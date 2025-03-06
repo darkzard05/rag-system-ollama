@@ -74,17 +74,6 @@ ollama list
 
 ---
 
-## 📂 6️⃣ 폴더 구조  
-```
-/rag-chatbot-ollama  
-│── app.py  # Streamlit 앱 메인 코드  
-│── requirements.txt  # 필요한 패키지 목록  
-│── README.md  # 프로젝트 설명  
-│── .gitignore  # 불필요한 파일 제외 (예: temp.pdf)  
-```
-
----
-
-## 📝 7️⃣ 라이선스  
+## 📝 6️⃣ 라이선스  
 이 프로젝트는 MIT 라이선스를 따릅니다.
 
