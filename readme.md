@@ -46,7 +46,7 @@ pip install -r requirements.txt
 ```bash
 streamlit run chatbot.py
 ```
-실행 후 브라우저에서 `http://localhost:8501` 접속  
+실행 후 브라우저에서 `http://localhost:8501` 접속
 
 ---
 
