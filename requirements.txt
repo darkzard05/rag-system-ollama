@@ -1,0 +1,9 @@
+streamlit
+torch
+langchain
+langchain-community
+langchain-experimental
+langchain-huggingface
+langchain-ollama
+faiss-cpu
+pypdf
