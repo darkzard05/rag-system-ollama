@@ -37,17 +37,18 @@ if uploaded_file:
     vector = FAISS.from_documents(documents, embedder)
     st.write("🗄️ FAISS 벡터 저장소가 생성되었습니다.")
 
-    retriever = vector.as_retriever(search_type="similarity", search_kwargs={"k": 3})
+    retriever = vector.as_retriever(search_type="similarity", search_kwargs={"k": 100})
     st.write("🔍 검색기가 생성되었습니다.")
 
     llm = OllamaLLM(model="deepseek-r1:14b")
     st.write("🤖 LLM이 초기화되었습니다.")
 
     prompt = """
-    Use the following context to answer the question.
-    Context: {context}
-    Question: {question}
-    Answer:"""
+    다음 문맥을 사용하여 요청을 수행하세요.
+    문맥: {context}
+    사용자의 요청: {question}
+    응답:
+    """
     QA_PROMPT = PromptTemplate.from_template(prompt)
 
     combine_documents_chain = create_stuff_documents_chain(llm, QA_PROMPT)
