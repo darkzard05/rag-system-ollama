@@ -61,7 +61,7 @@ streamlit run chatbot.py
 ## 🔧 5️⃣ 설정 변경 방법  
 ### ✅ **다른 LLM 모델 사용하기**  
 기본적으로 `deepseek-r1:14b`을 사용하지만, 다른 모델로 변경할 수 있습니다.  
-`app.py`에서 아래 부분을 수정하세요.  
+`chatbot.py`에서 아래 부분을 수정하세요.  
 
 ```python
 llm = OllamaLLM(model="mistral")  # deepseek-r1:14b → mistral
