@@ -20,17 +20,11 @@ curl -fsSL https://ollama.com/install.sh | sh
 
 #### 🔹 **LLM 모델 다운로드**  
 Ollama를 설치한 후, 원하는 모델을 다운로드하세요.  
-기본적으로 `deepseek-r1:14b` 모델을 사용합니다.
+기본적으로 `gemma3:4b` 모델을 사용합니다.
 
 ```bash
-ollama pull deepseek-r1:14b
+ollama pull gemma3:4b
 ```
-🚀 **다른 모델을 사용하고 싶다면?**  
-예를 들어 `mistral` 모델을 사용하려면:  
-```bash
-ollama pull mistral
-```
-
 ---
 
 ## 📌 2️⃣ 패키지 설치  
@@ -54,17 +48,17 @@ streamlit run chatbot.py
 - **PDF 문서 업로드 및 텍스트 추출**  
 - **HuggingFace Embedding 모델** (`intfloat/e5-base-v2`) 사용  
 - **FAISS 벡터 데이터베이스** 활용한 문서 검색  
-- **Ollama LLM (`deepseek-r1:14b`)을 이용한 질의응답**  
+- **Ollama LLM을 이용한 질의응답**  
 
 ---
 
 ## 🔧 5️⃣ 설정 변경 방법  
 ### ✅ **다른 LLM 모델 사용하기**  
-기본적으로 `deepseek-r1:14b`을 사용하지만, 다른 모델로 변경할 수 있습니다.  
+기본적으로 `gemma3:4b`을 사용하지만, 다른 모델로 변경할 수 있습니다.  
 `chatbot.py`에서 아래 부분을 수정하세요.  
 
 ```python
-llm = OllamaLLM(model="mistral")  # deepseek-r1:14b → mistral
+llm = OllamaLLM(model="deepseek-r1:14b")  # gemma3.4b --> deepseek-r1:14b
 ```
 
 💡 **사용 가능한 모델 목록 확인**  
