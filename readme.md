@@ -1,34 +1,34 @@
 # 📄 RAG Chatbot with Ollama LLM
 
-이 프로젝트는 **LangChain 기반 RAG (Retrieval-Augmented Generation) 챗봇**입니다.  
-PDF 문서를 업로드하면 내용을 임베딩 벡터로 변환하고, Ollama LLM을 활용해 질문에 대한 답변을 제공합니다.  
+This project is a **LangChain-based RAG (Retrieval-Augmented Generation) chatbot**.  
+Upload a PDF document to convert its content into embedding vectors and get answers to questions using Ollama LLM.
 
 ---
 
-## 🚀 1️⃣ 설치 방법  
+## 🚀 1️⃣ Installation
 
-### 📌 **1. 환경 설정**  
-- **Python 3.9 이상**이 필요합니다.  
-- Ollama 설치 필요 (로컬 LLM 실행용)  
+### 📌 **1. Environment Setup**  
+- Requires **Python 3.9 or higher**.  
+- Ollama installation needed (for local LLM execution).
 
-### 📌 **2. Ollama 설치 및 모델 다운로드**  
-#### 🔹 **Ollama 설치** (최신 버전 확인 후 설치)  
-👉 [Ollama 공식 사이트](https://ollama.com) 에서 다운로드하거나, 터미널에서 실행:  
+### 📌 **2. Install Ollama and Download Model**  
+#### 🔹 **Install Ollama** (check the latest version)  
+👉 Download from [Ollama Official Site](https://ollama.com) or run in terminal:  
 ```bash
 curl -fsSL https://ollama.com/install.sh | sh
 ```
 
-#### 🔹 **LLM 모델 다운로드**  
-Ollama를 설치한 후, 원하는 모델을 다운로드하세요.  
-기본적으로 `gemma3:4b` 모델을 사용합니다.
+#### 🔹 **Download LLM Model**  
+After installing Ollama, download the desired model.  
+By default, the `gemma3:4b` model is used.
 
 ```bash
 ollama pull gemma3:4b
 ```
 ---
 
-## 📌 2️⃣ 패키지 설치  
-프로젝트 루트 디렉토리에서 실행하세요.  
+## 📌 2️⃣ Install Packages  
+Run in the project root directory:
 
 ```bash
 pip install -r requirements.txt
@@ -36,38 +36,38 @@ pip install -r requirements.txt
 
 ---
 
-## 🎯 3️⃣ 실행 방법  
+## 🎯 3️⃣ How to Run  
 ```bash
 streamlit run chatbot.py
 ```
-실행 후 브라우저에서 `http://localhost:8501` 접속
+After running, access `http://localhost:8501` in your browser.
 
 ---
 
-## 📑 4️⃣ 주요 기능  
-- **PDF 문서 업로드 및 텍스트 추출**  
-- **HuggingFace Embedding 모델** (`intfloat/e5-base-v2`) 사용  
-- **FAISS 벡터 데이터베이스** 활용한 문서 검색  
-- **Ollama LLM을 이용한 질의응답**  
+## 📑 4️⃣ Key Features  
+- **PDF document upload and text extraction**  
+- **HuggingFace Embedding Model** (`intfloat/e5-base-v2`)  
+- **FAISS vector database** for document search  
+- **Ollama LLM** for Q&A  
 
 ---
 
-## 🔧 5️⃣ 설정 변경 방법  
-### ✅ **다른 LLM 모델 사용하기**  
-기본적으로 `gemma3:4b`을 사용하지만, 다른 모델로 변경할 수 있습니다.  
-`chatbot.py`에서 아래 부분을 수정하세요.  
+## 🔧 5️⃣ How to Change Settings  
+### ✅ **Using a Different LLM Model**  
+By default, `gemma3:4b` is used, but you can change it in the `config.py` file.  
+Modify the following in `config.py`:
 
 ```python
-llm = OllamaLLM(model="deepseek-r1:14b")  # gemma3.4b --> deepseek-r1:14b
+LLM_MODEL = "deepseek-r1:14b"  # gemma3:4b --> deepseek-r1:14b
 ```
 
-💡 **사용 가능한 모델 목록 확인**  
+💡 **Check Available Models**  
 ```bash
 ollama list
 ```
 
 ---
 
-## 📝 6️⃣ 라이선스  
-이 프로젝트는 MIT 라이선스를 따릅니다.
+## 📝 6️⃣ License  
+This project is licensed under the MIT License.
 
