@@ -12,14 +12,15 @@ from langchain.prompts import PromptTemplate
 from langchain.chains.combine_documents import create_stuff_documents_chain
 from langchain.chains import create_retrieval_chain
 import logging
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, TimeoutError
+import config  # 설정 파일 로드
 
 st.set_page_config(page_title="RAG Chatbot", layout="wide")  # 페이지 설정
 
 st.title("📄 RAG Chatbot with Ollama LLM")
 
 # 로깅 설정
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(level=logging.DEBUG)
 
 # 초기 출력 메시지를 위한 공간 예약
 initial_output = st.empty()
@@ -40,23 +41,27 @@ for msg in st.session_state.messages:
 @st.cache_data(show_spinner=False)
 def load_pdf_docs(file_bytes):
     try:
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp_file:
+        with tempfile.NamedTemporaryFile(delete=False, suffix=config.PDF_TEMP_SUFFIX) as tmp_file:
             tmp_file.write(file_bytes)
             temp_path = tmp_file.name
         loader = PyPDFLoader(temp_path)
         docs = loader.load()
-        os.remove(temp_path)  # 파일 삭제를 로드 후로 이동
+        os.remove(temp_path)  # 파일을 수동으로 삭제
         return docs
     except Exception as e:
         logging.error(f"PDF 로드 중 오류 발생: {e}")
         return []
 
+# HuggingFaceEmbeddings 객체 생성 함수
+def create_embedder():
+    return HuggingFaceEmbeddings(model_name=config.EMBEDDINGS_MODEL_NAME,
+                                 model_kwargs=config.EMBEDDINGS_MODEL_KWARGS)
+
 # 문서 분할 캐싱: 로드된 문서를 청크 단위로 분할
 @st.cache_data(show_spinner=False)
 def split_documents(_docs):
     try:
-        embedder = HuggingFaceEmbeddings(model_name="intfloat/e5-base-v2",
-                                         model_kwargs={'device': 'cpu'})
+        embedder = create_embedder()
         chunker = SemanticChunker(embedder)
         return chunker.split_documents(_docs)
     except Exception as e:
@@ -67,8 +72,7 @@ def split_documents(_docs):
 @st.cache_resource(show_spinner=False)
 def create_vector_store(_documents):
     try:
-        embedder = HuggingFaceEmbeddings(model_name="intfloat/e5-base-v2",
-                                         model_kwargs={'device': 'cpu'})
+        embedder = create_embedder()
         return FAISS.from_documents(_documents, embedder)
     except Exception as e:
         logging.error(f"벡터 저장소 생성 중 오류 발생: {e}")
@@ -77,13 +81,19 @@ def create_vector_store(_documents):
 # LLM 초기화 캐싱: LLM 객체는 한 번만 생성하도록 함
 @st.cache_resource(show_spinner=False)
 def init_llm():
-    try:  # 변경된 부분: 에러 처리 추가
-        return OllamaLLM(model="gemma3:4b", device='cuda')
+    try:
+        llm = OllamaLLM(model=config.LLM_MODEL, device=config.LLM_DEVICE)
+        logging.debug("LLM 초기화 성공")
+        return llm
     except Exception as e:
         logging.error(f"LLM 초기화 중 오류 발생: {e}")
         return None
 
-# uploaded_file = st.file_uploader("Upload your PDF file here", type="pdf")
+# 메시지 추가 함수
+def add_message(role, content):
+    st.session_state.messages.append({"role": role, "content": content})
+    st.chat_message(role).write(content)
+
 if uploaded_file:
     file_bytes = uploaded_file.getvalue()
     docs = load_pdf_docs(file_bytes)
@@ -94,7 +104,14 @@ if uploaded_file:
 
     with ThreadPoolExecutor() as executor:
         future_split = executor.submit(split_documents, docs)
-        documents = future_split.result()
+        try:
+            documents = future_split.result(timeout=config.PDF_LOAD_TIMEOUT)
+        except TimeoutError:
+            st.error("❌ 문서 분할이 시간 초과되었습니다.")
+            st.stop()
+        except Exception as e:
+            st.error(f"❌ 문서 분할 중 오류 발생: {e}")
+            st.stop()
     
     initial_output.write(f"📑 분할된 문서 청크 수: {len(documents)}")
 
@@ -104,7 +121,8 @@ if uploaded_file:
         st.stop()
     
     initial_output.write("🗄️ FAISS 벡터 저장소가 생성되었습니다.")
-    retriever = vector_store.as_retriever(search_type="similarity", search_kwargs={"k": 100})
+    retriever = vector_store.as_retriever(search_type=config.RETRIEVER_SEARCH_TYPE,
+                                          search_kwargs=config.RETRIEVER_SEARCH_KWARGS)
     initial_output.write("🔍 검색기가 생성되었습니다.")
 
     llm = init_llm()
@@ -114,11 +132,6 @@ if uploaded_file:
     
     initial_output.write("🤖 LLM이 초기화되었습니다.")
     
-    # # 문서가 성공적으로 로드된 후에 질문을 요청
-    # st.session_state.messages.append({"role": "assistant", "content": "안녕하세요! PDF 문서 관련 질문을 해주세요."})
-    # for msg in st.session_state.messages:
-    #     st.chat_message(msg["role"]).write(msg["content"])
-
     prompt = """
     당신은 문서 기반 전문 조력자입니다. 다음 규칙을 엄격히 준수하세요:
 
@@ -139,12 +152,10 @@ if uploaded_file:
     # 사용자 입력 처리
     user_input = st.chat_input("메시지를 입력하세요")
     if user_input:
-        st.session_state.messages.append({"role": "user", "content": user_input})
-        st.chat_message("user").write(user_input)
+        add_message("user", user_input)
         try:
-            response = qa_chain.invoke({"input": user_input})
+            response = qa_chain.invoke({"input": user_input, "context": documents})
             answer = response["answer"]
         except Exception as e:
             answer = f"오류가 발생했습니다: {e}"
-        st.session_state.messages.append({"role": "assistant", "content": answer})
-        st.chat_message("assistant").write(answer)
+        add_message("assistant", answer)
