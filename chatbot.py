@@ -23,7 +23,7 @@ st.title("📄 RAG Chatbot with Ollama LLM")
 logging.basicConfig(level=logging.DEBUG)
 
 # 초기 출력 메시지를 위한 공간 예약
-initial_output = st.empty()
+initial_output = st.container()
 
 # 사이드바에 파일 업로드 배치
 with st.sidebar:
@@ -140,6 +140,9 @@ if uploaded_file:
     2. 간결하고 명료한 한국어로 답변하세요.
     3. 전문적이고 깔끔한 형식으로 답변하세요.
     4. 불확실한 내용은 언급하지 마세요.
+    
+    [컨텍스트]
+    {context}
 
     [실제 질문]
     질문: {input}
