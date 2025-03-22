@@ -72,23 +72,24 @@ def load_pdf_docs(file_bytes):
         logging.error(f"PDF 로드 중 오류 발생: {e}")
         return []
 
+@st.cache_resource(show_spinner=False)
+def get_embedder(model_name="intfloat/e5-base-v2", model_kwargs={'device': 'cuda'}):
+    return HuggingFaceEmbeddings(model_name=model_name,
+                                 model_kwargs=model_kwargs)
+
 @st.cache_data(show_spinner=False)
-def split_documents(_docs):
+def split_documents(_docs, _embedder):
     try:
-        embedder = HuggingFaceEmbeddings(model_name="intfloat/e5-base-v2",
-                                         model_kwargs={'device': 'cuda'})
-        chunker = SemanticChunker(embedder)
+        chunker = SemanticChunker(_embedder)
         return chunker.split_documents(_docs)
     except Exception as e:
         logging.error(f"문서 분할 중 오류 발생: {e}")
         return []
 
 @st.cache_resource(show_spinner=False)
-def create_vector_store(_documents):
+def create_vector_store(_documents, _embedder):
     try:
-        embedder = HuggingFaceEmbeddings(model_name="intfloat/e5-base-v2",
-                                         model_kwargs={'device': 'cuda'})
-        return FAISS.from_documents(_documents, embedder)
+        return FAISS.from_documents(_documents, _embedder)
     except Exception as e:
         logging.error(f"벡터 저장소 생성 중 오류 발생: {e}")
         return None
@@ -111,6 +112,7 @@ if uploaded_file:
 
         # ✅ 캐시 무효화
         load_pdf_docs.clear()
+        get_embedder.clear()
         split_documents.clear()
         create_vector_store.clear()
 
@@ -141,13 +143,17 @@ if uploaded_file and not st.session_state.get("pdf_completed", False):
             })
             st.stop()
 
+        # 1️⃣ 문서 임베딩 생성
+        embedder = get_embedder(model_name="intfloat/e5-base-v2",
+                                model_kwargs={'device': 'cuda'})
+        
         # 2️⃣ 문서 분할
         with ThreadPoolExecutor() as executor:
-            future_split = executor.submit(split_documents, docs)
+            future_split = executor.submit(split_documents, docs, embedder)
             documents = future_split.result()
 
         # 3️⃣ 벡터 저장소 생성
-        vector_store = create_vector_store(documents)
+        vector_store = create_vector_store(documents, embedder)
         if vector_store is None:
             st.session_state.messages.append({
                 'role': 'assistant', 
@@ -171,11 +177,17 @@ if uploaded_file and not st.session_state.get("pdf_completed", False):
 
         # 5️⃣ QA 체인 생성
         prompt = """
-        당신은 문서 기반 전문 조력자입니다. 다음 규칙을 엄격히 준수하세요.
-        반드시 제공된 컨텍스트({context})만 사용하여 한국어로 답변하세요.
-        불확실한 내용은 언급하지 마세요.
-        질문: {input}
-        답변:
+        당신은 문서 분석 및 요약 전문가입니다.
+        아래 제공된 문서 컨텍스트 내의 정보만 활용하여, 주어진 질문에 대해 정확하고 명확하게 답변하십시오.
+        불확실하거나 확인되지 않은 내용은 언급하지 마시고, 항상 한국어로 응답하십시오.
+
+        [컨텍스트]
+        {context}
+        
+        [질문]
+        {input}
+
+        [답변]
         """
         QA_PROMPT = PromptTemplate.from_template(prompt)
         combine_chain = create_stuff_documents_chain(llm, QA_PROMPT)
