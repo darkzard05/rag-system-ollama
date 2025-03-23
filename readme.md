@@ -28,7 +28,7 @@ ollama list
 ## 🎯 Usage
 Run the chatbot:
 ```bash
-streamlit run chatbot.py
+streamlit run main.py
 ```
 Access at `http://localhost:8501`.
 
