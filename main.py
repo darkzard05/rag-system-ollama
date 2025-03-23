@@ -53,7 +53,7 @@ if selected_model and selected_model != st.session_state.get("last_selected_mode
     st.session_state.last_selected_model = selected_model  # 선택한 모델 저장
     new_message = {
         "role": "assistant",
-        "content": f"🛠️ 모델 `{selected_model}`이(가) 선택되었습니다."
+        "content": f"🛠️ 모델 {selected_model}이(가) 선택되었습니다."
     }
     st.session_state.messages.append(new_message)
     st.rerun()  # 업데이트 후 재실행하여 전체 대화 기록 출력
@@ -73,7 +73,7 @@ def load_pdf_docs(file_bytes):
         return []
 
 @st.cache_resource(show_spinner=False)
-def get_embedder(model_name="intfloat/e5-base-v2", model_kwargs={'device': 'cuda'}):
+def get_embedder(model_name="BAAI/bge-m3", model_kwargs={'device': 'cuda'}):
     return HuggingFaceEmbeddings(model_name=model_name,
                                  model_kwargs=model_kwargs)
 
@@ -128,7 +128,7 @@ if uploaded_file and not st.session_state.get("pdf_completed", False):
     if not st.session_state.get("pdf_message_logged", False):  
         st.session_state.messages.append({
             'role': 'assistant',
-            'content': f'📂 PDF 파일 `{uploaded_file.name}`이(가) 업로드되었습니다. 문서를 처리합니다...'
+            'content': f'📂 PDF 파일 {uploaded_file.name}이(가) 업로드되었습니다. 문서를 처리합니다...'
         })
         st.session_state.pdf_message_logged = True  # 메시지 중복 추가 방지
 
@@ -148,12 +148,14 @@ if uploaded_file and not st.session_state.get("pdf_completed", False):
                                 model_kwargs={'device': 'cuda'})
         
         # 2️⃣ 문서 분할
+        # 3️⃣ 벡터 저장소 생성
         with ThreadPoolExecutor() as executor:
             future_split = executor.submit(split_documents, docs, embedder)
-            documents = future_split.result()
+            future_vector_store = executor.submit(create_vector_store, docs, embedder)
+            
+        documents = future_split.result()
+        vector_store = future_vector_store.result() 
 
-        # 3️⃣ 벡터 저장소 생성
-        vector_store = create_vector_store(documents, embedder)
         if vector_store is None:
             st.session_state.messages.append({
                 'role': 'assistant', 
@@ -176,7 +178,8 @@ if uploaded_file and not st.session_state.get("pdf_completed", False):
         st.session_state.llm = llm  
 
         # 5️⃣ QA 체인 생성
-        prompt = """
+        QA_PROMPT = PromptTemplate.from_template(
+        """
         당신은 문서 분석 및 요약 전문가입니다.
         아래 제공된 문서 컨텍스트 내의 정보만 활용하여, 주어진 질문에 대해 정확하고 명확하게 답변하십시오.
         불확실하거나 확인되지 않은 내용은 언급하지 마시고, 항상 한국어로 응답하십시오.
@@ -189,9 +192,10 @@ if uploaded_file and not st.session_state.get("pdf_completed", False):
 
         [답변]
         """
-        QA_PROMPT = PromptTemplate.from_template(prompt)
+        )
         combine_chain = create_stuff_documents_chain(llm, QA_PROMPT)
-        qa_chain = create_retrieval_chain(vector_store.as_retriever(search_type="similarity", search_kwargs={"k": 100}), combine_chain)
+        qa_chain = create_retrieval_chain(vector_store.as_retriever(search_type="similarity",
+                                                                    search_kwargs={"k": 20}), combine_chain)
 
         # 6️⃣ QA 체인 저장
         st.session_state.qa_chain = qa_chain
@@ -200,7 +204,7 @@ if uploaded_file and not st.session_state.get("pdf_completed", False):
         # 7️⃣ 문서 처리 완료 메시지 추가 (한 번만 실행됨)
         st.session_state.messages.append({
             'role': 'assistant', 
-            'content': f'✅ PDF 파일 `{uploaded_file.name}` 문서 처리가 완료되었습니다.'
+            'content': f'✅ PDF 파일 {uploaded_file.name} 문서 처리가 완료되었습니다.'
         })
 
         # ✅ 문서 처리가 완료된 이후, 최종적으로 한 번만 `st.rerun()`
@@ -220,7 +224,8 @@ if user_input:
         'content': user_input
     })
 
-    if "qa_chain" not in st.session_state:
+    qa_chain = st.session_state.get("qa_chain")
+    if not qa_chain:
         with st.chat_message("assistant"):
             st.write("❌ 문서 처리가 완료되지 않았습니다. PDF를 먼저 업로드하세요.")
         st.session_state.messages.append({
