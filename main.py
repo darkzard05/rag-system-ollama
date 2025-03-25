@@ -151,9 +151,10 @@ if uploaded_file and not st.session_state.get("pdf_completed", False):
         # 3️⃣ 벡터 저장소 생성
         with ThreadPoolExecutor() as executor:
             future_split = executor.submit(split_documents, docs, embedder)
+            # 문서 분할이 완료되면 벡터 저장소 생성
+            documents = future_split.result()
             future_vector_store = executor.submit(create_vector_store, docs, embedder)
             
-        documents = future_split.result()
         vector_store = future_vector_store.result() 
 
         if vector_store is None:
@@ -204,7 +205,7 @@ if uploaded_file and not st.session_state.get("pdf_completed", False):
         # 7️⃣ 문서 처리 완료 메시지 추가 (한 번만 실행됨)
         st.session_state.messages.append({
             'role': 'assistant', 
-            'content': f'✅ PDF 파일 {uploaded_file.name} 문서 처리가 완료되었습니다.'
+            'content': f'✅ PDF 파일 {uploaded_file.name}의 문서 처리가 완료되었습니다.'
         })
 
         # ✅ 문서 처리가 완료된 이후, 최종적으로 한 번만 `st.rerun()`
