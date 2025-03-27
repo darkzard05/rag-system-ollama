@@ -15,6 +15,7 @@ import logging
 from concurrent.futures import ThreadPoolExecutor
 import subprocess
 
+
 # Ollama 모델 목록 가져오기
 def get_ollama_models():
     try:
@@ -151,11 +152,9 @@ if uploaded_file and not st.session_state.get("pdf_completed", False):
         # 3️⃣ 벡터 저장소 생성
         with ThreadPoolExecutor() as executor:
             future_split = executor.submit(split_documents, docs, embedder)
-            # 문서 분할이 완료되면 벡터 저장소 생성
-            documents = future_split.result()
             future_vector_store = executor.submit(create_vector_store, docs, embedder)
-            
-        vector_store = future_vector_store.result() 
+            documents = future_split.result()
+            vector_store = future_vector_store.result() 
 
         if vector_store is None:
             st.session_state.messages.append({
@@ -241,6 +240,7 @@ if user_input:
             try:
                 response = st.session_state.qa_chain.invoke({"input": user_input})
                 answer = response["answer"]
+
             except Exception as e:
                 answer = f"오류가 발생했습니다: {e}"
         
