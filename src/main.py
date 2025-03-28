@@ -96,10 +96,13 @@ if uploaded_file and not st.session_state.get("pdf_completed", False):
         # 2️⃣ 문서 분할
         # 3️⃣ 벡터 저장소 생성
         with ThreadPoolExecutor() as executor:
+            # 문서 분할 먼저 실행
             future_split = executor.submit(split_documents, docs, embedder)
-            future_vector_store = executor.submit(create_vector_store, docs, embedder)
-            documents = future_split.result()
-            vector_store = future_vector_store.result() 
+            documents = future_split.result()  # 분할된 문서를 받아야 함
+
+            # 분할된 문서를 기반으로 벡터 스토어 생성
+            future_vector_store = executor.submit(create_vector_store, documents, embedder)
+            vector_store = future_vector_store.result()
 
         if vector_store is None:
             st.session_state.messages.append({
