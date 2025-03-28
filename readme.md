@@ -28,15 +28,21 @@ ollama list
 ## 🎯 Usage
 Run the chatbot:
 ```bash
-streamlit run main.py
+streamlit run src/main.py
 ```
 Access at `http://localhost:8501`.
 
 ## 📑 Features
-- PDF upload and text extraction
-- HuggingFace embeddings (`intfloat/e5-base-v2`)
-- FAISS vector database for search
-- Dynamic Ollama model selection via sidebar
+- **Dynamic Ollama Model Selection**: Choose from available Ollama models via the sidebar.
+- **PDF Upload and Processing**: Upload PDF files for text extraction and question answering.
+- **HuggingFace Embeddings**: Uses `intfloat/e5-base-v2` or configurable models for embedding generation.
+- **FAISS Vector Database**: Efficient document retrieval using FAISS.
+- **Threaded Document Processing**: Parallelized document splitting and vector store creation for faster performance.
+- **Customizable QA Prompt**: Modify the QA prompt template for tailored responses.
+
+## 🛠️ Advanced Configuration
+- **Cache Management**: Automatic cache invalidation when new PDFs are uploaded.
+- **Device Configuration**: Default device is set to `cuda` for GPU acceleration. Modify in `utils.py` if needed.
 
 ## 📝 License
 This project is licensed under the MIT License.
