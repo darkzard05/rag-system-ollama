@@ -1,30 +1,19 @@
-import os
 import torch
 torch.classes.__path__ = []
-import tempfile
 import streamlit as st
-from langchain_community.document_loaders import PyPDFLoader
-from langchain_experimental.text_splitter import SemanticChunker
-from langchain_huggingface import HuggingFaceEmbeddings
-from langchain_community.vectorstores import FAISS
-from langchain_ollama import OllamaLLM
 from langchain.prompts import PromptTemplate
 from langchain.chains.combine_documents import create_stuff_documents_chain
 from langchain.chains.retrieval import create_retrieval_chain
 import logging
 from concurrent.futures import ThreadPoolExecutor
-import subprocess
-
-
-# Ollama 모델 목록 가져오기
-def get_ollama_models():
-    try:
-        result = subprocess.run(["ollama", "list"], capture_output=True, text=True, check=True)
-        models = [line.split()[0] for line in result.stdout.split("\n")[1:] if line]
-        return models
-    except Exception as e:
-        logging.error(f"Ollama 모델 목록을 불러오는 중 오류 발생: {e}")
-        return []
+from utils import (
+    get_ollama_models,
+    load_pdf_docs,
+    get_embedder,
+    split_documents,
+    create_vector_store,
+    init_llm,
+)
 
 st.set_page_config(page_title="RAG Chatbot", layout="wide")
 st.title("📄 RAG Chatbot with Ollama LLM")
@@ -59,50 +48,6 @@ if selected_model and selected_model != st.session_state.get("last_selected_mode
     st.session_state.messages.append(new_message)
     st.rerun()  # 업데이트 후 재실행하여 전체 대화 기록 출력
 
-@st.cache_data(show_spinner=False)
-def load_pdf_docs(file_bytes):
-    try:
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp_file:
-            tmp_file.write(file_bytes)
-            temp_path = tmp_file.name
-        loader = PyPDFLoader(temp_path)
-        docs = loader.load()
-        os.remove(temp_path)
-        return docs
-    except Exception as e:
-        logging.error(f"PDF 로드 중 오류 발생: {e}")
-        return []
-
-@st.cache_resource(show_spinner=False)
-def get_embedder(model_name="BAAI/bge-m3", model_kwargs={'device': 'cuda'}):
-    return HuggingFaceEmbeddings(model_name=model_name,
-                                 model_kwargs=model_kwargs)
-
-@st.cache_data(show_spinner=False)
-def split_documents(_docs, _embedder):
-    try:
-        chunker = SemanticChunker(_embedder)
-        return chunker.split_documents(_docs)
-    except Exception as e:
-        logging.error(f"문서 분할 중 오류 발생: {e}")
-        return []
-
-@st.cache_resource(show_spinner=False)
-def create_vector_store(_documents, _embedder):
-    try:
-        return FAISS.from_documents(_documents, _embedder)
-    except Exception as e:
-        logging.error(f"벡터 저장소 생성 중 오류 발생: {e}")
-        return None
-
-@st.cache_resource(show_spinner=False)
-def init_llm(model_name):
-    try:
-        return OllamaLLM(model=model_name, device='cuda')
-    except Exception as e:
-        logging.error(f"LLM 초기화 중 오류 발생: {e}")
-        return None
-
 # PDF 파일 업로드 시 기존 상태 초기화 및 처리
 if uploaded_file:
     file_bytes = uploaded_file.getvalue()  # 파일 내용 가져오기
@@ -112,10 +57,10 @@ if uploaded_file:
         st.session_state.last_uploaded_file = file_bytes  # 파일 내용을 기준으로 비교
 
         # ✅ 캐시 무효화
-        load_pdf_docs.clear()
-        get_embedder.clear()
-        split_documents.clear()
-        create_vector_store.clear()
+        load_pdf_docs.clear()  # 함수 호출 후 clear
+        get_embedder.clear()  # 함수 호출 후 clear
+        split_documents.clear()  # 함수 호출 후 clear
+        create_vector_store.clear()  # 함수 호출 후 clear
 
         # ✅ 🔥 세션 상태 초기화
         for key in ["pdf_processed", "pdf_completed", "qa_chain", "vector_store", "llm", "pdf_processing", "pdf_message_logged"]:
