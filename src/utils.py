@@ -9,7 +9,11 @@ from langchain_community.vectorstores import FAISS
 from langchain_ollama import OllamaLLM
 import streamlit as st
 
-def get_ollama_models():
+from typing import List, Optional, Dict, Any
+
+def get_ollama_models() -> List[str]:
+    """Ollama 모델 목록을 가져오는 함수"""
+    logging.info("Ollama 모델 목록을 불러오는 중...")
     try:
         result = subprocess.run(["ollama", "list"], capture_output=True, text=True, check=True)
         models = [line.split()[0] for line in result.stdout.split("\n")[1:] if line]
@@ -19,10 +23,12 @@ def get_ollama_models():
         return []
 
 @st.cache_data(show_spinner=False)
-def load_pdf_docs(file_bytes):
+def load_pdf_docs(file_path) -> List:
+    """PDF 파일을 로드하는 함수"""
+    logging.info("PDF 파일 로드 중...")
     try:
         with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp_file:
-            tmp_file.write(file_bytes)
+            tmp_file.write(file_path)
             temp_path = tmp_file.name
         loader = PyPDFLoader(temp_path)
         docs = loader.load()
@@ -33,20 +39,32 @@ def load_pdf_docs(file_bytes):
         return []
 
 @st.cache_resource(show_spinner=False)
-def get_embedder(model_name="BAAI/bge-m3", model_kwargs={'device': 'cuda'}):
-    return HuggingFaceEmbeddings(model_name=model_name, model_kwargs=model_kwargs)
+def get_embedder(model_name, model_kwargs=None) -> HuggingFaceEmbeddings:
+    """HuggingFaceEmbeddings 모델을 초기화하는 함수"""
+    return HuggingFaceEmbeddings(model_name=model_name,
+                                 model_kwargs=model_kwargs,
+                                 encode_kwargs={'normalize_embeddings': False,
+                                                'batch_size': 16,
+                                                'device': 'cuda'})
 
 @st.cache_data(show_spinner=False)
-def split_documents(_docs, _embedder):
+def split_documents(_docs, _embedder) -> List:
+    """문서를 분할하고 임베딩을 생성하는 함수"""
+    logging.info("문서 분할 및 임베딩 생성 중...")
     try:
-        chunker = SemanticChunker(_embedder)
+        chunker = SemanticChunker(_embedder,
+                                  buffer_size=3,
+                                  min_chunk_size=512,
+                                  )
         return chunker.split_documents(_docs)
     except Exception as e:
         logging.error(f"문서 분할 중 오류 발생: {e}")
         return []
 
 @st.cache_resource(show_spinner=False)
-def create_vector_store(_documents, _embedder):
+def create_vector_store(_documents, _embedder) -> Optional[FAISS]:
+    """문서에서 벡터 저장소를 생성하는 함수"""
+    logging.info("벡터 저장소 생성 중...")
     try:
         return FAISS.from_documents(_documents, _embedder)
     except Exception as e:
@@ -54,7 +72,9 @@ def create_vector_store(_documents, _embedder):
         return None
 
 @st.cache_resource(show_spinner=False)
-def init_llm(model_name):
+def init_llm(model_name) -> Optional[OllamaLLM]:
+    """LLM을 초기화하는 함수"""
+    logging.info("LLM 초기화 중...")
     try:
         return OllamaLLM(model=model_name, device='cuda')
     except Exception as e:
