@@ -1,3 +1,4 @@
+from re import split
 import torch
 torch.classes.__path__ = []
 import streamlit as st
@@ -15,9 +16,11 @@ from utils import (
     init_llm,
 )
 
+# Streamlit 페이지 설정
 st.set_page_config(page_title="RAG Chatbot", layout="wide")
 st.title("📄 RAG Chatbot with Ollama LLM")
 
+# 로깅 설정
 logging.basicConfig(level=logging.DEBUG)
 
 # 세션 상태 초기화
@@ -52,24 +55,24 @@ if selected_model and selected_model != st.session_state.get("last_selected_mode
 if uploaded_file:
     file_bytes = uploaded_file.getvalue()  # 파일 내용 가져오기
 
-    # ✅ 새로운 PDF 업로드 감지 후, 한 번만 상태 초기화
+    # 새로운 PDF 업로드 감지 후, 한 번만 상태 초기화
     if st.session_state.get("last_uploaded_file") != file_bytes:
         st.session_state.last_uploaded_file = file_bytes  # 파일 내용을 기준으로 비교
 
-        # ✅ 캐시 무효화
+        # 캐시 무효화
         load_pdf_docs.clear()  # 함수 호출 후 clear
         get_embedder.clear()  # 함수 호출 후 clear
         split_documents.clear()  # 함수 호출 후 clear
         create_vector_store.clear()  # 함수 호출 후 clear
 
-        # ✅ 🔥 세션 상태 초기화
+        # 세션 상태 초기화
         for key in ["pdf_processed", "pdf_completed", "qa_chain", "vector_store", "llm", "pdf_processing", "pdf_message_logged"]:
             st.session_state.pop(key, None)  # 존재하는 경우만 삭제
 
-        # ✅ UI 즉시 갱신하여 새로운 PDF 감지 (이후 추가적인 rerun 없음)
+        # UI 즉시 갱신하여 새로운 PDF 감지
         st.rerun()
 
-# ✅ "문서 처리 중" 메시지가 한 번만 출력되도록 조절
+# "문서 처리 중" 메시지가 한 번만 출력되도록 조절
 if uploaded_file and not st.session_state.get("pdf_completed", False):
     if not st.session_state.get("pdf_message_logged", False):  
         st.session_state.messages.append({
@@ -78,9 +81,9 @@ if uploaded_file and not st.session_state.get("pdf_completed", False):
         })
         st.session_state.pdf_message_logged = True  # 메시지 중복 추가 방지
 
-    # 🔥 문서 처리 과정에서 깜박임 방지를 위해 st.spinner() 사용
+    # 문서 처리 과정에서 깜박임 방지를 위해 st.spinner() 사용
     with st.spinner("📄 문서를 처리하는 중... 잠시만 기다려 주세요."):
-        # 1️⃣ 문서 로딩
+        # 문서 로딩
         docs = load_pdf_docs(uploaded_file.getvalue())
         if not docs:
             st.session_state.messages.append({
@@ -89,30 +92,39 @@ if uploaded_file and not st.session_state.get("pdf_completed", False):
             })
             st.stop()
 
-        # 1️⃣ 문서 임베딩 생성
-        embedder = get_embedder(model_name="intfloat/e5-base-v2",
+        # 문서 임베딩 생성
+        embedder = get_embedder(model_name="BAAI/bge-m3",
                                 model_kwargs={'device': 'cuda'})
         
-        # 2️⃣ 문서 분할
-        # 3️⃣ 벡터 저장소 생성
-        with ThreadPoolExecutor() as executor:
-            # 문서 분할 먼저 실행
-            future_split = executor.submit(split_documents, docs, embedder)
-            documents = future_split.result()  # 분할된 문서를 받아야 함
-
-            # 분할된 문서를 기반으로 벡터 스토어 생성
-            future_vector_store = executor.submit(create_vector_store, documents, embedder)
-            vector_store = future_vector_store.result()
-
-        if vector_store is None:
+        if embedder is None:
             st.session_state.messages.append({
                 'role': 'assistant', 
-                'content': '❌ 벡터 저장소 생성에 실패했습니다.'
+                'content': '❌ 임베더 초기화에 실패했습니다.'
             })
             st.stop()
-        st.session_state.vector_store = vector_store  
 
-        # 4️⃣ LLM 초기화
+        # 문서 분할 및 벡터 저장소 생성
+        with ThreadPoolExecutor() as executor:
+            try:
+                future_docs = executor.submit(split_documents, docs, embedder)
+                documents = future_docs.result()
+                if not documents:
+                    raise ValueError("❌ 문서 분할에 실패했습니다.")
+
+                future_vector_store = executor.submit(create_vector_store, documents, embedder)
+                vector_store = future_vector_store.result()
+                if not vector_store:
+                    raise ValueError("❌ 벡터 저장소 생성에 실패했습니다.")
+            except Exception as e:
+                st.session_state.messages.append({
+                    'role': 'assistant', 
+                    'content': f'오류가 발생했습니다: {e}'
+                })
+                st.stop()
+        
+        st.session_state.vector_store = vector_store
+
+        # LLM 초기화
         if isinstance(selected_model, str):
             llm = init_llm(selected_model)
         else:
@@ -125,7 +137,7 @@ if uploaded_file and not st.session_state.get("pdf_completed", False):
             st.stop()
         st.session_state.llm = llm  
 
-        # 5️⃣ QA 체인 생성
+        # QA 체인 생성
         QA_PROMPT = PromptTemplate.from_template(
         """
         당신은 문서 분석 및 요약 전문가입니다.
@@ -145,17 +157,17 @@ if uploaded_file and not st.session_state.get("pdf_completed", False):
         qa_chain = create_retrieval_chain(vector_store.as_retriever(search_type="similarity",
                                                                     search_kwargs={"k": 20}), combine_chain)
 
-        # 6️⃣ QA 체인 저장
+        # QA 체인 저장
         st.session_state.qa_chain = qa_chain
         st.session_state.pdf_completed = True  
 
-        # 7️⃣ 문서 처리 완료 메시지 추가 (한 번만 실행됨)
+        # 문서 처리 완료 메시지 추가 (한 번만 실행됨)
         st.session_state.messages.append({
             'role': 'assistant', 
             'content': f'✅ PDF 파일 {uploaded_file.name}의 문서 처리가 완료되었습니다.'
         })
 
-        # ✅ 문서 처리가 완료된 이후, 최종적으로 한 번만 `st.rerun()`
+        # 문서 처리가 완료된 이후, 최종적으로 한 번만 `st.rerun()`
         st.rerun()
 
 
