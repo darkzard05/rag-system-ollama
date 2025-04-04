@@ -24,11 +24,11 @@ logging.basicConfig(level=logging.INFO)
 
 # 사이드바 설정
 with st.sidebar:
-    st.header("설정")
+    st.header("Settings")
     # 모델 목록 가져오기
     models = get_ollama_models()
-    selected_model = st.selectbox("사용할 Ollama 모델 선택", models) if models else st.text("Ollama 모델을 불러올 수 없습니다.")
-    uploaded_file = st.file_uploader("PDF 파일 업로드", type="pdf")
+    selected_model = st.selectbox("Select an Ollama model", models) if models else st.text("Failed to load Ollama models.")
+    uploaded_file = st.file_uploader("Upload a PDF file", type="pdf")
     resolution_boost = st.slider(label="Resolution boost", min_value=1, max_value=10, value=1)
     width = st.slider(label="PDF width", min_value=100, max_value=1000, value=1000)
     height = st.slider(label="PDF height", min_value=-1, max_value=10000, value=1000)
@@ -39,7 +39,7 @@ user_input = st.chat_input("메시지를 입력하세요")
 col_left, col_right = st.columns([1, 1])
 
 with col_right:
-    st.header("📄 PDF 미리보기")
+    st.header("📄 PDF Preview")
     if uploaded_file:
         st.subheader(f"파일명: {uploaded_file.name}")
         try:
@@ -53,7 +53,7 @@ with col_right:
             st.error(f"PDF 미리보기 중 오류 발생: {e}")
 
 with col_left:
-    st.header("💬 대화")
+    st.header("💬 Chat")
     
     # 세션 상태 초기화
     if "messages" not in st.session_state:
