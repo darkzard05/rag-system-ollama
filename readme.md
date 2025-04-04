@@ -2,6 +2,9 @@
 
 A **LangChain-based RAG chatbot** that processes PDF documents and answers questions using Ollama LLM.
 
+![RAG Chatbot Screenshot](/image/image1.png)
+*A screenshot of the RAG Chatbot application in action. The image shows the user interface, including the sidebar for model selection, the PDF upload area, and the chat interface where questions can be asked and answered.*
+
 ## 🚀 Installation
 
 ### 1. Prerequisites
