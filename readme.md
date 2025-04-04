@@ -35,14 +35,15 @@ Access at `http://localhost:8501`.
 ## 📑 Features
 - **Dynamic Ollama Model Selection**: Choose from available Ollama models via the sidebar.
 - **PDF Upload and Processing**: Upload PDF files for text extraction and question answering.
-- **HuggingFace Embeddings**: Uses `intfloat/e5-base-v2` or configurable models for embedding generation.
+- **HuggingFace Embeddings**: Uses `BAAI/bge-m3` or configurable models for embedding generation.
 - **FAISS Vector Database**: Efficient document retrieval using FAISS.
-- **Threaded Document Processing**: Parallelized document splitting and vector store creation for faster performance.
 - **Customizable QA Prompt**: Modify the QA prompt template for tailored responses.
+- **Real-Time PDF Preview**: View uploaded PDFs directly in the app with adjustable resolution and dimensions.
 
 ## 🛠️ Advanced Configuration
-- **Cache Management**: Automatic cache invalidation when new PDFs are uploaded.
+- **Cache Management**: Automatic cache invalidation when new PDFs are uploaded or models are changed.
 - **Device Configuration**: Default device is set to `cuda` for GPU acceleration. Modify in `utils.py` if needed.
+- **Threaded Document Processing**: Parallelized document splitting and vector store creation for faster performance.
 
 ## 📝 License
 This project is licensed under the MIT License.
