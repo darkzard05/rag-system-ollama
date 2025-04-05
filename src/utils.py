@@ -22,7 +22,7 @@ def get_ollama_models() -> List[str]:
         return models
     except Exception as e:
         logging.error(f"Ollama 모델 목록을 불러오는 중 오류 발생: {e}")
-        return []
+        raise ValueError(f"Ollama 모델 목록을 불러오는 중 오류 발생: {e}") from e
 
 @st.cache_data(show_spinner=False)
 def load_pdf_docs(file_path) -> List:
@@ -38,14 +38,18 @@ def load_pdf_docs(file_path) -> List:
         return docs
     except Exception as e:
         logging.error(f"PDF 로드 중 오류 발생: {e}")
-        return []
+        raise ValueError(f"PDF 로드 중 오류 발생: {e}") from e
 
 @st.cache_resource(show_spinner=False)
 def get_embedder(model_name, model_kwargs=None, encode_kwargs=None) -> HuggingFaceEmbeddings:
     """HuggingFaceEmbeddings 모델을 초기화하는 함수"""
-    return HuggingFaceEmbeddings(model_name=model_name,
-                                 model_kwargs=model_kwargs,
-                                 encode_kwargs=encode_kwargs)
+    try:
+        return HuggingFaceEmbeddings(model_name=model_name,
+                                    model_kwargs=model_kwargs,
+                                    encode_kwargs=encode_kwargs)
+    except Exception as e:
+        logging.error(f"임베더 초기화 중 오류 발생: {e}")
+        raise ValueError(f"임베더 초기화 중 오류 발생: {e}") from e
 
 @st.cache_data(show_spinner=False)
 def split_documents(_docs: List, _embedder) -> List:
@@ -54,14 +58,15 @@ def split_documents(_docs: List, _embedder) -> List:
     start_time = time.time()
     try:
         chunker = SemanticChunker(_embedder,
-                                  buffer_size=3,
-                                  min_chunk_size=512)
+                                #   buffer_size=5,
+                                #   min_chunk_size=256
+                                  )
         docs = chunker.split_documents(_docs)
         logging.info(f"문서 분할 완료 (소요 시간: {time.time() - start_time:.2f}초)")
         return docs
     except Exception as e:
         logging.error(f"문서 분할 중 오류 발생: {e}")
-        return []
+        raise ValueError(f"문서 분할 중 오류 발생: {e}") from e
 
 @st.cache_resource(show_spinner=False)
 def create_vector_store(_documents, _embedder) -> Optional[FAISS]:
@@ -74,7 +79,7 @@ def create_vector_store(_documents, _embedder) -> Optional[FAISS]:
         return vector_space
     except Exception as e:
         logging.error(f"벡터 저장소 생성 중 오류 발생: {e}")
-        return None
+        raise ValueError(f"벡터 저장소 생성 중 오류 발생: {e}") from e
 
 @st.cache_resource(show_spinner=False)
 def init_llm(model_name) -> Optional[OllamaLLM]:
@@ -84,4 +89,4 @@ def init_llm(model_name) -> Optional[OllamaLLM]:
         return OllamaLLM(model=model_name, device='cuda')
     except Exception as e:
         logging.error(f"LLM 초기화 중 오류 발생: {e}")
-        return None
+        raise ValueError(f"LLM 초기화 중 오류 발생: {e}") from e
