@@ -31,9 +31,10 @@ ollama list
 ## 🎯 Usage
 Run the chatbot:
 ```bash
+git clone https://github.com/darkzard05/rag-system-ollama.git
+cd rag-system-ollama
 streamlit run src/main.py
 ```
-Access at `http://localhost:8501`.
 
 ## 📑 Features
 - **Dynamic Ollama Model Selection**: Choose from available Ollama models via the sidebar.
