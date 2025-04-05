@@ -25,9 +25,13 @@ logging.basicConfig(level=logging.INFO)
 # 사이드바 설정
 with st.sidebar:
     st.header("Settings")
-    # 모델 목록 가져오기
-    models = get_ollama_models()
-    selected_model = st.selectbox("Select an Ollama model", models) if models else st.text("Failed to load Ollama models.")
+    try:
+        models = get_ollama_models()
+        selected_model = st.selectbox("Select an Ollama model", models) if models else st.text("Failed to load Ollama models.")
+    except Exception as e:
+        st.error(f"Failed to load Ollama models: {e}")
+        st.warning("Ollama가 설치되어 있는지, Ollama 서버가 실행 중인지 확인해주세요.")
+        selected_model = None
     uploaded_file = st.file_uploader("Upload a PDF file", type="pdf")
     resolution_boost = st.slider(label="Resolution boost", min_value=1, max_value=10, value=1)
     width = st.slider(label="PDF width", min_value=100, max_value=1000, value=1000)
@@ -41,7 +45,6 @@ col_left, col_right = st.columns([1, 1])
 with col_right:
     st.header("📄 PDF Preview")
     if uploaded_file:
-        st.subheader(f"파일명: {uploaded_file.name}")
         try:
             # 임시 파일에 업로드된 PDF 파일 저장
             with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
@@ -100,51 +103,25 @@ with col_left:
             st.session_state.pdf_message_logged = True
 
         with st.spinner("📄 문서를 처리하는 중... 잠시만 기다려 주세요."):
-            docs = load_pdf_docs(uploaded_file.getvalue())
-            if not docs:
-                st.session_state.messages.append({
-                    "role": "assistant", 
-                    "content": "❌ 문서 처리에 실패했습니다."
-                })
-                st.stop()
-            
-            embedder = get_embedder(model_name="BAAI/bge-m3",
-                                    model_kwargs={'device': 'cuda'},
-                                    encode_kwargs={'device': 'cuda'})
-            if embedder is None:
-                st.session_state.messages.append({
-                    "role": "assistant", 
-                    "content": "❌ 임베더 초기화에 실패했습니다."
-                })
-                st.stop()
-            
             try:
+                docs = load_pdf_docs(uploaded_file.getvalue())        
+                embedder = get_embedder(model_name="BAAI/bge-m3",
+                                        model_kwargs={'device': 'cuda'},
+                                        encode_kwargs={'device': 'cuda'})
                 documents = split_documents(docs, embedder)
-                if not documents:
-                    raise ValueError("❌ 문서 분할에 실패했습니다.")
                 vector_store = create_vector_store(documents, embedder)
-                if not vector_store:
-                    raise ValueError("❌ 벡터 저장소 생성에 실패했습니다.")
-            except Exception as e:
-                st.session_state.messages.append({
-                    "role": "assistant", 
-                    "content": f"오류가 발생했습니다: {e}"
-                })
-                st.stop()
-            
-            st.session_state.vector_store = vector_store
-
-            if isinstance(selected_model, str):
-                llm = init_llm(selected_model)
-            else:
-                llm = None
-            if llm is None:
-                st.session_state.messages.append({
-                    "role": "assistant", 
-                    "content": "❌ LLM 초기화에 실패했습니다."
-                })
-                st.stop()
                 
+                if isinstance(selected_model, str):
+                    llm = init_llm(selected_model)
+                else:
+                    raise ValueError("❌ LLM 초기화에 실패했습니다.")
+            except ValueError as e:
+                st.session_state.messages.append({
+                    "role": "assistant",
+                    "content": str(e)
+                })
+                    
+            st.session_state.vector_store = vector_store
             st.session_state.llm = llm  
 
             QA_PROMPT = PromptTemplate.from_template(
@@ -184,7 +161,7 @@ with col_left:
             "content": user_input
         })
 
-        qa_chain = st.session_state.get("qa_chain")
+        qa_chain = st.session_state.qa_chain
         if not qa_chain:
             with st.chat_message("assistant"):
                 st.write("❌ 문서 처리가 완료되지 않았습니다. PDF를 먼저 업로드하세요.")
