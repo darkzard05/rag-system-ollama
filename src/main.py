@@ -20,6 +20,7 @@ from utils import (
 st.set_page_config(page_title="RAG Chatbot", layout="wide")
 st.title("📄 RAG Chatbot with Ollama LLM")
 
+# 로깅 설정
 logging.basicConfig(level=logging.INFO)
 
 # 사이드바 설정
@@ -37,6 +38,7 @@ with st.sidebar:
     width = st.slider(label="PDF width", min_value=100, max_value=1000, value=1000)
     height = st.slider(label="PDF height", min_value=-1, max_value=10000, value=1000)
 
+# 메시지 입력
 user_input = st.chat_input("메시지를 입력하세요")
 
 # 2열 레이아웃: 왼쪽에는 설정 및 대화, 오른쪽에는 PDF 미리보기
@@ -51,7 +53,7 @@ with col_right:
                 tmp.write(uploaded_file.getvalue())
                 tmp_path = tmp.name
             # 임시 파일 경로를 사용하여 pdf_viewer 호출
-            pdf_viewer(input=tmp_path, height=height, width=width, resolution_boost=resolution_boost)
+            pdf_viewer(input=tmp_path, width=width, height=height, key='pdf_viewer', resolution_boost=resolution_boost)
         except Exception as e:
             st.error(f"PDF 미리보기 중 오류 발생: {e}")
 
@@ -76,31 +78,38 @@ with col_left:
             "role": "assistant",
             "content": f"🛠️ 모델 {selected_model}이(가) 선택되었습니다."
         })
-        st.rerun()
+        with st.chat_message("assistant"):
+            st.write(f"🛠️ 모델 {selected_model}이(가) 선택되었습니다.")
     
     # PDF 파일 업로드 시 세션 상태 초기화
     if uploaded_file:
         file_bytes = uploaded_file.getvalue()
+        
         # 파일이 변경되었을 때만 세션 상태 초기화
         if st.session_state.get("last_uploaded_file") != file_bytes:
             st.session_state.last_uploaded_file = file_bytes
+            
             # 관련 캐시 및 상태 초기화
             load_pdf_docs.clear()
             get_embedder.clear()
             split_documents.clear()
             create_vector_store.clear()
+            
+            # 세션 상태 초기화
             for key in ["pdf_processed", "pdf_completed", "qa_chain", "vector_store", "llm", "pdf_processing", "pdf_message_logged"]:
                 st.session_state.pop(key, None)
-            st.rerun()
     
     # PDF 문서 처리
     if uploaded_file and not st.session_state.get("pdf_completed", False):
+        # PDF 파일 업로드 후 메시지 출력
         if not st.session_state.get("pdf_message_logged", False):
             st.session_state.messages.append({
                 "role": "assistant",
-                "content": f"📂 PDF 파일 {uploaded_file.name}이(가) 업로드되었습니다. 문서를 처리합니다..."
+                "content": f"📂 PDF 파일 {uploaded_file.name}이(가) 업로드되었습니다."
             })
             st.session_state.pdf_message_logged = True
+            with st.chat_message("assistant"):
+                st.write(f"📂 PDF 파일 {uploaded_file.name}이(가) 업로드되었습니다.")
 
         with st.spinner("📄 문서를 처리하는 중... 잠시만 기다려 주세요."):
             try:
@@ -120,10 +129,12 @@ with col_left:
                     "role": "assistant",
                     "content": str(e)
                 })
-                    
+            
+            # 문서 처리 완료 후 세션 상태 업데이트
             st.session_state.vector_store = vector_store
             st.session_state.llm = llm  
 
+            # QA 체인 생성
             QA_PROMPT = PromptTemplate.from_template(
             """
             당신은 문서 분석 및 요약 전문가입니다.
@@ -139,6 +150,8 @@ with col_left:
             [답변]
             """
             )
+            
+            # 문서 체인 생성
             combine_chain = create_stuff_documents_chain(llm, QA_PROMPT)
             qa_chain = create_retrieval_chain(vector_store.as_retriever(search_type="similarity",
                                                                         search_kwargs={"k": 20}), combine_chain)
@@ -150,7 +163,8 @@ with col_left:
                 "role": "assistant", 
                 "content": f"✅ PDF 파일 {uploaded_file.name}의 문서 처리가 완료되었습니다."
             })
-            st.rerun()
+            with st.chat_message("assistant"):
+                st.write(f"✅ PDF 파일 {uploaded_file.name}의 문서 처리가 완료되었습니다.")
     
     # 사용자 입력 처리
     if user_input:
@@ -161,6 +175,7 @@ with col_left:
             "content": user_input
         })
 
+        # QA 체인 초기화 확인
         qa_chain = st.session_state.qa_chain
         if not qa_chain:
             with st.chat_message("assistant"):
