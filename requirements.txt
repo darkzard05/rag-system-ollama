@@ -5,5 +5,6 @@ langchain-community
 langchain-experimental
 langchain-huggingface
 langchain-ollama
+streamlit_pdf_viewer
 faiss-cpu
-pypdf
+pymupdf
