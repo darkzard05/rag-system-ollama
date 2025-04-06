@@ -6,6 +6,7 @@ from streamlit_pdf_viewer import pdf_viewer
 from langchain.prompts import PromptTemplate
 from langchain.chains.combine_documents import create_stuff_documents_chain
 from langchain.chains.retrieval import create_retrieval_chain
+from langchain import hub
 import logging
 from utils import (
     get_ollama_models,
@@ -23,7 +24,7 @@ st.title("📄 RAG Chatbot with Ollama LLM")
 # 로깅 설정
 logging.basicConfig(level=logging.INFO)
 
-# 사이드바 설정
+# 사이드바 설정: 모델 선택 및 PDF 업로드
 with st.sidebar:
     st.header("Settings")
     try:
@@ -38,12 +39,10 @@ with st.sidebar:
     width = st.slider(label="PDF width", min_value=100, max_value=1000, value=1000)
     height = st.slider(label="PDF height", min_value=-1, max_value=10000, value=1000)
 
-# 메시지 입력
-user_input = st.chat_input("메시지를 입력하세요")
-
 # 2열 레이아웃: 왼쪽에는 설정 및 대화, 오른쪽에는 PDF 미리보기
 col_left, col_right = st.columns([1, 1])
 
+# PDF 미리보기
 with col_right:
     st.header("📄 PDF Preview")
     if uploaded_file:
@@ -53,10 +52,11 @@ with col_right:
                 tmp.write(uploaded_file.getvalue())
                 tmp_path = tmp.name
             # 임시 파일 경로를 사용하여 pdf_viewer 호출
-            pdf_viewer(input=tmp_path, width=width, height=height, key='pdf_viewer', resolution_boost=resolution_boost)
+            pdf_viewer(input=tmp_path, width=width, height=height, key=f'pdf_viewer_{uploaded_file.name}', resolution_boost=resolution_boost)
         except Exception as e:
             st.error(f"PDF 미리보기 중 오류 발생: {e}")
 
+# 대화 및 설정
 with col_left:
     st.header("💬 Chat")
     
@@ -65,11 +65,15 @@ with col_left:
         st.session_state.messages = []
     if "last_selected_model" not in st.session_state:
         st.session_state.last_selected_model = None
+        
+    # 대화 메시지를 저장할 컨테이너 생성
+    chat_container = st.container(height=500, border=True, key="chat_container")
 
-    # 상단에 저장된 대화 메시지를 순서대로 출력
-    for message in st.session_state.messages:
-        with st.chat_message(message["role"]):
-            st.write(message["content"])
+    # 대화 메시지 표시
+    with chat_container:
+        for message in st.session_state.messages:
+            with st.chat_message(message["role"]):
+                st.write(message["content"])
     
     # 모델 변경 시 업데이트
     if selected_model and selected_model != st.session_state.get("last_selected_model"):
@@ -78,8 +82,9 @@ with col_left:
             "role": "assistant",
             "content": f"🛠️ 모델 {selected_model}이(가) 선택되었습니다."
         })
-        with st.chat_message("assistant"):
-            st.write(f"🛠️ 모델 {selected_model}이(가) 선택되었습니다.")
+        with chat_container:
+            with st.chat_message("assistant"):
+                st.write(f"🛠️ 모델 {selected_model}이(가) 선택되었습니다.")
     
     # PDF 파일 업로드 시 세션 상태 초기화
     if uploaded_file:
@@ -101,75 +106,69 @@ with col_left:
     
     # PDF 문서 처리
     if uploaded_file and not st.session_state.get("pdf_completed", False):
-        # PDF 파일 업로드 후 메시지 출력
+        # PDF 파일이 업로드되었고 처리되지 않은 경우
         if not st.session_state.get("pdf_message_logged", False):
             st.session_state.messages.append({
                 "role": "assistant",
                 "content": f"📂 PDF 파일 {uploaded_file.name}이(가) 업로드되었습니다."
             })
             st.session_state.pdf_message_logged = True
-            with st.chat_message("assistant"):
-                st.write(f"📂 PDF 파일 {uploaded_file.name}이(가) 업로드되었습니다.")
+            with chat_container:
+                with st.chat_message("assistant"):
+                    st.write(f"📂 PDF 파일 {uploaded_file.name}이(가) 업로드되었습니다.")
 
-        with st.spinner("📄 문서를 처리하는 중... 잠시만 기다려 주세요."):
-            try:
-                docs = load_pdf_docs(uploaded_file.getvalue())        
-                embedder = get_embedder(model_name="BAAI/bge-m3",
-                                        model_kwargs={'device': 'cuda'},
-                                        encode_kwargs={'device': 'cuda'})
-                documents = split_documents(docs, embedder)
-                vector_store = create_vector_store(documents, embedder)
+        # PDF 문서 처리 중 메시지 출력
+        with chat_container:
+            with st.spinner("📄 문서를 처리하는 중... 잠시만 기다려 주세요.", show_time=True):
+                try:
+                    docs = load_pdf_docs(uploaded_file.getvalue())        
+                    embedder = get_embedder(model_name="BAAI/bge-m3",
+                                            model_kwargs={'device': 'cuda'},
+                                            encode_kwargs={'device': 'cuda'})
+                    documents = split_documents(docs, embedder)
+                    vector_store = create_vector_store(documents, embedder)
+                    
+                    if isinstance(selected_model, str):
+                        llm = init_llm(selected_model)
+                    else:
+                        raise ValueError("❌ LLM 초기화에 실패했습니다.")
+                except ValueError as e:
+                    st.session_state.messages.append({
+                        "role": "assistant",
+                        "content": str(e)
+                    })
                 
-                if isinstance(selected_model, str):
-                    llm = init_llm(selected_model)
-                else:
-                    raise ValueError("❌ LLM 초기화에 실패했습니다.")
-            except ValueError as e:
+                # 문서 처리 완료 후 세션 상태 업데이트
+                st.session_state.vector_store = vector_store
+                st.session_state.llm = llm  
+
+                # QA 체인 생성
+                QA_PROMPT = hub.pull("langchain-ai/retrieval-qa-chat")
+                
+                # 문서 체인 생성
+                combine_chain = create_stuff_documents_chain(llm, QA_PROMPT)
+                qa_chain = create_retrieval_chain(vector_store.as_retriever(search_type="similarity",
+                                                                            search_kwargs={"k": 20}), combine_chain)
+
+                st.session_state.qa_chain = qa_chain
+                st.session_state.pdf_completed = True  
+
                 st.session_state.messages.append({
-                    "role": "assistant",
-                    "content": str(e)
+                    "role": "assistant", 
+                    "content": f"✅ PDF 파일 {uploaded_file.name}의 문서 처리가 완료되었습니다."
                 })
-            
-            # 문서 처리 완료 후 세션 상태 업데이트
-            st.session_state.vector_store = vector_store
-            st.session_state.llm = llm  
-
-            # QA 체인 생성
-            QA_PROMPT = PromptTemplate.from_template(
-            """
-            당신은 문서 분석 및 요약 전문가입니다.
-            아래 제공된 문서 컨텍스트 내의 정보만 활용하여, 주어진 질문에 대해 정확하고 명확하게 답변하십시오.
-            불확실하거나 확인되지 않은 내용은 언급하지 마시고, 항상 한국어로 응답하십시오.
-
-            [컨텍스트]
-            {context}
-            
-            [질문]
-            {input}
-
-            [답변]
-            """
-            )
-            
-            # 문서 체인 생성
-            combine_chain = create_stuff_documents_chain(llm, QA_PROMPT)
-            qa_chain = create_retrieval_chain(vector_store.as_retriever(search_type="similarity",
-                                                                        search_kwargs={"k": 20}), combine_chain)
-
-            st.session_state.qa_chain = qa_chain
-            st.session_state.pdf_completed = True  
-
-            st.session_state.messages.append({
-                "role": "assistant", 
-                "content": f"✅ PDF 파일 {uploaded_file.name}의 문서 처리가 완료되었습니다."
-            })
-            with st.chat_message("assistant"):
-                st.write(f"✅ PDF 파일 {uploaded_file.name}의 문서 처리가 완료되었습니다.")
+                with chat_container:
+                    with st.chat_message("assistant"):
+                        st.write(f"✅ PDF 파일 {uploaded_file.name}의 문서 처리가 완료되었습니다.")
+    
+    # 메시지 입력
+    user_input = st.chat_input("메시지를 입력하세요")
     
     # 사용자 입력 처리
     if user_input:
-        with st.chat_message("user"):
-            st.write(user_input)
+        with chat_container:
+            with st.chat_message("user"):
+                st.write(user_input)
         st.session_state.messages.append({
             "role": "user", 
             "content": user_input
@@ -178,22 +177,33 @@ with col_left:
         # QA 체인 초기화 확인
         qa_chain = st.session_state.qa_chain
         if not qa_chain:
-            with st.chat_message("assistant"):
-                st.write("❌ 문서 처리가 완료되지 않았습니다. PDF를 먼저 업로드하세요.")
+            with chat_container:
+                with st.chat_message("assistant"):
+                    st.write("❌ 문서 처리가 완료되지 않았습니다. PDF를 먼저 업로드하세요.")
             st.session_state.messages.append({
                 "role": "assistant", 
                 "content": "❌ 문서 처리가 완료되지 않았습니다. PDF를 먼저 업로드하세요."
             })
             st.stop()
-
-        with st.chat_message("assistant"):
-            with st.spinner("🤖 답변 생성 중..."):
+            
+        # 답변 생성
+        with chat_container:
+            with st.chat_message("assistant"):
+                status_message = st.empty()
+                status_message.write("🤖 답변 생성 중...")
+                message_placeholder = st.empty()
+                answer = ""
                 try:
-                    response = st.session_state.qa_chain.invoke({"input": user_input})
-                    answer = response["answer"]
+                    # 스트리밍 응답 처리
+                    for chunk in qa_chain.stream({"input": user_input, "chat_history": []}):
+                        if "answer" in chunk:
+                            if not answer:
+                                status_message.empty()
+                            answer += chunk["answer"]
+                            message_placeholder.write(answer + "▌")
                 except Exception as e:
                     answer = f"오류가 발생했습니다: {e}"
-            st.write(answer)
+                    message_placeholder.write(answer)
 
         st.session_state.messages.append({
             "role": "assistant", 
