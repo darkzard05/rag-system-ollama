@@ -3,7 +3,7 @@ import time
 import tempfile
 import subprocess
 import logging
-from langchain_community.document_loaders import PyPDFLoader, PyMuPDFLoader
+from langchain_community.document_loaders import PyMuPDFLoader
 from langchain_experimental.text_splitter import SemanticChunker
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_community.vectorstores import FAISS
@@ -57,12 +57,9 @@ def split_documents(_docs: List, _embedder) -> List:
     logging.info("문서 분할 시작...")
     start_time = time.time()
     try:
-        chunker = SemanticChunker(_embedder,
-                                #   buffer_size=5,
-                                #   min_chunk_size=256
-                                  )
+        chunker = SemanticChunker(_embedder)
         docs = chunker.split_documents(_docs)
-        logging.info(f"문서 분할 완료 (소요 시간: {time.time() - start_time:.2f}초)")
+        logging.info(f"문서 {len(docs)} 페이지 분할 완료 (소요 시간: {time.time() - start_time:.2f}초)")
         return docs
     except Exception as e:
         logging.error(f"문서 분할 중 오류 발생: {e}")
@@ -86,7 +83,7 @@ def init_llm(model_name) -> Optional[OllamaLLM]:
     """LLM을 초기화하는 함수"""
     logging.info("LLM 초기화 중...")
     try:
-        return OllamaLLM(model=model_name, device='cuda')
+        return OllamaLLM(model=model_name)
     except Exception as e:
         logging.error(f"LLM 초기화 중 오류 발생: {e}")
         raise ValueError(f"LLM 초기화 중 오류 발생: {e}") from e
