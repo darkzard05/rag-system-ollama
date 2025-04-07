@@ -3,9 +3,9 @@ torch.classes.__path__ = []
 import tempfile
 import streamlit as st
 from streamlit_pdf_viewer import pdf_viewer
-from langchain.prompts import PromptTemplate
 from langchain.chains.combine_documents import create_stuff_documents_chain
 from langchain.chains.retrieval import create_retrieval_chain
+from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain import hub
 import logging
 from utils import (
@@ -143,7 +143,21 @@ with col_left:
                 st.session_state.llm = llm  
 
                 # QA 체인 생성
-                QA_PROMPT = hub.pull("langchain-ai/retrieval-qa-chat")
+                QA_PROMPT = ChatPromptTemplate.from_messages([
+                    # 시스템 메시지 (지침)
+                    ("system", 
+                    """다음의 문맥에 기반해서만 사용자 질문에 답변하세요:
+
+                    <context>
+                    {context}
+                    </context>"""),
+                        
+                    # 이전 채팅 기록 자리
+                    MessagesPlaceholder(variable_name="chat_history"),
+                    
+                    # 현재 사용자 입력
+                    ("human", "{input}")
+                    ])
                 
                 # 문서 체인 생성
                 combine_chain = create_stuff_documents_chain(llm, QA_PROMPT)
@@ -160,6 +174,25 @@ with col_left:
                 with chat_container:
                     with st.chat_message("assistant"):
                         st.write(f"✅ PDF 파일 {uploaded_file.name}의 문서 처리가 완료되었습니다.")
+                        
+        # 예시 질문 생성
+        with chat_container:
+            with st.spinner("📄 다음 문서에 대한 대표 질문 5가지를 생성 중... 잠시만 기다려 주세요.", show_time=True):
+                try:
+                    suggestion_prompt = "다음 문서에 기반해서 사용자가 할 수 있는 대표적인 질문 5가지를 제시해 주세요:\n\n"
+                    doc_sample_text = "\n\n".join([d.page_content for d in documents[:3]])[:2000]  # 너무 길지 않게 자르기
+                    suggestion_input = suggestion_prompt + doc_sample_text
+
+                    suggestion_response = llm.invoke(suggestion_input)
+                    st.session_state.messages.append({
+                        "role": "assistant",
+                        "content": f"💡 다음은 문서를 기반으로 할 수 있는 질문 예시입니다:\n\n{suggestion_response}"
+                    })
+                    with chat_container:
+                        with st.chat_message("assistant"):
+                            st.write(f"💡 다음은 문서를 기반으로 할 수 있는 질문 예시입니다:\n\n{suggestion_response}")
+                except Exception as e:
+                    st.warning(f"예시 질문 생성 중 오류 발생: {e}")
     
     # 메시지 입력
     user_input = st.chat_input("메시지를 입력하세요")
