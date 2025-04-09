@@ -145,24 +145,18 @@ with col_left:
                 # QA 체인 생성
                 QA_PROMPT = ChatPromptTemplate.from_messages([
                     # 시스템 메시지 (지침)
-                    ("system", 
-                    """다음의 문맥에 기반해서만 사용자 질문에 답변하세요:
-
-                    <context>
-                    {context}
-                    </context>"""),
-                        
+                    ("system", "다음의 문맥에 기반해서만 사용자 질문에 답변하세요:\n\n<context>\n{context}\n</context>"),
                     # 이전 채팅 기록 자리
                     MessagesPlaceholder(variable_name="chat_history"),
-                    
                     # 현재 사용자 입력
                     ("human", "{input}")
                     ])
                 
                 # 문서 체인 생성
                 combine_chain = create_stuff_documents_chain(llm, QA_PROMPT)
-                qa_chain = create_retrieval_chain(vector_store.as_retriever(search_type="similarity",
-                                                                            search_kwargs={"k": 20}), combine_chain)
+                qa_chain = create_retrieval_chain(vector_store.as_retriever(
+                    search_type="similarity", search_kwargs={"k": 20}
+                    ), combine_chain)
 
                 st.session_state.qa_chain = qa_chain
                 st.session_state.pdf_completed = True  
