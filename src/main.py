@@ -6,6 +6,7 @@ from streamlit_pdf_viewer import pdf_viewer
 from langchain.chains.combine_documents import create_stuff_documents_chain
 from langchain.chains.retrieval import create_retrieval_chain
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
+from langchain_core.messages import HumanMessage, AIMessage
 from langchain import hub
 import logging
 from utils import (
@@ -68,7 +69,7 @@ with col_left:
         
     # 대화 메시지를 저장할 컨테이너 생성
     chat_container = st.container(height=500, border=True, key="chat_container")
-
+    
     # 대화 메시지 표시
     with chat_container:
         for message in st.session_state.messages:
@@ -119,74 +120,104 @@ with col_left:
 
         # PDF 문서 처리 중 메시지 출력
         with chat_container:
-            with st.spinner("📄 문서를 처리하는 중... 잠시만 기다려 주세요.", show_time=True):
-                try:
-                    docs = load_pdf_docs(uploaded_file.getvalue())        
+            try:
+                with st.spinner("문서를 로딩 중...[1/5]"):
+                    docs = load_pdf_docs(uploaded_file.getvalue())
+                with st.spinner("임베딩 모델 로딩 중...[2/5]"):
+                    device = "cuda" if torch.cuda.is_available() else "cpu"
                     embedder = get_embedder(model_name="BAAI/bge-m3",
-                                            model_kwargs={'device': 'cuda'},
-                                            encode_kwargs={'device': 'cuda'})
+                                            model_kwargs={'device': device},
+                                            encode_kwargs={'device': device})
+                with st.spinner("문서를 분할 중...[3/5]"):
                     documents = split_documents(docs, embedder)
+                with st.spinner("벡터 저장소 생성 중...[4/5]"):
                     vector_store = create_vector_store(documents, embedder)
-                    
+                with st.spinner("LLM 초기화 중...[5/5]"):
                     if isinstance(selected_model, str):
                         llm = init_llm(selected_model)
                     else:
                         raise ValueError("❌ LLM 초기화에 실패했습니다.")
-                except ValueError as e:
-                    st.session_state.messages.append({
-                        "role": "assistant",
-                        "content": str(e)
-                    })
-                
-                # 문서 처리 완료 후 세션 상태 업데이트
-                st.session_state.vector_store = vector_store
-                st.session_state.llm = llm  
-
-                # QA 체인 생성
-                QA_PROMPT = ChatPromptTemplate.from_messages([
-                    # 시스템 메시지 (지침)
-                    ("system", "다음의 문맥에 기반해서만 사용자 질문에 답변하세요:\n\n<context>\n{context}\n</context>"),
-                    # 이전 채팅 기록 자리
-                    MessagesPlaceholder(variable_name="chat_history"),
-                    # 현재 사용자 입력
-                    ("human", "{input}")
-                    ])
-                
-                # 문서 체인 생성
-                combine_chain = create_stuff_documents_chain(llm, QA_PROMPT)
-                qa_chain = create_retrieval_chain(vector_store.as_retriever(
-                    search_type="similarity", search_kwargs={"k": 20}
-                    ), combine_chain)
-
-                st.session_state.qa_chain = qa_chain
-                st.session_state.pdf_completed = True  
-
+            except ValueError as e:
                 st.session_state.messages.append({
-                    "role": "assistant", 
-                    "content": f"✅ PDF 파일 {uploaded_file.name}의 문서 처리가 완료되었습니다."
+                    "role": "assistant",
+                    "content": str(e)
                 })
-                with chat_container:
-                    with st.chat_message("assistant"):
-                        st.write(f"✅ PDF 파일 {uploaded_file.name}의 문서 처리가 완료되었습니다.")
-                        
+            
+            # 문서 처리 완료 후 세션 상태 업데이트
+            st.session_state.vector_store = vector_store
+            st.session_state.llm = llm  
+
+            # QA 체인 생성
+            QA_PROMPT = ChatPromptTemplate.from_messages([
+                # 시스템 메시지 (지침)
+                ("system", "다음의 문맥에 기반해서만 사용자 질문에 답변하세요:\n\n<context>\n{context}\n</context>"),
+                # 이전 채팅 기록 자리
+                MessagesPlaceholder(variable_name="chat_history"),
+                # 현재 사용자 입력
+                ("human", "{input}")
+                ])
+            
+            # 문서 체인 생성
+            combine_chain = create_stuff_documents_chain(llm, QA_PROMPT)
+            qa_chain = create_retrieval_chain(vector_store.as_retriever(
+                search_type="similarity", search_kwargs={"k": 5}
+                ), combine_chain)
+
+            st.session_state.qa_chain = qa_chain
+            st.session_state.pdf_completed = True  
+
+            st.session_state.messages.append({
+                "role": "assistant", 
+                "content": f"✅ PDF 파일 {uploaded_file.name}의 문서 처리가 완료되었습니다."
+            })
+            with chat_container:
+                with st.chat_message("assistant"):
+                    st.write(f"✅ PDF 파일 {uploaded_file.name}의 문서 처리가 완료되었습니다.")
+        
         # 예시 질문 생성
         with chat_container:
-            with st.spinner("📄 다음 문서에 대한 대표 질문 5가지를 생성 중... 잠시만 기다려 주세요.", show_time=True):
+            # 문서 처리 완료 후 예시 질문 생성
+            with st.chat_message("assistant"):
+                # 스트리밍 처리 중 메시지 표시
+                message_placeholder = st.empty()
+                # 예시 질문 생성 메시지 표시
+                message_placeholder.write("💡 예시 질문 생성 중...")
                 try:
+                    # 예시 질문 생성 프롬프트
                     suggestion_prompt = "다음 문서에 기반해서 사용자가 할 수 있는 대표적인 질문 5가지를 제시해 주세요:\n\n"
-                    doc_sample_text = "\n\n".join([d.page_content for d in documents[:3]])[:2000]  # 너무 길지 않게 자르기
+                    
+                    # 문서 샘플 텍스트 생성
+                    doc_sample_text = "\n\n".join([d.page_content for d in documents[:10]]) # 너무 길지 않게 자르기
                     suggestion_input = suggestion_prompt + doc_sample_text
+                    
+                    full_response = ""
+                    # 스트리밍 응답을 위한 메시지 프롬프트
+                    for chunk in llm.stream(suggestion_input):
+                        full_response += chunk
+                        # placeholder 업데이트 (커서 효과 추가)
+                        message_placeholder.write(full_response + "▌")
 
-                    suggestion_response = llm.invoke(suggestion_input)
+                    # 스트리밍 완료 후 최종 메시지 업데이트 (커서 제거 및 접두사 추가)
+                    final_message = f"💡 다음은 문서를 기반으로 할 수 있는 질문 예시입니다:\n\n{full_response}"
+                    message_placeholder.write(final_message)
+
+                    # 세션 상태에 최종 응답 저장
                     st.session_state.messages.append({
                         "role": "assistant",
-                        "content": f"💡 다음은 문서를 기반으로 할 수 있는 질문 예시입니다:\n\n{suggestion_response}"
+                        "content": final_message
                     })
-                    with chat_container:
-                        with st.chat_message("assistant"):
-                            st.write(f"💡 다음은 문서를 기반으로 할 수 있는 질문 예시입니다:\n\n{suggestion_response}")
+
                 except Exception as e:
-                    st.warning(f"예시 질문 생성 중 오류 발생: {e}")
+                    error_message = f"⚠️ 예시 질문 생성 중 오류 발생: {e}"
+                    # 오류 발생 시 placeholder에 에러 메시지 표시
+                    message_placeholder.error(error_message)
+                    # 세션 상태에도 에러 메시지 저장
+                    st.session_state.messages.append({
+                        "role": "assistant",
+                        "content": error_message
+                    })
+                    # 필요시 로깅 추가
+                    logging.error(f"오류가 발생했습니다: {e}")
     
     # 메시지 입력
     user_input = st.chat_input("메시지를 입력하세요")
@@ -212,7 +243,7 @@ with col_left:
                 "content": "❌ 문서 처리가 완료되지 않았습니다. PDF를 먼저 업로드하세요."
             })
             st.stop()
-            
+        
         # 답변 생성
         with chat_container:
             with st.chat_message("assistant"):
@@ -222,7 +253,8 @@ with col_left:
                 answer = ""
                 try:
                     # 스트리밍 응답 처리
-                    for chunk in qa_chain.stream({"input": user_input, "chat_history": []}):
+                    for chunk in qa_chain.stream({"input": user_input,
+                                                  "chat_history": []}):
                         if "answer" in chunk:
                             if not answer:
                                 status_message.empty()
