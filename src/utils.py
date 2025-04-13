@@ -1,4 +1,5 @@
 import os
+import torch
 import time
 import tempfile
 import subprocess
@@ -9,6 +10,9 @@ from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_community.vectorstores import FAISS
 from langchain_ollama import OllamaLLM
 from langchain_core.messages import HumanMessage, AIMessage
+from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
+from langchain.chains.combine_documents import create_stuff_documents_chain
+from langchain.chains.retrieval import create_retrieval_chain
 import streamlit as st
 
 from typing import List, Optional, Dict, Any
@@ -55,30 +59,6 @@ def prepare_chat_history():
         elif msg["role"] == "assistant":
             chat_history.append(AIMessage(content=msg["content"]))
     return chat_history
-
-def generate_example_questions():
-    """예시 질문을 생성합니다."""
-    try:
-        with st.spinner("💡 문서 기반 예시 질문 생성 중..."):
-            logging.info("예시 질문 생성 시작...")
-            example_question_prompt = "이 문서의 내용을 기반으로 사용자가 궁금해할 만한 흥미로운 질문 5가지를 한국어로 만들어 주세요. 질문만 목록 형태로 제시해 주세요."
-            chat_history = prepare_chat_history()
-            response = st.session_state.qa_chain.invoke({
-                "input": example_question_prompt,
-                "chat_history": chat_history
-            })
-            example_questions = response.get("answer", "⚠️ 예시 질문 생성 실패")
-            st.session_state.messages.append({
-                "role": "assistant",
-                "content": f"💡 다음은 이 문서에 대해 질문해 볼 수 있는 예시입니다:\n\n{example_questions}"
-            })
-            logging.info("예시 질문 생성 완료.")
-    except Exception as e:
-        logging.warning(f"예시 질문 생성 중 오류 발생: {e}")
-        st.session_state.messages.append({
-            "role": "assistant",
-            "content": "⚠️ 예시 질문 생성 중 오류가 발생했습니다."
-        })
 
 @st.cache_data(show_spinner=False)
 def get_ollama_models() -> List[str]:
@@ -151,7 +131,75 @@ def init_llm(model_name) -> Optional[OllamaLLM]:
     """LLM을 초기화하는 함수"""
     logging.info("LLM 초기화 중...")
     try:
-        return OllamaLLM(model=model_name, additional_settings={"output_format": "plain_text"})
+        return OllamaLLM(model=model_name)
     except Exception as e:
         logging.error(f"LLM 초기화 중 오류 발생: {e}")
         raise ValueError(f"LLM 초기화 중 오류 발생: {e}") from e
+
+def get_qa_prompt() -> ChatPromptTemplate:
+    """QA 프롬프트를 반환하는 함수"""
+    return 
+    
+def process_pdf(uploaded_file, selected_model):
+    """PDF 처리 및 QA 체인 생성."""
+    try:
+        logging.info("PDF 처리 시작...")
+        file_bytes = uploaded_file.getvalue()
+
+        logging.info("문서 로딩 중...")
+        docs = load_pdf_docs(file_bytes)
+        if not docs: raise ValueError("PDF 문서 로딩 실패")
+
+        logging.info("임베딩 모델 로딩 중...")
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        embedder = get_embedder(model_name="BAAI/bge-m3",
+                                model_kwargs={'device': device},
+                                encode_kwargs={'normalize_embeddings': True, 'device': device})
+        if not embedder: raise ValueError("임베딩 모델 로딩 실패")
+
+        logging.info("문서 분할 중...")
+        documents = split_documents(docs, embedder)
+        if not documents: raise ValueError("문서 분할 실패")
+
+        logging.info("벡터 저장소 생성 중...")
+        vector_store = create_vector_store(documents, embedder)
+        if not vector_store: raise ValueError("벡터 저장소 생성 실패")
+        st.session_state.vector_store = vector_store
+
+        logging.info("LLM 초기화 중...")
+        if isinstance(selected_model, str):
+            llm = init_llm(selected_model)
+            if not llm: raise ValueError("LLM 초기화 실패")
+            st.session_state.llm = llm
+        else:
+            raise ValueError("LLM 초기화를 위한 모델 미선택")
+
+        logging.info("QA 체인 생성 중...")
+        QA_PROMPT = ChatPromptTemplate.from_messages([
+            ("system", ("당신은 주어진 문맥을 바탕으로 질문에 답변하는 AI 어시스턴트입니다.\n"
+                        "문맥에서 정보를 찾을 수 없으면, 모른다고 솔직하게 답하세요.\n"
+                        "추측하거나 외부 정보를 사용하지 마세요.\n\n"
+                        "<context>\n{context}\n</context>")),
+            MessagesPlaceholder(variable_name="chat_history"),
+            ("human", "{input}")
+            ])
+        combine_chain = create_stuff_documents_chain(st.session_state.llm, QA_PROMPT)
+        qa_chain = create_retrieval_chain(
+            st.session_state.vector_store.as_retriever(search_type="similarity", search_kwargs={"k": 10}),
+            combine_chain
+        )
+        st.session_state.qa_chain = qa_chain
+        st.session_state.pdf_processed = True
+        logging.info("PDF 처리 완료.")
+        st.session_state.messages.append({
+            "role": "assistant",
+            "content": f"✅ PDF 파일 '{uploaded_file.name}'의 문서 처리가 완료되었습니다. 이제 질문할 수 있습니다."
+        })
+
+    except Exception as e:
+        logging.error(f"PDF 처리 중 오류 발생: {e}", exc_info=True)
+        st.session_state.pdf_processing_error = str(e)
+        st.session_state.messages.append({
+            "role": "assistant",
+            "content": f"❌ PDF 처리 중 오류가 발생했습니다: {e}"
+        })
