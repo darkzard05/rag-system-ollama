@@ -54,7 +54,7 @@ col_left, col_right = st.columns([1, 1])
 # 오른쪽 컬럼: PDF 미리보기
 with col_right:
     st.header("📄 PDF Preview")
-    with st.container():  # 컨테이너 추가
+    with st.container():
         if uploaded_file and uploaded_file.name != st.session_state.get("last_uploaded_file_name"):
             if st.session_state.temp_pdf_path and os.path.exists(st.session_state.temp_pdf_path):
                 try:
@@ -86,7 +86,7 @@ with col_right:
 # 왼쪽 컬럼: 채팅 및 설정
 with col_left:
     st.header("💬 Chat")
-    chat_container = st.container(height=500, border=True)  # 채팅 컨테이너 추가
+    chat_container = st.container(height=500, border=True)
     with chat_container:
         # 채팅 메시지 표시
         for message in st.session_state.messages:
@@ -103,6 +103,7 @@ with col_left:
             })
             st.rerun()
 
+        # PDF 문서 처리 상태 확인
         if uploaded_file and not st.session_state.pdf_processed and not st.session_state.pdf_processing_error:
             with st.spinner("📄 PDF 문서 처리 중... 잠시만 기다려 주세요."):
                 process_pdf(uploaded_file, selected_model)
@@ -126,7 +127,11 @@ with col_left:
                             try:
                                 logging.info("예시 질문 생성 시작...")
                                 example_question_prompt = (
-                                    "문서의 핵심 내용을 바탕으로 사용자가 궁금해할 만한 질문 5개를 생성하세요.\n"
+                                    "다음 문서를 바탕으로 예상 가능한 질문을 생성하세요.\n"
+                                    "질문은 사실 기반, 추론, 요약, 비교 등 다양한 유형을 포함해야 합니다.\n"
+                                    "문서의 주요 주제와 세부 정보를 고려하여 질문을 작성하세요.\n"
+                                    "질문은 명확하고 구체적이어야 하며, 문서의 내용을 정확히 반영해야 합니다.\n"
+                                    "최소 4가지 유형(사실 기반, 추론, 요약, 비교)의 질문을 생성하세요.\n"
                                     "반드시 한국어로 답변하세요."
                                 )
                                 stream = st.session_state.qa_chain.stream({
@@ -157,22 +162,24 @@ with col_left:
         disabled=not is_ready_for_input
     )
 
+    # 사용자 입력 처리
     if user_input:
         st.session_state.messages.append({"role": "user", "content": user_input})
-        with chat_container:  # 입력 메시지도 컨테이너 안에 추가
+        with chat_container:
             with st.chat_message("user"):
                 st.write(user_input)
 
+        # 답변 생성
         qa_chain = st.session_state.get("qa_chain")
         if not qa_chain:
             error_message = "❌ QA 체인이 준비되지 않았습니다. PDF 문서를 먼저 성공적으로 처리해야 합니다."
             st.session_state.messages.append({"role": "assistant", "content": error_message})
-            with chat_container:  # 오류 메시지도 컨테이너 안에 추가
+            with chat_container:
                 with st.chat_message("assistant"):
                     st.warning(error_message)
 
         if qa_chain:
-            with chat_container:  # 답변도 컨테이너 안에 추가
+            with chat_container:
                 with st.chat_message("assistant"):
                     message_placeholder = st.empty()
                     message_placeholder.write("▌")
