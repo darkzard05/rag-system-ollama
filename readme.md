@@ -39,10 +39,12 @@ streamlit run src/main.py
 ## 📑 Features
 - **Dynamic Ollama Model Selection**: Choose from available Ollama models via the sidebar.
 - **PDF Upload and Processing**: Upload PDF files for text extraction and question answering.
+- **PDF Preview with Adjustable Settings**: View uploaded PDFs directly in the app with customizable resolution, width, and height.
 - **HuggingFace Embeddings**: Uses `BAAI/bge-m3` or configurable models for embedding generation.
 - **FAISS Vector Database**: Efficient document retrieval using FAISS.
 - **Customizable QA Prompt**: Modify the QA prompt template for tailored responses.
-- **Real-Time PDF Preview**: View uploaded PDFs directly in the app with adjustable resolution and dimensions.
+- **Example Question Generation**: Automatically generates example questions based on the uploaded PDF content.
+- **Korean Language Support**: All responses and example questions are generated in Korean.
 
 ## 🛠️ Advanced Configuration
 - **Cache Management**: Automatic cache invalidation when new PDFs are uploaded or models are changed.
