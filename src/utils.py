@@ -45,10 +45,8 @@ def reset_session_state(uploaded_file):
     st.session_state.vector_store = None
     st.session_state.messages = []  # 새 파일이므로 채팅 기록 초기화
     load_pdf_docs.clear()
-    get_embedder.clear()
     split_documents.clear()
     create_vector_store.clear()
-    init_llm.clear()
 
 def prepare_chat_history():
     """이전 대화 기록을 준비합니다."""
@@ -88,17 +86,6 @@ def load_pdf_docs(file_path) -> List:
         logging.error(f"PDF 로드 중 오류 발생: {e}")
         raise ValueError(f"PDF 로드 중 오류 발생: {e}") from e
 
-@st.cache_resource(show_spinner=False)
-def get_embedder(model_name, model_kwargs=None, encode_kwargs=None) -> HuggingFaceEmbeddings:
-    """HuggingFaceEmbeddings 모델을 초기화하는 함수"""
-    try:
-        return HuggingFaceEmbeddings(model_name=model_name,
-                                    model_kwargs=model_kwargs,
-                                    encode_kwargs=encode_kwargs)
-    except Exception as e:
-        logging.error(f"임베더 초기화 중 오류 발생: {e}")
-        raise ValueError(f"임베더 초기화 중 오류 발생: {e}") from e
-
 @st.cache_data(show_spinner=False)
 def split_documents(_docs: List, _embedder) -> List:
     """문서를 분할하는 함수"""
@@ -126,16 +113,6 @@ def create_vector_store(_documents, _embedder) -> Optional[FAISS]:
         logging.error(f"벡터 저장소 생성 중 오류 발생: {e}")
         raise ValueError(f"벡터 저장소 생성 중 오류 발생: {e}") from e
 
-@st.cache_resource(show_spinner=False)
-def init_llm(model_name) -> Optional[OllamaLLM]:
-    """LLM을 초기화하는 함수"""
-    logging.info("LLM 초기화 중...")
-    try:
-        return OllamaLLM(model=model_name)
-    except Exception as e:
-        logging.error(f"LLM 초기화 중 오류 발생: {e}")
-        raise ValueError(f"LLM 초기화 중 오류 발생: {e}") from e
-
 def get_qa_prompt() -> ChatPromptTemplate:
     """QA 프롬프트를 반환하는 함수"""
     return 
@@ -152,9 +129,10 @@ def process_pdf(uploaded_file, selected_model):
 
         logging.info("임베딩 모델 로딩 중...")
         device = "cuda" if torch.cuda.is_available() else "cpu"
-        embedder = get_embedder(model_name="BAAI/bge-m3",
-                                model_kwargs={'device': device},
-                                encode_kwargs={'normalize_embeddings': True, 'device': device})
+        logging.info(f"사용할 장치: {device}")
+        embedder = HuggingFaceEmbeddings(model_name="BAAI/bge-m3",
+                                         model_kwargs={'device': device},
+                                         encode_kwargs={'normalize_embeddings': True, 'device': device})
         if not embedder: raise ValueError("임베딩 모델 로딩 실패")
 
         logging.info("문서 분할 중...")
@@ -168,7 +146,7 @@ def process_pdf(uploaded_file, selected_model):
 
         logging.info("LLM 초기화 중...")
         if isinstance(selected_model, str):
-            llm = init_llm(selected_model)
+            llm = OllamaLLM(model=selected_model)
             if not llm: raise ValueError("LLM 초기화 실패")
             st.session_state.llm = llm
         else:
