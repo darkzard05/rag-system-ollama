@@ -86,12 +86,14 @@ with col_right:
 # 왼쪽 컬럼: 채팅 및 설정
 with col_left:
     st.header("💬 Chat")
-    chat_container = st.container(height=500, border=True)
+    chat_container = st.container(height=550)
     with chat_container:
         # 채팅 메시지 표시
-        for message in st.session_state.messages:
-            with st.chat_message(message["role"]):
-                st.write(message["content"])
+        chat_placeholder = st.empty()  # 동적 업데이트를 위한 컨테이너 생성
+        with chat_placeholder.container():
+            for message in st.session_state.messages:
+                with st.chat_message(message["role"]):
+                    st.write(message["content"])
 
         # 문서 처리 상태 메시지 추가
         new_file_uploaded = uploaded_file and uploaded_file.name != st.session_state.get("last_uploaded_file_name")
@@ -101,58 +103,56 @@ with col_left:
                 "role": "assistant",
                 "content": f"📂 새 PDF 파일 '{uploaded_file.name}'이(가) 업로드되었습니다. 문서를 처리합니다..."
             })
-            st.rerun()
+            chat_placeholder.empty()  # 기존 메시지 초기화
+            with chat_placeholder.container():
+                for message in st.session_state.messages:
+                    with st.chat_message(message["role"]):
+                        st.write(message["content"])
 
         # PDF 문서 처리 상태 확인
         if uploaded_file and not st.session_state.pdf_processed and not st.session_state.pdf_processing_error:
             with st.spinner("📄 PDF 문서 처리 중... 잠시만 기다려 주세요."):
-                process_pdf(uploaded_file, selected_model)
+                qa_chain, documents, embedder, vector_store = process_pdf(uploaded_file, selected_model)
 
                 # qa_chain 상태 확인
                 if not st.session_state.qa_chain:
                     logging.error("QA 체인이 초기화되지 않았습니다.")
-                    with chat_container:
-                        with st.chat_message("assistant"):
-                            st.error("⚠️ QA 체인이 초기화되지 않아 예시 질문을 생성할 수 없습니다.")
                     st.session_state.messages.append({
                         "role": "assistant",
                         "content": "⚠️ QA 체인이 초기화되지 않아 예시 질문을 생성할 수 없습니다."
-                    })
+                    }) 
                 else:
                     # 예시 질문 생성 및 컨테이너 안에 추가
-                    with chat_container:
-                        with st.chat_message("assistant"):
-                            example_placeholder = st.empty()
-                            example_placeholder.write("▌")
-                            try:
-                                logging.info("예시 질문 생성 시작...")
-                                example_question_prompt = (
-                                    "다음 문서를 바탕으로 예상 가능한 질문을 생성하세요.\n"
-                                    "질문은 사실 기반, 추론, 요약, 비교 등 다양한 유형을 포함해야 합니다.\n"
-                                    "문서의 주요 주제와 세부 정보를 고려하여 질문을 작성하세요.\n"
-                                    "질문은 명확하고 구체적이어야 하며, 문서의 내용을 정확히 반영해야 합니다.\n"
-                                    "최소 4가지 유형(사실 기반, 추론, 요약, 비교)의 질문을 생성하세요.\n"
-                                    "반드시 한국어로 답변하세요."
-                                )
-                                stream = st.session_state.qa_chain.stream({
-                                    "input": example_question_prompt,
-                                    "chat_history": [],
-                                })
-                                example_questions = ""
-                                for chunk in stream:
-                                    answer_part = chunk.get("answer", "")
-                                    if answer_part:
-                                        example_questions += answer_part
-                                        example_placeholder.write(example_questions + "▌")
-                                example_placeholder.write(example_questions)  # 최종 출력
-                                logging.info("예시 질문 생성 완료.")
-                            except Exception as e:
-                                logging.warning(f"예시 질문 생성 중 오류 발생: {e}")
-                                example_placeholder.error("⚠️ 예시 질문 생성 중 오류가 발생했습니다.")
-                                example_questions = "⚠️ 예시 질문 생성 중 오류가 발생했습니다."
+                    try:
+                        logging.info("예시 질문 생성 시작...")
+                        example_question_prompt = (
+                            "다음 문서를 바탕으로 질문을 생성하세요.\n"
+                            "질문은 사실 기반, 추론, 요약, 비교 등 다양한 유형을 포함해야 합니다.\n"
+                            "문서의 주요 주제와 세부 정보를 고려하여 질문을 작성하세요.\n"
+                            "질문은 명확하고 구체적이어야 하며, 문서의 내용을 정확히 반영해야 합니다.\n"
+                            "답변이 가능한 질문만 생성하세요.\n"
+                            "최소 4가지 유형(사실 기반, 추론, 요약, 비교)의 질문을 생성하세요.\n"
+                            "반드시 한국어로 답변하세요."
+                        )
+                        stream = st.session_state.qa_chain.stream({
+                            "input": example_question_prompt,
+                            "chat_history": [],
+                        })
+                        example_questions = ""
+                        for chunk in stream:
+                            answer_part = chunk.get("answer", "")
+                            if answer_part:
+                                example_questions += answer_part
+                        st.session_state.messages.append({"role": "assistant", "content": example_questions})
+                    except Exception as e:
+                        logging.warning(f"예시 질문 생성 중 오류 발생: {e}")
+                        st.session_state.messages.append({"role": "assistant", "content": "⚠️ 예시 질문 생성 중 오류가 발생했습니다."})
 
-                    # 예시 질문을 세션 메시지에 추가
-                    st.session_state.messages.append({"role": "assistant", "content": example_questions})
+            chat_placeholder.empty()  # 기존 메시지 초기화
+            with chat_placeholder.container():
+                for message in st.session_state.messages:
+                    with st.chat_message(message["role"]):
+                        st.write(message["content"])
 
     # 채팅 입력창을 컨테이너 하단에 고정
     is_ready_for_input = st.session_state.pdf_processed and not st.session_state.pdf_processing_error
