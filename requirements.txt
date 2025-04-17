@@ -6,5 +6,5 @@ langchain-experimental
 langchain-huggingface
 langchain-ollama
 streamlit_pdf_viewer
-faiss-cpu
+chromadb
 pymupdf
