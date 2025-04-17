@@ -1,4 +1,5 @@
 import os
+os.environ["CHROMA_TELEMETRY"] = "FALSE"
 import torch
 import time
 import tempfile
@@ -7,16 +8,17 @@ import logging
 from langchain_community.document_loaders import PyMuPDFLoader
 from langchain_experimental.text_splitter import SemanticChunker
 from langchain_huggingface import HuggingFaceEmbeddings
-from langchain_community.vectorstores import FAISS
+from langchain_community.vectorstores import Chroma
 from langchain_ollama import OllamaLLM
 from langchain_core.messages import HumanMessage, AIMessage
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain.chains.combine_documents import create_stuff_documents_chain
 from langchain.chains.retrieval import create_retrieval_chain
+from langchain_community.document_loaders.parsers import RapidOCRBlobParser
 import streamlit as st
 
-from typing import List, Optional, Dict, Any
-
+from typing import List, Optional
+from langchain_core.messages import AIMessage
 
 def init_session_state():
     """세션 상태 초기화 함수"""
@@ -78,7 +80,10 @@ def load_pdf_docs(file_path) -> List:
         with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp_file:
             tmp_file.write(file_path)
             temp_path = tmp_file.name
-        loader = PyMuPDFLoader(temp_path)
+        loader = PyMuPDFLoader(temp_path,
+                               extract_tables="markdown",
+                               images_inner_format="markdown-img",
+                               images_parser=RapidOCRBlobParser())
         docs = loader.load()
         os.remove(temp_path)
         return docs
@@ -101,21 +106,20 @@ def split_documents(_docs: List, _embedder) -> List:
         raise ValueError(f"문서 분할 중 오류 발생: {e}") from e
 
 @st.cache_resource(show_spinner=False)
-def create_vector_store(_documents, _embedder) -> Optional[FAISS]:
-    """문서에서 벡터 저장소를 생성하는 함수"""
-    logging.info("벡터 저장소 생성 중...")
+def create_vector_store(_documents, _embedder) -> Optional[Chroma]:
+    """문서에서 Chroma 벡터 저장소를 생성하는 함수"""
+    logging.info("Chroma 벡터 저장소 생성 중...")
     start_time = time.time()
     try:
-        vector_space = FAISS.from_documents(_documents, _embedder)
-        logging.info(f"벡터 저장소 생성 완료 (소요 시간: {time.time() - start_time:.2f}초)")
+        vector_space = Chroma.from_documents(
+            documents=_documents,
+            embedding=_embedder,
+        )
+        logging.info(f"Chroma 벡터 저장소 생성 완료 (소요 시간: {time.time() - start_time:.2f}초)")
         return vector_space
     except Exception as e:
-        logging.error(f"벡터 저장소 생성 중 오류 발생: {e}")
-        raise ValueError(f"벡터 저장소 생성 중 오류 발생: {e}") from e
-
-def get_qa_prompt() -> ChatPromptTemplate:
-    """QA 프롬프트를 반환하는 함수"""
-    return 
+        logging.error(f"Chroma 벡터 저장소 생성 중 오류 발생: {e}")
+        raise ValueError(f"Chroma 벡터 저장소 생성 중 오류 발생: {e}") from e
     
 def process_pdf(uploaded_file, selected_model):
     """PDF 처리 및 QA 체인 생성."""
@@ -154,16 +158,20 @@ def process_pdf(uploaded_file, selected_model):
 
         logging.info("QA 체인 생성 중...")
         QA_PROMPT = ChatPromptTemplate.from_messages([
-            ("system", ("당신은 주어진 문맥을 바탕으로 질문에 답변하는 AI 어시스턴트입니다.\n"
+            ("system", ("당신은 주어진 문맥(context)을 바탕으로 질문에 답변하는 AI 어시스턴트입니다.\n"
                         "문맥에서 정보를 찾을 수 없으면, 모른다고 솔직하게 답하세요.\n"
-                        "추측하거나 외부 정보를 사용하지 마세요.\n\n"
+                        "추측하거나 외부 정보를 사용하지 마세요.\n"
+                        "답변은 간결하고 명확해야 하며, 항상 한국어로 작성하세요.\n\n"
                         "<context>\n{context}\n</context>")),
             MessagesPlaceholder(variable_name="chat_history"),
             ("human", "{input}")
             ])
         combine_chain = create_stuff_documents_chain(st.session_state.llm, QA_PROMPT)
         qa_chain = create_retrieval_chain(
-            st.session_state.vector_store.as_retriever(search_type="similarity", search_kwargs={"k": 10}),
+            st.session_state.vector_store.as_retriever(
+                search_type="mmr",
+                search_kwargs={'k': 7, 'fetch_k': 20, 'lambda_mult': 0.5}
+                ),
             combine_chain
         )
         st.session_state.qa_chain = qa_chain
@@ -173,6 +181,7 @@ def process_pdf(uploaded_file, selected_model):
             "role": "assistant",
             "content": f"✅ PDF 파일 '{uploaded_file.name}'의 문서 처리가 완료되었습니다. 이제 질문할 수 있습니다."
         })
+        return qa_chain, documents, embedder, vector_store
 
     except Exception as e:
         logging.error(f"PDF 처리 중 오류 발생: {e}", exc_info=True)
