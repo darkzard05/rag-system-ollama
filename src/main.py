@@ -1,5 +1,5 @@
 import torch
-torch.classes.__path__ = []
+torch.classes.__path__ = [] # 호환성 문제 해결을 위한 임시 조치
 import tempfile
 import os
 import streamlit as st
@@ -54,107 +54,69 @@ col_left, col_right = st.columns([1, 1])
 # 오른쪽 컬럼: PDF 미리보기
 with col_right:
     st.header("📄 PDF Preview")
-    with st.container():
-        if uploaded_file and uploaded_file.name != st.session_state.get("last_uploaded_file_name"):
-            if st.session_state.temp_pdf_path and os.path.exists(st.session_state.temp_pdf_path):
-                try:
-                    os.remove(st.session_state.temp_pdf_path)
-                except Exception as e:
-                    logging.warning(f"이전 임시 PDF 파일 삭제 실패: {e}")
-            try:
-                with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
-                    tmp.write(uploaded_file.getvalue())
-                    st.session_state.temp_pdf_path = tmp.name
-            except Exception as e:
-                st.error(f"임시 PDF 파일 생성 실패: {e}")
-                st.session_state.temp_pdf_path = None
-
+    if uploaded_file and uploaded_file.name != st.session_state.get("last_uploaded_file_name"):
         if st.session_state.temp_pdf_path and os.path.exists(st.session_state.temp_pdf_path):
             try:
-                pdf_viewer(
-                    input=st.session_state.temp_pdf_path,
-                    width=width,
-                    height=height,
-                    key=f'pdf_viewer_{st.session_state.last_uploaded_file_name}',
-                    resolution_boost=resolution_boost
-                )
+                os.remove(st.session_state.temp_pdf_path)
+                logging.info("이전 임시 PDF 파일 삭제 성공")
             except Exception as e:
-                st.error(f"PDF 미리보기 중 오류 발생: {e}")
-        elif uploaded_file:
-            st.warning("PDF 미리보기를 표시할 수 없습니다.")
+                logging.warning(f"이전 임시 PDF 파일 삭제 실패: {e}")
+        try:
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
+                tmp.write(uploaded_file.getvalue())
+                st.session_state.temp_pdf_path = tmp.name
+                logging.info(f"임시 PDF 파일 생성 성공: {st.session_state.temp_pdf_path}")
+        except Exception as e:
+            st.error(f"임시 PDF 파일 생성 실패: {e}")
+            st.session_state.temp_pdf_path = None
+
+    if st.session_state.temp_pdf_path and os.path.exists(st.session_state.temp_pdf_path):
+        try:
+            pdf_viewer(
+                input=st.session_state.temp_pdf_path,
+                width=width,
+                height=height,
+                key=f'pdf_viewer_{st.session_state.last_uploaded_file_name}',
+                resolution_boost=resolution_boost
+            )
+        except Exception as e:
+            st.error(f"PDF 미리보기 중 오류 발생: {e}")
+    elif uploaded_file:
+        st.warning("PDF 미리보기를 표시할 수 없습니다.")
 
 # 왼쪽 컬럼: 채팅 및 설정
 with col_left:
     st.header("💬 Chat")
     chat_container = st.container(height=550)
-    with chat_container:
-        # 채팅 메시지 표시
-        chat_placeholder = st.empty()  # 동적 업데이트를 위한 컨테이너 생성
-        with chat_placeholder.container():
-            for message in st.session_state.messages:
-                with st.chat_message(message["role"]):
-                    st.write(message["content"])
-
-        # 문서 처리 상태 메시지 추가
-        new_file_uploaded = uploaded_file and uploaded_file.name != st.session_state.get("last_uploaded_file_name")
-        if new_file_uploaded:
+    
+    new_file_uploaded = uploaded_file and uploaded_file.name != st.session_state.get("last_uploaded_file_name")
+    if new_file_uploaded:
+        if st.session_state.temp_pdf_path:
             reset_session_state(uploaded_file)
             st.session_state.messages.append({
                 "role": "assistant",
-                "content": f"📂 새 PDF 파일 '{uploaded_file.name}'이(가) 업로드되었습니다. 문서를 처리합니다..."
+                "content": f"📂 새 PDF 파일 '{uploaded_file.name}'이(가) 업로드되었습니다."
             })
-            chat_placeholder.empty()  # 기존 메시지 초기화
-            with chat_placeholder.container():
-                for message in st.session_state.messages:
-                    with st.chat_message(message["role"]):
-                        st.write(message["content"])
-
-        # PDF 문서 처리 상태 확인
-        if uploaded_file and not st.session_state.pdf_processed and not st.session_state.pdf_processing_error:
+        else:
+            st.warning("PDF 파일을 임시로 저장하는 데 실패했습니다. 다시 시도해 주세요.")
+            
+    # PDF 처리 상태 확인
+    if uploaded_file and not st.session_state.pdf_processed and not st.session_state.pdf_processing_error:
+        with chat_container:
             with st.spinner("📄 PDF 문서 처리 중... 잠시만 기다려 주세요."):
-                qa_chain, documents, embedder, vector_store = process_pdf(uploaded_file, selected_model)
+                qa_chain, documents, embedder, vector_store = process_pdf(
+                    uploaded_file,
+                    selected_model,
+                    st.session_state.temp_pdf_path
+                    )
+            
+    # 채팅 메시지 표시
+    with chat_container:
+        for message in st.session_state.messages:
+            with st.chat_message(message["role"]):
+                st.write(message["content"])
 
-                # qa_chain 상태 확인
-                if not st.session_state.qa_chain:
-                    logging.error("QA 체인이 초기화되지 않았습니다.")
-                    st.session_state.messages.append({
-                        "role": "assistant",
-                        "content": "⚠️ QA 체인이 초기화되지 않아 예시 질문을 생성할 수 없습니다."
-                    }) 
-                else:
-                    # 예시 질문 생성 및 컨테이너 안에 추가
-                    try:
-                        logging.info("예시 질문 생성 시작...")
-                        example_question_prompt = (
-                            "다음 문서를 바탕으로 질문을 생성하세요.\n"
-                            "질문은 사실 기반, 추론, 요약, 비교 등 다양한 유형을 포함해야 합니다.\n"
-                            "문서의 주요 주제와 세부 정보를 고려하여 질문을 작성하세요.\n"
-                            "질문은 명확하고 구체적이어야 하며, 문서의 내용을 정확히 반영해야 합니다.\n"
-                            "답변이 가능한 질문만 생성하세요.\n"
-                            "최소 4가지 유형(사실 기반, 추론, 요약, 비교)의 질문을 생성하세요.\n"
-                            "반드시 한국어로 답변하세요."
-                        )
-                        stream = st.session_state.qa_chain.stream({
-                            "input": example_question_prompt,
-                            "chat_history": [],
-                        })
-                        example_questions = ""
-                        for chunk in stream:
-                            answer_part = chunk.get("answer", "")
-                            if answer_part:
-                                example_questions += answer_part
-                        st.session_state.messages.append({"role": "assistant", "content": example_questions})
-                    except Exception as e:
-                        logging.warning(f"예시 질문 생성 중 오류 발생: {e}")
-                        st.session_state.messages.append({"role": "assistant", "content": "⚠️ 예시 질문 생성 중 오류가 발생했습니다."})
-
-            chat_placeholder.empty()  # 기존 메시지 초기화
-            with chat_placeholder.container():
-                for message in st.session_state.messages:
-                    with st.chat_message(message["role"]):
-                        st.write(message["content"])
-
-    # 채팅 입력창을 컨테이너 하단에 고정
+    # 채팅 입력창
     is_ready_for_input = st.session_state.pdf_processed and not st.session_state.pdf_processing_error
     user_input = st.chat_input(
         "PDF 내용에 대해 질문해보세요.",
@@ -174,9 +136,6 @@ with col_left:
         if not qa_chain:
             error_message = "❌ QA 체인이 준비되지 않았습니다. PDF 문서를 먼저 성공적으로 처리해야 합니다."
             st.session_state.messages.append({"role": "assistant", "content": error_message})
-            with chat_container:
-                with st.chat_message("assistant"):
-                    st.warning(error_message)
 
         if qa_chain:
             with chat_container:
@@ -186,9 +145,10 @@ with col_left:
                     try:
                         chat_history = prepare_chat_history()
                         full_response = ""
-                        # 입력 프롬프트에 한국어로 답변 요청 추가
+                        # 답변 생성
+                        logging.info("답변 생성 시작...")
                         stream = qa_chain.stream({
-                            "input": f"{user_input}\n\n항상 한국어로 답변하세요.",
+                            "input": f"{user_input}\n\n**[System Instruction]** Please answer in the same language as the question above.",
                             "chat_history": chat_history
                         })
                         for chunk in stream:
