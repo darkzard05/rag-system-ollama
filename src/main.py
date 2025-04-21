@@ -8,14 +8,12 @@ import logging
 from utils import (
     init_session_state,
     reset_session_state,
-    prepare_chat_history,
     get_ollama_models,
     process_pdf,
 )
 
 # 페이지 설정
 st.set_page_config(page_title="RAG Chatbot", layout="wide")
-st.title("📄 RAG Chatbot with Ollama LLM")
 
 # 로깅 설정
 logging.basicConfig(level=logging.INFO)
@@ -25,7 +23,7 @@ init_session_state()
 
 # 사이드바 설정
 with st.sidebar:
-    st.header("Settings")
+    st.header("📄 RAG Chatbot with Ollama LLM")
     try:
         models = get_ollama_models()
         current_model_index = models.index(st.session_state.last_selected_model) if st.session_state.last_selected_model in models else 0
@@ -43,7 +41,6 @@ with st.sidebar:
 
     # PDF 뷰어 설정
     st.divider()
-    st.header("📄 PDF Viewer Settings")
     resolution_boost = st.slider(label="Resolution boost", min_value=1, max_value=10, value=1)
     width = st.slider(label="PDF width", min_value=100, max_value=1000, value=1000)
     height = st.slider(label="PDF height", min_value=-1, max_value=10000, value=1000)
@@ -53,7 +50,7 @@ col_left, col_right = st.columns([1, 1])
 
 # 오른쪽 컬럼: PDF 미리보기
 with col_right:
-    st.header("📄 PDF Preview")
+    # PDF 미리보기
     if uploaded_file and uploaded_file.name != st.session_state.get("last_uploaded_file_name"):
         if st.session_state.temp_pdf_path and os.path.exists(st.session_state.temp_pdf_path):
             try:
@@ -70,6 +67,7 @@ with col_right:
             st.error(f"임시 PDF 파일 생성 실패: {e}")
             st.session_state.temp_pdf_path = None
 
+    # PDF 미리보기 표시
     if st.session_state.temp_pdf_path and os.path.exists(st.session_state.temp_pdf_path):
         try:
             pdf_viewer(
@@ -86,8 +84,7 @@ with col_right:
 
 # 왼쪽 컬럼: 채팅 및 설정
 with col_left:
-    st.header("💬 Chat")
-    chat_container = st.container(height=550)
+    chat_container = st.container(height=500)
     
     new_file_uploaded = uploaded_file and uploaded_file.name != st.session_state.get("last_uploaded_file_name")
     if new_file_uploaded:
@@ -95,7 +92,7 @@ with col_left:
             reset_session_state(uploaded_file)
             st.session_state.messages.append({
                 "role": "assistant",
-                "content": f"📂 새 PDF 파일 '{uploaded_file.name}'이(가) 업로드되었습니다."
+                "content": f"📂 새 PDF 파일 '{uploaded_file.name}'이(가) 업로드되었습니다.",
             })
         else:
             st.warning("PDF 파일을 임시로 저장하는 데 실패했습니다. 다시 시도해 주세요.")
@@ -126,7 +123,9 @@ with col_left:
 
     # 사용자 입력 처리
     if user_input:
-        st.session_state.messages.append({"role": "user", "content": user_input})
+        st.session_state.messages.append({"role": "user",
+                                          "content": user_input,
+                                          })
         with chat_container:
             with st.chat_message("user"):
                 st.write(user_input)
@@ -135,7 +134,9 @@ with col_left:
         qa_chain = st.session_state.get("qa_chain")
         if not qa_chain:
             error_message = "❌ QA 체인이 준비되지 않았습니다. PDF 문서를 먼저 성공적으로 처리해야 합니다."
-            st.session_state.messages.append({"role": "assistant", "content": error_message})
+            st.session_state.messages.append({"role": "assistant",
+                                              "content": error_message,
+                                              })
 
         if qa_chain:
             with chat_container:
@@ -143,13 +144,12 @@ with col_left:
                     message_placeholder = st.empty()
                     message_placeholder.write("▌")
                     try:
-                        chat_history = prepare_chat_history()
                         full_response = ""
                         # 답변 생성
                         logging.info("답변 생성 시작...")
                         stream = qa_chain.stream({
-                            "input": f"{user_input}\n\n**[System Instruction]** Please answer in the same language as the question above.",
-                            "chat_history": chat_history
+                            "input": user_input,
+                            # "chat_history": chat_history
                         })
                         for chunk in stream:
                             answer_part = chunk.get("answer", "")
@@ -161,4 +161,6 @@ with col_left:
                         logging.error(f"답변 생성 중 오류 발생: {e}", exc_info=True)
                         full_response = f"❌ 답변 생성 중 오류가 발생했습니다: {e}"
                         message_placeholder.error(full_response)
-            st.session_state.messages.append({"role": "assistant", "content": full_response})
+            st.session_state.messages.append({"role": "assistant",
+                                              "content": full_response,
+                                              })
