@@ -1,22 +1,20 @@
 import os
 os.environ["CHROMA_TELEMETRY"] = "FALSE"
+import asyncio
 import torch
 import time
 import subprocess
 import logging
-from langchain_community.document_loaders import PyMuPDFLoader
+from langchain_pymupdf4llm import PyMuPDF4LLMLoader
 from langchain_experimental.text_splitter import SemanticChunker
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_community.vectorstores import Chroma
 from langchain_ollama import OllamaLLM
-from langchain_core.messages import HumanMessage, AIMessage
-from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
+from langchain_core.prompts import ChatPromptTemplate
 from langchain.chains.combine_documents import create_stuff_documents_chain
 from langchain.chains.retrieval import create_retrieval_chain
 import streamlit as st
-
-from typing import List, Optional
-from langchain_core.messages import AIMessage
+from typing import List, Tuple, Optional
 
 def init_session_state():
     """세션 상태 초기화 함수"""
@@ -38,6 +36,7 @@ def init_session_state():
             
 def reset_session_state(uploaded_file):
     """세션 상태를 초기화합니다."""
+    logging.info("세션 상태 리셋 중...")
     st.session_state.last_uploaded_file_name = uploaded_file.name
     st.session_state.pdf_processed = False
     st.session_state.pdf_processing_error = None
@@ -47,16 +46,6 @@ def reset_session_state(uploaded_file):
     load_pdf_docs.clear()
     split_documents.clear()
     create_vector_store.clear()
-
-def prepare_chat_history():
-    """이전 대화 기록을 준비합니다."""
-    chat_history = []
-    for msg in st.session_state.messages:
-        if msg["role"] == "user":
-            chat_history.append(HumanMessage(content=msg["content"]))
-        elif msg["role"] == "assistant":
-            chat_history.append(AIMessage(content=msg["content"]))
-    return chat_history
 
 @st.cache_data(show_spinner=False)
 def get_ollama_models() -> List[str]:
@@ -70,7 +59,7 @@ def get_ollama_models() -> List[str]:
         logging.error(f"Ollama 모델 목록을 불러오는 중 오류 발생: {e}")
         raise ValueError(f"Ollama 모델 목록을 불러오는 중 오류 발생: {e}") from e
 
-@st.cache_data(show_spinner=False)
+@st.cache_resource(show_spinner=False)
 def load_pdf_docs(pdf_file_path: str) -> List:
     """PDF 파일을 로드하는 함수"""
     logging.info("PDF 파일 로드 시작...")
@@ -78,25 +67,25 @@ def load_pdf_docs(pdf_file_path: str) -> List:
         logging.error(f"PDF 파일 경로가 존재하지 않습니다: {pdf_file_path}")
         raise FileNotFoundError(f"PDF 파일 경로가 존재하지 않습니다: {pdf_file_path}")
     try:
-        loader = PyMuPDFLoader(pdf_file_path)
-        docs = loader.load()
-        logging.info(f"PDF 파일 로드 완료: {len(docs)} 페이지")
+        loader = PyMuPDF4LLMLoader(pdf_file_path)
+        docs = loader.lazy_load()
+        logging.info(f"PDF 파일 로드 완료")
         return docs
     except Exception as e:
         logging.error(f"PDF 로드 중 오류 발생: {e}")
         raise ValueError(f"PDF 로드 중 오류 발생: {e}") from e
 
 @st.cache_resource(show_spinner=False)
-def load_embedding_model():
+def load_embedding_model() -> HuggingFaceEmbeddings:
     """HuggingFace 임베딩 모델을 로드하고 캐싱합니다."""
     logging.info("임베딩 모델 로딩 시작...")
     device = "cuda" if torch.cuda.is_available() else "cpu"
     logging.info(f"임베딩 모델용 장치: {device}")
     try:
         embedder = HuggingFaceEmbeddings(
-            model_name="intfloat/e5-base-v2",        #"BAAI/bge-m3" # 필요시 이 부분을 설정 가능하게 변경 가능
+            model_name="sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",    # "BAAI/bge-m3", "intfloat/e5-base-v2",
             model_kwargs={'device': device},
-            encode_kwargs={'normalize_embeddings': True, 'device': device}
+            encode_kwargs={'normalize_embeddings': True, 'device': device},
         )
         logging.info("임베딩 모델 로딩 완료.")
         return embedder
@@ -119,19 +108,14 @@ def split_documents(_docs: List, _embedder) -> List:
         raise ValueError(f"문서 분할 중 오류 발생: {e}") from e
 
 @st.cache_resource(show_spinner=False)
-def create_vector_store(_documents, _embedder, persist_directory: str = "chroma_db_store") -> Optional[Chroma]:
+def create_vector_store(_documents, _embedder) -> Optional[Chroma]:
     """문서에서 Chroma 벡터 저장소를 생성하는 함수"""
     logging.info("Chroma 벡터 저장소 생성 시작...")
     start_time = time.time()
     try:
-        # 디렉토리가 없으면 생성
-        if not os.path.exists(persist_directory):
-            os.makedirs(persist_directory)
-
         vector_space = Chroma.from_documents(
             documents=_documents,
             embedding=_embedder,
-            persist_directory=persist_directory # 저장 경로 지정
         )
         logging.info(f"Chroma 벡터 저장소 생성 완료 (소요 시간: {time.time() - start_time:.2f}초)")
         return vector_space
@@ -140,18 +124,19 @@ def create_vector_store(_documents, _embedder, persist_directory: str = "chroma_
         raise ValueError(f"Chroma 벡터 저장소 생성 중 오류 발생: {e}") from e
     
 @st.cache_resource(show_spinner=False)
-def load_llm(model_name: str):
+def load_llm(model_name: str) -> OllamaLLM:
     """선택된 Ollama LLM을 로드하고 캐싱합니다."""
     logging.info(f"Ollama LLM 로딩 시작: {model_name}")
     try:
-        llm = OllamaLLM(model=model_name)
+        llm = OllamaLLM(model=model_name,
+                        temperature=0)
         logging.info(f"Ollama LLM 로딩 완료: {model_name}")
         return llm
     except Exception as e:
         logging.error(f"Ollama LLM ({model_name}) 로딩 중 오류 발생: {e}", exc_info=True)
         raise ValueError(f"Ollama LLM ({model_name}) 로딩 실패: {e}") from e
     
-def process_pdf(uploaded_file, selected_model, temp_pdf_path: str):
+def process_pdf(uploaded_file, selected_model, temp_pdf_path: str) -> Tuple:
     """PDF 처리 및 QA 체인 생성."""
     try:
         docs = load_pdf_docs(temp_pdf_path)
@@ -176,18 +161,22 @@ def process_pdf(uploaded_file, selected_model, temp_pdf_path: str):
 
         logging.info("QA 체인 생성 시작...")
         QA_PROMPT = ChatPromptTemplate.from_messages([
-            ("system", ("당신은 질문 답변 과제를 위한 보조 AI입니다.\n"
-                        "주어진 검색된 컨텍스트 조각을 사용하여 질문에 답하세요.\n"
-                        "답을 모르면 모른다고 솔직하게 말하세요.\n\n"
-                        "<context>\n{context}\n</context>")),
-            MessagesPlaceholder(variable_name="chat_history"),
-            ("human", "{input}")
-            ])
+            ("system", (
+                "다음 컨텍스트를 기반으로 질문에 답하시오:\n"
+                "{context}\n"
+                "상세한 답변을 제공하시오. 답변을 정당화하지 마시오.\n"
+                "컨텍스트 정보에 없는 정보를 제공하지 마시오.\n"
+                "질문과 컨텍스트는 서로 다른 언어로 되어 있을 수 있습니다.\n"
+                "질문의 언어를 자동으로 감지하여, 컨텍스트의 언어로 번역한 후 컨텍스트에서 검색하고,\n"
+                "검색된 결과를 기반으로 답변을 생성한 후, 생성된 답변을 질문의 언어로 번역하여 제공하시오."
+            )),
+            ("human", "질문: {input}")
+        ])
         combine_chain = create_stuff_documents_chain(st.session_state.llm, QA_PROMPT)
         qa_chain = create_retrieval_chain(
             st.session_state.vector_store.as_retriever(
-                search_type="similarity",
-                search_kwargs={'k': 7},
+                search_type="mmr",
+                search_kwargs={'k': 5, 'fetch_k': 20, 'lambda_mult': 0.7},
                 ),
             combine_chain
         )
@@ -200,15 +189,10 @@ def process_pdf(uploaded_file, selected_model, temp_pdf_path: str):
             "content": (
                 f"✅ PDF 파일 '{uploaded_file.name}'의 문서 처리가 완료되었습니다.\n\n"
                 "이제 문서 내용에 대해 자유롭게 질문해보세요. 예를 들면 다음과 같습니다:\n\n"
-                "**기본 정보 확인:**\n"
                 "- 이 문서의 핵심 주제는 무엇인가요?\n"
                 "- 이 문서가 작성된 목적이 무엇인가요?\n"
-                "- 문서를 간략하게 요약해주세요.\n\n"
-                "**세부 내용 질문:**\n"
-                "- [알고 싶은 특정 용어/개념]에 대해 설명해주세요.\n"
-                "- 문서에서 [찾고 싶은 특정 정보/데이터] 부분을 찾아주세요.\n\n"
-                "**구조 및 요점 파악:**\n"
-                "- 이 문서의 주요 섹션(장)은 어떻게 구성되어 있나요?\n"
+                "- 문서를 간략하게 요약해주세요.\n"
+                "- 이 문서의 섹션은 어떻게 구성되어 있나요?\n"
                 "- 결론이나 주요 시사점은 무엇인가요?\n"
             )
         })
