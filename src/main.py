@@ -74,7 +74,7 @@ with col_right:
                 input=st.session_state.temp_pdf_path,
                 width=width,
                 height=height,
-                key=f'pdf_viewer_{st.session_state.last_uploaded_file_name}',
+                key=f'pdf_viewer_{os.path.basename(st.session_state.temp_pdf_path)}',
                 resolution_boost=resolution_boost
             )
         except Exception as e:
@@ -148,8 +148,7 @@ with col_left:
                         # 답변 생성
                         logging.info("답변 생성 시작...")
                         stream = qa_chain.stream({
-                            "input": user_input,
-                            # "chat_history": chat_history
+                            "input": user_input
                         })
                         for chunk in stream:
                             answer_part = chunk.get("answer", "")
