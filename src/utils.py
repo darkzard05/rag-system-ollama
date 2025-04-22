@@ -1,6 +1,4 @@
 import os
-os.environ["CHROMA_TELEMETRY"] = "FALSE"
-import asyncio
 import torch
 import time
 import subprocess
@@ -8,7 +6,8 @@ import logging
 from langchain_pymupdf4llm import PyMuPDF4LLMLoader
 from langchain_experimental.text_splitter import SemanticChunker
 from langchain_huggingface import HuggingFaceEmbeddings
-from langchain_community.vectorstores import Chroma
+from langchain_community.vectorstores import Chroma, FAISS
+
 from langchain_ollama import OllamaLLM
 from langchain_core.prompts import ChatPromptTemplate
 from langchain.chains.combine_documents import create_stuff_documents_chain
@@ -83,7 +82,7 @@ def load_embedding_model() -> HuggingFaceEmbeddings:
     logging.info(f"임베딩 모델용 장치: {device}")
     try:
         embedder = HuggingFaceEmbeddings(
-            model_name="sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",    # "BAAI/bge-m3", "intfloat/e5-base-v2",
+            model_name="sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2", # "BAAI/bge-m3", "intfloat/e5-base-v2",
             model_kwargs={'device': device},
             encode_kwargs={'normalize_embeddings': True, 'device': device},
         )
@@ -108,12 +107,12 @@ def split_documents(_docs: List, _embedder) -> List:
         raise ValueError(f"문서 분할 중 오류 발생: {e}") from e
 
 @st.cache_resource(show_spinner=False)
-def create_vector_store(_documents, _embedder) -> Optional[Chroma]:
+def create_vector_store(_documents, _embedder) -> Optional[FAISS]:
     """문서에서 Chroma 벡터 저장소를 생성하는 함수"""
     logging.info("Chroma 벡터 저장소 생성 시작...")
     start_time = time.time()
     try:
-        vector_space = Chroma.from_documents(
+        vector_space = FAISS.from_documents(
             documents=_documents,
             embedding=_embedder,
         )
@@ -129,7 +128,7 @@ def load_llm(model_name: str) -> OllamaLLM:
     logging.info(f"Ollama LLM 로딩 시작: {model_name}")
     try:
         llm = OllamaLLM(model=model_name,
-                        temperature=0)
+                        temperature=0.2)
         logging.info(f"Ollama LLM 로딩 완료: {model_name}")
         return llm
     except Exception as e:
@@ -162,15 +161,27 @@ def process_pdf(uploaded_file, selected_model, temp_pdf_path: str) -> Tuple:
         logging.info("QA 체인 생성 시작...")
         QA_PROMPT = ChatPromptTemplate.from_messages([
             ("system", (
-                "다음 컨텍스트를 기반으로 질문에 답하시오:\n"
-                "{context}\n"
-                "상세한 답변을 제공하시오. 답변을 정당화하지 마시오.\n"
-                "컨텍스트 정보에 없는 정보를 제공하지 마시오.\n"
-                "질문과 컨텍스트는 서로 다른 언어로 되어 있을 수 있습니다.\n"
-                "질문의 언어를 자동으로 감지하여, 컨텍스트의 언어로 번역한 후 컨텍스트에서 검색하고,\n"
-                "검색된 결과를 기반으로 답변을 생성한 후, 생성된 답변을 질문의 언어로 번역하여 제공하시오."
+                "You are a specialized assistant that answers questions strictly based on the provided context.\n"
+                "Your primary rule is to respond entirely in the same language as the user's question ({input}).\n"
+                "Context:\n{context}\n\n"
+                "Mandatory Instructions:\n"
+                "1. Identify the user's question language ('Target Language').\n"
+                "2. Find answers only within the given context; no external information.\n"
+                "3. Provide a detailed, well-structured answer from context.\n"
+                "4. Enforce the Target Language: absolutely no other language allowed.\n"
+                "5. Output only the final answer in the Target Language, with no meta-commentary."
+                # --- 한국어 버전 ---
+                # "당신은 제공된 컨텍스트에만 엄격히 기반하여 답변하는 전문 어시스턴트입니다.\n"
+                # "질문과 동일한 언어로만 응답하세요 ({input}).\n"
+                # "컨텍스트:\n{context}\n\n"
+                # "필수 지침:\n"
+                # "1. 질문 언어(대상 언어)를 식별합니다.\n"
+                # "2. 제공된 컨텍스트 외 정보 사용 금지.\n"
+                # "3. 컨텍스트로만 상세하고 구조화된 답변 작성.\n"
+                # "4. 대상 언어 외 사용 금지.\n"
+                # "5. 최종 답변만 출력; 메타 코멘트 금지."
             )),
-            ("human", "질문: {input}")
+            ("human", "Question: {input}")
         ])
         combine_chain = create_stuff_documents_chain(st.session_state.llm, QA_PROMPT)
         qa_chain = create_retrieval_chain(
