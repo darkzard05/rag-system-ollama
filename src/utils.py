@@ -5,6 +5,7 @@ import subprocess
 import logging
 from langchain_pymupdf4llm import PyMuPDF4LLMLoader
 from langchain_experimental.text_splitter import SemanticChunker
+from langchain.text_splitter import RecursiveCharacterTextSplitter, CharacterTextSplitter
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_community.vectorstores import Chroma, FAISS
 
@@ -98,7 +99,13 @@ def split_documents(_docs: List, _embedder) -> List:
     logging.info("문서 분할 시작...")
     start_time = time.time()
     try:
-        chunker = SemanticChunker(_embedder)
+        # chunker = SemanticChunker(_embedder)
+        chunker = RecursiveCharacterTextSplitter(
+            chunk_size=1000,
+            chunk_overlap=200,
+            length_function=len, # 문자 수 기준
+            is_separator_regex=False,
+            )
         docs = chunker.split_documents(_docs)
         logging.info(f"문서 {len(docs)} 페이지 분할 완료 (소요 시간: {time.time() - start_time:.2f}초)")
         return docs
@@ -127,14 +134,44 @@ def load_llm(model_name: str) -> OllamaLLM:
     """선택된 Ollama LLM을 로드하고 캐싱합니다."""
     logging.info(f"Ollama LLM 로딩 시작: {model_name}")
     try:
-        llm = OllamaLLM(model=model_name,
-                        temperature=0.2)
+        llm = OllamaLLM(
+            model=model_name,
+            temperature=0.2
+            )
         logging.info(f"Ollama LLM 로딩 완료: {model_name}")
         return llm
     except Exception as e:
         logging.error(f"Ollama LLM ({model_name}) 로딩 중 오류 발생: {e}", exc_info=True)
         raise ValueError(f"Ollama LLM ({model_name}) 로딩 실패: {e}") from e
     
+# QA 프롬프트를 함수 외부에서 정의하여 다른 모듈에서 import 가능하게 함
+QA_PROMPT = ChatPromptTemplate.from_messages([
+    ("system", (
+        "You are a specialized assistant that answers questions strictly based on the provided context.\n"
+        "Your primary rule is to respond entirely in the same language as the user's question.\n"
+        "Context:\n{context}\n\n"
+        "Mandatory Instructions:\n"
+        "1. Identify the user's question language ('Target Language').\n"
+        "2. Find answers only within the given context; no external information.\n"
+        "3. Provide a detailed, well-structured answer from context.\n"
+        "4. Enforce the Target Language: absolutely no other language allowed.\n"
+        "5. Output only the final answer in the Target Language, with no meta-commentary.\n"
+        "6. If the answer cannot be found within the provided context, explicitly state that the information is not available in the document, using the Target Language." # 추가된 지침
+        # --- 한국어 버전 ---
+        # "당신은 제공된 컨텍스트에만 엄격히 기반하여 답변하는 전문 어시스턴트입니다.\n"
+        # "질문과 동일한 언어로만 응답하세요.\n"
+        # "컨텍스트:\n{context}\n\n"
+        # "필수 지침:\n"
+        # "1. 질문 언어(대상 언어)를 식별합니다.\n"
+        # "2. 제공된 컨텍스트 외 정보 사용 금지.\n"
+        # "3. 컨텍스트로만 상세하고 구조화된 답변 작성.\n"
+        # "4. 대상 언어 외 사용 금지.\n"
+        # "5. 최종 답변만 출력; 메타 코멘트 금지.\n"
+        # "6. 만약 제공된 컨텍스트 내에서 답변을 찾을 수 없다면, 해당 정보가 문서에 없다고 대상 언어로 명확하게 답변하세요." # 추가된 지침
+    )),
+    ("human", "Question: {input}")
+])
+
 def process_pdf(uploaded_file, selected_model, temp_pdf_path: str) -> Tuple:
     """PDF 처리 및 QA 체인 생성."""
     try:
@@ -159,30 +196,8 @@ def process_pdf(uploaded_file, selected_model, temp_pdf_path: str) -> Tuple:
             raise ValueError("LLM 초기화를 위한 모델 미선택")
 
         logging.info("QA 체인 생성 시작...")
-        QA_PROMPT = ChatPromptTemplate.from_messages([
-            ("system", (
-                "You are a specialized assistant that answers questions strictly based on the provided context.\n"
-                "Your primary rule is to respond entirely in the same language as the user's question ({input}).\n"
-                "Context:\n{context}\n\n"
-                "Mandatory Instructions:\n"
-                "1. Identify the user's question language ('Target Language').\n"
-                "2. Find answers only within the given context; no external information.\n"
-                "3. Provide a detailed, well-structured answer from context.\n"
-                "4. Enforce the Target Language: absolutely no other language allowed.\n"
-                "5. Output only the final answer in the Target Language, with no meta-commentary."
-                # --- 한국어 버전 ---
-                # "당신은 제공된 컨텍스트에만 엄격히 기반하여 답변하는 전문 어시스턴트입니다.\n"
-                # "질문과 동일한 언어로만 응답하세요 ({input}).\n"
-                # "컨텍스트:\n{context}\n\n"
-                # "필수 지침:\n"
-                # "1. 질문 언어(대상 언어)를 식별합니다.\n"
-                # "2. 제공된 컨텍스트 외 정보 사용 금지.\n"
-                # "3. 컨텍스트로만 상세하고 구조화된 답변 작성.\n"
-                # "4. 대상 언어 외 사용 금지.\n"
-                # "5. 최종 답변만 출력; 메타 코멘트 금지."
-            )),
-            ("human", "Question: {input}")
-        ])
+        # QA_PROMPT 정의를 함수 외부로 이동했으므로 여기서는 사용만 함
+        # 전역으로 정의된 QA_PROMPT 사용
         combine_chain = create_stuff_documents_chain(st.session_state.llm, QA_PROMPT)
         qa_chain = create_retrieval_chain(
             st.session_state.vector_store.as_retriever(
