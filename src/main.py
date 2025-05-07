@@ -3,6 +3,8 @@ torch.classes.__path__ = [] # 호환성 문제 해결을 위한 임시 조치
 import tempfile
 import os
 import streamlit as st
+from langchain.chains.combine_documents import create_stuff_documents_chain
+from langchain.chains.retrieval import create_retrieval_chain
 from streamlit_pdf_viewer import pdf_viewer
 import logging
 from utils import (
@@ -55,28 +57,22 @@ with st.sidebar:
         st.session_state.last_selected_model = selected_model
         st.session_state.llm = None # 이전 LLM 인스턴스 상태 제거
         st.session_state.qa_chain = None # 이전 QA 체인 상태 제거
-        # load_llm 캐시를 직접 지울 필요는 보통 없음 (st.cache_resource가 인자 기반 캐싱)
-        # load_llm.clear() # 필요 시 주석 해제
 
         logging.info(f"LLM 변경 감지: {old_model} -> {selected_model}")
 
         if st.session_state.get("pdf_processed"):
             # PDF가 이미 처리된 경우, 새 모델로 LLM 및 QA 체인 재생성
-            st.info(f"모델을 '{selected_model}'(으)로 변경하는 중...")
             try:
                 # 1. 새 LLM 로드 및 저장
                 with st.spinner(f"'{selected_model}' 모델 로딩 중..."):
-                    # utils에서 load_llm 함수 사용 (캐시 활용)
+                    # utils에서 load_llm 함수 사용
                     new_llm = load_llm(selected_model)
                     st.session_state.llm = new_llm
 
                 # 2. QA 체인 재생성 (기존 벡터 저장소 사용)
                 if st.session_state.get("vector_store") and st.session_state.get("llm"):
                     with st.spinner("QA 시스템 업데이트 중..."):
-                        # utils에서 임포트한 QA_PROMPT 사용
-                        from langchain.chains.combine_documents import create_stuff_documents_chain
-                        from langchain.chains.retrieval import create_retrieval_chain
-
+                        # 벡터 저장소와 LLM이 모두 존재하는 경우에만 QA 체인 업데이트
                         combine_chain = create_stuff_documents_chain(st.session_state.llm, QA_PROMPT)
                         retriever = st.session_state.vector_store.as_retriever(
                             search_type="mmr",
@@ -85,18 +81,18 @@ with st.sidebar:
                         new_qa_chain = create_retrieval_chain(retriever, combine_chain)
                         st.session_state.qa_chain = new_qa_chain
                         logging.info(f"'{selected_model}' 모델로 QA 체인 업데이트 완료.")
-                        st.success(f"모델이 '{selected_model}'(으)로 성공적으로 변경되었습니다.")
                         # 채팅에 변경 완료 메시지 추가
                         st.session_state.messages.append({
                             "role": "assistant",
-                            "content": f"✅ 모델이 '{selected_model}'(으)로 변경되었습니다. 이제 새 모델로 질문할 수 있습니다."
+                            "content": f"✅ 모델이 '{selected_model}'(으)로 변경되었습니다."
                         })
-                        st.rerun() # 변경사항 즉시 반영 (채팅 메시지 표시 등)
+                        st.rerun() # 모델 변경 및 QA 체인 업데이트 후 즉시 반영
                 else:
                     st.error("QA 시스템 업데이트 실패: 벡터 저장소 또는 LLM을 찾을 수 없습니다.")
                     logging.error("QA 시스템 업데이트 실패: 벡터 저장소 또는 LLM 상태 없음")
                     st.session_state.pdf_processed = False # 처리 실패 상태로 변경
                     st.session_state.qa_chain = None
+                    # 오류 메시지는 다음 사용자 입력 시 또는 자연스러운 rerun 시 표시됨
 
             except Exception as e:
                 st.error(f"모델 변경 중 오류 발생: {e}")
@@ -108,15 +104,16 @@ with st.sidebar:
                     "role": "assistant",
                     "content": f"❌ 모델을 '{selected_model}'(으)로 변경하는 중 오류가 발생했습니다: {e}"
                 })
-                st.rerun() # 오류 메시지 표시를 위해 rerun
+                st.rerun() # 오류 발생 후 즉시 반영
 
         else:
             # PDF가 아직 처리되지 않은 경우, 로그만 남김 (사용자에게는 파일 업로드 시 반영됨)
-            logging.info(f"모델 선택 변경됨: {selected_model}. PDF 업로드 시 적용됩니다.")
-            # 필요 시 채팅에 정보 메시지 추가 가능
-            # st.session_state.messages.append({"role": "assistant", "content": f"ℹ️ 모델이 '{selected_model}'(으)로 선택되었습니다."})
-            # if message added, uncomment below
-            # st.rerun()
+            logging.info(f"모델 선택 변경됨 (PDF 미처리 상태): {selected_model}. PDF 업로드 시 적용됩니다.")
+            st.session_state.messages.append({
+                "role": "assistant",
+                "content": f"ℹ️ 모델이 '{selected_model}'(으)로 선택되었습니다."
+            })
+            st.rerun() # 모델 선택 알림 후 즉시 반영
 
     uploaded_file = st.file_uploader("Upload a PDF file", type="pdf")
 
@@ -168,6 +165,12 @@ with col_right:
 with col_left:
     st.subheader("💬 Chat")
     chat_container = st.container(height=500, border=True)
+    
+    # 채팅 메시지 표시
+    with chat_container:
+        for message in st.session_state.messages:
+            with st.chat_message(message["role"]):
+                st.write(message["content"])
 
     new_file_uploaded = uploaded_file and uploaded_file.name != st.session_state.get("last_uploaded_file_name")
     if new_file_uploaded:
@@ -177,31 +180,58 @@ with col_left:
                 "role": "assistant",
                 "content": f"📂 새 PDF 파일 '{uploaded_file.name}'이(가) 업로드되었습니다."
                 })
+            st.rerun() # 새 파일 업로드 메시지 후 즉시 반영
         else:
             st.warning("PDF 파일을 임시로 저장하는 데 실패했습니다. 다시 시도해 주세요.")
-            
-    # PDF 처리 상태 확인
-    if uploaded_file and st.session_state.temp_pdf_path and not st.session_state.get("pdf_processed") and not st.session_state.get("pdf_processing_error"):
-        # 처리 시작 전, 현재 선택된 모델 확인
+
+    # PDF 처리 상태 확인 및 시작
+    # 단계 1: 처리 중 메시지 표시 및 플래그 설정
+    if uploaded_file and st.session_state.temp_pdf_path and \
+       not st.session_state.get("pdf_processed") and \
+       not st.session_state.get("pdf_processing_error") and \
+       not st.session_state.get("pdf_is_processing"): # 아직 처리 시작 안 함
+
         current_selected_model = st.session_state.get("last_selected_model")
         if not current_selected_model:
-             st.warning("모델이 선택되지 않았습니다. 사이드바에서 모델을 선택해주세요.")
+            # 모델 미선택 시 경고 (매번 표시될 수 있음, 사이드바 선택 유도)
+            st.warning("모델이 선택되지 않았습니다. 사이드바에서 모델을 선택해주세요.")
         else:
-            with chat_container:
-                with st.spinner(f"📄 PDF 문서 처리 중... 잠시만 기다려 주세요."):
-                    # process_pdf 호출 시 현재 세션의 모델 사용
-                    process_pdf(
-                        uploaded_file,
-                        current_selected_model, # 세션 상태의 최신 모델 사용
-                        st.session_state.temp_pdf_path
-                    )
-                    # process_pdf 내부에서 session_state를 업데이트하므로 반환값 저장 불필요
-            
-    # 채팅 메시지 표시
-    with chat_container:
-        for message in st.session_state.messages:
-            with st.chat_message(message["role"]):
-                st.write(message["content"])
+            # 모델이 선택되었으므로 처리 시작 메시지 표시
+            st.session_state.messages.append({
+                "role": "assistant",
+                "content": f"⏳ '{uploaded_file.name}' 문서 처리 중... 잠시만 기다려주세요."
+            })
+            st.session_state.pdf_is_processing = True
+            st.rerun()
+
+    # 단계 2: 실제 PDF 처리 (pdf_is_processing 플래그가 True일 때)
+    if st.session_state.get("pdf_is_processing") and \
+       not st.session_state.get("pdf_processed") and \
+       not st.session_state.get("pdf_processing_error"):
+
+        current_selected_model = st.session_state.get("last_selected_model")
+
+        if uploaded_file and st.session_state.temp_pdf_path and current_selected_model:
+            # process_pdf 함수는 내부적으로 성공/실패 메시지를 추가하고,
+            # pdf_processed, pdf_processing_error, pdf_is_processing 플래그를 업데이트하며,
+            # st.rerun()을 호출함.
+            process_pdf(
+                uploaded_file,
+                current_selected_model,
+                st.session_state.temp_pdf_path
+            )
+            # process_pdf가 rerun을 하므로, 이 아래 코드는 해당 실행에서는 도달하지 않음.
+            # pdf_is_processing 플래그는 process_pdf 내부에서 False로 설정됨.
+        else:
+            logging.warning("PDF 처리 시작 조건 불충족 (pdf_is_processing True 상태).")
+            st.session_state.messages.append({
+                "role": "assistant",
+                "content": "⚠️ 문서 처리를 시작할 수 없습니다. 파일 업로드 상태나 모델 선택을 다시 확인해주세요."
+            })
+            st.session_state.pdf_is_processing = False # 플래그 리셋
+            st.session_state.pdf_processed = False
+            st.session_state.pdf_processing_error = "처리 시작 조건 불충족"
+            st.rerun()
 
     # 채팅 입력창
     # 입력 가능 조건: PDF 처리 완료 + 오류 없음 + QA 체인 존재
@@ -222,7 +252,6 @@ with col_left:
             with st.chat_message("user"):
                 st.write(user_input)
 
-        # 답변 생성
         # 답변 생성 전 QA 체인 유효성 확인 (모델 변경 중 None일 수 있음)
         qa_chain = st.session_state.get("qa_chain")
         if not qa_chain:
@@ -235,7 +264,6 @@ with col_left:
             with chat_container:
                 with st.chat_message("assistant"):
                     st.error(error_message) # 오류 강조 표시
-            # st.rerun() # 필요 시 rerun으로 즉시 업데이트
         else:
             # QA 체인이 준비된 경우 답변 생성 진행
             with chat_container:
@@ -302,7 +330,7 @@ with col_left:
                         logging.error(f"답변 생성 중 오류 발생: {e}", exc_info=True)
                         error_message = f"❌ 답변 생성 중 오류가 발생했습니다: {e}"
                         message_placeholder.error(error_message)
-                        full_response = error_message # 상태 저장을 위해 full_response를 오류 메시지로 설정
+                        full_response = error_message
 
             # 최종 *답변* 부분 (또는 오류)을 세션 상태에 저장
             st.session_state.messages.append({
