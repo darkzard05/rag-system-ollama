@@ -8,3 +8,5 @@ langchain-ollama
 streamlit_pdf_viewer
 chromadb
 pymupdf
+unstructured[all-docs]==0.10.25
+pdfminer.six==20221105
