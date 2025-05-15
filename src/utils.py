@@ -3,19 +3,18 @@ import torch
 import time
 import subprocess
 import logging
-from langchain_pymupdf4llm import PyMuPDF4LLMLoader
-from langchain_community.document_loaders import PyMuPDFLoader
+from langchain_community.document_loaders import UnstructuredPDFLoader
 from langchain_experimental.text_splitter import SemanticChunker
-from langchain.text_splitter import RecursiveCharacterTextSplitter, CharacterTextSplitter
+from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_huggingface import HuggingFaceEmbeddings
-from langchain_community.vectorstores import Chroma, FAISS
+from langchain_community.vectorstores import FAISS
 
 from langchain_ollama import OllamaLLM
 from langchain_core.prompts import ChatPromptTemplate
 from langchain.chains.combine_documents import create_stuff_documents_chain
 from langchain.chains.retrieval import create_retrieval_chain
 import streamlit as st
-from typing import List, Tuple, Optional
+from typing import List, Optional
 
 def init_session_state():
     """세션 상태 초기화 함수"""
@@ -70,10 +69,8 @@ def load_pdf_docs(pdf_file_path: str) -> List:
         logging.error(f"PDF 파일 경로가 존재하지 않습니다: {pdf_file_path}")
         raise FileNotFoundError(f"PDF 파일 경로가 존재하지 않습니다: {pdf_file_path}")
     try:
-        loader = PyMuPDFLoader(
+        loader = UnstructuredPDFLoader(
             pdf_file_path,
-            mode="page",
-            extract_tables="markdown",
             )
         docs = loader.lazy_load()
         logging.info(f"PDF 파일 로드 완료")
@@ -101,7 +98,7 @@ def load_embedding_model() -> HuggingFaceEmbeddings:
         raise ValueError(f"임베딩 모델 로딩 실패: {e}") from e
 
 @st.cache_data(show_spinner=False)
-def split_documents(_docs: List, _embedder) -> List:
+def split_documents(_docs: List) -> List:
     """문서를 분할하는 함수"""
     logging.info("문서 분할 시작...")
     start_time = time.time()
@@ -121,19 +118,19 @@ def split_documents(_docs: List, _embedder) -> List:
 
 @st.cache_resource(show_spinner=False)
 def create_vector_store(_documents, _embedder) -> Optional[FAISS]:
-    """문서에서 Chroma 벡터 저장소를 생성하는 함수"""
-    logging.info("Chroma 벡터 저장소 생성 시작...")
+    """문서에서 FAISS 벡터 저장소를 생성하는 함수"""
+    logging.info("FAISS 벡터 저장소 생성 시작...")
     start_time = time.time()
     try:
         vector_space = FAISS.from_documents(
             documents=_documents,
             embedding=_embedder,
         )
-        logging.info(f"Chroma 벡터 저장소 생성 완료 (소요 시간: {time.time() - start_time:.2f}초)")
+        logging.info(f"FAISS 벡터 저장소 생성 완료 (소요 시간: {time.time() - start_time:.2f}초)")
         return vector_space
     except Exception as e:
-        logging.error(f"Chroma 벡터 저장소 생성 중 오류 발생: {e}")
-        raise ValueError(f"Chroma 벡터 저장소 생성 중 오류 발생: {e}") from e
+        logging.error(f"FAISS 벡터 저장소 생성 중 오류 발생: {e}")
+        raise ValueError(f"FAISS 벡터 저장소 생성 중 오류 발생: {e}") from e
     
 @st.cache_resource(show_spinner=False)
 def load_llm(model_name: str) -> OllamaLLM:
@@ -175,7 +172,7 @@ def process_pdf(uploaded_file, selected_model, temp_pdf_path: str):
         embedder = load_embedding_model()
         if not embedder: raise ValueError("임베딩 모델 로딩 실패 (캐시)")
 
-        documents = split_documents(docs, embedder)
+        documents = split_documents(docs)
         if not documents: raise ValueError("문서 분할 실패")
 
         vector_store = create_vector_store(documents, embedder)
@@ -209,11 +206,11 @@ def process_pdf(uploaded_file, selected_model, temp_pdf_path: str):
             "content": (
                 f"✅ PDF 파일 '{uploaded_file.name}'의 문서 처리가 완료되었습니다.\n\n"
                 "이제 문서 내용에 대해 자유롭게 질문해보세요. 예를 들면 다음과 같습니다:\n\n"
-                "- 이 문서의 핵심 주제는 무엇인가요?\n"
-                "- 이 문서가 작성된 목적이 무엇인가요?\n"
-                "- 문서를 간략하게 요약해주세요.\n"
-                "- 이 문서의 섹션은 어떻게 구성되어 있나요?\n"
-                "- 결론이나 주요 시사점은 무엇인가요?\n"
+                "- 이 문서의 주요 내용(key points)은 무엇인가요?\n"
+                "- 이 문서를 한 문장으로 요약한다면 어떻게 될까요?\n"
+                "- 이 문서에서 가장 주목해야 할 부분은 어디인가요?\n"
+                "- 이 문서의 내용을 바탕으로 어떤 질문을 할 수 있을까요?\n"
+                "- 이 문서에서 다루는 핵심 개념은 무엇인가요?\n"
             )
         })        
         st.session_state.pdf_is_processing = False # 처리 완료 후 플래그 리셋
