@@ -3,7 +3,7 @@ import torch
 import time
 import subprocess
 import logging
-from langchain_community.document_loaders import UnstructuredPDFLoader
+from langchain_community.document_loaders import UnstructuredPDFLoader, PyMuPDFLoader
 from langchain_experimental.text_splitter import SemanticChunker
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_huggingface import HuggingFaceEmbeddings
@@ -69,11 +69,18 @@ def load_pdf_docs(pdf_file_path: str) -> List:
         logging.error(f"PDF 파일 경로가 존재하지 않습니다: {pdf_file_path}")
         raise FileNotFoundError(f"PDF 파일 경로가 존재하지 않습니다: {pdf_file_path}")
     try:
-        loader = UnstructuredPDFLoader(
+        start_time = time.time()
+        # loader = UnstructuredPDFLoader(
+        #     pdf_file_path,
+        #     mode="single",
+        #     strategy="auto",
+        #     )
+        loader = PyMuPDFLoader(
             pdf_file_path,
+            mode="single",
             )
-        docs = loader.lazy_load()
-        logging.info(f"PDF 파일 로드 완료")
+        docs = loader.load()
+        logging.info(f"PDF 파일 로드 완료 (소요 시간: {time.time() - start_time:.2f}초)")
         return docs
     except Exception as e:
         logging.error(f"PDF 로드 중 오류 발생: {e}")
@@ -104,8 +111,8 @@ def split_documents(_docs: List) -> List:
     start_time = time.time()
     try:
         chunker = RecursiveCharacterTextSplitter(
-            chunk_size=4000,
-            chunk_overlap=200,
+            chunk_size=2000,
+            chunk_overlap=100,
             length_function=len, # 문자 수 기준
             is_separator_regex=False,
             )
