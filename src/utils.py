@@ -3,8 +3,7 @@ import torch
 import time
 import subprocess
 import logging
-from langchain_community.document_loaders import UnstructuredPDFLoader, PyMuPDFLoader
-from langchain_experimental.text_splitter import SemanticChunker
+from langchain_community.document_loaders import PyMuPDFLoader
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_community.vectorstores import FAISS
@@ -44,7 +43,7 @@ def reset_session_state(uploaded_file):
     st.session_state.qa_chain = None
     st.session_state.vector_store = None
     st.session_state.pdf_is_processing = False # PDF 처리 중 상태 플래그 리셋
-    # st.session_state.messages = []  # 새 파일이므로 채팅 기록 초기화
+    st.session_state.messages = []  # 새 파일이므로 채팅 기록 초기화
     load_pdf_docs.clear()
     split_documents.clear()
     create_vector_store.clear()
@@ -70,11 +69,6 @@ def load_pdf_docs(pdf_file_path: str) -> List:
         raise FileNotFoundError(f"PDF 파일 경로가 존재하지 않습니다: {pdf_file_path}")
     try:
         start_time = time.time()
-        # loader = UnstructuredPDFLoader(
-        #     pdf_file_path,
-        #     mode="single",
-        #     strategy="auto",
-        #     )
         loader = PyMuPDFLoader(
             pdf_file_path,
             mode="single",
@@ -111,8 +105,8 @@ def split_documents(_docs: List) -> List:
     start_time = time.time()
     try:
         chunker = RecursiveCharacterTextSplitter(
-            chunk_size=2000,
-            chunk_overlap=100,
+            chunk_size=4000,
+            chunk_overlap=200,
             length_function=len, # 문자 수 기준
             is_separator_regex=False,
             )
@@ -156,19 +150,24 @@ def load_llm(model_name: str) -> OllamaLLM:
 # QA 프롬프트를 함수 외부에서 정의하여 다른 모듈에서 import 가능하게 함
 QA_PROMPT = ChatPromptTemplate.from_messages([
     ("system", (
-        "You are an AI assistant. Your task is to answer questions based *solely* on the provided 'Context'.\n"
-        "You MUST respond in the same language as the user's question.\n\n"
-        "Context:\n{context}\n\n"
-        "Follow these instructions:\n"
-        "1. **Internal Thought Process (Mandatory):** Enclose your step-by-step reasoning in `<think>...</think>` tags. Explain how the context leads to your answer, or why it doesn't contain the answer. This is for internal logging and will not be shown to the user.\n"
-        "2. **Answer Formulation:** Based *strictly* on the 'Context', construct your answer. It must be clear, detailed, and in the same language as the user's question. Do NOT use any information outside the 'Context'.\n"
-        "3. **Handling Missing Information:** If the 'Context' does not provide an answer, respond *only* with a polite statement in the user's language indicating this. For example:\n"
-        "   - Korean: '죄송합니다만, 제공된 문서 내용만으로는 요청하신 정보에 대한 답변을 찾을 수 없습니다.'\n"
-        "   - English: 'I apologize, but the provided document context does not contain the information needed to answer your question.'\n"
-        "   (Adapt this message to the user's language.)"
-    )),
+        "You are an AI assistant. Your primary task is to answer questions based *solely* on the provided 'Context'.\n\n"
+        "**CRITICAL: You MUST respond in the EXACT same language as the user's question.** This is the most important instruction.\n\n"
+        "Context:\n"
+        "{context}\n"
+        "Follow these instructions carefully:\n"
+        "1. **Language of Response:**\n"
+        "   - ALWAYS use the same language as the user's question for your entire response.\n"
+        "   - For example, if the question is in Korean, your answer MUST be in Korean. If the question is in English, your answer MUST be in English.\n\n"
+        "2. **Answer Formulation:**\n"
+        "   - Construct your answer based *strictly* on the information found within the 'Context'.\n"
+        "   - Your answer should be clear and detailed.\n"
+        "   - Do NOT use any external knowledge or information not present in the 'Context'.\n\n"
+        "3. **Handling Missing Information:**\n"
+        "   - If the 'Context' does not contain the information to answer the question, you MUST state (in the same language as the question) that the information is not available in the provided document.\n"
+        "   - Do not invent an answer or use external knowledge."
+        )),
     ("human", "Question: {input}")
-])
+    ])
 
 def process_pdf(uploaded_file, selected_model, temp_pdf_path: str):
     """PDF 처리 및 QA 체인 생성."""
@@ -196,7 +195,10 @@ def process_pdf(uploaded_file, selected_model, temp_pdf_path: str):
         logging.info("QA 체인 생성 시작...")
         # QA_PROMPT 정의를 함수 외부로 이동했으므로 여기서는 사용만 함
         # 전역으로 정의된 QA_PROMPT 사용
-        combine_chain = create_stuff_documents_chain(st.session_state.llm, QA_PROMPT)
+        combine_chain = create_stuff_documents_chain(
+            st.session_state.llm,
+            QA_PROMPT
+            )
         qa_chain = create_retrieval_chain(
             st.session_state.vector_store.as_retriever(
                 search_type="mmr",
@@ -212,12 +214,15 @@ def process_pdf(uploaded_file, selected_model, temp_pdf_path: str):
             "role": "assistant",
             "content": (
                 f"✅ PDF 파일 '{uploaded_file.name}'의 문서 처리가 완료되었습니다.\n\n"
-                "이제 문서 내용에 대해 자유롭게 질문해보세요. 예를 들면 다음과 같습니다:\n\n"
-                "- 이 문서의 주요 내용(key points)은 무엇인가요?\n"
-                "- 이 문서를 한 문장으로 요약한다면 어떻게 될까요?\n"
-                "- 이 문서에서 가장 주목해야 할 부분은 어디인가요?\n"
-                "- 이 문서의 내용을 바탕으로 어떤 질문을 할 수 있을까요?\n"
-                "- 이 문서에서 다루는 핵심 개념은 무엇인가요?\n"
+                "이제 문서 내용에 대해 자유롭게 질문해보세요! 예를 들어 다음과 같이 질문할 수 있습니다:\n\n"
+                "- 이 문서를 한 문단으로 요약해주세요.\n"
+                "- 이 문서의 주요 주장과 그 근거는 무엇인가요?\n"
+                "- 이 문서에서 가장 중요한 핵심 용어 3가지를 설명해주세요.\n"
+                "- 이 문서가 해결하고자 하는 문제는 무엇인가요?\n"
+                "- 이 문서에서 제시된 해결책이나 제안이 있다면 알려주세요.\n"
+                "- 이 문서의 결론은 무엇이며, 어떤 시사점을 주나요?\n"
+                "- 이 문서의 내용 중 가장 흥미로운 부분은 어디인가요?\n"
+                "- 이 문서의 내용을 바탕으로 새로운 질문 2가지를 만들어주세요.\n"
             )
         })        
         st.session_state.pdf_is_processing = False # 처리 완료 후 플래그 리셋
