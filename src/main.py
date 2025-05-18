@@ -78,7 +78,7 @@ def handle_model_change(selected_model: str):
         SessionManager.reset_session_state(["llm", "qa_chain", "pdf_processed"])
         SessionManager.add_message("assistant", f"❌ {error_msg}")
         
-    SessionManager.request_rerun()
+    st.rerun()  # 직접 rerun 호출
 
 def handle_pdf_upload(uploaded_file):
     """PDF 파일 업로드 처리"""
@@ -88,23 +88,39 @@ def handle_pdf_upload(uploaded_file):
     if uploaded_file.name == st.session_state.get("last_uploaded_file_name"):
         return
 
-    if st.session_state.temp_pdf_path and os.path.exists(st.session_state.temp_pdf_path):
-        try:
-            os.remove(st.session_state.temp_pdf_path)
-            logging.info("이전 임시 PDF 파일 삭제 성공")
-        except Exception as e:
-            logging.warning(f"이전 임시 PDF 파일 삭제 실패: {e}")
-
     try:
+        # 1. 이전 PDF 파일 정리
+        if st.session_state.temp_pdf_path and os.path.exists(st.session_state.temp_pdf_path):
+            try:
+                os.remove(st.session_state.temp_pdf_path)
+                logging.info("이전 임시 PDF 파일 삭제 성공")
+            except Exception as e:
+                logging.warning(f"이전 임시 PDF 파일 삭제 실패: {e}")
+
+        # 2. 새 PDF 파일 저장
         with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
             tmp.write(uploaded_file.getvalue())
             st.session_state.temp_pdf_path = tmp.name
             logging.info(f"임시 PDF 파일 생성 성공: {st.session_state.temp_pdf_path}")
-            SessionManager.reset_for_new_file(uploaded_file)
-            SessionManager.add_message("assistant", f"📂 새 PDF 파일 '{uploaded_file.name}'이(가) 업로드되었습니다.")
-            st.rerun()
+        
+        # 3. 세션 상태 리셋
+        SessionManager.reset_for_new_file(uploaded_file)
+        
+        # 4. 초기 메시지 추가
+        SessionManager.add_message(
+            "assistant", (
+                f"📂 새 PDF 파일 '{uploaded_file.name}'이(가) 업로드되었습니다.\n"
+                "잠시만 기다려주세요."
+                )
+        )
+        
+        # 5. 한 번만 리런
+        st.rerun()
+        
     except Exception as e:
-        st.error(f"임시 PDF 파일 생성 실패: {e}")
+        error_msg = f"임시 PDF 파일 생성 실패: {e}"
+        logging.error(error_msg)
+        st.error(error_msg)
         st.session_state.temp_pdf_path = None
 
 def handle_pdf_processing(uploaded_file):
@@ -122,9 +138,17 @@ def handle_pdf_processing(uploaded_file):
         st.warning("모델이 선택되지 않았습니다. 사이드바에서 모델을 선택해주세요.")
         return
 
-    SessionManager.add_message("assistant", f"⏳ '{uploaded_file.name}' 문서 처리 중... 잠시만 기다려주세요.")
     st.session_state.pdf_is_processing = True
-    st.rerun()
+    SessionManager.add_message("assistant", f"⏳ '{uploaded_file.name}' 문서 처리 중...")
+    
+    try:
+        process_pdf(uploaded_file, current_selected_model, st.session_state.temp_pdf_path)
+    except Exception as e:
+        error_msg = f"PDF 처리 중 오류 발생: {e}"
+        logging.error(error_msg)
+        SessionManager.set_error_state(error_msg)
+    finally:
+        st.session_state.pdf_is_processing = False
 
 def process_thought_stream(chunk: str, thought_response: str) -> tuple[str, str, bool]:
     """생각 과정 스트림 처리"""
@@ -248,23 +272,20 @@ def main():
     # 왼쪽 컬럼: 채팅 및 설정
     with col_left:
         st.subheader("💬 Chat")
+        
+        # 채팅 컨테이너
         chat_container = st.container(height=500, border=True)
         
+        # 채팅 메시지 표시
+        with chat_container:
+            if "messages" in st.session_state:
+                for message in st.session_state.messages:
+                    with st.chat_message(message["role"]):
+                        st.markdown(message["content"])
+        
         # PDF 처리 관련 로직
-        handle_pdf_processing(uploaded_file)
-
-        if st.session_state.get("pdf_is_processing"):
-            current_selected_model = st.session_state.get("last_selected_model")
-            if uploaded_file and st.session_state.temp_pdf_path and current_selected_model:
-                process_pdf(uploaded_file, current_selected_model, st.session_state.temp_pdf_path)
-            else:
-                logging.warning("PDF 처리 시작 조건 불충족 (pdf_is_processing True 상태).")
-                error_msg_proc = "⚠️ 문서 처리를 시작할 수 없습니다. 파일 업로드 상태나 모델 선택을 다시 확인해주세요."
-                SessionManager.add_message("assistant", error_msg_proc)
-                st.session_state.pdf_is_processing = False
-                st.session_state.pdf_processed = False
-                st.session_state.pdf_processing_error = "처리 시작 조건 불충족"
-                st.rerun()
+        if not st.session_state.get("pdf_processed"):
+            handle_pdf_processing(uploaded_file)
 
         # 채팅 입력 UI
         user_input = st.chat_input(
@@ -273,30 +294,30 @@ def main():
             disabled=not SessionManager.is_ready_for_chat()
         )
 
-        # 채팅 메시지 표시 (컨테이너 안에서)
-        with chat_container:
-            # 기존 메시지 표시
-            for message in st.session_state.messages:
-                with st.chat_message(message["role"]):
-                    st.write(message["content"])
-
-            # 새 메시지 처리
-            if user_input:
-                # 사용자 메시지 추가 및 표시
-                SessionManager.add_message("user", user_input)
+        # 새 메시지 처리
+        if user_input:
+            SessionManager.add_message("user", user_input)
+            with chat_container:
                 with st.chat_message("user"):
-                    st.write(user_input)
-
-                # QA 체인 검증 및 응답 생성
-                qa_chain = st.session_state.get("qa_chain")
-                if not qa_chain:
-                    error_message = "❌ QA 시스템이 준비되지 않았습니다. 모델 변경이 진행 중이거나 PDF 처리가 필요할 수 있습니다."
-                    SessionManager.add_message("assistant", error_message)
-                    with st.chat_message("assistant"):
-                        st.error(error_message)
-                else:
+                    st.markdown(user_input)
+                
+            # QA 체인 검증 및 응답 생성
+            qa_chain = st.session_state.get("qa_chain")
+            if not qa_chain:
+                error_message = "❌ QA 시스템이 준비되지 않았습니다. 모델 변경이 진행 중이거나 PDF 처리가 필요할 수 있습니다."
+                with st.chat_message("assistant"):
+                    st.markdown(error_message)
+                SessionManager.add_message("assistant", error_message)
+            else:
+                try:
                     response = process_chat_response(qa_chain, user_input, chat_container)
                     SessionManager.add_message("assistant", response)
+                except Exception as e:
+                    error_message = f"❌ 응답 생성 중 오류가 발생했습니다: {str(e)}"
+                    with st.chat_message("assistant"):
+                        st.markdown(error_message)
+                    SessionManager.add_message("assistant", error_message)
+                    logging.error(f"응답 생성 오류: {e}", exc_info=True)
 
 if __name__ == "__main__":
     main()
