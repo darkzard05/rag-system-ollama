@@ -14,3 +14,4 @@ sentence-transformers
 numpy
 scikit-learn
 tqdm
+rank_bm25
