@@ -4,6 +4,9 @@ import time
 import subprocess
 import logging
 import functools
+from typing import List, Optional, Dict
+import streamlit as st
+
 from langchain_community.document_loaders import PyMuPDFLoader
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_huggingface import HuggingFaceEmbeddings
@@ -12,8 +15,8 @@ from langchain.chains.combine_documents import create_stuff_documents_chain
 
 from langchain_ollama import OllamaLLM
 from langchain_core.prompts import ChatPromptTemplate, PromptTemplate
-import streamlit as st
-from typing import List, Optional, Dict
+from langchain_community.retrievers import BM25Retriever
+from langchain.retrievers import EnsembleRetriever
 from langchain_core.runnables import RunnableLambda, RunnablePassthrough
 
 # 모델 및 설정 상수
@@ -21,11 +24,9 @@ EMBEDDING_MODEL_NAME = "sentence-transformers/paraphrase-multilingual-MiniLM-L12
 
 # 리트리버 설정 상수
 RETRIEVER_CONFIG: Dict = {
-    'search_type': "mmr",
+    'search_type': "similarity",
     'search_kwargs': {
-        'k': 5,           # 검색 결과 수 최적화
-        'fetch_k': 20,    # 후보 수 증가
-        'lambda_mult': 0.8 # MMR 다양성 가중치 증가
+        'k': 5,
     }
 }
 
@@ -51,7 +52,8 @@ class SessionManager:
         "temp_pdf_path": None,
         "pdf_is_processing": False,
         "processing_step": None,
-        "source_documents": {} # source_documents 초기화 추가
+        "source_documents": {}, # source_documents 초기화 추가
+        "processed_document_splits": None, # 분할된 문서 청크 저장용
     }
     
     @classmethod
@@ -88,7 +90,8 @@ class SessionManager:
             "vector_store",
             "pdf_is_processing",
             "processing_step",
-            "messages"
+            "messages",
+            "processed_document_splits" # 추가
         ]
         cls.reset_session_state(file_related_keys)
         st.session_state.last_uploaded_file_name = uploaded_file.name
@@ -97,10 +100,6 @@ class SessionManager:
         if last_model_change_message:
             st.session_state.last_model_change_message = last_model_change_message
             cls.add_message("assistant", last_model_change_message)
-        
-        # Streamlit 캐시 초기화
-        st.cache_data.clear()
-        st.cache_resource.clear()
     
     @classmethod
     def add_message(cls, role: str, content: str):
@@ -164,7 +163,7 @@ class SessionManager:
 # 로깅 데코레이터 수정
 def log_operation(operation_name):
     def decorator(func):
-        @functools.wraps(func)  # 함수 메타데이터 보존
+        @functools.wraps(func)
         def wrapper(*args, **kwargs):
             logging.info(f"{operation_name} 시작...")
             start_time = time.time()
@@ -201,14 +200,14 @@ def load_embedding_model() -> HuggingFaceEmbeddings:
     device = "cuda" if torch.cuda.is_available() else "cpu"
     logging.info(f"임베딩 모델용 장치: {device}")
     embedder = HuggingFaceEmbeddings(
-        model_name=EMBEDDING_MODEL_NAME, # 정의된 상수 사용
+        model_name=EMBEDDING_MODEL_NAME,
         model_kwargs={
             "device": device,
             "trust_remote_code": False,
             },
         encode_kwargs={
             "device": device,
-            "batch_size": 32,
+            "batch_size": 64,
             "normalize_embeddings": True,
             },
     )
@@ -246,65 +245,18 @@ def load_llm(model_name: str) -> OllamaLLM:
 # QA 프롬프트를 함수 외부에서 정의하여 다른 모듈에서 import 가능하게 함
 QA_PROMPT = ChatPromptTemplate.from_messages([
     ("system", (
-     """당신은 주어진 컨텍스트만을 사용하여 사용자의 질문에 답변하는 AI 어시스턴트입니다. 다른 지식이나 정보를 사용해서는 안 됩니다.
+     """
+     당신은 주어진 컨텍스트만을 사용하여 사용자의 질문에 답변하는 AI 어시스턴트입니다. 다른 지식이나 정보를 사용해서는 안 됩니다.
 
-     **컨텍스트:**
+     **컨텍스트**
      {context}
 
-     **답변 생성 지침:**
-     1.  **언어:** 사용자의 질문과 동일한 언어로 답변해야 합니다.
-     2.  **답변 형식 (`answer` 필드 내용):**
-         *   답변은 반드시 마크다운 형식으로, 명확하게 작성해야 합니다.
-         *   **출처 표기 위치:** 컨텍스트에서 가져온 정보에 대한 출처 번호(예: `[1]`, `[2]`)는, 해당 정보가 기술된 **구절이나 문장의 끝에** 명시해야 합니다. (예: "정보 A는 문서에서 설명하고 있습니다[1]. 또한 정보 B도 언급됩니다[2].")
-             *   **줄 바꿈 및 가독성:**
-                 *   답변 내용이 여러 항목, 단계 또는 문단으로 구성될 경우, 마크다운의 줄 바꿈(예: 빈 줄 삽입)이나 목록(숫자 목록, 글머리 기호 목록)을 적절히 사용하여 가독성을 높여야 합니다.
-                 *   각 정보 단위가 명확히 구분되도록 표현해야 합니다.
-                 *   **예시 (여러 항목을 설명하는 경우):**
-                     ```markdown
-                     문서의 주요 내용은 다음과 같습니다:
-                     1.  **주제 A**: 주제 A에 대한 상세 설명입니다. 이 부분은 문서의 핵심 내용을 다룹니다[1].
-                     2.  **주제 B**: 주제 B는 다른 관점을 제공하며, 관련된 예시를 포함합니다[2].
-                         *   부연 설명: 주제 B의 특정 측면에 대한 추가 정보입니다.
-                     3.  **결론**: 문서의 결론은 이러한 주제들을 종합하여 요약합니다[3].
-                     ```
-                 *   위 예시처럼, 최종적으로 렌더링될 때 깔끔하고 이해하기 쉬운 답변을 생성하는 것을 목표로 합니다.
-             *   **매우 중요:** 출처 번호는 **절대로** 문장이나 구절의 시작 부분에 와서는 안 됩니다.
-                 *   **잘못된 예시:** `[1] 이 정보는 중요합니다.`
-                 *   **올바른 예시:** `이 정보는 중요합니다[1].`
-         *   **다중 출처:** 하나의 정보에 여러 출처가 있다면 `[1][2]`와 같이 연달아 표시합니다.
-         *   **번호 일치 및 일관성:** `answer` 필드 내의 출처 번호는 제공되는 컨텍스트의 `[번호]`와 일치해야 하며, `sources` 필드의 `id`와도 일치해야 합니다. (예: 컨텍스트가 `[1] 첫 번째 문서 내용... \n[2] 두 번째 문서 내용...`으로 제공되면, 답변에서 첫 번째 문서를 인용 시 `[1]`을 사용하고, `sources` 배열의 해당 객체 `id`는 `1`이어야 합니다.) `answer` 필드에서 사용된 모든 출처 번호는 `sources` 배열에 해당 `id`를 가진 객체로 반드시 포함되어야 하며, 그 반대로 `sources` 배열에 있는 모든 `id`는 `answer` 필드 어딘가에 `[id]` 형태로 인용되어야 합니다.
-
-     3.  **정보 출처 (`sources` 필드 내용):**
-         *   `answer` 필드에서 **실제로 인용한** 각 컨텍스트 문서에 대해 `sources` 배열에 객체를 추가해야 합니다.
-         *   각 소스 객체는 다음 필드를 가져야 합니다:
-             *   `id` (정수): `answer`에서 인용된 컨텍스트 문서의 번호입니다. (예: `[1]`을 인용했다면 `1`)
-             *   `text` (문자열): `answer`에서 해당 `[id]`로 인용한 정보의 **직접적인 근거가 되는 컨텍스트 원문의 핵심 구절**이어야 합니다. 이 구절은 사용자가 인용의 타당성을 빠르게 확인할 수 있도록 도와야 하며, 너무 길거나 짧지 않게, **가장 관련성이 높은 부분**을 정확히 발췌해야 합니다.
-             *   `page` (문자열): 해당 컨텍스트 문서의 페이지 번호입니다. 페이지 정보가 컨텍스트에 명시되어 있다면 그 값을 사용하고, 없다면 "N/A"로 표시합니다. (컨텍스트는 `(p.페이지번호)` 형식으로 페이지 정보를 포함할 수 있습니다.)
-     4.  **답변 불가 시:**
-         *   만약 질문에 대한 답변을 제공된 컨텍스트 내에서 찾을 수 없다면, `answer` 필드에 "제공된 컨텍스트에서는 질문에 대한 답변을 찾을 수 없습니다."라고 명확히 답변해야 합니다.
-         *   이 경우, `sources` 배열은 빈 배열 `[]`이어야 합니다.
-
-     **최종 JSON 출력 형식:**
-     응답은 반드시 다음 JSON 형식이어야 합니다. **JSON 객체 자체만을 반환해야 하며, JSON 객체를 감싸는 마크다운(예: ```json ... ```)이나 다른 설명 텍스트를 포함해서는 안 됩니다.**
-     ```json
-     {{
-       "answer": answer,
-       "sources": [
-         {{
-           "id": id,
-           "text": text,
-           "page": page,
-         }},
-       ]
-     }}
-     ```
-     만약 답변을 찾을 수 없는 경우의 예시:
-     ```json
-     {{
-       "answer": "제공된 컨텍스트에서는 질문에 대한 답변을 찾을 수 없습니다.",
-       "sources": []
-     }}
-     ```
+     **답변 생성 지침**
+     1.  **언어** 사용자의 질문과 동일한 언어로 답변해야 합니다.
+     2.  **답변 형식**
+        - 답변은 반드시 명확하게 작성해야 합니다.
+        - 답변 내용이 여러 항목, 단계 또는 문단으로 구성될 경우, 마크다운의 줄 바꿈(예: 빈 줄 삽입)이나 목록(숫자 목록, 글머리 기호 목록)을 적절히 사용하여 가독성을 높여야 합니다.
+        - 각 정보 단위가 명확히 구분되도록 표현해야 합니다.
      """
         )),
     ("human", "Question: {input}")
@@ -314,37 +266,32 @@ QA_PROMPT = ChatPromptTemplate.from_messages([
 def update_qa_chain(llm, vector_store):
     """QA 체인 업데이트"""
     try:
-        # 헬퍼 함수 정의
-        def init_source_docs_and_pass_input(input_data: Dict) -> Dict:
-            """세션 상태의 source_documents를 초기화하고 입력을 그대로 반환합니다."""
-            st.session_state.source_documents = {}
-            return input_data
-
-        def add_doc_number_to_metadata_and_save(docs: List[Dict]) -> List[Dict]:
+        # 헬퍼 함수 정의 (st.session_state 직접 접근 제거)
+        def add_doc_number_to_metadata(docs: List[Dict]) -> List[Dict]:
             """
             검색된 각 문서에 'doc_number' 메타데이터를 추가하고,
-            st.session_state.source_documents에 저장합니다.
+            페이지 번호를 처리합니다.
+            st.session_state 접근은 이 함수 외부에서 처리합니다.
             """
-            # Ensure source_documents exists and is a dictionary.
-            # This is a safeguard, as init_source_docs_and_pass_input should handle this.
-            if not isinstance(st.session_state.get("source_documents"), dict):
-                st.session_state.source_documents = {}
+            # 이 함수는 순수하게 문서 리스트를 받아 메타데이터를 추가/수정하고 반환합니다.
+            # st.session_state.source_documents 관련 로직은 호출하는 쪽(메인 스레드)에서 처리합니다.
             for i, doc in enumerate(docs, 1):
                 doc.metadata["doc_number"] = i # 나중에 document_prompt에서 사용
 
                 # 페이지 번호 처리: 0-indexed를 1-indexed 문자열로 변환 또는 'N/A'
                 # PyMuPDFLoader는 'page' 메타데이터를 0-indexed 정수로 제공
-                page_number = doc.metadata.get('page')
-                if page_number is not None:
-                    doc.metadata['page'] = str(page_number + 1) # 1-indexed 문자열로 덮어쓰기
+                page_number_raw = doc.metadata.get('page')
+                if page_number_raw is not None:
+                    try:
+                        # Ensure page_number_raw is an integer before arithmetic operation
+                        current_page_int = int(page_number_raw)
+                        doc.metadata['page'] = str(current_page_int + 1) # Convert to 1-indexed string
+                    except ValueError:
+                        # Handle cases where page_number_raw is a string that cannot be converted to int
+                        logging.warning(f"Could not convert page metadata '{page_number_raw}' to an integer. Setting page to 'N/A'.")
+                        doc.metadata['page'] = 'N/A'
                 else:
                     doc.metadata['page'] = 'N/A'
-
-                # UI 툴팁 및 참조를 위해 세션 상태에 저장
-                st.session_state.source_documents[str(i)] = {
-                    'content': doc.page_content.strip(),
-                    'page': doc.metadata.get('page') # 이제 이 값은 1-indexed 문자열 또는 'N/A'
-                }
             return docs
 
         def rename_documents_key(data_dict: Dict) -> Dict:
@@ -354,10 +301,30 @@ def update_qa_chain(llm, vector_store):
             return data_dict
 
         # 리트리버 설정
-        retriever = vector_store.as_retriever(
+        faiss_retriever = vector_store.as_retriever(
             search_type=RETRIEVER_CONFIG['search_type'],
             search_kwargs=RETRIEVER_CONFIG['search_kwargs']
         )
+
+        # BM25 리트리버 설정 (분할된 문서가 세션에 저장되어 있다고 가정)
+        final_retriever = faiss_retriever # 기본값은 FAISS 리트리버
+        if st.session_state.get("processed_document_splits"):
+            try:
+                bm25_retriever = BM25Retriever.from_documents(
+                    st.session_state.processed_document_splits
+                )
+                bm25_retriever.k = RETRIEVER_CONFIG['search_kwargs'].get('k', 5) # FAISS와 동일한 k 사용
+
+                # EnsembleRetriever 설정 (가중치는 실험을 통해 조정)
+                final_retriever = EnsembleRetriever(
+                    retrievers=[bm25_retriever, faiss_retriever],
+                    weights=[0.4, 0.6] 
+                )
+                logging.info("EnsembleRetriever (BM25 + FAISS) 사용.")
+            except Exception as e:
+                logging.warning(f"BM25 리트리버 또는 EnsembleRetriever 생성 실패: {e}. FAISS 리트리버만 사용합니다.")
+        else:
+            logging.info("분할된 문서가 없어 FAISS 리트리버만 사용합니다.")
 
         # 각 문서를 LLM 프롬프트의 컨텍스트 부분에 맞게 포맷팅하기 위한 프롬프트
         # add_doc_number_to_metadata_and_save 함수에서 doc.metadata에 'doc_number'와 'page'가 설정됨
@@ -379,13 +346,14 @@ def update_qa_chain(llm, vector_store):
         # 1. 세션 상태 초기화 -> 2. 입력 통과 및 문서 검색/처리 -> 3. 키 이름 변경 -> 4. LLM 호출
         # retriever가 문자열 입력을 받도록 RunnableLambda를 사용하여 'input' 키의 값을 추출
         retrieval_chain_with_processing = RunnablePassthrough.assign(
-            processed_documents=RunnableLambda(lambda x: x["input"]) # 'input' 키의 값만 retriever로 전달
-                                | retriever
-                                | RunnableLambda(add_doc_number_to_metadata_and_save)
+            processed_documents=RunnableLambda(lambda x: x["input"]) # 'input' 키의 값만 final_retriever로 전달
+                                | final_retriever # FAISS 또는 Ensemble 리트리버
+                                | RunnableLambda(add_doc_number_to_metadata) # st.session_state 접근 제거
         )
 
         final_qa_chain = (
-            RunnableLambda(init_source_docs_and_pass_input) # 입력: {"input": "question"}
+            # RunnableLambda(init_source_docs_and_pass_input) # st.session_state 접근 제거
+            RunnablePassthrough() # 입력: {"input": "question"}
             | retrieval_chain_with_processing # 출력: {"input": "question", "processed_documents": [docs_with_metadata]}
             # Ensure the key for documents matches what combine_docs_chain expects via QA_PROMPT's {context}
             | RunnableLambda(lambda x: {"input": x["input"], "context": x.pop("processed_documents")}) 
@@ -410,6 +378,7 @@ def process_pdf(uploaded_file, selected_model: str, temp_pdf_path: str):
         docs = load_pdf_docs(temp_pdf_path)
         embedder = load_embedding_model()
         documents = split_documents(docs)
+        st.session_state.processed_document_splits = documents # 분할된 문서 저장
         vector_store = create_vector_store(documents, embedder)
         llm = load_llm(selected_model)
         
@@ -451,5 +420,3 @@ def process_pdf(uploaded_file, selected_model: str, temp_pdf_path: str):
     finally:
         st.session_state.pdf_is_processing = False
         st.session_state.processing_step = None
-    
-    st.rerun()
