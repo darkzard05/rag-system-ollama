@@ -16,12 +16,18 @@ venv.bak/
 # Databases
 *.sqlite3
 *.db
-chroma_db_store/ # ChromaDB 저장소 제외
 
 # Temporary files
 *.log
 *.tmp
 *.swp
+
+# Model cache
+.model_cache/
+.cache/
+*.pt
+*.bin
+*.onnx
 
 # IDE / Editor files
 .vscode/
