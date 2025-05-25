@@ -73,32 +73,44 @@ def handle_pdf_upload(uploaded_file):
     if not uploaded_file:
         return
 
+    # 같은 파일이 다시 업로드된 경우 처리하지 않음
     if uploaded_file.name == st.session_state.get("last_uploaded_file_name"):
         return
 
     try:
         # 1. 이전 PDF 파일 정리
-        if st.session_state.temp_pdf_path and os.path.exists(st.session_state.temp_pdf_path):
+        if st.session_state.get("temp_pdf_path") and os.path.exists(st.session_state.temp_pdf_path):
             try:
                 os.remove(st.session_state.temp_pdf_path)
                 logging.info("이전 임시 PDF 파일 삭제 성공")
             except Exception as e:
                 logging.warning(f"이전 임시 PDF 파일 삭제 실패: {e}")
 
-        # 2. 새 PDF 파일 저장
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
-            tmp.write(uploaded_file.getvalue())
-            st.session_state.temp_pdf_path = tmp.name
-            logging.info(f"임시 PDF 파일 생성 성공: {st.session_state.temp_pdf_path}")
-        
-        # 3. 세션 상태 리셋
+        # 2. 세션 상태 리셋 (파일 저장 전에 실행)
         SessionManager.reset_for_new_file(uploaded_file)
+        
+        # 3. 새 PDF 파일을 임시 디렉토리에 저장
+        temp_dir = tempfile.gettempdir()
+        temp_pdf_path = os.path.join(temp_dir, f"rag_chatbot_{int(time.time())}_{uploaded_file.name}")
+        
+        with open(temp_pdf_path, 'wb') as f:
+            f.write(uploaded_file.getvalue())
+        
+        # 4. 세션 상태 업데이트
+        st.session_state.temp_pdf_path = temp_pdf_path
+        st.session_state.current_file_path = temp_pdf_path  # 현재 파일 경로 설정
+        logging.info(f"임시 PDF 파일 생성 성공: {temp_pdf_path}")
+        
         SessionManager.add_message(
             "assistant", (
                 f"📂 새 PDF 파일 '{uploaded_file.name}'이(가) 업로드되었습니다.\n\n"
                 "잠시만 기다려주세요."
                 )
         )
+        
+        # PDF 뷰어 키 업데이트
+        st.session_state["pdf_viewer_key"] = f"pdf_viewer_{uploaded_file.name}_{int(time.time())}"
+        
         # 새 파일 정보로 UI를 업데이트하기 위해 rerun
         st.rerun()
         
@@ -156,25 +168,53 @@ def process_chat_response(qa_chain, user_input, chat_container):
     with chat_container:
         with st.chat_message("assistant"):
             thought_expander = st.expander("🤔 생각 과정", expanded=False)
-            message_placeholder = st.empty() # 답변 또는 상태 메시지를 표시할 영역
-            message_placeholder.write("답변 생성 중...") # 초기 메시지
+            thought_placeholder = thought_expander.empty()  # 생각 과정을 표시할 영역
+            message_placeholder = st.empty()  # 답변을 표시할 영역
+            message_placeholder.write("답변 생성 시작...")  # 초기 메시지
 
             try:
                 logging.info("답변 생성 시작...")
-                
-                message_placeholder.write("답변 생성 중...") 
-
-                # 1. Stream을 사용하여 LLM 응답을 실시간으로 처리
                 start_time = time.time()
 
                 # LLM 응답을 스트리밍하여 실시간으로 표시
                 full_llm_output = ""
+                thought_content = ""
+                is_thinking = False
+                current_content = ""
+                
                 for chunk_text in qa_chain.stream({"input": user_input}):
                     full_llm_output += chunk_text
-                    message_placeholder.markdown(full_llm_output + "▌") # 커서 효과
-                message_placeholder.markdown(full_llm_output) # 최종본 표시
+                    
+                    # <think> 태그가 시작되는지 확인
+                    if "<think>" in chunk_text and not is_thinking:
+                        is_thinking = True
+                        current_content = ""
+                        message_placeholder.write("생각 중...") # 생각 과정 시작 시 상태 메시지 변경
+                        continue
+                    
+                    # </think> 태그가 있는지 확인
+                    if "</think>" in chunk_text and is_thinking:
+                        is_thinking = False
+                        thought_content = current_content
+                        thought_placeholder.markdown(thought_content + "▌")
+                        current_content = ""
+                        message_placeholder.write("답변 생성 중...") # 답변 생성 시작 시 상태 메시지 변경
+                        continue
+                    
+                    # 현재 상태에 따라 적절한 placeholder에 내용 추가
+                    if is_thinking:
+                        current_content += chunk_text
+                        thought_placeholder.markdown(current_content + "▌")
+                    else:
+                        current_content += chunk_text
+                        message_placeholder.markdown(current_content + "▌")
 
-                end_time = time.time() # 답변 생성 종료 시간 기록
+                # 최종 내용 표시
+                if thought_content:
+                    thought_placeholder.markdown(thought_content)
+                message_placeholder.markdown(current_content)
+
+                end_time = time.time()
                 generation_time = end_time - start_time
                 logging.info(f"LLM 답변 생성 완료 (소요 시간: {generation_time:.2f}초)")
 
@@ -256,19 +296,32 @@ def main():
     with col_right:
         st.subheader("📄 PDF Preview")
         handle_pdf_upload(uploaded_file)
-        if st.session_state.temp_pdf_path and os.path.exists(st.session_state.temp_pdf_path):
-            try:
-                pdf_viewer(
-                    input=st.session_state.temp_pdf_path,
-                    width=width,
-                    height=height,
-                    key=f'pdf_viewer_{os.path.basename(st.session_state.temp_pdf_path)}',
-                    resolution_boost=resolution_boost
-                )
-            except Exception as e:
-                st.error(f"PDF 미리보기 중 오류 발생: {e}")
-        elif uploaded_file:
-            st.warning("PDF 미리보기를 표시할 수 없습니다.")
+        
+        if uploaded_file:
+            if st.session_state.get("temp_pdf_path") and os.path.exists(st.session_state.temp_pdf_path):
+                try:
+                    viewer_key = st.session_state.get("pdf_viewer_key", "pdf_viewer_default")
+                    pdf_viewer(
+                        input=st.session_state.temp_pdf_path,
+                        width=width,
+                        height=height,
+                        key=viewer_key,
+                        resolution_boost=resolution_boost
+                    )
+                    logging.info(f"PDF 뷰어 렌더링 성공 - 키: {viewer_key}")
+                except Exception as e:
+                    error_msg = f"PDF 미리보기 중 오류 발생: {str(e)}"
+                    logging.error(error_msg, exc_info=True)
+                    st.error(error_msg)
+                    
+                    # PDF 뷰어 복구 시도
+                    try:
+                        st.session_state["pdf_viewer_key"] = f"pdf_viewer_retry_{int(time.time())}"
+                        st.rerun()
+                    except Exception as retry_error:
+                        logging.error(f"PDF 뷰어 복구 실패: {retry_error}")
+            else:
+                st.warning("PDF 파일을 로드할 수 없습니다. 다시 업로드해주세요.")
 
     with col_left:
         st.subheader("💬 Chat")
