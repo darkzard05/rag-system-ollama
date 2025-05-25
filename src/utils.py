@@ -38,22 +38,36 @@ TEXT_SPLITTER_CONFIG: Dict = {
 
 class SessionManager:
     """세션 상태를 관리하는 클래스"""
-    
-    # 세션 상태의 기본값을 클래스 변수로 정의
+      # 세션 상태의 기본값을 클래스 변수로 정의
     DEFAULT_SESSION_STATE = {
+        # 기본 상태
         "messages": [],
         "last_selected_model": None,
         "last_uploaded_file_name": None,
+        "last_model_change_message": None,
+        
+        # PDF 처리 상태
         "pdf_processed": False,
         "pdf_processing_error": None,
+        "pdf_is_processing": False,
+        "temp_pdf_path": None,
+        "processing_step": None,
+        
+        # 문서 처리 관련
+        "processed_document_splits": None,
+        "source_documents": {},
+        "current_file_path": None,
+        
+        # LLM 및 검색 관련
         "qa_chain": None,
         "vector_store": None,
         "llm": None,
-        "temp_pdf_path": None,
-        "pdf_is_processing": False,
-        "processing_step": None,
-        "source_documents": {}, # source_documents 초기화 추가
-        "processed_document_splits": None, # 분할된 문서 청크 저장용
+        "bm25_retriever": None,
+        
+        # 캐시 관련
+        "_faiss_index": None,
+        "_pdf_text_cache": None,
+        "last_retriever_key": None,
     }
     
     @classmethod
@@ -73,33 +87,40 @@ class SessionManager:
         for key in keys_to_reset:
             if key in cls.DEFAULT_SESSION_STATE:
                 st.session_state[key] = cls.DEFAULT_SESSION_STATE[key]
-    
     @classmethod
     def reset_for_new_file(cls, uploaded_file):
         """새 파일 업로드시 세션 상태 리셋"""
         logging.info("새 파일 업로드로 인한 세션 상태 리셋 중...")
         
-        # 모델 변경 메시지 저장
-        last_model_change_message = st.session_state.get("last_model_change_message")
+        # 보존할 상태 저장
+        preserved_states = {
+            "last_model_change_message": st.session_state.get("last_model_change_message"),
+            "last_selected_model": st.session_state.get("last_selected_model"),
+            "_initialized": st.session_state.get("_initialized", False)
+        }
         
-        file_related_keys = [
-            "last_uploaded_file_name",
-            "pdf_processed",
-            "pdf_processing_error",
-            "qa_chain",
-            "vector_store",
-            "pdf_is_processing",
-            "processing_step",
-            "messages",
-            "processed_document_splits" # 추가
-        ]
-        cls.reset_session_state(file_related_keys)
+        # Streamlit 캐시 초기화
+        st.cache_resource.clear()
+        st.cache_data.clear()
+        
+        # 모든 세션 상태 초기화 (보존할 상태 제외)
+        exclude_keys = ["last_selected_model", "_initialized"]
+        all_keys = [key for key in st.session_state.keys() if key not in exclude_keys]
+        cls.reset_session_state(all_keys)
+        
+        # 새 파일 정보 설정
         st.session_state.last_uploaded_file_name = uploaded_file.name
+        st.session_state.current_file_path = None  # 새로운 처리 과정에서 설정됨
         
-        # 모델 변경 메시지 복원
-        if last_model_change_message:
-            st.session_state.last_model_change_message = last_model_change_message
-            cls.add_message("assistant", last_model_change_message)
+        # 보존된 상태 복원
+        for key, value in preserved_states.items():
+            if value is not None and key != "_initialized":
+                st.session_state[key] = value
+                if key == "last_model_change_message":
+                    cls.add_message("assistant", value)
+        
+        # 초기화 완료 로깅
+        logging.info(f"세션 상태 초기화 완료 - 새 파일: {uploaded_file.name}")
     
     @classmethod
     def add_message(cls, role: str, content: str):
@@ -160,6 +181,34 @@ class SessionManager:
         """에러 상태 초기화"""
         st.session_state.pdf_processing_error = None
 
+    @classmethod
+    def clear_caches(cls):
+        """모든 캐시 초기화"""
+        # Streamlit 캐시 초기화
+        st.cache_resource.clear()
+        st.cache_data.clear()
+        
+        # 캐시 관련 세션 상태 초기화
+        cache_keys = [
+            "vector_store",
+            "bm25_retriever",
+            "_faiss_index",
+            "_pdf_text_cache",
+            "last_retriever_key",
+            "processed_document_splits"
+        ]
+        for key in cache_keys:
+            if key in st.session_state:
+                del st.session_state[key]
+        logging.info("모든 캐시가 초기화되었습니다.")
+    
+    @classmethod
+    def get_file_specific_cache_key(cls, base_key: str) -> str:
+        """파일별 고유 캐시 키 생성"""
+        current_file = st.session_state.get('current_file_path', '')
+        current_model = st.session_state.get('last_selected_model', '')
+        return f"{base_key}_{current_file}_{current_model}"
+
 # 로깅 데코레이터 수정
 def log_operation(operation_name):
     def decorator(func):
@@ -183,7 +232,7 @@ def get_ollama_models() -> List[str]:
     result = subprocess.run(["ollama", "list"], capture_output=True, text=True, check=True)
     return [line.split()[0] for line in result.stdout.split("\n")[1:] if line]
 
-@st.cache_resource(show_spinner=False)
+@st.cache_resource(show_spinner=False, ttl=600)  # 10분 후 캐시 만료
 @log_operation("PDF 파일 로드")
 def load_pdf_docs(pdf_file_path: str) -> List:
     if not os.path.exists(pdf_file_path):
@@ -199,18 +248,45 @@ def load_pdf_docs(pdf_file_path: str) -> List:
 def load_embedding_model() -> HuggingFaceEmbeddings:
     device = "cuda" if torch.cuda.is_available() else "cpu"
     logging.info(f"임베딩 모델용 장치: {device}")
+      # GPU 메모리 최적화
+    if device == "cuda":
+        # CUDA 캐시 정리
+        torch.cuda.empty_cache()
+        # 메모리 할당자 설정
+        torch.backends.cudnn.benchmark = True
+        # GPU 메모리 할당자 최적화
+        torch.backends.cuda.max_split_size_mb = 512
+    
+    # 모델 설정 (SentenceTransformer는 torch_dtype를 직접 지원하지 않음)
+    model_kwargs = {
+        "device": device,
+        "trust_remote_code": False,
+    }
+    
+    # 인코딩 설정 최적화
+    encode_kwargs = {
+        "device": device,
+        "batch_size": 128,  # 배치 크기 증가
+        "normalize_embeddings": True,
+        "convert_to_numpy": True,  # numpy 변환 최적화
+        "convert_to_tensor": False  # 불필요한 텐서 변환 방지
+    }
+    
     embedder = HuggingFaceEmbeddings(
         model_name=EMBEDDING_MODEL_NAME,
-        model_kwargs={
-            "device": device,
-            "trust_remote_code": False,
-            },
-        encode_kwargs={
-            "device": device,
-            "batch_size": 64,
-            "normalize_embeddings": True,
-            },
+        model_kwargs=model_kwargs,
+        encode_kwargs=encode_kwargs,
+        cache_folder=".model_cache"  # 모델 캐시 폴더 지정
     )
+    
+    # 초기 워밍업 실행
+    try:
+        logging.info("임베딩 모델 워밍업 실행 중...")
+        _ = embedder.embed_documents(["워밍업 텍스트"])
+        logging.info("임베딩 모델 워밍업 완료")
+    except Exception as e:
+        logging.warning(f"워밍업 중 오류 발생: {e}")
+    
     return embedder
 
 @st.cache_data(show_spinner=False)
@@ -226,9 +302,9 @@ def split_documents(_docs: List) -> List:
     )
     return chunker.split_documents(_docs)
 
-@st.cache_resource(show_spinner=False)
+@st.cache_resource(show_spinner=False, ttl=600)  # 10분 후 캐시 만료
 @log_operation("FAISS 벡터 저장소 생성")
-def create_vector_store(_documents, _embedder) -> Optional[FAISS]:
+def create_vector_store(_documents, _embedder, file_path: str = None) -> Optional[FAISS]:
     return FAISS.from_documents(
         documents=_documents,
         embedding=_embedder,
@@ -294,33 +370,35 @@ def update_qa_chain(llm, vector_store):
                     doc.metadata['page'] = 'N/A'
             return docs
 
-        def rename_documents_key(data_dict: Dict) -> Dict:
-            """'processed_documents' 키를 'documents'로 변경합니다."""
-            if "processed_documents" in data_dict:
-                data_dict["documents"] = data_dict.pop("processed_documents")
-            return data_dict
-
         # 리트리버 설정
         faiss_retriever = vector_store.as_retriever(
             search_type=RETRIEVER_CONFIG['search_type'],
             search_kwargs=RETRIEVER_CONFIG['search_kwargs']
-        )
-
-        # BM25 리트리버 설정 (분할된 문서가 세션에 저장되어 있다고 가정)
+        )        # BM25 리트리버 설정 (분할된 문서가 세션에 저장되어 있다고 가정)
         final_retriever = faiss_retriever # 기본값은 FAISS 리트리버
+        
+        # 현재 파일 경로로 캐시 키 생성
+        current_file = st.session_state.get('current_file_path', '')
+        retriever_cache_key = f"retriever_{current_file}"
+        
         if st.session_state.get("processed_document_splits"):
             try:
+                # 이전 리트리버 제거
+                if retriever_cache_key in st.session_state:
+                    del st.session_state[retriever_cache_key]
+                
                 bm25_retriever = BM25Retriever.from_documents(
                     st.session_state.processed_document_splits
                 )
-                bm25_retriever.k = RETRIEVER_CONFIG['search_kwargs'].get('k', 5) # FAISS와 동일한 k 사용
+                bm25_retriever.k = RETRIEVER_CONFIG['search_kwargs'].get('k', 5)
 
-                # EnsembleRetriever 설정 (가중치는 실험을 통해 조정)
                 final_retriever = EnsembleRetriever(
                     retrievers=[bm25_retriever, faiss_retriever],
                     weights=[0.4, 0.6] 
                 )
-                logging.info("EnsembleRetriever (BM25 + FAISS) 사용.")
+                # 새 리트리버 캐시
+                st.session_state[retriever_cache_key] = final_retriever
+                logging.info(f"EnsembleRetriever (BM25 + FAISS) 생성 완료 - 파일: {current_file}")
             except Exception as e:
                 logging.warning(f"BM25 리트리버 또는 EnsembleRetriever 생성 실패: {e}. FAISS 리트리버만 사용합니다.")
         else:
@@ -369,17 +447,25 @@ def update_qa_chain(llm, vector_store):
 def process_pdf(uploaded_file, selected_model: str, temp_pdf_path: str):
     """PDF 처리 및 QA 체인 생성."""
     try:
-        # 상태 초기화
+        # 상태 및 캐시 초기화
         st.session_state.pdf_is_processing = True
         st.session_state.pdf_processed = False
         st.session_state.qa_chain = None
         
-        # 각 단계 처리
+        # 모든 캐시 초기화
+        SessionManager.clear_caches()
+        
+        # 현재 파일 경로 설정
+        st.session_state.current_file_path = temp_pdf_path
+        logging.info(f"PDF 처리 시작: {temp_pdf_path}")
+
+        # PDF 파일 저장
         docs = load_pdf_docs(temp_pdf_path)
+        
         embedder = load_embedding_model()
         documents = split_documents(docs)
         st.session_state.processed_document_splits = documents # 분할된 문서 저장
-        vector_store = create_vector_store(documents, embedder)
+        vector_store = create_vector_store(documents, embedder, temp_pdf_path)
         llm = load_llm(selected_model)
         
         # QA 체인 생성
