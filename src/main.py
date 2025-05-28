@@ -5,10 +5,7 @@ import os
 import streamlit as st
 from streamlit_pdf_viewer import pdf_viewer
 import logging
-import json
-import re
-import html
-import time # 시간 측정을 위해 time 모듈 import
+import time
 from utils import (
     SessionManager,
     get_ollama_models,
@@ -149,105 +146,80 @@ def handle_pdf_processing(uploaded_file):
         # PDF 처리 시도 후 (성공/실패 모두) UI 업데이트를 위해 rerun
         st.rerun()
 
-def _parse_llm_output(full_llm_output: str) -> tuple[str, str, dict | None]:
-    """LLM의 전체 출력에서 생각 과정을 분리하고, 나머지 텍스트를 직접 반환합니다."""
-    thought_content = ""
-    remaining_output = full_llm_output.strip()
-
-    if remaining_output.startswith("<think>"):
-        think_end_tag = "</think>"
-        think_end_idx = remaining_output.find(think_end_tag)
-        if think_end_idx != -1:
-            thought_content = remaining_output[len("<think>"):think_end_idx].strip()
-            remaining_output = remaining_output[think_end_idx + len(think_end_tag):].strip()
-    
-    return thought_content, remaining_output, None
-
 def process_chat_response(qa_chain, user_input, chat_container):
     """채팅 응답 처리"""
     with chat_container:
         with st.chat_message("assistant"):
             thought_expander = st.expander("🤔 생각 과정", expanded=False)
-            thought_placeholder = thought_expander.empty()  # 생각 과정을 표시할 영역
-            message_placeholder = st.empty()  # 답변을 표시할 영역
-            message_placeholder.write("답변 생성 시작...")  # 초기 메시지
+            thought_placeholder = thought_expander.empty()
+            message_placeholder = st.empty()
+            message_placeholder.markdown("답변 생성 준비 중...")
 
             try:
-                logging.info("답변 생성 시작...")
                 start_time = time.time()
-
-                # LLM 응답을 스트리밍하여 실시간으로 표시
-                full_llm_output = ""
-                thought_content = ""
+                thought_buffer = ""
+                response_buffer = ""
                 is_thinking = False
-                current_content = ""
+                update_counter = 0
                 
-                for chunk_text in qa_chain.stream({"input": user_input}):
-                    full_llm_output += chunk_text
-                    
-                    # <think> 태그가 시작되는지 확인
-                    if "<think>" in chunk_text and not is_thinking:
-                        is_thinking = True
-                        current_content = ""
-                        message_placeholder.write("생각 중...") # 생각 과정 시작 시 상태 메시지 변경
-                        continue
-                    
-                    # </think> 태그가 있는지 확인
-                    if "</think>" in chunk_text and is_thinking:
-                        is_thinking = False
-                        thought_content = current_content
-                        thought_placeholder.markdown(thought_content + "▌")
-                        current_content = ""
-                        message_placeholder.write("답변 생성 중...") # 답변 생성 시작 시 상태 메시지 변경
-                        continue
-                    
-                    # 현재 상태에 따라 적절한 placeholder에 내용 추가
-                    if is_thinking:
-                        current_content += chunk_text
-                        thought_placeholder.markdown(current_content + "▌")
+                for chunk in qa_chain.stream({"input": user_input}):
+                    if isinstance(chunk, dict):
+                        chunk_text = chunk.get("answer", "")
                     else:
-                        current_content += chunk_text
-                        message_placeholder.markdown(current_content + "▌")
-
-                # 최종 내용 표시
-                if thought_content:
-                    thought_placeholder.markdown(thought_content)
-                message_placeholder.markdown(current_content)
-
-                end_time = time.time()
-                generation_time = end_time - start_time
-                logging.info(f"LLM 답변 생성 완료 (소요 시간: {generation_time:.2f}초)")
-
-                if not full_llm_output:
-                    raise ValueError("LLM으로부터 빈 응답을 받았습니다.")
-                # 2. LLM 출력 파싱 (생각 과정, raw JSON, 파싱된 데이터)
-                # parsed_json_data will now always be None
-                parsed_thought_final, direct_llm_text_output, parsed_json_data = _parse_llm_output(full_llm_output)
-
-                # 3. 최종 생각 과정 표시 (스트리밍 중에는 표시하지 않음)
-                if parsed_thought_final:
-                    thought_expander.markdown(parsed_thought_final)
-                else:
-                    thought_expander.empty()
-
-                # 4. 답변 처리 (이제 direct_llm_text_output을 직접 사용)
-                # parsed_json_data는 항상 None이므로, 이전의 JSON 파싱 성공/실패 분기 로직은 필요 없음.
-                if not direct_llm_text_output:
-                    message_placeholder.markdown("LLM으로부터 답변 내용을 받지 못했습니다.")
-                    SessionManager.add_message("assistant", "LLM으로부터 답변 내용을 받지 못했습니다.")
-                    return
+                        chunk_text = str(chunk)
+                        
+                    if not chunk_text:
+                        continue
+                        
+                    # 태그 처리
+                    if "<think>" in chunk_text:
+                        is_thinking = True
+                        thought_buffer = chunk_text.split("<think>")[1]
+                        # 생각 과정 시작 시 메시지 업데이트
+                        message_placeholder.markdown("🤔 생각을 정리하는 중입니다...")
+                        continue
+                        
+                    if "</think>" in chunk_text:
+                        is_thinking = False
+                        thought_end_idx = chunk_text.find("</think>")
+                        thought_buffer += chunk_text[:thought_end_idx]
+                        response_buffer = chunk_text[thought_end_idx + len("</think>"):]
+                        if thought_buffer.strip():
+                            thought_placeholder.markdown(thought_buffer)
+                        # 생각 과정 종료 시 메시지 업데이트
+                        message_placeholder.markdown("답변을 작성하는 중...")
+                        continue
+                    
+                    # 버퍼에 추가 및 화면 업데이트
+                    if is_thinking:
+                        thought_buffer += chunk_text
+                        if update_counter % 3 == 0:
+                            thought_placeholder.markdown(thought_buffer + "▌")
+                    else:
+                        response_buffer += chunk_text
+                        if update_counter % 3 == 0:
+                            message_placeholder.markdown(response_buffer + "▌")
+                    
+                    update_counter += 1
+                    time.sleep(0.01)  # 스트리밍 효과를 위한 짧은 대기
                 
-                message_placeholder.markdown(direct_llm_text_output, unsafe_allow_html=True)
-                SessionManager.add_message("assistant", direct_llm_text_output)
-
-                # "참고 자료" 출력 로직 제거
-                # llm_provided_sources 변수는 여전히 존재하지만 UI에 표시하지 않음
+                # 최종 응답 표시
+                if thought_buffer.strip():
+                    thought_placeholder.markdown(thought_buffer)
+                if response_buffer.strip():
+                    message_placeholder.markdown(response_buffer)
+                
+                # 세션에 저장
+                SessionManager.add_message("assistant", response_buffer)
+                
+                end_time = time.time()
+                logging.info(f"LLM 답변 생성 완료 (소요 시간: {end_time - start_time:.2f}초)")
 
             except Exception as e:
-                logging.error(f"답변 생성 중 오류 발생: {e}", exc_info=True)
-                error_message = f"❌ 답변 생성 중 오류가 발생했습니다: {e}"
-                message_placeholder.error(error_message)
-                SessionManager.add_message("assistant", error_message)
+                error_msg = f"답변 생성 중 오류 발생: {str(e)}"
+                logging.error(error_msg, exc_info=True)
+                message_placeholder.error(error_msg)
+                SessionManager.add_message("assistant", f"❌ {error_msg}")
 
 def display_chat_messages(chat_container):
     """채팅 컨테이너에 모든 메시지를 표시"""
@@ -293,6 +265,7 @@ def main():
 
     col_left, col_right = st.columns([1, 1])
 
+    # 메인 컨테이너 설정
     with col_right:
         st.subheader("📄 PDF Preview")
         handle_pdf_upload(uploaded_file)
@@ -323,9 +296,11 @@ def main():
             else:
                 st.warning("PDF 파일을 로드할 수 없습니다. 다시 업로드해주세요.")
 
+    # 채팅 컨테이너 설정
     with col_left:
         st.subheader("💬 Chat")
-        chat_container = st.container(height=500, border=True)
+        
+        chat_container = st.container(height=650, border=True)
         display_chat_messages(chat_container)
 
         if not st.session_state.get("pdf_processed"):
