@@ -152,7 +152,7 @@ class SessionManager:
         
         cls.add_message(
             "assistant", 
-            f"🔄 모델을 {old_model}에서 {new_model}로 변경하는 중..."
+            f"🔄 모델을 {new_model}로 변경했습니다."
         )
         return old_model
 
@@ -322,7 +322,8 @@ def load_llm(model_name: str) -> OllamaLLM:
 QA_PROMPT = ChatPromptTemplate.from_messages([
     ("system", (
      """
-     당신은 주어진 컨텍스트만을 사용하여 사용자의 질문에 답변하는 AI 어시스턴트입니다. 다른 지식이나 정보를 사용해서는 안 됩니다.
+     당신은 주어진 컨텍스트만을 사용하여 사용자의 질문에 답변하는 AI 어시스턴트입니다.
+     다른 지식이나 정보를 사용해서는 안 됩니다.
 
      **컨텍스트**
      {context}
@@ -331,7 +332,8 @@ QA_PROMPT = ChatPromptTemplate.from_messages([
      1.  **언어** 사용자의 질문과 동일한 언어로 답변해야 합니다.
      2.  **답변 형식**
         - 답변은 반드시 명확하게 작성해야 합니다.
-        - 답변 내용이 여러 항목, 단계 또는 문단으로 구성될 경우, 마크다운의 줄 바꿈(예: 빈 줄 삽입)이나 목록(숫자 목록, 글머리 기호 목록)을 적절히 사용하여 가독성을 높여야 합니다.
+        - 답변 내용이 여러 항목, 단계 또는 문단으로 구성될 경우,
+        마크다운의 줄 바꿈(예: 빈 줄 삽입)이나 목록(숫자 목록, 글머리 기호 목록)을 적절히 사용하여 가독성을 높여야 합니다.
         - 각 정보 단위가 명확히 구분되도록 표현해야 합니다.
      """
         )),
@@ -484,14 +486,9 @@ def process_pdf(uploaded_file, selected_model: str, temp_pdf_path: str):
         success_message = (
             f"✅ '{uploaded_file.name}' 문서 처리가 완료되었습니다.\n\n"
             "다음과 같은 질문들을 해보세요:\n\n"
-            "[문서 전체 이해하기]\n"
             "- 이 문서를 한 문단으로 요약해주세요\n"
             "- 이 문서의 주요 주장과 근거를 설명해주세요\n"
             "- 이 문서의 핵심 용어 3가지를 설명해주세요\n\n"
-            "[세부 내용 파악하기]\n"
-            "- 이 문서가 해결하고자 하는 문제는 무엇인가요?\n"
-            "- 문서에서 제시된 해결책이나 제안은 무엇인가요?\n"
-            "- 이 연구의 한계점이나 향후 연구 방향은 무엇인가요?\n\n"
             "자유롭게 문서의 내용에 대해 질문해보세요."
         )
         SessionManager.add_message("assistant", success_message)
