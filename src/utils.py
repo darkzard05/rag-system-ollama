@@ -465,7 +465,7 @@ def process_pdf(uploaded_file, selected_model: str, temp_pdf_path: str):
         embedder = load_embedding_model()
         documents = split_documents(docs)
         st.session_state.processed_document_splits = documents # 분할된 문서 저장
-        vector_store = create_vector_store(documents, embedder, temp_pdf_path)
+        vector_store = create_vector_store(documents, embedder)
         llm = load_llm(selected_model)
         
         # QA 체인 생성
