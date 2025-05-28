@@ -304,7 +304,7 @@ def split_documents(_docs: List) -> List:
 
 @st.cache_resource(show_spinner=False, ttl=600)  # 10분 후 캐시 만료
 @log_operation("FAISS 벡터 저장소 생성")
-def create_vector_store(_documents, _embedder, file_path: str = None) -> Optional[FAISS]:
+def create_vector_store(_documents, _embedder) -> Optional[FAISS]:
     return FAISS.from_documents(
         documents=_documents,
         embedding=_embedder,
@@ -354,18 +354,18 @@ def update_qa_chain(llm, vector_store):
             # 이 함수는 순수하게 문서 리스트를 받아 메타데이터를 추가/수정하고 반환합니다.
             # st.session_state.source_documents 관련 로직은 호출하는 쪽(메인 스레드)에서 처리합니다.
             for i, doc in enumerate(docs, 1):
-                doc.metadata["doc_number"] = i # 나중에 document_prompt에서 사용
+                doc.metadata["doc_number"] = i
 
                 # 페이지 번호 처리: 0-indexed를 1-indexed 문자열로 변환 또는 'N/A'
                 # PyMuPDFLoader는 'page' 메타데이터를 0-indexed 정수로 제공
                 page_number_raw = doc.metadata.get('page')
                 if page_number_raw is not None:
                     try:
-                        # Ensure page_number_raw is an integer before arithmetic operation
+                        # 페이지 번호가 문자열로 되어 있을 경우 정수로 변환
                         current_page_int = int(page_number_raw)
                         doc.metadata['page'] = str(current_page_int + 1) # Convert to 1-indexed string
                     except ValueError:
-                        # Handle cases where page_number_raw is a string that cannot be converted to int
+                        # 페이지 번호가 정수로 변환 불가능한 경우
                         logging.warning(f"Could not convert page metadata '{page_number_raw}' to an integer. Setting page to 'N/A'.")
                         doc.metadata['page'] = 'N/A'
                 else:
@@ -376,8 +376,10 @@ def update_qa_chain(llm, vector_store):
         faiss_retriever = vector_store.as_retriever(
             search_type=RETRIEVER_CONFIG['search_type'],
             search_kwargs=RETRIEVER_CONFIG['search_kwargs']
-        )        # BM25 리트리버 설정 (분할된 문서가 세션에 저장되어 있다고 가정)
-        final_retriever = faiss_retriever # 기본값은 FAISS 리트리버
+        )
+        
+        # BM25 리트리버 설정 (분할된 문서가 세션에 저장되어 있다고 가정)
+        final_retriever = faiss_retriever
         
         # 현재 파일 경로로 캐시 키 생성
         current_file = st.session_state.get('current_file_path', '')
@@ -432,13 +434,9 @@ def update_qa_chain(llm, vector_store):
         )
 
         final_qa_chain = (
-            # RunnableLambda(init_source_docs_and_pass_input) # st.session_state 접근 제거
             RunnablePassthrough() # 입력: {"input": "question"}
             | retrieval_chain_with_processing # 출력: {"input": "question", "processed_documents": [docs_with_metadata]}
-            # Ensure the key for documents matches what combine_docs_chain expects via QA_PROMPT's {context}
             | RunnableLambda(lambda x: {"input": x["input"], "context": x.pop("processed_documents")}) 
-            # 이전 rename_documents_key 대신 context로 직접 매핑
-            # | RunnableLambda(rename_documents_key) # 출력: {"input": "question", "documents": [docs_with_metadata]}
             | combine_docs_chain # 입력: {"input": "question", "documents": [docs]}, 출력: LLM 답변 문자열 (스트리밍 시 청크)
         )
         return final_qa_chain
