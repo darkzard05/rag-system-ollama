@@ -1,5 +1,7 @@
 import torch
-torch.classes.__path__ = [] # PyTorch/torchvision 특정 버전 호환성 문제 해결을 위한 임시 조치일 수 있음
+# 아래 코드는 특정 PyTorch/Torchvision 버전 간 호환성 문제로 인해 torchvision.ops 등을 찾지 못하는 오류를
+# 해결하기 위한 임시 조치입니다. (예: torchvision 로딩 시 `torch.classes.load_library` 관련 오류)
+torch.classes.__path__ = []
 import tempfile
 import os
 import streamlit as st
@@ -63,10 +65,9 @@ def handle_model_change(selected_model: str):
         SessionManager.reset_session_state(["llm", "qa_chain"])
         SessionManager.add_message("assistant", f"❌ {error_msg}")
         st.session_state.last_model_change_message = f"❌ {error_msg}"
-    # st.rerun() # selectbox 값 변경으로 인한 자동 rerun으로 충분하므로 명시적 rerun 제거
 
-def handle_pdf_upload(uploaded_file):
-    """PDF 파일 업로드 처리"""
+def handle_file_upload_and_process(uploaded_file):
+    """PDF 파일 업로드와 처리를 한 번에 관리"""
     if not uploaded_file:
         return
 
@@ -74,76 +75,55 @@ def handle_pdf_upload(uploaded_file):
     if uploaded_file.name == st.session_state.get("last_uploaded_file_name"):
         return
 
-    try:
-        # 1. 이전 PDF 파일 정리
-        if st.session_state.get("temp_pdf_path") and os.path.exists(st.session_state.temp_pdf_path):
-            try:
-                os.remove(st.session_state.temp_pdf_path)
-                logging.info("이전 임시 PDF 파일 삭제 성공")
-            except Exception as e:
-                logging.warning(f"이전 임시 PDF 파일 삭제 실패: {e}")
+    # 1. 이전 임시 파일 정리 (Best-effort)
+    if st.session_state.get("temp_pdf_path") and os.path.exists(st.session_state.temp_pdf_path):
+        try:
+            os.remove(st.session_state.temp_pdf_path)
+            logging.info("이전 임시 PDF 파일 삭제 성공")
+        except Exception as e:
+            logging.warning(f"이전 임시 PDF 파일 삭제 실패: {e}")
 
-        # 2. 세션 상태 리셋 (파일 저장 전에 실행)
-        SessionManager.reset_for_new_file(uploaded_file)
-        
+    # 2. 세션 상태 리셋
+    SessionManager.reset_for_new_file(uploaded_file)
+    st.session_state.pdf_is_processing = True
+
+    try:
         # 3. 새 PDF 파일을 임시 디렉토리에 저장
-        temp_dir = tempfile.gettempdir()
-        temp_pdf_path = os.path.join(temp_dir, f"rag_chatbot_{int(time.time())}_{uploaded_file.name}")
+        with st.spinner(f"'{uploaded_file.name}' 파일 저장 중..."):
+            temp_dir = tempfile.gettempdir()
+            temp_pdf_path = os.path.join(temp_dir, f"rag_chatbot_{int(time.time())}_{uploaded_file.name}")
+            with open(temp_pdf_path, 'wb') as f:
+                f.write(uploaded_file.getvalue())
+            
+            st.session_state.temp_pdf_path = temp_pdf_path
+            st.session_state.current_file_path = temp_pdf_path
+            st.session_state["pdf_viewer_key"] = f"pdf_viewer_{uploaded_file.name}_{int(time.time())}"
+            logging.info(f"임시 PDF 파일 생성 성공: {temp_pdf_path}")
         
-        with open(temp_pdf_path, 'wb') as f:
-            f.write(uploaded_file.getvalue())
-        
-        # 4. 세션 상태 업데이트
-        st.session_state.temp_pdf_path = temp_pdf_path
-        st.session_state.current_file_path = temp_pdf_path  # 현재 파일 경로 설정
-        logging.info(f"임시 PDF 파일 생성 성공: {temp_pdf_path}")
-        
+        # 4. 문서 처리 시작 메시지 표시
         SessionManager.add_message(
-            "assistant", (
-                f"📂 새 PDF 파일 '{uploaded_file.name}'이(가) 업로드되었습니다.\n\n"
-                "잠시만 기다려주세요."
-                )
+            "assistant", 
+            f"📂 '{uploaded_file.name}' 파일 업로드 완료.\n\n"
+            f"⏳ 문서 처리를 시작합니다. 잠시만 기다려주세요..."
         )
         
-        # PDF 뷰어 키 업데이트
-        st.session_state["pdf_viewer_key"] = f"pdf_viewer_{uploaded_file.name}_{int(time.time())}"
-        
-        # 새 파일 정보로 UI를 업데이트하기 위해 rerun
-        st.rerun()
-        
-    except Exception as e:
-        error_msg = f"임시 PDF 파일 생성 실패: {e}"
-        logging.error(error_msg)
-        st.error(error_msg)
-        st.session_state.temp_pdf_path = None
+        # 5. PDF 처리 실행 (rerun 없이 바로 실행)
+        current_selected_model = st.session_state.get("last_selected_model")
+        if not current_selected_model:
+            st.warning("모델이 선택되지 않았습니다. 사이드바에서 모델을 선택해주세요.")
+            # 모델 미선택 시 처리를 중단하고 사용자에게 알림
+            SessionManager.set_error_state("모델이 선택되지 않아 PDF 처리를 진행할 수 없습니다.")
+            return
 
-def handle_pdf_processing(uploaded_file):
-    """PDF 처리 상태 관리 및 실행"""
-    if not (uploaded_file and st.session_state.temp_pdf_path):
-        return
-
-    if (st.session_state.get("pdf_processed") or 
-        st.session_state.get("pdf_processing_error") or 
-        st.session_state.get("pdf_is_processing")):
-        return
-
-    current_selected_model = st.session_state.get("last_selected_model")
-    if not current_selected_model:
-        st.warning("모델이 선택되지 않았습니다. 사이드바에서 모델을 선택해주세요.")
-        return
-
-    st.session_state.pdf_is_processing = True
-    SessionManager.add_message("assistant", f"⏳ '{uploaded_file.name}' 문서 처리 중...")
-    
-    try:
         process_pdf(uploaded_file, current_selected_model, st.session_state.temp_pdf_path)
+
     except Exception as e:
-        error_msg = f"PDF 처리 중 오류 발생: {e}"
-        logging.error(error_msg)
+        error_msg = f"파일 업로드 또는 처리 중 오류 발생: {e}"
+        logging.error(error_msg, exc_info=True)
         SessionManager.set_error_state(error_msg)
     finally:
         st.session_state.pdf_is_processing = False
-        # PDF 처리 시도 후 (성공/실패 모두) UI 업데이트를 위해 rerun
+        # 모든 과정이 끝난 후 UI 전체를 최종 상태로 업데이트하기 위해 단 한번 rerun
         st.rerun()
 
 def process_chat_response(qa_chain, user_input, chat_container):
@@ -201,7 +181,9 @@ def process_chat_response(qa_chain, user_input, chat_container):
                             message_placeholder.markdown(response_buffer + "▌")
                     
                     update_counter += 1
-                    time.sleep(0.01)  # 스트리밍 효과를 위한 짧은 대기
+                    # 스트리밍 효과를 시각적으로 부드럽게 하기 위한 짧은 대기입니다.
+                    # 응답 속도가 매우 중요한 경우 이 값을 줄이거나 제거할 수 있습니다.
+                    time.sleep(0.01)  
                 
                 # 최종 응답 표시
                 if thought_buffer.strip():
@@ -258,6 +240,10 @@ def main():
             handle_model_change(selected_model)
 
         uploaded_file = st.file_uploader("Upload a PDF file", type="pdf")
+        
+        # 파일 업로드가 감지되면 바로 처리 함수 호출
+        handle_file_upload_and_process(uploaded_file)
+        
         st.divider()
         resolution_boost = st.slider("Resolution boost", 1, 10, 1)
         width = st.slider("PDF width", 100, 1000, 1000)
@@ -268,8 +254,8 @@ def main():
     # 메인 컨테이너 설정
     with col_right:
         st.subheader("📄 PDF Preview")
-        handle_pdf_upload(uploaded_file)
         
+        # PDF 뷰어 렌더링
         if uploaded_file:
             if st.session_state.get("temp_pdf_path") and os.path.exists(st.session_state.temp_pdf_path):
                 try:
@@ -293,8 +279,6 @@ def main():
                         st.rerun()
                     except Exception as retry_error:
                         logging.error(f"PDF 뷰어 복구 실패: {retry_error}")
-            else:
-                st.warning("PDF 파일을 로드할 수 없습니다. 다시 업로드해주세요.")
 
     # 채팅 컨테이너 설정
     with col_left:
@@ -302,9 +286,6 @@ def main():
         
         chat_container = st.container(height=650, border=True)
         display_chat_messages(chat_container)
-
-        if not st.session_state.get("pdf_processed"):
-            handle_pdf_processing(uploaded_file)
             
         user_input = st.chat_input(
             "PDF 내용에 대해 질문해보세요.",
