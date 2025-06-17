@@ -197,25 +197,6 @@ class SessionManager:
     def clear_error_state(cls):
         """에러 상태 초기화"""
         st.session_state.pdf_processing_error = None
-
-    @classmethod
-    def clear_caches(cls):
-        """모든 캐시 초기화"""
-        # Streamlit 전역 캐시 초기화 (@st.cache_data, @st.cache_resource)
-        st.cache_resource.clear()
-        st.cache_data.clear()
-        
-        # PDF 처리와 직접적으로 관련된 세션 상태 초기화
-        # vector_store 등은 @st.cache_resource로 관리되므로 여기서 직접 삭제할 필요 없음
-        cache_keys = [
-            "_faiss_index",
-            "_pdf_text_cache",
-            "processed_document_splits"
-        ]
-        for key in cache_keys:
-            if key in st.session_state:
-                del st.session_state[key]
-        logging.info("모든 캐시가 초기화되었습니다.")
     
     @classmethod
     def get_file_specific_cache_key(cls, base_key: str) -> str:
@@ -247,7 +228,6 @@ def get_ollama_models() -> List[str]:
     result = subprocess.run(["ollama", "list"], capture_output=True, text=True, check=True)
     return [line.split()[0] for line in result.stdout.split("\n")[1:] if line]
 
-@st.cache_resource(show_spinner=False, ttl=600)  # 10분 후 캐시 만료
 @log_operation("PDF 파일 로드")
 def load_pdf_docs(pdf_file_path: str) -> List:
     if not os.path.exists(pdf_file_path):
@@ -305,7 +285,6 @@ def load_embedding_model() -> HuggingFaceEmbeddings:
     
     return embedder
 
-@st.cache_data(show_spinner=False)
 @log_operation("문서 분할")
 def split_documents(_docs: List) -> List:
     chunker = RecursiveCharacterTextSplitter(
@@ -318,7 +297,6 @@ def split_documents(_docs: List) -> List:
     )
     return chunker.split_documents(_docs)
 
-@st.cache_resource(show_spinner=False, ttl=600)  # 10분 후 캐시 만료
 @log_operation("FAISS 벡터 저장소 생성")
 def create_vector_store(_documents, _embedder) -> Optional[FAISS]:
     return FAISS.from_documents(
@@ -326,7 +304,6 @@ def create_vector_store(_documents, _embedder) -> Optional[FAISS]:
         embedding=_embedder,
     )
     
-@st.cache_resource(show_spinner=False)
 @log_operation("BM25 리트리버 생성")
 def create_bm25_retriever(_documents: List, k: int) -> BM25Retriever:
     """캐시된 BM25 리트리버를 생성하거나 반환합니다."""
@@ -334,7 +311,6 @@ def create_bm25_retriever(_documents: List, k: int) -> BM25Retriever:
     retriever.k = k
     return retriever
 
-@st.cache_resource(show_spinner=False)
 @log_operation("Ensemble 리트리버 생성")
 def create_ensemble_retriever(_faiss_retriever: FAISS, _bm25_retriever: BM25Retriever, weights: List[float]):
     """캐시된 Ensemble 리트리버를 생성하거나 반환합니다."""
@@ -480,9 +456,6 @@ def process_pdf(uploaded_file, selected_model: str, temp_pdf_path: str):
         st.session_state.pdf_is_processing = True
         st.session_state.pdf_processed = False
         st.session_state.qa_chain = None
-        
-        # 모든 캐시 초기화
-        SessionManager.clear_caches()
         
         # 현재 파일 경로 설정
         st.session_state.current_file_path = temp_pdf_path
