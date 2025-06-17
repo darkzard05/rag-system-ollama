@@ -29,7 +29,6 @@ RETRIEVER_CONFIG: Dict = {
         'k': 5,
     }
 }
-
 # 텍스트 분할 설정
 TEXT_SPLITTER_CONFIG: Dict = {
     'chunk_size': 4000,
@@ -41,6 +40,7 @@ class SessionManager:
       # 세션 상태의 기본값을 클래스 변수로 정의
     DEFAULT_SESSION_STATE = {
         # 기본 상태
+        "model_update_initiated_message": None, # 모델 변경 시작 메시지
         "messages": [],
         "last_selected_model": None,
         "last_uploaded_file_name": None,
@@ -70,6 +70,14 @@ class SessionManager:
         "last_retriever_key": None,
     }
     
+    # 새 파일 업로드 시 보존할 세션 상태 키 목록
+    PRESERVE_ON_NEW_FILE_KEYS = [
+        "_initialized",
+        "last_selected_model",
+        "model_update_initiated_message",
+        "last_model_change_message"
+    ]
+    
     @classmethod
     def init_session(cls):
         """세션 상태 초기화 - 한 번만 실행되어야 함"""
@@ -88,20 +96,17 @@ class SessionManager:
             if key in cls.DEFAULT_SESSION_STATE:
                 st.session_state[key] = cls.DEFAULT_SESSION_STATE[key]
     @classmethod
-    def reset_for_new_file(cls, uploaded_file):
+    def reset_for_new_file(cls, uploaded_file: str):
         """새 파일 업로드시 세션 상태 리셋"""
         logging.info("새 파일 업로드로 인한 세션 상태 리셋 중...")
         
         # 보존할 상태 저장
         preserved_states = {
+            "model_update_initiated_message": st.session_state.get("model_update_initiated_message"),
             "last_model_change_message": st.session_state.get("last_model_change_message"),
             "last_selected_model": st.session_state.get("last_selected_model"),
             "_initialized": st.session_state.get("_initialized", False)
         }
-        
-        # Streamlit 캐시 초기화
-        st.cache_resource.clear()
-        st.cache_data.clear()
         
         # 모든 세션 상태 초기화 (보존할 상태 제외)
         exclude_keys = ["last_selected_model", "_initialized"]
@@ -112,13 +117,26 @@ class SessionManager:
         st.session_state.last_uploaded_file_name = uploaded_file.name
         st.session_state.current_file_path = None  # 새로운 처리 과정에서 설정됨
         
-        # 보존된 상태 복원
-        for key, value in preserved_states.items():
-            if value is not None and key != "_initialized":
-                st.session_state[key] = value
-                if key == "last_model_change_message":
-                    cls.add_message("assistant", value)
+        # 1. 보존된 세션 상태 값 복원
+        if preserved_states.get("model_update_initiated_message") is not None:
+            st.session_state.model_update_initiated_message = preserved_states["model_update_initiated_message"]
+        if preserved_states.get("last_model_change_message") is not None:
+            st.session_state.last_model_change_message = preserved_states["last_model_change_message"]
+        if preserved_states.get("last_selected_model") is not None:
+            st.session_state.last_selected_model = preserved_states["last_selected_model"]
+        st.session_state._initialized = preserved_states.get("_initialized", False)
+
+        # 2. 보존된 메시지들을 (초기화된) messages 목록에 순서대로 다시 추가
+        # 모델 변경 시작 메시지 추가
+        initiated_msg = st.session_state.get("model_update_initiated_message")
+        if initiated_msg:
+            cls.add_message("assistant", initiated_msg)
         
+        # 모델 변경 완료/결과 메시지 추가 (시작 메시지와 다를 경우에만)
+        completed_msg = st.session_state.get("last_model_change_message")
+        if completed_msg and completed_msg != initiated_msg:
+            cls.add_message("assistant", completed_msg)
+            
         # 초기화 완료 로깅
         logging.info(f"세션 상태 초기화 완료 - 새 파일: {uploaded_file.name}")
     
@@ -150,10 +168,9 @@ class SessionManager:
         cls.reset_session_state(model_related_keys)
         st.session_state.last_selected_model = new_model
         
-        cls.add_message(
-            "assistant", 
-            f"🔄 모델을 {new_model}로 변경했습니다."
-        )
+        model_update_msg = f"🔄 모델을 {new_model}로 변경했습니다."
+        cls.add_message("assistant", model_update_msg)
+        st.session_state.model_update_initiated_message = model_update_msg # 시작 메시지 저장
         return old_model
 
     @classmethod
@@ -184,17 +201,15 @@ class SessionManager:
     @classmethod
     def clear_caches(cls):
         """모든 캐시 초기화"""
-        # Streamlit 캐시 초기화
+        # Streamlit 전역 캐시 초기화 (@st.cache_data, @st.cache_resource)
         st.cache_resource.clear()
         st.cache_data.clear()
         
-        # 캐시 관련 세션 상태 초기화
+        # PDF 처리와 직접적으로 관련된 세션 상태 초기화
+        # vector_store 등은 @st.cache_resource로 관리되므로 여기서 직접 삭제할 필요 없음
         cache_keys = [
-            "vector_store",
-            "bm25_retriever",
             "_faiss_index",
             "_pdf_text_cache",
-            "last_retriever_key",
             "processed_document_splits"
         ]
         for key in cache_keys:
@@ -255,7 +270,8 @@ def load_embedding_model() -> HuggingFaceEmbeddings:
         # 메모리 할당자 설정
         torch.backends.cudnn.benchmark = True
         # GPU 메모리 할당자 최적화
-        torch.backends.cuda.max_split_size_mb = 512
+        # 이 값은 사용자의 GPU 메모리 크기 및 모델에 따라 조정될 수 있습니다.
+        torch.backends.cuda.max_split_size_mb = 512 
     
     # 모델 설정 (SentenceTransformer는 torch_dtype를 직접 지원하지 않음)
     model_kwargs = {
@@ -309,6 +325,22 @@ def create_vector_store(_documents, _embedder) -> Optional[FAISS]:
         documents=_documents,
         embedding=_embedder,
     )
+    
+@st.cache_resource(show_spinner=False)
+@log_operation("BM25 리트리버 생성")
+def create_bm25_retriever(_documents: List, k: int) -> BM25Retriever:
+    """캐시된 BM25 리트리버를 생성하거나 반환합니다."""
+    retriever = BM25Retriever.from_documents(_documents)
+    retriever.k = k
+    return retriever
+
+@st.cache_resource(show_spinner=False)
+@log_operation("Ensemble 리트리버 생성")
+def create_ensemble_retriever(_faiss_retriever: FAISS, _bm25_retriever: BM25Retriever, weights: List[float]):
+    """캐시된 Ensemble 리트리버를 생성하거나 반환합니다."""
+    return EnsembleRetriever(
+        retrievers=[_bm25_retriever, _faiss_retriever], weights=weights
+    )
 
 @st.cache_resource(show_spinner=False)
 @log_operation("Ollama LLM 로딩")
@@ -340,38 +372,39 @@ QA_PROMPT = ChatPromptTemplate.from_messages([
     ("human", "Question: {input}")
     ])
 
+# 헬퍼 함수 정의 (st.session_state 직접 접근 제거)
+def add_doc_number_to_metadata(docs: List[Dict]) -> List[Dict]:
+    """
+    검색된 각 문서에 'doc_number' 메타데이터를 추가하고,
+    페이지 번호를 1-indexed 문자열로 변환합니다.
+    이 함수는 순수 함수로, st.session_state에 직접 접근하지 않습니다.
+    LLM 응답 후 출처를 표시하기 위해 st.session_state.source_documents 등을 활용하는 로직은
+    이 함수를 호출하는 UI 측 코드에서 처리할 수 있습니다.
+    """
+    # 이 함수는 순수하게 문서 리스트를 받아 메타데이터를 추가/수정하고 반환합니다.
+    # st.session_state.source_documents 관련 로직은 호출하는 쪽(메인 스레드)에서 처리합니다.
+    for i, doc in enumerate(docs, 1):
+        doc.metadata["doc_number"] = i
+
+        # 페이지 번호 처리: 0-indexed를 1-indexed 문자열로 변환 또는 'N/A'
+        # PyMuPDFLoader는 'page' 메타데이터를 0-indexed 정수로 제공
+        page_number_raw = doc.metadata.get('page')
+        if page_number_raw is not None:
+            try:
+                # 페이지 번호가 문자열로 되어 있을 경우 정수로 변환
+                current_page_int = int(page_number_raw)
+                doc.metadata['page'] = str(current_page_int + 1) # Convert to 1-indexed string
+            except ValueError:
+                # 페이지 번호가 정수로 변환 불가능한 경우
+                logging.warning(f"Could not convert page metadata '{page_number_raw}' to an integer. Setting page to 'N/A'.")
+                doc.metadata['page'] = 'N/A'
+        else:
+            doc.metadata['page'] = 'N/A'
+    return docs
 
 def update_qa_chain(llm, vector_store):
     """QA 체인 업데이트"""
     try:
-        # 헬퍼 함수 정의 (st.session_state 직접 접근 제거)
-        def add_doc_number_to_metadata(docs: List[Dict]) -> List[Dict]:
-            """
-            검색된 각 문서에 'doc_number' 메타데이터를 추가하고,
-            페이지 번호를 처리합니다.
-            st.session_state 접근은 이 함수 외부에서 처리합니다.
-            """
-            # 이 함수는 순수하게 문서 리스트를 받아 메타데이터를 추가/수정하고 반환합니다.
-            # st.session_state.source_documents 관련 로직은 호출하는 쪽(메인 스레드)에서 처리합니다.
-            for i, doc in enumerate(docs, 1):
-                doc.metadata["doc_number"] = i
-
-                # 페이지 번호 처리: 0-indexed를 1-indexed 문자열로 변환 또는 'N/A'
-                # PyMuPDFLoader는 'page' 메타데이터를 0-indexed 정수로 제공
-                page_number_raw = doc.metadata.get('page')
-                if page_number_raw is not None:
-                    try:
-                        # 페이지 번호가 문자열로 되어 있을 경우 정수로 변환
-                        current_page_int = int(page_number_raw)
-                        doc.metadata['page'] = str(current_page_int + 1) # Convert to 1-indexed string
-                    except ValueError:
-                        # 페이지 번호가 정수로 변환 불가능한 경우
-                        logging.warning(f"Could not convert page metadata '{page_number_raw}' to an integer. Setting page to 'N/A'.")
-                        doc.metadata['page'] = 'N/A'
-                else:
-                    doc.metadata['page'] = 'N/A'
-            return docs
-
         # 리트리버 설정
         faiss_retriever = vector_store.as_retriever(
             search_type=RETRIEVER_CONFIG['search_type'],
@@ -379,30 +412,26 @@ def update_qa_chain(llm, vector_store):
         )
         
         # BM25 리트리버 설정 (분할된 문서가 세션에 저장되어 있다고 가정)
-        final_retriever = faiss_retriever
-        
-        # 현재 파일 경로로 캐시 키 생성
-        current_file = st.session_state.get('current_file_path', '')
-        retriever_cache_key = f"retriever_{current_file}"
+        final_retriever = faiss_retriever # 기본값은 FAISS 리트리버
         
         if st.session_state.get("processed_document_splits"):
             try:
-                # 이전 리트리버 제거
-                if retriever_cache_key in st.session_state:
-                    del st.session_state[retriever_cache_key]
-                
-                bm25_retriever = BM25Retriever.from_documents(
-                    st.session_state.processed_document_splits
-                )
-                bm25_retriever.k = RETRIEVER_CONFIG['search_kwargs'].get('k', 5)
+                # BM25 및 Ensemble 리트리버를 위한 k 값 (FAISS와 동일하게 설정)
+                k_val = RETRIEVER_CONFIG['search_kwargs'].get('k', 5)
 
-                final_retriever = EnsembleRetriever(
-                    retrievers=[bm25_retriever, faiss_retriever],
-                    weights=[0.4, 0.6] 
+                # 캐시된 BM25 리트리버 사용
+                bm25_retriever_instance = create_bm25_retriever(
+                    _documents=st.session_state.processed_document_splits,
+                    k=k_val
                 )
-                # 새 리트리버 캐시
-                st.session_state[retriever_cache_key] = final_retriever
-                logging.info(f"EnsembleRetriever (BM25 + FAISS) 생성 완료 - 파일: {current_file}")
+                
+                # 캐시된 Ensemble 리트리버 사용
+                final_retriever = create_ensemble_retriever(
+                    _faiss_retriever=faiss_retriever,
+                    _bm25_retriever=bm25_retriever_instance,
+                    weights=[0.4, 0.6]  # 이 가중치는 설정으로 관리 가능
+                )
+                logging.info("EnsembleRetriever (BM25 + FAISS) 생성 및 사용.")
             except Exception as e:
                 logging.warning(f"BM25 리트리버 또는 EnsembleRetriever 생성 실패: {e}. FAISS 리트리버만 사용합니다.")
         else:
