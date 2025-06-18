@@ -326,7 +326,7 @@ def load_llm(model_name: str) -> OllamaLLM:
         num_predict=-1,
         )
 
-# QA 프롬프트를 함수 외부에서 정의하여 다른 모듈에서 import 가능하게 함
+# QA 체인 프롬프트 템플릿 정의
 QA_PROMPT = ChatPromptTemplate.from_messages([
     ("system", (
      """
@@ -379,74 +379,78 @@ def add_doc_number_to_metadata(docs: List[Dict]) -> List[Dict]:
     return docs
 
 def update_qa_chain(llm, vector_store):
-    """QA 체인 업데이트"""
+    """
+    QA 체인을 업데이트합니다.
+    이제 체인은 답변(answer)과 함께 참조된 문서(context)를 반환합니다.
+    """
     try:
-        # 리트리버 설정
+        # 1. 리트리버 설정
         faiss_retriever = vector_store.as_retriever(
             search_type=RETRIEVER_CONFIG['search_type'],
             search_kwargs=RETRIEVER_CONFIG['search_kwargs']
         )
         
-        # BM25 리트리버 설정 (분할된 문서가 세션에 저장되어 있다고 가정)
-        final_retriever = faiss_retriever # 기본값은 FAISS 리트리버
+        final_retriever = faiss_retriever
         
         if st.session_state.get("processed_document_splits"):
             try:
-                # BM25 및 Ensemble 리트리버를 위한 k 값 (FAISS와 동일하게 설정)
                 k_val = RETRIEVER_CONFIG['search_kwargs'].get('k', 5)
-
-                # 캐시된 BM25 리트리버 사용
                 bm25_retriever_instance = create_bm25_retriever(
-                    _documents=st.session_state.processed_document_splits,
-                    k=k_val
+                    _documents=st.session_state.processed_document_splits, k=k_val
                 )
-                
-                # 캐시된 Ensemble 리트리버 사용
                 final_retriever = create_ensemble_retriever(
                     _faiss_retriever=faiss_retriever,
                     _bm25_retriever=bm25_retriever_instance,
-                    weights=[0.4, 0.6]  # 이 가중치는 설정으로 관리 가능
+                    weights=[0.4, 0.6]
                 )
                 logging.info("EnsembleRetriever (BM25 + FAISS) 생성 및 사용.")
             except Exception as e:
-                logging.warning(f"BM25 리트리버 또는 EnsembleRetriever 생성 실패: {e}. FAISS 리트리버만 사용합니다.")
+                logging.warning(f"EnsembleRetriever 생성 실패: {e}. FAISS 리트리버만 사용합니다.")
         else:
             logging.info("분할된 문서가 없어 FAISS 리트리버만 사용합니다.")
 
-        # 각 문서를 LLM 프롬프트의 컨텍스트 부분에 맞게 포맷팅하기 위한 프롬프트
-        # add_doc_number_to_metadata_and_save 함수에서 doc.metadata에 'doc_number'와 'page'가 설정됨
+        # 2. 문서 포맷팅 프롬프트 (기존과 동일)
         document_prompt = PromptTemplate.from_template(
             "[{doc_number}] {page_content} (p.{page})"
         )
 
-        # LLM에 최종적으로 전달될 프롬프트를 사용하여 문서 결합 체인 생성
-        # create_stuff_documents_chain은 QA_PROMPT의 {context}를 document_prompt로 포맷된 문서들로 채움
+        # 3. LLM 호출 체인 (기존과 동일)
         combine_docs_chain = create_stuff_documents_chain(
             llm=llm,
             prompt=QA_PROMPT,
             document_prompt=document_prompt,
             document_separator="\n\n",
-            document_variable_name="context" # Explicitly use "context" from QA_PROMPT
         )
 
-        # LCEL을 사용하여 전체 RAG 체인 구성
-        # 1. 세션 상태 초기화 -> 2. 입력 통과 및 문서 검색/처리 -> 3. 키 이름 변경 -> 4. LLM 호출
-        # retriever가 문자열 입력을 받도록 RunnableLambda를 사용하여 'input' 키의 값을 추출
-        retrieval_chain_with_processing = RunnablePassthrough.assign(
-            processed_documents=RunnableLambda(lambda x: x["input"]) # 'input' 키의 값만 final_retriever로 전달
-                                | final_retriever # FAISS 또는 Ensemble 리트리버
-                                | RunnableLambda(add_doc_number_to_metadata) # st.session_state 접근 제거
+        # 4. LCEL을 사용하여 전체 RAG 체인 재구성 (핵심 변경 사항)
+        #   - RunnablePassthrough.assign을 사용하여 체인 중간 결과를 유지합니다.
+        #   - 최종 출력은 {'answer': str, 'context': List[Document]} 형태가 됩니다.
+
+        # 4-1. 사용자의 질문(input)을 받아 문서를 검색하고 메타데이터를 추가하는 부분
+        retrieval_and_metadata_chain = (
+            # final_retriever는 문자열 입력을 받으므로 x['input']을 전달
+            RunnableLambda(lambda x: x["input"])
+            | final_retriever
+            | RunnableLambda(add_doc_number_to_metadata) # 페이지 번호, 문서 번호 추가
         )
 
-        final_qa_chain = (
-            RunnablePassthrough() # 입력: {"input": "question"}
-            | retrieval_chain_with_processing # 출력: {"input": "question", "processed_documents": [docs_with_metadata]}
-            | RunnableLambda(lambda x: {"input": x["input"], "context": x.pop("processed_documents")}) 
-            | combine_docs_chain # 입력: {"input": "question", "documents": [docs]}, 출력: LLM 답변 문자열 (스트리밍 시 청크)
+        # 4-2. 전체 체인 구성
+        #   - RunnablePassthrough()로 시작하여 입력 딕셔너리({'input': '...'})를 그대로 전달
+        #   - .assign(context=...) : 'context' 키에 검색된 문서를 추가
+        #   - .assign(answer=...) : 'answer' 키에 LLM 답변을 추가
+        final_qa_chain_with_sources = (
+            RunnablePassthrough.assign(
+                context=retrieval_and_metadata_chain
+            ).assign(
+                answer=combine_docs_chain
+            )
         )
-        return final_qa_chain
+        
+        return final_qa_chain_with_sources
 
     except Exception as e:
+        # 오류 발생 시 스택 트레이스를 포함하여 더 자세한 정보 로깅
+        logging.error("QA 체인 업데이트 실패", exc_info=True)
         raise ValueError(f"QA 체인 업데이트 실패: {e}")
 
 def process_pdf(uploaded_file, selected_model: str, temp_pdf_path: str):
@@ -486,9 +490,9 @@ def process_pdf(uploaded_file, selected_model: str, temp_pdf_path: str):
         success_message = (
             f"✅ '{uploaded_file.name}' 문서 처리가 완료되었습니다.\n\n"
             "다음과 같은 질문들을 해보세요:\n\n"
-            "- 이 문서를 한 문단으로 요약해주세요\n"
-            "- 이 문서의 주요 주장과 근거를 설명해주세요\n"
-            "- 이 문서의 핵심 용어 3가지를 설명해주세요\n\n"
+            "- 이 문서를 한 문단으로 요약해주세요.\n"
+            "- 이 문서의 주요 주장과 근거를 설명해주세요.\n"
+            "- 이 문서의 핵심 용어 3가지를 설명해주세요.\n\n"
             "자유롭게 문서의 내용에 대해 질문해보세요."
         )
         SessionManager.add_message("assistant", success_message)
