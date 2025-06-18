@@ -127,13 +127,21 @@ def handle_file_upload_and_process(uploaded_file):
         st.rerun()
 
 def process_chat_response(qa_chain, user_input, chat_container):
-    """채팅 응답 처리"""
+    """
+    스트리밍 방식으로 LLM 응답을 처리하고 채팅 컨테이너에 표시하는 함수
+    """
     with chat_container:
         with st.chat_message("assistant"):
+            # 생각 과정 Expander와 그 안의 플레이스홀더
             thought_expander = st.expander("🤔 생각 과정", expanded=False)
             thought_placeholder = thought_expander.empty()
+            
+            # 1. 메시지, 생각 과정, 원문 보기 영역에 대한 플레이스홀더를 미리 생성
             message_placeholder = st.empty()
+            
+            # 초기 메시지 설정
             message_placeholder.markdown("답변 생성 준비 중...")
+            thought_placeholder.markdown("아직 생각 과정이 없습니다.")
 
             try:
                 start_time = time.time()
@@ -142,58 +150,60 @@ def process_chat_response(qa_chain, user_input, chat_container):
                 is_thinking = False
                 update_counter = 0
                 
+                source_documents = []
+
+                # 2. 스트리밍 처리
                 for chunk in qa_chain.stream({"input": user_input}):
-                    if isinstance(chunk, dict):
-                        chunk_text = chunk.get("answer", "")
-                    else:
-                        chunk_text = str(chunk)
-                        
-                    if not chunk_text:
+                    answer_chunk = chunk.get("answer", "")
+                    if chunk.get("context"):
+                        if not source_documents:
+                            source_documents = chunk.get("context")
+                    
+                    if not answer_chunk:
                         continue
                         
-                    # 태그 처리
-                    if "<think>" in chunk_text:
+                    if "<think>" in answer_chunk:
                         is_thinking = True
-                        thought_buffer = chunk_text.split("<think>")[1]
-                        # 생각 과정 시작 시 메시지 업데이트
+                        thought_buffer = answer_chunk.split("<think>")[1]
                         message_placeholder.markdown("🤔 생각을 정리하는 중입니다...")
                         continue
                         
-                    if "</think>" in chunk_text:
+                    if "</think>" in answer_chunk:
                         is_thinking = False
-                        thought_end_idx = chunk_text.find("</think>")
-                        thought_buffer += chunk_text[:thought_end_idx]
-                        response_buffer = chunk_text[thought_end_idx + len("</think>"):]
+                        thought_end_idx = answer_chunk.find("</think>")
+                        thought_buffer += answer_chunk[:thought_end_idx]
                         if thought_buffer.strip():
+                            # 생각 과정이 끝나면 최종 내용을 업데이트
                             thought_placeholder.markdown(thought_buffer)
-                        # 생각 과정 종료 시 메시지 업데이트
+                        response_buffer = answer_chunk[thought_end_idx + len("</think>"):]
                         message_placeholder.markdown("답변을 작성하는 중...")
                         continue
                     
-                    # 버퍼에 추가 및 화면 업데이트
                     if is_thinking:
-                        thought_buffer += chunk_text
+                        thought_buffer += answer_chunk
                         if update_counter % 3 == 0:
                             thought_placeholder.markdown(thought_buffer + "▌")
                     else:
-                        response_buffer += chunk_text
+                        response_buffer += answer_chunk
                         if update_counter % 3 == 0:
                             message_placeholder.markdown(response_buffer + "▌")
                     
                     update_counter += 1
-                    # 스트리밍 효과를 시각적으로 부드럽게 하기 위한 짧은 대기입니다.
-                    # 응답 속도가 매우 중요한 경우 이 값을 줄이거나 제거할 수 있습니다.
                     time.sleep(0.01)  
                 
-                # 최종 응답 표시
+                # 3. 스트리밍 종료 후, 각 플레이스홀더에 최종 내용 채우기
+
+                # 최종 생각 과정 업데이트
                 if thought_buffer.strip():
                     thought_placeholder.markdown(thought_buffer)
-                if response_buffer.strip():
-                    message_placeholder.markdown(response_buffer)
                 
-                # 세션에 저장
-                SessionManager.add_message("assistant", response_buffer)
-                
+                # 최종 답변 표시
+                final_answer = response_buffer.strip()
+                if not final_answer:
+                    final_answer = "죄송합니다, 제공된 문서에서 관련 정보를 찾을 수 없었습니다."
+                message_placeholder.markdown(final_answer)
+                SessionManager.add_message("assistant", final_answer)
+
                 end_time = time.time()
                 logging.info(f"LLM 답변 생성 완료 (소요 시간: {end_time - start_time:.2f}초)")
 
@@ -202,14 +212,6 @@ def process_chat_response(qa_chain, user_input, chat_container):
                 logging.error(error_msg, exc_info=True)
                 message_placeholder.error(error_msg)
                 SessionManager.add_message("assistant", f"❌ {error_msg}")
-
-def display_chat_messages(chat_container):
-    """채팅 컨테이너에 모든 메시지를 표시"""
-    with chat_container:
-        if "messages" in st.session_state:
-            for message in st.session_state.messages:
-                with st.chat_message(message["role"]):
-                    st.markdown(message["content"], unsafe_allow_html=True)
 
 def main():
     # 사이드바 설정
@@ -285,34 +287,45 @@ def main():
         st.subheader("💬 Chat")
         
         chat_container = st.container(height=650, border=True)
-        display_chat_messages(chat_container)
+        
+        # 1. 스크립트가 실행될 때마다 세션에 저장된 모든 메시지를 표시
+        with chat_container:
+            if "messages" in st.session_state:
+                for message in st.session_state.messages:
+                    with st.chat_message(message["role"]):
+                        st.markdown(message["content"], unsafe_allow_html=True)
             
-        user_input = st.chat_input(
+        # 2. 사용자 입력을 받음
+        if user_input := st.chat_input(
             "PDF 내용에 대해 질문해보세요.",
             key='user_input',
             disabled=not SessionManager.is_ready_for_chat()
-        )
-
-        # 새 메시지 처리
-        if user_input and SessionManager.is_ready_for_chat(): # is_ready_for_chat 추가
+        ):
+            # 3. 사용자 메시지를 세션에 추가하고 즉시 화면에 표시
             SessionManager.add_message("user", user_input)
             with chat_container:
                 with st.chat_message("user"):
                     st.markdown(user_input)
+            
+            # 4. 어시스턴트 응답 처리
             qa_chain = st.session_state.get("qa_chain")
             if not qa_chain:
                 error_message = "❌ QA 시스템이 준비되지 않았습니다. 모델 변경이 진행 중이거나 PDF 처리가 필요할 수 있습니다."
-                with st.chat_message("assistant"):
-                    st.markdown(error_message)
+                # 에러 메시지도 세션에 추가하고 즉시 표시
                 SessionManager.add_message("assistant", error_message)
+                with chat_container:
+                    with st.chat_message("assistant"):
+                        st.markdown(error_message)
             else:
                 try:
+                    # process_chat_response가 스트리밍 응답을 chat_container에 직접 표시
                     process_chat_response(qa_chain, user_input, chat_container)
                 except Exception as e:
                     error_message = f"❌ 응답 생성 중 오류가 발생했습니다: {str(e)}"
-                    with st.chat_message("assistant"):
-                        st.markdown(error_message)
                     SessionManager.add_message("assistant", error_message)
+                    with chat_container:
+                        with st.chat_message("assistant"):
+                            st.markdown(error_message)
                     logging.error(f"응답 생성 오류: {e}", exc_info=True)
 
 if __name__ == "__main__":
