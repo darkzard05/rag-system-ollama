@@ -2,7 +2,7 @@
 **PDF-based Local Chatbot powered by Ollama and Streamlit**  
 **PDF 기반 로컬 챗봇 (Ollama + Streamlit)**
 
-![RAG Chatbot Preview](image/image3.png)
+![RAG Chatbot Preview](image/image1.png)
 
 ## 🔑 Key Features / 주요 기능
 
