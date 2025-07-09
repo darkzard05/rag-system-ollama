@@ -5,6 +5,7 @@ import subprocess
 import logging
 import functools
 from typing import List, Optional, Dict
+from tqdm import tqdm
 import streamlit as st
 
 from langchain_community.document_loaders import PyMuPDFLoader
@@ -26,13 +27,14 @@ EMBEDDING_MODEL_NAME = "sentence-transformers/paraphrase-multilingual-MiniLM-L12
 RETRIEVER_CONFIG: Dict = {
     'search_type': "similarity",
     'search_kwargs': {
-        'k': 5,
-    }
+        'k': 4,  # k 값을 5에서 4로 줄여 LLM에 전달되는 컨텍스트 양을 줄여 답변 속도 향상
+    },
+    'weights': [0.4, 0.6]
 }
 # 텍스트 분할 설정
 TEXT_SPLITTER_CONFIG: Dict = {
-    'chunk_size': 4000,
-    'chunk_overlap': 200,
+    'chunk_size': 1500, # 청크 크기를 줄여 임베딩 속도 및 답변 생성 속도 개선
+    'chunk_overlap': 150, # 청크 크기에 맞춰 오버랩도 조정
 }
 
 class SessionManager:
@@ -65,8 +67,6 @@ class SessionManager:
         "bm25_retriever": None,
         
         # 캐시 관련
-        "_faiss_index": None,
-        "_pdf_text_cache": None,
         "last_retriever_key": None,
     }
     
@@ -96,48 +96,36 @@ class SessionManager:
             if key in cls.DEFAULT_SESSION_STATE:
                 st.session_state[key] = cls.DEFAULT_SESSION_STATE[key]
     @classmethod
-    def reset_for_new_file(cls, uploaded_file: str):
-        """새 파일 업로드시 세션 상태 리셋"""
+    def reset_for_new_file(cls, uploaded_file):
+        """새 파일 업로드시 세션 상태를 리셋합니다. 일부 상태는 보존됩니다."""
         logging.info("새 파일 업로드로 인한 세션 상태 리셋 중...")
-        
-        # 보존할 상태 저장
-        preserved_states = {
-            "model_update_initiated_message": st.session_state.get("model_update_initiated_message"),
-            "last_model_change_message": st.session_state.get("last_model_change_message"),
-            "last_selected_model": st.session_state.get("last_selected_model"),
-            "_initialized": st.session_state.get("_initialized", False)
-        }
-        
-        # 모든 세션 상태 초기화 (보존할 상태 제외)
-        exclude_keys = ["last_selected_model", "_initialized"]
-        all_keys = [key for key in st.session_state.keys() if key not in exclude_keys]
-        cls.reset_session_state(all_keys)
-        
-        # 새 파일 정보 설정
-        st.session_state.last_uploaded_file_name = uploaded_file.name
-        st.session_state.current_file_path = None  # 새로운 처리 과정에서 설정됨
-        
-        # 1. 보존된 세션 상태 값 복원
-        if preserved_states.get("model_update_initiated_message") is not None:
-            st.session_state.model_update_initiated_message = preserved_states["model_update_initiated_message"]
-        if preserved_states.get("last_model_change_message") is not None:
-            st.session_state.last_model_change_message = preserved_states["last_model_change_message"]
-        if preserved_states.get("last_selected_model") is not None:
-            st.session_state.last_selected_model = preserved_states["last_selected_model"]
-        st.session_state._initialized = preserved_states.get("_initialized", False)
 
-        # 2. 보존된 메시지들을 (초기화된) messages 목록에 순서대로 다시 추가
-        # 모델 변경 시작 메시지 추가
-        initiated_msg = st.session_state.get("model_update_initiated_message")
+        # 1. 보존할 상태 값 저장
+        preserved_states = {
+            key: st.session_state.get(key) for key in cls.PRESERVE_ON_NEW_FILE_KEYS
+            if key in st.session_state
+        }
+
+        # 2. 모든 세션 상태를 기본값으로 초기화
+        for key, value in cls.DEFAULT_SESSION_STATE.items():
+            st.session_state[key] = value
+
+        # 3. 보존된 상태 값 복원
+        for key, value in preserved_states.items():
+            st.session_state[key] = value
+
+        # 4. 새 파일 정보 설정
+        st.session_state.last_uploaded_file_name = uploaded_file.name
+
+        # 5. 보존된 메시지들을 (초기화된) messages 목록에 다시 추가
+        initiated_msg = preserved_states.get("model_update_initiated_message")
         if initiated_msg:
             cls.add_message("assistant", initiated_msg)
-        
-        # 모델 변경 완료/결과 메시지 추가 (시작 메시지와 다를 경우에만)
-        completed_msg = st.session_state.get("last_model_change_message")
+
+        completed_msg = preserved_states.get("last_model_change_message")
         if completed_msg and completed_msg != initiated_msg:
             cls.add_message("assistant", completed_msg)
             
-        # 초기화 완료 로깅
         logging.info(f"세션 상태 초기화 완료 - 새 파일: {uploaded_file.name}")
     
     @classmethod
@@ -197,13 +185,6 @@ class SessionManager:
     def clear_error_state(cls):
         """에러 상태 초기화"""
         st.session_state.pdf_processing_error = None
-    
-    @classmethod
-    def get_file_specific_cache_key(cls, base_key: str) -> str:
-        """파일별 고유 캐시 키 생성"""
-        current_file = st.session_state.get('current_file_path', '')
-        current_model = st.session_state.get('last_selected_model', '')
-        return f"{base_key}_{current_file}_{current_model}"
 
 # 로깅 데코레이터 수정
 def log_operation(operation_name):
@@ -298,12 +279,47 @@ def split_documents(_docs: List) -> List:
     return chunker.split_documents(_docs)
 
 @log_operation("FAISS 벡터 저장소 생성")
-def create_vector_store(_documents, _embedder) -> Optional[FAISS]:
-    return FAISS.from_documents(
-        documents=_documents,
-        embedding=_embedder,
-    )
-    
+def create_vector_store(_documents, _embedder, progress_callback=None) -> Optional[FAISS]:
+    """
+    문서와 임베더를 사용하여 FAISS 벡터 저장소를 생성합니다.
+    진행률 콜백을 지원하여 UI에 진행 상황을 표시할 수 있습니다.
+    """
+    # tqdm을 사용하여 문서 임베딩 진행 상황을 추적합니다.
+    # 이 부분은 특히 문서가 많을 때 시간이 오래 걸리는 주요 병목 지점입니다.
+    batch_size = 32  # UI 업데이트를 위해 배치 크기를 적절히 조절
+    all_texts = [doc.page_content for doc in _documents]
+    all_metadatas = [doc.metadata for doc in _documents]
+    vector_store = None
+
+    for i in tqdm(range(0, len(all_texts), batch_size), desc="문서 임베딩 중"):
+        batch_texts = all_texts[i:i+batch_size]
+        batch_metadatas = all_metadatas[i:i+batch_size]
+
+        try:
+            embeddings = _embedder.embed_documents(batch_texts)
+
+            if vector_store is None:
+                # 첫 번째 배치에서 벡터 저장소 초기화
+                vector_store = FAISS.from_embeddings(
+                    text_embeddings=list(zip(batch_texts, embeddings)),
+                    embedding=_embedder,
+                    metadatas=batch_metadatas
+                )
+            else:
+                # 이후 배치 추가
+                vector_store.add_embeddings(
+                    text_embeddings=list(zip(batch_texts, embeddings)),
+                    metadatas=batch_metadatas
+                )
+        except Exception as e:
+            logging.error(f"임베딩 또는 벡터 저장소 추가 중 오류 발생 (배치 {i//batch_size}): {e}", exc_info=True)
+            raise
+        if progress_callback:
+            progress = (i + batch_size) / len(all_texts)
+            progress_callback(min(progress, 1.0))  # 1.0을 넘지 않도록 보장
+
+    return vector_store
+
 @log_operation("BM25 리트리버 생성")
 def create_bm25_retriever(_documents: List, k: int) -> BM25Retriever:
     """캐시된 BM25 리트리버를 생성하거나 반환합니다."""
@@ -378,7 +394,7 @@ def add_doc_number_to_metadata(docs: List[Dict]) -> List[Dict]:
             doc.metadata['page'] = 'N/A'
     return docs
 
-def update_qa_chain(llm, vector_store):
+def update_qa_chain(llm, vector_store, processed_document_splits: Optional[List] = None):
     """
     QA 체인을 업데이트합니다.
     이제 체인은 답변(answer)과 함께 참조된 문서(context)를 반환합니다.
@@ -392,16 +408,16 @@ def update_qa_chain(llm, vector_store):
         
         final_retriever = faiss_retriever
         
-        if st.session_state.get("processed_document_splits"):
+        if processed_document_splits:
             try:
                 k_val = RETRIEVER_CONFIG['search_kwargs'].get('k', 5)
                 bm25_retriever_instance = create_bm25_retriever(
-                    _documents=st.session_state.processed_document_splits, k=k_val
+                    _documents=processed_document_splits, k=k_val
                 )
                 final_retriever = create_ensemble_retriever(
                     _faiss_retriever=faiss_retriever,
                     _bm25_retriever=bm25_retriever_instance,
-                    weights=[0.4, 0.6]
+                    weights=RETRIEVER_CONFIG['weights']
                 )
                 logging.info("EnsembleRetriever (BM25 + FAISS) 생성 및 사용.")
             except Exception as e:
@@ -471,11 +487,19 @@ def process_pdf(uploaded_file, selected_model: str, temp_pdf_path: str):
         embedder = load_embedding_model()
         documents = split_documents(docs)
         st.session_state.processed_document_splits = documents # 분할된 문서 저장
-        vector_store = create_vector_store(documents, embedder)
+        
+        # 벡터 저장소 생성 (진행률 표시 추가)
+        progress_bar = st.progress(0, text="문서 임베딩 및 벡터 저장소 생성 중...")
+        vector_store = create_vector_store(
+            documents, 
+            embedder, 
+            progress_callback=lambda p: progress_bar.progress(p, text=f"문서 임베딩 진행률: {int(p*100)}%")
+        )
+        progress_bar.empty() # 완료 후 진행률 바 제거
         llm = load_llm(selected_model)
         
         # QA 체인 생성
-        qa_chain = update_qa_chain(llm, vector_store)
+        qa_chain = update_qa_chain(llm, vector_store, documents)
         
         # 세션 상태 한번에 업데이트
         st.session_state.update({
