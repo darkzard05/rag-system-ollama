@@ -44,13 +44,20 @@
    ```bash
    git clone https://github.com/darkzard05/rag-system-ollama.git
    cd rag-system-ollama
+   ```
 
 2. **(Recommended) Create and activate a virtual environment / (권장) 가상 환경 생성 및 활성화**
    ```bash
    python -m venv venv
-   # Windows
+   
+   # On Windows (cmd.exe)
    venv\Scripts\activate
-   # macOS/Linux
+   
+   # On Windows (PowerShell)
+   # Make sure execution policy is set, e.g., Set-ExecutionPolicy Unrestricted -Scope Process
+   venv\Scripts\Activate.ps1
+   
+   # On macOS/Linux
    source venv/bin/activate
    ```
 
@@ -59,22 +66,25 @@
    pip install -r requirements.txt
    ```
 
-3. Ollama를 설치하고 실행합니다:
+4. **Install and run Ollama / Ollama 설치 및 실행**
+   - Download and install from the [Ollama Official Website](https://ollama.com).
+   - After installation, ensure the Ollama server is running. You can check by running `ollama list` in your terminal.
    - [Ollama 공식 웹사이트](https://ollama.com)에서 설치 파일을 다운로드하여 설치하세요.
-   - 설치 후, `ollama list` 명령어를 실행하여 사용 가능한 모델을 확인합니다.
+   - 설치 후, 터미널에서 `ollama list` 명령어를 실행하여 Ollama 서버가 실행 중인지 확인합니다.
 
-4. 추천 모델 다운로드:
+5. **Download the recommended model / 추천 모델 다운로드**
    ```bash
    ollama pull qwen3:4b
    ```
-   - `qwen3:4b` 모델은 이 애플리케이션에서 권장되는 모델입니다.
+   - The `qwen3:4b` model is recommended for this application for a good balance of performance and resource usage.
+   - `qwen3:4b` 모델은 이 애플리케이션에서 성능과 리소스 사용량의 균형을 위해 권장되는 모델입니다.
 
-5. Streamlit 애플리케이션을 실행합니다:
+6. **Run the Streamlit application / Streamlit 애플리케이션 실행**
    ```bash
    streamlit run src/main.py
    ```
 
-6. 웹 브라우저에서 `http://localhost:8501`로 접속하여 애플리케이션을 사용합니다.
+7. Open your web browser and go to `http://localhost:8501` to use the application. / 웹 브라우저에서 `http://localhost:8501`로 접속하여 애플리케이션을 사용합니다.
 
 ## 📁 Project Structure / 파일 구조
 ```
@@ -82,8 +92,6 @@ readme.md
 requirements.txt
 image/
     image1.png
-    image2.png
-    image3.png
 src/
     main.py
     utils.py
