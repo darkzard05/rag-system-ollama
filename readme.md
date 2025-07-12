@@ -88,24 +88,29 @@
 
 ## 📁 Project Structure / 파일 구조
 ```
-readme.md
-requirements.txt
-image/
-    image1.png
-src/
-    main.py
-    utils.py
+.
+├── .gitignore
+├── LICENSE
+├── readme.md
+├── requirements.txt
+├── image/
+│   └── image1.png
+└── src/
+    ├── main.py
+    ├── ui.py
+    ├── session.py
+    ├── rag_core.py
+    └── config.py
 ```
-- **readme.md**: Project description file / 프로젝트에 대한 설명 파일입니다.
-- **requirements.txt**: List of required Python packages / 필요한 Python 패키지 목록입니다.
-- **image/**: Folder containing project images / 프로젝트에서 사용하는 이미지 파일이 저장된 폴더입니다.
-- **src/**: Folder containing main application source code / 애플리케이션의 주요 소스 코드가 포함된 폴더입니다.
-  - **main.py**: Entry point of Streamlit application / Streamlit 애플리케이션의 진입점입니다.
-    - Handles the user interface, chat logic, session state management, and orchestrates the RAG pipeline.
-    - 사용자 인터페이스, 채팅 로직, 세션 상태 관리 및 RAG 파이프라인 조정을 담당합니다.
-  - **utils.py**: PDF processing and utility functions / PDF 처리 및 기타 유틸리티 함수가 포함된 파일입니다.
-    - Contains functions for loading and parsing PDF documents, splitting text into chunks, generating embeddings, managing the vector store (FAISS), and creating the QA chain with Ollama.
-    - PDF 문서 로드 및 파싱, 텍스트 청크 분할, 임베딩 생성, 벡터 저장소(FAISS) 관리, Ollama를 사용한 QA 체인 생성 기능을 포함합니다.
+- **`readme.md`**: Project description file / 프로젝트에 대한 설명 파일입니다.
+- **`requirements.txt`**: List of required Python packages / 필요한 Python 패키지 목록입니다.
+- **`image/`**: Folder containing project images / 프로젝트에서 사용하는 이미지 파일이 저장된 폴더입니다.
+- **`src/`**: Folder containing main application source code / 애플리케이션의 주요 소스 코드가 포함된 폴더입니다.
+  - **`main.py`**: Entry point of the Streamlit application. It initializes the app and orchestrates the different modules. / Streamlit 애플리케이션의 진입점입니다. 앱을 초기화하고 다른 모듈들을 조립하는 역할을 합니다.
+  - **`ui.py`**: Contains all functions related to rendering the Streamlit user interface (sidebar, chat area, PDF viewer). / 사이드바, 채팅 영역, PDF 뷰어 등 Streamlit 사용자 인터페이스 렌더링과 관련된 모든 함수를 포함합니다.
+  - **`session.py`**: Manages the application's session state, including chat history, processing status, and selected models. / 채팅 기록, 처리 상태, 선택된 모델 등 애플리케이션의 세션 상태를 관리합니다.
+  - **`rag_core.py`**: The core of the RAG system. Handles PDF loading, text splitting, embedding, vector store creation, and building the QA chain. / RAG 시스템의 핵심입니다. PDF 로딩, 텍스트 분할, 임베딩, 벡터 저장소 생성, QA 체인 구성 등을 담당합니다.
+  - **`config.py`**: Contains all configuration constants for the application, such as model names, retriever settings, and text splitter parameters. / 모델 이름, 리트리버 설정, 텍스트 분할 파라미터 등 애플리케이션의 모든 설정 상수를 포함합니다.
 
 ## ✨ Key Components / 주요 구성 요소
 
