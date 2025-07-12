@@ -15,3 +15,4 @@ numpy
 scikit-learn
 tqdm
 rank_bm25
+ollama
