@@ -1,12 +1,11 @@
 streamlit
 torch
-torchvision
-torchaudio
 langchain
 langchain-community
 langchain-experimental
 langchain-huggingface
 langchain-ollama
+langchain-google-genai
 streamlit_pdf_viewer
 faiss-cpu
 pymupdf
@@ -16,3 +15,5 @@ scikit-learn
 tqdm
 rank_bm25
 ollama
+google-generativeai
+python-dotenv
