@@ -1,10 +1,28 @@
 """
 애플리케이션의 모든 설정을 담는 파일입니다.
 """
+import os
 from typing import Dict, List
+from dotenv import load_dotenv
+
+load_dotenv() # .env 파일에서 환경 변수를 로드합니다.
 
 # --- 모델 및 설정 상수 ---
-EMBEDDING_MODEL_NAME: str = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
+OLLAMA_MODEL_NAME: str = "qwen3:4b"
+GEMINI_MODEL_NAME: str = "gemini-1.5-flash"
+OLLAMA_NUM_PREDICT: int = int(os.getenv("OLLAMA_NUM_PREDICT", "-1")) # -1 for unlimited, or set a specific token limit
+
+# Gemini API 키를 환경 변수에서 로드합니다.
+# 예: export GEMINI_API_KEY="YOUR_API_KEY"
+GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY", "") 
+
+AVAILABLE_EMBEDDING_MODELS: List[str] = [
+    "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
+    "intfloat/multilingual-e5-large-instruct",
+    "sentence-transformers/paraphrase-multilingual-mpnet-base-v2",
+    "sentence-transformers/all-MiniLM-L6-v2", # 진단을 위해 기본 모델로 변경
+]
+EMBEDDING_MODEL_NAME: str = AVAILABLE_EMBEDDING_MODELS[0]
 CACHE_DIR: str = ".model_cache"
 
 # --- 리트리버 설정 상수 ---
