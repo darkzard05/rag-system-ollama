@@ -9,29 +9,33 @@ from typing import List, Optional, Dict
 
 import torch
 # Streamlit의 파일 감시 기능과 PyTorch 간의 호환성 문제를 해결하기 위한 임시 조치
-if not hasattr(torch.classes, '__path__'):
-    torch.classes.__path__ = []
+torch.classes.__path__ = []
 
-import ollama
 import streamlit as st
+import ollama
+import google.generativeai as genai
+from session import SessionManager
 from langchain_community.document_loaders import PyMuPDFLoader
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_community.vectorstores import FAISS
 from langchain.chains.combine_documents import create_stuff_documents_chain
 from langchain_ollama import OllamaLLM
+from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.prompts import ChatPromptTemplate, PromptTemplate
 from langchain_community.retrievers import BM25Retriever
 from langchain.retrievers import EnsembleRetriever
 from langchain_core.runnables import RunnableLambda, RunnablePassthrough
-from tqdm import tqdm
 
-# 설정 파일에서 상수 임포트
+# ���정 파일에서 상수 임포트
 from config import (
-    EMBEDDING_MODEL_NAME,
     CACHE_DIR,
     RETRIEVER_CONFIG,
-    TEXT_SPLITTER_CONFIG
+    TEXT_SPLITTER_CONFIG,
+    OLLAMA_MODEL_NAME,
+    GEMINI_MODEL_NAME,
+    GEMINI_API_KEY,
+    OLLAMA_NUM_PREDICT
 )
 
 # --- 로깅 데코레이터 ---
@@ -51,24 +55,81 @@ def log_operation(operation_name):
         return wrapper
     return decorator
 
-# --- 외부 서비스 연동 ---
-@st.cache_data(show_spinner=False)
-@log_operation("Ollama 모델 목록 불러오기")
-def get_ollama_models() -> List[str]:
-    response = ollama.list()
-    if 'models' in response:
-        return [model['model'] for model in response['models']]
-    logging.warning("Ollama 응답에 'models' 키가 없습니다. 빈 목록을 반환합니다.")
-    return []
+# --- 모델 목록 조회 ---
+@st.cache_data(ttl=3600, show_spinner="사용 가능한 모델 목록을 가져오는 중...")
+def get_available_models() -> List[str]:
+    """Ollama와 Gemini에서 사용 가능한 모델 목록을 동적으로 가져와 정렬된 리스트로 반환합니다."""
+    ollama_models = []
+    gemini_models = []
+    
+    # 1. Ollama 로컬 모델 가져오기
+    try:
+        ollama_response = ollama.list()
+        ollama_models = sorted([
+            model['model'] for model in ollama_response.get('models', [])
+        ])
+        if ollama_models:
+            logging.info(f"Ollama에서 다음 모델을 찾았습니다: {ollama_models}")
+    except Exception as e:
+        logging.warning(f"Ollama 모델 목록을 가져오는 데 실패했습니다. Ollama 서버가 실행 중인지 확인하세요. 오류: {e}")
+
+    # 2. Gemini 모델 가져오기 (선별된 최신 모델)
+    if GEMINI_API_KEY:
+        try:
+            genai.configure(api_key=GEMINI_API_KEY)
+            preferred_gemini_models = [
+                "gemini-2.5-pro", "gemini-2.5-flash",
+                "gemini-1.5-pro-latest", "gemini-1.5-flash-latest",
+                "gemini-pro",
+            ]
+            available_models_from_api = [
+                m.name.replace('models/', '') for m in genai.list_models() 
+                if 'generateContent' in m.supported_generation_methods
+            ]
+            filtered_gemini_models = [
+                model for model in preferred_gemini_models 
+                if model in available_models_from_api
+            ]
+
+            if filtered_gemini_models:
+                gemini_models = filtered_gemini_models
+                logging.info(f"선별된 Gemini 모델을 찾았습니다: {gemini_models}")
+            else:
+                fallback_models = [
+                    m for m in available_models_from_api 
+                    if any(k in m for k in ["2.5", "1.5", "pro"])
+                ][:5]
+                gemini_models = fallback_models
+                logging.info(f"선호하는 Gemini 모델을 찾지 못해, 사용 가능한 모델 중 일부를 사용합니다: {fallback_models}")
+        except Exception as e:
+            logging.warning(f"Gemini 모델 목록을 가져오는 데 실패했습니다: {e}")
+
+    # 3. 최종 모델 목록 조합
+    final_models = []
+    if ollama_models:
+        final_models.extend(ollama_models)
+    
+    if ollama_models and gemini_models:
+        final_models.append("--------------------") # 구분선 추가
+
+    if gemini_models:
+        final_models.extend(gemini_models)
+
+    # 모델을 전혀 찾지 못한 경우 기본값 사용
+    if not final_models:
+        logging.error("사용 가능한 LLM 모델을 찾을 수 없습니다. 기본 모델 목록을 사용합니다.")
+        return [OLLAMA_MODEL_NAME, GEMINI_MODEL_NAME]
+        
+    return final_models
 
 # --- 모델 로딩 ---
 @st.cache_resource(show_spinner=False)
 @log_operation("임베딩 모델 로딩")
-def load_embedding_model() -> HuggingFaceEmbeddings:
+def load_embedding_model(embedding_model_name: str) -> HuggingFaceEmbeddings:
     device = "cuda" if torch.cuda.is_available() else "cpu"
     logging.info(f"임베딩 모델용 장치: {device}")
     return HuggingFaceEmbeddings(
-        model_name=EMBEDDING_MODEL_NAME,
+        model_name=embedding_model_name,
         model_kwargs={"device": device},
         encode_kwargs={"device": device, "batch_size": 128},
         cache_folder=CACHE_DIR
@@ -76,8 +137,22 @@ def load_embedding_model() -> HuggingFaceEmbeddings:
 
 @st.cache_resource(show_spinner=False)
 @log_operation("Ollama LLM 로딩")
-def load_llm(model_name: str) -> OllamaLLM:
-    return OllamaLLM(model=model_name, num_predict=-1)
+def load_ollama_llm(_model_name: str) -> OllamaLLM:
+    return OllamaLLM(model=_model_name, num_predict=OLLAMA_NUM_PREDICT)
+
+@st.cache_resource(show_spinner=False)
+@log_operation("Gemini LLM 로딩")
+def load_gemini_llm(_model_name: str) -> ChatGoogleGenerativeAI:
+    if not GEMINI_API_KEY:
+        raise ValueError("config.py 파일에 Gemini API 키를 설정해야 합니다.")
+    return ChatGoogleGenerativeAI(model=_model_name, google_api_key=GEMINI_API_KEY)
+
+def load_llm(model_name: str):
+    """선택된 모델 이름에 따라 적절한 LLM을 로드합니다."""
+    if "gemini" in model_name.lower():
+        return load_gemini_llm(_model_name=model_name)
+    else:
+        return load_ollama_llm(_model_name=model_name)
 
 # --- 문서 처리 ---
 @log_operation("PDF 문서 로드")
@@ -105,7 +180,7 @@ def create_bm25_retriever(docs: List, k: int) -> BM25Retriever:
     retriever.k = k
     return retriever
 
-@log_operation("Ensemble 리트리버 ��성")
+@log_operation("Ensemble 리트리버 생성")
 def create_ensemble_retriever(faiss_retriever, bm25_retriever, weights: List[float]):
     return EnsembleRetriever(
         retrievers=[bm25_retriever, faiss_retriever], weights=weights
@@ -160,9 +235,6 @@ def create_qa_chain(llm, vector_store, doc_splits: Optional[List] = None):
          당신은 주어진 컨텍스트만을 사용하여 사용자의 질문에 답변하는 AI 어시스턴트입니다.
          다른 지식이나 정보를 사용해서는 안 됩니다. 사용자의 질문과 동일한 언어로 답변해야 합니다.
          답변은 명확하고 가독성 높게, 필요시 마크다운 목록을 사용하여 구성해주세요.
-         
-         답변을 생성하기 전에, 먼저 당신의 생각 과정을 <think>...</think> 태그 안에 정리해주세요.
-         예: <think>사용자의 질문은 A에 대한 것이다. 컨텍스트 2, 5에서 관련 정보를 찾았다. 이 정보를 종합하여 답변을 구성해야겠다.</think>
 
          [컨텍스트]
          {context}
@@ -199,26 +271,27 @@ def create_qa_chain(llm, vector_store, doc_splits: Optional[List] = None):
 
 # --- 전체 PDF 처리 파이프라인 ---
 @log_operation("전체 PDF 처리 파이프라인")
-def process_pdf_and_build_chain(uploaded_file, temp_pdf_path: str, selected_model: str):
+def process_pdf_and_build_chain(uploaded_file, temp_pdf_path: str, selected_model: str, selected_embedding_model: str):
     """PDF 처리부터 QA 체인 생성까지의 전체 과정을 관리합니다."""
     
     # 1. 문서 로드 및 분할
     docs = load_pdf_docs(temp_pdf_path)
     doc_splits = split_documents(docs)
-    st.session_state.processed_document_splits = doc_splits
+    SessionManager.set_processed_document_splits(doc_splits)
     
     # 2. 임베딩 및 벡터 저장소 생성
-    embedder = load_embedding_model()
+    embedder = load_embedding_model(selected_embedding_model)
+    SessionManager.set_embedder(embedder)
     vector_store = create_vector_store(doc_splits, embedder)
-    st.session_state.vector_store = vector_store
+    SessionManager.set_vector_store(vector_store)
     
     # 3. LLM 로드 및 QA 체인 생성
     llm = load_llm(selected_model)
-    st.session_state.llm = llm
+    SessionManager.set_llm(llm)
     qa_chain = create_qa_chain(llm, vector_store, doc_splits)
-    st.session_state.qa_chain = qa_chain
+    SessionManager.set_qa_chain(qa_chain)
     
-    st.session_state.pdf_processed = True
+    SessionManager.set_pdf_processed(True)
     logging.info(f"'{uploaded_file.name}' 문서 처리 및 QA 체인 생성 완료.")
     
     success_message = (
@@ -226,3 +299,12 @@ def process_pdf_and_build_chain(uploaded_file, temp_pdf_path: str, selected_mode
         "이제 문서 내용에 대해 자유롭게 질문해보세요."
     )
     return success_message
+
+def is_embedding_model_cached(model_name: str) -> bool:
+    """지정된 임베딩 모델이 로컬 캐시에 존재하는지 확인합니다."""
+    # Hugging Face의 캐시 경로 규칙을 따릅니다.
+    # 예: "sentence-transformers/all-MiniLM-L6-v2" -> ".model_cache/models--sentence-transformers--all-MiniLM-L6-v2"
+    model_path_name = f"models--{model_name.replace('/', '--')}"
+    cache_path = os.path.join(CACHE_DIR, model_path_name)
+    return os.path.exists(cache_path)
+

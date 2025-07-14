@@ -4,7 +4,6 @@ RAG Chatbot 애플리케이션의 메인 진입점 파일입니다.
 import os
 import logging
 import tempfile
-import time
 import streamlit as st
 
 # 리팩토링된 모듈 임포트
@@ -26,6 +25,10 @@ st.set_page_config(
 )
 
 # --- 핸들러 함수 ---
+def handle_gemini_api_key_change(api_key: str):
+    """Gemini API 키 변경을 처리하는 핸들러"""
+    st.session_state.gemini_api_key = api_key
+
 def handle_model_change(selected_model: str):
     """모델 변경을 처리하는 핸들러"""
     if not selected_model or selected_model == st.session_state.get("last_selected_model"):
@@ -36,7 +39,8 @@ def handle_model_change(selected_model: str):
     if st.session_state.get("pdf_processed"):
         with st.spinner(f"'{selected_model}' 모델로 QA 시스템 업데이트 중..."):
             try:
-                llm = load_llm(selected_model)
+                gemini_api_key = st.session_state.get("gemini_api_key")
+                llm = load_llm(selected_model, gemini_api_key)
                 st.session_state.llm = llm
                 qa_chain = create_qa_chain(
                     llm,
@@ -76,12 +80,15 @@ def handle_file_upload(uploaded_file):
         if not selected_model:
             st.warning("모델이 선택되지 않았습니다. 사이드바에서 모델을 선택해주세요.")
             return
+        
+        gemini_api_key = st.session_state.get("gemini_api_key")
 
         with st.spinner(f"'{uploaded_file.name}' 문서 처리 중... 잠시만 기다려주세요."):
             success_message = process_pdf_and_build_chain(
                 uploaded_file,
                 st.session_state.temp_pdf_path,
-                selected_model
+                selected_model,
+                gemini_api_key
             )
         SessionManager.add_message("assistant", success_message)
         st.rerun()
@@ -99,7 +106,8 @@ def main():
     
     render_sidebar(
         uploaded_file_handler=handle_file_upload,
-        model_change_handler=handle_model_change
+        model_change_handler=handle_model_change,
+        gemini_api_key_handler=handle_gemini_api_key_change
     )
 
     col_left, col_right = st.columns([1, 1])
