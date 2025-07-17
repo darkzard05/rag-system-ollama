@@ -1,7 +1,6 @@
 """
 RAG Chatbot 애플리케이션의 메인 진입점 파일입니다.
 """
-import os
 import logging
 import tempfile
 import streamlit as st
@@ -9,7 +8,15 @@ import streamlit as st
 # 리팩토링된 모듈 임포트
 from session import SessionManager
 from ui import render_sidebar, render_chat_column, render_pdf_viewer
-from rag_core import process_pdf_and_build_chain, create_qa_chain, load_llm
+from rag_core import (
+    process_pdf_and_build_chain, 
+    create_qa_chain, 
+    load_llm, 
+    load_embedding_model, 
+    create_vector_store,
+    is_embedding_model_cached
+)
+from config import AVAILABLE_EMBEDDING_MODELS
 
 # --- 로깅 설정 ---
 logging.basicConfig(
@@ -24,46 +31,71 @@ st.set_page_config(
     layout="wide"
 )
 
-# --- 핸들러 함수 ---
-def handle_gemini_api_key_change(api_key: str):
-    """Gemini API 키 변경을 처리하는 핸들러"""
-    st.session_state.gemini_api_key = api_key
+# --- 핸들러 및 헬퍼 함수 ---
+def update_qa_system():
+    """QA 시스템을 현재 세션 상태에 맞춰 업데이트하는 헬퍼 함수"""
+    try:
+        llm = SessionManager.get_llm()
+        vector_store = SessionManager.get_vector_store()
+        doc_splits = SessionManager.get_processed_document_splits()
+
+        if not all([llm, vector_store, doc_splits]):
+            st.warning("QA 시스템을 업데이트하기 위한 정보가 부족합니다.")
+            return
+
+        qa_chain = create_qa_chain(llm, vector_store, doc_splits)
+        SessionManager.set_qa_chain(qa_chain)
+        st.rerun()
+    except Exception as e:
+        st.error(f"QA 시스템 업데이트 중 오류 발생: {e}")
+        logging.error("QA 시스템 업데이트 오류", exc_info=True)
 
 def handle_model_change(selected_model: str):
     """모델 변경을 처리하는 핸들러"""
-    if not selected_model or selected_model == st.session_state.get("last_selected_model"):
+    if "---" in selected_model or \
+       not selected_model or \
+       selected_model == SessionManager.get_last_selected_model():
         return
 
     SessionManager.update_model(selected_model)
     
-    if st.session_state.get("pdf_processed"):
+    if SessionManager.get_pdf_processed():
         with st.spinner(f"'{selected_model}' 모델로 QA 시스템 업데이트 중..."):
-            try:
-                gemini_api_key = st.session_state.get("gemini_api_key")
-                llm = load_llm(selected_model, gemini_api_key)
-                st.session_state.llm = llm
-                qa_chain = create_qa_chain(
-                    llm,
-                    st.session_state.vector_store,
-                    st.session_state.processed_document_splits
-                )
-                st.session_state.qa_chain = qa_chain
-                st.rerun()
-            except Exception as e:
-                st.error(f"모델 변경 중 오류 발생: {e}")
-                logging.error("모델 변경 핸들러 오류", exc_info=True)
+            llm = load_llm(selected_model)
+            SessionManager.set_llm(llm)
+            update_qa_system()
+
+def handle_embedding_model_change(selected_embedding_model: str):
+    """임베딩 모델 변경을 처리하는 핸들러. 초기 설정 시에는 메시지를 추가하지 않음."""
+    last_embedding_model = SessionManager.get_last_selected_embedding_model()
+
+    if not selected_embedding_model or selected_embedding_model == last_embedding_model:
+        return
+
+    SessionManager.set_last_selected_embedding_model(selected_embedding_model)
+    
+    if last_embedding_model is not None:
+        SessionManager.add_message("assistant", f"🔄 임베딩 모델을 '{selected_embedding_model}'로 변경했습니다.")
+
+    if SessionManager.get_pdf_processed():
+        if not is_embedding_model_cached(selected_embedding_model):
+            st.info(f"'{selected_embedding_model}' 모델을 처음 로드합니다. 다운로드가 필요하며 몇 분 정도 소요될 수 있습니다.")
+
+        with st.spinner(f"'{selected_embedding_model}' 임베딩 모델로 QA 시스템 업데이트 중..."):
+            embedder = load_embedding_model(selected_embedding_model)
+            SessionManager.set_embedder(embedder)
+            
+            doc_splits = SessionManager.get_processed_document_splits()
+            vector_store = create_vector_store(doc_splits, embedder)
+            SessionManager.set_vector_store(vector_store)
+            
+            update_qa_system()
+
 
 def handle_file_upload(uploaded_file):
     """파일 업로드를 처리하는 핸들러"""
-    if uploaded_file.name == st.session_state.get("last_uploaded_file_name"):
+    if uploaded_file.name == SessionManager.get_last_uploaded_file_name():
         return
-
-    # 이전 임시 파일 정리
-    if st.session_state.get("temp_pdf_path") and os.path.exists(st.session_state.temp_pdf_path):
-        try:
-            os.remove(st.session_state.temp_pdf_path)
-        except Exception as e:
-            logging.warning(f"이전 임시 파일 삭제 실패: {e}")
 
     SessionManager.reset_for_new_file(uploaded_file)
 
@@ -71,26 +103,30 @@ def handle_file_upload(uploaded_file):
         # 새 임시 파일 저장
         with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp_file:
             tmp_file.write(uploaded_file.getvalue())
-            st.session_state.temp_pdf_path = tmp_file.name
+            SessionManager.set_temp_pdf_path(tmp_file.name)
         
         SessionManager.add_message("assistant", f"📂 '{uploaded_file.name}' 파일 업로드 완료.")
         
         # PDF 처리
-        selected_model = st.session_state.get("last_selected_model")
-        if not selected_model:
-            st.warning("모델이 선택되지 않았습니다. 사이드바에서 모델을 선택해주세요.")
-            return
+        selected_model = SessionManager.get_last_selected_model()
+        selected_embedding_model = SessionManager.get_last_selected_embedding_model() or AVAILABLE_EMBEDDING_MODELS[0]
         
-        gemini_api_key = st.session_state.get("gemini_api_key")
+        if not selected_model:
+            st.warning("LLM 모델이 선택되지 않았습니다. 사이드바에서 모델을 선택해주세요.")
+            return
+
+        # 모델 로드 전 캐시 확인 및 안내 메시지 표시
+        if not is_embedding_model_cached(selected_embedding_model):
+            st.info(f"'{selected_embedding_model}' 모델을 처음 로드합니다. 다운로드가 필요하며 몇 분 정도 소요될 수 있습니다.")
 
         with st.spinner(f"'{uploaded_file.name}' 문서 처리 중... 잠시만 기다려주세요."):
             success_message = process_pdf_and_build_chain(
                 uploaded_file,
-                st.session_state.temp_pdf_path,
+                SessionManager.get_temp_pdf_path(),
                 selected_model,
-                gemini_api_key
+                selected_embedding_model
             )
-        SessionManager.add_message("assistant", success_message)
+            SessionManager.add_message("assistant", success_message)
         st.rerun()
 
     except Exception as e:
@@ -107,7 +143,7 @@ def main():
     render_sidebar(
         uploaded_file_handler=handle_file_upload,
         model_change_handler=handle_model_change,
-        gemini_api_key_handler=handle_gemini_api_key_change
+        embedding_model_change_handler=handle_embedding_model_change
     )
 
     col_left, col_right = st.columns([1, 1])

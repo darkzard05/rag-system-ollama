@@ -1,7 +1,9 @@
 """
 Streamlit UI 컴포넌트 렌더링 함수들을 모아놓은 파일.
 """
+from email import message
 import os
+import time
 import logging
 import streamlit as st
 from streamlit_pdf_viewer import pdf_viewer
@@ -15,7 +17,6 @@ from config import (
     THINK_END_TAG,
     MSG_PREPARING_ANSWER,
     MSG_THINKING,
-    MSG_WRITING_ANSWER,
     MSG_NO_THOUGHT_PROCESS,
     MSG_NO_RELATED_INFO,
 )
@@ -28,12 +29,14 @@ def _process_chat_response(qa_chain, user_input, chat_container):
         message_placeholder = st.empty()
         
         message_placeholder.markdown(MSG_PREPARING_ANSWER)
-        thought_placeholder.markdown(MSG_NO_THOUGHT_PROCESS)
+        thought_placeholder.markdown(MSG_THINKING)
 
         try:
             thought_buffer = ""
             response_buffer = ""
             is_thinking = False
+            
+            start_time = time.time()
             
             for chunk in qa_chain.stream({"input": user_input}):
                 answer_chunk = chunk.get("answer", "")
@@ -57,15 +60,22 @@ def _process_chat_response(qa_chain, user_input, chat_container):
                 
                 if thought_buffer.strip():
                     thought_placeholder.markdown(thought_buffer + "▌")
-                else:
-                    thought_placeholder.markdown(MSG_NO_THOUGHT_PROCESS)
 
-                message_placeholder.markdown(response_buffer + "▌")
+                # 답변 placeholder의 내용을 결정
+                current_message = response_buffer
+                if not current_message.strip() and is_thinking:
+                    current_message = MSG_THINKING
+                
+                message_placeholder.markdown(current_message + "▌")
+
+            end_time = time.time()
+            elapsed_time = end_time - start_time
 
             # 최종 내용 업데이트
             if thought_buffer.strip():
                 thought_placeholder.markdown(thought_buffer)
             else:
+                # 스트림이 모두 끝난 후에도 생각 내용이 없으면 그때 메시지 표시
                 thought_placeholder.markdown(MSG_NO_THOUGHT_PROCESS)
             
             final_answer = response_buffer.strip()
@@ -74,7 +84,13 @@ def _process_chat_response(qa_chain, user_input, chat_container):
             
             message_placeholder.markdown(final_answer)
             SessionManager.add_message("assistant", final_answer)
-            logging.info(f"LLM 답변 생성 완료")
+            
+            # 답변 생성 시간 및 글자 수 로깅
+            logging.info(
+                f"LLM 답변 생성 완료. "
+                f"소요 시간: {elapsed_time:.2f}초, "
+                f"답변 길이: {len(final_answer)}자"
+            )
 
         except Exception as e:
             error_msg = f"답변 생성 중 오류 발생: {str(e)}"
@@ -102,7 +118,7 @@ def render_sidebar(uploaded_file_handler, model_change_handler, embedding_model_
         if last_model not in available_models:
             last_model = available_models[0] if available_models else OLLAMA_MODEL_NAME
 
-        current_model_index = available_models.index(last_model)
+        current_model_index = available_models.index(last_model) if last_model in available_models else 0
         
         selected_model = st.selectbox(
             "LLM 모델 선택",
@@ -177,3 +193,32 @@ def render_chat_column():
             _process_chat_response(qa_chain, user_input, chat_container)
         else:
             st.error("QA 시스템이 준비되지 않았습니다. PDF를 먼저 처리해주세요.")
+
+    # 초기 안내 메시지
+    if not SessionManager.get_messages():
+        with chat_container:
+            st.info(
+                "**RAG-Chat에 오신 것을 환영합니다!**\n\n"
+                "사이드바에서 PDF 파일을 업로드하여 문서 내용에 대한 대화를 시작해보세요."
+            )
+            
+            st.markdown(
+                """
+                **💡 사용 가이드:**
+                - **PDF 업로드:** 좌측 사이드바에서 분석하고 싶은 PDF를 업로드하세요.
+                - **모델 선택:** 로컬 `Ollama` 모델 또는 `Gemini` API 모델을 선택할 수 있습니다.
+                - **질문하기:** 문서 처리가 완료되면, 내용에 대해 자유롭게 질문할 수 있습니다.
+                - **PDF 뷰어:** 우측에서 원본 문서를 함께 보며 대화할 수 있습니다. (해상도/크기 조절 가능)
+                """
+            )
+
+            with st.expander("⚠️ 알아두실 점"):
+                st.warning(
+                    "**답변의 정확성:** 답변은 업로드된 PDF 내용만을 기반으로 생성되며, 사실이 아닐 수 있습니다."
+                )
+                st.warning(
+                    "**개인정보:** Gemini 모델 사용 시, 질문 내용이 Google 서버로 전송될 수 있습니다."
+                )
+                st.warning(
+                    "**초기 로딩:** 임베딩 모델을 처음 사용하면 다운로드에 몇 분이 소요될 수 있습니다."
+                )
