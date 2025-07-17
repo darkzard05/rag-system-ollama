@@ -24,8 +24,10 @@
 - **Python**: 3.10 or higher
 - **Ollama (Optional)**: If using local models, Ollama must be installed and the server running.
   - Refer to the [Ollama Official Website](https://ollama.com) for installation.
-- **Gemini API Key (Optional)**: If using the Gemini model, you need an API key.
-  - Get your key from [Google AI Studio](https://aistudio.google.com/app/apikey).
+- **Gemini API Key (Optional)**: If using the Gemini model, you need to set up your API key.
+  - Create a `.env` file in the project's root directory.
+  - Add your API key to the file like this: `GEMINI_API_KEY="YOUR_API_KEY"`
+  - You can get your key from [Google AI Studio](https://aistudio.google.com/app/apikey).
 - **System Resources**: For local models, sufficient RAM (e.g., 16GB+ for 7B models) is recommended.
 
 ---
@@ -115,8 +117,7 @@
 
 ## 📝 How to Use
 1.  **Upload a PDF file** in the sidebar.
-2.  **Select an LLM model** from the dropdown menu.
-    - If you choose a **Gemini model**, an input field will appear. **Enter your Gemini API Key**.
+2.  **Select an LLM model** from the dropdown menu. (Note: For Gemini models, ensure your API key is set in the `.env` file as described in the Prerequisites.)
 3.  **Select an embedding model** from the dropdown menu.
 4.  Wait for the PDF to be processed. A notification will appear.
 5.  Enter your questions about the document content in the chat input field.
@@ -143,7 +144,7 @@
 - **Ollama Connection Issues**:
   - Ensure the Ollama application/server is running (`ollama list`).
 - **Gemini API Key Issues**:
-  - Ensure the key is correct and has the necessary permissions.
+  - Ensure the key is correct, has the necessary permissions, and is set in your `.env` file.
   - A `429` error might indicate you have exceeded your API rate limits.
 - **Slow Performance**:
   - Processing large PDFs or using large local models can be resource-intensive.
@@ -169,7 +170,7 @@ This project is distributed under the MIT License. See the `LICENSE` file for mo
 - **유연한 LLM 선택 (Ollama & Gemini)**: 개인 정보 보호를 위해 Ollama로 로컬에서 LLM을 실행하거나, 고성능을 위해 API를 통해 강력한 Gemini 1.5 Pro 모델을 사용하는 것 중에서 선택할 수 있습니다.
 - **유연한 임베딩 모델 선택**: 성능 및 언어 지원 요구에 맞는 다양한 임베딩 모델 중에서 선택할 수 있습니다.
 - **Streamlit 기반 웹 인터페이스**: Streamlit으로 구축된 사용자 친화적이고 대화형 웹 인터페이스를 통해 손쉽게 문서를 업로드하고, 채팅하며, PDF를 확인할 수 있습니다.
-- **LLM의 사고 과정 확인**: LLM이 답변을 생성하기 전의 사고 과정을 확인할 수 있는 옵션을 제공하여 ��명성을 높입니다.
+- **LLM의 사고 과정 확인**: LLM이 답변을 생성하기 전의 사고 과정을 확인할 수 있는 옵션을 제공하여 투명성을 높입니다.
 
 ---
 
@@ -179,8 +180,10 @@ This project is distributed under the MIT License. See the `LICENSE` file for mo
 - **Python**: 3.10 이상
 - **Ollama (선택 사항)**: 로컬 모델 사용 시, Ollama가 설치되어 있고 서버가 실행 중이어야 합니다.
   - 설치는 [Ollama 공식 웹사이트](https://ollama.com)를 참조하세요.
-- **Gemini API 키 (선택 사항)**: Gemini 모델 사용 시, API 키가 필요합니다.
-  - [Google AI Studio](https://aistudio.google.com/app/apikey)에서 키를 발급받으세요.
+- **Gemini API 키 (선택 사항)**: Gemini 모델 사용 시, API 키를 설정해야 합니다.
+  - 프로젝트 루트 디렉터리에 `.env` 파일을 생성하세요.
+  - 파일에 다음과 같이 API 키를 추가하세요: `GEMINI_API_KEY="YOUR_API_KEY"`
+  - [Google AI Studio](https://aistudio.google.com/app/apikey)에서 키를 발급받을 수 있습니다.
 - **시스템 리소스**: 로컬 모델의 경우, 충분한 RAM(예: 7B 모델의 경우 16GB 이상)이 권장됩니다.
 
 ---
@@ -246,7 +249,7 @@ This project is distributed under the MIT License. See the `LICENSE` file for mo
     └── config.py
 ```
 - **`readme.md`**: 프로젝트에 대한 설명 파일입니다.
-- **`requirements.txt`**: 필요한 Python 패키지 목록입니다.
+- **`requirements.txt`**: 필요한 Python ���키지 목록입니다.
 - **`image/`**: 프로젝트에서 사용하는 이미지 파일이 저장된 폴더입니다.
 - **`src/`**: 애플리케이션의 주요 소스 코드가 포함된 폴더입니다.
   - **`main.py`**: Streamlit 애플리케이션의 진입점입니다. 앱을 초기화하고 다른 모듈들을 조립하는 역할을 합니다.
@@ -269,12 +272,11 @@ This project is distributed under the MIT License. See the `LICENSE` file for mo
 
 ## 📝 사용 방법
 1.  사이드바에서 **PDF 파일을 업로드**합니다.
-2.  드롭다운 메뉴에서 **LLM 모델을 선택**합니다.
-    - **Gemini 모델**을 선택하면 입력 필드가 나타납니다. **Gemini API 키를 입력**하세요.
+2.  드롭다운 메뉴에서 **LLM 모델을 선택**합니다. (참고: Gemini 모델의 경우, 사전 준비 사항에 설명된 대로 `.env` 파일에 API 키가 설정되어 있는지 확인하세요.)
 3.  드롭다운 메뉴에서 **임베딩 모델을 선택**합니다.
 4.  PDF가 처리될 때까지 기다립니다. 알림이 표시됩니다.
 5.  채팅 입력창에 문서 내용에 대한 질문을 입력합니다.
-6.  챗봇이 답변을 제공합니다. 각 답변 아래의 "🤔 생각 과정" 섹션을 확장하여 LLM의 추론 단계를 확인할 수 있습니다.
+6.  챗봇��� 답변을 제공합니다. 각 답변 아래의 "🤔 생각 과정" 섹션을 확장하여 LLM의 추론 단계를 확인할 수 있습니다.
 
 ## ⚙️ 설정
 
@@ -297,7 +299,7 @@ This project is distributed under the MIT License. See the `LICENSE` file for mo
 - **Ollama 연결 문제**:
   - Ollama 애플리케이션/서버가 실행 중인지 확인하세요 (`ollama list`).
 - **Gemini API 키 문제**:
-  - 키가 올바르고 필요한 권한을 가지고 있는지 확인하세요.
+  - 키가 올바르고, 필요한 권한을 가졌으며, `.env` 파일에 설정되어 있는지 확인하세요.
   - `429` 오류는 API 할당량을 초과했음을 의미할 수 있습니다.
 - **느린 성능**:
   - 대용량 PDF를 처리하거나 대규모 로컬 모델을 사용하는 것은 리소스를 많이 소모할 수 있습니다.
