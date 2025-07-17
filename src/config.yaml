@@ -1,0 +1,9 @@
+# 사용 가능한 Gemini 모델 목록
+# 우선순위 순서대로 나열합니다. API에서 사용 가능한 모델만 필터링되어 UI에 표시됩니다.
+gemini_models:
+  - "gemini-2.5-pro"
+  - "gemini-2.5-flash"
+  - "gemini-2.0-flash"
+  - "gemini-1.5-pro-latest"
+  - "gemini-1.5-flash-latest"
+  - "gemini-pro"
