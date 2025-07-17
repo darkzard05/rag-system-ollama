@@ -17,3 +17,4 @@ rank_bm25
 ollama
 google-generativeai
 python-dotenv
+pyyaml
