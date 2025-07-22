@@ -13,13 +13,12 @@ class SessionManager:
         "last_selected_embedding_model": None,
         "pdf_processed": False,
         "pdf_processing_error": None,
-        "temp_pdf_path": None,
+        "pdf_file_bytes": None, # temp_pdf_path 대신 사용
         "processed_document_splits": None,
         "qa_chain": None,
         "vector_store": None,
         "llm": None,
         "embedder": None,
-        "resolution_boost": 1,
         "pdf_width": 1000,
         "pdf_height": 1000,
     }
@@ -36,13 +35,9 @@ class SessionManager:
             logging.info("세션 상태 초기화 완료.")
 
     @classmethod
-    def reset_for_new_file(cls, uploaded_file):
-        """새 파일 업로드시 세션 상태를 리셋합니다."""
-        if uploaded_file:
-            logging.info(f"새 파일 '{uploaded_file.name}' 업로드로 인한 세션 상태 리셋 중...")
-            new_file_name = uploaded_file.name
-        else:
-            new_file_name = None
+    def reset_for_new_file(cls, file_name: str, file_bytes: bytes):
+        """새 파일 업로드시 세션 상태를 리셋하고 새 파일 정보를 즉시 설정합니다."""
+        logging.info(f"새 파일 '{file_name}' 업로드로 인한 세션 상태 리셋 중...")
 
         preserved_model = cls.get_last_selected_model()
         preserved_embedding_model = cls.get_last_selected_embedding_model()
@@ -54,7 +49,10 @@ class SessionManager:
         # 보존해야 할 값들 복원
         cls.set_last_selected_model(preserved_model)
         cls.set_last_selected_embedding_model(preserved_embedding_model)
-        cls.set_last_uploaded_file_name(new_file_name)
+        
+        # 새 파일 정보 즉시 설정
+        cls.set_last_uploaded_file_name(file_name)
+        cls.set_pdf_file_bytes(file_bytes)
         
     @classmethod
     def add_message(cls, role: str, content: str):
@@ -105,9 +103,9 @@ class SessionManager:
     @classmethod
     def get_pdf_processing_error(cls): return st.session_state.get("pdf_processing_error")
     @classmethod
-    def get_temp_pdf_path(cls): return st.session_state.get("temp_pdf_path")
+    def get_pdf_file_bytes(cls): return st.session_state.get("pdf_file_bytes")
     @classmethod
-    def set_temp_pdf_path(cls, path: str): st.session_state.temp_pdf_path = path
+    def set_pdf_file_bytes(cls, file_bytes: bytes): st.session_state.pdf_file_bytes = file_bytes
     @classmethod
     def get_processed_document_splits(cls): return st.session_state.get("processed_document_splits")
     @classmethod
@@ -132,10 +130,6 @@ class SessionManager:
     def get_last_selected_embedding_model(cls): return st.session_state.get("last_selected_embedding_model")
     @classmethod
     def set_last_selected_embedding_model(cls, model_name: str): st.session_state.last_selected_embedding_model = model_name
-    @classmethod
-    def get_resolution_boost(cls): return st.session_state.get("resolution_boost", cls.DEFAULT_SESSION_STATE["resolution_boost"])
-    @classmethod
-    def set_resolution_boost(cls, value: int): st.session_state.resolution_boost = value
     @classmethod
     def get_pdf_width(cls): return st.session_state.get("pdf_width", cls.DEFAULT_SESSION_STATE["pdf_width"])
     @classmethod

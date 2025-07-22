@@ -1,12 +1,11 @@
 """
 Streamlit UI 컴포넌트 렌더링 함수들을 모아놓은 파일.
 """
-from email import message
-import os
 import time
 import logging
 import streamlit as st
 from streamlit_pdf_viewer import pdf_viewer
+import fitz  # PyMuPDF
 
 from session import SessionManager
 from rag_core import get_available_models
@@ -107,8 +106,6 @@ def render_sidebar(uploaded_file_handler, model_change_handler, embedding_model_
         uploaded_file = st.file_uploader("PDF 파일 업로드", type="pdf")
         if uploaded_file:
             uploaded_file_handler(uploaded_file)
-        
-        st.divider()
 
         # --- LLM 모델 선택 (동적 목록) ---
         available_models = get_available_models()
@@ -139,12 +136,12 @@ def render_sidebar(uploaded_file_handler, model_change_handler, embedding_model_
             key="embedding_model_selector"
         )
         embedding_model_change_handler(selected_embedding_model)
-
+        
         st.divider()
 
         # --- PDF 뷰어 설정 ---
-        resolution_boost = st.slider("해상도", 1, 10, SessionManager.get_resolution_boost())
-        SessionManager.set_resolution_boost(resolution_boost)
+        st.subheader("📄 PDF 뷰어 설정")
+        
         pdf_width = st.slider("PDF 너비", 100, 1000, SessionManager.get_pdf_width())
         SessionManager.set_pdf_width(pdf_width)
         pdf_height = st.slider("PDF 높이", 100, 10000, SessionManager.get_pdf_height())
@@ -154,19 +151,77 @@ def render_pdf_viewer():
     """PDF 뷰어 컬럼을 렌더링합니다."""
     st.subheader("📄 PDF 미리보기")
     
-    temp_pdf_path = SessionManager.get_temp_pdf_path()
-    if temp_pdf_path and os.path.exists(temp_pdf_path):
-        try:
-            pdf_viewer(
-                input=temp_pdf_path,
-                width=SessionManager.get_pdf_width(),
-                height=SessionManager.get_pdf_height(),
-                key=f"pdf_viewer_{SessionManager.get_last_uploaded_file_name()}",
-                resolution_boost=SessionManager.get_resolution_boost()
+    pdf_bytes = SessionManager.get_pdf_file_bytes()
+    if not pdf_bytes:
+        st.info("미리볼 PDF가 없습니다. 사이드바에서 파일을 업로드해주세요.")
+        return
+
+    try:
+        # PDF 파일을 한 번만 열어서 총 페이지 수를 얻고 뷰어에 전달합니다.
+        pdf_document = fitz.open(stream=pdf_bytes, filetype="pdf")
+        total_pages = len(pdf_document)
+        
+        current_file_name = SessionManager.get_last_uploaded_file_name()
+
+        # 세션 상태 초기화 및 페이지 번호 유효성 검사
+        if 'current_page' not in st.session_state:
+            st.session_state.current_page = 1
+        
+        # 파일이 바뀌면 페이지 번호를 1로 초기화
+        if st.session_state.get('last_pdf_name') != current_file_name:
+            st.session_state.current_page = 1
+            st.session_state.last_pdf_name = current_file_name
+
+        if st.session_state.current_page > total_pages:
+            st.session_state.current_page = 1
+
+        # --- 페이지 네비게이션 콜백 함수 (st.rerun()을 사용하지 않는 안정적인 방식) ---
+        def go_to_previous_page():
+            if st.session_state.current_page > 1:
+                st.session_state.current_page -= 1
+
+        def go_to_next_page():
+            if st.session_state.current_page < total_pages:
+                st.session_state.current_page += 1
+
+        # --- 단순화되고 안정적인 UI ---
+        col1, col2, col3 = st.columns([3, 4, 3])
+
+        with col1:
+            st.button(
+                "◀️ 이전",
+                on_click=go_to_previous_page,
+                use_container_width=True,
+                disabled=(st.session_state.current_page <= 1)
             )
-        except Exception as e:
-            st.error(f"PDF 미리보기 중 오류 발생: {str(e)}")
-            logging.error("PDF 미리보기 오류", exc_info=True)
+
+        with col2:
+            # 비활성화된 버튼을 사용하여 페이지 번호를 표시 (UI 통일성 및 안정성)
+            st.button(
+                f"{st.session_state.current_page} / {total_pages}",
+                use_container_width=True,
+                disabled=True,
+            )
+
+        with col3:
+            st.button(
+                "다음 ▶️",
+                on_click=go_to_next_page,
+                use_container_width=True,
+                disabled=(st.session_state.current_page >= total_pages)
+            )
+
+        # streamlit-pdf-viewer를 사용하여 선택된 페이지만 렌더링
+        pdf_viewer(
+            input=pdf_bytes,
+            width=SessionManager.get_pdf_width(),
+            height=SessionManager.get_pdf_height(),
+            pages_to_render=[st.session_state.current_page],
+            # key=f"pdf_viewer_{current_file_name}",
+        )
+    except Exception as e:
+        st.error(f"PDF를 표시하는 중 오류가 발생했습니다: {e}")
+        logging.error("PDF 뷰어 오류", exc_info=True)
 
 def render_chat_column():
     """채팅 컬럼을 렌더링하고 채팅 로직을 처리합니다."""

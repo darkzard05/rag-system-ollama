@@ -97,14 +97,15 @@ def handle_file_upload(uploaded_file):
     if uploaded_file.name == SessionManager.get_last_uploaded_file_name():
         return
 
-    SessionManager.reset_for_new_file(uploaded_file)
-
+    file_bytes = uploaded_file.getvalue()
+    SessionManager.reset_for_new_file(uploaded_file.name, file_bytes)
+    
     try:
-        # 새 임시 파일 저장
+        # RAG Core 처리를 위해 임시 파일은 여전히 필요
         with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp_file:
-            tmp_file.write(uploaded_file.getvalue())
-            SessionManager.set_temp_pdf_path(tmp_file.name)
-        
+            tmp_file.write(file_bytes)
+            temp_path = tmp_file.name
+
         SessionManager.add_message("assistant", f"📂 '{uploaded_file.name}' 파일 업로드 완료.")
         
         # PDF 처리
@@ -122,11 +123,16 @@ def handle_file_upload(uploaded_file):
         with st.spinner(f"'{uploaded_file.name}' 문서 처리 중... 잠시만 기다려주세요."):
             success_message = process_pdf_and_build_chain(
                 uploaded_file,
-                SessionManager.get_temp_pdf_path(),
+                temp_path, # 임시 파일 경로 전달
                 selected_model,
                 selected_embedding_model
             )
             SessionManager.add_message("assistant", success_message)
+        
+        # 임시 파일 삭제
+        import os
+        os.remove(temp_path)
+        
         st.rerun()
 
     except Exception as e:

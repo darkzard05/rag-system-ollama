@@ -301,9 +301,9 @@ def process_pdf_and_build_chain(uploaded_file, temp_pdf_path: str, selected_mode
     SessionManager.set_pdf_processed(True)
     logging.info(f"'{uploaded_file.name}' 문서 처리 및 QA 체인 생성 완료.")
     
-    # 메모리 최적화: 가장 큰 데이터인 분할 문서를 세션에서 제거
-    SessionManager.set_processed_document_splits(None) 
-    logging.info("메모리 최적화를 위해 분할된 문서 목록을 세션에서 제거했습니다.")
+    # 메모리 최적화를 위해 주석 처리. EnsembleRetriever를 위해 세션에 유지.
+    # SessionManager.set_processed_document_splits(None) 
+    # logging.info("메모리 최적화를 위해 분할된 문서 목록을 세션에서 제거했습니다.")
 
     success_message = (
         f"✅ '{uploaded_file.name}' 문서 처리가 완료되었습니다.\n\n"
