@@ -1,0 +1,66 @@
+# config.yml
+# 애플리케이션의 주요 설정을 관리하는 파일입니다.
+
+# --- 모델 설정 ---
+models:
+  # 기본으로 사용할 Ollama 및 Gemini 모델 이름
+  default_ollama: "qwen3:4b"
+  default_gemini: "gemini-2.5-flash"
+  
+  # Ollama 모델의 토큰 생성 제한 (-1은 무제한)
+  ollama_num_predict: -1
+  
+  # Gemini API에서 우선적으로 보여줄 모델 목록
+  preferred_gemini:
+    - "gemini-2.5-pro"
+    - "gemini-2.5-flash"
+    - "gemini-2.0-flash"
+  
+  # 사용 가능한 임베딩 모델 목록
+  available_embeddings:
+    - "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
+    - "intfloat/multilingual-e5-large-instruct"
+    - "sentence-transformers/paraphrase-multilingual-mpnet-base-v2"
+    - "sentence-transformers/all-MiniLM-L6-v2"
+  
+  # 모델 캐시 디렉터리
+  cache_dir: ".model_cache"
+
+# --- RAG 파이프라인 설정 ---
+rag:
+  # 벡터 저장소 캐시 디렉터리
+  vector_store_cache_dir: ".model_cache/vector_store_cache"
+  
+  # 리트리버 설정
+  retriever:
+    search_type: "similarity"
+    search_kwargs:
+      k: 5
+    # BM25와 FAISS의 가중치 (Ensemble Retriever용)
+    ensemble_weights: [0.4, 0.6]
+
+  # 텍스트 분할 설정
+  text_splitter:
+    chunk_size: 1500
+    chunk_overlap: 150
+
+# --- 채팅 UI 설정 ---
+ui:
+  # 채팅 및 PDF 뷰어 컨테이너의 높이
+  container_height: 650
+
+  # LLM의 생각 과정을 구분하기 위한 태그
+  think_start_tag: "<think>"
+  think_end_tag: "</think>"
+  
+  # UI에 표시될 메시지
+  messages:
+    preparing_answer: "답변 생성 준비 중..."
+    thinking: "🤔 생각을 정리하는 중입니다..."
+    no_thought_process: "아직 생각 과정이 없습니다."
+    no_related_info: |
+      제공된 문서에서 질문에 대한 명확한 정보를 찾기 어렵습니다. 😥
+
+      **다음을 시도해 보세요:**
+      - 질문을 좀 더 명확하게 하거나 다른 키워드를 사용해 보세요.
+      - 좀 더 일반적이거나 넓은 범위의 질문을 해보세요.
