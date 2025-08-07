@@ -18,6 +18,7 @@ from config import (
     MSG_THINKING,
     MSG_NO_THOUGHT_PROCESS,
     MSG_NO_RELATED_INFO,
+    UI_CONTAINER_HEIGHT,
 )
 
 def _process_chat_response(qa_chain, user_input, chat_container):
@@ -108,25 +109,26 @@ def render_sidebar(uploaded_file_handler, model_change_handler, embedding_model_
             uploaded_file_handler(uploaded_file)
 
         # --- LLM 모델 선택 (동적 목록) ---
-        available_models = get_available_models()
-        
-        last_model = SessionManager.get_last_selected_model()
-        # 마지막으로 선택한 모델이 현재 사용 가능한 목록에 없으면, 목록의 첫 번째 모델을 기본값으로 사용
-        if last_model not in available_models:
-            last_model = available_models[0] if available_models else OLLAMA_MODEL_NAME
+        with st.spinner("LLM 모델 목록을 불러오는 중..."):
+            available_models = get_available_models()
+            
+            last_model = SessionManager.get("last_selected_model")
+            # 마지막으로 선택한 모델이 현재 사용 가능한 목록에 없으면, 목록의 첫 번째 모델을 기본값으로 사용
+            if last_model not in available_models:
+                last_model = available_models[0] if available_models else OLLAMA_MODEL_NAME
 
-        current_model_index = available_models.index(last_model) if last_model in available_models else 0
-        
-        selected_model = st.selectbox(
-            "LLM 모델 선택",
-            available_models,
-            index=current_model_index,
-            key="model_selector"
-        )
-        model_change_handler(selected_model)
+            current_model_index = available_models.index(last_model) if last_model in available_models else 0
+            
+            selected_model = st.selectbox(
+                "LLM 모델 선택",
+                available_models,
+                index=current_model_index,
+                key="model_selector"
+            )
+            model_change_handler(selected_model)
 
         # --- 임베딩 모델 선택 ---
-        last_embedding_model = SessionManager.get_last_selected_embedding_model() or AVAILABLE_EMBEDDING_MODELS[0]
+        last_embedding_model = SessionManager.get("last_selected_embedding_model") or AVAILABLE_EMBEDDING_MODELS[0]
         current_embedding_model_index = AVAILABLE_EMBEDDING_MODELS.index(last_embedding_model) if last_embedding_model in AVAILABLE_EMBEDDING_MODELS else 0
         
         selected_embedding_model = st.selectbox(
@@ -138,44 +140,31 @@ def render_sidebar(uploaded_file_handler, model_change_handler, embedding_model_
         embedding_model_change_handler(selected_embedding_model)
         
         st.divider()
-
-        # --- PDF 뷰어 설정 ---
-        st.subheader("📄 PDF 뷰어 설정")
         
-        pdf_width = st.slider("PDF 너비", 100, 1000, SessionManager.get_pdf_width())
-        SessionManager.set_pdf_width(pdf_width)
-        pdf_height = st.slider("PDF 높이", 100, 10000, SessionManager.get_pdf_height())
-        SessionManager.set_pdf_height(pdf_height)
 
 def render_pdf_viewer():
     """PDF 뷰어 컬럼을 렌더링합니다."""
     st.subheader("📄 PDF 미리보기")
     
-    pdf_bytes = SessionManager.get_pdf_file_bytes()
+    pdf_bytes = SessionManager.get("pdf_file_bytes")
     if not pdf_bytes:
         st.info("미리볼 PDF가 없습니다. 사이드바에서 파일을 업로드해주세요.")
         return
 
     try:
-        # PDF 파일을 한 번만 열어서 총 페이지 수를 얻고 뷰어에 전달합니다.
         pdf_document = fitz.open(stream=pdf_bytes, filetype="pdf")
         total_pages = len(pdf_document)
         
-        current_file_name = SessionManager.get_last_uploaded_file_name()
+        current_file_name = SessionManager.get("last_uploaded_file_name")
 
-        # 세션 상태 초기화 및 페이지 번호 유효성 검사
         if 'current_page' not in st.session_state:
             st.session_state.current_page = 1
-        
-        # 파일이 바뀌면 페이지 번호를 1로 초기화
         if st.session_state.get('last_pdf_name') != current_file_name:
             st.session_state.current_page = 1
             st.session_state.last_pdf_name = current_file_name
-
         if st.session_state.current_page > total_pages:
             st.session_state.current_page = 1
 
-        # --- 페이지 네비게이션 콜백 함수 (st.rerun()을 사용하지 않는 안정적인 방식) ---
         def go_to_previous_page():
             if st.session_state.current_page > 1:
                 st.session_state.current_page -= 1
@@ -184,41 +173,48 @@ def render_pdf_viewer():
             if st.session_state.current_page < total_pages:
                 st.session_state.current_page += 1
 
-        # --- 단순화되고 안정적인 UI ---
-        col1, col2, col3 = st.columns([3, 4, 3])
+        # 1. PDF 뷰어 먼저 표시
+        pdf_viewer(
+            input=pdf_bytes,
+            height=UI_CONTAINER_HEIGHT,
+            pages_to_render=[st.session_state.current_page],
+        )
 
-        with col1:
+        # 2. 내비게이션 UI 개선
+        # 컬럼 비율을 조정하여 페이지 입력과 텍스트를 분리
+        nav_cols = st.columns([1, 2, 1]) 
+        
+        with nav_cols[0]:
             st.button(
-                "◀️ 이전",
+                "← 이전",
                 on_click=go_to_previous_page,
                 use_container_width=True,
                 disabled=(st.session_state.current_page <= 1)
             )
 
-        with col2:
-            # 비활성화된 버튼을 사용하여 페이지 번호를 표시 (UI 통일성 및 안정성)
-            st.button(
-                f"{st.session_state.current_page} / {total_pages}",
-                use_container_width=True,
-                disabled=True,
+        with nav_cols[1]:
+            # 슬라이더와 number_input 동기화를 위한 콜백 함수
+            def sync_slider_and_input():
+                st.session_state.current_page = st.session_state.current_page_slider
+
+            st.slider(
+                "페이지 이동",
+                min_value=1,
+                max_value=total_pages,
+                key="current_page_slider",
+                label_visibility="collapsed",
+                value=st.session_state.current_page,
+                on_change=sync_slider_and_input # on_change 콜백 사용
             )
 
-        with col3:
+        with nav_cols[2]:
             st.button(
-                "다음 ▶️",
+                "다음 →",
                 on_click=go_to_next_page,
                 use_container_width=True,
                 disabled=(st.session_state.current_page >= total_pages)
             )
 
-        # streamlit-pdf-viewer를 사용하여 선택된 페이지만 렌더링
-        pdf_viewer(
-            input=pdf_bytes,
-            width=SessionManager.get_pdf_width(),
-            height=SessionManager.get_pdf_height(),
-            pages_to_render=[st.session_state.current_page],
-            # key=f"pdf_viewer_{current_file_name}",
-        )
     except Exception as e:
         st.error(f"PDF를 표시하는 중 오류가 발생했습니다: {e}")
         logging.error("PDF 뷰어 오류", exc_info=True)
@@ -227,7 +223,7 @@ def render_chat_column():
     """채팅 컬럼을 렌더링하고 채팅 로직을 처리합니다."""
     st.subheader("💬 채팅")
     
-    chat_container = st.container(height=650, border=True)
+    chat_container = st.container(height=UI_CONTAINER_HEIGHT, border=True)
     
     # 기존 메시지 표시
     for message in SessionManager.get_messages():
@@ -243,7 +239,7 @@ def render_chat_column():
         with chat_container, st.chat_message("user"):
             st.markdown(user_input)
         
-        qa_chain = SessionManager.get_qa_chain()
+        qa_chain = SessionManager.get("qa_chain")
         if qa_chain:
             _process_chat_response(qa_chain, user_input, chat_container)
         else:
@@ -263,7 +259,7 @@ def render_chat_column():
                 - **PDF 업로드:** 좌측 사이드바에서 분석하고 싶은 PDF를 업로드하세요.
                 - **모델 선택:** 로컬 `Ollama` 모델 또는 `Gemini` API 모델을 선택할 수 있습니다.
                 - **질문하기:** 문서 처리가 완료되면, 내용에 대해 자유롭게 질문할 수 있습니다.
-                - **PDF 뷰어:** 우측에서 원본 문서를 함께 보며 대화할 수 있습니다. (해상도/크기 조절 가능)
+                - **PDF 뷰어:** 우측에서 원본 문서를 함께 보며 대화할 수 있습니다.
                 """
             )
 
@@ -277,3 +273,10 @@ def render_chat_column():
                 st.warning(
                     "**초기 로딩:** 임베딩 모델을 처음 사용하면 다운로드에 몇 분이 소요될 수 있습니다."
                 )
+
+    # 에러 메시지 표시
+    if error_msg := SessionManager.get("pdf_processing_error"):
+        st.error(f"오류가 발생했습니다: {error_msg}")
+        if st.button("재시도"):
+            SessionManager.reset_all_state()
+            st.rerun()

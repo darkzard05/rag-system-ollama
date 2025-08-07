@@ -5,20 +5,19 @@ import os
 import time
 import logging
 import functools
-from typing import List, Optional, Dict, TYPE_CHECKING
+import hashlib
+import pickle
+from typing import List, Optional, Dict, Tuple, Callable
 
 import streamlit as st
 import ollama
-from session import SessionManager
 
-# --- 타입 체킹을 위한 지연 임포트 ---
-if TYPE_CHECKING:
-    import torch
-    from langchain_huggingface import HuggingFaceEmbeddings
-    from langchain_community.vectorstores import FAISS
-    from langchain_community.retrievers import BM25Retriever
-    from langchain_ollama import OllamaLLM
-    from langchain_google_genai import ChatGoogleGenerativeAI
+from session import SessionManager
+from langchain_huggingface import HuggingFaceEmbeddings
+from langchain_community.vectorstores import FAISS
+from langchain_community.retrievers import BM25Retriever
+from langchain_ollama import OllamaLLM
+from langchain_google_genai import ChatGoogleGenerativeAI
 
 # --- 설정 파일에서 상수 임포트 ---
 from config import (
@@ -29,7 +28,8 @@ from config import (
     GEMINI_MODEL_NAME,
     GEMINI_API_KEY,
     OLLAMA_NUM_PREDICT,
-    PREFERRED_GEMINI_MODELS
+    PREFERRED_GEMINI_MODELS,
+    VECTOR_STORE_CACHE_DIR
 )
 
 # --- 로깅 데코레이터 ---
@@ -50,7 +50,7 @@ def log_operation(operation_name):
     return decorator
 
 # --- 모델 목록 조회 ---
-@st.cache_data(ttl=3600, show_spinner="사용 가능한 모델 목록을 가져오는 중...")
+@st.cache_data(ttl=3600)
 def get_available_models() -> List[str]:
     """Ollama와 Gemini에서 사용 가능한 모델 목록을 동적으로 가져와 정렬된 리스트로 반환합니다."""
     import google.generativeai as genai
@@ -169,6 +169,42 @@ def split_documents(docs: List) -> List:
     )
     return chunker.split_documents(docs)
 
+# --- 벡터 저장소 캐싱 ---
+def _get_cache_path(file_bytes: bytes, embedding_model_name: str) -> Tuple[str, str]:
+    """파일 내용과 임베딩 모델 이름 기반으로 고유 캐시 경로 생성"""
+    file_hash = hashlib.sha256(file_bytes).hexdigest()
+    model_name_slug = embedding_model_name.replace('/', '_')
+    cache_dir = os.path.join(VECTOR_STORE_CACHE_DIR, f"{file_hash}_{model_name_slug}")
+    doc_splits_path = os.path.join(cache_dir, "doc_splits.pkl")
+    return cache_dir, doc_splits_path
+
+@log_operation("벡터 저장소 캐시 저장")
+def _save_to_cache(cache_path: str, doc_splits_path: str, doc_splits: List, vector_store: FAISS):
+    """FAISS 인덱스와 문서 조각을 디스크에 저장"""
+    try:
+        os.makedirs(cache_path, exist_ok=True)
+        vector_store.save_local(cache_path)
+        with open(doc_splits_path, "wb") as f:
+            pickle.dump(doc_splits, f)
+        logging.info(f"캐시를 '{cache_path}'에 저장했습니다.")
+    except Exception as e:
+        logging.error(f"캐시 저장 중 오류 발생: {e}")
+
+@log_operation("벡터 저장소 캐시 로드")
+def _load_from_cache(cache_path: str, doc_splits_path: str, embedder) -> Optional[Tuple[List, FAISS]]:
+    """디스크에서 FAISS 인덱스와 문서 조각을 로드"""
+    if os.path.exists(cache_path) and os.path.exists(doc_splits_path):
+        try:
+            vector_store = FAISS.load_local(cache_path, embedder, allow_dangerous_deserialization=True)
+            with open(doc_splits_path, "rb") as f:
+                doc_splits = pickle.load(f)
+            logging.info(f"캐시를 '{cache_path}'에서 불러왔습니다.")
+            return doc_splits, vector_store
+        except Exception as e:
+            logging.warning(f"캐시 로드 중 오류 발생: {e}. 캐시를 재생성합니다.")
+            return None
+    return None
+
 # --- 리트리버 및 벡터 저장소 생성 ---
 @log_operation("FAISS 벡터 저장소 생성")
 def create_vector_store(docs: List, embedder: "HuggingFaceEmbeddings") -> "FAISS":
@@ -220,7 +256,7 @@ def create_qa_chain(llm, vector_store, doc_splits: Optional[List] = None):
                 docs=doc_splits, k=RETRIEVER_CONFIG['search_kwargs']['k']
             )
             final_retriever = create_ensemble_retriever(
-                faiss_retriever, bm25_retriever, RETRIEVER_CONFIG['weights']
+                faiss_retriever, bm25_retriever, RETRIEVER_CONFIG['ensemble_weights']
             )
             logging.info("EnsembleRetriever (BM25 + FAISS) 생성 및 사용.")
         except Exception as e:
@@ -260,7 +296,7 @@ def create_qa_chain(llm, vector_store, doc_splits: Optional[List] = None):
 
     # 입력부터 최종 답변까지의 전체 RAG 체인
     retrieval_chain = (
-        RunnableLambda(lambda x: x["input"])
+        RunnableLambda(lambda x: x["input"]) 
         | final_retriever
         | RunnableLambda(_add_doc_number_to_metadata)
     )
@@ -278,38 +314,64 @@ def create_qa_chain(llm, vector_store, doc_splits: Optional[List] = None):
 
 # --- 전체 PDF 처리 파이프라인 ---
 @log_operation("전체 PDF 처리 파이프라인")
-def process_pdf_and_build_chain(uploaded_file, temp_pdf_path: str, selected_model: str, selected_embedding_model: str):
-    """PDF 처리부터 QA 체인 생성까지의 전체 과정을 관리합니다."""
-    
-    # 1. 문서 로드 및 분할
-    docs = load_pdf_docs(temp_pdf_path)
-    doc_splits = split_documents(docs)
-    SessionManager.set_processed_document_splits(doc_splits)
-    
-    # 2. 임베딩 및 벡터 저장소 생성
-    embedder = load_embedding_model(selected_embedding_model)
-    SessionManager.set_embedder(embedder)
-    vector_store = create_vector_store(doc_splits, embedder)
-    SessionManager.set_vector_store(vector_store)
-    
-    # 3. LLM 로드 및 QA 체인 생성
-    llm = load_llm(selected_model)
-    SessionManager.set_llm(llm)
-    qa_chain = create_qa_chain(llm, vector_store, doc_splits)
-    SessionManager.set_qa_chain(qa_chain)
-    
-    SessionManager.set_pdf_processed(True)
-    logging.info(f"'{uploaded_file.name}' 문서 처리 및 QA 체인 생성 완료.")
-    
-    # 메모리 최적화를 위해 주석 처리. EnsembleRetriever를 위해 세션에 유지.
-    # SessionManager.set_processed_document_splits(None) 
-    # logging.info("메모리 최적화를 위해 분할된 문서 목록을 세션에서 제거했습니다.")
+def process_pdf_and_build_chain(
+    uploaded_file_name: str,
+    file_bytes: bytes,
+    temp_pdf_path: str,
+    llm,
+    embedder,
+    progress_callback: Optional[Callable[[str], None]] = None
+) -> Tuple[str, bool]:
+    """PDF 처리부터 QA 체인 생성까지의 전체 과정을 관리합니다. 캐싱 로직 포함."""
 
-    success_message = (
-        f"✅ '{uploaded_file.name}' 문서 처리가 완료되었습니다.\n\n"
-        "이제 문서 내용에 대해 자유롭게 질문해보세요."
-    )
-    return success_message
+    def _update_progress(message: str):
+        if progress_callback:
+            progress_callback(message)
+
+    cache_path, doc_splits_path = _get_cache_path(file_bytes, embedder.model_name)
+
+    # 1. 캐시 로드 시도
+    _update_progress("저장된 캐시 확인 중...")
+    cached_data = _load_from_cache(cache_path, doc_splits_path, embedder)
+
+    if cached_data:
+        doc_splits, vector_store = cached_data
+        cache_used = True
+        success_message = f"✅ '{uploaded_file_name}' 문서의 저장된 캐시를 불러왔습니다."
+        _update_progress("저장된 캐시를 성공적으로 불러왔습니다.")
+    else:
+        # 2. 캐시가 없으면 전체 처리 수행
+        cache_used = False
+        _update_progress(f"'{uploaded_file_name}' 문서 로드 중...")
+        docs = load_pdf_docs(temp_pdf_path)
+        
+        _update_progress("문서 분할 중...")
+        doc_splits = split_documents(docs)
+        
+        _update_progress("벡터 저장소 생성 중... (시간이 소요될 수 있습니다)")
+        vector_store = create_vector_store(doc_splits, embedder)
+
+        # 3. 새로운 캐시 저장
+        _update_progress("처리된 데이터 캐시 저장 중...")
+        _save_to_cache(cache_path, doc_splits_path, doc_splits, vector_store)
+        success_message = (
+            f"✅ '{uploaded_file_name}' 문서 처리가 완료되었습니다.\n\n"
+            "이제 문서 내용에 대해 자유롭게 질문해보세요."
+        )
+
+    # 4. 세션에 데이터 저장 및 QA 체인 생성
+    _update_progress("QA 시스템 구성 중...")
+    SessionManager.set("processed_document_splits", doc_splits)
+    SessionManager.set("vector_store", vector_store)
+    qa_chain = create_qa_chain(llm, vector_store, doc_splits)
+    SessionManager.set("qa_chain", qa_chain)
+
+    SessionManager.set("pdf_processed", True)
+    logging.info(f"'{uploaded_file_name}' 문서 처리 및 QA 체인 생성 완료. (캐시 사용: {cache_used})")
+    
+    _update_progress("모든 처리가 완료되었습니다!")
+    return success_message, cache_used
+
 
 def is_embedding_model_cached(model_name: str) -> bool:
     """지정된 임베딩 모델이 로컬 캐시에 존재하는지 확인합니다."""

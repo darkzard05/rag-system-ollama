@@ -1,74 +1,52 @@
 """
-애플리케이션의 모든 설정을 담는 파일입니다.
+config.yml 파일과 환경 변수에서 애플리케이션 설정을 로드합니다.
 """
 import os
 import yaml
-from typing import Dict, List
+from typing import Dict, List, Any
 from dotenv import load_dotenv
 
-load_dotenv() # .env 파일에서 환경 변수를 로드합니다.
+# .env 파일 로드
+load_dotenv()
 
-# --- YAML 설정 파일 로드 ---
-def load_yaml_config(config_path: str) -> Dict:
+def _load_config() -> Dict[str, Any]:
     """YAML 설정 파일을 로드합니다."""
+    config_path = os.path.join(os.path.dirname(__file__), '..', 'config.yml')
     try:
         with open(config_path, 'r', encoding='utf-8') as f:
             return yaml.safe_load(f)
     except FileNotFoundError:
-        print(f"Warning: '{config_path}' not found. Using default values.")
-        return {}
-    except Exception as e:
-        print(f"Error loading '{config_path}': {e}")
-        return {}
+        raise RuntimeError("설정 파일(config.yml)을 찾을 수 없습니다. 프로젝트 루트에 파일이 있는지 확인하세요.")
+    except yaml.YAMLError as e:
+        raise RuntimeError(f"설정 파일(config.yml)을 파싱하는 중 오류가 발생했습니다: {e}")
 
-# 현재 파일의 디렉토리 기준으로 config.yaml 경로 설정
-_config_path = os.path.join(os.path.dirname(__file__), 'config.yaml')
-_yaml_config = load_yaml_config(_config_path)
+# 설정 로드
+_config = _load_config()
 
 # --- 모델 및 설정 상수 ---
-OLLAMA_MODEL_NAME: str = "qwen3:4b"
-GEMINI_MODEL_NAME: str = "gemini-1.5-flash"
-OLLAMA_NUM_PREDICT: int = int(os.getenv("OLLAMA_NUM_PREDICT", "-1")) # -1 for unlimited, or set a specific token limit
+_models_config = _config.get('models', {})
+OLLAMA_MODEL_NAME: str = _models_config.get('default_ollama', 'qwen3:4b')
+GEMINI_MODEL_NAME: str = _models_config.get('default_gemini', 'gemini-2.5-flash')
+OLLAMA_NUM_PREDICT: int = int(os.getenv("OLLAMA_NUM_PREDICT", _models_config.get('ollama_num_predict', -1)))
+GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY", "")
+PREFERRED_GEMINI_MODELS: List[str] = _models_config.get('preferred_gemini', [])
+AVAILABLE_EMBEDDING_MODELS: List[str] = _models_config.get('available_embeddings', [])
+CACHE_DIR: str = _models_config.get('cache_dir', '.model_cache')
 
-# Gemini API 키를 환경 변수에서 로드합니다.
-# 예: export GEMINI_API_KEY="YOUR_API_KEY"
-GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY", "") 
+# --- RAG 파이프라인 설정 ---
+_rag_config = _config.get('rag', {})
+RETRIEVER_CONFIG: Dict = _rag_config.get('retriever', {})
+TEXT_SPLITTER_CONFIG: Dict = _rag_config.get('text_splitter', {})
+VECTOR_STORE_CACHE_DIR: str = _rag_config.get('vector_store_cache_dir', '.model_cache/vector_store_cache')
 
-# YAML 파일에서 Gemini 모델 목록 가져오기 (없으면 빈 리스트)
-PREFERRED_GEMINI_MODELS: List[str] = _yaml_config.get('gemini_models', [])
-
-AVAILABLE_EMBEDDING_MODELS: List[str] = [
-    "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
-    "intfloat/multilingual-e5-large-instruct",
-    "sentence-transformers/paraphrase-multilingual-mpnet-base-v2",
-    "sentence-transformers/all-MiniLM-L6-v2", # 진단을 위해 기본 모델로 변경
-]
-CACHE_DIR: str = ".model_cache"
-
-# --- 리트리버 설정 상수 ---
-RETRIEVER_CONFIG: Dict = {
-    'search_type': "similarity",
-    'search_kwargs': {
-        'k': 5,
-    },
-    'weights': [0.4, 0.6]
-}
-
-# --- 텍스트 분할 설정 ---
-TEXT_SPLITTER_CONFIG: Dict = {
-    'chunk_size': 1500,
-    'chunk_overlap': 150,
-}
 
 # --- 채팅 UI 상수 ---
-THINK_START_TAG: str = "<think>"
-THINK_END_TAG: str = "</think>"
-MSG_PREPARING_ANSWER: str = "답변 생성 준비 중..."
-MSG_THINKING: str = "🤔 생각을 정리하는 중입니다..."
-MSG_NO_THOUGHT_PROCESS: str = "아직 생각 과정이 없습니다."
-MSG_NO_RELATED_INFO: str = (
-    "제공된 문서에서 질문에 대한 명확한 정보를 찾기 어렵습니다. 😥\n\n"
-    "**다음을 시도해 보세요:**\n"
-    "- 질문을 좀 더 명확하게 하거나 다른 키워드를 사용해 보세요.\n"
-    "- 좀 더 일반적이거나 넓은 범위의 질문을 해보세요."
-)
+_ui_config = _config.get('ui', {})
+UI_CONTAINER_HEIGHT: int = _ui_config.get('container_height', 650)
+_ui_messages = _ui_config.get('messages', {})
+THINK_START_TAG: str = _ui_config.get('think_start_tag', '<think>')
+THINK_END_TAG: str = _ui_config.get('think_end_tag', '</think>')
+MSG_PREPARING_ANSWER: str = _ui_messages.get('preparing_answer', '답변 생성 준비 중...')
+MSG_THINKING: str = _ui_messages.get('thinking', '🤔 생각을 정리하는 중입니다...')
+MSG_NO_THOUGHT_PROCESS: str = _ui_messages.get('no_thought_process', '아직 생각 과정이 없습니다.')
+MSG_NO_RELATED_INFO: str = _ui_messages.get('no_related_info', '관련 정보를 찾을 수 없습니다.')
