@@ -6,7 +6,7 @@ langchain-experimental
 langchain-huggingface
 langchain-ollama
 langchain-google-genai
-streamlit_pdf_viewer
+streamlit_pdf_viewer>=0.0.26
 faiss-cpu
 pymupdf
 sentence-transformers
