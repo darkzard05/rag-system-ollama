@@ -44,14 +44,20 @@ rag:
     chunk_size: 1500
     chunk_overlap: 150
 
+  # 프롬프트 설정
+  prompts:
+    qa_system_prompt: |
+      You are a helpful AI assistant. Your task is to answer the user's question based ONLY on the provided context.
+      
+      **CRITICAL RULE: You MUST respond in the same language as the user's question.** 
+      For example, if the question is in Korean, your entire response must be in Korean. If the question is in English, your entire response must be in English.
+      
+      Please structure your answer clearly and readably, using markdown lists if necessary.
+
 # --- 채팅 UI 설정 ---
 ui:
   # 채팅 및 PDF 뷰어 컨테이너의 높이
   container_height: 650
-
-  # LLM의 생각 과정을 구분하기 위한 태그
-  think_start_tag: "<think>"
-  think_end_tag: "</think>"
   
   # UI에 표시될 메시지
   messages:
