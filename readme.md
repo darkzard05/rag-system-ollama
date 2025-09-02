@@ -57,11 +57,13 @@
     pip install -r requirements.txt
     ```
 
-4.  **(For Ollama Users) Pull the recommended model**
+4.  **(For Ollama Users) Pull a model**
+    We recommend a general-purpose model to start. You can find more models at the [Ollama Library](https://ollama.com/library).
     ```bash
-    ollama pull qwen2:1.5b
+    ollama pull llama3:8b
     ```
     - Ensure the Ollama server is running before this step.
+    - Make sure the `default_ollama` model name in your `config.yml` matches a model you have pulled.
 
 5.  **Run the Streamlit application**
     ```bash
@@ -86,14 +88,14 @@
     ├── session.py
     ├── rag_core.py
     ├── config.py
-    └── config.yaml
+    └── config.yml
 ```
 - **`main.py`**: Entry point of the Streamlit application.
 - **`ui.py`**: Contains all functions for rendering the Streamlit user interface.
 - **`session.py`**: Manages the application's session state.
 - **`rag_core.py`**: The core of the RAG system (data processing, embedding, retrieval, QA chain).
 - **`config.py`**: Loads and provides configuration constants for the application.
-- **`config.yaml`**: YAML file for storing configurations like model lists and retriever settings.
+- **`config.yml`**: YAML file for storing configurations like model lists and retriever settings.
 - **`.env.example`**: An example file for environment variables. Copy it to `.env` to set your API keys.
 
 ## ✨ Key Components
@@ -109,7 +111,7 @@
 ## ⚙️ Configuration
 
 - **API Keys**: Set your `GEMINI_API_KEY` in a `.env` file in the project root.
-- **Models and Parameters**: You can adjust the models, retriever weights, and text splitter settings in `src/config.yaml`.
+- **Models and Parameters**: You can adjust the models, retriever weights, and text splitter settings in `config.yml`.
 
 ## 🚑 Troubleshooting
 
@@ -177,11 +179,13 @@ This project is distributed under the MIT License. See the `LICENSE` file for mo
     pip install -r requirements.txt
     ```
 
-4.  **(Ollama 사용자) 추천 모델 다운로드**
+4.  **(Ollama 사용자) 모델 다운로드**
+    시작을 위해 범용 모델을 사용하는 것을 권장합니다. 더 많은 모델은 [Ollama 라이브러리](https://ollama.com/library)에서 찾을 수 있습니다.
     ```bash
-    ollama pull qwen2:1.5b
+    ollama pull llama3:8b
     ```
     - 이 명령을 실행하기 전에 Ollama 서버가 실행 중인지 확인하세요.
+    - `config.yml`의 `default_ollama` 모델 이름이 다운로드한 모델과 일치하는지 확인하세요.
 
 5.  **Streamlit 애플리케이션 실행**
     ```bash
@@ -206,14 +210,14 @@ This project is distributed under the MIT License. See the `LICENSE` file for mo
     ├── session.py
     ├── rag_core.py
     ├── config.py
-    └── config.yaml
+    └── config.yml
 ```
 - **`main.py`**: Streamlit 애플리케이션의 진입점입니다.
 - **`ui.py`**: Streamlit 사용자 인터페이스 렌더링 함수들을 포함합니다.
 - **`session.py`**: 애플리케이션의 세션 상태를 관리합니다.
 - **`rag_core.py`**: RAG 시스템의 핵심 로직(데이터 처리, 임베딩, 리트리버, QA 체인)을 담당합니다.
 - **`config.py`**: 애플리케이션의 설정 상수를 로드하고 제공합니다.
-- **`config.yaml`**: 모델 목록, 리트리버 설정 등 주요 설정을 저장하는 YAML 파일입니다.
+- **`config.yml`**: 모델 목록, 리트리버 설정 등 주요 설정을 저장하는 YAML 파일입니다.
 - **`.env.example`**: 환경 변수 예시 파일입니다. 이 파일을 `.env`로 복사하여 API 키 등을 설정할 수 있습니다.
 
 ## ✨ 주요 구성 요소
@@ -229,7 +233,7 @@ This project is distributed under the MIT License. See the `LICENSE` file for mo
 ## ⚙️ 설정
 
 - **API 키**: 프로젝트 루트에 `.env` 파일을 만들고 `GEMINI_API_KEY`를 설정하세요.
-- **모델 및 파라미터**: `src/config.yaml` 파일에서 모델, 리트리버 가중치, 텍스트 분할기 설정 등을 조정할 수 있습니다.
+- **모델 및 파라미터**: `config.yml` 파일에서 모델, 리트리버 가중치, 텍스트 분할기 설정 등을 조정할 수 있습니다.
 
 ## 🚑 문제 해결
 

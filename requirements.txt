@@ -1,3 +1,4 @@
+# Core Application Dependencies
 streamlit
 torch
 langchain
@@ -18,3 +19,8 @@ ollama
 google-generativeai
 python-dotenv
 pyyaml
+pydantic>=2.0
+
+# Development and Linting Dependencies
+black
+ruff
