@@ -2,12 +2,15 @@
 Streamlit 세션 상태 관리를 위한 SessionManager 클래스.
 이 클래스는 st.session_state에 대한 직접적인 Getter/Setter 역할에 집중합니다.
 """
+
 import logging
 import streamlit as st
-from typing import List, Any, Dict, Optional
+from typing import List, Any, Dict
+
 
 class SessionManager:
     """세션 상태를 관리하는 클래스 (순수 Getter/Setter 역할)"""
+
     DEFAULT_SESSION_STATE: Dict[str, Any] = {
         "messages": [],
         "last_selected_model": None,
@@ -22,6 +25,10 @@ class SessionManager:
         "llm": None,
         "embedder": None,
         "is_generating_answer": False,
+        "is_first_run": True,
+        "needs_rag_rebuild": False,
+        "needs_qa_chain_update": False,
+        "new_file_uploaded": False,
     }
 
     @classmethod
@@ -36,27 +43,45 @@ class SessionManager:
             logging.info("세션 상태 초기화 완료.")
 
     @classmethod
-    def reset_all_state(cls):
-        """모든 세션 상태를 기본값으로 리셋합니다."""
-        logging.info("모든 세션 상태를 기본값으로 리셋합니다.")
-        for key, value in cls.DEFAULT_SESSION_STATE.items():
-            st.session_state[key] = value
-        # 초기화 플래그는 유지
-        st.session_state._initialized = True
+    def reset_for_new_file(cls):
+        """새 파일 업로드 시 RAG 관련 상태를 안전하게 리셋합니다."""
+        logging.info("새 파일 업로드 감지. RAG 관련 상태를 리셋합니다.")
+
+        # 리셋할 키 목록
+        keys_to_reset = [
+            "pdf_processed",
+            "pdf_processing_error",
+            "processed_document_splits",
+            "qa_chain",
+            "vector_store",
+        ]
+
+        # st.session_state에서 해당 키들을 순회하며 삭제
+        for key in keys_to_reset:
+            if key in st.session_state:
+                del st.session_state[key]
+
+        # 상태 플래그 설정
+        st.session_state.pdf_processed = False
+        st.session_state.needs_rag_rebuild = True
 
     @classmethod
     def add_message(cls, role: str, content: str):
         """메시지 추가"""
-        if "messages" not in st.session_state or not isinstance(st.session_state.messages, list):
+        if "messages" not in st.session_state or not isinstance(
+            st.session_state.messages, list
+        ):
             st.session_state.messages = []
         st.session_state.messages.append({"role": role, "content": content})
 
     @staticmethod
     def is_ready_for_chat() -> bool:
         """채팅 준비 상태 확인"""
-        return (st.session_state.get("pdf_processed", False) and
-                not st.session_state.get("pdf_processing_error") and
-                st.session_state.get("qa_chain") is not None)
+        return (
+            st.session_state.get("pdf_processed", False)
+            and not st.session_state.get("pdf_processing_error")
+            and st.session_state.get("qa_chain") is not None
+        )
 
     # --- Getters ---
     @classmethod
@@ -71,3 +96,13 @@ class SessionManager:
     @classmethod
     def set(cls, key: str, value: Any):
         st.session_state[key] = value
+
+    @classmethod
+    def reset_all_state(cls):
+        """세션의 모든 상태를 기본값으로 리셋합니다."""
+        logging.info("세션의 모든 상태를 리셋합니다.")
+        # st.session_state.clear() # clear()는 모든 것을 지우므로 콜백과 위젯 상태에 문제를 일으킬 수 있음
+        for key in list(st.session_state.keys()):
+            if key != "_initialized":  # 초기화 플래그는 유지
+                del st.session_state[key]
+        cls.init_session()
