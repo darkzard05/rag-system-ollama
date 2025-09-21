@@ -21,63 +21,30 @@ from config import (
 
 def _process_chat_response(qa_chain, user_input, chat_container):
     """
-    QA 체인에서 스트리밍된 응답을 실시간으로 처리하고 UI에 표시합니다.
-    응답이 <think> 태그로 시작하는 경우, 생각 과정과 답변을 분리하여 스트리밍합니다.
+    LangGraph RAG 체인에서 스트리밍된 응답을 실시간으로 처리하고 UI에 표시합니다.
     """
     with chat_container, st.chat_message("assistant"):
-        thought_expander = st.expander("🤔 생각 과정", expanded=False)
-        thought_placeholder = thought_expander.empty()
         message_placeholder = st.empty()
-
-        thought_placeholder.markdown(MSG_THINKING)
         message_placeholder.markdown(MSG_PREPARING_ANSWER)
 
-        is_thinking = False
-        is_answer = False
-        first_chunk_processed = False
-        thought_buffer = ""
-        answer_buffer = ""
-
+        final_generation = ""
         try:
+            # LangGraph는 각 노드가 끝날 때마다 상태를 스트리밍합니다.
             stream = qa_chain.stream({"input": user_input})
 
             for chunk in stream:
-                if not first_chunk_processed:
-                    # 첫 번째 청크에서 <think> 태그 확인
-                    if chunk.lstrip().startswith("<think>"):
-                        is_thinking = True
-                        # 첫 청크에서 <think> 태그 제거
-                        chunk = chunk.lstrip()[len("<think>") :]
-                    else:
-                        is_answer = True
-                    first_chunk_processed = True
-
-                if is_thinking:
-                    # </think> 태그가 있는지 확인
-                    if "</think>" in chunk:
-                        parts = chunk.split("</think>", 1)
-                        thought_buffer += parts[0]
-                        answer_buffer += parts[1]
-                        is_thinking = False
-                        is_answer = True
-                    else:
-                        thought_buffer += chunk
-
-                elif is_answer:
-                    answer_buffer += chunk
-
-                # UI 실시간 업데이트
-                thought_placeholder.markdown(thought_buffer + "▌")
-                message_placeholder.markdown(answer_buffer + "▌")
-
+                # 스트림의 각 청크는 {'노드이름': {'상태키': 값}} 형태입니다.
+                # 마지막 'generate' 노드의 출력을 찾습니다.
+                if "generate" in chunk:
+                    generation_output = chunk["generate"].get("generation", "")
+                    if generation_output:
+                        final_generation = generation_output
+                        message_placeholder.markdown(final_generation + "▌")
+            
             # 스트리밍 완료 후 최종 UI 업데이트
-            thought_placeholder.markdown(thought_buffer)
-            if not thought_buffer:
-                thought_expander.markdown(MSG_NO_THOUGHT_PROCESS)
-                thought_expander.expanded = False
-
-            message_placeholder.markdown(answer_buffer)
-            SessionManager.add_message("assistant", answer_buffer)
+            message_placeholder.markdown(final_generation)
+            SessionManager.add_message("assistant", final_generation)
+            logging.info(f"LangGraph 스트리밍 완료. (응답 길이: {len(final_generation)}자)")
 
         except Exception as e:
             error_msg = f"답변 스트리밍 중 오류 발생: {str(e)}"

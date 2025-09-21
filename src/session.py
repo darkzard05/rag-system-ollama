@@ -16,6 +16,7 @@ class SessionManager:
         "last_selected_model": None,
         "last_uploaded_file_name": None,
         "last_selected_embedding_model": None,
+        "last_pdf_name": None, # PDF 뷰어의 현재 파일 이름 추적
         "pdf_processed": False,
         "pdf_processing_error": None,
         "pdf_file_bytes": None,

@@ -107,6 +107,7 @@ def load_embedding_model(embedding_model_name: str) -> "HuggingFaceEmbeddings":
     from langchain_huggingface import HuggingFaceEmbeddings
 
     # Streamlit의 파일 감시 기능과 PyTorch 간의 호환성 문제를 해결하기 위한 임시 조치
+    # Streamlit의 파일 감시 기능과 PyTorch 간의 호환성 문제를 해결하기 위한 임시 조치
     if hasattr(torch, "classes"):
         torch.classes.__path__ = []
 
