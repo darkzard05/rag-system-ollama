@@ -32,8 +32,8 @@ _config = _load_config()
 
 # --- 모델 및 설정 상수 ---
 _models_config = _config.get("models", {})
-OLLAMA_MODEL_NAME: str = _models_config.get("default_ollama", "qwen3:4b")
-GEMINI_MODEL_NAME: str = _models_config.get("default_gemini", "gemini-2.5-flash")
+OLLAMA_MODEL_NAME: str = _models_config.get("default_ollama", "qwen2:1.5b")
+GEMINI_MODEL_NAME: str = _models_config.get("default_gemini", "gemini-1.5-flash")
 OLLAMA_NUM_PREDICT: int = int(
     os.getenv("OLLAMA_NUM_PREDICT", _models_config.get("ollama_num_predict", -1))
 )

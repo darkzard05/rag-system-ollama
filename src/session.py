@@ -30,6 +30,7 @@ class SessionManager:
         "needs_rag_rebuild": False,
         "needs_qa_chain_update": False,
         "new_file_uploaded": False,
+        "show_graph": False,
     }
 
     @classmethod
@@ -67,13 +68,21 @@ class SessionManager:
         st.session_state.needs_rag_rebuild = True
 
     @classmethod
-    def add_message(cls, role: str, content: str):
-        """메시지 추가"""
+    def add_message(cls, role: str, content: str, thought: str = None):
+        """
+        메시지 추가. 'thought' 인자를 추가하여 생각 과정을 별도로 저장합니다.
+        """
         if "messages" not in st.session_state or not isinstance(
             st.session_state.messages, list
         ):
             st.session_state.messages = []
-        st.session_state.messages.append({"role": role, "content": content})
+        
+        message = {"role": role, "content": content}
+        # 💡 'thought' 내용이 있으면 메시지 객체에 추가
+        if thought:
+            message["thought"] = thought
+            
+        st.session_state.messages.append(message)
 
     @staticmethod
     def is_ready_for_chat() -> bool:
