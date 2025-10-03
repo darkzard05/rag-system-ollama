@@ -49,51 +49,72 @@ def split_documents(docs: List) -> List:
 
 class VectorStoreCache:
     def __init__(self, file_bytes: bytes, embedding_model_name: str):
-        self.cache_dir, self.doc_splits_path = self._get_cache_paths(
-            file_bytes, embedding_model_name
+        self.cache_dir, self.doc_splits_path, self.faiss_index_path = (
+            self._get_cache_paths(file_bytes, embedding_model_name)
         )
+
     def _get_cache_paths(
         self, file_bytes: bytes, embedding_model_name: str
-    ) -> Tuple[str, str]:
+    ) -> Tuple[str, str, str]:
         file_hash = hashlib.sha256(file_bytes).hexdigest()
         model_name_slug = embedding_model_name.replace("/", "_")
         cache_dir = os.path.join(
             VECTOR_STORE_CACHE_DIR, f"{file_hash}_{model_name_slug}"
         )
         doc_splits_path = os.path.join(cache_dir, "doc_splits.json")
-        return cache_dir, doc_splits_path
+        faiss_index_path = os.path.join(cache_dir, "faiss_index")
+        return cache_dir, doc_splits_path, faiss_index_path
+
     def _serialize_docs(self, docs: List[Document]) -> List[Dict]:
         return [
             {"page_content": doc.page_content, "metadata": doc.metadata} for doc in docs
         ]
+
     def _deserialize_docs(self, docs_as_dicts: List[Dict]) -> List[Document]:
         return [
             Document(page_content=d["page_content"], metadata=d["metadata"])
             for d in docs_as_dicts
         ]
-    @log_operation("문서 조각 캐시 로드")
-    def load(self) -> Optional[List[Document]]:
-        if os.path.exists(self.doc_splits_path):
+
+    @log_operation("벡터 저장소 캐시 로드")
+    def load(
+        self, embedder: "HuggingFaceEmbeddings"
+    ) -> Tuple[Optional[List[Document]], Optional["FAISS"]]:
+        if os.path.exists(self.doc_splits_path) and os.path.exists(
+            self.faiss_index_path
+        ):
             try:
+                # 1. 문서 조각 로드
                 with open(self.doc_splits_path, "r", encoding="utf-8") as f:
                     doc_splits_as_dicts = json.load(f)
                 doc_splits = self._deserialize_docs(doc_splits_as_dicts)
-                logging.info(f"문서 조각 캐시를 '{self.doc_splits_path}'에서 불러왔습니다.")
-                return doc_splits
+
+                # 2. FAISS 인덱스 로드
+                vector_store = FAISS.load_local(
+                    self.faiss_index_path,
+                    embedder,
+                    allow_dangerous_deserialization=True,
+                )
+                logging.info(f"벡터 저장소 캐시를 '{self.cache_dir}'에서 불러왔습니다.")
+                return doc_splits, vector_store
             except Exception as e:
-                logging.warning(f"문서 조각 캐시 로드 중 오류 발생: {e}. 캐시를 재생성합니다.")
-        return None
-    @log_operation("문서 조각 캐시 저장")
-    def save(self, doc_splits: List):
+                logging.warning(f"캐시 로드 중 오류 발생: {e}. 캐시를 재생성합니다.")
+        return None, None
+
+    @log_operation("벡터 저장소 캐시 저장")
+    def save(self, doc_splits: List[Document], vector_store: "FAISS"):
         try:
             os.makedirs(self.cache_dir, exist_ok=True)
+            # 1. 문서 조각 저장
             with open(self.doc_splits_path, "w", encoding="utf-8") as f:
                 json.dump(
                     self._serialize_docs(doc_splits), f, ensure_ascii=False, indent=4
                 )
-            logging.info(f"문서 조각 캐시를 '{self.doc_splits_path}'에 저장했습니다.")
+            # 2. FAISS 인덱스 저장
+            vector_store.save_local(self.faiss_index_path)
+            logging.info(f"벡터 저장소 캐시를 '{self.cache_dir}'에 저장했습니다.")
         except Exception as e:
-            logging.error(f"문서 조각 캐시 저장 중 오류 발생: {e}")
+            logging.error(f"캐시 저장 중 오류 발생: {e}")
 
 @log_operation("FAISS 벡터 저장소 생성")
 def create_vector_store(docs: List, embedder: "HuggingFaceEmbeddings") -> "FAISS":
@@ -116,17 +137,16 @@ def build_rag_pipeline(
     uploaded_file_name: str, file_bytes: bytes, llm, embedder
 ) -> Tuple[str, bool]:
     cache = VectorStoreCache(file_bytes, embedder.model_name)
-    doc_splits = cache.load()
+    doc_splits, vector_store = cache.load(embedder)
     cache_used = False
 
-    if doc_splits:
+    if doc_splits and vector_store:
         cache_used = True
-        vector_store = create_vector_store(doc_splits, embedder)
     else:
         docs = load_pdf_docs(file_bytes)
         doc_splits = split_documents(docs)
         vector_store = create_vector_store(doc_splits, embedder)
-        cache.save(doc_splits)
+        cache.save(doc_splits, vector_store)
 
     faiss_retriever = vector_store.as_retriever(
         search_type=RETRIEVER_CONFIG["search_type"],

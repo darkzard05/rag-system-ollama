@@ -338,7 +338,7 @@ def render_chat_column():
 
 def render_workflow_tab_content():
     """'워크플로우' 탭에 들어갈 콘텐츠를 렌더링합니다."""
-    qa_chain = SessionManager.get("rag_workflow_graph")
+    qa_chain = SessionManager.get("qa_chain")
     
     if not qa_chain:
         st.info("워크플로우를 보려면 먼저 사이드바에서 PDF를 처리해야 합니다.")
