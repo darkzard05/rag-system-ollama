@@ -22,6 +22,45 @@ from config import (
 )
 
 
+# 💡 1. 추가된 부분: 태그를 상수로 정의
+THINK_START_TAG = "<think>"
+THINK_END_TAG = "</think>"
+
+
+def _parse_think_tags(response: str) -> tuple[str, str]:
+    """
+    응답 문자열에서 <think>...</think> 태그를 파싱하여
+    생각 내용과 실제 답변 내용을 분리합니다.
+
+    Args:
+        response (str): LLM으로부터 받은 전체 응답 문자열
+
+    Returns:
+        tuple[str, str]: (생각 내용, 답변 내용) 튜플
+    """
+    think_content = ""
+    answer_content = ""
+    
+    start_index = response.find(THINK_START_TAG)
+    
+    if start_index != -1:
+        # 💡 2. 수정된 부분: <think> 태그 뒤에서부터 </think>를 찾도록 변경
+        end_index = response.find(THINK_END_TAG, start_index)
+        
+        if end_index != -1:
+            # <think>와 </think> 태그가 모두 있는 경우
+            think_content = response[start_index + len(THINK_START_TAG):end_index].strip()
+            answer_content = response[end_index + len(THINK_END_TAG):].strip()
+        else:
+            # <think> 태그만 있는 경우 (스트리밍 중간 과정)
+            think_content = response[start_index + len(THINK_START_TAG):].strip()
+    else:
+        # <think> 태그가 없는 경우
+        answer_content = response.strip()
+        
+    return think_content, answer_content
+
+
 async def _stream_chat_response(qa_chain, user_input, chat_container) -> tuple[str, str]:
     """
     스트림을 실시간으로 파싱하여 UI에 표시하고, 최종 (생각, 답변) 튜플을 반환합니다.
@@ -38,8 +77,6 @@ async def _stream_chat_response(qa_chain, user_input, chat_container) -> tuple[s
         thought_container = expander.empty()
         answer_container = st.empty()
 
-        # --- 💡 1. 수정된 부분: 초기 메시지를 동일하게 설정 ---
-        # 확장 패널과 메인 답변 창 모두에 '생각 중' 메시지를 표시합니다.
         thought_container.markdown(MSG_THINKING + "▌")
         answer_container.markdown(MSG_PREPARING_ANSWER)
 
@@ -56,41 +93,18 @@ async def _stream_chat_response(qa_chain, user_input, chat_container) -> tuple[s
                     if isinstance(chunk_data, dict) and "response" in chunk_data:
                         full_response += chunk_data["response"]
                         
-                        think_content = ""
-                        answer_content = ""
-                        
-                        think_start_tag = "<think>"
-                        think_end_tag = "</think>"
-                        
-                        start_index = full_response.find(think_start_tag)
-                        end_index = full_response.find(think_end_tag)
+                        think_content, answer_content = _parse_think_tags(full_response)
 
-                        if start_index != -1:
-                            if end_index != -1:
-                                if not is_thought_complete:
-                                    thought_end_time = time.time()
-                                    is_thought_complete = True
-                                
-                                think_content = full_response[start_index + len(think_start_tag):end_index].strip()
-                                answer_content = full_response[end_index + len(think_end_tag):].strip()
-                            else:
-                                think_content = full_response[start_index + len(think_start_tag):].strip()
-                        else:
-                            answer_content = full_response.strip()
-
-                        # --- 💡 2. 수정된 부분: 스트리밍 로직 변경 ---
+                        # 💡 3. 수정된 부분: 불필요한 조건문 제거
+                        if answer_content and not is_thought_complete:
+                            thought_end_time = time.time()
+                            is_thought_complete = True
+                        
                         if answer_content:
-                            # 답변 내용이 시작되면,
-                            # 1. 생각 과정은 완성된 내용으로 업데이트하고,
-                            # 2. 답변 창은 고정 메시지를 덮어쓰며 답변 스트리밍을 시작합니다.
                             thought_container.markdown(think_content)
                             answer_container.markdown(answer_content + "▌")
                         else:
-                            # 생각 과정만 스트리밍 중일 때,
-                            # 1. 생각 과정 창만 실시간으로 업데이트합니다.
-                            # 2. 답변 창(answer_container)은 건드리지 않아 고정 메시지가 유지됩니다.
                             thought_container.markdown(think_content + "▌")
-                            # answer_container.empty()  <- 이 줄을 제거하여 고정 메시지가 사라지지 않도록 함
 
         except Exception as e:
             error_msg = f"스트리밍 답변 생성 중 오류 발생: {str(e)}"
@@ -100,27 +114,15 @@ async def _stream_chat_response(qa_chain, user_input, chat_container) -> tuple[s
 
     # --- 스트리밍 완료 후 최종 내용 정리 및 로그 출력 ---
     end_time = time.time()
-    final_think_content = ""
-    final_answer_content = ""
-
-    start_index = full_response.find("<think>")
-    end_index = full_response.find("</think>")
-
-    if start_index != -1 and end_index != -1:
-        final_think_content = full_response[start_index + len("<think>"):end_index].strip()
-        final_answer_content = full_response[end_index + len("</think>"):].strip()
-    else:
-        final_answer_content = full_response.replace("<think>", "").replace("</think>", "").strip()
+    
+    final_think_content, final_answer_content = _parse_think_tags(full_response)
 
     thought_container.markdown(final_think_content or MSG_NO_THOUGHT_PROCESS)
     answer_container.markdown(final_answer_content)
     
-    # --- 💡 수정된 부분: 로그 출력 로직 정리 💡 ---
-    # 상세 성능 정보를 담을 변수 초기화
     perf_details = ""
     
     if final_think_content and thought_end_time:
-        # 생각 과정과 답변이 모두 있는 경우
         thought_duration = thought_end_time - start_time
         answer_duration = end_time - thought_end_time
         perf_details = (
@@ -128,11 +130,9 @@ async def _stream_chat_response(qa_chain, user_input, chat_container) -> tuple[s
             f"답변: {answer_duration:.2f}초 ({len(final_answer_content)}자)"
         )
     elif final_answer_content:
-        # 답변만 있는 경우
         total_duration = end_time - start_time
         perf_details = f"답변: {total_duration:.2f}초 ({len(final_answer_content)}자)"
 
-    # 상세 성능 정보가 있을 경우에만 로그 출력
     if perf_details:
         logging.info(f"  [성능 상세] {perf_details}")
     

@@ -148,6 +148,15 @@ def load_llm(model_name: str):
 
 
 def is_embedding_model_cached(model_name: str) -> bool:
+    """
+    주어진 Hugging Face 임베딩 모델이 로컬 캐시 디렉토리에 존재하는지 확인합니다.
+
+    Args:
+        model_name (str): 확인할 Hugging Face 모델의 이름 (예: "jhgan/ko-sroberta-multitask").
+
+    Returns:
+        bool: 모델이 캐시되어 있으면 True, 그렇지 않으면 False.
+    """
     model_path_name = f"models--{model_name.replace('/', '--')}"
     cache_path = os.path.join(CACHE_DIR, model_path_name)
     return os.path.exists(cache_path)
