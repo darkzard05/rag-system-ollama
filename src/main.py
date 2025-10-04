@@ -1,30 +1,26 @@
 """
 RAG Chatbot 애플리케이션의 메인 진입점 파일입니다.
 """
-
 import logging
 import streamlit as st
 
 from session import SessionManager
-from ui import render_sidebar, render_chat_column, render_pdf_viewer
+from ui import render_sidebar, render_chat_column, render_pdf_viewer, render_left_column_with_tabs
+
 from rag_core import build_rag_pipeline, update_llm_in_pipeline
 from model_loader import load_llm, load_embedding_model, is_embedding_model_cached
 from config import AVAILABLE_EMBEDDING_MODELS
 
-# --- 로깅 설정 ---
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(levelname)s - %(message)s",
     datefmt="%Y-%m-%d %H:%M:%S",
 )
 
-# --- 페이지 설정 ---
 st.set_page_config(page_title="RAG Chatbot", layout="wide")
 
 
-# --- 헬퍼 함수 ---
 def _ensure_models_are_loaded(status_container):
-    """LLM과 임베딩 모델이 세션에 로드되었는지 확인하고, 없으면 로드합니다."""
     selected_model = SessionManager.get("last_selected_model")
     selected_embedding = SessionManager.get("last_selected_embedding_model")
 
@@ -51,12 +47,10 @@ def _ensure_models_are_loaded(status_container):
             with st.spinner(spinner_msg):
                 embedder = load_embedding_model(selected_embedding)
                 SessionManager.set("embedder", embedder)
-
     return True
 
 
 def _rebuild_rag_system(status_container):
-    """RAG 시스템 재구축을 위한 UI 래퍼 함수."""
     file_name = SessionManager.get("last_uploaded_file_name")
     file_bytes = SessionManager.get("pdf_file_bytes")
 
@@ -93,6 +87,7 @@ def _rebuild_rag_system(status_container):
         status_container.error(f"오류: {e}")
 
 
+# --- 💡 LLM 업데이트 로직을 원래의 효율적인 방식으로 복원 💡 ---
 def _update_qa_chain(status_container):
     """LLM 변경 시 QA 체인 업데이트를 위한 UI 래퍼 함수."""
     selected_model = SessionManager.get("last_selected_model")
@@ -101,7 +96,7 @@ def _update_qa_chain(status_container):
             f"'{selected_model}' 모델 로드 및 QA 시스템 업데이트 중..."
         ):
             llm = load_llm(selected_model)
-            update_llm_in_pipeline(llm)
+            update_llm_in_pipeline(llm) # 재빌드 대신 세션만 업데이트
             success_message = "✅ QA 시스템이 새 모델로 업데이트되었습니다."
             status_container.success(success_message)
             SessionManager.add_message("assistant", success_message)
@@ -112,14 +107,10 @@ def _update_qa_chain(status_container):
         SessionManager.add_message("assistant", f"❌ {error_msg}")
 
 
-# --- on_change 콜백 함수 ---
 def on_file_upload():
-    """파일 업로드 시 실행되는 콜백. 상태를 직접 변경하지 않고 플래그만 설정."""
     uploaded_file = st.session_state.get("pdf_uploader")
     if not uploaded_file:
         return
-
-    # 파일이 변경되었는지 확인
     if uploaded_file.name != SessionManager.get("last_uploaded_file_name"):
         SessionManager.set("last_uploaded_file_name", uploaded_file.name)
         SessionManager.set("pdf_file_bytes", uploaded_file.getvalue())
@@ -127,74 +118,66 @@ def on_file_upload():
 
 
 def on_model_change():
-    """LLM 모델 변경 시 실행되는 콜백."""
     selected_model = st.session_state.get("model_selector")
     last_model = SessionManager.get("last_selected_model")
-
     if "---" in selected_model or not selected_model or selected_model == last_model:
         return
-
     if not SessionManager.get("is_first_run"):
         SessionManager.add_message(
             "assistant", f"🔄 LLM을 '{selected_model}'(으)로 변경합니다."
         )
-
     SessionManager.set("last_selected_model", selected_model)
     if SessionManager.get("pdf_processed"):
         SessionManager.set("needs_qa_chain_update", True)
 
 
 def on_embedding_change():
-    """임베딩 모델 변경 시 실행되는 콜백."""
     selected_embedding = st.session_state.get("embedding_model_selector")
     last_embedding = SessionManager.get("last_selected_embedding_model")
-
     if not selected_embedding or selected_embedding == last_embedding:
         return
-
     if not SessionManager.get("is_first_run"):
         SessionManager.add_message(
             "assistant", f"🔄 임베딩 모델을 '{selected_embedding}'(으)로 변경합니다."
         )
-
     SessionManager.set("last_selected_embedding_model", selected_embedding)
     if SessionManager.get("pdf_file_bytes"):
         SessionManager.set("needs_rag_rebuild", True)
 
 
-# --- 메인 애플리케이션 실행 ---
 def main():
-    """메인 애플리케이션 실행 함수"""
+    #--- 세션 상태 초기화 및 사이드바 렌더링 ---
     SessionManager.init_session()
-
     status_container = render_sidebar(
         file_uploader_callback=on_file_upload,
         model_selector_callback=on_model_change,
         embedding_selector_callback=on_embedding_change,
     )
-
-    # 새 파일이 업로드되면 관련 상태를 리셋
+    
+    # --- RAG 시스템 구축 및 업데이트 트리거 ---
     if SessionManager.get("new_file_uploaded"):
         SessionManager.reset_for_new_file()
         SessionManager.set("new_file_uploaded", False)
-
         file_name = SessionManager.get("last_uploaded_file_name")
         SessionManager.add_message("assistant", f"📂 '{file_name}' 파일 업로드 완료.")
-
     if SessionManager.get("needs_rag_rebuild"):
         SessionManager.set("needs_rag_rebuild", False)
         _rebuild_rag_system(status_container)
-
     elif SessionManager.get("needs_qa_chain_update"):
         SessionManager.set("needs_qa_chain_update", False)
         _update_qa_chain(status_container)
 
     col_left, col_right = st.columns([1, 1])
+
     with col_left:
-        render_chat_column()
+        # 왼쪽 컬럼의 모든 UI(탭 포함)를 이 함수가 담당합니다.
+        render_left_column_with_tabs()
+
     with col_right:
+        # PDF 뷰어는 항상 오른쪽에 고정됩니다.
         render_pdf_viewer()
 
+    # 첫 실행 플래그 해제
     if SessionManager.get("is_first_run"):
         SessionManager.set("is_first_run", False)
 

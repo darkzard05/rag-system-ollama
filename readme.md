@@ -2,20 +2,23 @@
 
 ---
 <a name="english"></a>
-# RAG Chatbot with Ollama & Gemini (English)
+# RAG Chatbot with LangGraph, Ollama & Gemini (English)
 
-**An advanced PDF-based Chatbot powered by an Ensemble Retriever (BM25 & FAISS), Ollama, Gemini, and Streamlit.**
+**An advanced PDF-based Chatbot powered by LangGraph, an Ensemble Retriever (BM25 & FAISS), Ollama, Gemini, and Streamlit.**
+
+This project implements a sophisticated RAG (Retrieval-Augmented Generation) system where the core pipeline is structured as a state machine using **LangGraph**. This approach enhances modularity, observability, and scalability.
 
 ![RAG Chatbot Preview](image/image1.png)
 
 ## 🔑 Key Features
 
-- **PDF-based Q&A**: Upload your PDF documents and get answers to your questions based on their content.
+- **LangGraph-based Architecture**: The RAG pipeline (Retrieve -> Format Context -> Generate Response) is built as a graph, making the workflow transparent and easy to modify.
+- **Workflow Visualization**: The Streamlit UI includes a "Workflow" tab that visually represents the RAG pipeline structure using Mermaid diagrams, offering clear insight into the operational flow.
 - **Advanced Hybrid Search**: Utilizes an **Ensemble Retriever** that combines keyword-based search (BM25) and semantic search (FAISS) to deliver more accurate and contextually relevant results.
 - **Flexible LLM Selection (Ollama & Gemini)**: Choose between running large language models locally with Ollama for privacy, or using powerful Gemini models via API for high performance.
-- **Flexible Embedding Model Selection**: Choose from a variety of open-source embedding models to suit your needs for performance and language support.
-- **Streamlit-based Web Interface**: A user-friendly and interactive web interface for easy document upload, model selection, chatting, and PDF viewing.
-- **View LLM's Thinking Process**: Option to see the thought process of the LLM before it generates an answer, providing transparency into its reasoning.
+- **Efficient Caching**: The system caches the entire FAISS vector store, not just document splits. This significantly speeds up initialization by avoiding the need to re-calculate embeddings for previously processed documents.
+- **View LLM's Thinking Process**: An expander in the UI shows the internal "thought" process of the LLM before it generates a final answer, providing transparency into its reasoning.
+- **Interactive UI**: A user-friendly interface built with Streamlit for easy document upload, model selection, chatting, and side-by-side PDF viewing.
 
 ---
 
@@ -75,10 +78,7 @@
 ## 📁 Project Structure
 ```
 .
-├── .env.example
-├── .gitignore
-├── LICENSE
-├── readme.md
+├── ...
 ├── requirements.txt
 ├── image/
 │   └── image1.png
@@ -87,57 +87,57 @@
     ├── ui.py
     ├── session.py
     ├── rag_core.py
+    ├── graph_builder.py  <-- New: Defines the LangGraph structure
+    ├── schemas.py        <-- New: Defines data structures (e.g., GraphState)
     ├── config.py
     └── config.yml
 ```
 - **`main.py`**: Entry point of the Streamlit application.
-- **`ui.py`**: Contains all functions for rendering the Streamlit user interface.
+- **`ui.py`**: Renders the Streamlit UI, including the chat interface and workflow visualization.
 - **`session.py`**: Manages the application's session state.
-- **`rag_core.py`**: The core of the RAG system (data processing, embedding, retrieval, QA chain).
-- **`config.py`**: Loads and provides configuration constants for the application.
-- **`config.yml`**: YAML file for storing configurations like model lists and retriever settings.
-- **`.env.example`**: An example file for environment variables. Copy it to `.env` to set your API keys.
+- **`rag_core.py`**: Handles core RAG logic like document processing, embedding, and retriever creation.
+- **`graph_builder.py`**: Constructs the RAG workflow using LangGraph.
+- **`schemas.py`**: Defines the state object used throughout the graph.
+- **`config.py` & `config.yml`**: Manage application configurations.
 
 ## ✨ Key Components
 
-- **PDF Loader (PyMuPDF)**: Loads and extracts text content from uploaded PDF files.
-- **Text Splitter (Langchain)**: Divides the extracted text into smaller, manageable chunks.
-- **Embedding Model (Sentence Transformers)**: Converts text chunks into numerical vector embeddings.
-- **Vector Store (FAISS)**: Stores vector embeddings for efficient similarity search.
-- **Retriever (Ensemble)**: Combines keyword-based search (**BM25**) and semantic search (**FAISS**) to fetch the most relevant text chunks for a given query.
-- **LLM (Ollama & Gemini)**: The selected language model generates an answer using the user's query and the retrieved context.
-- **Streamlit UI**: Provides the interactive web interface for all user interactions.
+- **LangGraph**: Orchestrates the RAG pipeline as a stateful graph.
+- **PDF Loader (PyMuPDF)**: Loads and extracts text from PDF files.
+- **Text Splitter (Langchain)**: Divides text into smaller, manageable chunks.
+- **Embedding Model (Sentence Transformers)**: Converts text chunks into vector embeddings.
+- **Vector Store (FAISS)**: Stores embeddings for efficient similarity search.
+- **Retriever (Ensemble)**: Combines **BM25** (keyword) and **FAISS** (semantic) search.
+- **LLM (Ollama & Gemini)**: Generates answers based on user queries and retrieved context.
+- **Streamlit UI**: Provides the interactive web interface.
 
 ## ⚙️ Configuration
 
-- **API Keys**: Set your `GEMINI_API_KEY` in a `.env` file in the project root.
-- **Models and Parameters**: You can adjust the models, retriever weights, and text splitter settings in `config.yml`.
-
-## 🚑 Troubleshooting
-
-- **Ollama Connection Issues**: Ensure the Ollama application/server is running (`ollama list`).
-- **Gemini API Key Issues**: Ensure the key is correct and set in your `.env` file. A `429` error might indicate you have exceeded your API rate limits.
-- **Slow Performance**: Processing large PDFs or using large local models can be resource-intensive. Ensure your system meets the recommended specifications.
+- **API Keys**: Set your `GEMINI_API_KEY` in a `.env` file.
+- **Models and Parameters**: Adjust models, retriever weights, and text splitter settings in `config.yml`.
 
 ## 📄 License
 This project is distributed under the MIT License. See the `LICENSE` file for more details.
 
 ---
 <a name="korean"></a>
-# RAG Chatbot with Ollama & Gemini (한국어)
+# LangGraph, Ollama & Gemini 기반 RAG 챗봇 (한국어)
 
-**앙상블 리트리버(BM25 & FAISS), Ollama, Gemini, Streamlit 기반의 고도화된 PDF 챗봇**
+**LangGraph, 앙상블 리트리버(BM25 & FAISS), Ollama, Gemini, Streamlit 기반의 고도화된 PDF 챗봇**
+
+이 프로젝트는 정교한 RAG(Retrieval-Augmented Generation) 시스템을 구현하며, 핵심 파이프라인이 **LangGraph**를 사용한 상태 머신으로 구조화되어 있습니다. 이 접근 방식은 모듈성, 관찰 가능성 및 확장성을 향상시킵니다.
 
 ![RAG Chatbot Preview](image/image1.png)
 
 ## 🔑 주요 기능
 
-- **PDF 기반 Q&A**: PDF 문서를 업로드하고 해당 내용을 기반으로 질문에 대한 답변을 얻을 수 있습니다.
+- **LangGraph 기반 아키텍처**: RAG 파이프라인(검색 -> 컨텍스트 구성 -> 답변 생성)을 그래프로 구축하여 워크플로우를 투명하고 수정하기 쉽게 만듭니다.
+- **워크플로우 시각화**: Streamlit UI에 RAG 파이프라인 구조를 Mermaid 다이어그램으로 시각적으로 표현하는 "워크플로우" 탭을 포함하여, 작동 흐름에 대한 명확한 통찰력을 제공합니다.
 - **고도화된 하이브리드 검색**: 키워드 기반 검색(BM25)과 의미 기반 검색(FAISS)을 결합한 **앙상블 리트리버**를 사용하여 더 정확하고 문맥에 맞는 결과를 제공합니다.
 - **유연한 LLM 선택 (Ollama & Gemini)**: 개인 정보 보호를 위해 Ollama로 로컬에서 LLM을 실행하거나, 고성능을 위해 API를 통해 강력한 Gemini 모델을 사용하는 것 중에서 선택할 수 있습니다.
-- **유연한 임베딩 모델 선택**: 성능 및 언어 지원 요구에 맞는 다양한 오픈소스 임베딩 모델 중에서 선택할 수 있습니다.
-- **Streamlit 기반 웹 인터페이스**: 손쉬운 문서 업로드, 모델 선택, 채팅, PDF 뷰잉을 위한 사용자 친화적인 대화형 웹 인터페이스입니다.
-- **LLM의 사고 과정 확인**: LLM이 답변을 생성하기 전의 사고 과정을 확인할 수 있는 옵션을 제공하여 추론 과정의 투명성을 높입니다.
+- **효율적인 캐싱**: 시스템은 문서 조각뿐만 아니라 전체 FAISS 벡터 저장소를 캐시합니다. 이를 통해 이전에 처리된 문서에 대한 임베딩을 다시 계산할 필요가 없어 초기화 속도가 크게 향상됩니다.
+- **LLM의 사고 과정 확인**: UI의 확장 패널을 통해 LLM이 최종 답변을 생성하기 전의 내부 "사고" 과정을 보여주어 추론 과정의 투명성을 제공합니다.
+- **대화형 UI**: 손쉬운 문서 업로드, 모델 선택, 채팅 및 나란히 보는 PDF 뷰어를 위해 Streamlit으로 구축된 사용자 친화적인 인터페이스입니다.
 
 ---
 
@@ -197,10 +197,7 @@ This project is distributed under the MIT License. See the `LICENSE` file for mo
 ## 📁 파일 구조
 ```
 .
-├── .env.example
-├── .gitignore
-├── LICENSE
-├── readme.md
+├── ...
 ├── requirements.txt
 ├── image/
 │   └── image1.png
@@ -209,37 +206,34 @@ This project is distributed under the MIT License. See the `LICENSE` file for mo
     ├── ui.py
     ├── session.py
     ├── rag_core.py
+    ├── graph_builder.py  <-- 신규: LangGraph 구조 정의
+    ├── schemas.py        <-- 신규: 데이터 구조(예: GraphState) 정의
     ├── config.py
     └── config.yml
 ```
 - **`main.py`**: Streamlit 애플리케이션의 진입점입니다.
-- **`ui.py`**: Streamlit 사용자 인터페이스 렌더링 함수들을 포함합니다.
+- **`ui.py`**: 채팅 인터페이스 및 워크플로우 시각화를 포함한 Streamlit UI를 렌더링합니다.
 - **`session.py`**: 애플리케이션의 세션 상태를 관리합니다.
-- **`rag_core.py`**: RAG 시스템의 핵심 로직(데이터 처리, 임베딩, 리트리버, QA 체인)을 담당합니다.
-- **`config.py`**: 애플리케이션의 설정 상수를 로드하고 제공합니다.
-- **`config.yml`**: 모델 목록, 리트리버 설정 등 주요 설정을 저장하는 YAML 파일입니다.
-- **`.env.example`**: 환경 변수 예시 파일입니다. 이 파일을 `.env`로 복사하여 API 키 등을 설정할 수 있습니다.
+- **`rag_core.py`**: 문서 처리, 임베딩, 리트리버 생성과 같은 핵심 RAG 로직을 처리합니다.
+- **`graph_builder.py`**: LangGraph를 사용하여 RAG 워크플로우를 구성합니다.
+- **`schemas.py`**: 그래프 전체에서 사용되는 상태 객체를 정의합니다.
+- **`config.py` & `config.yml`**: 애플리케이션 설정을 관리합니다.
 
 ## ✨ 주요 구성 요소
 
-- **PDF 로더 (PyMuPDF)**: 업로드된 PDF 파일에서 텍스트 내용을 로드하고 추출합니다.
-- **텍스트 분할기 (Langchain)**: 추출된 텍스트를 처리하기 쉬운 작은 청크로 나눕니다.
-- **임베딩 모델 (Sentence Transformers)**: 텍스트 청크를 숫자 벡터 임베딩으로 변환합니다.
-- **벡터 저장소 (FAISS)**: 벡터 임베딩을 저장하여 효율적인 유사도 검색을 수행합니다.
-- **리트리버 (Ensemble)**: 키워드 기반 검색(**BM25**)과 의미 기반 검색(**FAISS**)을 결합하여 주어진 쿼리에 가장 관련성 높은 텍스트 청크를 가져옵니다.
-- **LLM (Ollama & Gemini)**: 선택된 언어 모델이 사용자의 쿼리와 검색된 컨텍스트를 사용하여 답변을 생성합니다.
-- **Streamlit UI**: 모든 사용자 상호 작용을 위한 대화형 웹 인터페이스를 제공합니다.
+- **LangGraph**: RAG 파이프라인을 상태 기반 그래프로 조율합니다.
+- **PDF 로더 (PyMuPDF)**: PDF 파일에서 텍스트를 로드하고 추출합니다.
+- **텍스트 분할기 (Langchain)**: 텍스트를 관리하기 쉬운 작은 청크로 나눕니다.
+- **임베딩 모델 (Sentence Transformers)**: 텍스트 청크를 벡터 임베딩으로 변환합니다.
+- **벡터 저장소 (FAISS)**: 효율적인 유사도 검색을 위해 임베딩을 저장합니다.
+- **리트리버 (Ensemble)**: **BM25**(키워드)와 **FAISS**(의미) 검색을 결합합니다.
+- **LLM (Ollama & Gemini)**: 사용자 쿼리와 검색된 컨텍스트를 기반으로 답변을 생성합니다.
+- **Streamlit UI**: 대화형 웹 인터페이스를 제공합니다.
 
 ## ⚙️ 설정
 
-- **API 키**: 프로젝트 루트에 `.env` 파일을 만들고 `GEMINI_API_KEY`를 설정하세요.
+- **API 키**: `.env` 파일에 `GEMINI_API_KEY`를 설정하세요.
 - **모델 및 파라미터**: `config.yml` 파일에서 모델, 리트리버 가중치, 텍스트 분할기 설정 등을 조정할 수 있습니다.
-
-## 🚑 문제 해결
-
-- **Ollama 연결 문제**: Ollama 애플리케이션/서버가 실행 중인지 확인하세요 (`ollama list`).
-- **Gemini API 키 문제**: 키가 올바르고 `.env` 파일에 정확히 설정되었는지 확인하세요. `429` 오류는 API 할당량을 초과했음을 의미할 수 있습니다.
-- **느린 성능**: 대용량 PDF를 처리하거나 큰 로컬 모델을 사용하는 것은 리소스를 많이 소모할 수 있습니다. 시스템이 권장 사양을 충족하는지 확인하세요.
 
 ## 📄 라이선스
 이 프로젝트는 MIT 라이선스 하에 배포됩니다. 자세한 내용은 `LICENSE` 파일을 참조하세요.
