@@ -22,6 +22,11 @@ from config import (
 )
 
 
+# 💡 1. 추가된 부분: 태그를 상수로 정의
+THINK_START_TAG = "<think>"
+THINK_END_TAG = "</think>"
+
+
 def _parse_think_tags(response: str) -> tuple[str, str]:
     """
     응답 문자열에서 <think>...</think> 태그를 파싱하여
@@ -36,20 +41,19 @@ def _parse_think_tags(response: str) -> tuple[str, str]:
     think_content = ""
     answer_content = ""
     
-    think_start_tag = "<think>"
-    think_end_tag = "</think>"
+    start_index = response.find(THINK_START_TAG)
     
-    start_index = response.find(think_start_tag)
-    end_index = response.find(think_end_tag)
-
     if start_index != -1:
+        # 💡 2. 수정된 부분: <think> 태그 뒤에서부터 </think>를 찾도록 변경
+        end_index = response.find(THINK_END_TAG, start_index)
+        
         if end_index != -1:
             # <think>와 </think> 태그가 모두 있는 경우
-            think_content = response[start_index + len(think_start_tag):end_index].strip()
-            answer_content = response[end_index + len(think_end_tag):].strip()
+            think_content = response[start_index + len(THINK_START_TAG):end_index].strip()
+            answer_content = response[end_index + len(THINK_END_TAG):].strip()
         else:
             # <think> 태그만 있는 경우 (스트리밍 중간 과정)
-            think_content = response[start_index + len(think_start_tag):].strip()
+            think_content = response[start_index + len(THINK_START_TAG):].strip()
     else:
         # <think> 태그가 없는 경우
         answer_content = response.strip()
@@ -89,16 +93,12 @@ async def _stream_chat_response(qa_chain, user_input, chat_container) -> tuple[s
                     if isinstance(chunk_data, dict) and "response" in chunk_data:
                         full_response += chunk_data["response"]
                         
-                        # --- 💡 1. 수정된 부분: 파싱 로직을 헬퍼 함수로 통일 ---
                         think_content, answer_content = _parse_think_tags(full_response)
 
-                        # 생각->답변 전환 시점 시간 기록
+                        # 💡 3. 수정된 부분: 불필요한 조건문 제거
                         if answer_content and not is_thought_complete:
-                            # </think> 태그가 처음 나타나고 answer_content가 생기기 시작하면
-                            # 생각 과정이 끝난 것으로 간주
-                            if "</think>" in full_response:
-                                thought_end_time = time.time()
-                                is_thought_complete = True
+                            thought_end_time = time.time()
+                            is_thought_complete = True
                         
                         if answer_content:
                             thought_container.markdown(think_content)
@@ -115,7 +115,6 @@ async def _stream_chat_response(qa_chain, user_input, chat_container) -> tuple[s
     # --- 스트리밍 완료 후 최종 내용 정리 및 로그 출력 ---
     end_time = time.time()
     
-    # --- 💡 2. 수정된 부분: 최종 파싱도 동일한 헬퍼 함수 사용 ---
     final_think_content, final_answer_content = _parse_think_tags(full_response)
 
     thought_container.markdown(final_think_content or MSG_NO_THOUGHT_PROCESS)
