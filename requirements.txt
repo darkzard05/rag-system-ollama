@@ -1,27 +1,25 @@
-# Core Application Dependencies
+# Streamlit & UI
 streamlit
-torch
+streamlit-pdf-viewer
+streamlit-mermaid
+PyMuPDF
+
+# LangChain & RAG Core
 langchain
+langchain-core
 langchain-community
-langchain-experimental
+langgraph
 langchain-huggingface
 langchain-ollama
-langchain-google-genai
-streamlit_pdf_viewer>=0.0.26
-faiss-cpu
-pymupdf
-sentence-transformers
-numpy
-scikit-learn
-tqdm
-rank_bm25
-ollama
-google-generativeai
-python-dotenv
-pyyaml
-pydantic>=2.0
-streamlit-mermaid
 
-# Development and Linting Dependencies
-black
-ruff
+# Vector Store & Embeddings
+faiss-cpu
+sentence-transformers
+torch
+
+# LLM Server
+ollama
+
+# Configuration
+python-dotenv
+PyYAML

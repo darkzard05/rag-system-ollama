@@ -1,4 +1,94 @@
-[Read in English](#english) | [한국어로 보기](#korean)
+# RAG System with Ollama & LangGraph
+
+This project is a Streamlit web application that allows you to chat with your PDF documents using a local Large Language Model (LLM) powered by Ollama. It leverages the RAG (Retrieval-Augmented Generation) pattern, LangChain, and LangGraph to provide contextual answers based on the content of your uploaded files.
+
+## Key Features
+
+-   **Chat with Your PDFs:** Upload a PDF file and ask questions about its content.
+-   **Powered by Local LLMs:** Uses Ollama to run LLMs locally on your machine, ensuring privacy and control.
+-   **Selectable Embedding Models:** Choose from a list of different sentence-transformer models for document embedding.
+-   **Hybrid Search:** Combines dense vector search (FAISS) and keyword-based search (BM25) for robust and accurate document retrieval.
+-   **Built with LangGraph:** The RAG pipeline is orchestrated as a graph, making the logic clear and extensible.
+-   **Interactive UI:** A user-friendly interface built with Streamlit, including a PDF viewer.
+-   **Caching:** Caches processed documents (vector stores) to ensure fast re-loading of previously analyzed files.
+
+## Setup and Installation
+
+### 1. Prerequisites: Install Ollama
+
+You must have Ollama installed and running on your system.
+
+1.  Download and install Ollama from the [official website](https://ollama.com/).
+2.  Pull the LLM model you intend to use. The default model in this project is `qwen2:1.5b`.
+    ```sh
+    ollama pull qwen2:1.5b
+    ```
+
+### 2. Clone the Repository
+
+```sh
+git clone <repository-url>
+cd rag-system-ollama
+```
+
+### 3. Create a Virtual Environment (Recommended)
+
+```sh
+# For Windows
+python -m venv venv
+.\venv\Scripts\activate
+
+# For macOS/Linux
+python3 -m venv venv
+source venv/bin/activate
+```
+
+### 4. Install Dependencies
+
+Install all the required Python packages from `requirements.txt`.
+
+```sh
+pip install -r requirements.txt
+```
+
+## How to Run
+
+Once the setup is complete, you can run the Streamlit application with the following command:
+
+```sh
+streamlit run src/main.py
+```
+
+The application will open in your default web browser.
+
+## Project Structure
+
+```
+.
+├── .env.example
+├── config.yml
+├── readme.md
+├── requirements.txt
+└── src/
+    ├── config.py          # Loads settings from config.yml
+    ├── graph_builder.py   # Defines the RAG workflow using LangGraph
+    ├── main.py            # Main entry point for the Streamlit app
+    ├── model_loader.py    # Handles loading LLMs and embedding models
+    ├── rag_core.py        # Core RAG logic (document loading, splitting, embedding)
+    ├── schemas.py         # Data schemas (e.g., GraphState)
+    ├── session.py         # Manages the Streamlit session state
+    ├── ui.py              # Contains all Streamlit UI rendering functions
+    └── utils.py           # Utility functions (e.g., decorators)
+```
+
+## Configuration
+
+The main behavior of the application can be configured in the `config.yml` file:
+
+-   **`models`**: Set the default Ollama model, preferred embedding models, etc.
+-   **`rag`**: Configure the RAG pipeline, such as chunk size, retriever settings, and ensemble weights.
+-   **`ui`**: Change UI messages and container heights.
+
 
 ---
 <a name="english"></a>
