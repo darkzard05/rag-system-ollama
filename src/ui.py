@@ -1,6 +1,4 @@
-"""
-Streamlit UI 컴포넌트 렌더링 함수들을 모아놓은 파일.
-"""
+"Streamlit UI 컴포넌트 렌더링 함수들을 모아놓은 파일."
 
 import time
 import logging
@@ -16,68 +14,19 @@ from config import (
     AVAILABLE_EMBEDDING_MODELS,
     OLLAMA_MODEL_NAME,
     MSG_PREPARING_ANSWER,
-    MSG_THINKING,
-    MSG_NO_THOUGHT_PROCESS,
     UI_CONTAINER_HEIGHT,
 )
 
 
-# 💡 1. 추가된 부분: 태그를 상수로 정의
-THINK_START_TAG = "<think>"
-THINK_END_TAG = "</think>"
-
-
-def _parse_think_tags(response: str) -> tuple[str, str]:
+async def _stream_chat_response(qa_chain, user_input, chat_container) -> str:
     """
-    응답 문자열에서 <think>...</think> 태그를 파싱하여
-    생각 내용과 실제 답변 내용을 분리합니다.
-
-    Args:
-        response (str): LLM으로부터 받은 전체 응답 문자열
-
-    Returns:
-        tuple[str, str]: (생각 내용, 답변 내용) 튜플
-    """
-    think_content = ""
-    answer_content = ""
-    
-    start_index = response.find(THINK_START_TAG)
-    
-    if start_index != -1:
-        # 💡 2. 수정된 부분: <think> 태그 뒤에서부터 </think>를 찾도록 변경
-        end_index = response.find(THINK_END_TAG, start_index)
-        
-        if end_index != -1:
-            # <think>와 </think> 태그가 모두 있는 경우
-            think_content = response[start_index + len(THINK_START_TAG):end_index].strip()
-            answer_content = response[end_index + len(THINK_END_TAG):].strip()
-        else:
-            # <think> 태그만 있는 경우 (스트리밍 중간 과정)
-            think_content = response[start_index + len(THINK_START_TAG):].strip()
-    else:
-        # <think> 태그가 없는 경우
-        answer_content = response.strip()
-        
-    return think_content, answer_content
-
-
-async def _stream_chat_response(qa_chain, user_input, chat_container) -> tuple[str, str]:
-    """
-    스트림을 실시간으로 파싱하여 UI에 표시하고, 최종 (생각, 답변) 튜플을 반환합니다.
-    생성 시간을 분리하여 측정하고 로그를 남깁니다.
+    LLM의 답변을 실시간으로 UI에 스트리밍하고 최종 답변 문자열을 반환합니다.
     """
     full_response = ""
-    
     start_time = time.time()
-    thought_end_time = None
-    is_thought_complete = False
     
     with chat_container, st.chat_message("assistant"):
-        expander = st.expander("생각 과정 보기", expanded=False)
-        thought_container = expander.empty()
         answer_container = st.empty()
-
-        thought_container.markdown(MSG_THINKING + "▌")
         answer_container.markdown(MSG_PREPARING_ANSWER)
 
         try:
@@ -92,51 +41,23 @@ async def _stream_chat_response(qa_chain, user_input, chat_container) -> tuple[s
                     
                     if isinstance(chunk_data, dict) and "response" in chunk_data:
                         full_response += chunk_data["response"]
-                        
-                        think_content, answer_content = _parse_think_tags(full_response)
-
-                        # 💡 3. 수정된 부분: 불필요한 조건문 제거
-                        if answer_content and not is_thought_complete:
-                            thought_end_time = time.time()
-                            is_thought_complete = True
-                        
-                        if answer_content:
-                            thought_container.markdown(think_content)
-                            answer_container.markdown(answer_content + "▌")
-                        else:
-                            thought_container.markdown(think_content + "▌")
+                        answer_container.markdown(full_response + "▌")
 
         except Exception as e:
             error_msg = f"스트리밍 답변 생성 중 오류 발생: {str(e)}"
             logging.error(error_msg, exc_info=True)
             answer_container.error(error_msg)
-            return "", f"❌ {error_msg}"
+            return f"❌ {error_msg}"
 
     # --- 스트리밍 완료 후 최종 내용 정리 및 로그 출력 ---
     end_time = time.time()
+    answer_container.markdown(full_response)
     
-    final_think_content, final_answer_content = _parse_think_tags(full_response)
-
-    thought_container.markdown(final_think_content or MSG_NO_THOUGHT_PROCESS)
-    answer_container.markdown(final_answer_content)
+    total_duration = end_time - start_time
+    perf_details = f"답변: {total_duration:.2f}초 ({len(full_response)}자)"
+    logging.info(f"  [성능 상세] {perf_details}")
     
-    perf_details = ""
-    
-    if final_think_content and thought_end_time:
-        thought_duration = thought_end_time - start_time
-        answer_duration = end_time - thought_end_time
-        perf_details = (
-            f"생각: {thought_duration:.2f}초 ({len(final_think_content)}자), "
-            f"답변: {answer_duration:.2f}초 ({len(final_answer_content)}자)"
-        )
-    elif final_answer_content:
-        total_duration = end_time - start_time
-        perf_details = f"답변: {total_duration:.2f}초 ({len(final_answer_content)}자)"
-
-    if perf_details:
-        logging.info(f"  [성능 상세] {perf_details}")
-    
-    return final_think_content, final_answer_content
+    return full_response
 
 
 def render_sidebar(
@@ -258,30 +179,19 @@ def render_pdf_viewer():
 
 def render_chat_column():
     """채팅 컬럼을 렌더링하고 채팅 로직을 처리합니다."""
-    # st.subheader("💬 채팅")
     chat_container = st.container(height=UI_CONTAINER_HEIGHT, border=True)
 
-    # --- 💡 2. 대화 기록 표시 로직 (수정됨) 💡 ---
     messages = SessionManager.get_messages()
     for message in messages:
         with chat_container, st.chat_message(message["role"]):
-            # 💡 'thought'가 저장되어 있으면 expander와 함께 렌더링
-            if message["role"] == "assistant" and "thought" in message and message["thought"]:
-                with st.expander("생각 과정 보기", expanded=False):
-                    st.markdown(message["thought"], unsafe_allow_html=True)
-            
-            # 💡 content는 항상 렌더링
             st.markdown(message["content"], unsafe_allow_html=True)
 
-    # --- 💡 1. 사용자 입력 처리 로직 (이 부분은 변경 없음) 💡 ---
     if user_input := st.chat_input(
         "PDF 내용에 대해 질문해보세요.", disabled=not SessionManager.is_ready_for_chat()
     ):
-        # 💡 사용자 메시지는 'thought' 없이 추가
         SessionManager.add_message("user", user_input)
         st.rerun()
 
-    # --- 💡 AI 응답 생성 및 저장 로직 (수정됨) 💡 ---
     if messages and messages[-1]["role"] == "user":
         last_user_input = messages[-1]["content"]
         qa_chain = SessionManager.get("qa_chain")
@@ -293,18 +203,12 @@ def render_chat_column():
                 loop = asyncio.new_event_loop()
                 asyncio.set_event_loop(loop)
             
-            # 스트리밍 함수는 이제 (생각, 답변) 튜플을 반환
-            final_thought, final_answer = loop.run_until_complete(
+            final_answer = loop.run_until_complete(
                 _stream_chat_response(qa_chain, last_user_input, chat_container)
             )
             
-            # 💡 수정된 add_message를 사용하여 생각과 답변을 모두 저장
-            if final_answer or final_thought:
-                SessionManager.add_message(
-                    "assistant", 
-                    content=final_answer, 
-                    thought=final_thought
-                )
+            if final_answer:
+                SessionManager.add_message("assistant", content=final_answer)
                 st.rerun()
         else:
             st.error("QA 시스템이 준비되지 않았습니다. PDF를 먼저 처리해주세요.")
@@ -337,7 +241,7 @@ def render_chat_column():
             st.rerun()
 
 def render_workflow_tab_content():
-    """'워크플로우' 탭에 들어갈 콘텐츠를 렌더링합니다."""
+    """워크플로우 탭에 들어갈 콘텐츠를 렌더링합니다."""
     qa_chain = SessionManager.get("qa_chain")
     
     if not qa_chain:

@@ -68,9 +68,9 @@ class SessionManager:
         st.session_state.needs_rag_rebuild = True
 
     @classmethod
-    def add_message(cls, role: str, content: str, thought: str = None):
+    def add_message(cls, role: str, content: str):
         """
-        메시지 추가. 'thought' 인자를 추가하여 생각 과정을 별도로 저장합니다.
+        메시지를 세션에 추가합니다.
         """
         if "messages" not in st.session_state or not isinstance(
             st.session_state.messages, list
@@ -78,10 +78,6 @@ class SessionManager:
             st.session_state.messages = []
         
         message = {"role": role, "content": content}
-        # 💡 'thought' 내용이 있으면 메시지 객체에 추가
-        if thought:
-            message["thought"] = thought
-            
         st.session_state.messages.append(message)
 
     @staticmethod

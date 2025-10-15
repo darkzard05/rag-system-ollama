@@ -39,67 +39,49 @@ def _fetch_ollama_models() -> List[str]:
         return []
 
 def _fetch_gemini_models() -> List[str]:
-    import google.generativeai as genai
-    if not GEMINI_API_KEY:
-        return []
-    try:
-        genai.configure(api_key=GEMINI_API_KEY)
-        available_models_from_api = [
-            m.name.replace("models/", "")
-            for m in genai.list_models()
-            if "generateContent" in m.supported_generation_methods
-        ]
+    # import google.generativeai as genai
+    # if not GEMINI_API_KEY:
+    #     return []
+    # try:
+    #     genai.configure(api_key=GEMINI_API_KEY)
+    #     available_models_from_api = [
+    #         m.name.replace("models/", "")
+    #         for m in genai.list_models()
+    #         if "generateContent" in m.supported_generation_methods
+    #     ]
         
-        filtered_gemini_models = [
-            model
-            for model in PREFERRED_GEMINI_MODELS
-            if model in available_models_from_api
-        ]
+    #     filtered_gemini_models = [
+    #         model
+    #         for model in PREFERRED_GEMINI_MODELS
+    #         if model in available_models_from_api
+    #     ]
 
-        if filtered_gemini_models:
-            logging.info(f"선별된 Gemini 모델을 찾았습니다: {filtered_gemini_models}")
-            return filtered_gemini_models
+    #     if filtered_gemini_models:
+    #         logging.info(f"선별된 Gemini 모델을 찾았습니다: {filtered_gemini_models}")
+    #         return filtered_gemini_models
         
-        fallback_models = [
-            m
-            for m in available_models_from_api
-            if any(k in m for k in ["1.5", "pro"])
-        ][:5]
-        logging.info(
-            f"선호하는 Gemini 모델을 찾지 못해, 사용 가능한 모델 중 일부를 사용합니다: {fallback_models}"
-        )
-        return fallback_models
-    except Exception as e:
-        logging.warning(f"Gemini 모델 목록을 가져오는 데 실패했습니다: {e}")
-        return []
+    #     fallback_models = [
+    #         m
+    #         for m in available_models_from_api
+    #         if any(k in m for k in ["1.5", "pro"])
+    #     ][:5]
+    #     logging.info(
+    #         f"선호하는 Gemini 모델을 찾지 못해, 사용 가능한 모델 중 일부를 사용합니다: {fallback_models}"
+    #     )
+    #     return fallback_models
+    # except Exception as e:
+    #     logging.warning(f"Gemini 모델 목록을 가져오는 데 실패했습니다: {e}")
+    return []
 
 @st.cache_data(ttl=3600)
 def get_available_models() -> List[str]:
-    ollama_models = []
-    gemini_models = []
+    ollama_models = _fetch_ollama_models()
 
-    with ThreadPoolExecutor(max_workers=2) as executor:
-        future_ollama = executor.submit(_fetch_ollama_models)
-        future_gemini = executor.submit(_fetch_gemini_models)
-
-        ollama_models = future_ollama.result()
-        gemini_models = future_gemini.result()
-
-    final_models = []
-    if ollama_models:
-        final_models.extend(ollama_models)
-
-    if ollama_models and gemini_models:
-        final_models.append("--------------------")
-
-    if gemini_models:
-        final_models.extend(gemini_models)
-
-    if not final_models:
+    if not ollama_models:
         logging.error("사용 가능한 LLM 모델을 찾을 수 없습니다. 기본 모델 목록을 사용합니다.")
-        return [OLLAMA_MODEL_NAME, GEMINI_MODEL_NAME]
+        return [OLLAMA_MODEL_NAME]
 
-    return final_models
+    return ollama_models
 
 
 @st.cache_resource(show_spinner=False)
@@ -130,21 +112,21 @@ def load_ollama_llm(_model_name: str) -> "OllamaLLM":
     return OllamaLLM(model=_model_name, num_predict=OLLAMA_NUM_PREDICT)
 
 
-@st.cache_resource(show_spinner=False)
-@log_operation("Gemini LLM 로딩")
-def load_gemini_llm(_model_name: str) -> "ChatGoogleGenerativeAI":
-    from langchain_google_genai import ChatGoogleGenerativeAI
+# @st.cache_resource(show_spinner=False)
+# @log_operation("Gemini LLM 로딩")
+# def load_gemini_llm(_model_name: str) -> "ChatGoogleGenerativeAI":
+#     from langchain_google_genai import ChatGoogleGenerativeAI
 
-    if not GEMINI_API_KEY:
-        raise ValueError("config.py 파일에 Gemini API 키를 설정해야 합니다.")
-    return ChatGoogleGenerativeAI(model=_model_name, google_api_key=GEMINI_API_KEY)
+#     if not GEMINI_API_KEY:
+#         raise ValueError("config.py 파일에 Gemini API 키를 설정해야 합니다.")
+#     return ChatGoogleGenerativeAI(model=_model_name, google_api_key=GEMINI_API_KEY)
 
 
 def load_llm(model_name: str):
-    if "gemini" in model_name.lower():
-        return load_gemini_llm(_model_name=model_name)
-    else:
-        return load_ollama_llm(_model_name=model_name)
+    # if "gemini" in model_name.lower():
+    #     return load_gemini_llm(_model_name=model_name)
+    # else:
+    return load_ollama_llm(_model_name=model_name)
 
 
 def is_embedding_model_cached(model_name: str) -> bool:

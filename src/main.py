@@ -5,8 +5,7 @@ import logging
 import streamlit as st
 
 from session import SessionManager
-from ui import render_sidebar, render_chat_column, render_pdf_viewer, render_left_column_with_tabs
-
+from ui import render_sidebar, render_pdf_viewer, render_left_column_with_tabs
 from rag_core import build_rag_pipeline, update_llm_in_pipeline
 from model_loader import load_llm, load_embedding_model, is_embedding_model_cached
 from config import AVAILABLE_EMBEDDING_MODELS
@@ -87,7 +86,6 @@ def _rebuild_rag_system(status_container):
         status_container.error(f"오류: {e}")
 
 
-# --- 💡 LLM 업데이트 로직을 원래의 효율적인 방식으로 복원 💡 ---
 def _update_qa_chain(status_container):
     """LLM 변경 시 QA 체인 업데이트를 위한 UI 래퍼 함수."""
     selected_model = SessionManager.get("last_selected_model")
@@ -96,7 +94,7 @@ def _update_qa_chain(status_container):
             f"'{selected_model}' 모델 로드 및 QA 시스템 업데이트 중..."
         ):
             llm = load_llm(selected_model)
-            update_llm_in_pipeline(llm) # 재빌드 대신 세션만 업데이트
+            update_llm_in_pipeline(llm)
             success_message = "✅ QA 시스템이 새 모델로 업데이트되었습니다."
             status_container.success(success_message)
             SessionManager.add_message("assistant", success_message)
@@ -146,7 +144,6 @@ def on_embedding_change():
 
 
 def main():
-    #--- 세션 상태 초기화 및 사이드바 렌더링 ---
     SessionManager.init_session()
     status_container = render_sidebar(
         file_uploader_callback=on_file_upload,
@@ -154,12 +151,12 @@ def main():
         embedding_selector_callback=on_embedding_change,
     )
     
-    # --- RAG 시스템 구축 및 업데이트 트리거 ---
     if SessionManager.get("new_file_uploaded"):
         SessionManager.reset_for_new_file()
         SessionManager.set("new_file_uploaded", False)
         file_name = SessionManager.get("last_uploaded_file_name")
         SessionManager.add_message("assistant", f"📂 '{file_name}' 파일 업로드 완료.")
+    
     if SessionManager.get("needs_rag_rebuild"):
         SessionManager.set("needs_rag_rebuild", False)
         _rebuild_rag_system(status_container)
@@ -170,14 +167,11 @@ def main():
     col_left, col_right = st.columns([1, 1])
 
     with col_left:
-        # 왼쪽 컬럼의 모든 UI(탭 포함)를 이 함수가 담당합니다.
         render_left_column_with_tabs()
 
     with col_right:
-        # PDF 뷰어는 항상 오른쪽에 고정됩니다.
         render_pdf_viewer()
 
-    # 첫 실행 플래그 해제
     if SessionManager.get("is_first_run"):
         SessionManager.set("is_first_run", False)
 

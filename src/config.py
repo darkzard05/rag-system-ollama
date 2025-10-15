@@ -49,7 +49,8 @@ TEXT_SPLITTER_CONFIG: Dict = _rag_config.get("text_splitter", {})
 VECTOR_STORE_CACHE_DIR: str = _rag_config.get(
     "vector_store_cache_dir", ".model_cache/vector_store_cache"
 )
-QA_SYSTEM_PROMPT: str = _rag_config.get("prompts", {}).get("qa_system_prompt", "")
+_prompts_config = _rag_config.get("prompts") or {}
+QA_SYSTEM_PROMPT: str = _prompts_config.get("qa_system_prompt", "")
 
 
 # --- 채팅 UI 상수 ---
@@ -57,10 +58,6 @@ _ui_config = _config.get("ui", {})
 UI_CONTAINER_HEIGHT: int = _ui_config.get("container_height", 650)
 _ui_messages = _ui_config.get("messages", {})
 MSG_PREPARING_ANSWER: str = _ui_messages.get("preparing_answer", "답변 생성 준비 중...")
-MSG_THINKING: str = _ui_messages.get("thinking", "🤔 생각을 정리하는 중입니다...")
-MSG_NO_THOUGHT_PROCESS: str = _ui_messages.get(
-    "no_thought_process", "아직 생각 과정이 없습니다."
-)
 MSG_NO_RELATED_INFO: str = _ui_messages.get(
     "no_related_info", "관련 정보를 찾을 수 없습니다."
 )
