@@ -5,7 +5,6 @@ import logging
 import asyncio
 import streamlit as st
 from streamlit_pdf_viewer import pdf_viewer
-from streamlit_mermaid import st_mermaid
 import fitz  # PyMuPDF
 
 from session import SessionManager
@@ -179,12 +178,14 @@ def render_pdf_viewer():
 
 def render_chat_column():
     """채팅 컬럼을 렌더링하고 채팅 로직을 처리합니다."""
+    
+    st.subheader("💬 채팅")
     chat_container = st.container(height=UI_CONTAINER_HEIGHT, border=True)
 
     messages = SessionManager.get_messages()
     for message in messages:
         with chat_container, st.chat_message(message["role"]):
-            st.markdown(message["content"], unsafe_allow_html=True)
+            st.markdown(message["content"])
 
     if user_input := st.chat_input(
         "PDF 내용에 대해 질문해보세요.", disabled=not SessionManager.is_ready_for_chat()
@@ -240,57 +241,8 @@ def render_chat_column():
             SessionManager.reset_all_state()
             st.rerun()
 
-def render_workflow_tab_content():
-    """워크플로우 탭에 들어갈 콘텐츠를 렌더링합니다."""
-    qa_chain = SessionManager.get("qa_chain")
-    
-    if not qa_chain:
-        st.info("워크플로우를 보려면 먼저 사이드바에서 PDF를 처리해야 합니다.")
-        return
-
-    # 1. LangGraph에서 Mermaid 구문 추출
-    try:
-        mermaid_syntax = qa_chain.get_graph().draw_mermaid()
-    except Exception as e:
-        st.error(f"그래프를 생성하는 중 오류가 발생했습니다: {e}")
-        return
-
-    # 2. Mermaid 그래프 렌더링
-    st.subheader("워크플로우 다이어그램")
-    st_mermaid(mermaid_syntax, height="350px") # 컬럼에 맞게 높이 살짝 조절
-
-    # 3. 각 노드에 대한 상세 설명 추가
-    st.subheader("각 단계 설명")
-    
-    node_descriptions = {
-        "retrieve": "**1. 문서 검색 (Retrieve):** 사용자의 질문과 가장 관련성이 높은 문서 조각들을 찾아냅니다.",
-        "format_context": "**2. 컨텍스트 구성 (Format Context):** 검색된 문서 조각들을 LLM이 이해하기 쉬운 형식으로 정리합니다.",
-        "generate_response": "**3. 답변 생성 (Generate Response):** 정리된 컨텍스트와 질문을 기반으로 최종 답변을 생성합니다."
-    }
-
-    graph_nodes = qa_chain.get_graph().nodes
-    for node_name in graph_nodes:
-        if node_name in node_descriptions:
-            st.markdown(node_descriptions[node_name])
-        elif node_name != "__end__":
-            st.markdown(f"- **{node_name}**: 커스텀 노드")
-
-def render_left_column_with_tabs():
+def render_left_column():
     """
-    왼쪽 컬럼에 '채팅'과 '워크플로우' 탭을 생성하고,
-    각 탭에 맞는 콘텐츠를 렌더링합니다.
+    왼쪽 컬럼에 채팅 UI를 렌더링합니다.
     """
-    # 1. 탭 생성
-    tab_chat, tab_workflow = st.tabs(["💬 채팅", "📊 워크플로우"])
-
-    # 2. '채팅' 탭 콘텐츠 구성
-    with tab_chat:
-        # 기존 채팅 렌더링 함수를 호출합니다.
-        # (이후 단계에서 이 함수를 약간 수정할 것입니다.)
-        render_chat_column()
-
-    # 3. '워크플로우' 탭 콘텐츠 구성
-    with tab_workflow:
-        # 그래프 뷰 렌더링 함수를 호출합니다.
-        # (이후 단계에서 이 함수를 약간 수정할 것입니다.)
-        render_workflow_tab_content() # 새 이름으로 변경
+    render_chat_column()

@@ -5,7 +5,7 @@ import logging
 import streamlit as st
 
 from session import SessionManager
-from ui import render_sidebar, render_pdf_viewer, render_left_column_with_tabs
+from ui import render_sidebar, render_pdf_viewer, render_left_column
 from rag_core import build_rag_pipeline, update_llm_in_pipeline
 from model_loader import load_llm, load_embedding_model, is_embedding_model_cached
 from config import AVAILABLE_EMBEDDING_MODELS
@@ -167,7 +167,7 @@ def main():
     col_left, col_right = st.columns([1, 1])
 
     with col_left:
-        render_left_column_with_tabs()
+        render_left_column()
 
     with col_right:
         render_pdf_viewer()

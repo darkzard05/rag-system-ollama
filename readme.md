@@ -204,7 +204,7 @@ This project implements a sophisticated RAG (Retrieval-Augmented Generation) sys
 ## ⚙️ Configuration
 
 - **API Keys**: Set your `GEMINI_API_KEY` in a `.env` file.
-- **Models and Parameters**: Adjust models, retriever weights, and text splitter settings in `config.yml`.
+- **Models and Parameters**: Adjust models, retriever weights, text splitter settings, and **Ollama's response token limit (`ollama_num_predict`)** in `config.yml`. The default `ollama_num_predict` is set to `2048` to balance detailed responses with performance.
 
 ## 📄 License
 This project is distributed under the MIT License. See the `LICENSE` file for more details.

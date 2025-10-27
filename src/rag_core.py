@@ -5,16 +5,15 @@ import os
 import logging
 import hashlib
 import json
-from typing import List, Optional, Dict, Tuple
+from typing import List, Optional, Dict, Tuple, TYPE_CHECKING
 import tempfile
 
-from langchain_core.documents import Document
-from langchain_community.vectorstores import FAISS
-from langchain_community.retrievers import BM25Retriever
-from langchain_huggingface import HuggingFaceEmbeddings
-from langchain_community.document_loaders import PyMuPDFLoader
-from langchain.text_splitter import RecursiveCharacterTextSplitter
-from langchain.retrievers import EnsembleRetriever
+if TYPE_CHECKING:
+    from langchain_core.documents import Document
+    from langchain_community.vectorstores import FAISS
+    from langchain_community.retrievers import BM25Retriever
+    from langchain_huggingface import HuggingFaceEmbeddings
+    from langchain.retrievers import EnsembleRetriever
 
 from config import (
     RETRIEVER_CONFIG,
@@ -28,6 +27,7 @@ from graph_builder import build_graph
 
 @log_operation("PDF 문서 로드")
 def load_pdf_docs(pdf_file_bytes: bytes) -> List:
+    from langchain_community.document_loaders import PyMuPDFLoader
     with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as temp_file:
         temp_file.write(pdf_file_bytes)
         temp_file_path = temp_file.name
@@ -41,6 +41,7 @@ def load_pdf_docs(pdf_file_bytes: bytes) -> List:
 
 @log_operation("문서 분할")
 def split_documents(docs: List) -> List:
+    from langchain.text_splitter import RecursiveCharacterTextSplitter
     chunker = RecursiveCharacterTextSplitter(
         chunk_size=TEXT_SPLITTER_CONFIG["chunk_size"],
         chunk_overlap=TEXT_SPLITTER_CONFIG["chunk_overlap"],
@@ -65,21 +66,23 @@ class VectorStoreCache:
         faiss_index_path = os.path.join(cache_dir, "faiss_index")
         return cache_dir, doc_splits_path, faiss_index_path
 
-    def _serialize_docs(self, docs: List[Document]) -> List[Dict]:
+    def _serialize_docs(self, docs: List["Document"]) -> List[Dict]:
         return [
             {"page_content": doc.page_content, "metadata": doc.metadata} for doc in docs
         ]
 
-    def _deserialize_docs(self, docs_as_dicts: List[Dict]) -> List[Document]:
+    def _deserialize_docs(self, docs_as_dicts: List[Dict]) -> List["Document"]:
+        from langchain_core.documents import Document
         return [
-            Document(page_content=d["page_content"], metadata=d["metadata"])
+            Document(page_content=d["page_content"], metadata=d["metadata"]) 
             for d in docs_as_dicts
         ]
 
     @log_operation("벡터 저장소 캐시 로드")
     def load(
         self, embedder: "HuggingFaceEmbeddings"
-    ) -> Tuple[Optional[List[Document]], Optional["FAISS"]]:
+    ) -> Tuple[Optional[List["Document"]], Optional["FAISS"]]:
+        from langchain_community.vectorstores import FAISS
         if os.path.exists(self.doc_splits_path) and os.path.exists(
             self.faiss_index_path
         ):
@@ -93,7 +96,7 @@ class VectorStoreCache:
                 vector_store = FAISS.load_local(
                     self.faiss_index_path,
                     embedder,
-                    allow_dangerous_deserialization=True,
+                    allow_dangerous_deserialization=True
                 )
                 logging.info(f"벡터 저장소 캐시를 '{self.cache_dir}'에서 불러왔습니다.")
                 return doc_splits, vector_store
@@ -102,7 +105,7 @@ class VectorStoreCache:
         return None, None
 
     @log_operation("벡터 저장소 캐시 저장")
-    def save(self, doc_splits: List[Document], vector_store: "FAISS"):
+    def save(self, doc_splits: List["Document"], vector_store: "FAISS"):
         try:
             os.makedirs(self.cache_dir, exist_ok=True)
             # 1. 문서 조각 저장
@@ -118,16 +121,19 @@ class VectorStoreCache:
 
 @log_operation("FAISS 벡터 저장소 생성")
 def create_vector_store(docs: List, embedder: "HuggingFaceEmbeddings") -> "FAISS":
+    from langchain_community.vectorstores import FAISS
     return FAISS.from_documents(docs, embedder)
 
 @log_operation("BM25 리트리버 생성")
 def create_bm25_retriever(docs: List, k: int) -> "BM25Retriever":
+    from langchain_community.retrievers import BM25Retriever
     retriever = BM25Retriever.from_documents(docs)
     retriever.k = k
     return retriever
 
 @log_operation("Ensemble 리트리버 생성")
 def create_ensemble_retriever(faiss_retriever, bm25_retriever, weights: List[float]):
+    from langchain.retrievers import EnsembleRetriever
     return EnsembleRetriever(
         retrievers=[bm25_retriever, faiss_retriever], weights=weights
     )

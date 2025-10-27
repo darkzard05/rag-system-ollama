@@ -7,8 +7,8 @@ models:
   default_ollama: "qwen3:4b"
   default_gemini: "gemini-2.5-flash"
   
-  # Ollama 모델의 토큰 생성 제한 (-1은 무제한)
-  ollama_num_predict: -1
+  # Ollama 모델의 토큰 생성 제한 (기본값: 2048)
+  ollama_num_predict: 2048
   
   # Gemini API에서 우선적으로 보여줄 모델 목록
   preferred_gemini:
@@ -25,6 +25,9 @@ models:
   
   # 모델 캐시 디렉터리
   cache_dir: ".model_cache"
+
+  # 임베딩 모델의 배치 크기 ('auto'로 설정 시 VRAM에 따라 자동 조절, 숫자로 직접 지정 가능)
+  embedding_batch_size: "auto"
 
 # --- RAG 파이프라인 설정 ---
 rag:
