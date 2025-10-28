@@ -7,7 +7,6 @@ import logging
 import streamlit as st
 import ollama
 from typing import List, TYPE_CHECKING
-from concurrent.futures import ThreadPoolExecutor
 
 if TYPE_CHECKING:
     from langchain_huggingface import HuggingFaceEmbeddings
@@ -36,13 +35,14 @@ def _fetch_ollama_models() -> List[str]:
         return []
 
 
-
 @st.cache_data(ttl=3600)
 def get_available_models() -> List[str]:
     ollama_models = _fetch_ollama_models()
 
     if not ollama_models:
-        logging.error("사용 가능한 LLM 모델을 찾을 수 없습니다. 기본 모델 목록을 사용합니다.")
+        logging.error(
+            "사용 가능한 LLM 모델을 찾을 수 없습니다. 기본 모델 목록을 사용합니다."
+        )
         return [OLLAMA_MODEL_NAME]
 
     return ollama_models
@@ -55,6 +55,7 @@ def _get_dynamic_batch_size(device: str) -> int:
         return 64
 
     import torch
+
     try:
         total_vram_gb = torch.cuda.get_device_properties(0).total_memory / (1024**3)
         logging.info(f"사용 가능한 GPU VRAM: {total_vram_gb:.2f}GB")
@@ -67,11 +68,13 @@ def _get_dynamic_batch_size(device: str) -> int:
             batch_size = 64
         else:
             batch_size = 32
-        
+
         logging.info(f"VRAM 기반 동적 배치 크기: {batch_size}")
         return batch_size
     except Exception as e:
-        logging.warning(f"VRAM 확인 중 오류 발생: {e}. 기본 배치 크기(64)를 사용합니다.")
+        logging.warning(
+            f"VRAM 확인 중 오류 발생: {e}. 기본 배치 크기(64)를 사용합니다."
+        )
         return 64
 
 
@@ -94,7 +97,9 @@ def load_embedding_model(embedding_model_name: str) -> "HuggingFaceEmbeddings":
     elif EMBEDDING_BATCH_SIZE == "auto":
         batch_size = _get_dynamic_batch_size(device)
     else:
-        logging.warning(f"잘못된 배치 크기 설정('{EMBEDDING_BATCH_SIZE}'). 기본값(128)을 사용합니다.")
+        logging.warning(
+            f"잘못된 배치 크기 설정('{EMBEDDING_BATCH_SIZE}'). 기본값(128)을 사용합니다."
+        )
 
     return HuggingFaceEmbeddings(
         model_name=embedding_model_name,
@@ -111,9 +116,6 @@ def load_ollama_llm(_model_name: str) -> "OllamaLLM":
 
     # --- 💡 JSON 및 temperature 전역 설정을 제거하고, 순수한 LLM 객체를 반환 💡 ---
     return OllamaLLM(model=_model_name, num_predict=OLLAMA_NUM_PREDICT)
-
-
-
 
 
 def load_llm(model_name: str):

@@ -1,10 +1,10 @@
 """
 LangGraph를 사용하여 RAG 파이프라인을 구성하고 실행하는 로직을 담당합니다.
 """
+
 import logging
 from typing import Any, AsyncGenerator, Dict
 
-from langchain_core.documents import Document
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
 from langgraph.graph import StateGraph, END
@@ -50,12 +50,14 @@ def build_graph(retriever: Any):
         return {"context": context}
 
     @async_log_operation("통합 응답 생성")
-    async def generate_response(state: GraphState) -> AsyncGenerator[Dict[str, Any], None]:
+    async def generate_response(
+        state: GraphState,
+    ) -> AsyncGenerator[Dict[str, Any], None]:
         # 💡 llm을 SessionManager에서 다시 가져오도록 수정
         llm = SessionManager.get("llm")
         if not llm:
             raise ValueError("세션에서 LLM을 찾을 수 없습니다.")
-            
+
         prompt = ChatPromptTemplate.from_messages(
             [
                 ("system", QA_SYSTEM_PROMPT),
@@ -63,7 +65,9 @@ def build_graph(retriever: Any):
             ]
         )
         chain = prompt | llm | StrOutputParser()
-        async for chunk in chain.astream({"input": state["input"], "context": state["context"]}):
+        async for chunk in chain.astream(
+            {"input": state["input"], "context": state["context"]}
+        ):
             yield {"response": chunk}
 
     # --- 💡 그래프 연결 로직을 매우 단순하게 변경 💡 ---
@@ -80,5 +84,5 @@ def build_graph(retriever: Any):
 
     app = workflow.compile()
     logging.info("단순 RAG LangGraph 워크플로우가 성공적으로 컴파일되었습니다.")
-    
+
     return app

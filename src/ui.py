@@ -23,7 +23,7 @@ async def _stream_chat_response(qa_chain, user_input, chat_container) -> str:
     """
     full_response = ""
     start_time = time.time()
-    
+
     with chat_container, st.chat_message("assistant"):
         answer_container = st.empty()
         answer_container.markdown(MSG_PREPARING_ANSWER)
@@ -34,10 +34,10 @@ async def _stream_chat_response(qa_chain, user_input, chat_container) -> str:
             ):
                 kind = event["event"]
                 name = event.get("name", "")
-                
+
                 if kind == "on_chain_stream" and name == "generate_response":
                     chunk_data = event["data"].get("chunk")
-                    
+
                     if isinstance(chunk_data, dict) and "response" in chunk_data:
                         full_response += chunk_data["response"]
                         answer_container.markdown(full_response + "▌")
@@ -51,18 +51,16 @@ async def _stream_chat_response(qa_chain, user_input, chat_container) -> str:
     # --- 스트리밍 완료 후 최종 내용 정리 및 로그 출력 ---
     end_time = time.time()
     answer_container.markdown(full_response)
-    
+
     total_duration = end_time - start_time
     perf_details = f"답변: {total_duration:.2f}초 ({len(full_response)}자)"
     logging.info(f"  [성능 상세] {perf_details}")
-    
+
     return full_response
 
 
 def render_sidebar(
-    file_uploader_callback,
-    model_selector_callback,
-    embedding_selector_callback
+    file_uploader_callback, model_selector_callback, embedding_selector_callback
 ):
     with st.sidebar:
         st.header("⚙️ 설정")
@@ -133,12 +131,15 @@ def render_pdf_viewer():
             st.session_state.last_pdf_name = current_file_name
         if st.session_state.current_page > total_pages:
             st.session_state.current_page = 1
+
         def go_to_previous_page():
             if st.session_state.current_page > 1:
                 st.session_state.current_page -= 1
+
         def go_to_next_page():
             if st.session_state.current_page < total_pages:
                 st.session_state.current_page += 1
+
         pdf_viewer(
             input=pdf_bytes,
             height=UI_CONTAINER_HEIGHT,
@@ -153,8 +154,10 @@ def render_pdf_viewer():
                 disabled=(st.session_state.current_page <= 1),
             )
         with nav_cols[1]:
+
             def sync_slider_and_input():
                 st.session_state.current_page = st.session_state.current_page_slider
+
             st.slider(
                 "페이지 이동",
                 min_value=1,
@@ -178,7 +181,7 @@ def render_pdf_viewer():
 
 def render_chat_column():
     """채팅 컬럼을 렌더링하고 채팅 로직을 처리합니다."""
-    
+
     st.subheader("💬 채팅")
     chat_container = st.container(height=UI_CONTAINER_HEIGHT, border=True)
 
@@ -196,18 +199,18 @@ def render_chat_column():
     if messages and messages[-1]["role"] == "user":
         last_user_input = messages[-1]["content"]
         qa_chain = SessionManager.get("qa_chain")
-        
+
         if qa_chain:
             try:
                 loop = asyncio.get_running_loop()
             except RuntimeError:
                 loop = asyncio.new_event_loop()
                 asyncio.set_event_loop(loop)
-            
+
             final_answer = loop.run_until_complete(
                 _stream_chat_response(qa_chain, last_user_input, chat_container)
             )
-            
+
             if final_answer:
                 SessionManager.add_message("assistant", content=final_answer)
                 st.rerun()
@@ -240,6 +243,7 @@ def render_chat_column():
         if st.button("재시도"):
             SessionManager.reset_all_state()
             st.rerun()
+
 
 def render_left_column():
     """

@@ -1,12 +1,13 @@
 """
 RAG Chatbot 애플리케이션의 메인 진입점 파일입니다.
 """
+
 import logging
 import streamlit as st
 
 from session import SessionManager
 from ui import render_sidebar, render_pdf_viewer, render_left_column
-from rag_core import build_rag_pipeline, update_llm_in_pipeline
+from rag_core import build_rag_pipeline
 from model_loader import load_llm, load_embedding_model, is_embedding_model_cached
 from config import AVAILABLE_EMBEDDING_MODELS
 
@@ -63,13 +64,11 @@ def _rebuild_rag_system(status_container):
             if not _ensure_models_are_loaded(status_container):
                 return
 
-            llm = SessionManager.get("llm")
             embedder = SessionManager.get("embedder")
 
             success_message, cache_used = build_rag_pipeline(
                 uploaded_file_name=file_name,
                 file_bytes=file_bytes,
-                llm=llm,
                 embedder=embedder,
             )
             if cache_used:
@@ -90,11 +89,13 @@ def _update_qa_chain(status_container):
     """LLM 변경 시 QA 체인 업데이트를 위한 UI 래퍼 함수."""
     selected_model = SessionManager.get("last_selected_model")
     try:
-        with status_container, st.spinner(
-            f"'{selected_model}' 모델 로드 및 QA 시스템 업데이트 중..."
+        with (
+            status_container,
+            st.spinner(f"'{selected_model}' 모델 로드 및 QA 시스템 업데이트 중..."),
         ):
             llm = load_llm(selected_model)
-            update_llm_in_pipeline(llm)
+            SessionManager.set("llm", llm)
+            logging.info(f"세션의 LLM이 새로운 모델 '{llm.model}'(으)로 업데이트되었습니다.")
             success_message = "✅ QA 시스템이 새 모델로 업데이트되었습니다."
             status_container.success(success_message)
             SessionManager.add_message("assistant", success_message)
@@ -150,17 +151,17 @@ def main():
         model_selector_callback=on_model_change,
         embedding_selector_callback=on_embedding_change,
     )
-    
+
     if SessionManager.get("new_file_uploaded"):
         SessionManager.reset_for_new_file()
         SessionManager.set("new_file_uploaded", False)
         file_name = SessionManager.get("last_uploaded_file_name")
         SessionManager.add_message("assistant", f"📂 '{file_name}' 파일 업로드 완료.")
-    
+
     if SessionManager.get("needs_rag_rebuild"):
         SessionManager.set("needs_rag_rebuild", False)
         _rebuild_rag_system(status_container)
-    
+
     if SessionManager.get("needs_qa_chain_update"):
         SessionManager.set("needs_qa_chain_update", False)
         _update_qa_chain(status_container)
