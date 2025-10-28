@@ -59,7 +59,7 @@ def build_graph(retriever: Any):
         prompt = ChatPromptTemplate.from_messages(
             [
                 ("system", QA_SYSTEM_PROMPT),
-                ("human", "[Context]:\n{context}\n\n[Question]: {input}"),
+                ("human", "[참고 문서]:\n{context}\n\n[질문]: {input}"),
             ]
         )
         chain = prompt | llm | StrOutputParser()

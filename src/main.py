@@ -160,7 +160,8 @@ def main():
     if SessionManager.get("needs_rag_rebuild"):
         SessionManager.set("needs_rag_rebuild", False)
         _rebuild_rag_system(status_container)
-    elif SessionManager.get("needs_qa_chain_update"):
+    
+    if SessionManager.get("needs_qa_chain_update"):
         SessionManager.set("needs_qa_chain_update", False)
         _update_qa_chain(status_container)
 

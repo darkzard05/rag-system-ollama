@@ -48,6 +48,76 @@ def split_documents(docs: List) -> List:
     )
     return chunker.split_documents(docs)
 
+# class VectorStoreCache:
+#     def __init__(self, file_bytes: bytes, embedding_model_name: str):
+#         self.cache_dir, self.doc_splits_path, self.faiss_index_path = (
+#             self._get_cache_paths(file_bytes, embedding_model_name)
+#         )
+
+#     def _get_cache_paths(
+#         self, file_bytes: bytes, embedding_model_name: str
+#     ) -> Tuple[str, str, str]:
+#         file_hash = hashlib.sha256(file_bytes).hexdigest()
+#         model_name_slug = embedding_model_name.replace("/", "_")
+#         cache_dir = os.path.join(
+#             VECTOR_STORE_CACHE_DIR, f"{file_hash}_{model_name_slug}"
+#         )
+#         doc_splits_path = os.path.join(cache_dir, "doc_splits.json")
+#         faiss_index_path = os.path.join(cache_dir, "faiss_index")
+#         return cache_dir, doc_splits_path, faiss_index_path
+
+#     def _serialize_docs(self, docs: List["Document"]) -> List[Dict]:
+#         return [
+#             {"page_content": doc.page_content, "metadata": doc.metadata} for doc in docs
+#         ]
+
+#     def _deserialize_docs(self, docs_as_dicts: List[Dict]) -> List["Document"]:
+#         from langchain_core.documents import Document
+#         return [
+#             Document(page_content=d["page_content"], metadata=d["metadata"]) 
+#             for d in docs_as_dicts
+#         ]
+
+#     @log_operation("벡터 저장소 캐시 로드")
+#     def load(
+#         self, embedder: "HuggingFaceEmbeddings"
+#     ) -> Tuple[Optional[List["Document"]], Optional["FAISS"]]:
+#         from langchain_community.vectorstores import FAISS
+#         if os.path.exists(self.doc_splits_path) and os.path.exists(
+#             self.faiss_index_path
+#         ):
+#             try:
+#                 # 1. 문서 조각 로드
+#                 with open(self.doc_splits_path, "r", encoding="utf-8") as f:
+#                     doc_splits_as_dicts = json.load(f)
+#                 doc_splits = self._deserialize_docs(doc_splits_as_dicts)
+
+#                 # 2. FAISS 인덱스 로드
+#                 vector_store = FAISS.load_local(
+#                     self.faiss_index_path,
+#                     embedder,
+#                     allow_dangerous_deserialization=True
+#                 )
+#                 logging.info(f"벡터 저장소 캐시를 '{self.cache_dir}'에서 불러왔습니다.")
+#                 return doc_splits, vector_store
+#             except Exception as e:
+#                 logging.warning(f"캐시 로드 중 오류 발생: {e}. 캐시를 재생성합니다.")
+#         return None, None
+
+#     @log_operation("벡터 저장소 캐시 저장")
+#     def save(self, doc_splits: List["Document"], vector_store: "FAISS"):
+#         try:
+#             os.makedirs(self.cache_dir, exist_ok=True)
+#             # 1. 문서 조각 저장
+#             with open(self.doc_splits_path, "w", encoding="utf-8") as f:
+#                 json.dump(
+#                     self._serialize_docs(doc_splits), f, ensure_ascii=False, indent=4
+#                 )
+#             # 2. FAISS 인덱스 저장
+#             vector_store.save_local(self.faiss_index_path)
+#             logging.info(f"벡터 저장소 캐시를 '{self.cache_dir}'에 저장했습니다.")
+#         except Exception as e:
+#             logging.error(f"캐시 저장 중 오류 발생: {e}")
 class VectorStoreCache:
     def __init__(self, file_bytes: bytes, embedding_model_name: str):
         self.cache_dir, self.doc_splits_path, self.faiss_index_path = (
@@ -66,17 +136,23 @@ class VectorStoreCache:
         faiss_index_path = os.path.join(cache_dir, "faiss_index")
         return cache_dir, doc_splits_path, faiss_index_path
 
+    # --- 💡 수정된 부분 1: Pydantic V1 호환 직렬화 메서드 (.dict()) 💡 ---
     def _serialize_docs(self, docs: List["Document"]) -> List[Dict]:
-        return [
-            {"page_content": doc.page_content, "metadata": doc.metadata} for doc in docs
-        ]
+        """
+        Document 객체를 Pydantic V1의 .dict() 메서드를 사용해
+        딕셔너리 형태로 변환합니다.
+        """
+        return [doc.dict() for doc in docs]
 
+    # --- 💡 수정된 부분 2: Pydantic V1 호환 역직렬화 메서드 (.parse_obj()) 💡 ---
     def _deserialize_docs(self, docs_as_dicts: List[Dict]) -> List["Document"]:
+        """
+        딕셔너리를 Pydantic V1의 .parse_obj() 클래스 메서드를 사용해
+        Document 객체로 복원합니다.
+        """
         from langchain_core.documents import Document
-        return [
-            Document(page_content=d["page_content"], metadata=d["metadata"]) 
-            for d in docs_as_dicts
-        ]
+        # Pydantic V1에서는 클래스 메서드인 parse_obj를 사용합니다.
+        return [Document.parse_obj(d) for d in docs_as_dicts]
 
     @log_operation("벡터 저장소 캐시 로드")
     def load(
@@ -87,7 +163,7 @@ class VectorStoreCache:
             self.faiss_index_path
         ):
             try:
-                # 1. 문서 조각 로드
+                # 1. 문서 조각 로드 (수정된 메서드 사용)
                 with open(self.doc_splits_path, "r", encoding="utf-8") as f:
                     doc_splits_as_dicts = json.load(f)
                 doc_splits = self._deserialize_docs(doc_splits_as_dicts)
@@ -108,7 +184,7 @@ class VectorStoreCache:
     def save(self, doc_splits: List["Document"], vector_store: "FAISS"):
         try:
             os.makedirs(self.cache_dir, exist_ok=True)
-            # 1. 문서 조각 저장
+            # 1. 문서 조각 저장 (수정된 메서드 사용)
             with open(self.doc_splits_path, "w", encoding="utf-8") as f:
                 json.dump(
                     self._serialize_docs(doc_splits), f, ensure_ascii=False, indent=4
