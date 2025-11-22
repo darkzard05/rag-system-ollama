@@ -13,9 +13,11 @@ from config import AVAILABLE_EMBEDDING_MODELS
 
 logging.basicConfig(
     level=logging.INFO,
-    format="%(asctime)s - %(levelname)s - %(message)s",
+    format="%(asctime)s - %(levelname)s - [%(name)s:%(funcName)s:%(lineno)d] - %(message)s",
     datefmt="%Y-%m-%d %H:%M:%S",
 )
+
+logger = logging.getLogger(__name__)
 
 st.set_page_config(page_title="RAG Chatbot", layout="wide")
 
@@ -78,8 +80,8 @@ def _rebuild_rag_system(status_container):
         status_container.success("RAG 시스템 구축 완료!")
 
     except Exception as e:
-        error_msg = f"RAG 시스템 구축 중 오류 발생: {e}"
-        logging.error(error_msg, exc_info=True)
+        error_msg = f"Error building RAG system: {e}"
+        logger.error(error_msg, exc_info=True)
         SessionManager.set("pdf_processing_error", error_msg)
         SessionManager.add_message("assistant", f"❌ {error_msg}")
         status_container.error(f"오류: {e}")
@@ -95,13 +97,13 @@ def _update_qa_chain(status_container):
         ):
             llm = load_llm(selected_model)
             SessionManager.set("llm", llm)
-            logging.info(f"세션의 LLM이 새로운 모델 '{llm.model}'(으)로 업데이트되었습니다.")
+            logger.info(f"Session LLM updated to new model: '{llm.model}'")
             success_message = "✅ QA 시스템이 새 모델로 업데이트되었습니다."
             status_container.success(success_message)
             SessionManager.add_message("assistant", success_message)
     except Exception as e:
-        error_msg = f"QA 시스템 업데이트 중 오류 발생: {e}"
-        logging.error(error_msg, exc_info=True)
+        error_msg = f"Error updating QA system: {e}"
+        logger.error(error_msg, exc_info=True)
         status_container.error(error_msg)
         SessionManager.add_message("assistant", f"❌ {error_msg}")
 

@@ -42,7 +42,6 @@ def test_build_rag_pipeline_cache_miss(mocker):
     # Dummy inputs
     dummy_file_name = "test.pdf"
     dummy_file_bytes = b"dummy pdf content"
-    mock_llm = MagicMock()
     mock_embedder = MagicMock()
     mock_embedder.model_name = "dummy-embedding-model"
 
@@ -50,7 +49,6 @@ def test_build_rag_pipeline_cache_miss(mocker):
     success_message, cache_used = build_rag_pipeline(
         uploaded_file_name=dummy_file_name,
         file_bytes=dummy_file_bytes,
-        llm=mock_llm,
         embedder=mock_embedder,
     )
 
@@ -107,7 +105,6 @@ def test_build_rag_pipeline_cache_hit(mocker):
     # Dummy inputs
     dummy_file_name = "test.pdf"
     dummy_file_bytes = b"dummy pdf content"
-    mock_llm = MagicMock()
     mock_embedder = MagicMock()
     mock_embedder.model_name = "dummy-embedding-model"
 
@@ -115,7 +112,6 @@ def test_build_rag_pipeline_cache_hit(mocker):
     success_message, cache_used = build_rag_pipeline(
         uploaded_file_name=dummy_file_name,
         file_bytes=dummy_file_bytes,
-        llm=mock_llm,
         embedder=mock_embedder,
     )
 

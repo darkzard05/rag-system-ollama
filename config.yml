@@ -64,6 +64,7 @@ ui:
   
   # UI에 표시될 메시지
   messages:
+    # --- 일반 메시지 ---
     preparing_answer: "답변 생성 준비 중..."
     thinking: "🤔 생각을 정리하는 중입니다..."
     no_thought_process: "아직 생각 과정이 없습니다."
@@ -73,3 +74,46 @@ ui:
       **다음을 시도해 보세요:**
       - 질문을 좀 더 명확하게 하거나 다른 키워드를 사용해 보세요.
       - 좀 더 일반적이거나 넓은 범위의 질문을 해보세요.
+
+    # --- 사이드바 ---
+    sidebar_title: "⚙️ 설정"
+    pdf_uploader_label: "PDF 파일 업로드"
+    model_selector_label: "LLM 모델 선택"
+    embedding_selector_label: "임베딩 모델 선택"
+    system_status_title: "📊 시스템 상태"
+    loading_models: "LLM 모델 목록을 불러오는 중..."
+
+    # --- PDF 뷰어 ---
+    pdf_viewer_title: "📄 PDF 미리보기"
+    pdf_viewer_no_file: "미리볼 PDF가 없습니다. 사이드바에서 파일을 업로드해주세요."
+    pdf_viewer_prev_button: "← 이전"
+    pdf_viewer_next_button: "다음 →"
+    pdf_viewer_page_slider: "페이지 이동"
+    pdf_viewer_error: "PDF를 표시하는 중 오류가 발생했습니다: {e}"
+
+    # --- 채팅 ---
+    chat_title: "💬 채팅"
+    chat_input_placeholder: "PDF 내용에 대해 질문해보세요."
+    chat_no_qa_system: "QA 시스템이 준비되지 않았습니다. PDF를 먼저 처리해주세요."
+    chat_welcome: |
+      **RAG-Chat에 오신 것을 환영합니다!**
+
+      사이드바에서 PDF 파일을 업로드하여 문서 내용에 대한 대화를 시작해보세요.
+    chat_guide: |
+      **💡 사용 가이드**
+      - **PDF 업로드:** 좌측 사이드바에서 분석하고 싶은 PDF를 업로드하세요.
+      - **모델 선택:** 로컬 `Ollama` 모델 또는 `Gemini` API 모델을 선택할 수 있습니다.
+      - **질문하기:** 문서 처리가 완료되면, 내용에 대해 자유롭게 질문할 수 있습니다.
+      - **PDF 뷰어:** 우측에서 원본 문서를 함께 보며 대화할 수 있습니다.
+      
+      **⚠️ 알아두실 점**
+      - **답변의 정확성:** 답변은 업로드된 PDF 내용만을 기반으로 생성되며, 사실이 아닐 수 있습니다.
+      - **개인정보:** Gemini 모델 사용 시, 질문 내용이 Google 서버로 전송될 수 있습니다.
+      - **초기 로딩:** 임베딩 모델을 처음 사용하면 다운로드에 몇 분이 소요될 수 있습니다.
+    
+    # --- 오류 및 상태 메시지 ---
+    streaming_error: "스트리밍 답변 생성 중 오류 발생: {e}"
+    generic_error: "오류가 발생했습니다: {error_msg}"
+    retry_button: "재시도"
+    errors:
+      ollama_not_running: "Ollama 서버에 연결할 수 없습니다. 서버가 실행 중인지 확인해주세요."

@@ -6,7 +6,6 @@ Pydantic 모델, TypedDict 등이 포함됩니다.
 from typing import List, TypedDict, Optional
 from langchain_core.documents import Document
 
-
 class GraphState(TypedDict):
     """
     RAG 그래프의 상태를 나타냅니다.

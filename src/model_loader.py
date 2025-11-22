@@ -17,8 +17,12 @@ from config import (
     OLLAMA_MODEL_NAME,
     OLLAMA_NUM_PREDICT,
     EMBEDDING_BATCH_SIZE,
+    MSG_ERROR_OLLAMA_NOT_RUNNING,
 )
 from utils import log_operation
+
+
+logger = logging.getLogger(__name__)
 
 
 def _fetch_ollama_models() -> List[str]:
@@ -26,24 +30,25 @@ def _fetch_ollama_models() -> List[str]:
         ollama_response = ollama.list()
         models = sorted([model["model"] for model in ollama_response.get("models", [])])
         if models:
-            logging.info(f"Ollama에서 다음 모델을 찾았습니다: {models}")
-        return models
+            logger.info(f"Found Ollama models: {models}")
+            return models
+        return [MSG_ERROR_OLLAMA_NOT_RUNNING]
     except Exception as e:
-        logging.warning(
-            f"Ollama 모델 목록을 가져오는 데 실패했습니다. Ollama 서버가 실행 중인지 확인하세요. 오류: {e}"
+        logger.warning(
+            f"Failed to fetch Ollama models. Is the Ollama server running? Error: {e}"
         )
-        return []
+        return [MSG_ERROR_OLLAMA_NOT_RUNNING]
 
 
 @st.cache_data(ttl=3600)
 def get_available_models() -> List[str]:
     ollama_models = _fetch_ollama_models()
 
-    if not ollama_models:
-        logging.error(
-            "사용 가능한 LLM 모델을 찾을 수 없습니다. 기본 모델 목록을 사용합니다."
+    if not ollama_models or ollama_models[0] == MSG_ERROR_OLLAMA_NOT_RUNNING:
+        logger.error(
+            "Could not find any available LLM models. Using default list."
         )
-        return [OLLAMA_MODEL_NAME]
+        return ollama_models
 
     return ollama_models
 
@@ -51,14 +56,14 @@ def get_available_models() -> List[str]:
 def _get_dynamic_batch_size(device: str) -> int:
     """GPU VRAM에 따라 동적으로 배치 크기를 결정합니다."""
     if device != "cuda":
-        logging.info("CPU 환경이므로 기본 배치 크기(64)를 사용합니다.")
+        logger.info("Running on CPU, using default batch size (64).")
         return 64
 
     import torch
 
     try:
         total_vram_gb = torch.cuda.get_device_properties(0).total_memory / (1024**3)
-        logging.info(f"사용 가능한 GPU VRAM: {total_vram_gb:.2f}GB")
+        logger.info(f"Available GPU VRAM: {total_vram_gb:.2f}GB")
 
         if total_vram_gb > 16:
             batch_size = 256
@@ -69,17 +74,17 @@ def _get_dynamic_batch_size(device: str) -> int:
         else:
             batch_size = 32
 
-        logging.info(f"VRAM 기반 동적 배치 크기: {batch_size}")
+        logger.info(f"Using dynamic batch size based on VRAM: {batch_size}")
         return batch_size
     except Exception as e:
-        logging.warning(
-            f"VRAM 확인 중 오류 발생: {e}. 기본 배치 크기(64)를 사용합니다."
+        logger.warning(
+            f"Error checking VRAM: {e}. Using default batch size (64)."
         )
         return 64
 
 
 @st.cache_resource(show_spinner=False)
-@log_operation("임베딩 모델 로딩")
+@log_operation("Load embedding model")
 def load_embedding_model(embedding_model_name: str) -> "HuggingFaceEmbeddings":
     import torch
     from langchain_huggingface import HuggingFaceEmbeddings
@@ -88,17 +93,17 @@ def load_embedding_model(embedding_model_name: str) -> "HuggingFaceEmbeddings":
     #     torch.classes.__path__ = []
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    logging.info(f"임베딩 모델용 장치: {device}")
+    logger.info(f"Using device for embedding model: {device}")
 
     batch_size = 128  # 기본값
     if isinstance(EMBEDDING_BATCH_SIZE, int):
         batch_size = EMBEDDING_BATCH_SIZE
-        logging.info(f"config.yml에 설정된 배치 크기({batch_size})를 사용합니다.")
+        logger.info(f"Using batch size from config.yml: {batch_size}")
     elif EMBEDDING_BATCH_SIZE == "auto":
         batch_size = _get_dynamic_batch_size(device)
     else:
-        logging.warning(
-            f"잘못된 배치 크기 설정('{EMBEDDING_BATCH_SIZE}'). 기본값(128)을 사용합니다."
+        logger.warning(
+            f"Invalid batch size setting ('{EMBEDDING_BATCH_SIZE}'). Using default (128)."
         )
 
     return HuggingFaceEmbeddings(
@@ -110,7 +115,7 @@ def load_embedding_model(embedding_model_name: str) -> "HuggingFaceEmbeddings":
 
 
 @st.cache_resource(show_spinner=False)
-@log_operation("Ollama LLM 로딩")
+@log_operation("Load Ollama LLM")
 def load_ollama_llm(_model_name: str) -> "OllamaLLM":
     from langchain_ollama import OllamaLLM
 

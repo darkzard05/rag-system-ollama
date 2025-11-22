@@ -15,6 +15,9 @@ from utils import async_log_operation
 from schemas import GraphState
 
 
+logger = logging.getLogger(__name__)
+
+
 # 💡 build_graph가 더 이상 llm을 인자로 받지 않도록 수정
 def build_graph(retriever: Any):
     """
@@ -24,18 +27,18 @@ def build_graph(retriever: Any):
     # 라우터 및 분기 노드(conversational, general) 함수들 모두 삭제
 
     def retrieve_documents(state: GraphState) -> Dict[str, Any]:
-        logging.info("노드 실행: retrieve_documents")
+        logger.info("Node execution: 'retrieve_documents'")
         if not retriever:
-            raise ValueError("그래프에 유효한 리트리버가 주입되지 않았습니다.")
+            raise ValueError("A valid retriever was not provided to the graph.")
         documents = retriever.invoke(state["input"])
         return {"documents": documents}
 
     def format_context(state: GraphState) -> Dict[str, Any]:
-        logging.info("노드 실행: format_context")
+        logger.info("Node execution: 'format_context'")
         documents = state["documents"]
-        logging.info(f"리트리버가 {len(documents)}개의 문서를 검색했습니다.")
+        logger.info(f"Retrieved {len(documents)} documents.")
         if not documents:
-            logging.warning("검색된 문서가 없어 컨텍스트가 비어있습니다.")
+            logger.warning("No documents were retrieved, context will be empty.")
         formatted_docs = []
         for i, doc in enumerate(documents):
             doc.metadata["doc_number"] = i + 1
@@ -46,17 +49,17 @@ def build_graph(retriever: Any):
                 f"[{doc.metadata['doc_number']}] {doc.page_content} (p.{doc.metadata.get('page', 'N/A')})"
             )
         context = "\n\n".join(formatted_docs)
-        logging.info(f"생성된 컨텍스트의 길이: {len(context)}자")
+        logger.info(f"Formatted context length: {len(context)} characters")
         return {"context": context}
 
-    @async_log_operation("통합 응답 생성")
+    @async_log_operation("Generate response")
     async def generate_response(
         state: GraphState,
     ) -> AsyncGenerator[Dict[str, Any], None]:
         # 💡 llm을 SessionManager에서 다시 가져오도록 수정
         llm = SessionManager.get("llm")
         if not llm:
-            raise ValueError("세션에서 LLM을 찾을 수 없습니다.")
+            raise ValueError("LLM not found in session.")
 
         prompt = ChatPromptTemplate.from_messages(
             [
@@ -70,7 +73,7 @@ def build_graph(retriever: Any):
         ):
             yield {"response": chunk}
 
-    # --- 💡 그래프 연결 로직을 매우 단순하게 변경 💡 ---
+    # 워크플로우 구성
     workflow = StateGraph(GraphState)
 
     workflow.add_node("retrieve", retrieve_documents)
@@ -83,6 +86,6 @@ def build_graph(retriever: Any):
     workflow.add_edge("generate_response", END)
 
     app = workflow.compile()
-    logging.info("단순 RAG LangGraph 워크플로우가 성공적으로 컴파일되었습니다.")
+    logger.info("Simple RAG LangGraph workflow compiled successfully.")
 
     return app

@@ -7,6 +7,9 @@ import logging
 import functools
 
 
+logger = logging.getLogger(__name__)
+
+
 def log_operation(operation_name):
     """
     함수 실행 시작, 완료, 오류 발생 시 로그를 남기는 데코레이터.
@@ -16,16 +19,19 @@ def log_operation(operation_name):
     def decorator(func):
         @functools.wraps(func)
         def wrapper(*args, **kwargs):
-            logging.info(f"'{operation_name}' 시작...")
+            logger.info(f"Operation started: '{operation_name}'")
             start_time = time.time()
             try:
                 result = func(*args, **kwargs)
-                logging.info(
-                    f"'{operation_name}' 완료 (소요 시간: {time.time() - start_time:.2f}초)"
+                duration = time.time() - start_time
+                logger.info(
+                    f"Operation completed: '{operation_name}' (Duration: {duration:.2f}s)"
                 )
                 return result
             except Exception as e:
-                logging.error(f"'{operation_name}' 중 오류 발생: {e}", exc_info=True)
+                logger.error(
+                    f"Operation failed: '{operation_name}'. Error: {e}", exc_info=True
+                )
                 raise
 
         return wrapper
@@ -43,19 +49,22 @@ def async_log_operation(operation_name):
     def decorator(func):
         @functools.wraps(func)
         async def wrapper(*args, **kwargs):
-            logging.info(f"'{operation_name}' 시작...")
+            logger.info(f"Operation started: '{operation_name}'")
             start_time = time.time()
             try:
                 # 비동기 생성기를 호출하고, 그 결과를 스트리밍합니다.
                 async for chunk in func(*args, **kwargs):
                     yield chunk
             except Exception as e:
-                logging.error(f"'{operation_name}' 중 오류 발생: {e}", exc_info=True)
+                logger.error(
+                    f"Operation failed: '{operation_name}'. Error: {e}", exc_info=True
+                )
                 raise
             finally:
                 # 스트리밍이 모두 끝난 후에 완료 로그를 남깁니다.
-                logging.info(
-                    f"'{operation_name}' 완료 (소요 시간: {time.time() - start_time:.2f}초)"
+                duration = time.time() - start_time
+                logger.info(
+                    f"Operation completed: '{operation_name}' (Duration: {duration:.2f}s)"
                 )
 
         return wrapper

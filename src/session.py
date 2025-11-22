@@ -8,6 +8,9 @@ import streamlit as st
 from typing import List, Any, Dict
 
 
+logger = logging.getLogger(__name__)
+
+
 class SessionManager:
     """세션 상태를 관리하는 클래스 (순수 Getter/Setter 역할)"""
 
@@ -37,17 +40,17 @@ class SessionManager:
     def init_session(cls):
         """세션 상태 초기화 - 한 번만 실행되어야 함"""
         if not st.session_state.get("_initialized", False):
-            logging.info("세션 상태 초기화 중...")
+            logger.info("Initializing session state.")
             for key, value in cls.DEFAULT_SESSION_STATE.items():
                 if key not in st.session_state:
                     st.session_state[key] = value
             st.session_state._initialized = True
-            logging.info("세션 상태 초기화 완료.")
+            logger.info("Session state initialized.")
 
     @classmethod
     def reset_for_new_file(cls):
         """새 파일 업로드 시 RAG 관련 상태를 안전하게 리셋합니다."""
-        logging.info("새 파일 업로드 감지. RAG 관련 상태를 리셋합니다.")
+        logger.info("New file uploaded, resetting RAG-related state.")
 
         # 리셋할 키 목록
         keys_to_reset = [
@@ -106,7 +109,7 @@ class SessionManager:
     @classmethod
     def reset_all_state(cls):
         """세션의 모든 상태를 기본값으로 리셋합니다."""
-        logging.info("세션의 모든 상태를 리셋합니다.")
+        logger.info("Resetting all session state.")
         # st.session_state.clear() # clear()는 모든 것을 지우므로 콜백과 위젯 상태에 문제를 일으킬 수 있음
         for key in list(st.session_state.keys()):
             if key != "_initialized":  # 초기화 플래그는 유지

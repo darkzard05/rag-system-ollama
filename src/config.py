@@ -59,3 +59,42 @@ MSG_PREPARING_ANSWER: str = _ui_messages.get("preparing_answer", "답변 생성 
 MSG_NO_RELATED_INFO: str = _ui_messages.get(
     "no_related_info", "관련 정보를 찾을 수 없습니다."
 )
+MSG_SIDEBAR_TITLE: str = _ui_messages.get("sidebar_title", "⚙️ 설정")
+MSG_PDF_UPLOADER_LABEL: str = _ui_messages.get("pdf_uploader_label", "PDF 파일 업로드")
+MSG_MODEL_SELECTOR_LABEL: str = _ui_messages.get("model_selector_label", "LLM 모델 선택")
+MSG_EMBEDDING_SELECTOR_LABEL: str = _ui_messages.get(
+    "embedding_selector_label", "임베딩 모델 선택"
+)
+MSG_SYSTEM_STATUS_TITLE: str = _ui_messages.get("system_status_title", "📊 시스템 상태")
+MSG_LOADING_MODELS: str = _ui_messages.get(
+    "loading_models", "LLM 모델 목록을 불러오는 중..."
+)
+MSG_PDF_VIEWER_TITLE: str = _ui_messages.get("pdf_viewer_title", "📄 PDF 미리보기")
+MSG_PDF_VIEWER_NO_FILE: str = _ui_messages.get(
+    "pdf_viewer_no_file", "미리볼 PDF가 없습니다. 사이드바에서 파일을 업로드해주세요."
+)
+MSG_PDF_VIEWER_PREV_BUTTON: str = _ui_messages.get("pdf_viewer_prev_button", "← 이전")
+MSG_PDF_VIEWER_NEXT_BUTTON: str = _ui_messages.get("pdf_viewer_next_button", "다음 →")
+MSG_PDF_VIEWER_PAGE_SLIDER: str = _ui_messages.get("pdf_viewer_page_slider", "페이지 이동")
+MSG_PDF_VIEWER_ERROR: str = _ui_messages.get(
+    "pdf_viewer_error", "PDF를 표시하는 중 오류가 발생했습니다: {e}"
+)
+MSG_CHAT_TITLE: str = _ui_messages.get("chat_title", "💬 채팅")
+MSG_CHAT_INPUT_PLACEHOLDER: str = _ui_messages.get(
+    "chat_input_placeholder", "PDF 내용에 대해 질문해보세요."
+)
+MSG_CHAT_NO_QA_SYSTEM: str = _ui_messages.get(
+    "chat_no_qa_system", "QA 시스템이 준비되지 않았습니다. PDF를 먼저 처리해주세요."
+)
+MSG_CHAT_WELCOME: str = _ui_messages.get("chat_welcome", "환영합니다!")
+MSG_CHAT_GUIDE: str = _ui_messages.get("chat_guide", "사용 가이드")
+MSG_STREAMING_ERROR: str = _ui_messages.get(
+    "streaming_error", "스트리밍 답변 생성 중 오류 발생: {e}"
+)
+MSG_GENERIC_ERROR: str = _ui_messages.get("generic_error", "오류가 발생했습니다: {error_msg}")
+MSG_RETRY_BUTTON: str = _ui_messages.get("retry_button", "재시도")
+_ui_errors = _ui_messages.get("errors", {})
+MSG_ERROR_OLLAMA_NOT_RUNNING: str = _ui_errors.get(
+    "ollama_not_running",
+    "Ollama 서버에 연결할 수 없습니다. 서버가 실행 중인지 확인해주세요.",
+)
