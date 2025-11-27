@@ -32,9 +32,22 @@ _config = _load_config()
 
 # --- 모델 및 설정 상수 ---
 _models_config = _config.get("models", {})
-OLLAMA_MODEL_NAME: str = _models_config.get("default_ollama", "qwen2:1.5b")
+OLLAMA_MODEL_NAME: str = _models_config.get("default_ollama", "gemma3:8b")
+# 예측 토큰 수
 OLLAMA_NUM_PREDICT: int = int(
     os.getenv("OLLAMA_NUM_PREDICT", _models_config.get("ollama_num_predict", -1))
+    )
+# 온도 설정
+OLLAMA_TEMPERATURE: float = float(
+    os.getenv("OLLAMA_TEMPERATURE", _models_config.get("temperature", 0.1))
+    )
+# 컨텍스트 윈도우
+OLLAMA_NUM_CTX: int = int(
+    os.getenv("OLLAMA_NUM_CTX", _models_config.get("num_ctx", 4096)) 
+)
+# Top P
+OLLAMA_TOP_P: float = float(
+    os.getenv("OLLAMA_TOP_P", _models_config.get("top_p", 0.8))
 )
 AVAILABLE_EMBEDDING_MODELS: List[str] = _models_config.get("available_embeddings", [])
 CACHE_DIR: str = _models_config.get("cache_dir", ".model_cache")

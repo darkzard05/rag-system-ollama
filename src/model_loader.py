@@ -14,8 +14,10 @@ if TYPE_CHECKING:
 
 from config import (
     CACHE_DIR,
-    OLLAMA_MODEL_NAME,
     OLLAMA_NUM_PREDICT,
+    OLLAMA_TEMPERATURE,
+    OLLAMA_NUM_CTX,
+    OLLAMA_TOP_P,
     EMBEDDING_BATCH_SIZE,
     MSG_ERROR_OLLAMA_NOT_RUNNING,
 )
@@ -116,15 +118,24 @@ def load_embedding_model(embedding_model_name: str) -> "HuggingFaceEmbeddings":
 
 @st.cache_resource(show_spinner=False)
 @log_operation("Load Ollama LLM")
-def load_ollama_llm(_model_name: str) -> "OllamaLLM":
+def load_ollama_llm(_model_name: str,
+                    temperature: float = OLLAMA_TEMPERATURE
+                    ) -> "OllamaLLM":
+    if _model_name == MSG_ERROR_OLLAMA_NOT_RUNNING:
+        raise ValueError("Ollama 서버가 실행 중이지 않아 모델을 로드할 수 없습니다.")
+    
     from langchain_ollama import OllamaLLM
+    
+    return OllamaLLM(
+        model=_model_name, 
+        num_predict=OLLAMA_NUM_PREDICT,
+        top_p=OLLAMA_TOP_P,
+        num_ctx=OLLAMA_NUM_CTX, 
+        temperature=temperature,
+    )
 
-    # --- 💡 JSON 및 temperature 전역 설정을 제거하고, 순수한 LLM 객체를 반환 💡 ---
-    return OllamaLLM(model=_model_name, num_predict=OLLAMA_NUM_PREDICT)
-
-
-def load_llm(model_name: str):
-    return load_ollama_llm(_model_name=model_name)
+def load_llm(model_name: str, temperature: float = OLLAMA_TEMPERATURE):
+    return load_ollama_llm(_model_name=model_name, temperature=temperature)
 
 
 def is_embedding_model_cached(model_name: str) -> bool:

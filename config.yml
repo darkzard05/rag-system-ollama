@@ -3,19 +3,12 @@
 
 # --- 모델 설정 ---
 models:
-  # 기본으로 사용할 Ollama 및 Gemini 모델 이름
-  default_ollama: "qwen3:4b"
-  default_gemini: "gemini-2.5-flash"
+  # 기본으로 사용할 Ollama 모델 이름
+  default_ollama: "gemma3:8b"
   
   # Ollama 모델의 토큰 생성 제한 (기본값: 2048)
   ollama_num_predict: 2048
-  
-  # Gemini API에서 우선적으로 보여줄 모델 목록
-  preferred_gemini:
-    - "gemini-2.5-pro"
-    - "gemini-2.5-flash"
-    - "gemini-2.0-flash"
-  
+    
   # 사용 가능한 임베딩 모델 목록
   available_embeddings:
     - "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
@@ -102,13 +95,12 @@ ui:
     chat_guide: |
       **💡 사용 가이드**
       - **PDF 업로드:** 좌측 사이드바에서 분석하고 싶은 PDF를 업로드하세요.
-      - **모델 선택:** 로컬 `Ollama` 모델 또는 `Gemini` API 모델을 선택할 수 있습니다.
+      - **모델 선택:** 로컬 `Ollama` 모델을 선택할 수 있습니다.
       - **질문하기:** 문서 처리가 완료되면, 내용에 대해 자유롭게 질문할 수 있습니다.
       - **PDF 뷰어:** 우측에서 원본 문서를 함께 보며 대화할 수 있습니다.
       
       **⚠️ 알아두실 점**
       - **답변의 정확성:** 답변은 업로드된 PDF 내용만을 기반으로 생성되며, 사실이 아닐 수 있습니다.
-      - **개인정보:** Gemini 모델 사용 시, 질문 내용이 Google 서버로 전송될 수 있습니다.
       - **초기 로딩:** 임베딩 모델을 처음 사용하면 다운로드에 몇 분이 소요될 수 있습니다.
     
     # --- 오류 및 상태 메시지 ---

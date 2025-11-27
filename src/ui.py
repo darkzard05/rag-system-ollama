@@ -3,6 +3,7 @@
 import time
 import logging
 import asyncio
+import nest_asyncio 
 import streamlit as st
 from streamlit_pdf_viewer import pdf_viewer
 import fitz  # PyMuPDF
@@ -39,7 +40,7 @@ from config import (
 
 
 logger = logging.getLogger(__name__)
-
+nest_asyncio.apply() 
 
 async def _stream_chat_response(qa_chain, user_input, chat_container) -> str:
     """
@@ -53,6 +54,7 @@ async def _stream_chat_response(qa_chain, user_input, chat_container) -> str:
         answer_container.markdown(MSG_PREPARING_ANSWER)
 
         try:
+            # LangGraph app.astream_events를 사용하여 스트리밍 (원래대로 복원)
             async for event in qa_chain.astream_events(
                 {"input": user_input}, version="v1"
             ):
@@ -243,14 +245,17 @@ def render_chat_column():
 
         if qa_chain:
             try:
+                # 이미 실행 중인 루프가 있는지 확인
                 loop = asyncio.get_running_loop()
             except RuntimeError:
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
+                loop = None
 
-            final_answer = loop.run_until_complete(
-                _stream_chat_response(qa_chain, last_user_input, chat_container)
-            )
+            if loop and loop.is_running():
+                # 루프가 실행 중이면 task로 예약하고 기다림 (nest_asyncio 필요)
+                final_answer = loop.run_until_complete(_stream_chat_response(qa_chain, last_user_input, chat_container))
+            else:
+                # 루프가 없으면 새로 실행
+                final_answer = asyncio.run(_stream_chat_response(qa_chain, last_user_input, chat_container))
 
             if final_answer:
                 SessionManager.add_message("assistant", content=final_answer)
