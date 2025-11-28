@@ -23,10 +23,10 @@ def build_graph(retriever: Any):
     """
     단순한 RAG 워크플로우를 구성하고 컴파일합니다.
     """
-
-    # 라우터 및 분기 노드(conversational, general) 함수들 모두 삭제
-
     def retrieve_documents(state: GraphState) -> Dict[str, Any]:
+        """
+        문서를 검색하는 노드 함수.
+        """
         logger.info("Node execution: 'retrieve_documents'")
         if not retriever:
             raise ValueError("A valid retriever was not provided to the graph.")
@@ -34,12 +34,17 @@ def build_graph(retriever: Any):
         return {"documents": documents}
 
     def format_context(state: GraphState) -> Dict[str, Any]:
+        """
+        검색된 문서들을 포맷팅하여 컨텍스트를 생성하는 노드 함수.
+        """
         logger.info("Node execution: 'format_context'")
         documents = state["documents"]
         logger.info(f"Retrieved {len(documents)} documents.")
+        
         if not documents:
             logger.warning("No documents were retrieved, context will be empty.")
         formatted_docs = []
+        
         for i, doc in enumerate(documents):
             doc.metadata["doc_number"] = i + 1
             page_number = doc.metadata.get("page", "N/A")
@@ -56,7 +61,9 @@ def build_graph(retriever: Any):
     async def generate_response(
         state: GraphState,
     ) -> AsyncGenerator[Dict[str, Any], None]:
-        # 💡 llm을 SessionManager에서 다시 가져오도록 수정
+        """
+        LLM을 사용하여 답변을 생성하는 노드 함수 (스트리밍 지원).
+        """
         llm = SessionManager.get("llm")
         if not llm:
             raise ValueError("LLM not found in session.")

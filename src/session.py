@@ -12,8 +12,9 @@ logger = logging.getLogger(__name__)
 
 
 class SessionManager:
-    """세션 상태를 관리하는 클래스 (순수 Getter/Setter 역할)"""
-
+    """
+    세션 상태를 관리하는 클래스 (순수 Getter/Setter 역할)
+    """
     DEFAULT_SESSION_STATE: Dict[str, Any] = {
         "messages": [],
         "last_selected_model": None,
@@ -38,7 +39,9 @@ class SessionManager:
 
     @classmethod
     def init_session(cls):
-        """세션 상태 초기화 - 한 번만 실행되어야 함"""
+        """
+        세션 상태 초기화 - 한 번만 실행되어야 함
+        """
         if not st.session_state.get("_initialized", False):
             logger.info("Initializing session state.")
             for key, value in cls.DEFAULT_SESSION_STATE.items():
@@ -49,7 +52,9 @@ class SessionManager:
 
     @classmethod
     def reset_for_new_file(cls):
-        """새 파일 업로드 시 RAG 관련 상태를 안전하게 리셋합니다."""
+        """
+        새 파일 업로드 시 RAG 관련 상태를 안전하게 리셋합니다.
+        """
         logger.info("New file uploaded, resetting RAG-related state.")
 
         # 리셋할 키 목록
@@ -61,10 +66,10 @@ class SessionManager:
             "vector_store",
         ]
 
-        # st.session_state에서 해당 키들을 순회하며 삭제
+        # 해당 키들을 None으로 리셋
         for key in keys_to_reset:
             if key in st.session_state:
-                del st.session_state[key]
+                st.session_state[key] = None
 
         # 상태 플래그 설정
         st.session_state.pdf_processed = False
@@ -85,7 +90,9 @@ class SessionManager:
 
     @staticmethod
     def is_ready_for_chat() -> bool:
-        """채팅 준비 상태 확인"""
+        """
+        채팅 준비 상태 확인
+        """
         return (
             st.session_state.get("pdf_processed", False)
             and not st.session_state.get("pdf_processing_error")
@@ -95,23 +102,37 @@ class SessionManager:
     # --- Getters ---
     @classmethod
     def get(cls, key: str, default: Any = None) -> Any:
+        """
+        세션 상태에서 값을 가져옵니다.
+        """
         return st.session_state.get(key, default)
 
     @classmethod
     def get_messages(cls) -> List[Dict[str, str]]:
+        """
+        메시지 목록을 가져옵니다.
+        """
         return st.session_state.get("messages", [])
 
     # --- Setters ---
     @classmethod
     def set(cls, key: str, value: Any):
+        """
+        세션 상태에 값을 설정합니다.
+        """
         st.session_state[key] = value
 
     @classmethod
     def reset_all_state(cls):
-        """세션의 모든 상태를 기본값으로 리셋합니다."""
+        """
+        세션의 모든 상태를 기본값으로 리셋합니다.
+        """
         logger.info("Resetting all session state.")
-        # st.session_state.clear() # clear()는 모든 것을 지우므로 콜백과 위젯 상태에 문제를 일으킬 수 있음
-        for key in list(st.session_state.keys()):
-            if key != "_initialized":  # 초기화 플래그는 유지
-                del st.session_state[key]
-        cls.init_session()
+
+        # 위젯 키(보통 UI 컴포넌트의 key)를 제외하고 데이터만 리셋하는 것이 안전함
+        # 혹은 DEFAULT_SESSION_STATE에 정의된 키만 초기화
+        for key, value in cls.DEFAULT_SESSION_STATE.items():
+            st.session_state[key] = value
+        
+        # 초기화 플래그 유지
+        st.session_state._initialized = True

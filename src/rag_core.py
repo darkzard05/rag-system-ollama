@@ -58,20 +58,25 @@ def _split_documents(docs: List["Document"]) -> List["Document"]:
 
 # --- 캐시 관리 ---
 def _serialize_docs(docs: List["Document"]) -> List[Dict]:
-    """Document 객체를 직렬화 가능한 딕셔너리 리스트로 변환합니다."""
-    return [doc.dict() for doc in docs]
-
+    """
+    문서 객체 목록을 직렬화 가능한 딕셔너리 목록으로 변환합니다.
+    """
+    return [doc.model_dump() if hasattr(doc, "model_dump") else doc.dict() for doc in docs]
 
 def _deserialize_docs(docs_as_dicts: List[Dict]) -> List["Document"]:
-    """딕셔너리 리스트를 Document 객체 리스트로 복원합니다."""
+    """
+    직렬화된 딕셔너리 목록을 문서 객체 목록으로 변환합니다.
+    """
     from langchain_core.documents import Document
 
+    if hasattr(Document, "model_validate"):
+        return [Document.model_validate(d) for d in docs_as_dicts]
     return [Document.parse_obj(d) for d in docs_as_dicts]
 
-
 class VectorStoreCache:
-    """벡터 저장소 및 리트리버 캐시를 관리(경로 생성, 저장, 로드)합니다."""
-
+    """
+    벡터 저장소 및 리트리버 캐시를 관리(경로 생성, 저장, 로드)합니다.
+    """
     def __init__(self, file_bytes: bytes, embedding_model_name: str):
         (
             self.cache_dir,
@@ -158,6 +163,9 @@ class VectorStoreCache:
 def _create_vector_store(
     docs: List["Document"], embedder: "HuggingFaceEmbeddings"
 ) -> "FAISS":
+    """
+    문서 목록과 임베더를 사용하여 FAISS 벡터 저장소를 생성합니다.
+    """
     from langchain_community.vectorstores import FAISS
 
     return FAISS.from_documents(docs, embedder)
@@ -165,6 +173,9 @@ def _create_vector_store(
 
 @log_operation("Create BM25 retriever")
 def _create_bm25_retriever(docs: List["Document"]) -> "BM25Retriever":
+    """
+    문서 목록을 사용하여 BM25 리트리버를 생성합니다.
+    """
     from langchain_community.retrievers import BM25Retriever
 
     retriever = BM25Retriever.from_documents(docs)
@@ -176,6 +187,9 @@ def _create_bm25_retriever(docs: List["Document"]) -> "BM25Retriever":
 def _create_ensemble_retriever(
     vector_store: "FAISS", bm25_retriever: "BM25Retriever"
 ) -> "EnsembleRetriever":
+    """
+    FAISS 및 BM25 리트리버를 결합한 앙상블 리트리버를 생성합니다.
+    """
     from langchain.retrievers import EnsembleRetriever
 
     faiss_retriever = vector_store.as_retriever(
@@ -214,6 +228,9 @@ def _load_and_build_retrieval_components(
 def build_rag_pipeline(
     uploaded_file_name: str, file_bytes: bytes, embedder: "HuggingFaceEmbeddings"
 ) -> Tuple[str, bool]:
+    """
+    RAG 파이프라인을 구축하고 세션에 저장합니다.
+    """
     doc_splits, vector_store, bm25_retriever, cache_used = (
         _load_and_build_retrieval_components(file_bytes, embedder)
     )
@@ -238,7 +255,9 @@ def build_rag_pipeline(
 
 @log_operation("Update LLM in pipeline")
 def update_llm_in_pipeline(llm):
-    """세션의 LLM을 교체합니다. 그래프가 세션에서 LLM을 가져오므로 재빌드할 필요가 없습니다."""
+    """
+    세션의 LLM을 교체합니다. 그래프가 세션에서 LLM을 가져오므로 재빌드할 필요가 없습니다.
+    """
     if not SessionManager.get("pdf_processed"):
         raise ValueError("RAG 파이프라인이 구축되지 않아 LLM을 업데이트할 수 없습니다.")
 

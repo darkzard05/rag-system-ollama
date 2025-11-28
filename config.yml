@@ -8,7 +8,16 @@ models:
   
   # Ollama 모델의 토큰 생성 제한 (기본값: 2048)
   ollama_num_predict: 2048
-    
+
+  # Ollama 모델의 온도 설정 (기본값: 0.1)
+  temperature: 0.1
+
+  # Ollama 모델의 컨텍스트 윈도우 설정 (기본값: 4096)
+  num_ctx: 4096
+
+  # Ollama 모델의 탑-피 설정 (기본값: 0.8)
+  top_p: 0.8
+
   # 사용 가능한 임베딩 모델 목록
   available_embeddings:
     - "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"

@@ -28,6 +28,12 @@ logger = logging.getLogger(__name__)
 
 
 def _fetch_ollama_models() -> List[str]:
+    """
+    Ollama 서버에서 사용 가능한 LLM 모델 목록을 가져옵니다.
+    
+    Returns:
+        List[str]: 사용 가능한 Ollama 모델 이름 목록.
+    """
     try:
         ollama_response = ollama.list()
         models = sorted([model["model"] for model in ollama_response.get("models", [])])
@@ -44,6 +50,12 @@ def _fetch_ollama_models() -> List[str]:
 
 @st.cache_data(ttl=3600)
 def get_available_models() -> List[str]:
+    """
+    Ollama 서버에서 사용 가능한 LLM 모델 목록을 가져옵니다.
+    
+    Returns:
+        List[str]: 사용 가능한 Ollama 모델 이름 목록.
+    """
     ollama_models = _fetch_ollama_models()
 
     if not ollama_models or ollama_models[0] == MSG_ERROR_OLLAMA_NOT_RUNNING:
@@ -56,7 +68,15 @@ def get_available_models() -> List[str]:
 
 
 def _get_dynamic_batch_size(device: str) -> int:
-    """GPU VRAM에 따라 동적으로 배치 크기를 결정합니다."""
+    """
+    GPU VRAM에 따라 동적으로 배치 크기를 결정합니다.
+    
+    Args:
+        device (str): 'cuda' 또는 'cpu'
+    
+    Returns:
+        int: 적절한 배치 크기
+    """
     if device != "cuda":
         logger.info("Running on CPU, using default batch size (64).")
         return 64
@@ -88,6 +108,15 @@ def _get_dynamic_batch_size(device: str) -> int:
 @st.cache_resource(show_spinner=False)
 @log_operation("Load embedding model")
 def load_embedding_model(embedding_model_name: str) -> "HuggingFaceEmbeddings":
+    """
+    Hugging Face 임베딩 모델을 로드합니다.
+    
+    Args:
+        embedding_model_name (str): 로드할 Hugging Face 모델 이름.
+    
+    Returns:
+        HuggingFaceEmbeddings: 로드된 임베딩 모델 인스턴스.
+    """
     import torch
     from langchain_huggingface import HuggingFaceEmbeddings
 
@@ -115,28 +144,30 @@ def load_embedding_model(embedding_model_name: str) -> "HuggingFaceEmbeddings":
         cache_folder=CACHE_DIR,
     )
 
-
-@st.cache_resource(show_spinner=False)
 @log_operation("Load Ollama LLM")
-def load_ollama_llm(_model_name: str,
-                    temperature: float = OLLAMA_TEMPERATURE
-                    ) -> "OllamaLLM":
-    if _model_name == MSG_ERROR_OLLAMA_NOT_RUNNING:
+def load_llm(
+    model_name: str,
+    temperature: float = OLLAMA_TEMPERATURE,
+    num_predict: int = OLLAMA_NUM_PREDICT,
+    top_p: float = OLLAMA_TOP_P,
+    num_ctx: int = OLLAMA_NUM_CTX,
+    ) -> "OllamaLLM":
+    """
+    Ollama LLM 모델을 로드합니다.
+    모든 설정값은 인자로 전달받으며, 전달되지 않을 경우 config.py의 상수를 기본값으로 사용합니다.
+    """
+    if model_name == MSG_ERROR_OLLAMA_NOT_RUNNING:
         raise ValueError("Ollama 서버가 실행 중이지 않아 모델을 로드할 수 없습니다.")
     
     from langchain_ollama import OllamaLLM
     
     return OllamaLLM(
-        model=_model_name, 
-        num_predict=OLLAMA_NUM_PREDICT,
-        top_p=OLLAMA_TOP_P,
-        num_ctx=OLLAMA_NUM_CTX, 
+        model=model_name, 
+        num_predict=num_predict,
+        top_p=top_p,
+        num_ctx=num_ctx,
         temperature=temperature,
     )
-
-def load_llm(model_name: str, temperature: float = OLLAMA_TEMPERATURE):
-    return load_ollama_llm(_model_name=model_name, temperature=temperature)
-
 
 def is_embedding_model_cached(model_name: str) -> bool:
     """

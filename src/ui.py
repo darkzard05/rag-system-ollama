@@ -3,7 +3,6 @@
 import time
 import logging
 import asyncio
-import nest_asyncio 
 import streamlit as st
 from streamlit_pdf_viewer import pdf_viewer
 import fitz  # PyMuPDF
@@ -40,11 +39,18 @@ from config import (
 
 
 logger = logging.getLogger(__name__)
-nest_asyncio.apply() 
 
 async def _stream_chat_response(qa_chain, user_input, chat_container) -> str:
     """
     LLM의 답변을 실시간으로 UI에 스트리밍하고 최종 답변 문자열을 반환합니다.
+    
+    Args:
+        qa_chain: RAG QA 체인 객체
+        user_input: 사용자가 입력한 질문 문자열
+        chat_container: Streamlit 채팅 메시지 컨테이너
+    
+    Returns:
+        str: 최종 답변 문자열
     """
     full_response = ""
     start_time = time.time()
@@ -88,6 +94,14 @@ async def _stream_chat_response(qa_chain, user_input, chat_container) -> str:
 def render_sidebar(
     file_uploader_callback, model_selector_callback, embedding_selector_callback
 ):
+    """
+    사이드바를 렌더링하고 콜백 함수를 설정합니다.
+    
+    Args:
+        file_uploader_callback: 파일 업로더 변경 시 호출되는 콜백 함수
+        model_selector_callback: 모델 선택 변경 시 호출되는 콜백 함수
+        embedding_selector_callback: 임베딩 모델 선택 변경 시 호출되는 콜백 함수
+    """
     with st.sidebar:
         st.header(MSG_SIDEBAR_TITLE)
         st.file_uploader(
@@ -158,6 +172,9 @@ def render_sidebar(
 
 
 def render_pdf_viewer():
+    """
+    PDF 뷰어를 렌더링합니다.
+    """
     st.subheader(MSG_PDF_VIEWER_TITLE)
     pdf_bytes = SessionManager.get("pdf_file_bytes")
     if not pdf_bytes:
@@ -223,8 +240,9 @@ def render_pdf_viewer():
 
 
 def render_chat_column():
-    """채팅 컬럼을 렌더링하고 채팅 로직을 처리합니다."""
-
+    """
+    채팅 컬럼을 렌더링하고 채팅 로직을 처리합니다.
+    """
     st.subheader(MSG_CHAT_TITLE)
     chat_container = st.container(height=UI_CONTAINER_HEIGHT, border=True)
 
@@ -245,17 +263,11 @@ def render_chat_column():
 
         if qa_chain:
             try:
-                # 이미 실행 중인 루프가 있는지 확인
-                loop = asyncio.get_running_loop()
-            except RuntimeError:
-                loop = None
-
-            if loop and loop.is_running():
-                # 루프가 실행 중이면 task로 예약하고 기다림 (nest_asyncio 필요)
-                final_answer = loop.run_until_complete(_stream_chat_response(qa_chain, last_user_input, chat_container))
-            else:
-                # 루프가 없으면 새로 실행
                 final_answer = asyncio.run(_stream_chat_response(qa_chain, last_user_input, chat_container))
+            except RuntimeError: 
+                # Event loop is already running 오류 처리
+                loop = asyncio.get_event_loop()
+                final_answer = loop.run_until_complete(_stream_chat_response(qa_chain, last_user_input, chat_container))
 
             if final_answer:
                 SessionManager.add_message("assistant", content=final_answer)

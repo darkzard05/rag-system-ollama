@@ -39,15 +39,15 @@ OLLAMA_NUM_PREDICT: int = int(
     )
 # 온도 설정
 OLLAMA_TEMPERATURE: float = float(
-    os.getenv("OLLAMA_TEMPERATURE", _models_config.get("temperature", 0.1))
+    os.getenv("OLLAMA_TEMPERATURE", _models_config.get("temperature", 0.5))
     )
 # 컨텍스트 윈도우
 OLLAMA_NUM_CTX: int = int(
-    os.getenv("OLLAMA_NUM_CTX", _models_config.get("num_ctx", 4096)) 
+    os.getenv("OLLAMA_NUM_CTX", _models_config.get("num_ctx", 2048)) 
 )
 # Top P
 OLLAMA_TOP_P: float = float(
-    os.getenv("OLLAMA_TOP_P", _models_config.get("top_p", 0.8))
+    os.getenv("OLLAMA_TOP_P", _models_config.get("top_p", 0.9))
 )
 AVAILABLE_EMBEDDING_MODELS: List[str] = _models_config.get("available_embeddings", [])
 CACHE_DIR: str = _models_config.get("cache_dir", ".model_cache")

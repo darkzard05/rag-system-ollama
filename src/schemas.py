@@ -10,7 +10,6 @@ class GraphState(TypedDict):
     """
     RAG 그래프의 상태를 나타냅니다.
     """
-
     input: str
     documents: List[Document]
     context: Optional[str]

@@ -4,6 +4,7 @@ RAG Chatbot 애플리케이션의 메인 진입점 파일입니다.
 
 import logging
 import streamlit as st
+import nest_asyncio
 
 from session import SessionManager
 from ui import render_sidebar, render_pdf_viewer, render_left_column
@@ -11,18 +12,25 @@ from rag_core import build_rag_pipeline
 from model_loader import load_llm, load_embedding_model, is_embedding_model_cached
 from config import AVAILABLE_EMBEDDING_MODELS
 
+# 스트림릿에서 비동기 작업을 지원하기 위해 nest_asyncio 적용
+nest_asyncio.apply()
+
+# 로깅 설정
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(levelname)s - [%(name)s:%(funcName)s:%(lineno)d] - %(message)s",
     datefmt="%Y-%m-%d %H:%M:%S",
 )
-
 logger = logging.getLogger(__name__)
 
+# Streamlit 페이지 구성
 st.set_page_config(page_title="RAG Chatbot", layout="wide")
 
 
 def _ensure_models_are_loaded(status_container):
+    """
+    LLM 및 임베딩 모델이 세션에 로드되어 있는지 확인하고, 없으면 로드합니다.
+    """
     selected_model = SessionManager.get("last_selected_model")
     selected_embedding = SessionManager.get("last_selected_embedding_model")
 
@@ -53,6 +61,9 @@ def _ensure_models_are_loaded(status_container):
 
 
 def _rebuild_rag_system(status_container):
+    """
+    RAG 시스템을 재구축하는 UI 래퍼 함수.
+    """
     file_name = SessionManager.get("last_uploaded_file_name")
     file_bytes = SessionManager.get("pdf_file_bytes")
 
@@ -88,7 +99,9 @@ def _rebuild_rag_system(status_container):
 
 
 def _update_qa_chain(status_container):
-    """LLM 변경 시 QA 체인 업데이트를 위한 UI 래퍼 함수."""
+    """
+    LLM 변경 시 QA 체인 업데이트를 위한 UI 래퍼 함수.
+    """
     selected_model = SessionManager.get("last_selected_model")
     try:
         with (
@@ -109,6 +122,9 @@ def _update_qa_chain(status_container):
 
 
 def on_file_upload():
+    """
+    파일 업로드 시 세션 상태를 업데이트하는 콜백 함수.
+    """
     uploaded_file = st.session_state.get("pdf_uploader")
     if not uploaded_file:
         return
@@ -119,6 +135,9 @@ def on_file_upload():
 
 
 def on_model_change():
+    """
+    LLM 모델 변경 시 세션 상태를 업데이트하는 콜백 함수.
+    """
     selected_model = st.session_state.get("model_selector")
     last_model = SessionManager.get("last_selected_model")
     if "---" in selected_model or not selected_model or selected_model == last_model:
@@ -133,6 +152,9 @@ def on_model_change():
 
 
 def on_embedding_change():
+    """
+    임베딩 모델 변경 시 세션 상태를 업데이트하는 콜백 함수.
+    """
     selected_embedding = st.session_state.get("embedding_model_selector")
     last_embedding = SessionManager.get("last_selected_embedding_model")
     if not selected_embedding or selected_embedding == last_embedding:
@@ -147,6 +169,9 @@ def on_embedding_change():
 
 
 def main():
+    """
+    RAG Chatbot 애플리케이션의 메인 함수.
+    """
     SessionManager.init_session()
     status_container = render_sidebar(
         file_uploader_callback=on_file_upload,
