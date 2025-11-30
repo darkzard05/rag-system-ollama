@@ -4,7 +4,7 @@ config.yml 파일과 환경 변수에서 애플리케이션 설정을 로드합�
 
 import os
 import yaml
-from typing import Dict, List, Any
+from typing import Dict, List, Any, Union
 from dotenv import load_dotenv
 
 # .env 파일 로드
@@ -51,7 +51,7 @@ OLLAMA_TOP_P: float = float(
 )
 AVAILABLE_EMBEDDING_MODELS: List[str] = _models_config.get("available_embeddings", [])
 CACHE_DIR: str = _models_config.get("cache_dir", ".model_cache")
-EMBEDDING_BATCH_SIZE: Any = _models_config.get("embedding_batch_size", "auto")
+EMBEDDING_BATCH_SIZE: Union[int, str] = _models_config.get("embedding_batch_size", "auto")
 
 # --- RAG 파이프라인 설정 ---
 _rag_config = _config.get("rag", {})

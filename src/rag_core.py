@@ -6,16 +6,15 @@ import os
 import logging
 import hashlib
 import json
-from typing import List, Optional, Dict, Tuple, TYPE_CHECKING
+from typing import List, Optional, Dict, Tuple
 import tempfile
 import pickle
 
-if TYPE_CHECKING:
-    from langchain_core.documents import Document
-    from langchain_community.vectorstores import FAISS
-    from langchain_community.retrievers import BM25Retriever
-    from langchain_huggingface import HuggingFaceEmbeddings
-    from langchain.retrievers import EnsembleRetriever
+from langchain_core.documents import Document
+from langchain_community.vectorstores import FAISS
+from langchain_community.retrievers import BM25Retriever
+from langchain_huggingface import HuggingFaceEmbeddings
+from langchain.retrievers import EnsembleRetriever
 
 from config import (
     RETRIEVER_CONFIG,
@@ -32,6 +31,9 @@ logger = logging.getLogger(__name__)
 # --- 문서 처리 ---
 @log_operation("Load PDF documents")
 def _load_pdf_docs(pdf_file_bytes: bytes) -> List["Document"]:
+    """
+    PDF 파일 바이트를 받아서 LangChain Document 객체 목록으로 로드합니다.
+    """
     from langchain_community.document_loaders import PyMuPDFLoader
 
     with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as temp_file:
@@ -47,6 +49,9 @@ def _load_pdf_docs(pdf_file_bytes: bytes) -> List["Document"]:
 
 @log_operation("Split documents")
 def _split_documents(docs: List["Document"]) -> List["Document"]:
+    """
+    문서 목록을 구성된 텍스트 분할기를 사용하여 분할합니다.
+    """
     from langchain.text_splitter import RecursiveCharacterTextSplitter
 
     chunker = RecursiveCharacterTextSplitter(
@@ -55,8 +60,6 @@ def _split_documents(docs: List["Document"]) -> List["Document"]:
     )
     return chunker.split_documents(docs)
 
-
-# --- 캐시 관리 ---
 def _serialize_docs(docs: List["Document"]) -> List[Dict]:
     """
     문서 객체 목록을 직렬화 가능한 딕셔너리 목록으로 변환합니다.
@@ -69,9 +72,10 @@ def _deserialize_docs(docs_as_dicts: List[Dict]) -> List["Document"]:
     """
     from langchain_core.documents import Document
 
-    if hasattr(Document, "model_validate"):
-        return [Document.model_validate(d) for d in docs_as_dicts]
-    return [Document.parse_obj(d) for d in docs_as_dicts]
+    return [Document.model_validate(d) for d in docs_as_dicts]
+    # if hasattr(Document, "model_validate"):
+    #     return [Document.model_validate(d) for d in docs_as_dicts]
+    # return [Document.parse_obj(d) for d in docs_as_dicts]
 
 class VectorStoreCache:
     """
@@ -157,8 +161,6 @@ class VectorStoreCache:
         except Exception as e:
             logger.error(f"Failed to save cache: {e}")
 
-
-# --- 리트리버 생성 ---
 @log_operation("Create FAISS vector store")
 def _create_vector_store(
     docs: List["Document"], embedder: "HuggingFaceEmbeddings"
@@ -170,7 +172,6 @@ def _create_vector_store(
 
     return FAISS.from_documents(docs, embedder)
 
-
 @log_operation("Create BM25 retriever")
 def _create_bm25_retriever(docs: List["Document"]) -> "BM25Retriever":
     """
@@ -181,7 +182,6 @@ def _create_bm25_retriever(docs: List["Document"]) -> "BM25Retriever":
     retriever = BM25Retriever.from_documents(docs)
     retriever.k = RETRIEVER_CONFIG["search_kwargs"]["k"]
     return retriever
-
 
 @log_operation("Create Ensemble retriever")
 def _create_ensemble_retriever(
@@ -200,7 +200,6 @@ def _create_ensemble_retriever(
         retrievers=[bm25_retriever, faiss_retriever],
         weights=RETRIEVER_CONFIG["ensemble_weights"],
     )
-
 
 # --- 파이프라인 구축 ---
 @log_operation("Load/Build retrieval components")

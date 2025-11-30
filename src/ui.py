@@ -55,15 +55,34 @@ async def _stream_chat_response(qa_chain, user_input, chat_container) -> str:
     full_response = ""
     start_time = time.time()
 
+    # 1. 현재 세션에서 활성화된 LLM 가져오기
+    current_llm = SessionManager.get("llm")
+    
+    if not current_llm:
+        return "❌ 오류: 로드된 LLM 모델이 없습니다. 모델을 다시 선택해주세요."
+
+    # 2. 실행 설정(Config) 생성
+    run_config = {
+        "configurable": {
+            "llm": current_llm
+        }
+    }
+    
+    # 3. 스트리밍 답변 생성 시작
     with chat_container, st.chat_message("assistant"):
         answer_container = st.empty()
         answer_container.markdown(MSG_PREPARING_ANSWER)
 
         try:
-            # LangGraph app.astream_events를 사용하여 스트리밍 (원래대로 복원)
+            # LangGraph app.astream_events를 사용하여 스트리밍
             async for event in qa_chain.astream_events(
-                {"input": user_input}, version="v1"
+                {"input": user_input}, 
+                config=run_config,
+                version="v1"
             ):
+            # async for event in qa_chain.astream_events(
+            #     {"input": user_input}, version="v1"
+            # ):
                 kind = event["event"]
                 name = event.get("name", "")
 
@@ -161,7 +180,7 @@ def render_sidebar(
             key="embedding_model_selector",
             on_change=embedding_selector_callback,
         )
-        st.divider()
+        # st.divider()
         st.header(MSG_SYSTEM_STATUS_TITLE)
         status_container = st.container()
 

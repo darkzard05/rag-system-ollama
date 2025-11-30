@@ -46,8 +46,8 @@ rag:
 
   # 텍스트 분할 설정
   text_splitter:
-    chunk_size: 1500
-    chunk_overlap: 150
+    chunk_size: 500
+    chunk_overlap: 100
 
     # 프롬프트 설정
     prompts:
@@ -62,7 +62,7 @@ rag:
 # --- 채팅 UI 설정 ---
 ui:
   # 채팅 및 PDF 뷰어 컨테이너의 높이
-  container_height: 650
+  container_height: 500
   
   # UI에 표시될 메시지
   messages:

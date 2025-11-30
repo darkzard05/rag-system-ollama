@@ -167,12 +167,12 @@ def on_embedding_change():
     if SessionManager.get("pdf_file_bytes"):
         SessionManager.set("needs_rag_rebuild", True)
 
-
 def main():
     """
     RAG Chatbot 애플리케이션의 메인 함수.
     """
     SessionManager.init_session()
+    
     status_container = render_sidebar(
         file_uploader_callback=on_file_upload,
         model_selector_callback=on_model_change,
