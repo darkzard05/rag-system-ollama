@@ -41,6 +41,7 @@ def _ensure_models_are_loaded(status_container):
         selected_embedding = AVAILABLE_EMBEDDING_MODELS[0]
         SessionManager.set("last_selected_embedding_model", selected_embedding)
 
+    # LLM 로드 (캐시된 LLM이 현재 선택 모델과 다를 때만 재로드)
     llm = SessionManager.get("llm")
     if not llm or llm.model != selected_model:
         with status_container:
@@ -48,6 +49,7 @@ def _ensure_models_are_loaded(status_container):
                 llm = load_llm(selected_model)
                 SessionManager.set("llm", llm)
 
+    # 임베딩 로드 (캐시된 임베더가 현재 선택 모델과 다를 때만 재로드)
     embedder = SessionManager.get("embedder")
     if not embedder or embedder.model_name != selected_embedding:
         spinner_msg = f"'{selected_embedding}' 임베딩 모델 로딩 중..."
@@ -193,6 +195,8 @@ def main():
         SessionManager.set("needs_qa_chain_update", False)
         _update_qa_chain(status_container)
 
+    # Fragment를 사용하므로 항상 2개 컬럼 레이아웃
+    # 채팅과 PDF는 독립적으로 렌더링됨 (서로 영향 없음)
     col_left, col_right = st.columns([1, 1])
 
     with col_left:

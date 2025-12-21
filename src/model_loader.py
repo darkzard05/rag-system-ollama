@@ -4,8 +4,6 @@ LLM 및 임베딩 모델 로딩을 담당하는 파일.
 
 import os
 import logging
-import streamlit as st
-import ollama
 from typing import List, TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -30,11 +28,12 @@ logger = logging.getLogger(__name__)
 def _fetch_ollama_models() -> List[str]:
     """
     Ollama 서버에서 사용 가능한 LLM 모델 목록을 가져옵니다.
-    
+
     Returns:
         List[str]: 사용 가능한 Ollama 모델 이름 목록.
     """
     try:
+        import ollama
         ollama_response = ollama.list()
         models = sorted([model["model"] for model in ollama_response.get("models", [])])
         if models:
@@ -48,102 +47,112 @@ def _fetch_ollama_models() -> List[str]:
         return [MSG_ERROR_OLLAMA_NOT_RUNNING]
 
 
-@st.cache_data(ttl=3600)
 def get_available_models() -> List[str]:
     """
     Ollama 서버에서 사용 가능한 LLM 모델 목록을 가져옵니다.
-    
+
+    Streamlit 캐싱이 적용되며, 첫 호출 시만 서버에서 모델을 조회합니다.
+
     Returns:
         List[str]: 사용 가능한 Ollama 모델 이름 목록.
     """
-    ollama_models = _fetch_ollama_models()
+    import streamlit as st
 
-    if not ollama_models or ollama_models[0] == MSG_ERROR_OLLAMA_NOT_RUNNING:
-        logger.error(
-            "Could not find any available LLM models. Using default list."
-        )
+    @st.cache_data(ttl=3600)
+    def _cached_models():
+        """내부 캐싱 함수."""
+        ollama_models = _fetch_ollama_models()
+
+        if not ollama_models or ollama_models[0] == MSG_ERROR_OLLAMA_NOT_RUNNING:
+            logger.error(
+                "Could not find any available LLM models. Using default list."
+            )
+            return ollama_models
+
         return ollama_models
 
-    return ollama_models
-
-
+    return _cached_models()
 def _get_dynamic_batch_size(device: str) -> int:
     """
-    GPU VRAM에 따라 동적으로 배치 크기를 결정합니다.
-    
+    GPU VRAM에 따라 동적으로 배치 크기를 결정합니다. (한 번만 계산, 이후 캐시됨)
+
     Args:
         device (str): 'cuda' 또는 'cpu'
-    
+
     Returns:
         int: 적절한 배치 크기
     """
+    if hasattr(_get_dynamic_batch_size, "_cached_batch_size"):
+        return _get_dynamic_batch_size._cached_batch_size
+
     if device != "cuda":
         logger.info("Running on CPU, using default batch size (64).")
-        return 64
+        batch_size = 64
+    else:
+        import torch
+        try:
+            total_vram_gb = torch.cuda.get_device_properties(0).total_memory / (1024**3)
+            logger.info(f"Available GPU VRAM: {total_vram_gb:.2f}GB")
 
-    import torch
+            if total_vram_gb > 16:
+                batch_size = 256
+            elif total_vram_gb > 8:
+                batch_size = 128
+            elif total_vram_gb > 4:
+                batch_size = 64
+            else:
+                batch_size = 32
 
-    try:
-        total_vram_gb = torch.cuda.get_device_properties(0).total_memory / (1024**3)
-        logger.info(f"Available GPU VRAM: {total_vram_gb:.2f}GB")
-
-        if total_vram_gb > 16:
-            batch_size = 256
-        elif total_vram_gb > 8:
-            batch_size = 128
-        elif total_vram_gb > 4:
+            logger.info(f"Using dynamic batch size based on VRAM: {batch_size}")
+        except Exception as e:
+            logger.warning(f"Error checking VRAM: {e}. Using default batch size (64).")
             batch_size = 64
-        else:
-            batch_size = 32
 
-        logger.info(f"Using dynamic batch size based on VRAM: {batch_size}")
-        return batch_size
-    except Exception as e:
-        logger.warning(
-            f"Error checking VRAM: {e}. Using default batch size (64)."
-        )
-        return 64
+    _get_dynamic_batch_size._cached_batch_size = batch_size
+    return batch_size
 
 
-@st.cache_resource(show_spinner=False)
-@log_operation("Load embedding model")
 def load_embedding_model(embedding_model_name: str) -> "HuggingFaceEmbeddings":
     """
-    Hugging Face 임베딩 모델을 로드합니다.
-    
+    Hugging Face 임베딩 모델을 로드합니다. (첫 로드 후 캐시됨)
+
     Args:
         embedding_model_name (str): 로드할 Hugging Face 모델 이름.
-    
+
     Returns:
         HuggingFaceEmbeddings: 로드된 임베딩 모델 인스턴스.
     """
-    import torch
-    from langchain_huggingface import HuggingFaceEmbeddings
+    import streamlit as st
 
-    # if hasattr(torch, "classes"):
-    #     torch.classes.__path__ = []
+    @st.cache_resource(show_spinner=False)
+    @log_operation("Load embedding model")
+    def _load_embedding_model_cached(model_name: str) -> "HuggingFaceEmbeddings":
+        """임베딩 모델을 로드하고 캐싱합니다."""
+        import torch
+        from langchain_huggingface import HuggingFaceEmbeddings
 
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    logger.info(f"Using device for embedding model: {device}")
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        logger.info(f"Using device for embedding model: {device}")
 
-    batch_size = 128  # 기본값
-    if isinstance(EMBEDDING_BATCH_SIZE, int):
-        batch_size = EMBEDDING_BATCH_SIZE
-        logger.info(f"Using batch size from config.yml: {batch_size}")
-    elif EMBEDDING_BATCH_SIZE == "auto":
-        batch_size = _get_dynamic_batch_size(device)
-    else:
-        logger.warning(
-            f"Invalid batch size setting ('{EMBEDDING_BATCH_SIZE}'). Using default (128)."
+        batch_size = 128
+        if isinstance(EMBEDDING_BATCH_SIZE, int):
+            batch_size = EMBEDDING_BATCH_SIZE
+            logger.info(f"Using batch size from config.yml: {batch_size}")
+        elif EMBEDDING_BATCH_SIZE == "auto":
+            batch_size = _get_dynamic_batch_size(device)
+        else:
+            logger.warning(
+                f"Invalid batch size setting ('{EMBEDDING_BATCH_SIZE}'). Using default (128)."
+            )
+
+        return HuggingFaceEmbeddings(
+            model_name=model_name,
+            model_kwargs={"device": device},
+            encode_kwargs={"device": device, "batch_size": batch_size},
+            cache_folder=CACHE_DIR,
         )
 
-    return HuggingFaceEmbeddings(
-        model_name=embedding_model_name,
-        model_kwargs={"device": device},
-        encode_kwargs={"device": device, "batch_size": batch_size},
-        cache_folder=CACHE_DIR,
-    )
-
+    return _load_embedding_model_cached(embedding_model_name)
 @log_operation("Load Ollama LLM")
 def load_llm(
     model_name: str,
@@ -151,18 +160,30 @@ def load_llm(
     num_predict: int = OLLAMA_NUM_PREDICT,
     top_p: float = OLLAMA_TOP_P,
     num_ctx: int = OLLAMA_NUM_CTX,
-    ) -> "OllamaLLM":
+) -> "OllamaLLM":
     """
     Ollama LLM 모델을 로드합니다.
-    모든 설정값은 인자로 전달받으며, 전달되지 않을 경우 config.py의 상수를 기본값으로 사용합니다.
+
+    Args:
+        model_name (str): 로드할 모델의 이름.
+        temperature (float): 모델의 온도 설정. 기본값은 config의 OLLAMA_TEMPERATURE.
+        num_predict (int): 예측 토큰 수. 기본값은 config의 OLLAMA_NUM_PREDICT.
+        top_p (float): Top-p 샘플링. 기본값은 config의 OLLAMA_TOP_P.
+        num_ctx (int): 컨텍스트 윈도우. 기본값은 config의 OLLAMA_NUM_CTX.
+
+    Returns:
+        OllamaLLM: 로드된 Ollama LLM 인스턴스.
+
+    Raises:
+        ValueError: Ollama 서버가 실행 중이지 않을 때.
     """
     if model_name == MSG_ERROR_OLLAMA_NOT_RUNNING:
         raise ValueError("Ollama 서버가 실행 중이지 않아 모델을 로드할 수 없습니다.")
-    
+
     from langchain_ollama import OllamaLLM
-    
+
     return OllamaLLM(
-        model=model_name, 
+        model=model_name,
         num_predict=num_predict,
         top_p=top_p,
         num_ctx=num_ctx,

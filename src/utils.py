@@ -39,13 +39,11 @@ def log_operation(operation_name):
     return decorator
 
 
-# --- 💡 비동기 함수 및 생성기를 위한 새로운 데코레이터 추가 💡 ---
 def async_log_operation(operation_name):
     """
     비동기 함수 및 비동기 생성기의 실행 시작, 완료, 오류 발생 시 로그를 남기는 데코레이터.
     스트리밍(yield)을 지원하면서 전체 실행 시간을 정확히 측정합니다.
     """
-
     def decorator(func):
         @functools.wraps(func)
         async def wrapper(*args, **kwargs):

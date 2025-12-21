@@ -7,7 +7,6 @@ import yaml
 from typing import Dict, List, Any, Union
 from dotenv import load_dotenv
 
-# .env 파일 로드
 load_dotenv()
 
 
@@ -36,14 +35,14 @@ OLLAMA_MODEL_NAME: str = _models_config.get("default_ollama", "gemma3:8b")
 # 예측 토큰 수
 OLLAMA_NUM_PREDICT: int = int(
     os.getenv("OLLAMA_NUM_PREDICT", _models_config.get("ollama_num_predict", -1))
-    )
+)
 # 온도 설정
 OLLAMA_TEMPERATURE: float = float(
     os.getenv("OLLAMA_TEMPERATURE", _models_config.get("temperature", 0.5))
-    )
+)
 # 컨텍스트 윈도우
 OLLAMA_NUM_CTX: int = int(
-    os.getenv("OLLAMA_NUM_CTX", _models_config.get("num_ctx", 2048)) 
+    os.getenv("OLLAMA_NUM_CTX", _models_config.get("num_ctx", 2048))
 )
 # Top P
 OLLAMA_TOP_P: float = float(
@@ -57,6 +56,7 @@ EMBEDDING_BATCH_SIZE: Union[int, str] = _models_config.get("embedding_batch_size
 _rag_config = _config.get("rag", {})
 RETRIEVER_CONFIG: Dict = _rag_config.get("retriever", {})
 TEXT_SPLITTER_CONFIG: Dict = _rag_config.get("text_splitter", {})
+SEMANTIC_CHUNKER_CONFIG: Dict = _rag_config.get("semantic_chunker", {})
 VECTOR_STORE_CACHE_DIR: str = _rag_config.get(
     "vector_store_cache_dir", ".model_cache/vector_store_cache"
 )

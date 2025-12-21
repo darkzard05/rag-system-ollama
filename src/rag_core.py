@@ -6,30 +6,32 @@ import os
 import logging
 import hashlib
 import json
-from typing import List, Optional, Dict, Tuple
+from typing import List, Optional, Dict, Tuple, TYPE_CHECKING
 import tempfile
 import pickle
+from functools import reduce
+import operator
 
-from langchain_core.documents import Document
-from langchain_community.vectorstores import FAISS
-from langchain_community.retrievers import BM25Retriever
-from langchain_huggingface import HuggingFaceEmbeddings
-from langchain.retrievers import EnsembleRetriever
+if TYPE_CHECKING:
+    from langchain_core.documents import Document
+    from langchain_community.vectorstores import FAISS
+    from langchain_community.retrievers import BM25Retriever
+    from langchain.retrievers import EnsembleRetriever
+    from langchain_huggingface import HuggingFaceEmbeddings
 
 from config import (
     RETRIEVER_CONFIG,
     TEXT_SPLITTER_CONFIG,
+    SEMANTIC_CHUNKER_CONFIG,
     VECTOR_STORE_CACHE_DIR,
 )
 from session import SessionManager
 from utils import log_operation
-from graph_builder import build_graph
 
 
 logger = logging.getLogger(__name__)
 
-# --- 문서 처리 ---
-@log_operation("Load PDF documents")
+
 def _load_pdf_docs(pdf_file_bytes: bytes) -> List["Document"]:
     """
     PDF 파일 바이트를 받아서 LangChain Document 객체 목록으로 로드합니다.
@@ -47,39 +49,121 @@ def _load_pdf_docs(pdf_file_bytes: bytes) -> List["Document"]:
         os.remove(temp_file_path)
 
 
-@log_operation("Split documents")
-def _split_documents(docs: List["Document"]) -> List["Document"]:
+def _split_documents(docs: List["Document"], embedder=None) -> List["Document"]:
     """
-    문서 목록을 구성된 텍스트 분할기를 사용하여 분할합니다.
+    문서 목록을 텍스트 분할기를 사용하여 분할합니다.
+    
+    의미론적 분할이 활성화되면 임베딩 기반 의미 분할기를 사용하고,
+    그렇지 않으면 기존의 RecursiveCharacterTextSplitter를 사용합니다.
+    
+    Args:
+        docs: 분할할 문서 리스트
+        embedder: 의미론적 분할을 위한 임베딩 모델 (선택사항)
+        
+    Returns:
+        분할된 문서 리스트
     """
     from langchain.text_splitter import RecursiveCharacterTextSplitter
+    from langchain_core.documents import Document
+    
+    # 의미론적 분할 활성화 여부 확인
+    use_semantic = SEMANTIC_CHUNKER_CONFIG.get("enabled", False)
+    
+    if use_semantic and embedder:
+        # 의미론적 분할기 사용
+        from semantic_chunker import EmbeddingBasedSemanticChunker
+        
+        semantic_chunker = EmbeddingBasedSemanticChunker(
+            embedder=embedder,
+            breakpoint_threshold_type=SEMANTIC_CHUNKER_CONFIG.get(
+                "breakpoint_threshold_type", "percentile"
+            ),
+            breakpoint_threshold_value=float(
+                SEMANTIC_CHUNKER_CONFIG.get("breakpoint_threshold_value", 95.0)
+            ),
+            sentence_split_regex=SEMANTIC_CHUNKER_CONFIG.get(
+                "sentence_split_regex", r"[.!?]\s+"
+            ),
+            min_chunk_size=int(SEMANTIC_CHUNKER_CONFIG.get("min_chunk_size", 100)),
+            max_chunk_size=int(SEMANTIC_CHUNKER_CONFIG.get("max_chunk_size", 800)),
+            similarity_threshold=float(
+                SEMANTIC_CHUNKER_CONFIG.get("similarity_threshold", 0.5)
+            ),
+        )
+        
+        # 문서별로 분할
+        split_docs = []
+        for doc in docs:
+            chunks = semantic_chunker.split_text(doc.page_content)
+            for chunk in chunks:
+                new_doc = Document(
+                    page_content=chunk,
+                    metadata=doc.metadata.copy()
+                )
+                split_docs.append(new_doc)
+        
+        logger.info(
+            f"Split {len(docs)} documents into {len(split_docs)} chunks "
+            f"using semantic chunker"
+        )
+        return split_docs
+    else:
+        # 기존의 RecursiveCharacterTextSplitter 사용
+        chunker = RecursiveCharacterTextSplitter(
+            chunk_size=TEXT_SPLITTER_CONFIG["chunk_size"],
+            chunk_overlap=TEXT_SPLITTER_CONFIG["chunk_overlap"],
+        )
+        return chunker.split_documents(docs)
 
-    chunker = RecursiveCharacterTextSplitter(
-        chunk_size=TEXT_SPLITTER_CONFIG["chunk_size"],
-        chunk_overlap=TEXT_SPLITTER_CONFIG["chunk_overlap"],
-    )
-    return chunker.split_documents(docs)
 
 def _serialize_docs(docs: List["Document"]) -> List[Dict]:
     """
     문서 객체 목록을 직렬화 가능한 딕셔너리 목록으로 변환합니다.
+
+    Args:
+        docs (List[Document]): 문서 객체 목록.
+
+    Returns:
+        List[Dict]: 직렬화된 문서 딕셔너리 목록.
     """
     return [doc.model_dump() if hasattr(doc, "model_dump") else doc.dict() for doc in docs]
 
 def _deserialize_docs(docs_as_dicts: List[Dict]) -> List["Document"]:
     """
     직렬화된 딕셔너리 목록을 문서 객체 목록으로 변환합니다.
+
+    Args:
+        docs_as_dicts (List[Dict]): 직렬화된 문서 딕셔너리 목록.
+
+    Returns:
+        List[Document]: 변환된 문서 객체 목록.
     """
     from langchain_core.documents import Document
 
     return [Document.model_validate(d) for d in docs_as_dicts]
-    # if hasattr(Document, "model_validate"):
-    #     return [Document.model_validate(d) for d in docs_as_dicts]
-    # return [Document.parse_obj(d) for d in docs_as_dicts]
+
+def _compute_config_hash() -> str:
+    """
+    설정(의미분할, 리트리버)이 변경되었는지 감지하기 위한 해시 생성.
+    설정이 변경되면 다른 캐시 키가 생성되어 이전 캐시를 무효화합니다.
+    
+    Returns:
+        str: 설정 기반 해시값 (8자리)
+    """
+    config_dict = {
+        "semantic_chunker": SEMANTIC_CHUNKER_CONFIG,
+        "text_splitter": TEXT_SPLITTER_CONFIG,
+        "retriever": RETRIEVER_CONFIG,
+    }
+    config_str = json.dumps(config_dict, sort_keys=True, default=str)
+    return hashlib.md5(config_str.encode()).hexdigest()[:8]
+
 
 class VectorStoreCache:
     """
-    벡터 저장소 및 리트리버 캐시를 관리(경로 생성, 저장, 로드)합니다.
+    벡터 저장소 및 리트리버 캐시를 관리합니다.
+
+    캐시 경로 생성, 저장소/리트리버 저장 및 로드 기능을 제공합니다.
     """
     def __init__(self, file_bytes: bytes, embedding_model_name: str):
         (
@@ -94,8 +178,9 @@ class VectorStoreCache:
     ) -> Tuple[str, str, str, str]:
         file_hash = hashlib.sha256(file_bytes).hexdigest()
         model_name_slug = embedding_model_name.replace("/", "_")
+        config_hash = _compute_config_hash()  # 설정 기반 해시 추가
         cache_dir = os.path.join(
-            VECTOR_STORE_CACHE_DIR, f"{file_hash}_{model_name_slug}"
+            VECTOR_STORE_CACHE_DIR, f"{file_hash}_{model_name_slug}_{config_hash}"
         )
         doc_splits_path = os.path.join(cache_dir, "doc_splits.json")
         faiss_index_path = os.path.join(cache_dir, "faiss_index")
@@ -107,6 +192,15 @@ class VectorStoreCache:
     ) -> Tuple[
         Optional[List["Document"]], Optional["FAISS"], Optional["BM25Retriever"]
     ]:
+        """
+        캐시에서 검색 구성 요소를 로드합니다.
+
+        Args:
+            embedder (HuggingFaceEmbeddings): 임베딩 모델.
+
+        Returns:
+            Tuple: (분할된 문서, FAISS 벡터 저장소, BM25 리트리버) 또는 모두 None.
+        """
         from langchain_community.vectorstores import FAISS
 
         if not all(
@@ -119,18 +213,15 @@ class VectorStoreCache:
         ):
             return None, None, None
         try:
-            # 1. 분할된 문서 로드
             with open(self.doc_splits_path, "r", encoding="utf-8") as f:
                 doc_splits = _deserialize_docs(json.load(f))
 
-            # 2. FAISS 벡터 저장소 로드
             vector_store = FAISS.load_local(
                 self.faiss_index_path,
                 embedder,
                 allow_dangerous_deserialization=True,
             )
 
-            # 3. BM25 리트리버 로드
             with open(self.bm25_retriever_path, "rb") as f:
                 bm25_retriever = pickle.load(f)
 
@@ -146,14 +237,19 @@ class VectorStoreCache:
         vector_store: "FAISS",
         bm25_retriever: "BM25Retriever",
     ):
+        """
+        검색 구성 요소를 캐시에 저장합니다.
+
+        Args:
+            doc_splits (List[Document]): 분할된 문서 목록.
+            vector_store (FAISS): FAISS 벡터 저장소.
+            bm25_retriever (BM25Retriever): BM25 리트리버.
+        """
         try:
             os.makedirs(self.cache_dir, exist_ok=True)
-            # 1. 분할된 문서 저장
             with open(self.doc_splits_path, "w", encoding="utf-8") as f:
                 json.dump(_serialize_docs(doc_splits), f, ensure_ascii=False, indent=4)
-            # 2. FAISS 벡터 저장소 저장
             vector_store.save_local(self.faiss_index_path)
-            # 3. BM25 리트리버 저장
             with open(self.bm25_retriever_path, "wb") as f:
                 pickle.dump(bm25_retriever, f)
 
@@ -167,15 +263,28 @@ def _create_vector_store(
 ) -> "FAISS":
     """
     문서 목록과 임베더를 사용하여 FAISS 벡터 저장소를 생성합니다.
+
+    Args:
+        docs (List[Document]): 문서 목록.
+        embedder (HuggingFaceEmbeddings): 임베딩 모델.
+
+    Returns:
+        FAISS: 생성된 FAISS 벡터 저장소.
     """
     from langchain_community.vectorstores import FAISS
 
     return FAISS.from_documents(docs, embedder)
 
-@log_operation("Create BM25 retriever")
+
 def _create_bm25_retriever(docs: List["Document"]) -> "BM25Retriever":
     """
     문서 목록을 사용하여 BM25 리트리버를 생성합니다.
+
+    Args:
+        docs (List[Document]): 문서 목록.
+
+    Returns:
+        BM25Retriever: 생성된 BM25 리트리버.
     """
     from langchain_community.retrievers import BM25Retriever
 
@@ -183,12 +292,19 @@ def _create_bm25_retriever(docs: List["Document"]) -> "BM25Retriever":
     retriever.k = RETRIEVER_CONFIG["search_kwargs"]["k"]
     return retriever
 
-@log_operation("Create Ensemble retriever")
+
 def _create_ensemble_retriever(
     vector_store: "FAISS", bm25_retriever: "BM25Retriever"
 ) -> "EnsembleRetriever":
     """
     FAISS 및 BM25 리트리버를 결합한 앙상블 리트리버를 생성합니다.
+
+    Args:
+        vector_store (FAISS): FAISS 벡터 저장소.
+        bm25_retriever (BM25Retriever): BM25 리트리버.
+
+    Returns:
+        EnsembleRetriever: 생성된 앙상블 리트리버.
     """
     from langchain.retrievers import EnsembleRetriever
 
@@ -208,6 +324,13 @@ def _load_and_build_retrieval_components(
 ) -> Tuple[List["Document"], "FAISS", "BM25Retriever", bool]:
     """
     캐시에서 검색 구성 요소를 로드하거나, 캐시가 없으면 새로 생성하고 저장합니다.
+
+    Args:
+        file_bytes (bytes): PDF 파일의 바이트 데이터.
+        embedder (HuggingFaceEmbeddings): 임베딩 모델.
+
+    Returns:
+        Tuple: (분할된 문서, FAISS 저장소, BM25 리트리버, 캐시 사용 여부).
     """
     cache = VectorStoreCache(file_bytes, embedder.model_name)
     doc_splits, vector_store, bm25_retriever = cache.load(embedder)
@@ -215,7 +338,7 @@ def _load_and_build_retrieval_components(
 
     if not cache_used:
         docs = _load_pdf_docs(file_bytes)
-        doc_splits = _split_documents(docs)
+        doc_splits = _split_documents(docs, embedder)
         vector_store = _create_vector_store(doc_splits, embedder)
         bm25_retriever = _create_bm25_retriever(doc_splits)
         cache.save(doc_splits, vector_store, bm25_retriever)
@@ -229,7 +352,17 @@ def build_rag_pipeline(
 ) -> Tuple[str, bool]:
     """
     RAG 파이프라인을 구축하고 세션에 저장합니다.
+
+    Args:
+        uploaded_file_name (str): 업로드된 파일의 이름.
+        file_bytes (bytes): 파일의 바이트 데이터.
+        embedder (HuggingFaceEmbeddings): 임베딩 모델.
+
+    Returns:
+        Tuple[str, bool]: (성공 메시지, 캐시 사용 여부).
     """
+    from graph_builder import build_graph
+
     doc_splits, vector_store, bm25_retriever, cache_used = (
         _load_and_build_retrieval_components(file_bytes, embedder)
     )
@@ -255,7 +388,15 @@ def build_rag_pipeline(
 @log_operation("Update LLM in pipeline")
 def update_llm_in_pipeline(llm):
     """
-    세션의 LLM을 교체합니다. 그래프가 세션에서 LLM을 가져오므로 재빌드할 필요가 없습니다.
+    세션의 LLM을 교체합니다.
+
+    그래프가 세션에서 LLM을 가져오므로 재빌드할 필요가 없습니다.
+
+    Args:
+        llm: 업데이트할 새로운 LLM 모델.
+
+    Raises:
+        ValueError: RAG 파이프라인이 구축되지 않았을 때.
     """
     if not SessionManager.get("pdf_processed"):
         raise ValueError("RAG 파이프라인이 구축되지 않아 LLM을 업데이트할 수 없습니다.")

@@ -10,6 +10,7 @@ langgraph>=0.1.0,<0.2.0
 langchain-community
 langchain-huggingface
 langchain-ollama
+langchain-text-splitters
 
 # Vector Store & Embeddings
 faiss-cpu==1.12.0

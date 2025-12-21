@@ -40,74 +40,75 @@ from config import (
 
 logger = logging.getLogger(__name__)
 
+
 async def _stream_chat_response(qa_chain, user_input, chat_container) -> str:
     """
     LLM의 답변을 실시간으로 UI에 스트리밍하고 최종 답변 문자열을 반환합니다.
-    
+
     Args:
-        qa_chain: RAG QA 체인 객체
-        user_input: 사용자가 입력한 질문 문자열
-        chat_container: Streamlit 채팅 메시지 컨테이너
-    
+        qa_chain: RAG QA 체인 객체.
+        user_input (str): 사용자가 입력한 질문.
+        chat_container: Streamlit 채팅 메시지 컨테이너.
+
     Returns:
-        str: 최종 답변 문자열
+        str: 최종 생성된 답변 문자열.
     """
     full_response = ""
     start_time = time.time()
 
-    # 1. 현재 세션에서 활성화된 LLM 가져오기
     current_llm = SessionManager.get("llm")
-    
+
     if not current_llm:
         return "❌ 오류: 로드된 LLM 모델이 없습니다. 모델을 다시 선택해주세요."
 
-    # 2. 실행 설정(Config) 생성
     run_config = {
         "configurable": {
             "llm": current_llm
         }
     }
-    
-    # 3. 스트리밍 답변 생성 시작
-    with chat_container, st.chat_message("assistant"):
-        answer_container = st.empty()
-        answer_container.markdown(MSG_PREPARING_ANSWER)
 
-        try:
-            # LangGraph app.astream_events를 사용하여 스트리밍
-            async for event in qa_chain.astream_events(
-                {"input": user_input}, 
-                config=run_config,
-                version="v1"
-            ):
-            # async for event in qa_chain.astream_events(
-            #     {"input": user_input}, version="v1"
-            # ):
-                kind = event["event"]
-                name = event.get("name", "")
+    SessionManager.set("is_generating_answer", True)
+    SessionManager.set("pdf_interaction_blocked", True)
 
-                if kind == "on_chain_stream" and name == "generate_response":
-                    chunk_data = event["data"].get("chunk")
+    try:
+        with chat_container, st.chat_message("assistant"):
+            answer_container = st.empty()
+            answer_container.markdown(MSG_PREPARING_ANSWER)
 
-                    if isinstance(chunk_data, dict) and "response" in chunk_data:
-                        full_response += chunk_data["response"]
-                        answer_container.markdown(full_response + "▌")
+            try:
+                async for event in qa_chain.astream_events(
+                    {"input": user_input},
+                    config=run_config,
+                    version="v1"
+                ):
+                    kind = event["event"]
+                    name = event.get("name", "")
 
-        except Exception as e:
-            error_msg = MSG_STREAMING_ERROR.format(e=str(e))
-            logger.error(f"Streaming error: {error_msg}", exc_info=True)
-            answer_container.error(error_msg)
-            return f"❌ {error_msg}"
+                    if kind == "on_chain_stream" and name == "generate_response":
+                        chunk_data = event["data"].get("chunk")
 
-    # --- 스트리밍 완료 후 최종 내용 정리 및 로그 출력 ---
-    end_time = time.time()
-    answer_container.markdown(full_response)
+                        if isinstance(chunk_data, dict) and "response" in chunk_data:
+                            full_response += chunk_data["response"]
+                            answer_container.markdown(full_response + "▌")
 
-    total_duration = end_time - start_time
-    perf_details = f"Response generated in {total_duration:.2f} seconds ({len(full_response)} chars)."
-    logger.info(f"  [Performance] {perf_details}")
+            except Exception as e:
+                error_msg = MSG_STREAMING_ERROR.format(e=str(e))
+                logger.error(f"Streaming error: {error_msg}", exc_info=True)
+                answer_container.error(error_msg)
+                return f"❌ {error_msg}"
 
-    return full_response
+        end_time = time.time()
+        answer_container.markdown(full_response)
+
+        total_duration = end_time - start_time
+        perf_details = f"Response generated in {total_duration:.2f} seconds ({len(full_response)} chars)."
+        logger.info(f"  [Performance] {perf_details}")
+
+        return full_response
+
+    finally:
+        SessionManager.set("is_generating_answer", False)
+        SessionManager.set("pdf_interaction_blocked", False)
 
 
 def render_sidebar(
@@ -115,11 +116,14 @@ def render_sidebar(
 ):
     """
     사이드바를 렌더링하고 콜백 함수를 설정합니다.
-    
+
     Args:
-        file_uploader_callback: 파일 업로더 변경 시 호출되는 콜백 함수
-        model_selector_callback: 모델 선택 변경 시 호출되는 콜백 함수
-        embedding_selector_callback: 임베딩 모델 선택 변경 시 호출되는 콜백 함수
+        file_uploader_callback: 파일 업로더 변경 시 호출되는 콜백.
+        model_selector_callback: 모델 선택 변경 시 호출되는 콜백.
+        embedding_selector_callback: 임베딩 모델 선택 변경 시 호출되는 콜백.
+
+    Returns:
+        Container: 상태 메시지를 표시할 컨테이너.
     """
     with st.sidebar:
         st.header(MSG_SIDEBAR_TITLE)
@@ -180,7 +184,6 @@ def render_sidebar(
             key="embedding_model_selector",
             on_change=embedding_selector_callback,
         )
-        # st.divider()
         st.header(MSG_SYSTEM_STATUS_TITLE)
         status_container = st.container()
 
@@ -194,12 +197,23 @@ def render_pdf_viewer():
     """
     PDF 뷰어를 렌더링합니다.
     """
+    _pdf_viewer_fragment()
+
+
+def _pdf_viewer_fragment():
+    """
+    PDF 뷰어 렌더링 로직 (fragment로 분리).
+    """
     st.subheader(MSG_PDF_VIEWER_TITLE)
+
     pdf_bytes = SessionManager.get("pdf_file_bytes")
     if not pdf_bytes:
         st.info(MSG_PDF_VIEWER_NO_FILE)
         return
+    
+    pdf_document = None
     try:
+        # ✅ Context manager로 PDF 리소스 자동 정리
         pdf_document = fitz.open(stream=pdf_bytes, filetype="pdf")
         total_pages = len(pdf_document)
         current_file_name = SessionManager.get("last_uploaded_file_name")
@@ -212,10 +226,16 @@ def render_pdf_viewer():
             st.session_state.current_page = 1
 
         def go_to_previous_page():
+            # 답변 생성 중이면 무시
+            if SessionManager.get("is_generating_answer", False):
+                return
             if st.session_state.current_page > 1:
                 st.session_state.current_page -= 1
 
         def go_to_next_page():
+            # 답변 생성 중이면 무시
+            if SessionManager.get("is_generating_answer", False):
+                return
             if st.session_state.current_page < total_pages:
                 st.session_state.current_page += 1
 
@@ -235,6 +255,11 @@ def render_pdf_viewer():
         with nav_cols[1]:
 
             def sync_slider_and_input():
+                # 답변 생성 중이면 슬라이더 조작 무시
+                if SessionManager.get("is_generating_answer", False):
+                    # 이전 값으로 복원
+                    st.session_state.current_page_slider = st.session_state.current_page
+                    return
                 st.session_state.current_page = st.session_state.current_page_slider
 
             st.slider(
@@ -256,11 +281,22 @@ def render_pdf_viewer():
     except Exception as e:
         st.error(MSG_PDF_VIEWER_ERROR.format(e=e))
         logger.error("PDF viewer error", exc_info=True)
+    finally:
+        # ✅ PDF 리소스 명시적 정리 (메모리 누수 방지)
+        if pdf_document is not None:
+            pdf_document.close()
 
 
 def render_chat_column():
     """
     채팅 컬럼을 렌더링하고 채팅 로직을 처리합니다.
+    """
+    _chat_fragment()
+
+
+def _chat_fragment():
+    """
+    채팅 렌더링 로직 (fragment로 분리).
     """
     st.subheader(MSG_CHAT_TITLE)
     chat_container = st.container(height=UI_CONTAINER_HEIGHT, border=True)
@@ -271,7 +307,8 @@ def render_chat_column():
             st.markdown(message["content"])
 
     if user_input := st.chat_input(
-        MSG_CHAT_INPUT_PLACEHOLDER, disabled=not SessionManager.is_ready_for_chat()
+        MSG_CHAT_INPUT_PLACEHOLDER, 
+        disabled=not SessionManager.is_ready_for_chat() or SessionManager.get("is_generating_answer")
     ):
         SessionManager.add_message("user", user_input)
         st.rerun()
