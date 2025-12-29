@@ -1,4 +1,6 @@
-"Streamlit UI 컴포넌트 렌더링 함수들을 모아놓은 파일."
+"""
+Streamlit UI 컴포넌트 렌더링 함수들을 모아놓은 파일.
+"""
 
 import time
 import logging
@@ -9,6 +11,7 @@ import fitz  # PyMuPDF
 
 from session import SessionManager
 from model_loader import get_available_models
+from utils import sync_run
 from config import (
     AVAILABLE_EMBEDDING_MODELS,
     OLLAMA_MODEL_NAME,
@@ -74,6 +77,9 @@ async def _stream_chat_response(qa_chain, user_input, chat_container) -> str:
         with chat_container, st.chat_message("assistant"):
             answer_container = st.empty()
             answer_container.markdown(MSG_PREPARING_ANSWER)
+            
+            last_update_time = time.time()
+            update_interval = 0.05  # 0.05초 간격으로 UI 업데이트 (부하 감소)
 
             try:
                 async for event in qa_chain.astream_events(
@@ -89,7 +95,14 @@ async def _stream_chat_response(qa_chain, user_input, chat_container) -> str:
 
                         if isinstance(chunk_data, dict) and "response" in chunk_data:
                             full_response += chunk_data["response"]
-                            answer_container.markdown(full_response + "▌")
+                            
+                            # 성능 최적화: 일정 시간 간격으로만 UI 업데이트
+                            current_time = time.time()
+                            if current_time - last_update_time > update_interval:
+                                answer_container.markdown(full_response + "▌")
+                                last_update_time = current_time
+                                # 이벤트 루프에 제어권을 양보하여 UI 패킷 전송을 도움
+                                await asyncio.sleep(0)
 
             except Exception as e:
                 error_msg = MSG_STREAMING_ERROR.format(e=str(e))
@@ -318,12 +331,9 @@ def _chat_fragment():
         qa_chain = SessionManager.get("qa_chain")
 
         if qa_chain:
-            try:
-                final_answer = asyncio.run(_stream_chat_response(qa_chain, last_user_input, chat_container))
-            except RuntimeError: 
-                # Event loop is already running 오류 처리
-                loop = asyncio.get_event_loop()
-                final_answer = loop.run_until_complete(_stream_chat_response(qa_chain, last_user_input, chat_container))
+            final_answer = sync_run(
+                _stream_chat_response(qa_chain, last_user_input, chat_container)
+            )
 
             if final_answer:
                 SessionManager.add_message("assistant", content=final_answer)

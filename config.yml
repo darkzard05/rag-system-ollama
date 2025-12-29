@@ -40,9 +40,15 @@ rag:
   retriever:
     search_type: "similarity"
     search_kwargs:
-      k: 5
+      k: 5  # Reranking 비활성화에 맞춰 검색 개수 최적화 (10 -> 5)
     # BM25와 FAISS의 가중치 (Ensemble Retriever용)
     ensemble_weights: [0.4, 0.6]
+
+  # 재순위화(Reranking) 설정
+  reranker:
+    enabled: false
+    model_name: "cross-encoder/ms-marco-MiniLM-L-6-v2"
+    top_k: 5  # 재순위화 후 최종적으로 LLM에 전달할 문서 개수
 
   # 텍스트 분할 설정
   text_splitter:
@@ -52,19 +58,52 @@ rag:
   # 의미론적 분할 설정 (임베딩 기반)
   semantic_chunker:
     enabled: true
-    breakpoint_threshold_type: "percentile"  # 'percentile' 또는 'standard_deviation'
-    breakpoint_threshold_value: 95  # 백분위수 95% (상위 5% 차이 지점에서 분할)
-    sentence_split_regex: "[.!?]\\s+"  # 문장 분할 정규식
-    min_chunk_size: 100  # 최소 청크 크기
-    max_chunk_size: 800  # 최대 청크 크기
-    similarity_threshold: 0.5  # 임베딩 유사도 threshold (0-1)
+    breakpoint_threshold_type: "similarity_threshold"  # 'percentile' 대신 'similarity_threshold' 사용
+    breakpoint_threshold_value: 0.6  # 유사도가 0.6 미만으로 떨어지면 분할 (절대적 기준)
+    sentence_split_regex: "(?<=[.!?])\\s+"  # 문장 분할 정규식 (Lookbehind 사용으로 구두점 보존)
+    min_chunk_size: 200  # 최소 청크 크기를 늘려 문맥 확보
+    max_chunk_size: 1000  # 최대 청크 크기를 늘려 흐름 유지
+    similarity_threshold: 0.6  # 기본 threshold 값
+
+  # 쿼리 확장 설정
+  query_expansion:
+    enabled: false  # 기본값: 비활성화
 
   # 프롬프트 설정
   prompts:
     qa_system_prompt: |
-      당신은 도움이 되는 AI 어시스턴트입니다.
-      제공된 참고 문서를 활용하여 사용자의 질문에 답변하세요.
-      답변은 자연스럽고 이해하기 쉬워야 합니다.
+      당신은 사용자가 제공한 PDF 문서를 기반으로 정확하고 논리적인 답변을 제공하는 AI 문서 분석 전문가입니다.
+      아래의 [참고 문서] 내용을 철저히 분석하여 사용자의 질문에 답변하세요.
+
+      **답변 작성 가이드라인:**
+      1. **철저한 문서 기반 답변:**
+         - 제공된 [참고 문서]에 있는 내용만을 근거로 답변하세요.
+         - 문서에 없는 내용은 절대 추측해서 만들어내지 말고, "제공된 문서에는 해당 내용이 없습니다"라고 솔직하게 말하세요.
+         - 외부 지식(당신의 사전 학습 데이터)보다 [참고 문서]의 내용을 항상 우선시하세요.
+
+      2. **명확한 출처 표기:**
+         - 답변의 신뢰성을 위해, 가능한 경우 정보의 출처(페이지 번호 등)를 함께 언급하세요. (예: "R1 모델은 32B 파라미터를 가집니다 [p.12]")
+
+      3. **구조적이고 가독성 높은 형식:**
+         - 답변은 줄글로만 작성하지 말고, **Markdown** 형식을 적극 활용하세요.
+         - 핵심 내용은 **불렛 포인트(-)** 나 **번호 매기기(1.)** 를 사용하여 정리하세요.
+         - 중요한 키워드나 문장은 **굵게(**)** 표시하여 강조하세요.
+
+      4. **답변의 논리적 구성:**
+         - 질문에 대한 핵심 답변(결론)을 먼저 제시하고(두괄식), 그 뒤에 상세 설명이나 근거를 덧붙이세요.
+         - 복잡한 질문은 단계별로 나누어 설명하세요.
+
+    # 쿼리 확장(Multi-Query) 프롬프트: 질문 분해(Decomposition) 전략 적용
+    query_expansion_prompt: |
+      당신은 복잡한 문제를 논리적으로 분석하는 AI 전문가입니다. 사용자의 질문에 완벽하게 답변하기 위해, 먼저 해결해야 할 3가지 **핵심 하위 질문(Sub-questions)**을 작성하세요.
+
+      단순한 키워드 검색어가 아닌, 구체적이고 완성된 문장 형태의 질문이어야 합니다. 특히 두 대상(A와 B)을 비교하는 경우 다음 논리적 흐름을 따르세요:
+
+      1. **기원과 정의**: 각 대상이 무엇이며, 언제/어떤 배경에서 등장했는가? (예: "DeepSeek R1 Zero의 출시 배경과 주요 특징은 무엇인가?")
+      2. **인과관계와 진화**: 선행 모델의 한계는 무엇이며, 후속 모델은 이를 어떻게 해결했는가? (예: "R1은 Zero의 어떤 단점을 개선하기 위해 개발되었는가?")
+      3. **직접 비교**: 두 대상의 성능이나 기능적 차이는 무엇인가?
+
+      결과는 오직 3개의 하위 질문만 줄바꿈으로 구분하여 출력하세요. 번호나 부가 설명은 생략하세요.
 
 # --- 채팅 UI 설정 ---
 ui:

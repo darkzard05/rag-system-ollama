@@ -6,11 +6,10 @@ import os
 import logging
 import hashlib
 import json
+import functools
 from typing import List, Optional, Dict, Tuple, TYPE_CHECKING
 import tempfile
 import pickle
-from functools import reduce
-import operator
 
 if TYPE_CHECKING:
     from langchain_core.documents import Document
@@ -24,9 +23,10 @@ from config import (
     TEXT_SPLITTER_CONFIG,
     SEMANTIC_CHUNKER_CONFIG,
     VECTOR_STORE_CACHE_DIR,
+    EMBEDDING_BATCH_SIZE,
 )
 from session import SessionManager
-from utils import log_operation
+from utils import log_operation, preprocess_text
 
 
 logger = logging.getLogger(__name__)
@@ -44,7 +44,13 @@ def _load_pdf_docs(pdf_file_bytes: bytes) -> List["Document"]:
 
     try:
         loader = PyMuPDFLoader(file_path=temp_file_path)
-        return loader.load()
+        docs = loader.load()
+        
+        # 텍스트 전처리 적용
+        for doc in docs:
+            doc.page_content = preprocess_text(doc.page_content)
+            
+        return docs
     finally:
         os.remove(temp_file_path)
 
@@ -73,6 +79,12 @@ def _split_documents(docs: List["Document"], embedder=None) -> List["Document"]:
         # 의미론적 분할기 사용
         from semantic_chunker import EmbeddingBasedSemanticChunker
         
+        # 배치 사이즈 결정
+        try:
+            batch_size = int(EMBEDDING_BATCH_SIZE)
+        except (ValueError, TypeError):
+            batch_size = 64  # 'auto'이거나 잘못된 값일 경우 기본값
+            
         semantic_chunker = EmbeddingBasedSemanticChunker(
             embedder=embedder,
             breakpoint_threshold_type=SEMANTIC_CHUNKER_CONFIG.get(
@@ -89,22 +101,14 @@ def _split_documents(docs: List["Document"], embedder=None) -> List["Document"]:
             similarity_threshold=float(
                 SEMANTIC_CHUNKER_CONFIG.get("similarity_threshold", 0.5)
             ),
+            batch_size=batch_size,
         )
         
-        # 문서별로 분할
-        split_docs = []
-        for doc in docs:
-            chunks = semantic_chunker.split_text(doc.page_content)
-            for chunk in chunks:
-                new_doc = Document(
-                    page_content=chunk,
-                    metadata=doc.metadata.copy()
-                )
-                split_docs.append(new_doc)
+        # 문서 전체를 통합하여 의미론적 분할 (페이지 경계 극복)
+        split_docs = semantic_chunker.split_documents(docs)
         
         logger.info(
-            f"Split {len(docs)} documents into {len(split_docs)} chunks "
-            f"using semantic chunker"
+            f"문서 분할 완료: {len(docs)}개 문서 -> {len(split_docs)}개 의미론적 청크"
         )
         return split_docs
     else:
@@ -113,7 +117,13 @@ def _split_documents(docs: List["Document"], embedder=None) -> List["Document"]:
             chunk_size=TEXT_SPLITTER_CONFIG["chunk_size"],
             chunk_overlap=TEXT_SPLITTER_CONFIG["chunk_overlap"],
         )
-        return chunker.split_documents(docs)
+        split_docs = chunker.split_documents(docs)
+
+    # 모든 청크에 인덱스 부여 (문서 병합 및 순서 복원용)
+    for i, doc in enumerate(split_docs):
+        doc.metadata["chunk_index"] = i
+
+    return split_docs
 
 
 def _serialize_docs(docs: List["Document"]) -> List[Dict]:
@@ -140,15 +150,13 @@ def _deserialize_docs(docs_as_dicts: List[Dict]) -> List["Document"]:
     """
     from langchain_core.documents import Document
 
-    return [Document.model_validate(d) for d in docs_as_dicts]
+    return [Document(**d) for d in docs_as_dicts]
 
+@functools.lru_cache(maxsize=1)
 def _compute_config_hash() -> str:
     """
     설정(의미분할, 리트리버)이 변경되었는지 감지하기 위한 해시 생성.
     설정이 변경되면 다른 캐시 키가 생성되어 이전 캐시를 무효화합니다.
-    
-    Returns:
-        str: 설정 기반 해시값 (8자리)
     """
     config_dict = {
         "semantic_chunker": SEMANTIC_CHUNKER_CONFIG,
@@ -225,10 +233,10 @@ class VectorStoreCache:
             with open(self.bm25_retriever_path, "rb") as f:
                 bm25_retriever = pickle.load(f)
 
-            logger.info(f"Full RAG cache loaded from '{self.cache_dir}'")
+            logger.info(f"RAG 캐시 로드 완료: '{self.cache_dir}'")
             return doc_splits, vector_store, bm25_retriever
         except Exception as e:
-            logger.warning(f"Failed to load from cache: {e}. Rebuilding cache.")
+            logger.warning(f"캐시 로드 실패: {e}. 캐시를 재생성합니다.")
             return None, None, None
 
     def save(
@@ -253,11 +261,11 @@ class VectorStoreCache:
             with open(self.bm25_retriever_path, "wb") as f:
                 pickle.dump(bm25_retriever, f)
 
-            logger.info(f"Full RAG cache saved to '{self.cache_dir}'")
+            logger.info(f"RAG 캐시 저장 완료: '{self.cache_dir}'")
         except Exception as e:
-            logger.error(f"Failed to save cache: {e}")
+            logger.error(f"캐시 저장 실패: {e}")
 
-@log_operation("Create FAISS vector store")
+@log_operation("FAISS 벡터 저장소 생성")
 def _create_vector_store(
     docs: List["Document"], embedder: "HuggingFaceEmbeddings"
 ) -> "FAISS":
@@ -318,7 +326,7 @@ def _create_ensemble_retriever(
     )
 
 # --- 파이프라인 구축 ---
-@log_operation("Load/Build retrieval components")
+@log_operation("검색 컴포넌트 로드/생성")
 def _load_and_build_retrieval_components(
     file_bytes: bytes, embedder: "HuggingFaceEmbeddings"
 ) -> Tuple[List["Document"], "FAISS", "BM25Retriever", bool]:
@@ -339,6 +347,12 @@ def _load_and_build_retrieval_components(
     if not cache_used:
         docs = _load_pdf_docs(file_bytes)
         doc_splits = _split_documents(docs, embedder)
+
+        if not doc_splits:
+            raise ValueError(
+                "PDF에서 텍스트를 추출할 수 없습니다. 스캔된 문서이거나 텍스트가 없는 파일일 수 있습니다."
+            )
+
         vector_store = _create_vector_store(doc_splits, embedder)
         bm25_retriever = _create_bm25_retriever(doc_splits)
         cache.save(doc_splits, vector_store, bm25_retriever)
@@ -346,7 +360,7 @@ def _load_and_build_retrieval_components(
     return doc_splits, vector_store, bm25_retriever, cache_used
 
 
-@log_operation("Build RAG pipeline")
+@log_operation("RAG 파이프라인 구축")
 def build_rag_pipeline(
     uploaded_file_name: str, file_bytes: bytes, embedder: "HuggingFaceEmbeddings"
 ) -> Tuple[str, bool]:
@@ -374,7 +388,7 @@ def build_rag_pipeline(
     SessionManager.set("pdf_processed", True)
 
     logger.info(
-        f"RAG pipeline built successfully for '{uploaded_file_name}' (Cache used: {cache_used})"
+        f"RAG 파이프라인 구축 완료: '{uploaded_file_name}' (캐시 사용: {cache_used})"
     )
 
     if cache_used:
@@ -385,7 +399,7 @@ def build_rag_pipeline(
     ), False
 
 
-@log_operation("Update LLM in pipeline")
+@log_operation("파이프라인 LLM 업데이트")
 def update_llm_in_pipeline(llm):
     """
     세션의 LLM을 교체합니다.
@@ -402,4 +416,4 @@ def update_llm_in_pipeline(llm):
         raise ValueError("RAG 파이프라인이 구축되지 않아 LLM을 업데이트할 수 없습니다.")
 
     SessionManager.set("llm", llm)
-    logger.info(f"Session LLM updated to new model: '{llm.model}'")
+    logger.info(f"세션 LLM 업데이트 완료: '{llm.model}'")

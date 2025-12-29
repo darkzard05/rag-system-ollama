@@ -47,19 +47,19 @@ class SessionManager:
         세션 상태 초기화 - 한 번만 실행되어야 함
         """
         if not st.session_state.get("_initialized", False):
-            logger.info("Initializing session state.")
+            logger.info("세션 상태 초기화 중...")
             for key, value in cls.DEFAULT_SESSION_STATE.items():
                 if key not in st.session_state:
                     st.session_state[key] = value
             st.session_state._initialized = True
-            logger.info("Session state initialized.")
+            logger.info("세션 상태 초기화 완료.")
 
     @classmethod
     def reset_for_new_file(cls):
         """
         새 파일 업로드 시 RAG 관련 상태를 안전하게 리셋합니다.
         """
-        logger.info("New file uploaded, resetting RAG-related state.")
+        logger.info("새 파일 업로드 감지. RAG 상태 리셋.")
 
         keys_to_reset = [
             "pdf_processed",
@@ -98,7 +98,7 @@ class SessionManager:
         if len(st.session_state.messages) > MAX_MESSAGE_HISTORY:
             removed_count = len(st.session_state.messages) - MAX_MESSAGE_HISTORY
             st.session_state.messages = st.session_state.messages[removed_count:]
-            logger.info(f"Removed {removed_count} old messages to maintain limit")
+            logger.info(f"메시지 제한 초과로 {removed_count}개 이전 메시지 삭제.")
 
     @staticmethod
     def is_ready_for_chat() -> bool:
@@ -149,7 +149,7 @@ class SessionManager:
         """
         세션의 모든 상태를 기본값으로 리셋합니다.
         """
-        logger.info("Resetting all session state.")
+        logger.info("모든 세션 상태 리셋.")
 
         # 위젯 키(보통 UI 컴포넌트의 key)를 제외하고 데이터만 리셋하는 것이 안전함
         # 혹은 DEFAULT_SESSION_STATE에 정의된 키만 초기화

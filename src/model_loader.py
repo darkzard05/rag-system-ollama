@@ -37,12 +37,12 @@ def _fetch_ollama_models() -> List[str]:
         ollama_response = ollama.list()
         models = sorted([model["model"] for model in ollama_response.get("models", [])])
         if models:
-            logger.info(f"Found Ollama models: {models}")
+            logger.info(f"Ollama 모델 목록 확보: {models}")
             return models
         return [MSG_ERROR_OLLAMA_NOT_RUNNING]
     except Exception as e:
         logger.warning(
-            f"Failed to fetch Ollama models. Is the Ollama server running? Error: {e}"
+            f"Ollama 모델 목록 조회 실패. 서버 상태를 확인하세요. 오류: {e}"
         )
         return [MSG_ERROR_OLLAMA_NOT_RUNNING]
 
@@ -65,13 +65,15 @@ def get_available_models() -> List[str]:
 
         if not ollama_models or ollama_models[0] == MSG_ERROR_OLLAMA_NOT_RUNNING:
             logger.error(
-                "Could not find any available LLM models. Using default list."
+                "사용 가능한 LLM 모델을 찾을 수 없습니다. 기본 목록을 사용합니다."
             )
             return ollama_models
 
         return ollama_models
 
     return _cached_models()
+
+
 def _get_dynamic_batch_size(device: str) -> int:
     """
     GPU VRAM에 따라 동적으로 배치 크기를 결정합니다. (한 번만 계산, 이후 캐시됨)
@@ -86,13 +88,13 @@ def _get_dynamic_batch_size(device: str) -> int:
         return _get_dynamic_batch_size._cached_batch_size
 
     if device != "cuda":
-        logger.info("Running on CPU, using default batch size (64).")
+        logger.info("CPU 환경 감지 (기본 배치 크기: 64).")
         batch_size = 64
     else:
         import torch
         try:
             total_vram_gb = torch.cuda.get_device_properties(0).total_memory / (1024**3)
-            logger.info(f"Available GPU VRAM: {total_vram_gb:.2f}GB")
+            logger.info(f"감지된 GPU VRAM: {total_vram_gb:.2f}GB")
 
             if total_vram_gb > 16:
                 batch_size = 256
@@ -103,9 +105,9 @@ def _get_dynamic_batch_size(device: str) -> int:
             else:
                 batch_size = 32
 
-            logger.info(f"Using dynamic batch size based on VRAM: {batch_size}")
+            logger.info(f"VRAM 기반 동적 배치 크기 설정: {batch_size}")
         except Exception as e:
-            logger.warning(f"Error checking VRAM: {e}. Using default batch size (64).")
+            logger.warning(f"VRAM 확인 실패: {e}. 기본 배치 크기(64)를 사용합니다.")
             batch_size = 64
 
     _get_dynamic_batch_size._cached_batch_size = batch_size
@@ -125,24 +127,24 @@ def load_embedding_model(embedding_model_name: str) -> "HuggingFaceEmbeddings":
     import streamlit as st
 
     @st.cache_resource(show_spinner=False)
-    @log_operation("Load embedding model")
+    @log_operation("임베딩 모델 로드")
     def _load_embedding_model_cached(model_name: str) -> "HuggingFaceEmbeddings":
         """임베딩 모델을 로드하고 캐싱합니다."""
         import torch
         from langchain_huggingface import HuggingFaceEmbeddings
 
         device = "cuda" if torch.cuda.is_available() else "cpu"
-        logger.info(f"Using device for embedding model: {device}")
+        logger.info(f"임베딩 모델 실행 장치: {device}")
 
         batch_size = 128
         if isinstance(EMBEDDING_BATCH_SIZE, int):
             batch_size = EMBEDDING_BATCH_SIZE
-            logger.info(f"Using batch size from config.yml: {batch_size}")
+            logger.info(f"설정 파일의 배치 크기 사용: {batch_size}")
         elif EMBEDDING_BATCH_SIZE == "auto":
             batch_size = _get_dynamic_batch_size(device)
         else:
             logger.warning(
-                f"Invalid batch size setting ('{EMBEDDING_BATCH_SIZE}'). Using default (128)."
+                f"잘못된 배치 크기 설정 ('{EMBEDDING_BATCH_SIZE}'). 기본값(128)을 사용합니다."
             )
 
         return HuggingFaceEmbeddings(
@@ -153,7 +155,33 @@ def load_embedding_model(embedding_model_name: str) -> "HuggingFaceEmbeddings":
         )
 
     return _load_embedding_model_cached(embedding_model_name)
-@log_operation("Load Ollama LLM")
+
+
+def load_reranker_model(model_name: str):
+    """
+    RERANKER용 CrossEncoder 모델을 로드합니다. (캐시됨)
+
+    Args:
+        model_name (str): Hugging Face CrossEncoder 모델 이름.
+
+    Returns:
+        CrossEncoder: 로드된 모델 인스턴스.
+    """
+    import streamlit as st
+    from sentence_transformers import CrossEncoder
+    import torch
+
+    @st.cache_resource(show_spinner=False)
+    @log_operation("Reranker 모델 로드")
+    def _load_reranker_model_cached(name: str):
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        logger.info(f"Reranker 모델 로드 중: '{name}' ({device})...")
+        return CrossEncoder(name, device=device)
+
+    return _load_reranker_model_cached(model_name)
+
+
+@log_operation("Ollama LLM 로드")
 def load_llm(
     model_name: str,
     temperature: float = OLLAMA_TEMPERATURE,
@@ -189,6 +217,7 @@ def load_llm(
         num_ctx=num_ctx,
         temperature=temperature,
     )
+
 
 def is_embedding_model_cached(model_name: str) -> bool:
     """

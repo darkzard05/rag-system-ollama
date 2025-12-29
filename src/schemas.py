@@ -11,6 +11,7 @@ class GraphState(TypedDict):
     RAG 그래프의 상태를 나타냅니다.
     """
     input: str
+    search_queries: List[str]  # 다중 검색 쿼리 리스트
     documents: List[Document]
     context: Optional[str]
     response: Optional[str]

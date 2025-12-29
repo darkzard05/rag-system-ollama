@@ -55,13 +55,16 @@ EMBEDDING_BATCH_SIZE: Union[int, str] = _models_config.get("embedding_batch_size
 # --- RAG 파이프라인 설정 ---
 _rag_config = _config.get("rag", {})
 RETRIEVER_CONFIG: Dict = _rag_config.get("retriever", {})
+RERANKER_CONFIG: Dict = _rag_config.get("reranker", {})  # Reranker 설정 로드
 TEXT_SPLITTER_CONFIG: Dict = _rag_config.get("text_splitter", {})
 SEMANTIC_CHUNKER_CONFIG: Dict = _rag_config.get("semantic_chunker", {})
 VECTOR_STORE_CACHE_DIR: str = _rag_config.get(
     "vector_store_cache_dir", ".model_cache/vector_store_cache"
 )
+QUERY_EXPANSION_CONFIG: Dict = _rag_config.get("query_expansion", {"enabled": True})
 _prompts_config = _rag_config.get("prompts") or {}
 QA_SYSTEM_PROMPT: str = _prompts_config.get("qa_system_prompt", "")
+QUERY_EXPANSION_PROMPT: str = _prompts_config.get("query_expansion_prompt", "")
 
 
 # --- 채팅 UI 상수 ---
