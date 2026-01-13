@@ -26,6 +26,7 @@ pyyaml==6.0.3
 
 # Utilities
 nest-asyncio==1.6.0
+numpy
 
 # Testing
 pytest==8.3.2

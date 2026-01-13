@@ -11,7 +11,9 @@ This project is a Streamlit web application that allows you to chat with your PD
 -   **Built with LangGraph:** The RAG pipeline is orchestrated as a graph, making the logic clear and extensible.
 -   **Interactive UI:** A user-friendly interface built with Streamlit, including a PDF viewer.
 -   **Caching:** Caches processed documents (vector stores) to ensure fast re-loading of previously analyzed files.
--   **Semantic Chunking:** Supports advanced semantic chunking based on embedding similarity for better context preservation.
+- **Semantic Chunking:** Supports advanced semantic chunking based on embedding similarity for better context preservation.
+- **Reranking (Optional):** Supports re-ranking retrieved documents using a Cross-Encoder model to improve answer precision (configurable in `config.yml`).
+- **Query Expansion (Optional):** Can expand user queries into multiple sub-questions to ensure broader context retrieval (configurable in `config.yml`).
 
 ## Setup and Installation
 
@@ -109,6 +111,8 @@ This project is distributed under the MIT License. See the `LICENSE` file for mo
 - **LangGraph 기반 아키텍처**: RAG 파이프라인(검색 -> 컨텍스트 구성 -> 답변 생성)을 그래프로 구축하여 워크플로우를 투명하고 수정하기 쉽게 만듭니다.
 - **고도화된 하이브리드 검색**: 키워드 기반 검색(BM25)과 의미 기반 검색(FAISS)을 결합한 **앙상블 리트리버**를 사용하여 더 정확하고 문맥에 맞는 결과를 제공합니다.
 - **의미론적 청킹(Semantic Chunking)**: 단순 길이 기반이 아닌, 임베딩 유사도를 기반으로 문맥 단위로 텍스트를 분할하여 검색 품질을 높입니다.
+- **재순위화(Reranking, 선택사항)**: Cross-Encoder 모델을 사용하여 검색된 문서의 연관성을 다시 평가하고 답변의 정확도를 높일 수 있습니다 (`config.yml`에서 설정).
+- **쿼리 확장(Query Expansion, 선택사항)**: 사용자의 질문을 여러 하위 질문으로 확장하여 더 넓은 범위의 문맥을 검색할 수 있습니다 (`config.yml`에서 설정).
 - **강력한 로컬 LLM (Ollama)**: 개인 정보 보호를 위해 Ollama로 로컬에서 LLM을 실행합니다.
 - **효율적인 캐싱**: 벡터 저장소와 모델을 캐싱하여, 앱을 재실행하거나 동일한 파일을 다시 로드할 때 속도가 매우 빠릅니다.
 - **대화형 UI**: 손쉬운 문서 업로드, 모델 선택, 채팅 및 나란히 보는 PDF 뷰어를 위해 Streamlit으로 구축된 사용자 친화적인 인터페이스입니다.
