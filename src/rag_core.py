@@ -2,89 +2,91 @@
 RAG 파이프라인의 핵심 로직(데이터 처리, 임베딩, 검색, 생성)을 담당하는 파일.
 """
 
-import os
-import logging
+import functools
 import hashlib
 import json
-import functools
-from typing import List, Optional, Dict, Tuple, TYPE_CHECKING
-import tempfile
+import logging
+import os
 import pickle
+import tempfile
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
+
+from langchain.retrievers import EnsembleRetriever
+from langchain.text_splitter import RecursiveCharacterTextSplitter
+from langchain_community.document_loaders import PyMuPDFLoader
+from langchain_community.retrievers import BM25Retriever
+from langchain_community.vectorstores import FAISS
+from langchain_core.documents import Document
 
 if TYPE_CHECKING:
-    from langchain_core.documents import Document
-    from langchain_community.vectorstores import FAISS
-    from langchain_community.retrievers import BM25Retriever
-    from langchain.retrievers import EnsembleRetriever
     from langchain_huggingface import HuggingFaceEmbeddings
 
 from config import (
-    RETRIEVER_CONFIG,
-    TEXT_SPLITTER_CONFIG,
-    SEMANTIC_CHUNKER_CONFIG,
-    VECTOR_STORE_CACHE_DIR,
     EMBEDDING_BATCH_SIZE,
+    RETRIEVER_CONFIG,
+    SEMANTIC_CHUNKER_CONFIG,
+    TEXT_SPLITTER_CONFIG,
+    VECTOR_STORE_CACHE_DIR,
 )
 from session import SessionManager
 from utils import log_operation, preprocess_text
 
+# 의미론적 분할기 (선택적 임포트)
+try:
+    from semantic_chunker import EmbeddingBasedSemanticChunker
+except ImportError:
+    EmbeddingBasedSemanticChunker = None
 
 logger = logging.getLogger(__name__)
 
 
-def _load_pdf_docs(pdf_file_bytes: bytes) -> List["Document"]:
+def _load_pdf_docs(pdf_file_bytes: bytes) -> List[Document]:
     """
     PDF 파일 바이트를 받아서 LangChain Document 객체 목록으로 로드합니다.
+    tempfile을 안전하게 처리하며, 예외 발생 시에도 파일이 정리되도록 합니다.
     """
-    from langchain_community.document_loaders import PyMuPDFLoader
-
-    with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as temp_file:
-        temp_file.write(pdf_file_bytes)
-        temp_file_path = temp_file.name
-
+    temp_file_path = None
     try:
+        # delete=False는 윈도우 호환성을 위해 필요
+        with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as temp_file:
+            temp_file.write(pdf_file_bytes)
+            temp_file_path = temp_file.name
+
         loader = PyMuPDFLoader(file_path=temp_file_path)
         docs = loader.load()
-        
+
         # 텍스트 전처리 적용
         for doc in docs:
             doc.page_content = preprocess_text(doc.page_content)
-            
+
         return docs
+    except Exception as e:
+        logger.error(f"PDF 로드 중 오류 발생: {e}")
+        raise
     finally:
-        os.remove(temp_file_path)
+        # 파일 삭제 보장
+        if temp_file_path and os.path.exists(temp_file_path):
+            try:
+                os.remove(temp_file_path)
+            except OSError as e:
+                logger.warning(f"임시 파일 삭제 실패 (나중에 정리 필요): {temp_file_path}, 오류: {e}")
 
 
-def _split_documents(docs: List["Document"], embedder=None) -> List["Document"]:
+def _split_documents(
+    docs: List[Document],
+    embedder: Optional["HuggingFaceEmbeddings"] = None,
+) -> List[Document]:
     """
-    문서 목록을 텍스트 분할기를 사용하여 분할합니다.
-    
-    의미론적 분할이 활성화되면 임베딩 기반 의미 분할기를 사용하고,
-    그렇지 않으면 기존의 RecursiveCharacterTextSplitter를 사용합니다.
-    
-    Args:
-        docs: 분할할 문서 리스트
-        embedder: 의미론적 분할을 위한 임베딩 모델 (선택사항)
-        
-    Returns:
-        분할된 문서 리스트
+    설정에 따라 의미론적 분할기 또는 RecursiveCharacterTextSplitter를 사용해 문서를 분할합니다.
     """
-    from langchain.text_splitter import RecursiveCharacterTextSplitter
-    from langchain_core.documents import Document
-    
-    # 의미론적 분할 활성화 여부 확인
     use_semantic = SEMANTIC_CHUNKER_CONFIG.get("enabled", False)
-    
-    if use_semantic and embedder:
-        # 의미론적 분할기 사용
-        from semantic_chunker import EmbeddingBasedSemanticChunker
-        
-        # 배치 사이즈 결정
+
+    if use_semantic and embedder and EmbeddingBasedSemanticChunker:
         try:
             batch_size = int(EMBEDDING_BATCH_SIZE)
         except (ValueError, TypeError):
-            batch_size = 64  # 'auto'이거나 잘못된 값일 경우 기본값
-            
+            batch_size = 64
+
         semantic_chunker = EmbeddingBasedSemanticChunker(
             embedder=embedder,
             breakpoint_threshold_type=SEMANTIC_CHUNKER_CONFIG.get(
@@ -103,161 +105,128 @@ def _split_documents(docs: List["Document"], embedder=None) -> List["Document"]:
             ),
             batch_size=batch_size,
         )
-        
-        # 문서 전체를 통합하여 의미론적 분할 (페이지 경계 극복)
+
         split_docs = semantic_chunker.split_documents(docs)
-        
-        logger.info(
-            f"문서 분할 완료: {len(docs)}개 문서 -> {len(split_docs)}개 의미론적 청크"
-        )
-        return split_docs
+        logger.info(f"의미론적 분할 완료: {len(docs)} 문서 -> {len(split_docs)} 청크")
     else:
-        # 기존의 RecursiveCharacterTextSplitter 사용
+        if use_semantic and not EmbeddingBasedSemanticChunker:
+            logger.warning(
+                "의미론적 분할이 활성화되었으나 모듈을 찾을 수 없어 기본 분할기로 대체합니다."
+            )
+
         chunker = RecursiveCharacterTextSplitter(
             chunk_size=TEXT_SPLITTER_CONFIG["chunk_size"],
             chunk_overlap=TEXT_SPLITTER_CONFIG["chunk_overlap"],
         )
         split_docs = chunker.split_documents(docs)
+        logger.info(f"기본 분할 완료: {len(docs)} 문서 -> {len(split_docs)} 청크")
 
-    # 모든 청크에 인덱스 부여 (문서 병합 및 순서 복원용)
+    # 청크 인덱스 메타데이터 추가
     for i, doc in enumerate(split_docs):
         doc.metadata["chunk_index"] = i
 
     return split_docs
 
 
-def _serialize_docs(docs: List["Document"]) -> List[Dict]:
-    """
-    문서 객체 목록을 직렬화 가능한 딕셔너리 목록으로 변환합니다.
+def _serialize_docs(docs: List[Document]) -> List[Dict[str, Any]]:
+    return [
+        doc.model_dump() if hasattr(doc, "model_dump") else doc.dict() for doc in docs
+    ]
 
-    Args:
-        docs (List[Document]): 문서 객체 목록.
 
-    Returns:
-        List[Dict]: 직렬화된 문서 딕셔너리 목록.
-    """
-    return [doc.model_dump() if hasattr(doc, "model_dump") else doc.dict() for doc in docs]
-
-def _deserialize_docs(docs_as_dicts: List[Dict]) -> List["Document"]:
-    """
-    직렬화된 딕셔너리 목록을 문서 객체 목록으로 변환합니다.
-
-    Args:
-        docs_as_dicts (List[Dict]): 직렬화된 문서 딕셔너리 목록.
-
-    Returns:
-        List[Document]: 변환된 문서 객체 목록.
-    """
-    from langchain_core.documents import Document
-
+def _deserialize_docs(docs_as_dicts: List[Dict[str, Any]]) -> List[Document]:
     return [Document(**d) for d in docs_as_dicts]
+
 
 @functools.lru_cache(maxsize=1)
 def _compute_config_hash() -> str:
-    """
-    설정(의미분할, 리트리버)이 변경되었는지 감지하기 위한 해시 생성.
-    설정이 변경되면 다른 캐시 키가 생성되어 이전 캐시를 무효화합니다.
-    """
+    """설정 변경 감지용 해시 생성"""
     config_dict = {
         "semantic_chunker": SEMANTIC_CHUNKER_CONFIG,
         "text_splitter": TEXT_SPLITTER_CONFIG,
         "retriever": RETRIEVER_CONFIG,
     }
     config_str = json.dumps(config_dict, sort_keys=True, default=str)
-    return hashlib.md5(config_str.encode()).hexdigest()[:8]
+    return hashlib.md5(config_str.encode()).hexdigest()[:12]  # 해시 길이 12자리로 확장
 
 
 class VectorStoreCache:
-    """
-    벡터 저장소 및 리트리버 캐시를 관리합니다.
+    """벡터 저장소 및 리트리버 캐시 관리자""" #
 
-    캐시 경로 생성, 저장소/리트리버 저장 및 로드 기능을 제공합니다.
-    """
     def __init__(self, file_bytes: bytes, embedding_model_name: str):
-        (
-            self.cache_dir,
-            self.doc_splits_path,
-            self.faiss_index_path,
-            self.bm25_retriever_path,
-        ) = self._get_cache_paths(file_bytes, embedding_model_name)
+        self.cache_dir, self.doc_splits_path, self.faiss_index_path, self.bm25_retriever_path = self._get_cache_paths(
+            file_bytes, embedding_model_name
+        )
 
     def _get_cache_paths(
         self, file_bytes: bytes, embedding_model_name: str
     ) -> Tuple[str, str, str, str]:
         file_hash = hashlib.sha256(file_bytes).hexdigest()
-        model_name_slug = embedding_model_name.replace("/", "_")
-        config_hash = _compute_config_hash()  # 설정 기반 해시 추가
+        # 파일 경로에 안전하지 않은 문자 제거
+        model_name_slug = embedding_model_name.replace("/", "_").replace("\\", "_")
+        config_hash = _compute_config_hash()
+
         cache_dir = os.path.join(
             VECTOR_STORE_CACHE_DIR, f"{file_hash}_{model_name_slug}_{config_hash}"
         )
-        doc_splits_path = os.path.join(cache_dir, "doc_splits.json")
-        faiss_index_path = os.path.join(cache_dir, "faiss_index")
-        bm25_retriever_path = os.path.join(cache_dir, "bm25_retriever.pkl")
-        return cache_dir, doc_splits_path, faiss_index_path, bm25_retriever_path
+
+        return (
+            cache_dir,
+            os.path.join(cache_dir, "doc_splits.json"),
+            os.path.join(cache_dir, "faiss_index"),
+            os.path.join(cache_dir, "bm25_retriever.pkl"),
+        )
 
     def load(
-        self, embedder: "HuggingFaceEmbeddings"
-    ) -> Tuple[
-        Optional[List["Document"]], Optional["FAISS"], Optional["BM25Retriever"]
-    ]:
-        """
-        캐시에서 검색 구성 요소를 로드합니다.
-
-        Args:
-            embedder (HuggingFaceEmbeddings): 임베딩 모델.
-
-        Returns:
-            Tuple: (분할된 문서, FAISS 벡터 저장소, BM25 리트리버) 또는 모두 None.
-        """
-        from langchain_community.vectorstores import FAISS
-
+        self,
+        embedder: "HuggingFaceEmbeddings",
+    ) -> Tuple[Optional[List[Document]], Optional[FAISS], Optional[BM25Retriever]]:
         if not all(
             os.path.exists(p)
-            for p in [
-                self.doc_splits_path,
-                self.faiss_index_path,
-                self.bm25_retriever_path,
-            ]
+            for p in [self.doc_splits_path, self.faiss_index_path, self.bm25_retriever_path]
         ):
             return None, None, None
+
         try:
+            # 1. 문서 로드 (JSON)
             with open(self.doc_splits_path, "r", encoding="utf-8") as f:
                 doc_splits = _deserialize_docs(json.load(f))
 
+            # 2. FAISS 로드
+            # 보안 경고: allow_dangerous_deserialization=True는 신뢰할 수 있는 로컬 파일에만 사용해야 합니다.
+            # 이 프로젝트에서는 로컬에서 생성된 캐시만 로드한다고 가정합니다.
             vector_store = FAISS.load_local(
                 self.faiss_index_path,
                 embedder,
                 allow_dangerous_deserialization=True,
             )
 
+            # 3. BM25 로드 (Pickle)
+            # 보안 경고: pickle은 신뢰할 수 없는 데이터에 대해 안전하지 않습니다.
             with open(self.bm25_retriever_path, "rb") as f:
                 bm25_retriever = pickle.load(f)
 
             logger.info(f"RAG 캐시 로드 완료: '{self.cache_dir}'")
             return doc_splits, vector_store, bm25_retriever
+
         except Exception as e:
-            logger.warning(f"캐시 로드 실패: {e}. 캐시를 재생성합니다.")
+            logger.warning(f"캐시 로드 실패 (손상 가능성): {e}. 캐시를 재생성합니다.")
             return None, None, None
 
     def save(
         self,
-        doc_splits: List["Document"],
-        vector_store: "FAISS",
-        bm25_retriever: "BM25Retriever",
+        doc_splits: List[Document],
+        vector_store: FAISS,
+        bm25_retriever: BM25Retriever,
     ):
-        """
-        검색 구성 요소를 캐시에 저장합니다.
-
-        Args:
-            doc_splits (List[Document]): 분할된 문서 목록.
-            vector_store (FAISS): FAISS 벡터 저장소.
-            bm25_retriever (BM25Retriever): BM25 리트리버.
-        """
         try:
             os.makedirs(self.cache_dir, exist_ok=True)
+
             with open(self.doc_splits_path, "w", encoding="utf-8") as f:
                 json.dump(_serialize_docs(doc_splits), f, ensure_ascii=False, indent=4)
+
             vector_store.save_local(self.faiss_index_path)
+
             with open(self.bm25_retriever_path, "wb") as f:
                 pickle.dump(bm25_retriever, f)
 
@@ -265,57 +234,25 @@ class VectorStoreCache:
         except Exception as e:
             logger.error(f"캐시 저장 실패: {e}")
 
+
 @log_operation("FAISS 벡터 저장소 생성")
 def _create_vector_store(
-    docs: List["Document"], embedder: "HuggingFaceEmbeddings"
-) -> "FAISS":
-    """
-    문서 목록과 임베더를 사용하여 FAISS 벡터 저장소를 생성합니다.
-
-    Args:
-        docs (List[Document]): 문서 목록.
-        embedder (HuggingFaceEmbeddings): 임베딩 모델.
-
-    Returns:
-        FAISS: 생성된 FAISS 벡터 저장소.
-    """
-    from langchain_community.vectorstores import FAISS
-
+    docs: List[Document],
+    embedder: "HuggingFaceEmbeddings",
+) -> FAISS:
     return FAISS.from_documents(docs, embedder)
 
 
-def _create_bm25_retriever(docs: List["Document"]) -> "BM25Retriever":
-    """
-    문서 목록을 사용하여 BM25 리트리버를 생성합니다.
-
-    Args:
-        docs (List[Document]): 문서 목록.
-
-    Returns:
-        BM25Retriever: 생성된 BM25 리트리버.
-    """
-    from langchain_community.retrievers import BM25Retriever
-
+def _create_bm25_retriever(docs: List[Document]) -> BM25Retriever:
     retriever = BM25Retriever.from_documents(docs)
     retriever.k = RETRIEVER_CONFIG["search_kwargs"]["k"]
     return retriever
 
 
 def _create_ensemble_retriever(
-    vector_store: "FAISS", bm25_retriever: "BM25Retriever"
-) -> "EnsembleRetriever":
-    """
-    FAISS 및 BM25 리트리버를 결합한 앙상블 리트리버를 생성합니다.
-
-    Args:
-        vector_store (FAISS): FAISS 벡터 저장소.
-        bm25_retriever (BM25Retriever): BM25 리트리버.
-
-    Returns:
-        EnsembleRetriever: 생성된 앙상블 리트리버.
-    """
-    from langchain.retrievers import EnsembleRetriever
-
+    vector_store: FAISS,
+    bm25_retriever: BM25Retriever,
+) -> EnsembleRetriever:
     faiss_retriever = vector_store.as_retriever(
         search_type=RETRIEVER_CONFIG["search_type"],
         search_kwargs=RETRIEVER_CONFIG["search_kwargs"],
@@ -325,27 +262,24 @@ def _create_ensemble_retriever(
         weights=RETRIEVER_CONFIG["ensemble_weights"],
     )
 
-# --- 파이프라인 구축 ---
+
 @log_operation("검색 컴포넌트 로드/생성")
 def _load_and_build_retrieval_components(
-    file_bytes: bytes, embedder: "HuggingFaceEmbeddings"
-) -> Tuple[List["Document"], "FAISS", "BM25Retriever", bool]:
-    """
-    캐시에서 검색 구성 요소를 로드하거나, 캐시가 없으면 새로 생성하고 저장합니다.
+    file_bytes: bytes,
+    embedder: "HuggingFaceEmbeddings",
+) -> Tuple[List[Document], FAISS, BM25Retriever, bool]:
 
-    Args:
-        file_bytes (bytes): PDF 파일의 바이트 데이터.
-        embedder (HuggingFaceEmbeddings): 임베딩 모델.
-
-    Returns:
-        Tuple: (분할된 문서, FAISS 저장소, BM25 리트리버, 캐시 사용 여부).
-    """
     cache = VectorStoreCache(file_bytes, embedder.model_name)
     doc_splits, vector_store, bm25_retriever = cache.load(embedder)
+
     cache_used = all(x is not None for x in [doc_splits, vector_store, bm25_retriever])
 
     if not cache_used:
         docs = _load_pdf_docs(file_bytes)
+        # 빈 문서 처리 추가
+        if not docs:
+             raise ValueError("PDF에서 내용을 읽을 수 없습니다. (빈 파일 또는 이미지 위주)")
+
         doc_splits = _split_documents(docs, embedder)
 
         if not doc_splits:
@@ -362,7 +296,9 @@ def _load_and_build_retrieval_components(
 
 @log_operation("RAG 파이프라인 구축")
 def build_rag_pipeline(
-    uploaded_file_name: str, file_bytes: bytes, embedder: "HuggingFaceEmbeddings"
+    uploaded_file_name: str,
+    file_bytes: bytes,
+    embedder: "HuggingFaceEmbeddings",
 ) -> Tuple[str, bool]:
     """
     RAG 파이프라인을 구축하고 세션에 저장합니다.
@@ -384,6 +320,7 @@ def build_rag_pipeline(
     rag_app = build_graph(retriever=final_retriever)
 
     SessionManager.set("processed_document_splits", doc_splits)
+    SessionManager.set("vector_store", vector_store)
     SessionManager.set("qa_chain", rag_app)
     SessionManager.set("pdf_processed", True)
 
@@ -400,7 +337,7 @@ def build_rag_pipeline(
 
 
 @log_operation("파이프라인 LLM 업데이트")
-def update_llm_in_pipeline(llm):
+def update_llm_in_pipeline(llm: Any) -> None:
     """
     세션의 LLM을 교체합니다.
 
@@ -416,4 +353,4 @@ def update_llm_in_pipeline(llm):
         raise ValueError("RAG 파이프라인이 구축되지 않아 LLM을 업데이트할 수 없습니다.")
 
     SessionManager.set("llm", llm)
-    logger.info(f"세션 LLM 업데이트 완료: '{llm.model}'")
+    logger.info(f"세션 LLM 업데이트 완료: '{getattr(llm, 'model', 'unknown')}'")
