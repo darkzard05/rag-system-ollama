@@ -51,7 +51,12 @@ _config = _load_config()
 
 # --- 모델 및 설정 상수 ---
 _models_config = _config.get("models", {})
-OLLAMA_MODEL_NAME: str = _models_config.get("default_ollama", "gemma3:8b")
+OLLAMA_MODEL_NAME: str = _models_config.get("default_ollama", "qwen3:4b")
+
+# Ollama 서버 주소 설정 (환경 변수 우선)
+OLLAMA_BASE_URL: str = _get_env(
+    "OLLAMA_BASE_URL", _models_config.get("base_url", "http://127.0.0.1:11434")
+)
 
 # 예측 파라미터 (환경 변수 우선, 실패 시 config.yml, 마지막으로 하드코딩된 기본값)
 OLLAMA_NUM_PREDICT: int = _get_env(

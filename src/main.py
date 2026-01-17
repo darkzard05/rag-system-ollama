@@ -222,6 +222,13 @@ def main() -> None:
         model_selector_callback=on_model_change,
         embedding_selector_callback=on_embedding_change,
     )
+    
+    # [UI 개선] PDF 미업로드 시 시스템 상태에 안내 메시지 표시
+    # 파일이 업로드되지 않았고(bytes 없음), 처리된 파일도 없을 때만 표시
+    if (not SessionManager.get("pdf_processed") 
+        and not SessionManager.get("pdf_processing_error")
+        and not SessionManager.get("pdf_file_bytes")):
+        status_container.info("👋 PDF 파일을 업로드하여 대화를 시작하세요.")
 
     # 상태 플래그에 따른 작업 수행 (우선순위: 새 파일 > 임베딩 변경 > 모델 변경)
     if SessionManager.get("new_file_uploaded"):

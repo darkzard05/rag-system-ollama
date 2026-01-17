@@ -5,30 +5,40 @@ Core Logic Rebuild: 데코레이터 제거 및 순수 함수 구조로 변경하
 
 import logging
 import asyncio
+import re
 from typing import Any, Dict, List
 
 from langchain_core.documents import Document
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.runnables import RunnableConfig
+from langchain_core.callbacks.manager import adispatch_custom_event
 from langgraph.graph import StateGraph, END
 
 from config import QA_SYSTEM_PROMPT, RERANKER_CONFIG, QUERY_EXPANSION_PROMPT, QUERY_EXPANSION_CONFIG
 from schemas import GraphState
 from model_loader import load_reranker_model
+from utils import clean_query_text
 
 logger = logging.getLogger(__name__)
 
 # --- Helper Functions ---
 
 def _merge_consecutive_chunks(docs: List[Document]) -> List[Document]:
-    """같은 출처의 연속된 인덱스를 가진 청크들을 하나로 병합합니다."""
+    """
+    같은 출처의 연속된 인덱스를 가진 청크들을 하나로 병합합니다.
+    [수정] 페이지 번호가 같은 경우에만 병합하여 출처 정확도를 높입니다.
+    """
     if not docs:
         return []
         
     sorted_docs = sorted(
         docs, 
-        key=lambda d: (d.metadata.get("source", ""), d.metadata.get("chunk_index", -1))
+        key=lambda d: (
+            d.metadata.get("source", ""), 
+            d.metadata.get("page", 0),
+            d.metadata.get("chunk_index", -1)
+        )
     )
     
     merged = []
@@ -43,11 +53,20 @@ def _merge_consecutive_chunks(docs: List[Document]) -> List[Document]:
     for next_doc in sorted_docs[1:]:
         curr_src = current_doc.metadata.get("source")
         next_src = next_doc.metadata.get("source")
+        curr_page = current_doc.metadata.get("page")
+        next_page = next_doc.metadata.get("page")
+        
         curr_idx = current_doc.metadata.get("chunk_index", -1)
         next_idx = next_doc.metadata.get("chunk_index", -1)
         
-        if curr_src == next_src and curr_idx != -1 and next_idx == curr_idx + 1:
+        # 같은 소스, 같은 페이지, 연속된 인덱스일 때만 병합
+        if (curr_src == next_src and 
+            curr_page == next_page and 
+            curr_idx != -1 and next_idx == curr_idx + 1):
+            
             current_doc.page_content += " " + next_doc.page_content
+            # 인덱스 업데이트 (마지막 인덱스로)
+            current_doc.metadata["chunk_index"] = next_idx
         else:
             merged.append(current_doc)
             current_doc = Document(
@@ -64,7 +83,6 @@ def build_graph(retriever: Any):
     """
     RAG 워크플로우를 구성하고 컴파일합니다.
     """
-
     # 1. 쿼리 확장 노드
     async def generate_queries(state: GraphState, config: RunnableConfig) -> Dict[str, Any]:
         logger.info("[Graph] 쿼리 생성 시작")
@@ -84,9 +102,19 @@ def build_graph(retriever: Any):
         try:
             # invoke 대신 ainvoke 사용
             result = await chain.ainvoke({"input": state["input"]})
-            queries = [q.strip() for q in result.split("\n") if q.strip()]
-            logger.info(f"[Graph] 확장된 쿼리: {queries}")
-            return {"search_queries": queries}
+            
+            # [개선] 불렛 포인트 및 번호 제거 파싱 로직
+            raw_queries = [q.strip() for q in result.split("\n") if q.strip()]
+            clean_queries = []
+            for q in raw_queries:
+                clean_q = clean_query_text(q)
+                if clean_q:
+                    clean_queries.append(clean_q)
+            
+            final_queries = clean_queries[:3] if clean_queries else [state["input"]]
+            logger.info(f"[Graph] 확장된 쿼리: {final_queries}")
+            return {"search_queries": final_queries}
+
         except Exception as e:
             logger.warning(f"[Graph] 쿼리 확장 실패: {e}")
             return {"search_queries": [state["input"]]}
@@ -109,13 +137,16 @@ def build_graph(retriever: Any):
         results = await asyncio.gather(*[_safe_ainvoke(q) for q in queries])
         all_documents = [doc for sublist in results for doc in sublist]
         
-        # 중복 제거
+        # [수정] 중복 제거: 내용 기반 해싱 (정확도 복구 및 메모리 최적화)
         unique_docs = []
         seen = set()
+        
         for doc in all_documents:
-            if doc.page_content not in seen:
+            doc_hash = hash(doc.page_content)
+            
+            if doc_hash not in seen:
                 unique_docs.append(doc)
-                seen.add(doc.page_content)
+                seen.add(doc_hash)
         
         logger.info(f"[Graph] 검색 완료: {len(unique_docs)} 문서")
         return {"documents": unique_docs}
@@ -151,7 +182,9 @@ def build_graph(retriever: Any):
         merged_docs = _merge_consecutive_chunks(documents)
         formatted = []
         for i, doc in enumerate(merged_docs):
-            formatted.append(f"[{i+1}] {doc.page_content}")
+            # [개선] 페이지 번호 포함 (출처 인용 지원)
+            page = doc.metadata.get("page", "?")
+            formatted.append(f"[Document {i+1} (Page {page})]\n{doc.page_content}")
             
         return {"context": "\n\n".join(formatted)}
 
@@ -175,13 +208,14 @@ def build_graph(retriever: Any):
         chain = prompt | llm | StrOutputParser()
 
         full_response = ""
-        # ainvoke 대신 astream을 직접 소비하여 콜백 활성화 보장
-        # 명시적으로 청크를 받아야 이벤트가 트리거되는 경우가 많음 (특히 로컬 LLM)
+        # ainvoke 대신 astream을 사용하여 토큰 단위로 받으며, config를 통해 이벤트를 전파함
         async for chunk in chain.astream(
             {"input": state["input"], "context": state["context"]},
             config=config
         ):
             full_response += chunk
+            # [Fix] 강제 스트리밍: 표준 콜백이 버퍼링될 경우를 대비해 커스텀 이벤트 발송
+            await adispatch_custom_event("response_chunk", {"chunk": chunk}, config=config)
         
         # UI에서 출처 표시를 할 수 있도록 문서 목록도 함께 유지
         return {"response": full_response, "documents": state.get("documents", [])}

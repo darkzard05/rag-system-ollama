@@ -23,7 +23,7 @@ from config import (
     OLLAMA_NUM_CTX,
     OLLAMA_TOP_P,
     OLLAMA_TIMEOUT,
-    EMBEDDING_BATCH_SIZE,
+    OLLAMA_BASE_URL,
     MSG_ERROR_OLLAMA_NOT_RUNNING,
 )
 from utils import log_operation
@@ -102,7 +102,7 @@ def load_llm(
         temperature=temperature,
         timeout=timeout,
         keep_alive="60m",  # 60분 동안 모델 메모리 유지
-        base_url="http://127.0.0.1:11434",
+        base_url=OLLAMA_BASE_URL,
         streaming=True,
     )
 

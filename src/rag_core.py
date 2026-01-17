@@ -30,46 +30,44 @@ from config import (
 )
 from session import SessionManager
 from utils import log_operation, preprocess_text
+from graph_builder import build_graph
 
-# 의미론적 분할기 (선택적 임포트)
-try:
-    from semantic_chunker import EmbeddingBasedSemanticChunker
-except ImportError:
-    EmbeddingBasedSemanticChunker = None
+from semantic_chunker import EmbeddingBasedSemanticChunker
+
+import fitz  # PyMuPDF
 
 logger = logging.getLogger(__name__)
 
 
 def _load_pdf_docs(pdf_file_bytes: bytes) -> List[Document]:
     """
-    PDF 파일 바이트를 받아서 LangChain Document 객체 목록으로 로드합니다.
-    tempfile을 안전하게 처리하며, 예외 발생 시에도 파일이 정리되도록 합니다.
+    PDF 파일 바이트를 메모리에서 직접 로드하여 LangChain Document 객체로 변환합니다.
+    [최적화] 디스크 I/O 제거 및 메타데이터(페이지 번호) 보존 강화.
     """
-    temp_file_path = None
+    docs = []
     try:
-        # delete=False는 윈도우 호환성을 위해 필요
-        with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as temp_file:
-            temp_file.write(pdf_file_bytes)
-            temp_file_path = temp_file.name
-
-        loader = PyMuPDFLoader(file_path=temp_file_path)
-        docs = loader.load()
-
-        # 텍스트 전처리 적용
-        for doc in docs:
-            doc.page_content = preprocess_text(doc.page_content)
-
+        # 메모리 스트림에서 PDF 열기 (fitz의 context manager 활용)
+        with fitz.open(stream=pdf_file_bytes, filetype="pdf") as doc_file:
+            for page_num, page in enumerate(doc_file):
+                text = page.get_text()
+                
+                # [강화] 텍스트 전처리 및 최소 길이 검사
+                if text:
+                    clean_text = preprocess_text(text)
+                    # 너무 짧은 페이지(빈 페이지나 이미지만 있는 경우)는 건너뛰어 노이즈 감소
+                    if clean_text and len(clean_text) > 10:
+                        metadata = {
+                            "source": "uploaded_pdf",
+                            "page": page_num + 1,  # 1-based index
+                            "total_pages": len(doc_file)
+                        }
+                        docs.append(Document(page_content=clean_text, metadata=metadata))
+        
         return docs
+
     except Exception as e:
-        logger.error(f"PDF 로드 중 오류 발생: {e}")
+        logger.error(f"PDF 메모리 로드 중 오류 발생: {e}")
         raise
-    finally:
-        # 파일 삭제 보장
-        if temp_file_path and os.path.exists(temp_file_path):
-            try:
-                os.remove(temp_file_path)
-            except OSError as e:
-                logger.warning(f"임시 파일 삭제 실패 (나중에 정리 필요): {temp_file_path}, 오류: {e}")
 
 
 def _split_documents(
@@ -81,11 +79,17 @@ def _split_documents(
     """
     use_semantic = SEMANTIC_CHUNKER_CONFIG.get("enabled", False)
 
-    if use_semantic and embedder and EmbeddingBasedSemanticChunker:
-        try:
-            batch_size = int(EMBEDDING_BATCH_SIZE)
-        except (ValueError, TypeError):
-            batch_size = 64
+    if use_semantic and embedder:
+        # 배치 사이즈 결정 로직 개선
+        if isinstance(EMBEDDING_BATCH_SIZE, int):
+            batch_size = EMBEDDING_BATCH_SIZE
+        elif str(EMBEDDING_BATCH_SIZE).lower() == "auto":
+            batch_size = 64  # auto일 경우 현재는 기본값 64 사용 (확장 가능)
+        else:
+            try:
+                batch_size = int(EMBEDDING_BATCH_SIZE)
+            except (ValueError, TypeError):
+                batch_size = 64
 
         semantic_chunker = EmbeddingBasedSemanticChunker(
             embedder=embedder,
@@ -109,11 +113,6 @@ def _split_documents(
         split_docs = semantic_chunker.split_documents(docs)
         logger.info(f"의미론적 분할 완료: {len(docs)} 문서 -> {len(split_docs)} 청크")
     else:
-        if use_semantic and not EmbeddingBasedSemanticChunker:
-            logger.warning(
-                "의미론적 분할이 활성화되었으나 모듈을 찾을 수 없어 기본 분할기로 대체합니다."
-            )
-
         chunker = RecursiveCharacterTextSplitter(
             chunk_size=TEXT_SPLITTER_CONFIG["chunk_size"],
             chunk_overlap=TEXT_SPLITTER_CONFIG["chunk_overlap"],
@@ -123,6 +122,7 @@ def _split_documents(
 
     # 청크 인덱스 메타데이터 추가
     for i, doc in enumerate(split_docs):
+        doc.metadata = doc.metadata.copy()
         doc.metadata["chunk_index"] = i
 
     return split_docs
@@ -311,8 +311,6 @@ def build_rag_pipeline(
     Returns:
         Tuple[str, bool]: (성공 메시지, 캐시 사용 여부).
     """
-    from graph_builder import build_graph
-
     doc_splits, vector_store, bm25_retriever, cache_used = (
         _load_and_build_retrieval_components(file_bytes, embedder)
     )

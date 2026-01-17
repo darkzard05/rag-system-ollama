@@ -12,6 +12,13 @@ import functools
 
 logger = logging.getLogger(__name__)
 _RE_WHITESPACE = re.compile(r'\s+')
+# [수정] 정규식 완화:
+# 1. ^\d+[\.\)\s]+ : 문두의 숫자와 점/괄호 (예: "1. ", "1) ")
+# 2. ^\s*[\-\*\u2022]\s* : 문두의 불렛 포인트 (예: "- ", "* ")
+# 3. ^["']+|["']+$ : 문두/문미의 따옴표
+# 4. (?:^Example:|^Query:)\s* : "Example:" 같은 접두사 제거
+_RE_QUERY_CLEAN_PREFIX = re.compile(r'^(?:\d+[\.\)\s]+|\s*[\-\*\u2022]\s*|(?:Example|Query|Question):\s*)+', re.IGNORECASE)
+_RE_QUERY_CLEAN_QUOTES = re.compile(r'^["\']+|["\']+$')
 
 def preprocess_text(text: str) -> str:
     """텍스트 정제: 널 문자 및 연속 공백 제거"""
@@ -21,10 +28,27 @@ def preprocess_text(text: str) -> str:
     return _RE_WHITESPACE.sub(' ', text).strip()
 
 
+def clean_query_text(text: str) -> str:
+    """
+    LLM이 생성한 쿼리에서 불필요한 장식(번호, 불렛, 따옴표)을 제거합니다.
+    검색어 내부의 특수문자(C++, .NET 등)는 보존합니다.
+    """
+    if not text:
+        return ""
+    
+    # 1. 앞부분의 번호, 불렛, 접두사 제거
+    text = _RE_QUERY_CLEAN_PREFIX.sub('', text.strip())
+    
+    # 2. 앞뒤 따옴표 제거
+    text = _RE_QUERY_CLEAN_QUOTES.sub('', text.strip())
+    
+    return text.strip()
+
+
 def sync_run(coro):
     """
     Streamlit(동기 환경)에서 비동기 코루틴을 안전하게 실행하기 위한 헬퍼.
-    nest_asyncio를 적용하여 이벤트 루프 중첩 허용.
+    전역적으로 nest_asyncio가 적용되어 있어야 작동합니다.
     """
     try:
         loop = asyncio.get_running_loop()
@@ -32,7 +56,6 @@ def sync_run(coro):
         loop = None
 
     if loop and loop.is_running():
-        nest_asyncio.apply(loop)
         return loop.run_until_complete(coro)
     
     return asyncio.run(coro)

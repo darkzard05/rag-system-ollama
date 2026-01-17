@@ -33,6 +33,7 @@ from config import (
     MSG_CHAT_NO_QA_SYSTEM,
     MSG_CHAT_WELCOME,
     MSG_ERROR_OLLAMA_NOT_RUNNING,
+    MSG_PREPARING_ANSWER,
 )
 
 logger = logging.getLogger(__name__)
@@ -40,15 +41,12 @@ logger = logging.getLogger(__name__)
 
 async def _stream_chat_response(qa_chain, user_input: str, chat_container) -> str:
     """
-    미니멀 답변 생성 함수.
-    로딩 메시지 표시 후 토큰이 들어오면 답변으로 즉시 대체합니다.
+    최적화된 답변 생성 및 스트리밍 함수.
+    [최적화] 인위적인 딜레이(update_interval)를 제거하여 반응 속도 극대화.
     """
     full_response = ""
     start_time = time.time()
-    last_update_time = 0
-    update_interval = 0.05
-    has_started = False  # 첫 토큰 수신 여부
-
+    
     current_llm = SessionManager.get("llm")
     if not current_llm:
         return "❌ 오류: LLM 모델이 로드되지 않았습니다."
@@ -59,84 +57,74 @@ async def _stream_chat_response(qa_chain, user_input: str, chat_container) -> st
     try:
         with chat_container:
             with st.chat_message("assistant", avatar="🤖"):
-                # 단 하나의 컨테이너로 로딩과 답변 모두 처리
                 answer_container = st.empty()
-                answer_container.markdown("⌛ 답변을 생성하고 있습니다...")
+                # 로딩 메시지 복구 (사용자 피드백 반영)
+                answer_container.markdown(f"⌛ {MSG_PREPARING_ANSWER}")
 
+                # 스트리밍 루프
                 async for event in qa_chain.astream_events(
                     {"input": user_input},
                     config=run_config,
                     version="v1"
                 ):
                     kind = event["event"]
+                    name = event.get("name", "Unknown")
+                    data = event.get("data", {})
+                    
+                    # [Debug] 모든 이벤트 로깅 (문제 해결 후 주석 처리 예정)
+                    logger.debug(f"[Stream Event] Kind: {kind} | Name: {name} | Keys: {list(data.keys())}")
+
                     chunk_text = None
 
-                    # 1. 실시간 토큰 수신 (파서 스트림 우선)
+                    # 1. 파서 스트림 (기존 로직)
                     if kind == "on_parser_stream":
-                        chunk = event["data"].get("chunk")
+                        chunk = data.get("chunk")
                         if isinstance(chunk, str):
                             chunk_text = chunk
                     
-                    # 2. 백업: 모델 스트림 (파서가 없거나 놓친 경우)
+                    # 2. 모델 스트림 (추가: 더 낮은 레벨의 토큰 이벤트)
                     elif kind == "on_chat_model_stream":
-                        chunk = event["data"].get("chunk")
-                        if hasattr(chunk, "content") and chunk.content:
-                            # 이미 파서에서 처리된 경우 중복 방지가 필요할 수 있으나,
-                            # StrOutputParser를 쓰면 보통 둘 중 하나만 타거나 내용이 동일함.
-                            # 여기서는 파서 이벤트가 없을 때를 대비해 사용
-                            if not full_response: # 아주 초기에만 유용할 수 있음 (또는 파서 미사용 시)
-                                pass 
-                            # 주의: LangChain에서 파서와 모델 스트림이 동시에 발생할 수 있음.
-                            # StrOutputParser가 있다면 on_parser_stream만 믿는 것이 중복 출력 방지에 안전함.
-                            # 하지만 파서가 동작하지 않는 경우를 위해 남겨둠 (단, 중복 주의)
-                            pass
-
+                        chunk = data.get("chunk")
+                        # AIMessageChunk 객체 또는 딕셔너리 처리
+                        if hasattr(chunk, "content"):
+                            chunk_text = chunk.content
+                        elif isinstance(chunk, dict) and "content" in chunk:
+                            chunk_text = chunk["content"]
+                        elif isinstance(chunk, str):
+                            chunk_text = chunk
+                    
+                    # 3. 커스텀 이벤트 스트림 (강제 스트리밍 fallback)
+                    elif kind == "on_custom_event" and name == "response_chunk":
+                        chunk = data.get("chunk")
+                        if isinstance(chunk, str):
+                            chunk_text = chunk
+                    
                     if chunk_text:
                         full_response += chunk_text
-                        if not has_started:
-                            has_started = True
-                        
-                        now = time.time()
-                        if now - last_update_time > update_interval:
-                            answer_container.markdown(full_response + "▌")
-                            last_update_time = now
+                        # [최적화] 딜레이 없이 즉시 렌더링
+                        answer_container.markdown(full_response + "▌")
 
-                    # 3. 안전 장치: 최종 결과 가로채기 (generate_response 노드 완료 시)
-                    if kind == "on_chain_end" and event.get("name") == "generate_response":
-                        output = event.get("data", {}).get("output")
-                        # GraphState 딕셔너리에서 response 추출
+                    # 3. 최종 결과 보정
+                    if kind == "on_chain_end" and name == "generate_response":
+                        output = data.get("output")
                         if isinstance(output, dict) and "response" in output:
                             final_node_res = output["response"]
                             # 스트리밍된 것보다 최종 결과가 길다면 교체 (누락 방지)
                             if len(final_node_res) > len(full_response):
                                 full_response = final_node_res
+                                logger.info("[Stream] 최종 결과로 응답 보정됨")
 
-                # 최종 렌더링 (커서 제거 및 최종 텍스트 확정)
+                # 최종 렌더링 (커서 제거)
                 elapsed_time = time.time() - start_time
                 if full_response:
                     answer_container.markdown(full_response)
-                    logger.info(f"[UI] 답변 완료: {elapsed_time:.2f}초")
+                    logger.info(f"[UI] 답변 생성 완료: {elapsed_time:.2f}초")
                 else:
-                    # 상세 로깅 추가
-                    llm_model = getattr(current_llm, "model", "Unknown")
-                    has_qa_chain = qa_chain is not None
-                    
-                    log_msg = (
-                        f"[UI] 답변 생성 실패 (빈 응답). "
-                        f"소요 시간: {elapsed_time:.2f}초, "
-                        f"LLM 모델: {llm_model}, "
-                        f"QA체인 존재: {has_qa_chain}, "
-                        f"이벤트 시작 여부: {has_started}"
-                    )
-                    logger.warning(log_msg)
-                    
-                    error_detail = "⚠️ 답변을 생성할 수 없습니다. (응답 값이 비어있습니다.)"
-                    if not has_started:
-                        error_detail = "⚠️ 답변 생성이 시작되지 않았습니다. Ollama 서버 상태나 모델 설정을 확인해주세요."
-                    
-                    answer_container.error(error_detail)
+                    logger.warning(f"[UI] 답변 생성 실패. 소요시간: {elapsed_time:.2f}초")
+                    answer_container.error("⚠️ 답변이 생성되지 않았습니다.")
 
         return full_response
+
     except Exception as e:
         logger.error(f"Streaming error: {e}", exc_info=True)
         return f"❌ 오류 발생: {str(e)}"
@@ -160,13 +148,17 @@ def render_sidebar(
     """
     with st.sidebar:
         st.header(MSG_SIDEBAR_TITLE)
+
+        # 답변 생성 중인지 확인 (사이드바 전체 잠금용)
+        is_generating = SessionManager.get("is_generating_answer")
         
         # 1. 파일 업로드 섹션 (가장 중요하므로 상시 노출)
         st.file_uploader(
             MSG_PDF_UPLOADER_LABEL, 
             type="pdf", 
             key="pdf_uploader", 
-            on_change=file_uploader_callback
+            on_change=file_uploader_callback,
+            disabled=is_generating  # 생성 중 업로드 방지
         )
 
         # 2. 모델 설정 섹션 (접이식으로 공간 절약)
@@ -197,7 +189,7 @@ def render_sidebar(
                 index=idx, 
                 key="model_selector", 
                 on_change=model_selector_callback, 
-                disabled=is_ollama_error,
+                disabled=(is_ollama_error or is_generating), # 에러거나 생성 중이면 비활성
                 help="사용할 LLM 모델을 선택하세요."
             )
 
@@ -214,6 +206,7 @@ def render_sidebar(
                 index=emb_idx, 
                 key="embedding_model_selector", 
                 on_change=embedding_selector_callback,
+                disabled=is_generating, # 생성 중 변경 방지
                 help="문서 검색에 사용할 임베딩 모델입니다."
             )
         
@@ -246,11 +239,14 @@ def _pdf_viewer_fragment():
             if "current_page" not in st.session_state: 
                 st.session_state.current_page = 1
             
-            # 페이지 범위 보정 (파일 변경 등으로 총 페이지가 줄었을 때)
+            # 페이지 범위 보정
             if st.session_state.current_page > total_pages:
                 st.session_state.current_page = 1
             if st.session_state.current_page < 1:
                 st.session_state.current_page = 1
+
+            # 답변 생성 중인지 확인
+            is_generating = SessionManager.get("is_generating_answer")
 
             # --- PDF 뷰어 렌더링 ---
             pdf_viewer(
@@ -278,7 +274,7 @@ def _pdf_viewer_fragment():
                     MSG_PDF_VIEWER_PREV_BUTTON, 
                     key="btn_pdf_prev", 
                     use_container_width=True,
-                    disabled=(st.session_state.current_page <= 1),
+                    disabled=(st.session_state.current_page <= 1 or is_generating),
                     on_click=go_prev
                 )
 
@@ -298,6 +294,7 @@ def _pdf_viewer_fragment():
                         value=st.session_state.current_page, 
                         label_visibility="collapsed",
                         key="num_input_page",
+                        disabled=is_generating,
                         on_change=update_page_input
                     )
                 with p2:
@@ -313,7 +310,7 @@ def _pdf_viewer_fragment():
                     MSG_PDF_VIEWER_NEXT_BUTTON, 
                     key="btn_pdf_next", 
                     use_container_width=True,
-                    disabled=(st.session_state.current_page >= total_pages),
+                    disabled=(st.session_state.current_page >= total_pages or is_generating),
                     on_click=go_next
                 )
             
@@ -395,4 +392,4 @@ def _chat_fragment():
                 SessionManager.add_message("assistant", final_ans)
                 st.rerun()
         else:
-            st.error(MSG_CHAT_NO_QA_SYSTEM)
+            st.toast(MSG_CHAT_NO_QA_SYSTEM, icon="⚠️")

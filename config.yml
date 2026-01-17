@@ -4,17 +4,21 @@
 # --- 모델 설정 ---
 models:
   # 기본으로 사용할 Ollama 모델 이름
-  default_ollama: "gemma3:8b"
+  default_ollama: "qwen3:4b"
   
+  # Ollama 서버 주소 (로컬: http://127.0.0.1:11434, 도커: http://host.docker.internal:11434)
+  base_url: "http://127.0.0.1:11434"
+
   # Ollama 모델의 토큰 생성 제한 (기본값: 4096)
   # -1로 설정하면 모델의 기본 설정 또는 무제한(컨텍스트 윈도우까지)으로 생성합니다.
+  # 명시적으로 충분한 길이를 확보하여 답변 끊김 방지
   ollama_num_predict: -1
 
   # Ollama 모델의 온도 설정 (기본값: 0.1)
   temperature: 0.1
 
-  # Ollama 모델의 컨텍스트 윈도우 설정 (기본값: 8192)
-  num_ctx: 8192
+  # Ollama 모델의 컨텍스트 윈도우 설정 (기본값: 4096)
+  num_ctx: 4096
 
   # Ollama 모델의 탑-피 설정 (기본값: 0.8)
   top_p: 0.8
@@ -41,15 +45,15 @@ rag:
   retriever:
     search_type: "similarity"
     search_kwargs:
-      k: 5  # Reranking 비활성화에 맞춰 검색 개수 최적화 (10 -> 5)
+      k: 3
     # BM25와 FAISS의 가중치 (Ensemble Retriever용)
     ensemble_weights: [0.4, 0.6]
 
   # 재순위화(Reranking) 설정
   reranker:
-    enabled: false
-    model_name: "cross-encoder/ms-marco-MiniLM-L-6-v2"
-    top_k: 5  # 재순위화 후 최종적으로 LLM에 전달할 문서 개수
+    enabled: false  # 로컬 환경 속도를 위해 기본값 비활성화 (필요시 true로 변경)
+    model_name: "BAAI/bge-reranker-v2-m3" # 한국어/다국어 지원 모델로 변경
+    top_k: 3  # 최종적으로 LLM에 전달할 문서 개수 (5 -> 3으로 줄여 속도 향상)
 
   # 텍스트 분할 설정
   text_splitter:
@@ -59,16 +63,16 @@ rag:
   # 의미론적 분할 설정 (임베딩 기반)
   semantic_chunker:
     enabled: true
-    breakpoint_threshold_type: "similarity_threshold"  # 'percentile' 대신 'similarity_threshold' 사용
-    breakpoint_threshold_value: 0.6  # 유사도가 0.6 미만으로 떨어지면 분할 (절대적 기준)
-    sentence_split_regex: "(?<=[.!?])\\s+"  # 문장 분할 정규식 (Lookbehind 사용으로 구두점 보존)
-    min_chunk_size: 200  # 최소 청크 크기를 늘려 문맥 확보
-    max_chunk_size: 1000  # 최대 청크 크기를 늘려 흐름 유지
-    similarity_threshold: 0.6  # 기본 threshold 값
+    breakpoint_threshold_type: "similarity_threshold"
+    breakpoint_threshold_value: 0.6
+    sentence_split_regex: "(?<=[.!?])\\s+"
+    min_chunk_size: 200
+    max_chunk_size: 1000
+    similarity_threshold: 0.6
 
   # 쿼리 확장 설정
   query_expansion:
-    enabled: false  # 기본값: 비활성화
+    enabled: false  # 로컬 LLM(4B 이하)의 파싱 오류 및 속도 저하 방지를 위해 비활성화
 
   # 프롬프트 설정
   prompts:
