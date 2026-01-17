@@ -182,9 +182,9 @@ def build_graph(retriever: Any):
         merged_docs = _merge_consecutive_chunks(documents)
         formatted = []
         for i, doc in enumerate(merged_docs):
-            # [개선] 페이지 번호 포함 (출처 인용 지원)
+            # [개선] 페이지 번호만 포함하여 LLM이 [p.X] 형식으로 인용하도록 강력 유도
             page = doc.metadata.get("page", "?")
-            formatted.append(f"[Document {i+1} (Page {page})]\n{doc.page_content}")
+            formatted.append(f"[p.{page}]\n{doc.page_content}")
             
         return {"context": "\n\n".join(formatted)}
 

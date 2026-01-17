@@ -39,7 +39,7 @@ import fitz  # PyMuPDF
 logger = logging.getLogger(__name__)
 
 
-def _load_pdf_docs(pdf_file_bytes: bytes) -> List[Document]:
+def _load_pdf_docs(pdf_file_bytes: bytes, file_name: str) -> List[Document]:
     """
     PDF 파일 바이트를 메모리에서 직접 로드하여 LangChain Document 객체로 변환합니다.
     [최적화] 디스크 I/O 제거 및 메타데이터(페이지 번호) 보존 강화.
@@ -57,7 +57,7 @@ def _load_pdf_docs(pdf_file_bytes: bytes) -> List[Document]:
                     # 너무 짧은 페이지(빈 페이지나 이미지만 있는 경우)는 건너뛰어 노이즈 감소
                     if clean_text and len(clean_text) > 10:
                         metadata = {
-                            "source": "uploaded_pdf",
+                            "source": file_name,
                             "page": page_num + 1,  # 1-based index
                             "total_pages": len(doc_file)
                         }
@@ -266,6 +266,7 @@ def _create_ensemble_retriever(
 @log_operation("검색 컴포넌트 로드/생성")
 def _load_and_build_retrieval_components(
     file_bytes: bytes,
+    file_name: str,
     embedder: "HuggingFaceEmbeddings",
 ) -> Tuple[List[Document], FAISS, BM25Retriever, bool]:
 
@@ -275,7 +276,7 @@ def _load_and_build_retrieval_components(
     cache_used = all(x is not None for x in [doc_splits, vector_store, bm25_retriever])
 
     if not cache_used:
-        docs = _load_pdf_docs(file_bytes)
+        docs = _load_pdf_docs(file_bytes, file_name)
         # 빈 문서 처리 추가
         if not docs:
              raise ValueError("PDF에서 내용을 읽을 수 없습니다. (빈 파일 또는 이미지 위주)")
@@ -312,7 +313,7 @@ def build_rag_pipeline(
         Tuple[str, bool]: (성공 메시지, 캐시 사용 여부).
     """
     doc_splits, vector_store, bm25_retriever, cache_used = (
-        _load_and_build_retrieval_components(file_bytes, embedder)
+        _load_and_build_retrieval_components(file_bytes, uploaded_file_name, embedder)
     )
     final_retriever = _create_ensemble_retriever(vector_store, bm25_retriever)
     rag_app = build_graph(retriever=final_retriever)

@@ -13,7 +13,7 @@ import fitz  # PyMuPDF
 
 from session import SessionManager
 from model_loader import get_available_models
-from utils import sync_run
+from utils import sync_run, apply_tooltips_to_response
 from config import (
     AVAILABLE_EMBEDDING_MODELS,
     OLLAMA_MODEL_NAME,
@@ -43,8 +43,10 @@ async def _stream_chat_response(qa_chain, user_input: str, chat_container) -> st
     """
     최적화된 답변 생성 및 스트리밍 함수.
     [최적화] 인위적인 딜레이(update_interval)를 제거하여 반응 속도 극대화.
+    [개선] 문서 출처를 RAG 결과에서 직접 가져와 구조적으로 렌더링.
     """
     full_response = ""
+    retrieved_documents = [] # 검색된 문서 저장용
     start_time = time.time()
     
     current_llm = SessionManager.get("llm")
@@ -58,7 +60,7 @@ async def _stream_chat_response(qa_chain, user_input: str, chat_container) -> st
         with chat_container:
             with st.chat_message("assistant", avatar="🤖"):
                 answer_container = st.empty()
-                # 로딩 메시지 복구 (사용자 피드백 반영)
+                # 로딩 메시지 복구
                 answer_container.markdown(f"⌛ {MSG_PREPARING_ANSWER}")
 
                 # 스트리밍 루프
@@ -71,21 +73,19 @@ async def _stream_chat_response(qa_chain, user_input: str, chat_container) -> st
                     name = event.get("name", "Unknown")
                     data = event.get("data", {})
                     
-                    # [Debug] 모든 이벤트 로깅 (문제 해결 후 주석 처리 예정)
-                    logger.debug(f"[Stream Event] Kind: {kind} | Name: {name} | Keys: {list(data.keys())}")
+                    # [Debug]
+                    # logger.debug(f"[Stream Event] Kind: {kind} | Name: {name}")
 
                     chunk_text = None
 
-                    # 1. 파서 스트림 (기존 로직)
+                    # 1. 텍스트 스트리밍
                     if kind == "on_parser_stream":
                         chunk = data.get("chunk")
                         if isinstance(chunk, str):
                             chunk_text = chunk
                     
-                    # 2. 모델 스트림 (추가: 더 낮은 레벨의 토큰 이벤트)
                     elif kind == "on_chat_model_stream":
                         chunk = data.get("chunk")
-                        # AIMessageChunk 객체 또는 딕셔너리 처리
                         if hasattr(chunk, "content"):
                             chunk_text = chunk.content
                         elif isinstance(chunk, dict) and "content" in chunk:
@@ -93,7 +93,6 @@ async def _stream_chat_response(qa_chain, user_input: str, chat_container) -> st
                         elif isinstance(chunk, str):
                             chunk_text = chunk
                     
-                    # 3. 커스텀 이벤트 스트림 (강제 스트리밍 fallback)
                     elif kind == "on_custom_event" and name == "response_chunk":
                         chunk = data.get("chunk")
                         if isinstance(chunk, str):
@@ -101,23 +100,46 @@ async def _stream_chat_response(qa_chain, user_input: str, chat_container) -> st
                     
                     if chunk_text:
                         full_response += chunk_text
-                        # [최적화] 딜레이 없이 즉시 렌더링
-                        answer_container.markdown(full_response + "▌")
+                        answer_container.markdown(full_response + "▌", unsafe_allow_html=True)
 
-                    # 3. 최종 결과 보정
+                    # 2. 문서 캡처 (retrieve 노드 완료 시점)
+                    if kind == "on_chain_end" and name == "retrieve":
+                        output = data.get("output")
+                        if output and isinstance(output, dict) and "documents" in output:
+                            retrieved_documents = output["documents"]
+                            logger.info(f"[UI] 검색된 문서 캡처: {len(retrieved_documents)}개")
+
+                    # 3. 최종 결과 보정 (generate_response 노드 완료 시점)
                     if kind == "on_chain_end" and name == "generate_response":
                         output = data.get("output")
-                        if isinstance(output, dict) and "response" in output:
-                            final_node_res = output["response"]
-                            # 스트리밍된 것보다 최종 결과가 길다면 교체 (누락 방지)
-                            if len(final_node_res) > len(full_response):
-                                full_response = final_node_res
-                                logger.info("[Stream] 최종 결과로 응답 보정됨")
+                        if isinstance(output, dict):
+                            # 만약 노드가 documents를 반환한다면 여기서도 캡처 시도 (안전망)
+                            if "documents" in output and not retrieved_documents:
+                                retrieved_documents = output["documents"]
+                            
+                            if "response" in output:
+                                final_node_res = output["response"]
+                                if len(final_node_res) > len(full_response):
+                                    full_response = final_node_res
 
-                # 최종 렌더링 (커서 제거)
+                # 스트리밍 종료 후 처리
                 elapsed_time = time.time() - start_time
+                
                 if full_response:
-                    answer_container.markdown(full_response)
+                    # [변경] 하단 목록 추가 대신 본문에 툴팁 적용
+                    if retrieved_documents:
+                        # 툴팁이 적용된 HTML로 변환
+                        final_html = apply_tooltips_to_response(full_response, retrieved_documents)
+                        answer_container.markdown(final_html, unsafe_allow_html=True)
+                        
+                        # 채팅 히스토리 저장을 위해 원본 텍스트(full_response)가 아닌 
+                        # HTML 버전(final_html)을 반환해야 나중에도 툴팁이 보임.
+                        # 단, SessionManager에는 구조적 데이터가 없으므로 HTML을 저장해야 함.
+                        full_response = final_html 
+                    else:
+                        # 문서가 없으면 그냥 텍스트 렌더링
+                        answer_container.markdown(full_response, unsafe_allow_html=True)
+
                     logger.info(f"[UI] 답변 생성 완료: {elapsed_time:.2f}초")
                 else:
                     logger.warning(f"[UI] 답변 생성 실패. 소요시간: {elapsed_time:.2f}초")
@@ -320,6 +342,74 @@ def _pdf_viewer_fragment():
 
 
 def render_left_column():
+    # [툴팁 CSS 주입]
+    st.markdown("""
+    <style>
+    /* 툴팁 컨테이너 */
+    .tooltip {
+        position: relative;
+        display: inline-block;
+        border-bottom: 1px dotted #888; /* 인용구임을 표시하는 점선 밑줄 */
+        cursor: help;
+        color: #0068c9; /* 링크 색상과 유사하게 */
+        font-weight: bold;
+    }
+
+    /* 툴팁 텍스트 (숨김 상태) */
+    .tooltip .tooltip-text {
+        visibility: hidden;
+        width: 350px;
+        background-color: #333; /* 다크 그레이 배경 */
+        color: #fff;
+        text-align: left;
+        border-radius: 6px;
+        padding: 10px;
+        font-size: 0.9em;
+        font-weight: normal;
+        line-height: 1.5;
+        
+        /* 위치 조정 */
+        position: absolute;
+        z-index: 1000;
+        bottom: 125%; /* 텍스트 위쪽에 표시 */
+        left: 50%;
+        margin-left: -175px; /* 가운데 정렬 */
+        
+        /* 페이드인 효과 */
+        opacity: 0;
+        transition: opacity 0.3s;
+        
+        /* 스크롤 및 크기 제한 */
+        max-height: 200px;
+        overflow-y: auto;
+        box-shadow: 0px 4px 8px rgba(0,0,0,0.3);
+    }
+
+    /* 화살표 */
+    .tooltip .tooltip-text::after {
+        content: "";
+        position: absolute;
+        top: 100%;
+        left: 50%;
+        margin-left: -5px;
+        border-width: 5px;
+        border-style: solid;
+        border-color: #333 transparent transparent transparent;
+    }
+
+    /* 호버 시 표시 */
+    .tooltip:hover .tooltip-text {
+        visibility: visible;
+        opacity: 1;
+    }
+    
+    /* 다크모드 대응: 글자색을 명확히 */
+    @media (prefers-color-scheme: dark) {
+        .tooltip { color: #4fa8ff; }
+    }
+    </style>
+    """, unsafe_allow_html=True)
+    
     _chat_fragment()
 
 
@@ -334,32 +424,9 @@ def render_message(role: str, content: str):
     avatar_icon = "🤖" if role == "assistant" else "👤"
     
     with st.chat_message(role, avatar=avatar_icon):
-        # 답변 내의 출처(Sources) 부분을 시각적으로 분리
-        # 가정: LLM 답변에 '출처:' 또는 'Sources:' 라는 구분자가 있다고 가정
-        # 실제 프롬프트에 따라 구분자는 달라질 수 있음
-        
-        # 간단한 파싱 로직 (필요시 정규표현식으로 고도화 가능)
-        separator = None
-        if "출처:" in content:
-            separator = "출처:"
-        elif "Sources:" in content:
-            separator = "Sources:"
-            
-        if role == "assistant" and separator:
-            try:
-                parts = content.split(separator, 1)
-                main_content = parts[0].strip()
-                sources = parts[1].strip()
-                
-                st.markdown(main_content)
-                if sources:
-                    with st.expander("📚 참고 문헌 (Sources)", expanded=False):
-                        st.markdown(f"**{separator}**\n{sources}")
-            except Exception:
-                # 파싱 에러 시 원본 그대로 출력
-                st.markdown(content)
-        else:
-            st.markdown(content)
+        # [개선] 파싱 로직 제거 - content에 이미 포맷팅된 출처가 포함되어 있음
+        # HTML 태그(접이식 출처) 렌더링을 위해 unsafe_allow_html=True 설정
+        st.markdown(content, unsafe_allow_html=True)
 
 
 @st.fragment
