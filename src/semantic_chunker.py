@@ -390,21 +390,43 @@ class EmbeddingBasedSemanticChunker:
             # 중심점이 속한 원본 문서 찾기
             matched_metadata = {}
             
-            # 순차 탐색 (문서 수가 많지 않다고 가정, 많으면 이진 탐색 고려)
+            # 순차 탐색
             found = False
-            for r in doc_ranges:
+            for i, r in enumerate(doc_ranges):
                 if r["start"] <= c_center < r["end"]:
                     matched_metadata = r["metadata"].copy() if r["metadata"] else {}
                     found = True
                     break
             
-            # 예외: 만약 중심점이 범위 밖이면(거의 없겠지만), 
-            # 시작점이나 끝점으로 재시도하거나 첫/마지막 문서 매핑
+            # [Fix] 정확한 범위를 못 찾은 경우 (문서 사이 공백에 중심점이 위치)
+            # 가장 가까운 문서를 찾아 매핑 (Gap 보정)
             if not found and doc_ranges:
-                if c_center >= doc_ranges[-1]["end"]:
-                    matched_metadata = doc_ranges[-1]["metadata"].copy()
-                elif c_center < doc_ranges[0]["start"]:
+                # 1. 범위 밖 (맨 앞보다 전, 맨 뒤보다 후)
+                if c_center < doc_ranges[0]["start"]:
                     matched_metadata = doc_ranges[0]["metadata"].copy()
+                elif c_center >= doc_ranges[-1]["end"]:
+                    matched_metadata = doc_ranges[-1]["metadata"].copy()
+                else:
+                    # 2. 문서 사이 Gap에 위치한 경우
+                    # 현재 c_center보다 시작점이 큰 첫 번째 문서를 찾으면, 그 문서(Next)나 그 앞 문서(Prev) 중 가까운 것 선택
+                    for i, r in enumerate(doc_ranges):
+                        if r["start"] > c_center:
+                            # r은 Gap 바로 뒤의 문서
+                            prev_r = doc_ranges[i-1] if i > 0 else r
+                            
+                            # 거리 비교: (Gap~Next) vs (Prev~Gap)
+                            dist_to_next = r["start"] - c_center
+                            dist_to_prev = c_center - prev_r["end"]
+                            
+                            if dist_to_prev <= dist_to_next:
+                                matched_metadata = prev_r["metadata"].copy()
+                            else:
+                                matched_metadata = r["metadata"].copy()
+                            break
+            
+            # 최후의 안전장치: 여전히 비어있다면 첫 번째 문서 정보 사용
+            if not matched_metadata and doc_ranges:
+                 matched_metadata = doc_ranges[0]["metadata"].copy()
 
             final_docs.append(
                 Document(page_content=c_text, metadata=matched_metadata)

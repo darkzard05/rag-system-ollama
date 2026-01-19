@@ -11,6 +11,7 @@ import pickle
 import tempfile
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
+import streamlit as st
 from langchain.retrievers import EnsembleRetriever
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_community.document_loaders import PyMuPDFLoader
@@ -39,34 +40,53 @@ import fitz  # PyMuPDF
 logger = logging.getLogger(__name__)
 
 
-def _load_pdf_docs(pdf_file_bytes: bytes, file_name: str) -> List[Document]:
+def _compute_file_hash(file_path: str) -> str:
+    """파일의 SHA256 해시를 계산합니다."""
+    sha256_hash = hashlib.sha256()
+    try:
+        with open(file_path, "rb") as f:
+            for byte_block in iter(lambda: f.read(4096), b""):
+                sha256_hash.update(byte_block)
+        return sha256_hash.hexdigest()
+    except Exception as e:
+        logger.error(f"파일 해시 계산 실패: {e}")
+        return ""
+
+
+def _load_pdf_docs(file_path: str, file_name: str) -> List[Document]:
     """
-    PDF 파일 바이트를 메모리에서 직접 로드하여 LangChain Document 객체로 변환합니다.
-    [최적화] 디스크 I/O 제거 및 메타데이터(페이지 번호) 보존 강화.
+    PDF 파일을 디스크에서 로드하여 LangChain Document 객체로 변환합니다.
+    [최적화] 메모리 효율성을 위해 파일 경로를 사용합니다.
     """
     docs = []
     try:
-        # 메모리 스트림에서 PDF 열기 (fitz의 context manager 활용)
-        with fitz.open(stream=pdf_file_bytes, filetype="pdf") as doc_file:
+        # 파일 경로에서 PDF 열기
+        with fitz.open(file_path) as doc_file:
+            total_pages = len(doc_file)
             for page_num, page in enumerate(doc_file):
-                text = page.get_text()
+                try:
+                    text = page.get_text()
+                except Exception as e:
+                    logger.warning(f"페이지 {page_num+1} 텍스트 추출 실패: {e}")
+                    text = ""
                 
                 # [강화] 텍스트 전처리 및 최소 길이 검사
                 if text:
                     clean_text = preprocess_text(text)
-                    # 너무 짧은 페이지(빈 페이지나 이미지만 있는 경우)는 건너뛰어 노이즈 감소
+                    # 너무 짧은 페이지는 건너뛰되, 로그로 남김
                     if clean_text and len(clean_text) > 10:
                         metadata = {
                             "source": file_name,
-                            "page": page_num + 1,  # 1-based index
-                            "total_pages": len(doc_file)
+                            "page": int(page_num + 1),  # 명시적 int 변환
+                            "total_pages": int(total_pages)
                         }
                         docs.append(Document(page_content=clean_text, metadata=metadata))
         
+        logger.info(f"PDF 로드 완료: {len(docs)}/{total_pages} 페이지 추출됨.")
         return docs
 
     except Exception as e:
-        logger.error(f"PDF 메모리 로드 중 오류 발생: {e}")
+        logger.error(f"PDF 로드 중 오류 발생: {e}")
         raise
 
 
@@ -153,15 +173,15 @@ def _compute_config_hash() -> str:
 class VectorStoreCache:
     """벡터 저장소 및 리트리버 캐시 관리자""" #
 
-    def __init__(self, file_bytes: bytes, embedding_model_name: str):
+    def __init__(self, file_path: str, embedding_model_name: str):
         self.cache_dir, self.doc_splits_path, self.faiss_index_path, self.bm25_retriever_path = self._get_cache_paths(
-            file_bytes, embedding_model_name
+            file_path, embedding_model_name
         )
 
     def _get_cache_paths(
-        self, file_bytes: bytes, embedding_model_name: str
+        self, file_path: str, embedding_model_name: str
     ) -> Tuple[str, str, str, str]:
-        file_hash = hashlib.sha256(file_bytes).hexdigest()
+        file_hash = _compute_file_hash(file_path)
         # 파일 경로에 안전하지 않은 문자 제거
         model_name_slug = embedding_model_name.replace("/", "_").replace("\\", "_")
         config_hash = _compute_config_hash()
@@ -264,31 +284,33 @@ def _create_ensemble_retriever(
 
 
 @log_operation("검색 컴포넌트 로드/생성")
+@st.cache_resource(show_spinner=False)
 def _load_and_build_retrieval_components(
-    file_bytes: bytes,
+    file_path: str,
     file_name: str,
-    embedder: "HuggingFaceEmbeddings",
+    _embedder: "HuggingFaceEmbeddings",
+    embedding_model_name: str,
 ) -> Tuple[List[Document], FAISS, BM25Retriever, bool]:
 
-    cache = VectorStoreCache(file_bytes, embedder.model_name)
-    doc_splits, vector_store, bm25_retriever = cache.load(embedder)
+    cache = VectorStoreCache(file_path, embedding_model_name)
+    doc_splits, vector_store, bm25_retriever = cache.load(_embedder)
 
     cache_used = all(x is not None for x in [doc_splits, vector_store, bm25_retriever])
 
     if not cache_used:
-        docs = _load_pdf_docs(file_bytes, file_name)
+        docs = _load_pdf_docs(file_path, file_name)
         # 빈 문서 처리 추가
         if not docs:
              raise ValueError("PDF에서 내용을 읽을 수 없습니다. (빈 파일 또는 이미지 위주)")
 
-        doc_splits = _split_documents(docs, embedder)
+        doc_splits = _split_documents(docs, _embedder)
 
         if not doc_splits:
             raise ValueError(
                 "PDF에서 텍스트를 추출할 수 없습니다. 스캔된 문서이거나 텍스트가 없는 파일일 수 있습니다."
             )
 
-        vector_store = _create_vector_store(doc_splits, embedder)
+        vector_store = _create_vector_store(doc_splits, _embedder)
         bm25_retriever = _create_bm25_retriever(doc_splits)
         cache.save(doc_splits, vector_store, bm25_retriever)
 
@@ -298,7 +320,7 @@ def _load_and_build_retrieval_components(
 @log_operation("RAG 파이프라인 구축")
 def build_rag_pipeline(
     uploaded_file_name: str,
-    file_bytes: bytes,
+    file_path: str,
     embedder: "HuggingFaceEmbeddings",
 ) -> Tuple[str, bool]:
     """
@@ -306,19 +328,25 @@ def build_rag_pipeline(
 
     Args:
         uploaded_file_name (str): 업로드된 파일의 이름.
-        file_bytes (bytes): 파일의 바이트 데이터.
+        file_path (str): 업로드된 파일의 임시 경로.
         embedder (HuggingFaceEmbeddings): 임베딩 모델.
 
     Returns:
         Tuple[str, bool]: (성공 메시지, 캐시 사용 여부).
     """
+    # [최적화] embedder 객체는 해싱에서 제외(_)하고, 모델명을 명시적 키로 전달
     doc_splits, vector_store, bm25_retriever, cache_used = (
-        _load_and_build_retrieval_components(file_bytes, uploaded_file_name, embedder)
+        _load_and_build_retrieval_components(
+            file_path, 
+            uploaded_file_name, 
+            _embedder=embedder, 
+            embedding_model_name=embedder.model_name
+        )
     )
     final_retriever = _create_ensemble_retriever(vector_store, bm25_retriever)
     rag_app = build_graph(retriever=final_retriever)
 
-    SessionManager.set("processed_document_splits", doc_splits)
+    # SessionManager.set("processed_document_splits", doc_splits) # [메모리 최적화] 불필요한 원본 데이터 저장 제거
     SessionManager.set("vector_store", vector_store)
     SessionManager.set("qa_chain", rag_app)
     SessionManager.set("pdf_processed", True)

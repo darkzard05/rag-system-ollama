@@ -4,6 +4,8 @@ Streamlit 프레임워크를 기반으로 UI를 구성하고 세션 상태를 �
 """
 
 import logging
+import tempfile
+import os
 from typing import Any
 
 import nest_asyncio
@@ -22,6 +24,7 @@ LAYOUT = "wide"
 MAX_FILE_SIZE_MB = 50  # 최대 파일 크기 제한 (MB)
 
 # 비동기 패치 적용 (최상단 실행)
+# Streamlit의 실행 루프와 LangGraph의 비동기 스트리밍(asyncio) 간의 충돌을 방지하기 위해 필수적입니다.
 nest_asyncio.apply()
 
 # 로깅 설정
@@ -90,9 +93,9 @@ def _rebuild_rag_system(status_container: DeltaGenerator) -> None:
     업로드된 파일과 선택된 모델을 사용하여 RAG 파이프라인을 재구축합니다.
     """
     file_name = SessionManager.get("last_uploaded_file_name")
-    file_bytes = SessionManager.get("pdf_file_bytes")
+    file_path = SessionManager.get("pdf_file_path")
 
-    if not file_name or not file_bytes:
+    if not file_name or not file_path:
         return
 
     # [중복 실행 방지] 이미 해당 파일에 대한 처리가 완료되었는지 확인
@@ -117,7 +120,7 @@ def _rebuild_rag_system(status_container: DeltaGenerator) -> None:
                 # RAG 파이프라인 빌드 (시간이 소요될 수 있음)
                 success_message, cache_used = build_rag_pipeline(
                     uploaded_file_name=file_name,
-                    file_bytes=file_bytes,
+                    file_path=file_path,
                     embedder=embedder,
                 )
 
@@ -164,6 +167,11 @@ def on_file_upload() -> None:
     if not uploaded_file:
         return
 
+    # [개선] 파일 타입 검사 (MIME 타입 확인)
+    if uploaded_file.type != "application/pdf":
+        st.error("❌ 올바른 PDF 파일이 아닙니다. PDF 형식의 파일을 업로드해주세요.")
+        return
+
     # [개선] 파일 크기 검사
     file_size_mb = uploaded_file.size / (1024 * 1024)
     if file_size_mb > MAX_FILE_SIZE_MB:
@@ -172,10 +180,29 @@ def on_file_upload() -> None:
 
     # 파일이 변경된 경우에만 처리
     if uploaded_file.name != SessionManager.get("last_uploaded_file_name"):
+        # [메모리 최적화] 이전 임시 파일이 있다면 삭제하여 디스크 공간 확보
+        old_path = SessionManager.get("pdf_file_path")
+        if old_path and os.path.exists(old_path):
+            try:
+                os.remove(old_path)
+                logger.info(f"이전 임시 파일 삭제 완료: {old_path}")
+            except Exception as e:
+                logger.warning(f"이전 임시 파일 삭제 실패: {e}")
+
         SessionManager.set("last_uploaded_file_name", uploaded_file.name)
-        # 주의: 큰 파일의 경우 getvalue()는 메모리를 많이 소모할 수 있음
-        SessionManager.set("pdf_file_bytes", uploaded_file.getvalue())
-        SessionManager.set("new_file_uploaded", True)
+        
+        # [메모리 최적화] 파일을 임시 경로에 저장하고 경로만 세션에 유지
+        try:
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp_file:
+                tmp_file.write(uploaded_file.getbuffer())
+                tmp_path = tmp_file.name
+            
+            SessionManager.set("pdf_file_path", tmp_path)
+            SessionManager.set("new_file_uploaded", True)
+            logger.info(f"새 임시 파일 저장 완료: {tmp_path}")
+        except Exception as e:
+            st.error(f"파일 저장 중 오류 발생: {e}")
+            logger.error(f"파일 저장 오류: {e}")
 
 
 def on_model_change() -> None:
@@ -208,7 +235,7 @@ def on_embedding_change() -> None:
 
     SessionManager.set("last_selected_embedding_model", selected)
     # 임베딩 모델이 바뀌면 문서를 다시 인덱싱해야 함
-    if SessionManager.get("pdf_file_bytes"):
+    if SessionManager.get("pdf_file_path"):
         SessionManager.set("needs_rag_rebuild", True)
 
 
@@ -227,7 +254,7 @@ def main() -> None:
     # 파일이 업로드되지 않았고(bytes 없음), 처리된 파일도 없을 때만 표시
     if (not SessionManager.get("pdf_processed") 
         and not SessionManager.get("pdf_processing_error")
-        and not SessionManager.get("pdf_file_bytes")):
+        and not SessionManager.get("pdf_file_path")):
         status_container.info("👋 PDF 파일을 업로드하여 대화를 시작하세요.")
 
     # 상태 플래그에 따른 작업 수행 (우선순위: 새 파일 > 임베딩 변경 > 모델 변경)

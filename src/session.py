@@ -26,8 +26,7 @@ class SessionManager:
         "last_pdf_name": None,  # PDF 뷰어의 현재 파일 이름 추적
         "pdf_processed": False,
         "pdf_processing_error": None,
-        "pdf_file_bytes": None,
-        "processed_document_splits": None,
+        "pdf_file_path": None,
         "qa_chain": None,
         "vector_store": None,
         "llm": None,
@@ -64,7 +63,6 @@ class SessionManager:
         keys_to_reset = [
             "pdf_processed",
             "pdf_processing_error",
-            "processed_document_splits",
             "qa_chain",
             "vector_store",
         ]

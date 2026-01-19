@@ -185,8 +185,11 @@ def build_graph(retriever: Any):
             # [개선] 페이지 번호만 포함하여 LLM이 [p.X] 형식으로 인용하도록 강력 유도
             page = doc.metadata.get("page", "?")
             formatted.append(f"[p.{page}]\n{doc.page_content}")
-            
-        return {"context": "\n\n".join(formatted)}
+        
+        context_str = "\n\n".join(formatted)
+        # [Debug] 컨텍스트의 앞부분만 로그로 확인 (페이지 번호 포함 여부 체크)
+        logger.info(f"[Graph] 컨텍스트 생성 완료 (Sample): {context_str[:200].replace(chr(10), ' ')}...")
+        return {"context": context_str}
 
 
     # 5. 답변 생성 노드 (가장 중요)
@@ -202,7 +205,14 @@ def build_graph(retriever: Any):
 
         prompt = ChatPromptTemplate.from_messages([
             ("system", QA_SYSTEM_PROMPT),
-            ("human", "[Context]:\n{context}\n\n[Question]: {input}"),
+            ("human", """[Context]:
+{context}
+
+[Question]: {input}
+
+[Instruction]:
+Please answer the question above based on the context.
+**Important:** Answer in the SAME language as the question (Korean question -> Korean answer)."""),
         ])
 
         chain = prompt | llm | StrOutputParser()

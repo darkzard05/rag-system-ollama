@@ -42,28 +42,23 @@ def apply_tooltips_to_response(response_text: str, documents: list) -> str:
             page_content_map[page_key] = content
 
     # 2. 정규표현식으로 인용 패턴 찾기 및 치환
-    # 목표: [Document 1, p.123], (Document 1, p.123), [p.123], (p.123) 등을 모두 포착
-    # Group 1: Opening Bracket (optional)
-    # Group 2: Page Number (required)
-    # Group 3: Closing Bracket (optional)
-    pattern = re.compile(r'([\[\(]?)(?:Document\s+\d+[,.]?\s*)?(?:[Pp](?:age)?\.?\s?)(\d+)([\]\)]?)', re.IGNORECASE)
+    # 목표: [p.123], (p. 123), [page 123], [p 123] 등을 모두 포착 (대소문자 무관, 공백 허용)
+    # Group 1: Opening Bracket
+    # Group 2: Page Number
+    # Group 3: Closing Bracket
+    pattern = re.compile(r'([\[\(])(?:Document\s+\d+[,.]?\s*)?(?:[Pp](?:age)?\.?\s*)(\d+)([\]\)])', re.IGNORECASE)
     
     def replacement(match):
-        open_bracket = match.group(1) if match.group(1) else "["
+        open_bracket = match.group(1)
         page_num = match.group(2)
-        close_bracket = match.group(3) if match.group(3) else "]"
+        close_bracket = match.group(3)
         
-        # 괄호가 짝이 안 맞으면 강제로 맞춤 (보기 좋게)
-        if open_bracket == "(" and close_bracket == "]": close_bracket = ")"
-        if open_bracket == "[" and close_bracket == ")": close_bracket = "]"
-        
-        # 표시할 텍스트는 항상 짧은 형식 [p.X] 으로 통일
-        display_text = f"[{'p.'}{page_num}]" 
+        # 표시할 텍스트는 항상 표준화된 형식 [p.X] 으로 통일
+        display_text = f"[p.{page_num}]" 
 
         if page_num in page_content_map:
-            # HTML Safe 처리 (따옴표 등 이스케이프)
+            # HTML Safe 처리
             raw_text = page_content_map[page_num]
-            # 너무 길면 자르기 (CSS max-height가 있지만 데이터량 조절)
             if len(raw_text) > 500:
                 raw_text = raw_text[:500] + "..."
                 
@@ -75,10 +70,10 @@ def apply_tooltips_to_response(response_text: str, documents: list) -> str:
                 f'</span>'
             )
         else:
-            # 매핑되는 문서가 없으면 정제된 텍스트만 반환 (Document X 부분 제거됨)
             return display_text
 
-    # sub 함수의 치환 로직에 함수 전달
+    # 3. 괄호가 없는 p.123 형태도 추가로 잡기 위한 2차 패턴 (선택사항, 노이즈 주의)
+    # 여기서는 안전하게 괄호가 있는 경우만 먼저 완벽히 처리합니다.
     new_response = pattern.sub(replacement, response_text)
     
     return new_response

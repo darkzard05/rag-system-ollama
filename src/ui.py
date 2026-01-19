@@ -5,6 +5,7 @@ Clean & Minimal Version: 부가 요소 제거, 직관적인 로딩 및 스트리
 
 import time
 import logging
+import os
 from typing import Callable, Optional
 
 import streamlit as st
@@ -126,6 +127,9 @@ async def _stream_chat_response(qa_chain, user_input: str, chat_container) -> st
                 elapsed_time = time.time() - start_time
                 
                 if full_response:
+                    # [Debug] LLM 원본 응답 로그 (출처 태그 확인용)
+                    logger.info(f"[UI] LLM Raw Response: {full_response[:300].replace(chr(10), ' ')}...")
+
                     # [변경] 하단 목록 추가 대신 본문에 툴팁 적용
                     if retrieved_documents:
                         # 툴팁이 적용된 HTML로 변환
@@ -248,13 +252,22 @@ def _pdf_viewer_fragment():
     """PDF 뷰어 (Fragment) - 개선된 네비게이션"""
     st.subheader(MSG_PDF_VIEWER_TITLE)
     
-    pdf_bytes = SessionManager.get("pdf_file_bytes")
-    if not pdf_bytes:
+    pdf_path = SessionManager.get("pdf_file_path")
+    if not pdf_path:
         st.info(MSG_PDF_VIEWER_NO_FILE)
         return
     
+    # [안정성] 임시 파일이 디스크에 존재하는지 확인
+    if not os.path.exists(pdf_path):
+        logger.error(f"임시 파일을 찾을 수 없음: {pdf_path}")
+        st.error("⚠️ 세션이 만료되었거나 파일을 찾을 수 없습니다. 다시 업로드해주세요.")
+        # 세션 초기화 유도
+        SessionManager.set("pdf_file_path", None)
+        SessionManager.set("pdf_processed", False)
+        return
+    
     try:
-        with fitz.open(stream=pdf_bytes, filetype="pdf") as doc:
+        with fitz.open(pdf_path) as doc:
             total_pages = len(doc)
             
             # 세션 상태 초기화
@@ -272,7 +285,7 @@ def _pdf_viewer_fragment():
 
             # --- PDF 뷰어 렌더링 ---
             pdf_viewer(
-                input=pdf_bytes, 
+                input=pdf_path, 
                 height=UI_CONTAINER_HEIGHT, 
                 pages_to_render=[st.session_state.current_page]
             )
