@@ -1,0 +1,592 @@
+"""
+Task 19-3: Distributed Reranking Module
+분산 재순위지정 - 다중 노드 결과의 최종 순위 결정
+"""
+
+from dataclasses import dataclass, field
+from enum import Enum
+from typing import List, Dict, Optional, Tuple, Any, Callable
+import time
+from threading import RLock
+import math
+
+
+class RerankerStrategy(Enum):
+    """재순위지정 전략"""
+    SCORE_ONLY = "score_only"              # 점수 기반
+    DIVERSITY = "diversity"                 # 다양성 고려
+    RECENCY = "recency"                    # 시간성 고려
+    CROSS_ENCODER = "cross_encoder"        # 교차 인코더
+    MMR = "mmr"                            # Maximal Marginal Relevance
+    FUSION = "fusion"                      # 여러 전략 통합
+
+
+class ScoringMethod(Enum):
+    """점수 계산 방식"""
+    LINEAR = "linear"
+    SIGMOID = "sigmoid"
+    RANK_BASED = "rank_based"
+    PERCENTILE = "percentile"
+
+
+@dataclass
+class RerankingResult:
+    """재순위지정된 결과"""
+    doc_id: str
+    content: str
+    original_score: float
+    reranked_score: float
+    original_rank: int
+    final_rank: int
+    reranking_factors: Dict[str, float] = field(default_factory=dict)
+    metadata: Dict[str, Any] = field(default_factory=dict)
+    timestamp: float = field(default_factory=time.time)
+    
+    def __lt__(self, other):
+        """점수 기반 비교"""
+        return self.reranked_score > other.reranked_score
+
+
+@dataclass
+class RerankingMetrics:
+    """재순위지정 메트릭"""
+    total_results: int = 0
+    reranked_results: int = 0
+    rank_changes: int = 0
+    reranking_time: float = 0.0
+    strategy_used: str = ""
+    avg_score_before: float = 0.0
+    avg_score_after: float = 0.0
+    diversity_score: float = 0.0
+    max_rank_change: int = 0
+
+
+class SimilarityCalculator:
+    """유사도 계산기"""
+    
+    @staticmethod
+    def cosine_similarity(vec1: List[float], vec2: List[float]) -> float:
+        """코사인 유사도"""
+        if not vec1 or not vec2:
+            return 0.0
+        
+        dot_product = sum(a * b for a, b in zip(vec1, vec2))
+        norm1 = sum(x ** 2 for x in vec1) ** 0.5
+        norm2 = sum(x ** 2 for x in vec2) ** 0.5
+        
+        if norm1 == 0 or norm2 == 0:
+            return 0.0
+        
+        return dot_product / (norm1 * norm2)
+    
+    @staticmethod
+    def manhattan_distance(vec1: List[float], vec2: List[float]) -> float:
+        """맨해튼 거리"""
+        if not vec1 or not vec2:
+            return 0.0
+        return sum(abs(a - b) for a, b in zip(vec1, vec2))
+    
+    @staticmethod
+    def euclidean_distance(vec1: List[float], vec2: List[float]) -> float:
+        """유클리디안 거리"""
+        if not vec1 or not vec2:
+            return 0.0
+        return sum((a - b) ** 2 for a, b in zip(vec1, vec2)) ** 0.5
+
+
+class DiversityCalculator:
+    """다양성 계산기"""
+    
+    def __init__(self):
+        self._lock = RLock()
+    
+    def calculate_diversity_penalty(
+        self,
+        result: Any,
+        selected_results: List[Any],
+        diversity_weight: float = 0.3
+    ) -> float:
+        """
+        다양성 페널티 계산
+        
+        Args:
+            result: 현재 결과
+            selected_results: 이미 선택된 결과들
+            diversity_weight: 다양성 가중치
+            
+        Returns:
+            다양성 페널티 (0~1)
+        """
+        if not selected_results:
+            return 0.0
+        
+        # 메타데이터 기반 다양성
+        metadata_similarity = self._calculate_metadata_similarity(result, selected_results)
+        
+        # 콘텐츠 기반 다양성
+        content_similarity = self._calculate_content_similarity(result, selected_results)
+        
+        # 통합 유사도
+        avg_similarity = (metadata_similarity + content_similarity) / 2
+        penalty = avg_similarity * diversity_weight
+        
+        return penalty
+    
+    def _calculate_metadata_similarity(self, result: Any, selected_results: List[Any]) -> float:
+        """메타데이터 유사도"""
+        if not selected_results:
+            return 0.0
+        
+        similarities = []
+        for selected in selected_results:
+            if hasattr(result, 'metadata') and hasattr(selected, 'metadata'):
+                # 메타데이터 필드 비교
+                result_meta = result.metadata if result.metadata else {}
+                selected_meta = selected.metadata if selected.metadata else {}
+                
+                if not result_meta or not selected_meta:
+                    similarities.append(0.0)
+                    continue
+                
+                match_count = 0
+                for key in result_meta:
+                    if key in selected_meta and result_meta[key] == selected_meta[key]:
+                        match_count += 1
+                
+                total_keys = max(len(result_meta), len(selected_meta))
+                similarity = match_count / total_keys if total_keys > 0 else 0.0
+                similarities.append(similarity)
+            else:
+                similarities.append(0.0)
+        
+        return sum(similarities) / len(similarities) if similarities else 0.0
+    
+    def _calculate_content_similarity(self, result: Any, selected_results: List[Any]) -> float:
+        """콘텐츠 유사도"""
+        if not selected_results:
+            return 0.0
+        
+        similarities = []
+        for selected in selected_results:
+            if hasattr(result, 'content') and hasattr(selected, 'content'):
+                # 단순 문자 기반 유사도
+                result_len = len(result.content)
+                selected_len = len(selected.content)
+                
+                if result_len == 0 or selected_len == 0:
+                    similarities.append(0.0)
+                    continue
+                
+                # 공통 문자 수 / 최대 문자 수
+                common = len(set(result.content) & set(selected.content))
+                max_len = max(result_len, selected_len)
+                similarity = common / max_len if max_len > 0 else 0.0
+                similarities.append(similarity)
+            else:
+                similarities.append(0.0)
+        
+        return sum(similarities) / len(similarities) if similarities else 0.0
+
+
+class QueryRelevanceScorer:
+    """쿼리 관련성 점수 계산기"""
+    
+    def __init__(self):
+        self._lock = RLock()
+    
+    def calculate_relevance_score(
+        self,
+        result: Any,
+        query_text: str,
+        scoring_method: ScoringMethod = ScoringMethod.LINEAR
+    ) -> float:
+        """
+        쿼리 관련성 점수 계산
+        
+        Args:
+            result: 검색 결과
+            query_text: 쿼리 텍스트
+            scoring_method: 점수 계산 방식
+            
+        Returns:
+            관련성 점수 (0~1)
+        """
+        if not query_text:
+            return 0.5
+        
+        # 기본 유사도 (단어 매칭)
+        query_words = set(query_text.lower().split())
+        content_words = set(result.content.lower().split())
+        
+        if not query_words or not content_words:
+            return 0.0
+        
+        match_ratio = len(query_words & content_words) / len(query_words | content_words)
+        
+        if scoring_method == ScoringMethod.LINEAR:
+            return match_ratio
+        
+        elif scoring_method == ScoringMethod.SIGMOID:
+            # 시그모이드 곡선
+            return 1.0 / (1.0 + math.exp(-10 * (match_ratio - 0.5)))
+        
+        elif scoring_method == ScoringMethod.RANK_BASED:
+            # 순위 기반 (현재 점수를 순위로 변환)
+            return min(1.0, match_ratio * 1.5)
+        
+        elif scoring_method == ScoringMethod.PERCENTILE:
+            # 백분위수 기반
+            return match_ratio ** 0.5
+        
+        else:
+            return match_ratio
+
+
+class DistributedReranker:
+    """분산 재순위지정 엔진"""
+    
+    def __init__(self):
+        self._lock = RLock()
+        self._diversity_calc = DiversityCalculator()
+        self._relevance_scorer = QueryRelevanceScorer()
+    
+    def rerank(
+        self,
+        results: List[Any],
+        query_text: Optional[str] = None,
+        strategy: RerankerStrategy = RerankerStrategy.SCORE_ONLY,
+        top_k: Optional[int] = None,
+        **kwargs
+    ) -> Tuple[List[RerankingResult], RerankingMetrics]:
+        """
+        검색 결과 재순위지정
+        
+        Args:
+            results: 원본 검색 결과
+            query_text: 쿼리 텍스트 (일부 전략에서 필요)
+            strategy: 재순위지정 전략
+            top_k: 상위 k개 결과
+            **kwargs: 전략별 추가 파라미터
+            
+        Returns:
+            (재순위지정된 결과, 메트릭)
+        """
+        start_time = time.time()
+        metrics = RerankingMetrics(
+            total_results=len(results),
+            strategy_used=strategy.value
+        )
+        
+        # 원본 점수 통계
+        if results:
+            if hasattr(results[0], 'aggregated_score'):
+                metrics.avg_score_before = sum(r.aggregated_score for r in results) / len(results)
+            else:
+                metrics.avg_score_before = sum(r.score for r in results) / len(results)
+        
+        # 전략별 재순위지정
+        if strategy == RerankerStrategy.SCORE_ONLY:
+            reranked = self._rerank_by_score(results, metrics)
+        
+        elif strategy == RerankerStrategy.DIVERSITY:
+            reranked = self._rerank_by_diversity(results, metrics, **kwargs)
+        
+        elif strategy == RerankerStrategy.RECENCY:
+            reranked = self._rerank_by_recency(results, metrics)
+        
+        elif strategy == RerankerStrategy.CROSS_ENCODER:
+            reranked = self._rerank_by_cross_encoder(results, query_text, metrics, **kwargs)
+        
+        elif strategy == RerankerStrategy.MMR:
+            reranked = self._rerank_by_mmr(results, metrics, **kwargs)
+        
+        elif strategy == RerankerStrategy.FUSION:
+            reranked = self._rerank_by_fusion(results, query_text, metrics, **kwargs)
+        
+        else:
+            reranked = self._rerank_by_score(results, metrics)
+        
+        # top-k 적용
+        if top_k:
+            reranked = reranked[:top_k]
+        
+        # 메트릭 업데이트
+        metrics.reranked_results = len(reranked)
+        if reranked:
+            metrics.avg_score_after = sum(r.reranked_score for r in reranked) / len(reranked)
+        metrics.reranking_time = time.time() - start_time
+        
+        return reranked, metrics
+    
+    def _rerank_by_score(
+        self,
+        results: List[Any],
+        metrics: RerankingMetrics
+    ) -> List[RerankingResult]:
+        """점수만 기반 재순위지정"""
+        reranked = []
+        
+        for idx, result in enumerate(results):
+            score = result.aggregated_score if hasattr(result, 'aggregated_score') else result.score
+            
+            reranked_result = RerankingResult(
+                doc_id=result.doc_id,
+                content=result.content,
+                original_score=score,
+                reranked_score=score,
+                original_rank=idx,
+                final_rank=idx,
+                metadata=result.metadata
+            )
+            reranked.append(reranked_result)
+        
+        return reranked
+    
+    def _rerank_by_diversity(
+        self,
+        results: List[Any],
+        metrics: RerankingMetrics,
+        diversity_weight: float = 0.3,
+        **kwargs
+    ) -> List[RerankingResult]:
+        """다양성을 고려한 재순위지정"""
+        reranked = []
+        selected_results = []
+        
+        def get_score(r):
+            return r.aggregated_score if hasattr(r, 'aggregated_score') else r.score
+        
+        sorted_results = sorted(results, key=lambda x: get_score(x), reverse=True)
+        
+        for idx, result in enumerate(sorted_results):
+            # 다양성 페널티 계산
+            penalty = self._diversity_calc.calculate_diversity_penalty(
+                result, selected_results, diversity_weight
+            )
+            
+            # 재순위지정 점수
+            score = get_score(result)
+            reranked_score = score * (1.0 - penalty)
+            
+            reranked_result = RerankingResult(
+                doc_id=result.doc_id,
+                content=result.content,
+                original_score=score,
+                reranked_score=reranked_score,
+                original_rank=idx,
+                final_rank=0,  # 나중에 설정
+                reranking_factors={'diversity_penalty': penalty},
+                metadata=result.metadata
+            )
+            reranked.append(reranked_result)
+            selected_results.append(result)
+        
+        # 재순위지정 점수 기반 정렬
+        reranked.sort(key=lambda x: x.reranked_score, reverse=True)
+        
+        # 최종 순위 설정 및 변화 추적
+        for idx, r in enumerate(reranked):
+            r.final_rank = idx
+            rank_change = abs(r.original_rank - idx)
+            metrics.rank_changes += rank_change
+            metrics.max_rank_change = max(metrics.max_rank_change, rank_change)
+        
+        return reranked
+    
+    def _rerank_by_recency(
+        self,
+        results: List[Any],
+        metrics: RerankingMetrics
+    ) -> List[RerankingResult]:
+        """시간성을 고려한 재순위지정"""
+        reranked = []
+        
+        for idx, result in enumerate(results):
+            # 최근 결과에 더 높은 점수
+            timestamp = result.aggregation_timestamp if hasattr(result, 'aggregation_timestamp') else result.timestamp
+            age_factor = 1.0 - (time.time() - timestamp) / (24 * 3600)
+            age_factor = max(0.5, age_factor)  # 최소 0.5
+            
+            score = result.aggregated_score if hasattr(result, 'aggregated_score') else result.score
+            reranked_score = score * age_factor
+            
+            reranked_result = RerankingResult(
+                doc_id=result.doc_id,
+                content=result.content,
+                original_score=score,
+                reranked_score=reranked_score,
+                original_rank=idx,
+                final_rank=0,
+                reranking_factors={'age_factor': age_factor},
+                metadata=result.metadata
+            )
+            reranked.append(reranked_result)
+        
+        # 정렬 및 순위 업데이트
+        reranked.sort(key=lambda x: x.reranked_score, reverse=True)
+        
+        for idx, r in enumerate(reranked):
+            r.final_rank = idx
+            metrics.rank_changes += abs(r.original_rank - idx)
+        
+        return reranked
+    
+    def _rerank_by_cross_encoder(
+        self,
+        results: List[Any],
+        query_text: Optional[str],
+        metrics: RerankingMetrics,
+        **kwargs
+    ) -> List[RerankingResult]:
+        """교차 인코더 기반 재순위지정"""
+        reranked = []
+        
+        for idx, result in enumerate(results):
+            # 쿼리 관련성 점수 계산
+            relevance_score = self._relevance_scorer.calculate_relevance_score(
+                result, query_text or "", ScoringMethod.SIGMOID
+            )
+            
+            # 원본 점수와 관련성 점수 병합
+            score = result.aggregated_score if hasattr(result, 'aggregated_score') else result.score
+            reranked_score = 0.6 * score + 0.4 * relevance_score
+            
+            reranked_result = RerankingResult(
+                doc_id=result.doc_id,
+                content=result.content,
+                original_score=score,
+                reranked_score=reranked_score,
+                original_rank=idx,
+                final_rank=0,
+                reranking_factors={'relevance': relevance_score},
+                metadata=result.metadata
+            )
+            reranked.append(reranked_result)
+        
+        # 정렬 및 순위 업데이트
+        reranked.sort(key=lambda x: x.reranked_score, reverse=True)
+        
+        for idx, r in enumerate(reranked):
+            r.final_rank = idx
+            metrics.rank_changes += abs(r.original_rank - idx)
+        
+        return reranked
+    
+    def _rerank_by_mmr(
+        self,
+        results: List[Any],
+        metrics: RerankingMetrics,
+        mmr_lambda: float = 0.5,
+        **kwargs
+    ) -> List[RerankingResult]:
+        """Maximal Marginal Relevance 기반 재순위지정"""
+        reranked = []
+        selected_indices = []
+        remaining_indices = list(range(len(results)))
+        
+        def get_score(r):
+            return r.aggregated_score if hasattr(r, 'aggregated_score') else r.score
+        
+        while remaining_indices and len(reranked) < len(results):
+            best_idx = None
+            best_mmr = -float('inf')
+            
+            for i in remaining_indices:
+                # 관련성 점수
+                relevance = get_score(results[i])
+                
+                # 다양성 페널티
+                diversity_penalty = 0.0
+                for selected_i in selected_indices:
+                    # 간단한 유사도 (점수 차이)
+                    similarity = 1.0 - abs(get_score(results[i]) - get_score(results[selected_i]))
+                    diversity_penalty = max(diversity_penalty, similarity)
+                
+                # MMR = λ * relevance - (1-λ) * diversity_penalty
+                mmr_score = mmr_lambda * relevance - (1 - mmr_lambda) * diversity_penalty
+                
+                if mmr_score > best_mmr:
+                    best_mmr = mmr_score
+                    best_idx = i
+            
+            if best_idx is not None:
+                result = results[best_idx]
+                reranked_result = RerankingResult(
+                    doc_id=result.doc_id,
+                    content=result.content,
+                    original_score=get_score(result),
+                    reranked_score=best_mmr,
+                    original_rank=best_idx,
+                    final_rank=len(reranked),
+                    reranking_factors={'mmr': best_mmr},
+                    metadata=result.metadata
+                )
+                reranked.append(reranked_result)
+                selected_indices.append(best_idx)
+                remaining_indices.remove(best_idx)
+                metrics.rank_changes += abs(best_idx - len(reranked) + 1)
+        
+        return reranked
+    
+    def _rerank_by_fusion(
+        self,
+        results: List[Any],
+        query_text: Optional[str],
+        metrics: RerankingMetrics,
+        **kwargs
+    ) -> List[RerankingResult]:
+        """여러 전략 통합한 재순위지정"""
+        # 1. 점수 기반
+        score_reranked, _ = self.rerank(results, strategy=RerankerStrategy.SCORE_ONLY)
+        
+        # 2. 관련성 기반
+        relevance_reranked, _ = self.rerank(
+            results, query_text, strategy=RerankerStrategy.CROSS_ENCODER
+        )
+        
+        # 3. 다양성 고려
+        diversity_reranked, _ = self.rerank(
+            results, strategy=RerankerStrategy.DIVERSITY
+        )
+        
+        # 통합 (평균 순위)
+        rank_map: Dict[str, List[int]] = {}
+        for r in score_reranked:
+            rank_map[r.doc_id] = [r.final_rank]
+        for r in relevance_reranked:
+            if r.doc_id in rank_map:
+                rank_map[r.doc_id].append(r.final_rank)
+        for r in diversity_reranked:
+            if r.doc_id in rank_map:
+                rank_map[r.doc_id].append(r.final_rank)
+        
+        # 평균 순위로 재정렬
+        fusion_results = []
+        def get_score(r):
+            return r.aggregated_score if hasattr(r, 'aggregated_score') else r.score
+        
+        for idx, result in enumerate(results):
+            ranks = rank_map.get(result.doc_id, [idx])
+            avg_rank = sum(ranks) / len(ranks)
+            avg_score = (1.0 - (avg_rank / len(results)))  # 순위를 점수로 변환
+            
+            reranked_result = RerankingResult(
+                doc_id=result.doc_id,
+                content=result.content,
+                original_score=get_score(result),
+                reranked_score=avg_score,
+                original_rank=idx,
+                final_rank=0,
+                reranking_factors={'fusion_rank': avg_rank},
+                metadata=result.metadata
+            )
+            fusion_results.append(reranked_result)
+        
+        # 정렬
+        fusion_results.sort(key=lambda x: x.reranked_score, reverse=True)
+        
+        for idx, r in enumerate(fusion_results):
+            r.final_rank = idx
+            metrics.rank_changes += abs(r.original_rank - idx)
+        
+        return fusion_results

@@ -1,108 +1,149 @@
-# Local RAG System with Ollama & LangGraph
+# RAG System with Ollama & LangGraph
 
-This project is a sophisticated **Retrieval-Augmented Generation (RAG)** application that enables you to chat with your PDF documents using local Large Language Models (LLMs) via **Ollama**. Built with **Streamlit** for the frontend and **LangGraph** for the backend logic, it ensures data privacy, high performance, and an interactive user experience.
+> A modular Retrieval-Augmented Generation (RAG) solution powered by Ollama, LangGraph, and Streamlit.
 
-![Project Status](https://img.shields.io/badge/status-active-success.svg)
-![Python](https://img.shields.io/badge/python-3.10+-blue.svg)
-![License](https://img.shields.io/badge/license-MIT-green.svg)
+[![Python 3.11+](https://img.shields.io/badge/Python-3.11+-blue.svg)](https://www.python.org)
+[![Modular: Packages](https://img.shields.io/badge/Architecture-Modular-orange.svg)]()
+[![Backend: LangGraph](https://img.shields.io/badge/Orchestrator-LangGraph-informational.svg)]()
+[![Tests: 700+](https://img.shields.io/badge/Tests-700+-brightgreen.svg)]()
+[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
-## 🚀 Key Features
+---
 
--   **Local & Private:** Runs entirely on your machine using [Ollama](https://ollama.com/), keeping your documents secure.
--   **LangGraph Architecture:** The RAG pipeline is modeled as a state machine (graph), making the workflow of retrieval, context generation, and answering transparent and extensible.
--   **Hybrid Search (Ensemble Retriever):** Combines **BM25** (keyword-based) and **FAISS** (semantic vector-based) search to retrieve the most relevant context.
--   **Semantic Chunking:** Implements advanced chunking strategies based on embedding similarity, ensuring that text is split by meaning rather than arbitrary length.
--   **Configurable Embeddings:** Supports various Sentence-Transformer models (e.g., `paraphrase-multilingual-MiniLM-L12-v2`, `multilingual-e5-large-instruct`).
--   **Advanced RAG Options:**
-    -   **Reranking:** Optional step to re-score retrieved documents using a Cross-Encoder for higher precision (configurable in `config.yml`).
-    -   **Query Expansion:** Optional multi-query generation to broaden search scope (configurable in `config.yml`).
--   **Interactive UI:** Feature-rich interface with a built-in PDF viewer alongside the chat window, supporting citation tooltips.
--   **Efficient Caching:** Caches vector stores and models to minimize loading times for previously processed files.
+## 🏗️ Project Architecture
 
-> **Note:** The default configuration (`config.yml`) and UI system prompts are currently set to **Korean**. You can modify the `config.yml` file to change prompts and messages to English if needed.
+The system has been refactored into a highly modular package structure to ensure maintainability, scalability, and security.
 
-## 📋 Prerequisites
-
-1.  **Python 3.10+**
-2.  **Ollama**: You must have Ollama installed and running.
-    -   Download from [ollama.com](https://ollama.com/).
-    -   Pull the default model (or any model you prefer):
-        ```bash
-        ollama pull qwen3:4b
-        ```
-
-## 🛠️ Installation
-
-1.  **Clone the Repository**
-    ```bash
-    git clone <repository-url>
-    cd rag-system-ollama
-    ```
-
-2.  **Create a Virtual Environment**
-    ```bash
-    # Windows
-    python -m venv venv
-    .\venv\Scripts\activate
-
-    # macOS/Linux
-    python3 -m venv venv
-    source venv/bin/activate
-    ```
-
-3.  **Install Dependencies**
-    ```bash
-    pip install -r requirements.txt
-    ```
-
-## 🏃 Usage
-
-1.  **Start Ollama Server**
-    Ensure Ollama is running in the background.
-
-2.  **Run the Application**
-    ```bash
-    streamlit run src/main.py
-    ```
-
-3.  **Interact**
-    -   Open your browser at `http://localhost:8501`.
-    -   **Sidebar:** Upload a PDF and select your preferred LLM/Embedding models.
-    -   **Chat:** Once processed, ask questions about the document.
-
-## ⚙️ Configuration
-
-The application is highly configurable via `config.yml`.
-
-| Section | Key | Description |
-| :--- | :--- | :--- |
-| **models** | `default_ollama` | Default LLM model to use (e.g., `qwen3:4b`). |
-| | `available_embeddings` | List of supported embedding models. |
-| | `ollama_num_predict` | Max output tokens (-1 for default/infinite). |
-| **rag** | `ensemble_weights` | Weights for [BM25, FAISS] (e.g., `[0.4, 0.6]`). |
-| | `semantic_chunker` | Enable/disable semantic chunking and set thresholds. |
-| | `reranker` | Enable/disable re-ranking step (requires more VRAM). |
-| | `query_expansion` | Enable/disable generating multiple queries. |
-| **ui** | `container_height` | Adjust the height of the chat/PDF window. |
-
-## 📂 Project Structure
-
-```
-.
-├── config.yml           # Central configuration file (Default settings are in Korean)
-├── requirements.txt     # Python dependencies
+```text
+rag-system-ollama/
 ├── src/
-│   ├── main.py          # Streamlit app entry point
-│   ├── rag_core.py      # Core RAG logic (loading, splitting, embedding)
-│   ├── graph_builder.py # LangGraph workflow definition
-│   ├── semantic_chunker.py # Custom semantic chunking implementation
-│   ├── model_loader.py  # Model management and caching
-│   ├── session.py       # Streamlit session state management
-│   ├── ui.py            # UI components and layout
-│   ├── schemas.py       # Data types and state definitions
-│   └── utils.py         # Helper functions
+│   ├── main.py             # 🏁 Main Entry Point (Streamlit UI)
+│   ├── core/               # 🧠 Core RAG Logic (Graph, Retrieval, Rerank, Model Loader)
+│   ├── api/                # 🔌 API Server & Real-time Handlers (REST, WebSocket)
+│   ├── services/           # ⚡ Background Services
+│   │   ├── optimization/   #    - AsyncIO, GPU Batching, GC Tuning
+│   │   ├── monitoring/     #    - Performance Tracking, Health Checks
+│   │   └── distributed/    #    - Cluster Management, Sync
+│   ├── security/           # 🛡️ Security Layers (RBAC, Auth, Cache Integrity)
+│   ├── common/             # 🛠️ Shared Utilities (Config, Exceptions, Typing)
+│   ├── cache/              # 💾 Multi-layer Caching System
+│   ├── ui/                 # 🎨 UI Components & Styling
+│   └── infra/              # 🏗️ Lifecycle Management (Deployment, Migration, Rollback)
+├── tests/                  # 🧪 Comprehensive Test Suites
+├── docs/                   # 📚 Detailed Technical Documentation
+└── reports/                # 📊 Development & Performance Reports
 ```
 
-## 📜 License
+---
 
-This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for details.
+## ⚡ Getting Started
+
+### 1️⃣ Prerequisites
+- **Python 3.11+**
+- **Ollama**: Download and install from [ollama.ai](https://ollama.ai)
+- **NVIDIA GPU** (Optional but highly recommended for embedding and inference)
+
+### 2️⃣ Model Setup
+Ensure your local Ollama instance is running and pull the required models:
+
+```bash
+# Start Ollama service
+ollama serve
+
+# Pull required models (Default: qwen3:4b)
+ollama pull qwen3:4b
+ollama pull nomic-embed-text
+```
+
+### 3️⃣ Installation
+
+```bash
+# Clone the repository
+git clone https://github.com/darkzard05/rag-system-ollama.git
+cd rag-system-ollama
+
+# Create and activate virtual environment
+python -m venv venv
+source venv/bin/activate  # On Windows: venv\Scripts\activate
+
+# Install dependencies
+pip install -r requirements.txt
+
+# Setup Environment Variables
+cp .env.example .env
+```
+
+### 4️⃣ Run the Application
+
+The main entry point is now centralized in `src/main.py`.
+
+```bash
+# Start the Streamlit UI
+streamlit run src/main.py
+```
+
+---
+
+## 🎯 Key Features
+
+### ✨ Engineering Excellence
+- **LangGraph Orchestration**: Precise control over the RAG pipeline with state-aware workflows.
+- **Smart Optimization**: Automated VRAM detection and batch size calculation for optimal GPU usage.
+- **AsyncIO Concurrency**: Parallel retrieval and generation for near-instant responses.
+- **Production Resilience**: Integrated Circuit Breakers, Error Recovery Chains, and Deployment Rollback systems.
+- **Advanced Security**: HMAC-based cache integrity verification and granular Role-Based Access Control (RBAC).
+
+### 🎨 Logic Flow
+```text
+📄 PDF Upload → 🔨 Semantic Chunking → 🧮 GPU-Optimized Embedding
+      ↓                 ↓                       ↓
+🔍 Hybrid Search ← 🔍 Parallel Retrieval ← 🧪 Vector Indexing
+      ↓
+💡 Streaming LLM Response (via LangGraph) → 💾 Multi-layer Caching
+```
+
+---
+
+## 🔌 API & Integration
+
+While the Streamlit UI provides the front-end, the backend is accessible via a modular API layer.
+
+- **REST API**: See `src/api/api_server.py` for endpoints.
+- **WebSocket**: Real-time streaming handlers located in `src/api/websocket_handler.py`.
+- **Custom Integration**: Use the `SystemIntegration` class in `src/cache/system_integration.py` to embed this RAG system into your own applications.
+
+---
+
+## 🧪 Testing & Quality Assurance
+
+We maintain a rigorous testing standard with over 700+ integrated and unit tests.
+
+```bash
+# Run all tests
+pytest tests/
+
+# Run specific integration tests
+pytest tests/test_rag_integration.py
+```
+
+Check the `reports/` directory for historical test results and performance benchmarks.
+
+---
+
+## 📚 Documentation
+
+For deeper technical insights, please refer to the files in the `docs/` directory:
+- [API Documentation](./docs/API.md)
+- [Architecture Details](./docs/ARCHITECTURE.md)
+- [Security Implementation](./docs/SECURITY_IMPLEMENTATION.md)
+- [Performance Optimization](./docs/TASK_11_ASYNCIO_OPTIMIZATION.md)
+
+---
+
+## 📄 License
+
+MIT License - Feel free to use and contribute!
+
+---
+
+**Version:** 2.0.0 (Modular Refactor) | **Updated:** 2026-01-22 | **Status:** Stable ✅

@@ -1,0 +1,38 @@
+name: RAG System CI
+
+on:
+  push:
+    branches: [ "main", "master" ]
+  pull_request:
+    branches: [ "main", "master" ]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Run Integration Tests
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Python 3.11
+      uses: actions/setup-python@v4
+      with:
+        python-version: "3.11"
+        cache: 'pip'
+        
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+        
+    - name: Run Integration Tests
+      run: |
+        python tests/test_rag_integration.py
+      env:
+        # Avoid connecting to real Ollama in CI
+        OLLAMA_HOST: "http://localhost:11434" 
+        # Ensure tests don't try to use GPU
+        CUDA_VISIBLE_DEVICES: ""

@@ -5,15 +5,15 @@ config.yml 파일과 환경 변수에서 애플리케이션 설정을 로드합�
 import os
 import logging
 from pathlib import Path
-from typing import Dict, List, Any, Union
+from typing import Dict, List, Any, Union, Optional
 import yaml
 from dotenv import load_dotenv
 
 load_dotenv()
 logger = logging.getLogger(__name__)
 
-# 프로젝트 루트 디렉토리 설정 (현재 파일 기준 상위 디렉토리)
-PROJECT_ROOT = Path(__file__).parent.parent
+# 프로젝트 루트 디렉토리 설정 (현재 파일 기준 3단계 상위 디렉토리: src/common/config.py -> root)
+PROJECT_ROOT = Path(__file__).parent.parent.parent
 CONFIG_PATH = PROJECT_ROOT / "config.yml"
 
 
@@ -51,7 +51,9 @@ _config = _load_config()
 
 # --- 모델 및 설정 상수 ---
 _models_config = _config.get("models", {})
-OLLAMA_MODEL_NAME: str = _models_config.get("default_ollama", "qwen3:4b")
+OLLAMA_MODEL_NAME: str = _get_env(
+    "DEFAULT_OLLAMA_MODEL", _models_config.get("default_ollama", "qwen3:4b")
+)
 
 # Ollama 서버 주소 설정 (환경 변수 우선)
 OLLAMA_BASE_URL: str = _get_env(
@@ -92,6 +94,51 @@ QUERY_EXPANSION_CONFIG: Dict = _rag_config.get("query_expansion", {"enabled": Tr
 _prompts_config = _rag_config.get("prompts") or {}
 QA_SYSTEM_PROMPT: str = _prompts_config.get("qa_system_prompt", "")
 QUERY_EXPANSION_PROMPT: str = _prompts_config.get("query_expansion_prompt", "")
+
+# --- 캐시 보안 설정 ---
+_cache_security_config = _config.get("cache_security", {})
+
+# 보안 레벨 (environment variable 우선)
+CACHE_SECURITY_LEVEL: str = _get_env(
+    "CACHE_SECURITY_LEVEL",
+    _cache_security_config.get("security_level", "medium"),
+    str
+)
+
+# HMAC 비밀 (environment variable 우선)
+CACHE_HMAC_SECRET: Optional[str] = _get_env(
+    "CACHE_HMAC_SECRET",
+    _cache_security_config.get("hmac_secret"),
+    str
+)
+
+# 신뢰 경로 (환경변수가 있으면 쉼표로 분리)
+_trusted_paths_env = os.getenv("TRUSTED_CACHE_PATHS")
+if _trusted_paths_env:
+    CACHE_TRUSTED_PATHS: List[str] = [p.strip() for p in _trusted_paths_env.split(",")]
+else:
+    CACHE_TRUSTED_PATHS: List[str] = _cache_security_config.get("trusted_paths", [])
+
+# 검증 실패 시 동작
+CACHE_VALIDATION_ON_FAILURE: str = _get_env(
+    "CACHE_VALIDATION_ON_FAILURE",
+    _cache_security_config.get("on_validation_failure", "regenerate"),
+    str
+)
+
+# 파일 권한 검사
+CACHE_CHECK_PERMISSIONS: bool = _get_env(
+    "CACHE_CHECK_PERMISSIONS",
+    _cache_security_config.get("check_permissions", True),
+    lambda x: x.lower() == "true" if isinstance(x, str) else x
+)
+
+# 예상 파일 권한
+_expected_file_mode = _cache_security_config.get("expected_file_mode", 0o644)
+CACHE_EXPECTED_FILE_MODE: int = int(_expected_file_mode, 0) if isinstance(_expected_file_mode, str) else _expected_file_mode
+
+_expected_dir_mode = _cache_security_config.get("expected_dir_mode", 0o755)
+CACHE_EXPECTED_DIR_MODE: int = int(_expected_dir_mode, 0) if isinstance(_expected_dir_mode, str) else _expected_dir_mode
 
 
 # --- 채팅 UI 상수 ---

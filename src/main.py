@@ -7,34 +7,38 @@ import logging
 import tempfile
 import os
 from typing import Any
+from pathlib import Path
 
 import nest_asyncio
 import streamlit as st
 from streamlit.delta_generator import DeltaGenerator
 
-from config import AVAILABLE_EMBEDDING_MODELS
-from model_loader import load_embedding_model, load_llm, is_embedding_model_cached
-from rag_core import build_rag_pipeline
-from session import SessionManager
-from ui import render_left_column, render_pdf_viewer, render_sidebar
+# 로깅 설정 (최상단)
+from common.logging_config import setup_logging, get_logger
+logger = setup_logging(
+    log_level="INFO",
+    log_file=Path("logs/app.log")
+)
+
+from common.config import AVAILABLE_EMBEDDING_MODELS
+from common.constants import StringConstants, FilePathConstants
+from core.model_loader import load_embedding_model, load_llm, is_embedding_model_cached
+from core.rag_core import build_rag_pipeline
+from core.session import SessionManager
+from ui.ui import render_left_column, render_pdf_viewer, render_sidebar, _render_status_box
+from services.optimization.memory_optimizer import get_memory_optimizer
 
 # 상수 정의
-PAGE_TITLE = "RAG Chatbot"
-LAYOUT = "wide"
-MAX_FILE_SIZE_MB = 50  # 최대 파일 크기 제한 (MB)
+PAGE_TITLE = StringConstants.PAGE_TITLE
+LAYOUT = StringConstants.LAYOUT
+MAX_FILE_SIZE_MB = StringConstants.MAX_FILE_SIZE_MB
 
 # 비동기 패치 적용 (최상단 실행)
-# Streamlit의 실행 루프와 LangGraph의 비동기 스트리밍(asyncio) 간의 충돌을 방지하기 위해 필수적입니다.
 nest_asyncio.apply()
 
-# 로깅 설정
-if not logging.getLogger().handlers:
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s - %(levelname)s - [%(name)s] %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S",
-    )
-logger = logging.getLogger(__name__)
+# 메모리 최적화 서비스 시작
+memory_optimizer = get_memory_optimizer()
+memory_optimizer.start()
 
 # Streamlit 페이지 설정
 st.set_page_config(page_title=PAGE_TITLE, layout=LAYOUT)
@@ -60,25 +64,31 @@ def _ensure_models_are_loaded(status_container: DeltaGenerator) -> bool:
             return False
 
     try:
+        # 실시간 상태 업데이트를 위한 플레이스홀더 확보
+        status_placeholder = SessionManager.get("status_placeholder")
+        def force_sync():
+            if status_placeholder:
+                _render_status_box(status_placeholder)
+
         # LLM 로드 상태 확인 및 로드
         current_llm = SessionManager.get("llm")
         if not current_llm or getattr(current_llm, "model", None) != selected_model:
-            with status_container:
-                with st.spinner(f"🧠 LLM 모델 로딩 중: '{selected_model}'..."):
-                    new_llm = load_llm(selected_model)
-                    SessionManager.set("llm", new_llm)
+            SessionManager.add_status_log(f"LLM 로딩 중")
+            force_sync() # 즉시 갱신
+            new_llm = load_llm(selected_model)
+            SessionManager.set("llm", new_llm)
+            SessionManager.replace_last_status_log(f"LLM 로드 완료")
+            force_sync()
 
         # 임베딩 모델 로드 상태 확인 및 로드
         current_embedder = SessionManager.get("embedder")
         if not current_embedder or getattr(current_embedder, "model_name", None) != selected_embedding:
-            msg = f"🧮 임베딩 모델 로딩 중: '{selected_embedding}'..."
-            if not is_embedding_model_cached(selected_embedding):
-                msg += " (최초 다운로드)"
-
-            with status_container:
-                with st.spinner(msg):
-                    new_embedder = load_embedding_model(selected_embedding)
-                    SessionManager.set("embedder", new_embedder)
+            SessionManager.add_status_log("임베딩 로딩 중")
+            force_sync() # 즉시 갱신
+            new_embedder = load_embedding_model(selected_embedding)
+            SessionManager.set("embedder", new_embedder)
+            SessionManager.replace_last_status_log(f"임베딩 로드 완료")
+            force_sync()
 
         return True
 
@@ -98,15 +108,10 @@ def _rebuild_rag_system(status_container: DeltaGenerator) -> None:
     if not file_name or not file_path:
         return
 
-    # [중복 실행 방지] 이미 해당 파일에 대한 처리가 완료되었는지 확인
-    # - pdf_processed가 True이고
-    # - 에러가 없으며
-    # - 벡터 스토어 객체가 메모리에 존재하는 경우
-    # 재구축을 건너뜁니다.
+    # [중복 실행 방지]
     if (SessionManager.get("pdf_processed") 
         and not SessionManager.get("pdf_processing_error") 
         and SessionManager.get("vector_store") is not None):
-        logger.debug(f"파일 '{file_name}'에 대한 RAG 파이프라인이 이미 구축되어 있습니다. 재구축을 건너뜁니다.")
         return
 
     try:
@@ -114,20 +119,20 @@ def _rebuild_rag_system(status_container: DeltaGenerator) -> None:
             return
 
         embedder = SessionManager.get("embedder")
+        
+        # 실시간 상태 박스 업데이트를 위한 콜백 정의
+        status_placeholder = SessionManager.get("status_placeholder")
+        def sync_ui():
+            if status_placeholder:
+                _render_status_box(status_placeholder)
 
-        with status_container:
-            with st.spinner(f"⚙️ 문서 분석 및 인덱싱 중: '{file_name}'..."):
-                # RAG 파이프라인 빌드 (시간이 소요될 수 있음)
-                success_message, cache_used = build_rag_pipeline(
-                    uploaded_file_name=file_name,
-                    file_path=file_path,
-                    embedder=embedder,
-                )
-
-                if cache_used:
-                    status_container.info("✅ 캐시된 인덱스를 로드했습니다.")
-                else:
-                    status_container.success("✅ 새로운 문서 인덱싱 완료.")
+        # RAG 파이프라인 빌드 (내부에서 상세 로그 기록 및 UI 동기화)
+        success_message, cache_used = build_rag_pipeline(
+            uploaded_file_name=file_name,
+            file_path=file_path,
+            embedder=embedder,
+            on_progress=sync_ui
+        )
 
         SessionManager.add_message("assistant", success_message)
 
@@ -145,14 +150,13 @@ def _update_qa_chain(status_container: DeltaGenerator) -> None:
     """
     selected_model = SessionManager.get("last_selected_model")
     try:
-        with status_container:
-            with st.spinner(f"🔄 LLM 교체 중: '{selected_model}'..."):
-                llm = load_llm(selected_model)
-                SessionManager.set("llm", llm)
+        SessionManager.add_status_log(f"🔄 LLM 교체 중: {selected_model}")
+        llm = load_llm(selected_model)
+        SessionManager.set("llm", llm)
+        SessionManager.replace_last_status_log(f"✅ LLM 교체 완료: {selected_model}")
 
         logger.info(f"LLM updated to: {selected_model}")
         msg = f"✅ QA 시스템이 '{selected_model}' 모델로 업데이트되었습니다."
-        status_container.success(msg)
         SessionManager.add_message("assistant", msg)
 
     except Exception as e:
@@ -250,26 +254,22 @@ def main() -> None:
         embedding_selector_callback=on_embedding_change,
     )
     
-    # [UI 개선] PDF 미업로드 시 시스템 상태에 안내 메시지 표시
-    # 파일이 업로드되지 않았고(bytes 없음), 처리된 파일도 없을 때만 표시
-    if (not SessionManager.get("pdf_processed") 
-        and not SessionManager.get("pdf_processing_error")
-        and not SessionManager.get("pdf_file_path")):
-        status_container.info("👋 PDF 파일을 업로드하여 대화를 시작하세요.")
-
     # 상태 플래그에 따른 작업 수행 (우선순위: 새 파일 > 임베딩 변경 > 모델 변경)
     if SessionManager.get("new_file_uploaded"):
         SessionManager.reset_for_new_file()
         SessionManager.set("new_file_uploaded", False)
         _rebuild_rag_system(status_container)
+        st.rerun() # UI 즉시 갱신
 
     elif SessionManager.get("needs_rag_rebuild"):
         SessionManager.set("needs_rag_rebuild", False)
         _rebuild_rag_system(status_container)
+        st.rerun() # UI 즉시 갱신
 
     elif SessionManager.get("needs_qa_chain_update"):
         SessionManager.set("needs_qa_chain_update", False)
         _update_qa_chain(status_container)
+        st.rerun() # UI 즉시 갱신
 
     # 메인 UI 레이아웃 (채팅창 + PDF 뷰어)
     col_left, col_right = st.columns([1, 1])
