@@ -100,13 +100,21 @@ def _render_status_box(container):
     container.markdown(full_html, unsafe_allow_html=True)
 
 
-async def _stream_chat_response(qa_chain, user_input: str, chat_container) -> str:
-    """최적화된 답변 생성 및 스트리밍 함수."""
-    full_response = ""
-    retrieved_documents = [] 
-    start_time = time.time()
+async def _stream_chat_response(rag_engine, user_query: str, chat_container) -> str:
+    """
+    RAG 엔진의 이벤트를 수신하여 사고 과정과 답변을 실시간으로 렌더링합니다.
+    """
+    state = {
+        "full_response": "",
+        "full_thought": "",
+        "retrieved_docs": [],
+        "start_time": time.time()
+    }
+    
     current_llm = SessionManager.get("llm")
-    if not current_llm: return "❌ 오류: LLM 모델이 로드되지 않았습니다."
+    if not current_llm:
+        return "❌ 오류: LLM 모델이 로드되지 않았습니다."
+        
     status_placeholder = SessionManager.get("status_placeholder")
     run_config = {"configurable": {"llm": current_llm}}
     SessionManager.set("is_generating_answer", True)
@@ -114,42 +122,91 @@ async def _stream_chat_response(qa_chain, user_input: str, chat_container) -> st
     try:
         with chat_container:
             with st.chat_message("assistant", avatar="🤖"):
-                answer_container = st.empty()
-                answer_container.markdown(f"⌛ {MSG_PREPARING_ANSWER}")
-                async with aclosing(qa_chain.astream_events({"input": user_input}, config=run_config, version="v1")) as event_stream:
+                # 1. UI 컴포넌트 초기화
+                thought_container = st.empty()
+                with thought_container:
+                    thought_expander = st.expander("🧠 사고 과정 (Thinking...)", expanded=True)
+                    thought_display = thought_expander.empty()
+                
+                answer_display = st.empty()
+                answer_display.markdown(f"⌛ {MSG_PREPARING_ANSWER}")
+                
+                # 2. 스트리밍 이벤트 처리 루프
+                async with aclosing(rag_engine.astream_events(
+                    {"input": user_query}, config=run_config, version="v2"
+                )) as event_stream:
                     async for event in event_stream:
-                        kind, name, data = event["event"], event.get("name", "Unknown"), event.get("data", {})
-                        if kind in ["on_chain_start", "on_chain_end"]: _render_status_box(status_placeholder)
-                        chunk_text = None
-                        if kind == "on_parser_stream": chunk_text = data.get("chunk")
-                        elif kind == "on_chat_model_stream":
-                            chunk = data.get("chunk")
-                            if hasattr(chunk, "content"): chunk_text = chunk.content
-                            elif isinstance(chunk, dict) and "content" in chunk: chunk_text = chunk["content"]
-                        elif kind == "on_custom_event" and name == "response_chunk": chunk_text = data.get("chunk")
-                        if chunk_text:
-                            full_response += chunk_text
-                            answer_container.markdown(full_response + "▌", unsafe_allow_html=True)
-                        if kind == "on_chain_end" and name == "retrieve":
-                            if "documents" in data.get("output", {}): retrieved_documents = data["output"]["documents"]
-                        if kind == "on_chain_end" and name == "generate_response":
-                            if isinstance(data.get("output"), dict):
-                                if "documents" in data["output"] and not retrieved_documents: retrieved_documents = data["output"]["documents"]
-                                if "response" in data["output"] and len(data["output"]["response"]) > len(full_response): full_response = data["output"]["response"]
-                if full_response:
-                    if retrieved_documents:
-                        final_html = apply_tooltips_to_response(full_response, retrieved_documents)
-                        answer_container.markdown(final_html, unsafe_allow_html=True)
-                        full_response = final_html 
-                    else: answer_container.markdown(full_response, unsafe_allow_html=True)
-                else: answer_container.error("⚠️ 답변이 생성되지 않았습니다.")
-        return full_response
+                        event_kind = event["event"]
+                        event_name = event.get("name", "Unknown")
+                        event_data = event.get("data", {})
+                        
+                        # 상태 박스 동기화
+                        if event_kind in ["on_chain_start", "on_chain_end"]:
+                            _render_status_box(status_placeholder)
+                        
+                        # [Integrity Protocol] 커스텀 응답 청크 이벤트 처리
+                        if event_kind == "on_custom_event" and event_name == "response_chunk":
+                            chunk_content = event_data.get("chunk")
+                            chunk_thought = event_data.get("thought")
+
+                            # 사고 과정 렌더링
+                            if chunk_thought:
+                                state["full_thought"] += chunk_thought
+                                thought_display.markdown(state["full_thought"] + "▌")
+                            
+                            # 답변 본문 렌더링
+                            if chunk_content:
+                                state["full_response"] += chunk_content
+                                answer_display.markdown(state["full_response"] + "▌", unsafe_allow_html=True)
+                            
+                        # 문서 검색 결과 캡처
+                        elif event_kind == "on_chain_end":
+                            if event_name == "retrieve":
+                                output = event_data.get("output", {})
+                                if "documents" in output:
+                                    state["retrieved_docs"] = output["documents"]
+                            
+                            elif event_name == "generate_response":
+                                output = event_data.get("output", {})
+                                if isinstance(output, dict):
+                                    # 최종 결과 확정 (유실 방지용 폴백)
+                                    if "documents" in output and not state["retrieved_docs"]:
+                                        state["retrieved_docs"] = output["documents"]
+                                    if "response" in output and len(output["response"]) > len(state["full_response"]):
+                                        state["full_response"] = output["response"]
+                
+                # 3. 답변 완료 후 UI 정리
+                _finalize_ui_rendering(thought_container, answer_display, state)
+                
+        return state["full_response"]
+
     except Exception as e:
-        logger.error(f"Streaming error: {e}", exc_info=True)
+        logger.error(f"UI 스트리밍 오류: {e}", exc_info=True)
         return f"❌ 오류 발생: {str(e)}"
     finally:
         SessionManager.set("is_generating_answer", False)
         _render_status_box(status_placeholder)
+
+def _finalize_ui_rendering(thought_container, answer_display, state):
+    """답변 생성이 끝난 후 UI를 최종 상태로 정리합니다."""
+    # 사고 과정 정리
+    if state["full_thought"]:
+        with thought_container:
+            label = f"🧠 사고 완료 ({len(state['full_thought'].split())} tokens)"
+            with st.expander(label, expanded=False):
+                st.markdown(state["full_thought"])
+    else:
+        thought_container.empty()
+
+    # 답변 본문 최종 렌더링 (툴팁 및 하이라이트 적용)
+    if state["full_response"]:
+        if state["retrieved_docs"]:
+            final_html = apply_tooltips_to_response(state["full_response"], state["retrieved_docs"])
+            answer_display.markdown(final_html, unsafe_allow_html=True)
+        else:
+            answer_display.markdown(state["full_response"], unsafe_allow_html=True)
+    else:
+        answer_display.error("⚠️ 답변이 생성되지 않았습니다.")
 
 
 def render_sidebar(
@@ -262,23 +319,38 @@ def _chat_fragment():
     st.subheader(MSG_CHAT_TITLE)
     chat_container = st.container(height=UI_CONTAINER_HEIGHT, border=True)
     messages = SessionManager.get_messages()
+    
+    # 1. 채팅 이력 렌더링
     for msg in messages:
-        with chat_container: render_message(msg["role"], msg["content"])
+        with chat_container: 
+            render_message(msg["role"], msg["content"])
+            
     if not messages:
-        with chat_container: st.info(MSG_CHAT_WELCOME)
-    is_gen = SessionManager.get("is_generating_answer")
-    if user_input := st.chat_input(MSG_CHAT_INPUT_PLACEHOLDER, disabled=is_gen, key="chat_input_clean"):
-        SessionManager.add_message("user", user_input)
+        with chat_container: 
+            st.info(MSG_CHAT_WELCOME)
+            
+    # 2. 사용자 입력 처리
+    is_generating = SessionManager.get("is_generating_answer")
+    if user_query := st.chat_input(MSG_CHAT_INPUT_PLACEHOLDER, disabled=is_generating, key="chat_input_clean"):
+        SessionManager.add_message("user", user_query)
         SessionManager.add_status_log("질문 분석 중")
+        
+        # UI 즉시 업데이트
         status_placeholder = SessionManager.get("status_placeholder")
         _render_status_box(status_placeholder)
-        with chat_container: render_message("user", user_input)
-        qa_chain = SessionManager.get("qa_chain")
-        if qa_chain:
-            final_ans = sync_run(_stream_chat_response(qa_chain, user_input, chat_container))
-            if final_ans and not final_ans.startswith("❌"):
-                SessionManager.add_message("assistant", final_ans)
+        with chat_container: 
+            render_message("user", user_query)
+            
+        # RAG 엔진 호출
+        rag_engine = SessionManager.get("rag_engine")
+        if rag_engine:
+            from common.utils import sync_run
+            final_answer = sync_run(_stream_chat_response(rag_engine, user_query, chat_container))
+            
+            if final_answer and not final_answer.startswith("❌"):
+                SessionManager.add_message("assistant", final_answer)
                 SessionManager.replace_last_status_log("답변 작성 완료")
                 SessionManager.add_status_log("질문 가능")
                 st.rerun()
-        else: st.toast(MSG_CHAT_NO_QA_SYSTEM, icon="⚠️")
+        else: 
+            st.toast(MSG_CHAT_NO_QA_SYSTEM, icon="⚠️")

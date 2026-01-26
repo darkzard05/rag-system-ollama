@@ -7,8 +7,9 @@ import logging
 import asyncio
 import hashlib
 import re
+import time
 from contextlib import aclosing
-from typing import Dict, List, Optional, overload
+from typing import Dict, List, Optional, overload, Any
 
 from common.typing_utils import (
     DocumentList,
@@ -31,7 +32,6 @@ from core.model_loader import load_reranker_model
 from core.query_optimizer import RAGQueryOptimizer # 추가
 from common.utils import clean_query_text
 from services.monitoring.performance_monitor import get_performance_monitor, OperationType
-from services.optimization.gc_tuner import get_contextual_gc_manager
 from services.optimization.async_optimizer import (
     get_concurrent_query_expander,
     get_concurrent_document_retriever,
@@ -347,98 +347,172 @@ def build_graph(retriever: Optional[T] = None) -> T:
     # 5. 답변 생성 노드 (가장 중요)
     async def generate_response(state: GraphState, config: RunnableConfig) -> GraphOutput:
         """
-        config가 확실하게 전달되도록 데코레이터 없이 구현함.
-        chain.astream을 직접 순회하여 토큰 생성 이벤트를 강제로 발생시킴.
-        
-        타임아웃: LLM_TIMEOUT (300초 = 5분)
+        LLM 답변을 생성하고 스트리밍합니다. 
+        내부적으로 성능 지표(TTFT, 추론 시간 등)를 상세히 기록합니다.
         """
-        gc_manager = get_contextual_gc_manager()
-        gc_manager.enter_performance_critical_section()
-        
-        try:
-            with monitor.track_operation(OperationType.LLM_INFERENCE, {"doc_count": len(state.get("documents", []))}) as op:
-                logger.info("[Graph] 답변 생성 시작 (Streaming 실행)")
+        with monitor.track_operation(OperationType.LLM_INFERENCE, {"doc_count": len(state.get("documents", []))}) as op:
+            try:
+                logger.info("[Graph] LLM 답변 생성 프로세스 시작")
                 from core.session import SessionManager
                 SessionManager.add_status_log("답변 작성 중")
+                
                 llm = config.get("configurable", {}).get("llm")
                 if not llm:
-                    raise ValueError("LLM is missing in config")
+                    raise ValueError("LLM 인스턴스가 설정(config)에 누락되었습니다.")
 
-                prompt = ChatPromptTemplate.from_messages([
+                prompt_template = ChatPromptTemplate.from_messages([
                     ("system", QA_SYSTEM_PROMPT),
-                    ("human", """[Context]:
-{context}
-
-[Question]: {input}
-
-[Instruction]:
-Please answer the question above based on the context.
-**Important:** Answer in the SAME language as the question (Korean question -> Korean answer)."""),
+                    ("human", "Context:\n{context}\n\nQuestion:\n{input}"),
                 ])
 
-                chain = prompt | llm | StrOutputParser()
+                # StrOutputParser를 쓰지 않고 AIMessageChunk를 직접 받아 메타데이터(thinking) 유지
+                generation_chain = prompt_template | llm
 
-                full_response = ""
+                # 성능 측정을 위한 내부 상태 추적기
+                class ResponsePerformanceTracker:
+                    def __init__(self, query_text: str, model_instance: Any):
+                        self.start_time = time.time()
+                        self.query = query_text
+                        self.model = model_instance
+                        self.first_token_at = None
+                        self.thinking_started_at = None
+                        self.thinking_finished_at = None
+                        self.answer_started_at = None
+                        self.answer_finished_at = None
+                        self.chunk_count = 0
+                        self.full_response = ""
+                        self.full_thought = ""
 
+                    def record_chunk(self, content: str, thought: str):
+                        now = time.time()
+                        if self.first_token_at is None:
+                            self.first_token_at = now
+                        
+                        if thought:
+                            if self.thinking_started_at is None:
+                                self.thinking_started_at = now
+                            self.full_thought += thought
+                            
+                        if content:
+                            if self.answer_started_at is None:
+                                self.answer_started_at = now
+                                # 답변이 시작되면 사고 과정은 끝난 것으로 간주
+                                if self.thinking_started_at and self.thinking_finished_at is None:
+                                    self.thinking_finished_at = now
+                            self.full_response += content
+                            self.chunk_count += 1
+
+                    def finalize_and_log(self):
+                        self.answer_finished_at = time.time()
+                        
+                        total_duration = self.answer_finished_at - self.start_time
+                        time_to_first_token = (self.first_token_at - self.start_time) if self.first_token_at else 0
+                        
+                        # 사고 과정 시간 계산
+                        thinking_duration = 0
+                        if self.thinking_started_at:
+                            end_time = self.thinking_finished_at or self.answer_started_at or self.answer_finished_at
+                            thinking_duration = end_time - self.thinking_started_at
+                            
+                        # 실제 답변 생성 시간 계산
+                        answer_duration = (self.answer_finished_at - self.answer_started_at) if self.answer_started_at else 0
+                        
+                        # 토큰 수(단어 단위) 및 속도 계산
+                        token_count = len(self.full_response.split())
+                        tokens_per_second = token_count / answer_duration if answer_duration > 0 else 0
+                        
+                        # 1. 단일행 로그 기록
+                        logger.info(
+                            f"[LLM Metrics] TTFT: {time_to_first_token:.2f}s | "
+                            f"Thinking: {thinking_duration:.2f}s | "
+                            f"Answer: {answer_duration:.2f}s | "
+                            f"Total: {total_duration:.2f}s | "
+                            f"Tokens: {token_count} | "
+                            f"Speed: {tokens_per_second:.1f} tok/s"
+                        )
+
+                        # 2. CSV 파일 영구 기록
+                        try:
+                            monitor.log_to_csv({
+                                "model": getattr(self.model, "model", "unknown"),
+                                "ttft": time_to_first_token,
+                                "thinking": thinking_duration,
+                                "answer": answer_duration,
+                                "total": total_duration,
+                                "tokens": token_count,
+                                "tps": tokens_per_second,
+                                "query": self.query
+                            })
+                        except Exception as e:
+                            logger.warning(f"성능 지표 CSV 저장 실패: {e}")
+
+                tracker = ResponsePerformanceTracker(state["input"], llm)
                 timeout = TimeoutConstants.LLM_TIMEOUT
 
-                async def _consume_stream() -> None:
-                    """Consume the model stream and emit custom chunk events; always closes the generator."""
-                    nonlocal full_response
-                    async with aclosing(
-                        chain.astream(
-                            {"input": state["input"], "context": state["context"]},
+                async def _consume_stream_and_dispatch_events() -> None:
+                    """모델 스트림을 소비하고 가공하여 커스텀 이벤트를 발생시킵니다."""
+                    async for chunk in generation_chain.astream(
+                        {"input": state["input"], "context": state["context"]},
+                        config=config,
+                    ):
+                        # 데이터 추출
+                        content = getattr(chunk, "content", "")
+                        thought = ""
+                        if hasattr(chunk, "additional_kwargs"):
+                            thought = chunk.additional_kwargs.get("thought") or chunk.additional_kwargs.get("thinking", "")
+                        
+                        if not content and not thought:
+                            continue
+
+                        # 메트릭 업데이트
+                        tracker.record_chunk(content, thought)
+
+                        # UI로 실시간 전송
+                        await adispatch_custom_event(
+                            "response_chunk",
+                            {"chunk": content, "thought": thought},
                             config=config,
                         )
-                    ) as stream:
-                        async for chunk in stream:
-                            full_response += chunk
-                            # [Fix] 강제 스트리밍: 표준 콜백이 버퍼링될 경우를 대비해 커스텀 이벤트 발송
-                            await adispatch_custom_event(
-                                "response_chunk",
-                                {"chunk": chunk},
-                                config=config,
-                            )
+                    
+                    tracker.finalize_and_log()
 
-                task = asyncio.create_task(_consume_stream())
+                # 스트리밍 태스크 실행 및 타임아웃 관리
+                generation_task = asyncio.create_task(_consume_stream_and_dispatch_events())
 
                 try:
-                    await asyncio.wait_for(task, timeout=timeout)
+                    await asyncio.wait_for(generation_task, timeout=timeout)
 
                 except asyncio.TimeoutError:
-                    logger.error(
-                        f"[Graph] LLM 응답 생성 타임아웃 ({TimeoutConstants.LLM_TIMEOUT}초 초과)"
-                    )
-                    # Ensure the streaming task is cancelled & awaited so underlying HTTP streams close cleanly.
-                    task.cancel()
-                    try:
-                        await task
-                    except asyncio.CancelledError:
-                        pass
-                    # 타임아웃 발생 시에도 부분 응답 반환
-                    if not full_response:
-                        full_response = "응답 생성 중 시간이 초과되었습니다. 더 간단한 질문으로 시도해주세요."
+                    logger.error(f"[Graph] LLM 응답 생성 시간 초과 ({timeout}초)")
+                    generation_task.cancel()
+                    try: await generation_task
+                    except asyncio.CancelledError: pass
+                    
+                    if not tracker.full_response:
+                        tracker.full_response = "죄송합니다. 응답 생성 시간이 너무 오래 걸려 중단되었습니다."
                     op.error = "timeout"
                 
                 except Exception as e:
-                    if not task.done():
-                        task.cancel()
-                        try:
-                            await task
-                        except Exception:
-                            pass
-                    logger.error(f"[Graph] 응답 생성 오류: {e}", exc_info=True)
+                    if not generation_task.done():
+                        generation_task.cancel()
+                        try: await generation_task
+                        except: pass
+                    logger.error(f"[Graph] 응답 생성 중 예외 발생: {e}", exc_info=True)
                     op.error = str(e)
                     raise
                 
-                # Track response tokens
-                op.tokens = len(full_response.split())
+                # 최종 상태 업데이트 및 반환
+                op.tokens = len(tracker.full_response.split())
                 from core.session import SessionManager
                 SessionManager.replace_last_status_log("답변 생성 완료")
-                # UI에서 출처 표시를 할 수 있도록 문서 목록도 함께 유지
-                return {"response": full_response, "documents": state.get("documents", [])}
-        finally:
-            gc_manager.exit_performance_critical_section()
+                
+                return {
+                    "response": tracker.full_response, 
+                    "documents": state.get("documents", [])
+                }
+            except Exception as e:
+                logger.error(f"[Graph] generate_response 노드 치명적 오류: {e}")
+                raise
 
 
     # --- Workflow Definition ---

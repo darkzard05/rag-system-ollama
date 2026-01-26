@@ -13,6 +13,8 @@ Features:
 """
 
 import time
+import os
+import csv
 import psutil
 import threading
 from dataclasses import dataclass, field
@@ -359,7 +361,48 @@ class PerformanceMonitor:
         self._token_counter = TokenCounter()
         self._operations: List[OperationMetrics] = []
         self._max_operations = 10000
+        
+        # CSV 로깅 설정
+        self.csv_path = os.path.join("logs", "performance_metrics.csv")
+        self._init_csv()
+        
         logger.info(f"PerformanceMonitor initialized (memory_tracking={enable_memory_tracking})")
+
+    def _init_csv(self):
+        """CSV 파일 초기화 및 헤더 작성"""
+        try:
+            if not os.path.exists(os.path.dirname(self.csv_path)):
+                os.makedirs(os.path.dirname(self.csv_path), exist_ok=True)
+                
+            if not os.path.exists(self.csv_path):
+                with open(self.csv_path, "w", newline="", encoding="utf-8") as f:
+                    writer = csv.writer(f)
+                    writer.writerow([
+                        "Timestamp", "Model", "TTFT", "Thinking_Time", 
+                        "Answer_Time", "Total_Time", "Tokens", "TPS", "Query"
+                    ])
+        except Exception as e:
+            logger.error(f"Failed to initialize performance CSV: {e}")
+
+    def log_to_csv(self, data: Dict[str, Any]):
+        """성능 데이터를 CSV 파일에 기록"""
+        try:
+            with self._lock:
+                with open(self.csv_path, "a", newline="", encoding="utf-8") as f:
+                    writer = csv.writer(f)
+                    writer.writerow([
+                        datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                        data.get("model", "unknown"),
+                        round(data.get("ttft", 0), 3),
+                        round(data.get("thinking", 0), 3),
+                        round(data.get("answer", 0), 3),
+                        round(data.get("total", 0), 3),
+                        data.get("tokens", 0),
+                        round(data.get("tps", 0), 2),
+                        data.get("query", "")[:100] # 쿼리는 앞 100자만 보관
+                    ])
+        except Exception as e:
+            logger.error(f"Failed to write metrics to CSV: {e}")
     
     # ========================================================================
     # Context Manager Support for Tracking

@@ -104,8 +104,8 @@ def load_reranker_model(model_name: str) -> Optional["CrossEncoder"]:
                 total_mem = torch.cuda.get_device_properties(0).total_memory // (1024**2)
         except: pass
 
-        # GPU 메모리가 6GB 미만이면 리랭커는 CPU에서 돌려 LLM 공간 확보
-        device = "cuda" if (is_gpu and total_mem > 6000) else "cpu"
+        # GPU 메모리가 8GB 미만이면 리랭커는 CPU에서 돌려 LLM 공간 확보 (기존 6GB에서 상향)
+        device = "cuda" if (is_gpu and total_mem > 8000) else "cpu"
         
         logger.info(f"Reranker 로드: {model_name} (Device: {device})")
         return CrossEncoder(model_name, device=device)
@@ -129,7 +129,7 @@ def load_llm(
     top_p: float = OLLAMA_TOP_P,
     num_ctx: int = OLLAMA_NUM_CTX,
     timeout: float = OLLAMA_TIMEOUT,
-) -> "OllamaLLM":
+) -> "ChatOllama":
     with monitor.track_operation(OperationType.PDF_LOADING, {"model": model_name, "timeout": timeout}) as op:
         if not model_name or model_name == MSG_ERROR_OLLAMA_NOT_RUNNING:
             raise LLMInferenceError(
@@ -138,19 +138,20 @@ def load_llm(
                 details={"msg": "Ollama 모델이 선택되지 않았습니다."}
             )
 
-        from langchain_ollama import OllamaLLM
+        from core.custom_ollama import DeepThinkingChatOllama
 
         logger.debug(f"Ollama 로드 설정: predict={num_predict}, ctx={num_ctx}, temp={temperature}")
 
-        # 로컬 환경 최적화: 타임아웃 15분 설정, keep_alive 60분 설정
-        result = OllamaLLM(
+        # ChatOllama 사용으로 사고 과정(thinking) 필드 지원 강화
+        # [Custom] DeepThinkingChatOllama를 사용하여 Ollama의 thinking 필드 캡처 지원
+        result = DeepThinkingChatOllama(
             model=model_name,
             num_predict=num_predict,
             top_p=top_p,
             num_ctx=num_ctx,
             temperature=temperature,
             timeout=timeout,
-            keep_alive="60m",  # 60분 동안 모델 메모리 유지
+            keep_alive="60m",
             base_url=OLLAMA_BASE_URL,
             streaming=True,
         )

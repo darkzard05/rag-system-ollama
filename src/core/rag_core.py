@@ -564,10 +564,10 @@ def build_rag_pipeline(
         if on_progress: on_progress()
 
     final_retriever = _create_ensemble_retriever(vector_store, bm25_retriever)
-    rag_app = build_graph(retriever=final_retriever)
+    rag_engine = build_graph(retriever=final_retriever)
 
     SessionManager.set("vector_store", vector_store)
-    SessionManager.set("qa_chain", rag_app)
+    SessionManager.set("rag_engine", rag_engine)
     SessionManager.set("pdf_processed", True)
     SessionManager.add_status_log("질문 가능")
     if on_progress: on_progress()
