@@ -104,8 +104,8 @@ def load_reranker_model(model_name: str) -> Optional["CrossEncoder"]:
                 total_mem = torch.cuda.get_device_properties(0).total_memory // (1024**2)
         except: pass
 
-        # GPU 메모리가 8GB 미만이면 리랭커는 CPU에서 돌려 LLM 공간 확보 (기존 6GB에서 상향)
-        device = "cuda" if (is_gpu and total_mem > 8000) else "cpu"
+        # [수정] 6GB GPU 환경에서도 리랭커 가속을 위해 기준을 4GB로 하향
+        device = "cuda" if (is_gpu and total_mem > 4000) else "cpu"
         
         logger.info(f"Reranker 로드: {model_name} (Device: {device})")
         return CrossEncoder(model_name, device=device)

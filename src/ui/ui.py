@@ -56,48 +56,79 @@ def _render_status_box(container):
         return
         
     status_logs = SessionManager.get("status_logs", [])
-    
-    # [스타일링: 하단 밀착형 롤링 로그]
+    if not status_logs:
+        return
+
+    # [스타일링: 초슬림 여백 및 가독성 중심 상태 박스]
     log_html = """
     <style>
-    .status-container {
-        font-family: 'Source Code Pro', monospace;
-        padding: 15px !important;
-        text-align: left !important;
+    .status-outer-container {
+        border: 1px solid rgba(49, 51, 63, 0.1);
+        border-radius: 6px;
+        padding: 4px 6px;
+        background-color: rgba(49, 51, 63, 0.03);
+        margin-bottom: 15px;
         width: 100%;
-        background-color: transparent !important;
-        border: none !important;
-        margin-top: -20px !important;
+    }
+    .status-container {
+        font-family: 'Source Code Pro', 'Cascadia Code', monospace;
+        height: 105px;
+        overflow-y: auto;
+        display: flex;
+        flex-direction: column;
+        scroll-behavior: auto; /* 즉각적인 이동을 위해 auto로 변경 */
     }
     .status-line {
-        line-height: 1.6;
+        line-height: 1.5;
         margin: 0px !important;
-        padding: 0px !important;
-        text-align: left !important;
+        padding: 1px 0px !important;
+        font-size: 0.82rem;
+        display: block;
+        word-break: break-all;
+        padding-left: 12px !important;
+        text-indent: -10px;
     }
-    .status-current { color: #0068c9; font-weight: bold; font-size: 0.85em; }
-    .status-history { color: #888; font-size: 0.8em; }
+    .status-history { color: #888; }
+    .status-current { color: #0068c9; font-weight: bold; }
+    
+    .status-container::-webkit-scrollbar { width: 3px; }
+    .status-container::-webkit-scrollbar-thumb { background: rgba(0,0,0,0.1); border-radius: 10px; }
     </style>
     """
     
-    display_logs = status_logs[-4:] if status_logs else []
-    padded_logs = [""] * (4 - len(display_logs)) + display_logs
-
     log_content = ""
-    for i, log in enumerate(padded_logs):
+    for i, log in enumerate(status_logs):
         import re
-        clean_log = re.sub(r'[^\x00-\x7F가-힣\s]', '', log).strip()
-        if clean_log == "" and log != "": clean_log = log.strip()
-
-        if clean_log == "":
-            log_content += "<div class='status-line status-history'>&nbsp;</div>"
-        elif i == 3:
-            log_content += f"<div class='status-line status-current'>&gt; {clean_log}</div>"
-        else:
-            log_content += f"<div class='status-line status-history'>- {clean_log}</div>"
+        clean_log = re.sub(r'[^\x00-\x7F가-힣\s\(\)\[\]\/\:\.\-\>]', '', log).strip()
+        if not clean_log and log: clean_log = log.strip()
+        
+        is_last = (i == len(status_logs) - 1)
+        cls = "status-current" if is_last else "status-history"
+        prefix = "&gt;" if is_last else "-"
+        
+        log_content += f"<div class='status-line {cls}'>{prefix} {clean_log}</div>"
     
-    full_html = f"{log_html}<div class='status-container'>{log_content}</div>"
+    # [개선] MutationObserver 또는 더 안정적인 하단 고정 스크립트
+    scroll_script = """
+    <script>
+        (function() {
+            function scrollToBottom() {
+                var containers = window.parent.document.querySelectorAll('.status-container');
+                containers.forEach(function(c) {
+                    c.scrollTop = c.scrollHeight;
+                });
+            }
+            // 즉시 실행 및 약간의 지연 후 재실행 (렌더링 완료 보장)
+            scrollToBottom();
+            setTimeout(scrollToBottom, 30);
+            setTimeout(scrollToBottom, 100);
+        })();
+    </script>
+    """
+    
+    full_html = f"{log_html}<div class='status-outer-container'><div class='status-container'>{log_content}</div></div>{scroll_script}"
     container.markdown(full_html, unsafe_allow_html=True)
+
 
 
 async def _stream_chat_response(rag_engine, user_query: str, chat_container) -> str:
@@ -108,7 +139,9 @@ async def _stream_chat_response(rag_engine, user_query: str, chat_container) -> 
         "full_response": "",
         "full_thought": "",
         "retrieved_docs": [],
-        "start_time": time.time()
+        "start_time": time.time(),
+        "thinking_start_time": None,
+        "thinking_end_time": None
     }
     
     current_llm = SessionManager.get("llm")
@@ -122,83 +155,108 @@ async def _stream_chat_response(rag_engine, user_query: str, chat_container) -> 
     try:
         with chat_container:
             with st.chat_message("assistant", avatar="🤖"):
-                # 1. UI 컴포넌트 초기화
+                # UI 컴포넌트 초기화: 처음에는 접힌 상태로 대기
                 thought_container = st.empty()
                 with thought_container:
-                    thought_expander = st.expander("🧠 사고 과정 (Thinking...)", expanded=True)
-                    thought_display = thought_expander.empty()
+                    st.expander("🧠 사고 준비 중...", expanded=False)
+                
+                thought_display = None # 사고 과정 텍스트를 실시간으로 쓸 공간
                 
                 answer_display = st.empty()
                 answer_display.markdown(f"⌛ {MSG_PREPARING_ANSWER}")
                 
-                # 2. 스트리밍 이벤트 처리 루프
+                # 스트리밍 이벤트 수신
                 async with aclosing(rag_engine.astream_events(
                     {"input": user_query}, config=run_config, version="v2"
                 )) as event_stream:
                     async for event in event_stream:
-                        event_kind = event["event"]
-                        event_name = event.get("name", "Unknown")
-                        event_data = event.get("data", {})
+                        kind, name, data = event["event"], event.get("name", "Unknown"), event.get("data", {})
                         
                         # 상태 박스 동기화
-                        if event_kind in ["on_chain_start", "on_chain_end"]:
+                        if kind in ["on_chain_start", "on_chain_end"]:
                             _render_status_box(status_placeholder)
                         
-                        # [Integrity Protocol] 커스텀 응답 청크 이벤트 처리
-                        if event_kind == "on_custom_event" and event_name == "response_chunk":
-                            chunk_content = event_data.get("chunk")
-                            chunk_thought = event_data.get("thought")
+                        # 커스텀 응답 이벤트 처리 (Integrity Protocol)
+                        if kind == "on_custom_event" and name == "response_chunk":
+                            content = data.get("chunk")
+                            thought = data.get("thought")
 
-                            # 사고 과정 렌더링
-                            if chunk_thought:
-                                state["full_thought"] += chunk_thought
-                                thought_display.markdown(state["full_thought"] + "▌")
+                            # 1. 사고 과정 처리
+                            if thought:
+                                if not state["full_thought"]:
+                                    state["thinking_start_time"] = time.time()
+                                    # 사고 시작 시 타이틀 업데이트 (여전히 접힌 상태 유지)
+                                    with thought_container:
+                                        thought_expander = st.expander("🧠 사고 과정 작성 중...", expanded=False)
+                                        thought_display = thought_expander.empty()
+                                
+                                state["full_thought"] += thought
+                                if thought_display:
+                                    thought_display.markdown(state["full_thought"] + "▌")
                             
-                            # 답변 본문 렌더링
-                            if chunk_content:
-                                state["full_response"] += chunk_content
+                            # 2. 답변 본문 처리
+                            if content:
+                                if not state["full_response"]:
+                                    # 첫 답변 토큰이 들어오면 사고 과정 종료로 간주
+                                    state["thinking_end_time"] = time.time()
+                                    if state["full_thought"]:
+                                        thinking_dur = state["thinking_end_time"] - state["thinking_start_time"]
+                                        with thought_container:
+                                            label = f"🧠 사고 완료 ({thinking_dur:.1f}초)"
+                                            with st.expander(label, expanded=False):
+                                                st.markdown(state["full_thought"])
+                                
+                                state["full_response"] += content
                                 answer_display.markdown(state["full_response"] + "▌", unsafe_allow_html=True)
                             
-                        # 문서 검색 결과 캡처
-                        elif event_kind == "on_chain_end":
-                            if event_name == "retrieve":
-                                output = event_data.get("output", {})
-                                if "documents" in output:
-                                    state["retrieved_docs"] = output["documents"]
+                        # 엔진 내부 데이터 캡처
+                        elif kind == "on_chain_end":
+                            if name == "retrieve":
+                                output = data.get("output", {})
+                                if "documents" in output: state["retrieved_docs"] = output["documents"]
                             
-                            elif event_name == "generate_response":
-                                output = event_data.get("output", {})
+                            elif name == "generate_response":
+                                output = data.get("output", {})
                                 if isinstance(output, dict):
-                                    # 최종 결과 확정 (유실 방지용 폴백)
                                     if "documents" in output and not state["retrieved_docs"]:
                                         state["retrieved_docs"] = output["documents"]
                                     if "response" in output and len(output["response"]) > len(state["full_response"]):
                                         state["full_response"] = output["response"]
                 
-                # 3. 답변 완료 후 UI 정리
+                # 최종 렌더링 및 정리
                 _finalize_ui_rendering(thought_container, answer_display, state)
                 
-        return state["full_response"]
+        return {
+            "response": state["full_response"], 
+            "thought": state["full_thought"],
+            "documents": state["retrieved_docs"]
+        }
 
     except Exception as e:
         logger.error(f"UI 스트리밍 오류: {e}", exc_info=True)
-        return f"❌ 오류 발생: {str(e)}"
+        return {"response": f"❌ 오류 발생: {str(e)}", "thought": "", "documents": []}
     finally:
         SessionManager.set("is_generating_answer", False)
         _render_status_box(status_placeholder)
 
 def _finalize_ui_rendering(thought_container, answer_display, state):
     """답변 생성이 끝난 후 UI를 최종 상태로 정리합니다."""
-    # 사고 과정 정리
+    # 1. 사고 과정 정리
     if state["full_thought"]:
         with thought_container:
-            label = f"🧠 사고 완료 ({len(state['full_thought'].split())} tokens)"
+            # 타이밍 정보가 있으면 사용, 없으면 토큰 수 사용
+            if state.get("thinking_start_time") and state.get("thinking_end_time"):
+                dur = state["thinking_end_time"] - state["thinking_start_time"]
+                label = f"🧠 사고 완료 ({dur:.1f}초)"
+            else:
+                label = f"🧠 사고 완료 ({len(state['full_thought'].split())} tokens)"
+            
             with st.expander(label, expanded=False):
                 st.markdown(state["full_thought"])
     else:
         thought_container.empty()
 
-    # 답변 본문 최종 렌더링 (툴팁 및 하이라이트 적용)
+    # 2. 답변 본문 최종 렌더링 (툴팁 및 하이라이트 적용)
     if state["full_response"]:
         if state["retrieved_docs"]:
             final_html = apply_tooltips_to_response(state["full_response"], state["retrieved_docs"])
@@ -308,9 +366,18 @@ def render_left_column():
     _chat_fragment()
 
 
-def render_message(role: str, content: str):
+def render_message(role: str, content: str, thought: str = None, documents: list = None):
     avatar_icon = "🤖" if role == "assistant" else "👤"
     with st.chat_message(role, avatar=avatar_icon):
+        if thought:
+            with st.expander("🧠 사고 완료", expanded=False):
+                st.markdown(thought)
+        
+        # Assistant 메시지이면서 참고 문서가 있다면 툴팁 적용
+        if role == "assistant" and documents:
+            from common.utils import apply_tooltips_to_response
+            content = apply_tooltips_to_response(content, documents)
+            
         st.markdown(content, unsafe_allow_html=True)
 
 
@@ -323,7 +390,12 @@ def _chat_fragment():
     # 1. 채팅 이력 렌더링
     for msg in messages:
         with chat_container: 
-            render_message(msg["role"], msg["content"])
+            render_message(
+                msg["role"], 
+                msg["content"], 
+                thought=msg.get("thought"),
+                documents=msg.get("documents")
+            )
             
     if not messages:
         with chat_container: 
@@ -345,10 +417,19 @@ def _chat_fragment():
         rag_engine = SessionManager.get("rag_engine")
         if rag_engine:
             from common.utils import sync_run
-            final_answer = sync_run(_stream_chat_response(rag_engine, user_query, chat_container))
+            result = sync_run(_stream_chat_response(rag_engine, user_query, chat_container))
+            
+            final_answer = result.get("response", "")
+            final_thought = result.get("thought", "")
+            final_docs = result.get("documents", [])
             
             if final_answer and not final_answer.startswith("❌"):
-                SessionManager.add_message("assistant", final_answer)
+                SessionManager.add_message(
+                    "assistant", 
+                    final_answer, 
+                    thought=final_thought,
+                    documents=final_docs
+                )
                 SessionManager.replace_last_status_log("답변 작성 완료")
                 SessionManager.add_status_log("질문 가능")
                 st.rerun()

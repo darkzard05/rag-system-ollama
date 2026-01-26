@@ -212,12 +212,16 @@ class ThreadSafeSessionManager:
             st.session_state._initialized = True
 
     @classmethod
-    def add_message(cls, role: str, content: str):
+    def add_message(cls, role: str, content: str, **kwargs):
         target = cls if not isinstance(cls, type) else None
         with ThreadSafeSessionManager._acquire_lock(instance=target):
             if "messages" not in st.session_state:
                 st.session_state.messages = []
-            st.session_state.messages.append({"role": role, "content": content})
+            
+            msg = {"role": role, "content": content}
+            msg.update(kwargs)
+            st.session_state.messages.append(msg)
+            
             if len(st.session_state.messages) > MAX_MESSAGE_HISTORY:
                 st.session_state.messages = st.session_state.messages[-MAX_MESSAGE_HISTORY:]
 

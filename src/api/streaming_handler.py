@@ -25,6 +25,7 @@ class StreamChunk:
     token_count: int
     chunk_index: int
     is_final: bool = False
+    thought: Optional[str] = None  # 사고 과정 필드 추가
 
 
 @dataclass

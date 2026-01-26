@@ -334,13 +334,11 @@ def build_graph(retriever: Optional[T] = None) -> T:
         merged_docs = _merge_consecutive_chunks(documents)
         formatted = []
         for i, doc in enumerate(merged_docs):
-            # [개선] 페이지 번호만 포함하여 LLM이 [p.X] 형식으로 인용하도록 강력 유도
             page = doc.metadata.get("page", "?")
-            formatted.append(f"[p.{page}]\n{doc.page_content}")
+            # 모델이 출력 형식과 혼동하지 않도록 형식을 변경합니다.
+            formatted.append(f"-- DOCUMENT CONTENT (PAGE {page}) --\n{doc.page_content}")
         
         context_str = "\n\n".join(formatted)
-        # [Debug] 컨텍스트의 앞부분만 로그로 확인 (페이지 번호 포함 여부 체크)
-        logger.info(f"[Graph] 컨텍스트 생성 완료 (Sample): {context_str[:200].replace(chr(10), ' ')}...")
         return {"context": context_str}
 
 
@@ -362,7 +360,16 @@ def build_graph(retriever: Optional[T] = None) -> T:
 
                 prompt_template = ChatPromptTemplate.from_messages([
                     ("system", QA_SYSTEM_PROMPT),
-                    ("human", "Context:\n{context}\n\nQuestion:\n{input}"),
+                    ("human", """### [Context] ###
+{context}
+
+### [Question] ###
+{input}
+
+### [Execution Checklist] ###
+1. 위 [Question]의 언어를 확인하고, 동일한 언어로 답변을 시작하세요.
+2. 모든 정보 단위의 마지막에 [Context]에서 확인한 페이지 번호 인용(`[p.X]`)을 마침표 앞에 덧붙이세요.
+3. 명확하고 구조화된 형식으로 답변을 구성하세요."""),
                 ])
 
                 # StrOutputParser를 쓰지 않고 AIMessageChunk를 직접 받아 메타데이터(thinking) 유지
@@ -418,16 +425,16 @@ def build_graph(retriever: Optional[T] = None) -> T:
                         answer_duration = (self.answer_finished_at - self.answer_started_at) if self.answer_started_at else 0
                         
                         # 토큰 수(단어 단위) 및 속도 계산
-                        token_count = len(self.full_response.split())
-                        tokens_per_second = token_count / answer_duration if answer_duration > 0 else 0
+                        resp_token_count = len(self.full_response.split())
+                        thought_token_count = len(self.full_thought.split())
+                        tokens_per_second = resp_token_count / answer_duration if answer_duration > 0 else 0
                         
                         # 1. 단일행 로그 기록
                         logger.info(
                             f"[LLM Metrics] TTFT: {time_to_first_token:.2f}s | "
-                            f"Thinking: {thinking_duration:.2f}s | "
-                            f"Answer: {answer_duration:.2f}s | "
+                            f"Thinking: {thinking_duration:.2f}s ({thought_token_count} tok) | "
+                            f"Answer: {answer_duration:.2f}s ({resp_token_count} tok) | "
                             f"Total: {total_duration:.2f}s | "
-                            f"Tokens: {token_count} | "
                             f"Speed: {tokens_per_second:.1f} tok/s"
                         )
 
@@ -439,12 +446,13 @@ def build_graph(retriever: Optional[T] = None) -> T:
                                 "thinking": thinking_duration,
                                 "answer": answer_duration,
                                 "total": total_duration,
-                                "tokens": token_count,
+                                "tokens": resp_token_count,
+                                "thought_tokens": thought_token_count,
                                 "tps": tokens_per_second,
-                                "query": self.query
                             })
-                        except Exception as e:
-                            logger.warning(f"성능 지표 CSV 저장 실패: {e}")
+                        except: pass
+
+                        return resp_token_count, thought_token_count
 
                 tracker = ResponsePerformanceTracker(state["input"], llm)
                 timeout = TimeoutConstants.LLM_TIMEOUT
@@ -502,12 +510,16 @@ def build_graph(retriever: Optional[T] = None) -> T:
                     raise
                 
                 # 최종 상태 업데이트 및 반환
-                op.tokens = len(tracker.full_response.split())
+                resp_tokens, thought_tokens = tracker.finalize_and_log()
+                op.tokens = resp_tokens
+                op.metadata["thought_tokens"] = thought_tokens
+                
                 from core.session import SessionManager
-                SessionManager.replace_last_status_log("답변 생성 완료")
+                SessionManager.replace_last_status_log(f"답변 생성 완료 (사고: {thought_tokens}토큰, 답변: {resp_tokens}토큰)")
                 
                 return {
                     "response": tracker.full_response, 
+                    "thought": tracker.full_thought,
                     "documents": state.get("documents", [])
                 }
             except Exception as e:
