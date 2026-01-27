@@ -3,6 +3,7 @@ Streamlit UI 컴포넌트 렌더링 함수들을 모아놓은 파일.
 Clean & Minimal Version: 부가 요소 제거, 직관적인 로딩 및 스트리밍.
 """
 
+import asyncio
 import time
 import logging
 import os
@@ -27,7 +28,7 @@ from core.model_loader import get_available_models
 from common.utils import sync_run, apply_tooltips_to_response
 from common.config import (
     AVAILABLE_EMBEDDING_MODELS,
-    OLLAMA_MODEL_NAME,
+    DEFAULT_OLLAMA_MODEL,
     UI_CONTAINER_HEIGHT,
     MSG_SIDEBAR_TITLE,
     MSG_PDF_UPLOADER_LABEL,
@@ -103,13 +104,16 @@ def _render_status_box(container):
     """
     
     import re
+    import html
     log_content = ""
     # [핵심] 로그를 역순으로 뒤집어 최신 내용이 0번 인덱스에 오게 함
     reversed_logs = status_logs[::-1]
     
     for i, log in enumerate(reversed_logs):
-        clean_log = re.sub(r'[^\x00-\x7F가-힣\s\(\)\[\]\/\:\.\-\>]', '', log).strip()
-        if not clean_log and log: clean_log = log.strip()
+        # HTML 이스케이프 처리로 안전성 확보
+        safe_log = html.escape(log)
+        clean_log = re.sub(r'[^\x00-\x7F가-힣\s\(\)\[\]\/\:\.\-\>]', '', safe_log).strip()
+        if not clean_log and safe_log: clean_log = safe_log.strip()
         
         # 첫 번째(i=0)가 가장 최신 로그
         is_newest = (i == 0)
@@ -295,8 +299,19 @@ def render_sidebar(
             actual_models = [] if is_ollama_error else [m for m in available_models if "---" not in m]
             
             last_model = SessionManager.get("last_selected_model")
+            
+            # [수정] 저장된 세션 모델이 없거나 유효하지 않은 경우의 초기값 결정 로직
             if not last_model or (actual_models and last_model not in actual_models):
-                last_model = actual_models[0] if actual_models else OLLAMA_MODEL_NAME
+                # 1. 설정파일의 기본 모델(DEFAULT_OLLAMA_MODEL)이 목록에 있는지 확인
+                if DEFAULT_OLLAMA_MODEL in actual_models:
+                    last_model = DEFAULT_OLLAMA_MODEL
+                # 2. 없다면 목록의 첫 번째 모델 선택
+                elif actual_models:
+                    last_model = actual_models[0]
+                # 3. 목록도 없다면 상수의 기본값 사용
+                else:
+                    last_model = DEFAULT_OLLAMA_MODEL
+                
                 SessionManager.set("last_selected_model", last_model)
 
             try: idx = available_models.index(last_model)

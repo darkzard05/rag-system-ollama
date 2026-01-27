@@ -24,9 +24,8 @@ class DeepThinkingChatOllama(ChatOllama):
         """
         비동기 스트리밍을 오버라이딩하여 thinking 필드를 직접 추출합니다.
         """
+        client = ollama.AsyncClient(host=self.base_url)
         try:
-            client = ollama.AsyncClient(host=self.base_url)
-            
             # 메시지 형식 변환 (LangChain -> Ollama)
             formatted_messages = []
             for m in messages:
@@ -70,5 +69,7 @@ class DeepThinkingChatOllama(ChatOllama):
                 
         except Exception as e:
             logger.error(f"[CustomOllama] 스트리밍 오류: {e}")
-            # 에러 발생 시 기본 구현으로 폴백 시도하거나 예외 발생
             raise
+        # 참고: 일부 버전에서는 client에 별도의 close()가 없을 수 있으므로 
+        # 에러 발생 시 로그만 남기고 종료합니다. 
+        # 만약 라이브러리가 명시적 close를 지원한다면 여기서 호출 가능합니다.

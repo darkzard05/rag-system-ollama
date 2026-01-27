@@ -180,8 +180,10 @@ class SearchResultAggregator:
         search_results: Dict[str, List[Any]],
         metrics: AggregationMetrics
     ) -> List[AggregatedResult]:
-        """콘텐츠 기반 중복 제거"""
+        """콘텐츠 기반 중복 제거 (O(N) 최적화)"""
         aggregated_map: Dict[str, AggregatedResult] = {}
+        # [최적화] 해시를 키로 사용하여 즉시 조회
+        content_hash_to_id: Dict[str, str] = {}
         
         for node_id, results in search_results.items():
             metrics.total_input_results += len(results)
@@ -189,24 +191,17 @@ class SearchResultAggregator:
             for result in results:
                 content_hash = ContentHash.calculate(result.content)
                 
-                # 기존 콘텐츠 해시 확인
-                existing_id = None
-                for hash_key, agg_id in self._content_hashes.items():
-                    if ContentHash.similar_hash(content_hash, hash_key):
-                        existing_id = agg_id
-                        break
+                # [최적화] 딕셔너리 룩업으로 중복 확인 (O(1))
+                existing_id = content_hash_to_id.get(content_hash)
                 
                 if existing_id:
                     # 중복 병합
                     metrics.duplicates_found += 1
                     agg = aggregated_map[existing_id]
-                    
                     self._merge_duplicate(agg, result, metrics)
-                
                 else:
-                    # 새로운 결과
-                    with self._lock:
-                        self._content_hashes[content_hash] = result.doc_id
+                    # 새로운 결과 등록
+                    content_hash_to_id[content_hash] = result.doc_id
                     
                     agg_result = AggregatedResult(
                         doc_id=result.doc_id,

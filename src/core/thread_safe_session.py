@@ -10,6 +10,7 @@ import logging
 import threading
 import time
 from typing import Dict, List, Optional, TypeVar, Any, Callable
+from contextvars import ContextVar
 
 import streamlit as st
 from common.typing_utils import SessionData, SessionKey, SessionValue
@@ -20,6 +21,9 @@ T = TypeVar("T")
 
 # ✅ 메모리 누수 방지: 최대 메시지 히스토리
 MAX_MESSAGE_HISTORY = 100
+
+# [추가] 비동기 컨텍스트 격리를 위한 세션 ID 변수
+_session_id_var: ContextVar[str] = ContextVar("session_id", default="default")
 
 
 class ThreadSafeSessionManager:
@@ -59,7 +63,7 @@ class ThreadSafeSessionManager:
     _default_lock_timeout = 5.0
     lock_count = 0
     failed_acquisitions = 0
-    _fallback_state = {} # 폴백 저장소 초기화
+    _fallback_sessions = {} # [수정] 단일 state에서 다중 세션 저장소로 변경
 
     def __init__(self, lock_timeout: float = 5.0):
         """인스턴스 기반 사용을 위한 초기화"""
@@ -77,45 +81,51 @@ class ThreadSafeSessionManager:
         return _LockContext(lock, timeout, target)
 
     @classmethod
+    def set_session_id(cls, session_id: str):
+        """[추가] 현재 컨텍스트(스레드/태스크)에서 사용할 세션 ID를 설정합니다."""
+        _session_id_var.set(session_id)
+
+    @classmethod
+    def get_session_id(cls) -> str:
+        """[추가] 현재 컨텍스트의 세션 ID를 가져옵니다."""
+        return _session_id_var.get()
+
+    @classmethod
     def _get_state(cls):
         """Streamlit session_state 또는 폴백 딕셔너리를 반환합니다."""
         try:
-            # [최적화] Streamlit 컨텍스트가 있는지 먼저 확인하여 경고 방지
+            # Streamlit 컨텍스트 확인 (runtime 체크)
             from streamlit.runtime.scriptrunner import get_script_run_ctx
             if get_script_run_ctx() is not None:
                 return st.session_state
-            raise RuntimeError("No Streamlit context")
+            
+            # 컨텍스트가 없는 경우(API 서버 등)를 위한 세션별 저장소 사용
+            sid = cls.get_session_id()
+            if sid not in cls._fallback_sessions:
+                cls._fallback_sessions[sid] = cls.DEFAULT_SESSION_STATE.copy()
+                cls._fallback_sessions[sid]["_initialized"] = True
+            return cls._fallback_sessions[sid]
         except (Exception, ImportError):
-            # 컨텍스트가 없는 경우(API 서버, 테스트 코드 등)를 위한 전역 저장소 사용
-            if not hasattr(cls, "_fallback_state") or not cls._fallback_state:
-                cls._fallback_state = cls.DEFAULT_SESSION_STATE.copy()
-            return cls._fallback_state
+            # 라이브러리 부재 시에도 세션별 저장소 사용
+            sid = cls.get_session_id()
+            if sid not in cls._fallback_sessions:
+                cls._fallback_sessions[sid] = cls.DEFAULT_SESSION_STATE.copy()
+                cls._fallback_sessions[sid]["_initialized"] = True
+            return cls._fallback_sessions[sid]
 
     @classmethod
-    def _get_state(cls):
-        """Streamlit session_state 또는 폴백 딕셔너리를 반환합니다."""
-        try:
-            # Streamlit 컨텍스트 확인
-            return st.session_state
-        except Exception:
-            # 컨텍스트가 없는 경우(API 서버 등)를 위한 전역 저장소 사용
-            if not hasattr(cls, "_fallback_state"):
-                cls._fallback_state = cls.DEFAULT_SESSION_STATE.copy()
-            return cls._fallback_state
-
-    @classmethod
-    def init_session(cls):
+    def init_session(cls, session_id: Optional[str] = None):
+        if session_id:
+            cls.set_session_id(session_id)
+            
         with cls._acquire_lock():
             state = cls._get_state()
             if not state.get("_initialized", False):
-                logger.info("[Session] [Init] 세션 상태 초기화 중...")
+                logger.info(f"[Session] [Init] 세션 상태 초기화 중... (ID: {cls.get_session_id()})")
                 for key, value in cls.DEFAULT_SESSION_STATE.items():
                     if key not in state:
                         state[key] = value
-                if hasattr(state, "_initialized"):
-                    state._initialized = True
-                else:
-                    state["_initialized"] = True
+                state["_initialized"] = True
 
     @classmethod
     def get(cls, key: str, default: Optional[SessionValue] = None) -> Optional[SessionValue]:
@@ -317,12 +327,15 @@ class ThreadSafeSessionManager:
             state["pdf_processed"] = False
             state["needs_rag_rebuild"] = True
             state["_chat_ready_needs_refresh"] = True
-            # [수정] 이전 로그를 완전히 비우고 분석 시작 상태만 표시
-            state["status_logs"] = ["문서 분석 중"]
+            
+            # [수정] 기존 로그 보존하고 분석 시작 알림 추가
+            if "status_logs" not in state:
+                state["status_logs"] = []
+            state["status_logs"].append("--- 새 문서 분석 시작 ---")
 
     @classmethod
     def add_status_log(cls, msg: str):
-        """작업 로그를 추가합니다. (내부 10개 보관, UI는 최신 4개 표시)"""
+        """작업 로그를 추가합니다. (최신 30개 보관)"""
         target = cls if not isinstance(cls, type) else None
         with ThreadSafeSessionManager._acquire_lock(instance=target):
             state = cls._get_state()
@@ -333,9 +346,9 @@ class ThreadSafeSessionManager:
                 return
                 
             state["status_logs"].append(msg)
-            # 최신 10개 유지 (스크롤 효과를 위한 버퍼)
-            if len(state["status_logs"]) > 10:
-                state["status_logs"] = state["status_logs"][-10:]
+            # [수정] 히스토리 유지 개수 상향 (10 -> 30)
+            if len(state["status_logs"]) > 30:
+                state["status_logs"] = state["status_logs"][-30:]
 
     @classmethod
     def replace_last_status_log(cls, msg: str):

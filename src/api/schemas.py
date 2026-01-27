@@ -20,6 +20,7 @@ class GraphState(TypedDict):
 class QueryRequest(BaseModel):
     """질의 요청 스키마"""
     query: str = Field(..., example="DeepSeek-R1의 성능은 어때?")
+    session_id: str = Field(default="default", example="user-123")
     use_cache: bool = True
 
 class QueryResponse(BaseModel):

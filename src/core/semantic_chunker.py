@@ -8,7 +8,7 @@
 
 import logging
 import re
-from typing import List, Optional, Any, TYPE_CHECKING
+from typing import List, Optional, Any, TYPE_CHECKING, Tuple
 import numpy as np
 from langchain_core.documents import Document
 
@@ -223,8 +223,7 @@ class EmbeddingBasedSemanticChunker:
 
     def _optimize_chunk_sizes(self, chunks: List[dict]) -> List[dict]:
         """
-        생성된 청크들의 크기를 검사하여 병합합니다.
-        Input/Output: [{'text': str, 'start': int, 'end': int}]
+        생성된 청크들의 크기를 검사하여 병합하며, 벡터도 가중 평균으로 계산합니다.
         """
         if not chunks:
             return chunks
@@ -242,9 +241,19 @@ class EmbeddingBasedSemanticChunker:
             merged_len = len(merged_text)
             
             if merged_len <= self.max_chunk_size:
-                # 병합: 텍스트는 합치고, start는 유지, end는 확장
+                # 벡터 병합: 각 청크의 길이를 고려한 가중 평균 (단순 평균보다 정확함)
+                len_a = len(current_chunk["text"])
+                len_b = len(chunk["text"])
+                total_len = len_a + len_b
+                
+                if total_len > 0:
+                    merged_vector = (current_chunk["vector"] * len_a + chunk["vector"] * len_b) / total_len
+                else:
+                    merged_vector = current_chunk["vector"]
+
                 current_chunk["text"] = merged_text
                 current_chunk["end"] = chunk["end"] # 끝 위치 업데이트
+                current_chunk["vector"] = merged_vector
             else:
                 # 현재 청크 저장 후 새로 시작
                 optimized.append(current_chunk)
@@ -259,7 +268,7 @@ class EmbeddingBasedSemanticChunker:
         """
         텍스트를 의미론적으로 분할합니다.
         Returns:
-            List[dict]: [{'text': str, 'start': int, 'end': int}, ...]
+            List[dict]: [{'text': str, 'start': int, 'end': int, 'vector': np.ndarray}, ...]
         """
         if not text or not text.strip():
             return []
@@ -284,6 +293,12 @@ class EmbeddingBasedSemanticChunker:
             sentences.append(current_s)
 
         if len(sentences) <= 1:
+            # 벡터가 없으므로 계산 필요
+            if sentences:
+                sentence_texts = [s["text"] for s in sentences]
+                embeddings = self._get_embeddings(sentence_texts)
+                for s, v in zip(sentences, embeddings):
+                    s["vector"] = v
             return sentences
         
         # 2. 임베딩 및 유사도 계산 (텍스트만 추출해서 사용)
@@ -294,11 +309,13 @@ class EmbeddingBasedSemanticChunker:
         # 3. 분기점 탐색
         breakpoints = self._find_breakpoints(similarities)
         
-        # 4. 1차 그룹화 (오프셋 유지)
+        # 4. 1차 그룹화 (오프셋 및 벡터 포함)
         chunks = []
         start_idx = 0
         for bp in breakpoints:
             group_sentences = sentences[start_idx:bp]
+            group_embeddings = embeddings[start_idx:bp] # 해당 범위의 벡터들
+            
             if not group_sentences:
                 continue
                 
@@ -307,39 +324,47 @@ class EmbeddingBasedSemanticChunker:
             group_start = group_sentences[0]["start"]
             group_end = group_sentences[-1]["end"]
             
+            # [최적화] 문장 벡터들의 평균을 청크 벡터로 사용
+            chunk_vector = np.mean(group_embeddings, axis=0)
+            
             chunks.append({
                 "text": merged_text,
                 "start": group_start,
-                "end": group_end
+                "end": group_end,
+                "vector": chunk_vector
             })
             start_idx = bp
         
         # 마지막 그룹
         last_group_sentences = sentences[start_idx:]
+        last_group_embeddings = embeddings[start_idx:]
         if last_group_sentences:
             merged_text = " ".join([s["text"] for s in last_group_sentences])
             group_start = last_group_sentences[0]["start"]
             group_end = last_group_sentences[-1]["end"]
+            chunk_vector = np.mean(last_group_embeddings, axis=0)
             
             chunks.append({
                 "text": merged_text,
                 "start": group_start,
-                "end": group_end
+                "end": group_end,
+                "vector": chunk_vector
             })
         
-        # 5. 크기 최적화 (오프셋 인식)
+        # 5. 크기 최적화 (오프셋 및 벡터 인식)
         return self._optimize_chunk_sizes(chunks)
 
-    def split_documents(self, docs: List["Document"]) -> List["Document"]:
+    def split_documents(self, docs: List["Document"]) -> Tuple[List["Document"], List[np.ndarray]]:
         """
         LangChain Document 객체 리스트를 받아 의미론적 분할을 수행합니다.
         문서들을 통합하여 문맥을 유지하되, 오프셋 매핑을 통해 
         각 청크의 원본 메타데이터(페이지 번호 등)를 정확히 보존합니다.
+        각 청크에 대해 이미 계산된 벡터를 함께 반환하여 재계산을 방지합니다.
         """
 
         if not docs:
             logger.warning("split_documents: 입력 문서 리스트가 비어있습니다.")
-            return []
+            return [], []
 
         # 1. 문서 통합 및 오프셋 매핑 구축
         full_text = ""
@@ -370,19 +395,21 @@ class EmbeddingBasedSemanticChunker:
 
         if not full_text.strip():
             logger.warning("split_documents: 병합된 텍스트가 비어있습니다.")
-            return []
+            return [], []
 
-        # 2. 청킹 수행 (오프셋 정보 포함)
-        # split_text는 이제 [{'text': str, 'start': int, 'end': int}]를 반환
+        # 2. 청킹 수행 (오프셋 및 벡터 정보 포함)
+        # split_text는 이제 [{'text': str, 'start': int, 'end': int, 'vector': np.ndarray}]를 반환
         chunk_dicts = self.split_text(full_text)
         
         # 3. 메타데이터 역매핑 및 문서 객체 생성
         final_docs = []
+        final_vectors = []
         
         for chunk in chunk_dicts:
             c_start = chunk["start"]
             c_end = chunk["end"]
             c_text = chunk["text"]
+            c_vector = chunk["vector"] # 이미 계산된 벡터
             
             # 청크의 중심점 계산
             c_center = (c_start + c_end) // 2
@@ -428,9 +455,8 @@ class EmbeddingBasedSemanticChunker:
             if not matched_metadata and doc_ranges:
                  matched_metadata = doc_ranges[0]["metadata"].copy()
 
-            final_docs.append(
-                Document(page_content=c_text, metadata=matched_metadata)
-            )
+            final_docs.append(Document(page_content=c_text, metadata=matched_metadata))
+            final_vectors.append(c_vector)
         
-        logger.info(f"의미론적 문서 분할 완료: {len(docs)}개 원본 문서 -> {len(final_docs)}개 청크 생성")
-        return final_docs
+        logger.info(f"의미론적 문서 분할 완료: {len(docs)}개 원본 문서 -> {len(final_docs)}개 청크 생성 (벡터 포함)")
+        return final_docs, final_vectors

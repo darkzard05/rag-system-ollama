@@ -10,7 +10,7 @@ import tempfile
 from typing import List, Dict, Any, Optional
 from pathlib import Path
 
-from fastapi import FastAPI, File, UploadFile, HTTPException, Depends, BackgroundTasks
+from fastapi import FastAPI, File, UploadFile, HTTPException, Depends, BackgroundTasks, Form
 from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -20,6 +20,7 @@ from core.model_loader import load_llm, load_embedding_model
 from core.rag_core import build_rag_pipeline, _load_and_build_retrieval_components, _create_ensemble_retriever
 from core.graph_builder import build_graph
 from api.schemas import QueryRequest, QueryResponse, SearchResponse, SearchResult
+from core.session import SessionManager
 
 # 로깅 설정
 logger = logging.getLogger(__name__)
@@ -39,13 +40,10 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# --- 싱글톤 리소스 관리 (메모리 효율화) ---
+# --- 싱글톤 리소스 관리 (모델 캐싱용) ---
 class RAGResourceManager:
     _llm = None
     _embedder = None
-    _rag_app = None
-    _vector_store = None
-    _current_file = None
 
     @classmethod
     def get_llm(cls):
@@ -71,12 +69,19 @@ async def health_check():
     }
 
 @app.post("/api/v1/upload")
-async def upload_document(file: UploadFile = File(...)):
+async def upload_document(
+    file: UploadFile = File(...),
+    session_id: str = Form("default")
+):
     """
     PDF 문서를 업로드하고 인덱싱합니다.
     """
     if not file.filename.endswith(".pdf"):
         raise HTTPException(status_code=400, detail="PDF 파일만 업로드 가능합니다.")
+
+    # 세션 ID 설정
+    SessionManager.set_session_id(session_id)
+    SessionManager.init_session()
 
     try:
         # 임시 파일 저장
@@ -96,12 +101,13 @@ async def upload_document(file: UploadFile = File(...)):
                 embedder=embedder
             )
 
-            RAGResourceManager._current_file = file.filename
-            logger.info(f"[System] [API] 문서 업로드 및 인덱싱 완료: {file.filename} (캐시 사용: {cache_used})")
+            SessionManager.set("last_uploaded_file_name", file.filename)
+            logger.info(f"[System] [API] 문서 업로드 및 인덱싱 완료: {file.filename} (Session: {session_id}, 캐시 사용: {cache_used})")
             
             return {
                 "message": msg,
                 "filename": file.filename,
+                "session_id": session_id,
                 "cache_used": cache_used
             }
         finally:
@@ -111,7 +117,7 @@ async def upload_document(file: UploadFile = File(...)):
                 logger.debug(f"임시 파일 삭제 완료: {tmp_path}")
 
     except Exception as e:
-        logger.error(f"업로드 중 오류: {e}", exc_info=True)
+        logger.error(f"업로드 중 오류 (Session: {session_id}): {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/api/v1/query", response_model=QueryResponse)
@@ -119,21 +125,15 @@ async def query_rag(request: QueryRequest):
     """
     질문에 대해 RAG 파이프라인을 실행하여 답변을 생성합니다.
     """
-    if RAGResourceManager._current_file is None:
+    SessionManager.set_session_id(request.session_id)
+    SessionManager.init_session()
+
+    if SessionManager.get("last_uploaded_file_name") is None:
         raise HTTPException(status_code=400, detail="먼저 문서를 업로드해주세요.")
 
     start_time = time.time()
     try:
         llm = RAGResourceManager.get_llm()
-        # 주의: LangGraph 앱은 build_rag_pipeline 호출 시 세션에 저장되나, 
-        # API 서버는 세션이 없으므로 직접 관리하거나 매번 구성해야 함.
-        # 여기서는 단순화를 위해 매번 retriever를 가져와 구성 (실제로는 캐싱 권장)
-        
-        # 실제 운영 환경에서는 전역 상태나 DB에서 retriever를 관리해야 함.
-        # 현재는 UI 로직과의 정합성을 위해 세션 대신 ResourceManager 사용 고려 필요.
-        # (임시: 매번 구성하는 로직)
-        from core.session import SessionManager
-        SessionManager.init_session() # 세션 초기화 보장
         rag_app = SessionManager.get("rag_engine")
         
         if rag_app is None:
@@ -159,7 +159,7 @@ async def query_rag(request: QueryRequest):
         )
 
     except Exception as e:
-        logger.error(f"질의 중 오류: {e}", exc_info=True)
+        logger.error(f"질의 중 오류 (Session: {request.session_id}): {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/api/v1/stream_query")
@@ -167,11 +167,12 @@ async def stream_query_rag(request: QueryRequest):
     """
     질문에 대한 답변을 실시간 스트리밍(SSE)으로 반환합니다.
     """
-    if RAGResourceManager._current_file is None:
+    SessionManager.set_session_id(request.session_id)
+    SessionManager.init_session()
+
+    if SessionManager.get("last_uploaded_file_name") is None:
         raise HTTPException(status_code=400, detail="먼저 문서를 업로드해주세요.")
 
-    from core.session import SessionManager
-    SessionManager.init_session()
     rag_app = SessionManager.get("rag_engine")
     if rag_app is None:
         raise HTTPException(status_code=500, detail="QA 시스템이 초기화되지 않았습니다.")
@@ -218,7 +219,7 @@ async def stream_query_rag(request: QueryRequest):
             yield "event: end\ndata: [DONE]\n\n"
 
         except Exception as e:
-            logger.error(f"Streaming API error: {e}")
+            logger.error(f"Streaming API error (Session: {request.session_id}): {e}")
             yield f"event: error\ndata: {str(e)}\n\n"
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")

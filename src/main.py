@@ -36,17 +36,25 @@ MAX_FILE_SIZE_MB = StringConstants.MAX_FILE_SIZE_MB
 # 비동기 패치 적용 (최상단 실행)
 nest_asyncio.apply()
 
-# 메모리 최적화 서비스 시작
-memory_optimizer = get_memory_optimizer()
-memory_optimizer.start()
+@st.cache_resource
+def get_and_start_memory_optimizer():
+    """메모리 최적화 서비스를 단 한 번만 초기화하고 시작합니다."""
+    optimizer = get_memory_optimizer()
+    optimizer.start()
+    return optimizer
+
+# 메모리 최적화 서비스 시작 (캐싱 적용)
+memory_optimizer = get_and_start_memory_optimizer()
 
 # Streamlit 페이지 설정
 st.set_page_config(page_title=PAGE_TITLE, layout=LAYOUT)
 
 
+import threading
+
 def _ensure_models_are_loaded(status_container: DeltaGenerator) -> bool:
     """
-    선택된 LLM 및 임베딩 모델이 세션에 로드되어 있는지 확인하고, 필요 시 로드합니다.
+    선택된 LLM 및 임베딩 모델을 병렬로 로드하여 대기 시간을 최소화합니다.
     """
     selected_model = SessionManager.get("last_selected_model")
     selected_embedding = SessionManager.get("last_selected_embedding_model")
@@ -64,32 +72,68 @@ def _ensure_models_are_loaded(status_container: DeltaGenerator) -> bool:
             return False
 
     try:
-        # 실시간 상태 업데이트를 위한 플레이스홀더 확보
         status_placeholder = SessionManager.get("status_placeholder")
         def force_sync():
             if status_placeholder:
                 _render_status_box(status_placeholder)
 
-        # LLM 로드 상태 확인 및 로드
         current_llm = SessionManager.get("llm")
-        if not current_llm or getattr(current_llm, "model", None) != selected_model:
-            SessionManager.add_status_log(f"LLM 로딩 중")
-            force_sync() # 즉시 갱신
-            new_llm = load_llm(selected_model)
-            SessionManager.set("llm", new_llm)
-            SessionManager.replace_last_status_log(f"LLM 로드 완료")
-            force_sync()
-
-        # 임베딩 모델 로드 상태 확인 및 로드
         current_embedder = SessionManager.get("embedder")
-        if not current_embedder or getattr(current_embedder, "model_name", None) != selected_embedding:
-            SessionManager.add_status_log("임베딩 로딩 중")
-            force_sync() # 즉시 갱신
-            new_embedder = load_embedding_model(selected_embedding)
-            SessionManager.set("embedder", new_embedder)
-            SessionManager.replace_last_status_log(f"임베딩 로드 완료")
-            force_sync()
+        
+        # 로드가 필요한 항목 식별
+        needs_llm = not current_llm or getattr(current_llm, "model", None) != selected_model
+        needs_embedding = not current_embedder or getattr(current_embedder, "model_name", None) != selected_embedding
 
+        if not needs_llm and not needs_embedding:
+            return True
+
+        # 결과를 담을 리스트 (가변 객체로 스레드 간 공유)
+        results = {"llm": None, "embedder": None, "error": None}
+
+        # 병렬 로딩을 위한 스레드 함수 정의
+        def load_llm_task():
+            try:
+                SessionManager.add_status_log(f"LLM 로딩 중: {selected_model}")
+                results["llm"] = load_llm(selected_model)
+            except Exception as e:
+                results["error"] = f"LLM 로드 실패: {e}"
+
+        def load_embedding_task():
+            try:
+                SessionManager.add_status_log(f"임베딩 로딩 중: {selected_embedding}")
+                results["embedder"] = load_embedding_model(selected_embedding)
+            except Exception as e:
+                results["error"] = f"임베딩 로드 실패: {e}"
+
+        threads = []
+        if needs_llm:
+            t1 = threading.Thread(target=load_llm_task)
+            threads.append(t1)
+            t1.start()
+        
+        if needs_embedding:
+            t2 = threading.Thread(target=load_embedding_task)
+            threads.append(t2)
+            t2.start()
+
+        # 모든 로딩이 완료될 때까지 UI 갱신하며 대기
+        while any(t.is_alive() for t in threads):
+            force_sync()
+            threading.Event().wait(0.2)
+
+        # 에러 체크
+        if results["error"]:
+            raise Exception(results["error"])
+
+        # [중요] 메인 스레드 컨텍스트에서 세션에 저장
+        if results["llm"]:
+            SessionManager.set("llm", results["llm"])
+            SessionManager.replace_last_status_log(f"✅ LLM 로드 완료")
+        if results["embedder"]:
+            SessionManager.set("embedder", results["embedder"])
+            SessionManager.replace_last_status_log(f"✅ 임베딩 로드 완료")
+
+        force_sync()
         return True
 
     except Exception as e:
@@ -244,34 +288,44 @@ def on_embedding_change() -> None:
 
 
 def main() -> None:
-    """메인 애플리케이션 로직"""
+    """메인 애플리케이션 로직 (최적화된 선형 구조)"""
     SessionManager.init_session()
 
-    # 사이드바 렌더링 및 상태 컨테이너 확보
+    # 1. 사이드바 및 상태 컨테이너 렌더링
     status_container = render_sidebar(
         file_uploader_callback=on_file_upload,
         model_selector_callback=on_model_change,
         embedding_selector_callback=on_embedding_change,
     )
     
-    # 상태 플래그에 따른 작업 수행 (우선순위: 새 파일 > 임베딩 변경 > 모델 변경)
+    # 2. 상태 변경 작업 수행 (메인 UI 렌더링 전 모든 로직 처리)
+    # 이 과정에서 발생하는 데이터 변경은 아래 3번 단계에서 즉시 반영됨
+    has_changed = False
+    
     if SessionManager.get("new_file_uploaded"):
+        current_file_path = SessionManager.get("pdf_file_path")
+        current_file_name = SessionManager.get("last_uploaded_file_name")
+        
         SessionManager.reset_for_new_file()
+        SessionManager.set("pdf_file_path", current_file_path)
+        SessionManager.set("last_uploaded_file_name", current_file_name)
         SessionManager.set("new_file_uploaded", False)
+        
         _rebuild_rag_system(status_container)
-        st.rerun() # UI 즉시 갱신
+        has_changed = True
 
     elif SessionManager.get("needs_rag_rebuild"):
         SessionManager.set("needs_rag_rebuild", False)
         _rebuild_rag_system(status_container)
-        st.rerun() # UI 즉시 갱신
+        has_changed = True
 
     elif SessionManager.get("needs_qa_chain_update"):
         SessionManager.set("needs_qa_chain_update", False)
         _update_qa_chain(status_container)
-        st.rerun() # UI 즉시 갱신
+        has_changed = True
 
-    # 메인 UI 레이아웃 (채팅창 + PDF 뷰어)
+    # 3. 메인 UI 레이아웃 (채팅창 + PDF 뷰어)
+    # 위에서 추가된 메시지나 상태가 이 단계에서 자연스럽게 포함되어 렌더링됨
     col_left, col_right = st.columns([1, 1])
 
     with col_left:
@@ -283,6 +337,7 @@ def main() -> None:
     # 첫 실행 플래그 해제
     if SessionManager.get("is_first_run"):
         SessionManager.set("is_first_run", False)
+
 
 
 if __name__ == "__main__":

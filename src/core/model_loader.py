@@ -71,6 +71,7 @@ def load_embedding_model(embedding_model_name: Optional[str] = None) -> "Hugging
             # 사용자가 cuda를 선택했지만 사용 불가능한 경우 폴백
             if device == "cuda" and not torch.cuda.is_available():
                 logger.warning("CUDA가 설정되었으나 사용 불가능합니다. CPU로 전환합니다.")
+                st.warning("⚠️ CUDA GPU를 사용할 수 없어 CPU 모드로 전환합니다. 처리 속도가 느려질 수 있습니다.")
                 device = "cpu"
 
         # Backward-compat: allow omitting model name in tests / legacy code

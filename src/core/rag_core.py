@@ -142,29 +142,37 @@ def _compute_file_hash(file_path: str) -> str:
         return ""
 
 
-def _load_pdf_docs(file_path: str, file_name: str, on_progress=None) -> List[Document]:
-    """
-    PDF 파일을 디스크에서 로드하여 LangChain Document 객체로 변환합니다.
-    """
-    with monitor.track_operation(OperationType.PDF_LOADING, {"file": file_name}) as op:
-        docs = []
-        try:
-            SessionManager.add_status_log(f"문서 파일 접근 중")
-            if on_progress: on_progress()
-            
-            with fitz.open(file_path) as doc_file:
-                total_pages = len(doc_file)
-                for page_num, page in enumerate(doc_file):
-                    if (page_num + 1) % 5 == 0 or page_num == 0:
-                        SessionManager.replace_last_status_log(f"텍스트 추출 중 ({page_num + 1}/{total_pages}p)")
-                        if on_progress: on_progress()
-                    
-                    try:
-                        text = page.get_text()
-                    except Exception as e:
-                        logger.warning(f"페이지 {page_num+1} 텍스트 추출 실패: {e}")
-                        text = ""
-                    
+import concurrent.futures
+
+def _extract_page_worker(file_path: str, page_num: int, total_pages: int, file_name: str) -> Optional[Document]:
+    """개별 페이지에서 텍스트를 추출하는 워커 함수 (스레드 세이프)"""
+    try:
+        # 각 스레드에서 파일을 새로 열어 독립적인 문서 객체 사용
+        with fitz.open(file_path) as doc:
+            page = doc[page_num]
+            text = page.get_text()
+            if text:
+                clean_text = preprocess_text(text)
+                if clean_text and len(clean_text) > 10:
+                    metadata = {
+                        "source": file_name,
+                        "page": int(page_num + 1),
+                        "total_pages": int(total_pages)
+                    }
+                    return Document(page_content=clean_text, metadata=metadata)
+    except Exception as e:
+        logger.warning(f"페이지 {page_num+1} 추출 실패: {e}")
+    return None
+
+def _extract_pages_batch_worker(file_path: str, page_range: List[int], total_pages: int, file_name: str) -> List[Tuple[int, Document]]:
+    """페이지 범위를 배치로 처리하는 워커 함수"""
+    results = []
+    try:
+        with fitz.open(file_path) as doc:
+            for page_num in page_range:
+                try:
+                    page = doc[page_num]
+                    text = page.get_text()
                     if text:
                         clean_text = preprocess_text(text)
                         if clean_text and len(clean_text) > 10:
@@ -173,29 +181,88 @@ def _load_pdf_docs(file_path: str, file_name: str, on_progress=None) -> List[Doc
                                 "page": int(page_num + 1),
                                 "total_pages": int(total_pages)
                             }
-                            docs.append(Document(page_content=clean_text, metadata=metadata))
+                            results.append((page_num, Document(page_content=clean_text, metadata=metadata)))
+                except Exception as e:
+                    logger.warning(f"페이지 {page_num+1} 추출 실패: {e}")
+    except Exception as e:
+        logger.error(f"배치 처리 중 문서 오픈 실패: {e}")
+    return results
+
+def _load_pdf_docs(file_path: str, file_name: str, on_progress=None) -> List[Document]:
+    """
+    PDF 파일을 배치 기반 병렬 로드로 변환하여 최적화합니다.
+    """
+    with monitor.track_operation(OperationType.PDF_LOADING, {"file": file_name}) as op:
+        try:
+            SessionManager.add_status_log(f"문서 분석 준비 중")
+            if on_progress: on_progress()
             
-            SessionManager.replace_last_status_log(f"텍스트 {len(docs)}개 구간 확보")
-            logger.info(f"PDF 로드 완료: {len(docs)}/{total_pages} 페이지 추출됨.")
+            with fitz.open(file_path) as doc_file:
+                total_pages = len(doc_file)
+            
+            # [최적화] 페이지 수에 따라 동적으로 병렬화 결정
+            if total_pages <= 15:
+                # (순차 처리 로직은 동일하므로 생략하거나 유지)
+                docs = []
+                with fitz.open(file_path) as doc:
+                    for i in range(total_pages):
+                        page = doc[i]
+                        text = page.get_text()
+                        if text:
+                            clean_text = preprocess_text(text)
+                            if clean_text and len(clean_text) > 10:
+                                docs.append(Document(page_content=clean_text, metadata={"source": file_name, "page": i+1, "total_pages": total_pages}))
+                        if (i + 1) % 5 == 0 or i == total_pages - 1:
+                            SessionManager.replace_last_status_log(f"텍스트 추출 중 ({i+1}/{total_pages}p)")
+                            if on_progress: on_progress()
+            else:
+                SessionManager.replace_last_status_log(f"병렬 배치 추출 시작 (총 {total_pages}p)")
+                if on_progress: on_progress()
+
+                max_workers = min(os.cpu_count() or 4, 8)
+                # 페이지를 배치로 분할 (예: 100페이지, 8스레드 -> 약 13페이지씩)
+                batch_size = (total_pages + max_workers - 1) // max_workers
+                batches = [list(range(i, min(i + batch_size, total_pages))) for i in range(0, total_pages, batch_size)]
+
+                all_results = [None] * total_pages
+                completed_pages = 0
+                
+                with concurrent.futures.ThreadPoolExecutor(max_workers=len(batches)) as executor:
+                    futures = [
+                        executor.submit(_extract_pages_batch_worker, file_path, batch, total_pages, file_name)
+                        for batch in batches
+                    ]
+                    
+                    for future in concurrent.futures.as_completed(futures):
+                        batch_results = future.result()
+                        for page_idx, doc in batch_results:
+                            all_results[page_idx] = doc
+                        
+                        completed_pages += len(batch_results)
+                        SessionManager.replace_last_status_log(f"텍스트 추출 중 ({min(completed_pages, total_pages)}/{total_pages}p)")
+                        if on_progress: on_progress()
+
+                docs = [r for r in all_results if r is not None]
+
+            SessionManager.replace_last_status_log(f"텍스트 {len(docs)}개 구간 확보 완료")
             op.tokens = sum(len(doc.page_content.split()) for doc in docs)
             return docs
-
         except Exception as e:
-            logger.error(f"PDF 로드 중 오류 발생: {e}")
-            op.error = str(e)
+            logger.error(f"PDF 로드 중 오류: {e}")
             raise
-
 
 def _split_documents(
     docs: List[Document],
     embedder: Optional["HuggingFaceEmbeddings"] = None,
-) -> List[Document]:
+) -> Tuple[List[Document], Optional[List[np.ndarray]]]:
     """
     설정에 따라 의미론적 분할기 또는 RecursiveCharacterTextSplitter를 사용해 문서를 분할합니다.
     """
     SessionManager.add_status_log("의미 단위 문장 분할 중")
     with monitor.track_operation(OperationType.SEMANTIC_CHUNKING, {"doc_count": len(docs)}) as op:
         use_semantic = SEMANTIC_CHUNKER_CONFIG.get("enabled", False)
+        split_docs = []
+        vectors = None
 
         if use_semantic and embedder:
             # 배치 사이즈 결정 로직 개선
@@ -228,8 +295,8 @@ def _split_documents(
                 batch_size=batch_size,
             )
 
-            split_docs = semantic_chunker.split_documents(docs)
-            logger.info(f"의미론적 분할 완료: {len(docs)} 문서 -> {len(split_docs)} 청크")
+            split_docs, vectors = semantic_chunker.split_documents(docs)
+            logger.info(f"의미론적 분할 완료: {len(docs)} 문서 -> {len(split_docs)} 청크 (벡터 재사용 준비 완료)")
         else:
             chunker = RecursiveCharacterTextSplitter(
                 chunk_size=TEXT_SPLITTER_CONFIG["chunk_size"],
@@ -244,7 +311,7 @@ def _split_documents(
             doc.metadata["chunk_index"] = i
 
         op.tokens = sum(len(doc.page_content.split()) for doc in split_docs)
-        return split_docs
+        return split_docs, vectors
 
 
 def _serialize_docs(docs: DocumentList) -> DocumentDictList:
@@ -531,9 +598,9 @@ def _load_and_build_retrieval_components(
                 details={"reason": "PDF에서 텍스트를 추출할 수 없음 (이미지 위주 또는 보호된 파일)"}
             )
 
-        if _on_progress: _on_progress()
-        doc_splits = _split_documents(docs, _embedder)
-        if _on_progress: _on_progress()
+        if on_progress: on_progress()
+        doc_splits, precomputed_vectors = _split_documents(docs, _embedder)
+        if on_progress: on_progress()
 
         if not doc_splits:
             raise InsufficientChunksError(
@@ -543,20 +610,21 @@ def _load_and_build_retrieval_components(
             )
 
         # [최적화] 인덱스 최적화 적용 및 임베딩 재사용
-        optimized_vectors = None
+        optimized_vectors = precomputed_vectors
         try:
             SessionManager.add_status_log("인덱스 최적화 중")
             if on_progress: on_progress()
             
-            # 임시 벡터 생성 (최적화 분석용)
-            texts = [d.page_content for d in doc_splits]
-            # 여기서 한 번 임베딩을 수행함
-            vectors = _embedder.embed_documents(texts)
-            vectors_np = [np.array(v) for v in vectors]
+            # [수정] 이미 의미론적 청커에서 벡터가 넘어왔다면 이를 최적화기에 전달
+            if optimized_vectors is None:
+                # 벡터가 없는 경우(기본 스플리터 사용 시)에만 새로 생성
+                texts = [d.page_content for d in doc_splits]
+                vectors = _embedder.embed_documents(texts)
+                optimized_vectors = [np.array(v) for v in vectors]
             
             optimizer = get_index_optimizer()
             # 최적화된 문서와 '벡터'를 함께 반환받음
-            optimized_docs, optimized_vectors, stats = optimizer.optimize_index(doc_splits, vectors_np)
+            optimized_docs, optimized_vectors, stats = optimizer.optimize_index(doc_splits, optimized_vectors)
             
             logger.info(
                 f"인덱스 최적화 완료: {len(doc_splits)} -> {len(optimized_docs)} 청크 "
@@ -566,12 +634,11 @@ def _load_and_build_retrieval_components(
             if on_progress: on_progress()
             
             doc_splits = optimized_docs
-            # FAISS에서 사용할 수 있도록 리스트 형태로 유지
         except Exception as e:
             logger.warning(f"인덱스 최적화 실패 (계속 진행): {e}")
-            optimized_vectors = None
+            # 최적화 실패 시에도 precomputed_vectors는 유지됨
 
-        # 최적화된 벡터가 있으면 재사용, 없으면 내부에서 새로 생성
+        # 최적화된 벡터(또는 의미론적 청커에서 온 벡터)가 있으면 재사용
         vector_store = _create_vector_store(doc_splits, _embedder, vectors=optimized_vectors)
         bm25_retriever = _create_bm25_retriever(doc_splits)
         cache.save(doc_splits, vector_store, bm25_retriever)
