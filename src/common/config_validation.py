@@ -23,7 +23,7 @@ class ModelConfig(BaseModel):
     """LLM 모델 설정."""
     
     default_ollama: str = Field(
-        default="qwen3:4b",
+        default="qwen3:4b-instruct-2507-q4_K_M",
         description="기본 Ollama 모델"
     )
     temperature: float = Field(

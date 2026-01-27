@@ -51,8 +51,8 @@ _config = _load_config()
 
 # --- 모델 및 설정 상수 ---
 _models_config = _config.get("models", {})
-OLLAMA_MODEL_NAME: str = _get_env(
-    "DEFAULT_OLLAMA_MODEL", _models_config.get("default_ollama", "qwen3:4b")
+DEFAULT_OLLAMA_MODEL: str = os.getenv(
+    "DEFAULT_OLLAMA_MODEL", _models_config.get("default_ollama", "qwen3:4b-instruct-2507-q4_K_M")
 )
 
 # Ollama 서버 주소 설정 (환경 변수 우선)

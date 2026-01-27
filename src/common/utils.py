@@ -140,6 +140,44 @@ def get_ollama_resource_usage(model_name: str) -> str:
 
 
 
+def format_error_message(e: Exception) -> str:
+    """
+    발생한 예외 객체를 분석하여 사용자에게 보여줄 친절한 메시지를 반환합니다.
+    """
+    from common.exceptions import (
+        PDFProcessingError, 
+        EmptyPDFError, 
+        InsufficientChunksError,
+        VectorStoreError,
+        LLMInferenceError,
+        EmbeddingModelError
+    )
+    
+    err_type = type(e).__name__
+    msg = str(e)
+    
+    # 1. 커스텀 도메인 예외 처리
+    if isinstance(e, EmptyPDFError):
+        return "📄 PDF 파일에 텍스트가 없거나 이미지로만 구성되어 있습니다. 다른 파일을 시도해 보세요."
+    elif isinstance(e, InsufficientChunksError):
+        return "⚠️ 문서의 유효한 텍스트가 너무 적어 분석할 수 없습니다."
+    elif isinstance(e, LLMInferenceError):
+        return f"🤖 AI 모델 응답 중 오류가 발생했습니다: {msg}"
+    elif isinstance(e, EmbeddingModelError):
+        return "🧠 임베딩 모델 로드에 실패했습니다. 자원(VRAM/RAM)이 부족한지 확인해 주세요."
+    
+    # 2. 일반 시스템 예외 처리
+    if "ConnectionError" in err_type or "11434" in msg:
+        return "🔌 Ollama 서버에 연결할 수 없습니다. Ollama가 실행 중인지 확인해 주세요."
+    elif "timeout" in msg.lower():
+        return "⌛ 처리 시간이 너무 오래 걸려 중단되었습니다. 잠시 후 다시 시도해 주세요."
+    elif "out of memory" in msg.lower() or "CUDA" in msg:
+        return "🚀 GPU 메모리(VRAM)가 부족합니다. 다른 프로그램을 종료하거나 모델을 작은 것으로 바꿔보세요."
+        
+    # 3. 기본값
+    return f"❌ 알 수 없는 오류 발생 ({err_type}): {msg}"
+
+
 def sync_run(coro):
     """
     Streamlit(동기 환경)에서 비동기 코루틴을 안전하게 실행하기 위한 헬퍼.

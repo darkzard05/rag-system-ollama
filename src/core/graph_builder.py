@@ -171,7 +171,7 @@ def build_graph(retriever: Optional[T] = None) -> T:
     # 2. 문서 검색 노드 (AsyncIO 최적화)
     async def retrieve_documents(state: GraphState) -> GraphOutput:
         """
-        [AsyncIO 최적화] 여러 쿼리로부터 병렬 문서 검색
+        [AsyncIO 최적화] 여러 쿼리 및 다중 리트리버로부터 병렬 문서 검색
         """
         from core.session import SessionManager
         with monitor.track_operation(
@@ -179,74 +179,49 @@ def build_graph(retriever: Optional[T] = None) -> T:
             {"query_count": len(state.get("search_queries", [state["input"]]))}
         ) as op:
             queries = state.get("search_queries", [state["input"]])
-            logger.info(f"[Retrieval] [Start] 병렬 검색 시작 ({len(queries)}개 검색어)")
+            logger.info(f"[Retrieval] [Start] 병렬 하이브리드 검색 시작 ({len(queries)}개 검색어)")
         
-            async def _safe_ainvoke_with_timeout(q: str) -> DocumentList:
-                """리트리버를 타임아웃과 함께 호출합니다."""
+            # 세션에서 개별 리트리버 획득
+            bm25 = SessionManager.get("bm25_retriever")
+            faiss = SessionManager.get("faiss_retriever")
+
+            async def _invoke_retriever(ret, q: str) -> DocumentList:
+                """리트리버 비동기 호출 헬퍼"""
+                if not ret: return []
                 try:
-                    timeout = TimeoutConstants.RETRIEVER_TIMEOUT
-                    
-                    if hasattr(retriever, "ainvoke"):
-                        result = await asyncio.wait_for(
-                            retriever.ainvoke(q),
-                            timeout=timeout
-                        )
-                    else:
-                        result = await asyncio.wait_for(
-                            asyncio.to_thread(retriever.invoke, q),
-                            timeout=timeout
-                        )
-                    
-                    return result if isinstance(result, list) else []
-                
-                except asyncio.TimeoutError:
-                    logger.error(
-                        f"[Retrieval] [Timeout] 검색 시간 초과 ({timeout}s): {q}"
-                    )
-                    return []
+                    if hasattr(ret, "ainvoke"):
+                        return await asyncio.wait_for(ret.ainvoke(q), timeout=TimeoutConstants.RETRIEVER_TIMEOUT)
+                    return await asyncio.wait_for(asyncio.to_thread(ret.invoke, q), timeout=TimeoutConstants.RETRIEVER_TIMEOUT)
                 except Exception as e:
-                    logger.error(f"[Retrieval] [Error] 검색 오류 ({q}): {e}", exc_info=True)
+                    logger.warning(f"[Retrieval] 검색 실패 ({type(ret).__name__}): {e}")
                     return []
 
-            # [최적화] ConcurrentDocumentRetriever 사용
-            try:
-                retriever_obj = get_concurrent_document_retriever()
-                unique_docs, retrieval_stats = await retriever_obj.retrieve_documents_parallel(
-                    queries=queries,
-                    retriever_func=_safe_ainvoke_with_timeout,
-                    deduplicate=True,
-                    metadata={"pipeline": "concurrent"}
-                )
-                
-                logger.info(
-                    f"[Retrieval] [Complete] 검색 완료 | "
-                    f"총 발견: {retrieval_stats['total_retrieved']} | "
-                    f"중복 제거: {retrieval_stats['duplicates_removed']} | "
-                    f"최종 문서: {retrieval_stats['unique_count']}"
-                )
-                SessionManager.replace_last_status_log(f"관련 문장 {retrieval_stats['unique_count']}개 식별 완료")
-                SessionManager.add_status_log("핵심 문장 엄선 중 (Reranking)")
-                op.tokens = sum(len(doc.page_content.split()) for doc in unique_docs)
-                return {"documents": unique_docs}
+            # 모든 쿼리에 대해 BM25와 FAISS를 병렬로 실행
+            tasks = []
+            for q in queries:
+                tasks.append(_invoke_retriever(bm25, q))
+                tasks.append(_invoke_retriever(faiss, q))
             
-            except Exception as e:
-                logger.error(f"[Retrieval] [Error] 동시 검색 최적화 실패: {e}")
-                # 폴백: 기본 병렬 검색
-                results = await asyncio.gather(*[_safe_ainvoke_with_timeout(q) for q in queries])
-                all_documents = [doc for sublist in results for doc in sublist]
-                
-                unique_docs = []
-                seen = set()
-                for doc in all_documents:
-                    doc_key = doc.page_content + doc.metadata.get("source", "")
-                    doc_hash = hashlib.sha256(doc_key.encode()).hexdigest()
-                    if doc_hash not in seen:
-                        unique_docs.append(doc)
-                        seen.add(doc_hash)
-                
-                logger.info(f"[Retrieval] [Fallback] 폴백 검색 완료: {len(unique_docs)} 문서")
-                op.tokens = sum(len(doc.page_content.split()) for doc in unique_docs)
-                return {"documents": unique_docs}
+            # [최적화 핵심] asyncio.gather로 모든 검색 작업을 한 번에 수행
+            results = await asyncio.gather(*tasks)
+            all_documents = [doc for sublist in results for doc in sublist]
+            
+            # 중복 제거 (SHA256 해시 기반)
+            unique_docs = []
+            seen = set()
+            for doc in all_documents:
+                doc_key = doc.page_content + doc.metadata.get("source", "")
+                doc_hash = hashlib.sha256(doc_key.encode()).hexdigest()
+                if doc_hash not in seen:
+                    unique_docs.append(doc)
+                    seen.add(doc_hash)
+            
+            logger.info(f"[Retrieval] [Complete] 병렬 하이브리드 검색 완료: {len(unique_docs)} 문서 확보")
+            SessionManager.replace_last_status_log(f"병렬 검색을 통해 관련 문장 {len(unique_docs)}개 확보")
+            SessionManager.add_status_log("핵심 문장 엄선 중 (Reranking)")
+            
+            op.tokens = sum(len(doc.page_content.split()) for doc in unique_docs)
+            return {"documents": unique_docs}
 
 
     # 3. 재순위화 노드 (지능형 최적화)
@@ -361,8 +336,9 @@ def build_graph(retriever: Optional[T] = None) -> T:
                 model_name = getattr(llm, "model", "Unknown")
                 resource_status = get_ollama_resource_usage(model_name)
                 
+                # [최적화] 리소스 상세 정보는 백엔드 로그로만 기록 (UI 단순화)
                 logger.info(f"[LLM] [Start] 답변 생성 프로세스 시작 (Model: {model_name}, Resource: {resource_status})")
-                SessionManager.add_status_log(f"답변 준비 중 ({resource_status})")
+                SessionManager.add_status_log("답변 생성 시작")
                 
                 prompt_template = ChatPromptTemplate.from_messages([
                     ("system", QA_SYSTEM_PROMPT),
@@ -529,23 +505,30 @@ def build_graph(retriever: Optional[T] = None) -> T:
                 generation_task = asyncio.create_task(_consume_stream_and_dispatch_events())
 
                 try:
+                    # 지정된 타임아웃 동안 대기
                     await asyncio.wait_for(generation_task, timeout=timeout)
                 except asyncio.TimeoutError:
                     logger.error(f"[LLM] [Error] 응답 생성 시간 초과 ({timeout}초)")
-                    generation_task.cancel()
-                    try: await generation_task
-                    except asyncio.CancelledError: pass
-                    if not tracker.full_response:
-                        tracker.full_response = "죄송합니다. 응답 생성 시간이 너무 오래 걸려 중단되었습니다."
                     op.error = "timeout"
+                except asyncio.CancelledError:
+                    logger.warning("[LLM] [Cancel] 사용자에 의해 또는 시스템에 의해 작업이 취소되었습니다.")
+                    op.error = "cancelled"
+                    raise # 상위로 취소 신호 전파
                 except Exception as e:
-                    if not generation_task.done():
-                        generation_task.cancel()
                     logger.error(f"[LLM] [Error] 응답 생성 중 예외 발생: {e}", exc_info=True)
                     op.error = str(e)
                     raise
+                finally:
+                    # [최적화 핵심] 노드가 종료될 때 생성 태스크가 살아있다면 반드시 취소
+                    if not generation_task.done():
+                        generation_task.cancel()
+                        try:
+                            # 취소가 완료될 때까지 대기하여 자원 정리 보장
+                            await generation_task
+                        except (asyncio.CancelledError, Exception):
+                            pass
                 
-                # 최종 지표 기록
+                # 최종 지표 기록 (정상 종료 시에만 실행됨)
                 resp_tokens, thought_tokens = tracker.finalize_and_log()
                 op.tokens = resp_tokens
                 op.metadata["thought_tokens"] = thought_tokens

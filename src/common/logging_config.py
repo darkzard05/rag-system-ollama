@@ -57,6 +57,10 @@ def setup_logging(
     root_logger = logging.getLogger()
 
     # ---- Warnings filtering (reduce noise in console/logs) ----
+    # [최적화] Streamlit bare mode 실행 시 발생하는 무의미한 경고 전역 차단
+    warnings.filterwarnings("ignore", message=".*missing ScriptRunContext.*")
+    logging.getLogger("streamlit.runtime.scriptrunner_utils.script_run_context").setLevel(logging.ERROR)
+    
     # NOTE: Some LangChain/LangGraph APIs emit beta warnings on each run.
     # We filter by message to avoid importing optional warning classes.
     warnings.filterwarnings(

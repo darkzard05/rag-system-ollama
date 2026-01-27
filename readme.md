@@ -1,99 +1,127 @@
 # RAG System with Ollama & LangGraph
 
-> A modular, high-performance Retrieval-Augmented Generation (RAG) solution optimized for local environments.
+> **A High-Performance, Local Retrieval-Augmented Generation (RAG) Solution.**  
+> Optimized for speed and accuracy using `LangGraph` orchestration and local `Ollama` models.
 
 [![Python 3.11+](https://img.shields.io/badge/Python-3.11+-blue.svg)](https://www.python.org)
-[![Modular: Packages](https://img.shields.io/badge/Architecture-Modular-orange.svg)]()
+[![Model: qwen3:4b-instruct](https://img.shields.io/badge/Model-qwen3:4b--instruct-blueviolet.svg)](https://ollama.com/library/qwen3)
 [![Backend: LangGraph](https://img.shields.io/badge/Orchestrator-LangGraph-informational.svg)]()
-[![Tests: Integrated](https://img.shields.io/badge/Tests-Integrated-brightgreen.svg)]()
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
 ---
 
-## 🏗️ Project Architecture
+## 📸 Preview
 
-The system is organized into specialized packages to ensure maintainability, security, and scalability.
+![Application Interface](image/image1.png)
 
-```text
-rag-system-ollama/
-├── src/
-│   ├── main.py             # 🏁 Streamlit UI Entry Point
-│   ├── core/               # 🧠 Core RAG Engine (Graph, Retrieval, Optimizer)
-│   ├── api/                # 🔌 FastAPI Server (REST & SSE Streaming)
-│   ├── services/           # ⚡ Background Optimizers & Monitors
-│   ├── security/           # 🛡️ Cache Integrity & Security Layers
-│   ├── common/             # 🛠️ Shared Config & Utilities
-│   └── cache/              # 💾 Response & Document Caching
-├── tests/                  # 🧪 Integration & Unit Test Suites
-├── docs/                   # 📚 Technical Documentation
-└── reports/                # 📊 Performance & Development Logs
-```
+*The interface provides a clean chat experience with sidebar controls for document upload and model selection.*
 
 ---
 
-## ⚡ Getting Started
+## ⚡ Key Highlights
+
+### 🚀 **Performance Optimized**
+- **Zero Thinking Time:** Switch to `qwen3:4b-instruct` eliminates the 2-3 minute wait time of standard models, delivering answers in seconds.
+- **Async & Parallel:** Uses `AsyncIO` for parallel document retrieval and processing.
+- **Device-Aware:** Automatically optimizes embedding and reranking tasks based on available hardware (CPU/GPU).
+
+### 🧠 **Intelligent RAG Pipeline**
+- **LangGraph Orchestration:** Precise state management for complex reasoning flows.
+- **Hybrid Search:** Combines semantic search (Dense) with keyword search (Sparse/BM25) for best-in-class retrieval.
+- **Adaptive Reranking:** Filters irrelevant documents to ensure the LLM receives only high-quality context.
+
+### 🛡️ **Enterprise-Grade Security**
+- **Cache Integrity:** Protects cached models and vectors with SHA256 checksums and HMAC verification.
+- **Safe Loading:** Prevents unauthorized model loading via strict path validation.
+
+---
+
+## 🛠️ Getting Started
 
 ### 1️⃣ Prerequisites
 - **Python 3.11+**
 - **Ollama**: Download from [ollama.ai](https://ollama.ai)
-- **Ollama Models**: `ollama pull qwen3:4b`
 
-### 2️⃣ Installation
+### 2️⃣ Model Setup (Crucial)
+We highly recommend using the **instruct** version of Qwen3 for the best RAG experience (fast response, no long "thinking" loops).
+
+```powershell
+# Pull the recommended model
+ollama pull qwen3:4b-instruct-2507-q4_K_M
+
+# (Optional) Pull embedding models if not auto-downloaded
+# The system will handle this automatically on first run.
+```
+
+### 3️⃣ Installation
 ```bash
 git clone https://github.com/darkzard05/rag-system-ollama.git
 cd rag-system-ollama
+
+# Create Virtual Environment
 python -m venv venv
 source venv/bin/activate  # Windows: venv\Scripts\activate
+
+# Install Dependencies
 pip install -r requirements.txt
 ```
 
-### 3️⃣ Run the Application
+### 4️⃣ Configuration
+The system is pre-configured in `config.yml`.
+Ensure the default model is set correctly for optimal performance:
 
-#### **Frontend (Streamlit UI)**
+```yaml
+# config.yml
+models:
+  default_ollama: "qwen3:4b-instruct-2507-q4_K_M"
+```
+
+---
+
+## 🖥️ Usage
+
+### Run the Frontend (Streamlit UI)
+The main interface for chatting with your documents.
 ```bash
 streamlit run src/main.py
 ```
 
-#### **Backend (FastAPI Server)**
+### Run the Backend (API Server)
+For integrating RAG capabilities into other applications.
 ```bash
 uvicorn src.api.api_server:app --host 0.0.0.0 --port 8000
 ```
 
 ---
 
-## 🎯 Key Features
+## 🏗️ Project Structure
 
-### ✨ Engineering Excellence
-- **LangGraph Orchestration**: Precise control over the RAG pipeline with state-aware workflows.
-- **Intelligent Query Routing**: Automatically bypasses query expansion for simple questions to minimize latency.
-- **Optimized Reranking**: Adaptive filtering and device-aware (CPU/GPU) execution to prevent VRAM bottlenecks.
-- **AsyncIO Concurrency**: Parallel retrieval from multiple search engines for near-instant results.
-- **Advanced Security**: SHA256 integrity and HMAC verification for all cached artifacts.
-
-### 🎨 Logic Flow
 ```text
-📄 PDF Upload → 🔨 Semantic Chunking → 🧮 Index Optimization
-      ↓                 ↓                       ↓
-🔍 Hybrid Search ← 🚀 Intelligent Routing ← ⚖️ Adaptive Reranking
-      ↓
-💡 SSE Response Streaming (via LangGraph) → 🛡️ Cache Integrity
+rag-system-ollama/
+├── src/
+│   ├── main.py             # 🏁 Streamlit Entry Point
+│   ├── core/               # 🧠 RAG Engine (Graph, Retrieval, Models)
+│   ├── api/                # 🔌 FastAPI Server
+│   ├── services/           # ⚡ Monitoring & Background Services
+│   ├── security/           # 🛡️ Security & Cache Verification
+│   └── common/             # 🛠️ Config & Utils
+├── image/                  # 🖼️ Assets & Screenshots
+├── logs/                   # 📝 Application & Performance Logs
+├── reports/                # 📊 Benchmarks & Audit Reports
+└── tests/                  # 🧪 Test Suite
 ```
 
 ---
 
-## 📚 Documentation
+## 📚 Documentation & Reports
 
-Detailed guides for developers:
-- [📖 API Reference](./docs/API.md) - Endpoints and integration examples.
-- [🏗️ Architecture Details](./docs/ARCHITECTURE.md) - Modular design and logical flow.
-- [🛡️ Security Implementation](./docs/SECURITY_IMPLEMENTATION.md) - Cache protection and integrity.
-- [⚡ Performance Optimization](./docs/TASK_11_ASYNCIO_OPTIMIZATION.md) - AsyncIO and GPU batching.
+- **[Model Recommendation Report](./reports/MODEL_SELECTION_RECOMMENDATION.md)**: Why we chose `qwen3:4b-instruct`.
+- **[Performance Audit](./reports/PERFORMANCE_AND_QUALITY_AUDIT.md)**: Detailed analysis of system latency and throughput.
+- **[API Reference](./docs/API.md)**: Endpoints documentation.
 
 ---
 
 ## 📄 License
-MIT License - Developed by darkzard05.
+MIT License - Developed by **darkzard05**.
 
----
-
-**Version:** 2.0.0 | **Updated:** 2026-01-22 | **Status:** Stable ✅
+**Status:** Stable (v2.1.0) | **Last Updated:** 2026-01-27

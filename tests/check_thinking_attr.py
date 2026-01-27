@@ -10,7 +10,7 @@ def test_qwen_thinking_attribute():
     
     try:
         # 스트리밍 모드
-        stream = ollama.generate(model='qwen3:4b', prompt=question, stream=True)
+        stream = ollama.generate(model='qwen3:4b-instruct-2507-q4_K_M', prompt=question, stream=True)
         
         thinking_found = False
         content_found = False

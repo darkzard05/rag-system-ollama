@@ -64,11 +64,16 @@ from security.cache_security import (
 from core.semantic_chunker import EmbeddingBasedSemanticChunker
 
 from services.optimization.batch_optimizer import get_optimal_batch_size
+
 from services.optimization.index_optimizer import get_index_optimizer, IndexOptimizationConfig
+
 from services.monitoring.performance_monitor import get_performance_monitor, OperationType
 
 import numpy as np
+
 import fitz  # PyMuPDF
+
+
 
 logger = logging.getLogger(__name__)
 monitor = get_performance_monitor()
@@ -600,13 +605,27 @@ def build_rag_pipeline(
         SessionManager.add_status_log("캐시 데이터 로드") 
         if on_progress: on_progress()
 
-    final_retriever = _create_ensemble_retriever(vector_store, bm25_retriever)
+    # [최적화] 병렬 검색을 위해 개별 리트리버 생성 및 세션 저장
+    faiss_retriever = vector_store.as_retriever(
+        search_type=RETRIEVER_CONFIG["search_type"],
+        search_kwargs=RETRIEVER_CONFIG["search_kwargs"],
+    )
+    
+    SessionManager.set("faiss_retriever", faiss_retriever)
+    SessionManager.set("bm25_retriever", bm25_retriever)
+
+    # 기존 호환성 유지 (EnsembleRetriever도 생성)
+    final_retriever = EnsembleRetriever(
+        retrievers=[bm25_retriever, faiss_retriever],
+        weights=RETRIEVER_CONFIG["ensemble_weights"],
+    )
     rag_engine = build_graph(retriever=final_retriever)
 
     SessionManager.set("vector_store", vector_store)
     SessionManager.set("rag_engine", rag_engine)
     SessionManager.set("pdf_processed", True)
     SessionManager.add_status_log("질문 가능")
+
     if on_progress: on_progress()
 
     logger.info(

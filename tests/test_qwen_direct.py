@@ -3,7 +3,7 @@ import time
 
 def test_qwen_direct():
     print("\n" + "="*60)
-    print("🚀 [Ollama Direct Test] qwen3:4b 객체 속성 정밀 분석")
+    print("🚀 [Ollama Direct Test] qwen3:4b-instruct-2507-q4_K_M 객체 속성 정밀 분석")
     print("="*60)
 
     # 사고를 강력하게 유도하는 질문
@@ -15,7 +15,7 @@ def test_qwen_direct():
         thought_detected = False
         
         # 스트리밍 수신
-        stream = ollama.generate(model='qwen3:4b', prompt=question, stream=True)
+        stream = ollama.generate(model='qwen3:4b-instruct-2507-q4_K_M', prompt=question, stream=True)
         
         for chunk in stream:
             # 1. 객체의 모든 속성 조사 (첫 번째 청크에서만)

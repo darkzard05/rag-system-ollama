@@ -112,9 +112,9 @@ class TestRAGInitialization(unittest.TestCase):
         config = load_and_validate_config(self.test_config)
         
         # config_validation uses different field names than this legacy test dict.
-        # Validate the values that are actually mapped/validated.
-        self.assertEqual(config.model.default_ollama, "qwen3:4b")
-        self.assertEqual(config.embedding.batch_size, 16)
+        # 기본 모델 설정 검증
+        self.assertEqual(config.model.default_ollama, "qwen3:4b-instruct-2507-q4_K_M")
+        self.assertEqual(config.rag.vector_store_cache_dir, ".model_cache/vector_store_cache")
         self.assertEqual(config.chunking.chunk_size, 200)
         self.assertEqual(config.retrieval.top_k, 3)
         logger.info("✓ Configuration validation passed")

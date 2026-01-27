@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 T = TypeVar("T")
 
 # ✅ 메모리 누수 방지: 최대 메시지 히스토리
-MAX_MESSAGE_HISTORY = 1000
+MAX_MESSAGE_HISTORY = 100
 
 
 class ThreadSafeSessionManager:
@@ -32,6 +32,7 @@ class ThreadSafeSessionManager:
 
     DEFAULT_SESSION_STATE: SessionData = {
         "messages": [],
+        "doc_pool": {},  # 🚀 문서 중앙 저장소 (메모리 절감용)
         "last_selected_model": None,
         "last_uploaded_file_name": None,
         "last_selected_embedding_model": None,
@@ -79,11 +80,13 @@ class ThreadSafeSessionManager:
     def _get_state(cls):
         """Streamlit session_state 또는 폴백 딕셔너리를 반환합니다."""
         try:
-            # Streamlit 컨텍스트 확인 (접근 시도)
-            _ = st.session_state
-            return st.session_state
-        except Exception:
-            # 컨텍스트가 없는 경우(API 서버 등)를 위한 전역 저장소 사용
+            # [최적화] Streamlit 컨텍스트가 있는지 먼저 확인하여 경고 방지
+            from streamlit.runtime.scriptrunner import get_script_run_ctx
+            if get_script_run_ctx() is not None:
+                return st.session_state
+            raise RuntimeError("No Streamlit context")
+        except (Exception, ImportError):
+            # 컨텍스트가 없는 경우(API 서버, 테스트 코드 등)를 위한 전역 저장소 사용
             if not hasattr(cls, "_fallback_state") or not cls._fallback_state:
                 cls._fallback_state = cls.DEFAULT_SESSION_STATE.copy()
             return cls._fallback_state
@@ -256,7 +259,25 @@ class ThreadSafeSessionManager:
             state = cls._get_state()
             if "messages" not in state:
                 state["messages"] = []
+            if "doc_pool" not in state:
+                state["doc_pool"] = {}
             
+            # [최적화] 문서 객체가 있으면 풀링 처리
+            documents = kwargs.get("documents")
+            if documents:
+                import hashlib
+                doc_ids = []
+                for doc in documents:
+                    # 내용 기반 해시 생성 (중복 방지)
+                    content_hash = hashlib.sha256(doc.page_content.encode()).hexdigest()[:16]
+                    if content_hash not in state["doc_pool"]:
+                        state["doc_pool"][content_hash] = doc
+                    doc_ids.append(content_hash)
+                
+                # 원본 documents 대신 ID 리스트 저장
+                kwargs["doc_ids"] = doc_ids
+                del kwargs["documents"]
+
             msg = {"role": role, "content": content}
             msg.update(kwargs)
             state["messages"].append(msg)

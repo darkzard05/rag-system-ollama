@@ -4,7 +4,7 @@
 # --- 모델 설정 ---
 models:
   # 기본으로 사용할 Ollama 모델 이름
-  default_ollama: "qwen3:4b"
+  default_ollama: "qwen3:4b-instruct-2507-q4_K_M"
   
   # Ollama 서버 주소 (로컬: http://127.0.0.1:11434, 도커: http://host.docker.internal:11434)
   base_url: "http://127.0.0.1:11434"
@@ -124,7 +124,6 @@ cache_security:
       2. **인용 형식**: 정보의 출처를 명시할 때는 반드시 `[p.X]` 형식을 사용하십시오. (예: [p.1], [p.3][p.5])
       3. **언어 일치**: 사용자의 질문과 동일한 언어로 답변하는 언어 전문가로서 행동하십시오.
       4. **객관성**: 추측을 배제하고 문서에 명시된 사실만을 논리적으로 전달하십시오.
-
 
     # 쿼리 확장(Multi-Query) 프롬프트: 검색 최적화 전략 적용
     query_expansion_prompt: |
