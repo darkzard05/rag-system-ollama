@@ -39,7 +39,7 @@ class ThreadSafeSessionManager:
         "pdf_processed": False,
         "pdf_processing_error": None,
         "pdf_file_path": None,
-        "qa_chain": None,
+        "rag_engine": None,
         "vector_store": None,
         "llm": None,
         "embedder": None,
@@ -58,6 +58,7 @@ class ThreadSafeSessionManager:
     _default_lock_timeout = 5.0
     lock_count = 0
     failed_acquisitions = 0
+    _fallback_state = {} # 폴백 저장소 초기화
 
     def __init__(self, lock_timeout: float = 5.0):
         """인스턴스 기반 사용을 위한 초기화"""
@@ -75,26 +76,55 @@ class ThreadSafeSessionManager:
         return _LockContext(lock, timeout, target)
 
     @classmethod
+    def _get_state(cls):
+        """Streamlit session_state 또는 폴백 딕셔너리를 반환합니다."""
+        try:
+            # Streamlit 컨텍스트 확인 (접근 시도)
+            _ = st.session_state
+            return st.session_state
+        except Exception:
+            # 컨텍스트가 없는 경우(API 서버 등)를 위한 전역 저장소 사용
+            if not hasattr(cls, "_fallback_state") or not cls._fallback_state:
+                cls._fallback_state = cls.DEFAULT_SESSION_STATE.copy()
+            return cls._fallback_state
+
+    @classmethod
+    def _get_state(cls):
+        """Streamlit session_state 또는 폴백 딕셔너리를 반환합니다."""
+        try:
+            # Streamlit 컨텍스트 확인
+            return st.session_state
+        except Exception:
+            # 컨텍스트가 없는 경우(API 서버 등)를 위한 전역 저장소 사용
+            if not hasattr(cls, "_fallback_state"):
+                cls._fallback_state = cls.DEFAULT_SESSION_STATE.copy()
+            return cls._fallback_state
+
+    @classmethod
     def init_session(cls):
         with cls._acquire_lock():
-            if not st.session_state.get("_initialized", False):
-                logger.info("[ThreadSafeSessionManager] 세션 상태 초기화 중...")
+            state = cls._get_state()
+            if not state.get("_initialized", False):
+                logger.info("[Session] [Init] 세션 상태 초기화 중...")
                 for key, value in cls.DEFAULT_SESSION_STATE.items():
-                    if key not in st.session_state:
-                        st.session_state[key] = value
-                st.session_state._initialized = True
+                    if key not in state:
+                        state[key] = value
+                if hasattr(state, "_initialized"):
+                    state._initialized = True
+                else:
+                    state["_initialized"] = True
 
     @classmethod
     def get(cls, key: str, default: Optional[SessionValue] = None) -> Optional[SessionValue]:
         target = cls if not isinstance(cls, type) else None
         with ThreadSafeSessionManager._acquire_lock(instance=target):
-            return st.session_state.get(key, default)
+            return cls._get_state().get(key, default)
 
     @classmethod
     def set(cls, key: SessionKey, value: SessionValue) -> None:
         target = cls if not isinstance(cls, type) else None
         with ThreadSafeSessionManager._acquire_lock(instance=target):
-            st.session_state[key] = value
+            cls._get_state()[key] = value
             # 전역 플래그 동기화
             if key == "is_generating_answer":
                 ThreadSafeSessionManager._is_generating_globally = bool(value)
@@ -102,25 +132,26 @@ class ThreadSafeSessionManager:
     def set_inst(self, key: str, value: Any) -> None:
         """인스턴스 메서드용 set (테스트 호환성)"""
         with self._acquire_lock(self):
-            st.session_state[key] = value
+            self._get_state()[key] = value
 
     @classmethod
     def has_key(cls, key: str) -> bool:
         target = cls if not isinstance(cls, type) else None
         with ThreadSafeSessionManager._acquire_lock(instance=target):
-            return key in st.session_state
+            return key in cls._get_state()
 
     def exists(self, key: str) -> bool:
         """인스턴스 메서드용 exists (테스트 호환성)"""
         with self._acquire_lock(self):
-            return key in st.session_state
+            return key in self._get_state()
 
     @classmethod
     def delete_key(cls, key: str) -> bool:
         target = cls if not isinstance(cls, type) else None
         with ThreadSafeSessionManager._acquire_lock(instance=target):
-            if key in st.session_state:
-                del st.session_state[key]
+            state = cls._get_state()
+            if key in state:
+                del state[key]
                 return True
             return False
 
@@ -132,8 +163,8 @@ class ThreadSafeSessionManager:
     def clear_all(cls):
         target = cls if not isinstance(cls, type) else None
         with ThreadSafeSessionManager._acquire_lock(instance=target):
-            st.session_state.clear()
-            logger.info("[ThreadSafeSessionManager] 모든 세션 상태 삭제")
+            cls._get_state().clear()
+            logger.info("[Session] [Cleanup] 모든 세션 상태 삭제")
 
     def clear(self) -> None:
         """인스턴스 메서드용 clear (테스트 호환성)"""
@@ -143,17 +174,19 @@ class ThreadSafeSessionManager:
     def atomic_read(cls, keys: List[str]) -> Dict[str, Any]:
         target = cls if not isinstance(cls, type) else None
         with ThreadSafeSessionManager._acquire_lock(instance=target):
-            return {key: st.session_state.get(key) for key in keys}
+            state = cls._get_state()
+            return {key: state.get(key) for key in keys}
 
     @classmethod
     def atomic_update(cls, update_func: Callable[[Dict[str, Any]], Dict[str, Any]]) -> bool:
         target = cls if not isinstance(cls, type) else None
         with ThreadSafeSessionManager._acquire_lock(instance=target):
             try:
-                current_state = dict(st.session_state)
+                state = cls._get_state()
+                current_state = dict(state)
                 updates = update_func(current_state)
                 for key, value in updates.items():
-                    st.session_state[key] = value
+                    state[key] = value
                 return True
             except Exception as e:
                 logger.error(f"Atomic update 실패: {e}")
@@ -163,14 +196,14 @@ class ThreadSafeSessionManager:
     def get_all_state(cls) -> Dict[str, Any]:
         target = cls if not isinstance(cls, type) else None
         with ThreadSafeSessionManager._acquire_lock(instance=target):
-            return dict(st.session_state)
+            return dict(cls._get_state())
 
     @classmethod
     def get_stats(cls) -> Dict[str, Any]:
         target = cls
         session_keys = 0
         try:
-            session_keys = len(st.session_state)
+            session_keys = len(cls._get_state())
         except Exception:
             pass
             
@@ -182,8 +215,9 @@ class ThreadSafeSessionManager:
 
     def set_multiple(self, data: Dict[str, Any]) -> bool:
         with self._acquire_lock(self):
+            state = self._get_state()
             for key, value in data.items():
-                st.session_state[key] = value
+                state[key] = value
             return True
 
     def get_multiple(self, keys: List[str]) -> Dict[str, Any]:
@@ -200,89 +234,98 @@ class ThreadSafeSessionManager:
     def get_messages(cls) -> List[Dict[str, str]]:
         target = cls if not isinstance(cls, type) else None
         with ThreadSafeSessionManager._acquire_lock(instance=target):
-            return st.session_state.get("messages", []).copy()
+            return cls._get_state().get("messages", []).copy()
 
     @classmethod
     def reset_all_state(cls):
         target = cls if not isinstance(cls, type) else None
         with ThreadSafeSessionManager._acquire_lock(instance=target):
-            logger.info("[ThreadSafeSessionManager] 모든 세션 상태 리셋")
+            logger.info("[Session] [Reset] 모든 세션 상태 리셋")
+            state = cls._get_state()
             for key, value in cls.DEFAULT_SESSION_STATE.items():
-                st.session_state[key] = value
-            st.session_state._initialized = True
+                state[key] = value
+            if hasattr(state, "_initialized"):
+                state._initialized = True
+            else:
+                state["_initialized"] = True
 
     @classmethod
     def add_message(cls, role: str, content: str, **kwargs):
         target = cls if not isinstance(cls, type) else None
         with ThreadSafeSessionManager._acquire_lock(instance=target):
-            if "messages" not in st.session_state:
-                st.session_state.messages = []
+            state = cls._get_state()
+            if "messages" not in state:
+                state["messages"] = []
             
             msg = {"role": role, "content": content}
             msg.update(kwargs)
-            st.session_state.messages.append(msg)
+            state["messages"].append(msg)
             
-            if len(st.session_state.messages) > MAX_MESSAGE_HISTORY:
-                st.session_state.messages = st.session_state.messages[-MAX_MESSAGE_HISTORY:]
+            if len(state["messages"]) > MAX_MESSAGE_HISTORY:
+                state["messages"] = state["messages"][-MAX_MESSAGE_HISTORY:]
 
     @classmethod
     def is_ready_for_chat(cls) -> bool:
         target = cls if not isinstance(cls, type) else None
         with ThreadSafeSessionManager._acquire_lock(instance=target):
+            state = cls._get_state()
             # 캐시 로직 재도입
-            if not st.session_state.get("_chat_ready_needs_refresh", True):
-                return st.session_state.get("_cached_chat_ready", False)
+            if not state.get("_chat_ready_needs_refresh", True):
+                return state.get("_cached_chat_ready", False)
 
             result = (
-                st.session_state.get("pdf_processed", False)
-                and not st.session_state.get("pdf_processing_error")
-                and st.session_state.get("qa_chain") is not None
+                state.get("pdf_processed", False)
+                and not state.get("pdf_processing_error")
+                and state.get("rag_engine") is not None
             )
 
-            st.session_state._cached_chat_ready = result
-            st.session_state._chat_ready_needs_refresh = False
+            state["_cached_chat_ready"] = result
+            state["_chat_ready_needs_refresh"] = False
             return result
 
     @classmethod
     def reset_for_new_file(cls):
         target = cls if not isinstance(cls, type) else None
         with ThreadSafeSessionManager._acquire_lock(instance=target):
-            logger.info("[ThreadSafeSessionManager] 새 파일 업로드 감지. RAG 상태 리셋")
-            keys_to_reset = ["pdf_processed", "pdf_processing_error", "qa_chain", "vector_store"]
+            logger.info("[Session] [Event] 새 파일 업로드 감지 -> RAG 상태 리셋")
+            state = cls._get_state()
+            keys_to_reset = ["pdf_processed", "pdf_processing_error", "rag_engine", "vector_store"]
             for key in keys_to_reset:
-                if key in st.session_state:
-                    st.session_state[key] = None
-            st.session_state.pdf_processed = False
-            st.session_state.needs_rag_rebuild = True
-            st.session_state._chat_ready_needs_refresh = True
+                if key in state:
+                    state[key] = None
+            state["pdf_processed"] = False
+            state["needs_rag_rebuild"] = True
+            state["_chat_ready_needs_refresh"] = True
             # [수정] 이전 로그를 완전히 비우고 분석 시작 상태만 표시
-            st.session_state.status_logs = ["문서 분석 중"]
+            state["status_logs"] = ["문서 분석 중"]
 
     @classmethod
     def add_status_log(cls, msg: str):
         """작업 로그를 추가합니다. (내부 10개 보관, UI는 최신 4개 표시)"""
         target = cls if not isinstance(cls, type) else None
         with ThreadSafeSessionManager._acquire_lock(instance=target):
-            if "status_logs" not in st.session_state:
-                st.session_state.status_logs = []
+            state = cls._get_state()
+            if "status_logs" not in state:
+                state["status_logs"] = []
             
-            if st.session_state.status_logs and st.session_state.status_logs[-1] == msg:
+            if state["status_logs"] and state["status_logs"][-1] == msg:
                 return
                 
-            st.session_state.status_logs.append(msg)
+            state["status_logs"].append(msg)
             # 최신 10개 유지 (스크롤 효과를 위한 버퍼)
-            if len(st.session_state.status_logs) > 10:
-                st.session_state.status_logs = st.session_state.status_logs[-10:]
+            if len(state["status_logs"]) > 10:
+                state["status_logs"] = state["status_logs"][-10:]
 
     @classmethod
     def replace_last_status_log(cls, msg: str):
         """가장 최근 로그를 새로운 메시지로 교체합니다. (진행 상태 업데이트용)"""
         target = cls if not isinstance(cls, type) else None
         with ThreadSafeSessionManager._acquire_lock(instance=target):
-            if "status_logs" not in st.session_state or not st.session_state.status_logs:
-                st.session_state.status_logs = [msg]
+            state = cls._get_state()
+            if "status_logs" not in state or not state["status_logs"]:
+                state["status_logs"] = [msg]
             else:
-                st.session_state.status_logs[-1] = msg
+                state["status_logs"][-1] = msg
 
 
 class _LockContext:

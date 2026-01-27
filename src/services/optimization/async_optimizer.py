@@ -91,7 +91,7 @@ class ConcurrentQueryExpander:
             OperationType.QUERY_PROCESSING,
             {"stage": "concurrent_expansion", "query_count": len(queries), **(metadata or {})}
         ) as op:
-            logger.info(f"[AsyncOptimizer] 동시 쿼리 확장 시작: {len(queries)} 쿼리")
+            logger.info(f"[Optimizer] [Query] 동시 쿼리 확장 시작: {len(queries)} 쿼리")
             
             async def _expand_with_limit(query: str, index: int) -> Tuple[int, List[str]]:
                 """세마포어 제한과 함께 단일 쿼리 확장"""
@@ -142,7 +142,7 @@ class ConcurrentQueryExpander:
             stats["expansion_ratio"] = len(all_expanded) / len(queries) if queries else 0
             
             logger.info(
-                f"[AsyncOptimizer] 동시 쿼리 확장 완료: "
+                f"[Optimizer] [Query] 동시 쿼리 확장 완료: "
                 f"{len(queries)} -> {len(all_expanded)} "
                 f"(확장율: {stats['expansion_ratio']:.2f}x)"
             )
@@ -201,7 +201,7 @@ class ConcurrentDocumentRetriever:
             OperationType.DOCUMENT_RETRIEVAL,
             {"query_count": len(queries), **(metadata or {})}
         ) as op:
-            logger.info(f"[AsyncOptimizer] 병렬 문서 검색 시작: {len(queries)} 쿼리")
+            logger.info(f"[Optimizer] [Retrieval] 병렬 문서 검색 시작: {len(queries)} 쿼리")
             
             async def _retrieve_with_limit(query: str, index: int) -> Tuple[int, DocumentList]:
                 """세마포어 제한과 함께 단일 쿼리 검색"""
@@ -252,7 +252,7 @@ class ConcurrentDocumentRetriever:
             }
             
             logger.info(
-                f"[AsyncOptimizer] 병렬 검색 완료: "
+                f"[Optimizer] [Retrieval] 병렬 검색 완료: "
                 f"{len(all_documents)} 문서 검색, "
                 f"{dup_count} 중복 제거, "
                 f"{len(unique_docs)} 최종 문서"
@@ -329,13 +329,10 @@ class ConcurrentDocumentReranker:
             (정렬된 문서 리스트, 통계 딕셔너리)
         """
         with monitor.track_operation(
-            OperationType.RERANKING,
-            {"doc_count": len(documents), "top_k": top_k, **(metadata or {})}
+            OperationType.DOCUMENT_RERANKING,
+            {"doc_count": len(documents), "query": query, **(metadata or {})}
         ) as op:
-            logger.info(
-                f"[AsyncOptimizer] 병렬 리랭킹 시작: "
-                f"{len(documents)} 문서, {top_k} 상위 문서 선택"
-            )
+            logger.info(f"[Optimizer] [Rerank] 병렬 리랭킹 시작: {len(documents)} 문서")
             
             if not documents:
                 return [], {"input_count": 0, "output_count": 0}
@@ -403,8 +400,8 @@ class ConcurrentDocumentReranker:
             }
             
             logger.info(
-                f"[AsyncOptimizer] 병렬 리랭킹 완료: "
-                f"{len(documents)} -> {len(final_docs)} 문서"
+                f"[Optimizer] [Rerank] 병렬 리랭킹 완료: "
+                f"{len(results)} 결과 도출 (상위 {k}개 유지)"
             )
             
             op.tokens = sum(len(doc.page_content.split()) for doc in final_docs)
@@ -448,9 +445,9 @@ class ConcurrentEmbeddingGenerator:
         """
         with monitor.track_operation(
             OperationType.EMBEDDING_GENERATION,
-            {"text_count": len(texts), **(metadata or {})}
+            {"text_count": len(texts), "batch_size": batch_size, **(metadata or {})}
         ) as op:
-            logger.info(f"[AsyncOptimizer] 병렬 임베딩 생성 시작: {len(texts)} 텍스트")
+            logger.info(f"[Optimizer] [Embedding] 병렬 임베딩 생성 시작: {len(texts)} 텍스트")
             
             if not texts:
                 return [], {"input_count": 0, "cache_hits": 0}
@@ -548,8 +545,7 @@ class ConcurrentEmbeddingGenerator:
             }
             
             logger.info(
-                f"[AsyncOptimizer] 병렬 임베딩 완료: "
-                f"{len(texts)} 텍스트 (캐시 히트: {cache_hits})"
+                f"[Optimizer] [Embedding] 병렬 임베딩 완료: {len(embeddings)} 벡터 생성"
             )
             
             op.tokens = sum(len(text.split()) for text in texts)

@@ -127,7 +127,7 @@ class ResponseTimeTracker:
         self._lock = threading.RLock()
         self._max_history = max_history
         self._timings: Dict[OperationType, deque] = {}
-        logger.info(f"ResponseTimeTracker initialized (max_history={max_history})")
+        logger.info(f"[Monitor] [Init] ResponseTimeTracker initialized (max_history={max_history})")
     
     def record_duration(self, operation_type: OperationType, duration_seconds: float) -> None:
         """
@@ -213,7 +213,7 @@ class MemoryMonitor:
         self._max_history = max_history
         self._memory_samples: deque = deque(maxlen=max_history)
         self._process = psutil.Process()
-        logger.info(f"MemoryMonitor initialized (max_history={max_history})")
+        logger.info(f"[Monitor] [Init] MemoryMonitor initialized (max_history={max_history})")
     
     def get_current_usage(self) -> Dict[str, float]:
         """
@@ -299,7 +299,7 @@ class TokenCounter:
     
     def __init__(self):
         """Initialize token counter."""
-        logger.info("TokenCounter initialized")
+        logger.info("[Monitor] [Init] TokenCounter initialized")
     
     @staticmethod
     def count_tokens(text: str) -> int:
@@ -366,7 +366,7 @@ class PerformanceMonitor:
         self.csv_path = os.path.join("logs", "performance_metrics.csv")
         self._init_csv()
         
-        logger.info(f"PerformanceMonitor initialized (memory_tracking={enable_memory_tracking})")
+        logger.info(f"[Monitor] [Init] PerformanceMonitor initialized (memory_tracking={enable_memory_tracking})")
 
     def _init_csv(self):
         """CSV 파일 초기화 및 헤더 작성"""
@@ -786,7 +786,7 @@ def get_performance_monitor() -> PerformanceMonitor:
         with _monitor_lock:
             if _global_monitor is None:
                 _global_monitor = PerformanceMonitor(enable_memory_tracking=True)
-                logger.info("Global PerformanceMonitor created")
+                logger.info("[Monitor] [Init] Global PerformanceMonitor created")
     
     return _global_monitor
 

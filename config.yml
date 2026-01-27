@@ -12,7 +12,7 @@ models:
   # Ollama 모델의 토큰 생성 제한 (기본값: 4096)
   # -1로 설정하면 모델의 기본 설정 또는 무제한(컨텍스트 윈도우까지)으로 생성합니다.
   # 명시적으로 충분한 길이를 확보하여 답변 끊김 방지
-  ollama_num_predict: 4096
+  ollama_num_predict: -1
 
   # Ollama 모델의 온도 설정 (기본값: 0.1)
   temperature: 0.1
@@ -36,6 +36,10 @@ models:
   # 임베딩 모델의 배치 크기 ('auto'로 설정 시 VRAM에 따라 자동 조절, 숫자로 직접 지정 가능)
   embedding_batch_size: "auto"
 
+  # 임베딩 모델 실행 디바이스 ('auto', 'cuda', 'cpu')
+  embedding_device: "auto"
+
+
 # --- RAG 파이프라인 설정 ---
 rag:
   # 벡터 저장소 캐시 디렉터리
@@ -51,7 +55,7 @@ rag:
 
   # 재순위화(Reranking) 설정
   reranker:
-    enabled: true  # 최적화 로직 적용을 위해 활성화
+    enabled: false  # 최적화 로직 적용을 위해 활성화
     model_name: "BAAI/bge-reranker-v2-m3" 
     top_k: 6  # 최종적으로 LLM에 전달할 문서 개수 (풍부한 답변을 위해 상향)
     bypass_threshold: 0.85  # 초기 검색 점수가 이 값보다 높으면 리랭킹 생략
@@ -64,7 +68,7 @@ rag:
   
   # 의미론적 분할 설정 (임베딩 기반)
   semantic_chunker:
-    enabled: true
+    enabled: false
     breakpoint_threshold_type: "similarity_threshold"
     breakpoint_threshold_value: 0.6
     sentence_split_regex: "(?<=[.!?])\\s+"
@@ -74,7 +78,7 @@ rag:
 
   # 쿼리 확장 설정
   query_expansion:
-    enabled: true  # 지능형 최적화 로직 적용을 위해 활성화
+    enabled: false  # 지능형 최적화 로직 적용을 위해 활성화
 
 # --- 캐시 보안 설정 ---
 cache_security:

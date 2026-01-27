@@ -12,6 +12,7 @@ GPU 메모리를 감지하여 최적 배치 크기를 자동 계산합니다.
 
 import logging
 import torch
+import functools
 from typing import Optional
 
 logger = logging.getLogger(__name__)
@@ -56,6 +57,7 @@ def get_available_gpu_memory() -> int:
         return 0
 
 
+@functools.lru_cache(maxsize=16)
 def get_optimal_batch_size(
     device: Optional[str] = None,
     model_type: str = "embedding",

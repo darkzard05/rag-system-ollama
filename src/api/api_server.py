@@ -86,22 +86,29 @@ async def upload_document(file: UploadFile = File(...)):
             tmp.write(content)
             tmp_path = tmp.name
 
-        embedder = RAGResourceManager.get_embedder()
-        
-        # RAG 파이프라인 구축 (인덱싱 포함)
-        msg, cache_used = build_rag_pipeline(
-            uploaded_file_name=file.filename,
-            file_path=tmp_path,
-            embedder=embedder
-        )
+        try:
+            embedder = RAGResourceManager.get_embedder()
+            
+            # RAG 파이프라인 구축 (인덱싱 포함)
+            msg, cache_used = build_rag_pipeline(
+                uploaded_file_name=file.filename,
+                file_path=tmp_path,
+                embedder=embedder
+            )
 
-        RAGResourceManager._current_file = file.filename
-        
-        return {
-            "message": msg,
-            "filename": file.filename,
-            "cache_used": cache_used
-        }
+            RAGResourceManager._current_file = file.filename
+            logger.info(f"[System] [API] 문서 업로드 및 인덱싱 완료: {file.filename} (캐시 사용: {cache_used})")
+            
+            return {
+                "message": msg,
+                "filename": file.filename,
+                "cache_used": cache_used
+            }
+        finally:
+            # 작업 완료 후 임시 파일 삭제
+            if os.path.exists(tmp_path):
+                os.unlink(tmp_path)
+                logger.debug(f"임시 파일 삭제 완료: {tmp_path}")
 
     except Exception as e:
         logger.error(f"업로드 중 오류: {e}", exc_info=True)
@@ -126,10 +133,11 @@ async def query_rag(request: QueryRequest):
         # 현재는 UI 로직과의 정합성을 위해 세션 대신 ResourceManager 사용 고려 필요.
         # (임시: 매번 구성하는 로직)
         from core.session import SessionManager
-        rag_app = SessionManager.get("qa_chain")
+        SessionManager.init_session() # 세션 초기화 보장
+        rag_app = SessionManager.get("rag_engine")
         
         if rag_app is None:
-             raise HTTPException(status_code=500, detail="QA 시스템이 초기화되지 않았습니다.")
+             raise HTTPException(status_code=500, detail="QA 시스템이 초기화되지 않았습니다. 문서를 먼저 업로드하세요.")
 
         config = {"configurable": {"llm": llm}}
         result = await rag_app.ainvoke({"input": request.query}, config=config)
@@ -163,7 +171,8 @@ async def stream_query_rag(request: QueryRequest):
         raise HTTPException(status_code=400, detail="먼저 문서를 업로드해주세요.")
 
     from core.session import SessionManager
-    rag_app = SessionManager.get("qa_chain")
+    SessionManager.init_session()
+    rag_app = SessionManager.get("rag_engine")
     if rag_app is None:
         raise HTTPException(status_code=500, detail="QA 시스템이 초기화되지 않았습니다.")
 

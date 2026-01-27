@@ -27,6 +27,7 @@ from common.config import (
     OLLAMA_TOP_P,
     OLLAMA_TIMEOUT,
     OLLAMA_BASE_URL,
+    EMBEDDING_DEVICE,
     MSG_ERROR_OLLAMA_NOT_RUNNING,
 )
 from common.utils import log_operation
@@ -61,7 +62,16 @@ from services.optimization.batch_optimizer import get_optimal_batch_size
 def load_embedding_model(embedding_model_name: Optional[str] = None) -> "HuggingFaceEmbeddings":
     with monitor.track_operation(OperationType.EMBEDDING_GENERATION, {"model": embedding_model_name or "default"}) as op:
         from langchain_huggingface import HuggingFaceEmbeddings
-        device = "cuda" if torch.cuda.is_available() else "cpu"
+        
+        # 디바이스 결정 로직 개선
+        if EMBEDDING_DEVICE == "auto":
+            device = "cuda" if torch.cuda.is_available() else "cpu"
+        else:
+            device = EMBEDDING_DEVICE
+            # 사용자가 cuda를 선택했지만 사용 불가능한 경우 폴백
+            if device == "cuda" and not torch.cuda.is_available():
+                logger.warning("CUDA가 설정되었으나 사용 불가능합니다. CPU로 전환합니다.")
+                device = "cpu"
 
         # Backward-compat: allow omitting model name in tests / legacy code
         if not embedding_model_name:
@@ -76,7 +86,7 @@ def load_embedding_model(embedding_model_name: Optional[str] = None) -> "Hugging
 
         # 배치 사이즈 최적화
         batch_size = get_optimal_batch_size(device=device, model_type="embedding")
-        logger.info(f"임베딩 로드: {embedding_model_name} ({device}, batch_size={batch_size})")
+        logger.info(f"[System] [Model] 임베딩 모델 로드: {embedding_model_name} ({device}, batch_size={batch_size})")
         
         result = HuggingFaceEmbeddings(
             model_name=embedding_model_name,
@@ -107,7 +117,7 @@ def load_reranker_model(model_name: str) -> Optional["CrossEncoder"]:
         # [수정] 6GB GPU 환경에서도 리랭커 가속을 위해 기준을 4GB로 하향
         device = "cuda" if (is_gpu and total_mem > 4000) else "cpu"
         
-        logger.info(f"Reranker 로드: {model_name} (Device: {device})")
+        logger.info(f"[System] [Model] 리랭커 모델 로드: {model_name} (디바이스: {device})")
         return CrossEncoder(model_name, device=device)
     except Exception as e:
         logger.error(f"Reranker 로드 실패: {e}")
@@ -140,6 +150,7 @@ def load_llm(
 
         from core.custom_ollama import DeepThinkingChatOllama
 
+        logger.info(f"[System] [Model] LLM 모델 로드: {model_name} (타임아웃: {timeout}s)")
         logger.debug(f"Ollama 로드 설정: predict={num_predict}, ctx={num_ctx}, temp={temperature}")
 
         # ChatOllama 사용으로 사고 과정(thinking) 필드 지원 강화

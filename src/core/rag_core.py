@@ -67,6 +67,7 @@ from services.optimization.batch_optimizer import get_optimal_batch_size
 from services.optimization.index_optimizer import get_index_optimizer, IndexOptimizationConfig
 from services.monitoring.performance_monitor import get_performance_monitor, OperationType
 
+import numpy as np
 import fitz  # PyMuPDF
 
 logger = logging.getLogger(__name__)
@@ -449,7 +450,17 @@ class VectorStoreCache:
 def _create_vector_store(
     docs: List[Document],
     embedder: "HuggingFaceEmbeddings",
+    vectors: Optional[List[np.ndarray]] = None,
 ) -> FAISS:
+    """
+    FAISS 벡터 저장소를 생성합니다. 
+    이미 계산된 벡터(embeddings)가 있으면 재사용하여 성능을 최적화합니다.
+    """
+    if vectors is not None:
+        # 텍스트와 임베딩 쌍으로 생성 (임베딩 모델 재호출 방지)
+        text_embeddings = zip([d.page_content for d in docs], vectors)
+        return FAISS.from_embeddings(text_embeddings, embedder, metadatas=[d.metadata for d in docs])
+    
     return FAISS.from_documents(docs, embedder)
 
 
@@ -508,17 +519,21 @@ def _load_and_build_retrieval_components(
                 details={"reason": "청킹 후 유효한 청크가 없음"}
             )
 
-        # [최적화] 인덱스 최적화 적용 (중복 제거 등)
+        # [최적화] 인덱스 최적화 적용 및 임베딩 재사용
+        optimized_vectors = None
         try:
             SessionManager.add_status_log("인덱스 최적화 중")
             if on_progress: on_progress()
             
             # 임시 벡터 생성 (최적화 분석용)
             texts = [d.page_content for d in doc_splits]
+            # 여기서 한 번 임베딩을 수행함
             vectors = _embedder.embed_documents(texts)
+            vectors_np = [np.array(v) for v in vectors]
             
             optimizer = get_index_optimizer()
-            optimized_docs, _, stats = optimizer.optimize_index(doc_splits, [np.array(v) for v in vectors])
+            # 최적화된 문서와 '벡터'를 함께 반환받음
+            optimized_docs, optimized_vectors, stats = optimizer.optimize_index(doc_splits, vectors_np)
             
             logger.info(
                 f"인덱스 최적화 완료: {len(doc_splits)} -> {len(optimized_docs)} 청크 "
@@ -526,11 +541,15 @@ def _load_and_build_retrieval_components(
             )
             SessionManager.replace_last_status_log(f"중복 내용 {stats.pruned_documents}개 정리")
             if on_progress: on_progress()
+            
             doc_splits = optimized_docs
+            # FAISS에서 사용할 수 있도록 리스트 형태로 유지
         except Exception as e:
             logger.warning(f"인덱스 최적화 실패 (계속 진행): {e}")
+            optimized_vectors = None
 
-        vector_store = _create_vector_store(doc_splits, _embedder)
+        # 최적화된 벡터가 있으면 재사용, 없으면 내부에서 새로 생성
+        vector_store = _create_vector_store(doc_splits, _embedder, vectors=optimized_vectors)
         bm25_retriever = _create_bm25_retriever(doc_splits)
         cache.save(doc_splits, vector_store, bm25_retriever)
         SessionManager.add_status_log("신규 인덱싱 완료") # 추가

@@ -39,6 +39,19 @@ venv.bak/
 .DS_Store
 Thumbs.db
 
+# Test and coverage
+.coverage
+.pytest_cache/
+htmlcov/
+tests/.pytest_cache/
+reports/test_output.txt
+
+# Logs and Monitoring
+logs/*.log
+logs/*.csv
+logs/*.json
+monitoring/grafana-storage/
+
 # Environment variables
 .env
 .gemini/

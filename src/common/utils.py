@@ -94,21 +94,50 @@ def preprocess_text(text: str) -> str:
     return _RE_WHITESPACE.sub(' ', text).strip()
 
 
-def clean_query_text(text: str) -> str:
+def clean_query_text(query: str) -> str:
+    """쿼리 텍스트에서 불필요한 기호 및 번호 제거"""
+    if not query: return ""
+    # 1. '1.', '2.', '- ', '* ' 등 시작 패턴 제거
+    query = re.sub(r'^\d+[\.\)]\s*', '', query)
+    query = re.sub(r'^[\-\*•]\s*', '', query)
+    # 2. 따옴표 제거
+    query = query.replace('"', '').replace("'", "")
+    return query.strip()
+
+
+def get_ollama_resource_usage(model_name: str) -> str:
     """
-    LLM이 생성한 쿼리에서 불필요한 장식(번호, 불렛, 따옴표)을 제거합니다.
-    검색어 내부의 특수문자(C++, .NET 등)는 보존합니다.
+    Ollama API를 통해 특정 모델의 리소스 사용 상태(GPU/CPU)를 조회합니다.
     """
-    if not text:
-        return ""
-    
-    # 1. 앞부분의 번호, 불렛, 접두사 제거
-    text = _RE_QUERY_CLEAN_PREFIX.sub('', text.strip())
-    
-    # 2. 앞뒤 따옴표 제거
-    text = _RE_QUERY_CLEAN_QUOTES.sub('', text.strip())
-    
-    return text.strip()
+    try:
+        import requests
+        from common.config import OLLAMA_BASE_URL
+        
+        # Ollama ps API 호출
+        response = requests.get(f"{OLLAMA_BASE_URL}/api/ps", timeout=2.0)
+        if response.status_code == 200:
+            data = response.json()
+            models = data.get("models", [])
+            
+            for m in models:
+                if model_name in m.get("name", ""):
+                    size_vram = m.get("size_vram", 0)
+                    size = m.get("size", 1)
+                    
+                    # VRAM 사용 비율 계산
+                    vram_ratio = (size_vram / size) * 100
+                    if vram_ratio >= 90:
+                        return f"GPU (VRAM {vram_ratio:.1f}%)"
+                    elif vram_ratio > 0:
+                        return f"Hybrid (VRAM {vram_ratio:.1f}%, CPU {100-vram_ratio:.1f}%)"
+                    else:
+                        return "CPU (0% VRAM)"
+            
+            return "Unknown (Not running)"
+        return "Unknown (API Error)"
+    except Exception:
+        return "Unknown (Connection Error)"
+
 
 
 def sync_run(coro):
@@ -135,15 +164,15 @@ def log_operation(operation_name):
     def decorator(func):
         @functools.wraps(func)
         def wrapper(*args, **kwargs):
-            logger.info(f"[작업 시작] '{operation_name}'")
+            logger.info(f"[System] [Task] {operation_name} 시작...")
             start = time.time()
             try:
                 res = func(*args, **kwargs)
                 dur = time.time() - start
-                logger.info(f"[작업 완료] '{operation_name}' ({dur:.2f}초)")
+                logger.info(f"[System] [Task] {operation_name} 완료 ({dur:.2f}s)")
                 return res
             except Exception as e:
-                logger.error(f"[작업 실패] '{operation_name}': {e}")
+                logger.error(f"[System] [Task] {operation_name} 실패: {e}")
                 raise
         return wrapper
     return decorator

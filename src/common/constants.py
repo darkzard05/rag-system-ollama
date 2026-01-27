@@ -24,7 +24,7 @@ class PerformanceConstants(IntEnum):
     EMBEDDING_BATCH_SIZE_GPU_HIGH = 128
     EMBEDDING_BATCH_SIZE_GPU_MID = 64
     EMBEDDING_BATCH_SIZE_GPU_LOW = 32
-    EMBEDDING_BATCH_SIZE_CPU = 32
+    EMBEDDING_BATCH_SIZE_CPU = 16
     
     # 캐싱
     MODEL_CACHE_TTL_SECONDS = 600  # 10분
@@ -52,10 +52,10 @@ class TimeoutConstants(IntEnum):
     RETRIEVER_TIMEOUT = 30
     
     # LLM 응답 생성
-    LLM_TIMEOUT = 300  # 5분
+    LLM_TIMEOUT = 900  # 15분 (기존 5분에서 연장)
     
     # 전체 QA 파이프라인
-    QA_PIPELINE_TIMEOUT = 600  # 10분
+    QA_PIPELINE_TIMEOUT = 1200  # 20분 (기존 10분에서 연장)
 
 
 class StringConstants:

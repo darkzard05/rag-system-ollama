@@ -117,17 +117,15 @@ def build_graph(retriever: Optional[T] = None) -> T:
     async def generate_queries(state: GraphState, config: RunnableConfig) -> GraphOutput:
         """
         [AsyncIO 최적화] 쿼리 확장 시 동시 처리
-        - 단일 쿼리를 다양한 관점으로 확장
-        - 비동기 LLM 호출로 병렬 처리
         """
+        from core.session import SessionManager
         with monitor.track_operation(OperationType.QUERY_PROCESSING, {"stage": "async_query_expansion"}) as op:
-            logger.info("[Graph] 쿼리 생성 시작 (AsyncIO 최적화)")
+            logger.info(f"[Query] [Start] 질문 분석 및 검색어 확장 시작: '{state['input'][:50]}...'")
             
             # [최적화] 지능형 쿼리 라우팅
             if not RAGQueryOptimizer.is_complex_query(state["input"]):
-                logger.info(f"[Optimizer] 단순 질문 감지 -> 확장을 건너뜁니다: {state['input']}")
-                from core.session import SessionManager
-                SessionManager.replace_last_status_log("질문 분석 완료")
+                logger.info("[Query] [Routing] 단순 질문 감지 -> 확장 생략")
+                SessionManager.replace_last_status_log("단순 질문 분석 완료")
                 SessionManager.add_status_log("문서 검색 중")
                 return {"search_queries": [state["input"]]}
 
@@ -147,9 +145,6 @@ def build_graph(retriever: Optional[T] = None) -> T:
         try:
             # [최적화] 비동기 LLM 호출
             result = await chain.ainvoke({"input": state["input"]})
-            from core.session import SessionManager
-            SessionManager.replace_last_status_log("질문 정밀 분석 완료")
-            SessionManager.add_status_log("문서 검색 중")
             
             # [개선] 불렛 포인트 및 번호 제거 파싱 로직
             raw_queries = [q.strip() for q in result.split("\n") if q.strip()]
@@ -160,13 +155,16 @@ def build_graph(retriever: Optional[T] = None) -> T:
                     clean_queries.append(clean_q)
             
             final_queries = clean_queries[:3] if clean_queries else [state["input"]]
-            logger.info(f"[Graph] 확장된 쿼리: {final_queries} (개수: {len(final_queries)})")
+            logger.info(f"[Query] [Complete] 검색어 {len(final_queries)}개 생성 완료: {final_queries}")
+            SessionManager.replace_last_status_log(f"질문 정밀 분석 완료 (검색어 {len(final_queries)}개)")
+            SessionManager.add_status_log("문서 검색 중")
+            
             op.tokens = len(result.split())
             return {"search_queries": final_queries}
 
         except Exception as e:
             op.error = str(e)
-            logger.warning(f"[Graph] 쿼리 확장 실패: {e}")
+            logger.warning(f"[Query] [Error] 쿼리 확장 실패 (폴백 적용): {e}")
             return {"search_queries": [state["input"]]}
 
 
@@ -174,16 +172,14 @@ def build_graph(retriever: Optional[T] = None) -> T:
     async def retrieve_documents(state: GraphState) -> GraphOutput:
         """
         [AsyncIO 최적화] 여러 쿼리로부터 병렬 문서 검색
-        - ConcurrentDocumentRetriever를 사용한 동시 검색
-        - SHA256 기반 중복 제거
-        - 메타데이터 통합
         """
+        from core.session import SessionManager
         with monitor.track_operation(
             OperationType.DOCUMENT_RETRIEVAL, 
             {"query_count": len(state.get("search_queries", [state["input"]]))}
         ) as op:
             queries = state.get("search_queries", [state["input"]])
-            logger.info(f"[Graph] 병렬 문서 검색 시작 (AsyncIO 최적화) - {len(queries)} 쿼리")
+            logger.info(f"[Retrieval] [Start] 병렬 검색 시작 ({len(queries)}개 검색어)")
         
             async def _safe_ainvoke_with_timeout(q: str) -> DocumentList:
                 """리트리버를 타임아웃과 함께 호출합니다."""
@@ -205,11 +201,11 @@ def build_graph(retriever: Optional[T] = None) -> T:
                 
                 except asyncio.TimeoutError:
                     logger.error(
-                        f"[Graph] 검색 타임아웃 ({TimeoutConstants.RETRIEVER_TIMEOUT}초 초과): {q}"
+                        f"[Retrieval] [Timeout] 검색 시간 초과 ({timeout}s): {q}"
                     )
                     return []
                 except Exception as e:
-                    logger.error(f"[Graph] 검색 오류 ({q}): {e}", exc_info=True)
+                    logger.error(f"[Retrieval] [Error] 검색 오류 ({q}): {e}", exc_info=True)
                     return []
 
             # [최적화] ConcurrentDocumentRetriever 사용
@@ -223,19 +219,18 @@ def build_graph(retriever: Optional[T] = None) -> T:
                 )
                 
                 logger.info(
-                    f"[Graph] 병렬 검색 완료: "
-                    f"검색: {retrieval_stats['total_retrieved']}, "
-                    f"중복 제거: {retrieval_stats['duplicates_removed']}, "
-                    f"최종: {retrieval_stats['unique_count']}"
+                    f"[Retrieval] [Complete] 검색 완료 | "
+                    f"총 발견: {retrieval_stats['total_retrieved']} | "
+                    f"중복 제거: {retrieval_stats['duplicates_removed']} | "
+                    f"최종 문서: {retrieval_stats['unique_count']}"
                 )
-                from core.session import SessionManager
-                SessionManager.replace_last_status_log(f"관련 문장 {retrieval_stats['unique_count']}개 식별")
-                SessionManager.add_status_log("핵심 문장 엄선 중")
+                SessionManager.replace_last_status_log(f"관련 문장 {retrieval_stats['unique_count']}개 식별 완료")
+                SessionManager.add_status_log("핵심 문장 엄선 중 (Reranking)")
                 op.tokens = sum(len(doc.page_content.split()) for doc in unique_docs)
                 return {"documents": unique_docs}
             
             except Exception as e:
-                logger.error(f"[Graph] 동시 검색 최적화 실패: {e}")
+                logger.error(f"[Retrieval] [Error] 동시 검색 최적화 실패: {e}")
                 # 폴백: 기본 병렬 검색
                 results = await asyncio.gather(*[_safe_ainvoke_with_timeout(q) for q in queries])
                 all_documents = [doc for sublist in results for doc in sublist]
@@ -249,7 +244,7 @@ def build_graph(retriever: Optional[T] = None) -> T:
                         unique_docs.append(doc)
                         seen.add(doc_hash)
                 
-                logger.info(f"[Graph] 폴백 검색 완료: {len(unique_docs)} 문서")
+                logger.info(f"[Retrieval] [Fallback] 폴백 검색 완료: {len(unique_docs)} 문서")
                 op.tokens = sum(len(doc.page_content.split()) for doc in unique_docs)
                 return {"documents": unique_docs}
 
@@ -258,12 +253,11 @@ def build_graph(retriever: Optional[T] = None) -> T:
     async def rerank_documents(state: GraphState) -> GraphOutput:
         """
         [지능형 최적화] 리랭킹 성능 및 자원 효율화
-        - 점수 기반 바이패스 (Score-based Bypassing)
-        - 대상 문서 수 최적화 (Adaptive Top-K)
-        - 비동기 배치 처리
         """
+        from core.session import SessionManager
         documents = state.get("documents", [])
         if not RERANKER_CONFIG.get("enabled", False) or not documents:
+            logger.info("[Rerank] [Skip] 리랭킹 비활성화 또는 문서 없음")
             return {"documents": documents}
 
         with monitor.track_operation(
@@ -272,31 +266,27 @@ def build_graph(retriever: Optional[T] = None) -> T:
         ) as op:
             try:
                 # [최적화 1] 바이패스 로직
-                # - 문서가 1개뿐이거나, 이미 신뢰도가 높다고 판단되는 경우 생략
-                # - 현재 검색 구조에서는 점수가 명시적이지 않으므로, 
-                # - 우선은 개수가 너무 적을 때(품질이 명확할 가능성 높음) 생략하는 로직 포함
                 if len(documents) <= 1:
-                    logger.info("[Optimizer] 문서가 1개뿐이므로 리랭킹을 생략합니다.")
+                    logger.info("[Rerank] [Skip] 문서가 1개뿐이므로 생략")
                     return {"documents": documents}
 
                 # [최적화 2] 대상 문서 제한 (VRAM 및 속도 보호)
                 max_docs = RERANKER_CONFIG.get("max_rerank_docs", 12)
                 if len(documents) > max_docs:
-                    logger.info(f"[Optimizer] 리랭킹 대상을 상위 {max_docs}개로 제한합니다. (원본: {len(documents)})")
+                    logger.info(f"[Rerank] [Limit] 대상 제한: {len(documents)} -> {max_docs}")
                     documents = documents[:max_docs]
 
-                logger.info(f"[Graph] 지능형 리랭킹 시작 - {len(documents)} 문서")
+                logger.info(f"[Rerank] [Start] 지능형 리랭킹 시작 ({len(documents)}개 문서)")
                 reranker = load_reranker_model(RERANKER_CONFIG.get("model_name"))
                 top_k = RERANKER_CONFIG.get("top_k", 6)
                 
                 async def _rerank_batch(query: str, docs: DocumentList) -> List[float]:
                     try:
                         pairs = [[query, doc.page_content] for doc in docs]
-                        # 리랭커는 CPU에서 돌리거나 모델을 캐싱하여 VRAM 경합 방지 권장
                         scores = await asyncio.to_thread(reranker.predict, pairs)
                         return scores
                     except Exception as e:
-                        logger.error(f"[Graph] 리랭킹 배치 오류: {e}")
+                        logger.error(f"[Rerank] [Error] 리랭킹 배치 오류: {e}")
                         return [0.0] * len(docs)
                 
                 # ConcurrentDocumentReranker 사용
@@ -309,19 +299,18 @@ def build_graph(retriever: Optional[T] = None) -> T:
                     metadata={"pipeline": "optimized_concurrent"}
                 )
                 
-                from core.session import SessionManager
-                SessionManager.replace_last_status_log(f"핵심 문장 {rerank_stats['output_count']}개 엄선")
-                SessionManager.add_status_log("답변 작성 중")
-
                 logger.info(
-                    f"[Graph] 리랭킹 완료: {rerank_stats['input_count']} -> {rerank_stats['output_count']} 문서"
+                    f"[Rerank] [Complete] 리랭킹 완료: {rerank_stats['input_count']} -> {rerank_stats['output_count']} 문서 선정"
                 )
+                SessionManager.replace_last_status_log(f"핵심 문장 {rerank_stats['output_count']}개 엄선 완료")
+                SessionManager.add_status_log("답변 작성 준비 중")
+
                 op.tokens = sum(len(doc.page_content.split()) for doc in final_docs)
                 return {"documents": final_docs}
             
             except Exception as e:
                 op.error = str(e)
-                logger.error(f"[Graph] 리랭킹 실패 (폴백 적용): {e}")
+                logger.error(f"[Rerank] [Error] 리랭킹 실패 (폴백 적용): {e}")
                 return {"documents": documents[:6]} # 실패 시 상위 6개 반환
 
 
@@ -348,16 +337,21 @@ def build_graph(retriever: Optional[T] = None) -> T:
         LLM 답변을 생성하고 스트리밍합니다. 
         내부적으로 성능 지표(TTFT, 추론 시간 등)를 상세히 기록합니다.
         """
+        from core.session import SessionManager
+        from common.utils import get_ollama_resource_usage
+
         with monitor.track_operation(OperationType.LLM_INFERENCE, {"doc_count": len(state.get("documents", []))}) as op:
             try:
-                logger.info("[Graph] LLM 답변 생성 프로세스 시작")
-                from core.session import SessionManager
-                SessionManager.add_status_log("답변 작성 중")
-                
                 llm = config.get("configurable", {}).get("llm")
                 if not llm:
                     raise ValueError("LLM 인스턴스가 설정(config)에 누락되었습니다.")
-
+                
+                model_name = getattr(llm, "model", "Unknown")
+                resource_status = get_ollama_resource_usage(model_name)
+                
+                logger.info(f"[LLM] [Start] 답변 생성 프로세스 시작 (Model: {model_name}, Resource: {resource_status})")
+                SessionManager.add_status_log(f"답변 준비 중 ({resource_status})")
+                
                 prompt_template = ChatPromptTemplate.from_messages([
                     ("system", QA_SYSTEM_PROMPT),
                     ("human", """### [Context] ###
@@ -372,10 +366,8 @@ def build_graph(retriever: Optional[T] = None) -> T:
 3. 명확하고 구조화된 형식으로 답변을 구성하세요."""),
                 ])
 
-                # StrOutputParser를 쓰지 않고 AIMessageChunk를 직접 받아 메타데이터(thinking) 유지
                 generation_chain = prompt_template | llm
 
-                # 성능 측정을 위한 내부 상태 추적기
                 class ResponsePerformanceTracker:
                     def __init__(self, query_text: str, model_instance: Any):
                         self.start_time = time.time()
@@ -389,6 +381,8 @@ def build_graph(retriever: Optional[T] = None) -> T:
                         self.chunk_count = 0
                         self.full_response = ""
                         self.full_thought = ""
+                        self._log_thinking_start = False
+                        self._log_answer_start = False
 
                     def record_chunk(self, content: str, thought: str):
                         now = time.time()
@@ -396,16 +390,26 @@ def build_graph(retriever: Optional[T] = None) -> T:
                             self.first_token_at = now
                         
                         if thought:
-                            if self.thinking_started_at is None:
+                            if not self._log_thinking_start:
+                                logger.info(f"[LLM] [Thinking] 사고 과정 시작...")
+                                SessionManager.replace_last_status_log("사고 과정 기록 중...")
                                 self.thinking_started_at = now
+                                self._log_thinking_start = True
                             self.full_thought += thought
                             
                         if content:
-                            if self.answer_started_at is None:
-                                self.answer_started_at = now
-                                # 답변이 시작되면 사고 과정은 끝난 것으로 간주
+                            if not self._log_answer_start:
+                                # 답변이 시작되면 사고 과정은 종료된 것으로 간주
                                 if self.thinking_started_at and self.thinking_finished_at is None:
                                     self.thinking_finished_at = now
+                                    thinking_dur = self.thinking_finished_at - self.thinking_started_at
+                                    logger.info(f"[LLM] [Thinking] 사고 완료 ({thinking_dur:.2f}s)")
+                                
+                                logger.info(f"[LLM] [Response] 답변 스트리밍 시작")
+                                SessionManager.replace_last_status_log("답변 스트리밍 중...")
+                                self.answer_started_at = now
+                                self._log_answer_start = True
+                            
                             self.full_response += content
                             self.chunk_count += 1
 
@@ -424,21 +428,27 @@ def build_graph(retriever: Optional[T] = None) -> T:
                         # 실제 답변 생성 시간 계산
                         answer_duration = (self.answer_finished_at - self.answer_started_at) if self.answer_started_at else 0
                         
-                        # 토큰 수(단어 단위) 및 속도 계산
+                        # 토큰 수 및 속도 계산
                         resp_token_count = len(self.full_response.split())
                         thought_token_count = len(self.full_thought.split())
                         tokens_per_second = resp_token_count / answer_duration if answer_duration > 0 else 0
                         
-                        # 1. 단일행 로그 기록
+                        # 표준화된 상세 로그 기록
                         logger.info(
-                            f"[LLM Metrics] TTFT: {time_to_first_token:.2f}s | "
-                            f"Thinking: {thinking_duration:.2f}s ({thought_token_count} tok) | "
-                            f"Answer: {answer_duration:.2f}s ({resp_token_count} tok) | "
-                            f"Total: {total_duration:.2f}s | "
-                            f"Speed: {tokens_per_second:.1f} tok/s"
+                            f"[LLM] [Complete] 생성 완료 | "
+                            f"TTFT: {time_to_first_token:.2f}s | "
+                            f"사고: {thinking_duration:.2f}s ({thought_token_count} tok) | "
+                            f"답변: {answer_duration:.2f}s ({resp_token_count} tok) | "
+                            f"속도: {tokens_per_second:.1f} tok/s | "
+                            f"총 소요: {total_duration:.2f}s"
                         )
 
-                        # 2. CSV 파일 영구 기록
+                        # UI 상태 박스 최종 업데이트
+                        SessionManager.replace_last_status_log(
+                            f"답변 생성 완료 (사고: {thought_token_count}토큰, 답변: {resp_token_count}토큰)"
+                        )
+
+                        # CSV 기록
                         try:
                             monitor.log_to_csv({
                                 "model": getattr(self.model, "model", "unknown"),
@@ -459,11 +469,13 @@ def build_graph(retriever: Optional[T] = None) -> T:
 
                 async def _consume_stream_and_dispatch_events() -> None:
                     """모델 스트림을 소비하고 가공하여 커스텀 이벤트를 발생시킵니다."""
+                    answer_buffer = []
+                    buffer_size = 5  # 5토큰 단위로 묶어서 전송
+                    
                     async for chunk in generation_chain.astream(
                         {"input": state["input"], "context": state["context"]},
                         config=config,
                     ):
-                        # 데이터 추출
                         content = getattr(chunk, "content", "")
                         thought = ""
                         if hasattr(chunk, "additional_kwargs"):
@@ -472,50 +484,59 @@ def build_graph(retriever: Optional[T] = None) -> T:
                         if not content and not thought:
                             continue
 
-                        # 메트릭 업데이트
                         tracker.record_chunk(content, thought)
 
-                        # UI로 실시간 전송
+                        # 사고 과정(thought)은 내용이 있을 때 즉시 전송 (보통 연속해서 들어옴)
+                        if thought:
+                            await adispatch_custom_event(
+                                "response_chunk",
+                                {"chunk": "", "thought": thought},
+                                config=config,
+                            )
+                        
+                        # 답변 본문(content)은 버퍼링하여 전송 횟수 최적화
+                        if content:
+                            answer_buffer.append(content)
+                            if len(answer_buffer) >= buffer_size:
+                                await adispatch_custom_event(
+                                    "response_chunk",
+                                    {"chunk": "".join(answer_buffer), "thought": ""},
+                                    config=config,
+                                )
+                                answer_buffer = []
+
+                    # 스트리밍 종료 후 남은 버퍼 플러시
+                    if answer_buffer:
                         await adispatch_custom_event(
                             "response_chunk",
-                            {"chunk": content, "thought": thought},
+                            {"chunk": "".join(answer_buffer), "thought": ""},
                             config=config,
                         )
-                    
-                    tracker.finalize_and_log()
 
-                # 스트리밍 태스크 실행 및 타임아웃 관리
+                # 스트리밍 태스크 실행
                 generation_task = asyncio.create_task(_consume_stream_and_dispatch_events())
 
                 try:
                     await asyncio.wait_for(generation_task, timeout=timeout)
-
                 except asyncio.TimeoutError:
-                    logger.error(f"[Graph] LLM 응답 생성 시간 초과 ({timeout}초)")
+                    logger.error(f"[LLM] [Error] 응답 생성 시간 초과 ({timeout}초)")
                     generation_task.cancel()
                     try: await generation_task
                     except asyncio.CancelledError: pass
-                    
                     if not tracker.full_response:
                         tracker.full_response = "죄송합니다. 응답 생성 시간이 너무 오래 걸려 중단되었습니다."
                     op.error = "timeout"
-                
                 except Exception as e:
                     if not generation_task.done():
                         generation_task.cancel()
-                        try: await generation_task
-                        except: pass
-                    logger.error(f"[Graph] 응답 생성 중 예외 발생: {e}", exc_info=True)
+                    logger.error(f"[LLM] [Error] 응답 생성 중 예외 발생: {e}", exc_info=True)
                     op.error = str(e)
                     raise
                 
-                # 최종 상태 업데이트 및 반환
+                # 최종 지표 기록
                 resp_tokens, thought_tokens = tracker.finalize_and_log()
                 op.tokens = resp_tokens
                 op.metadata["thought_tokens"] = thought_tokens
-                
-                from core.session import SessionManager
-                SessionManager.replace_last_status_log(f"답변 생성 완료 (사고: {thought_tokens}토큰, 답변: {resp_tokens}토큰)")
                 
                 return {
                     "response": tracker.full_response, 
@@ -523,7 +544,7 @@ def build_graph(retriever: Optional[T] = None) -> T:
                     "documents": state.get("documents", [])
                 }
             except Exception as e:
-                logger.error(f"[Graph] generate_response 노드 치명적 오류: {e}")
+                logger.error(f"[Graph] [Critical] generate_response 노드 치명적 오류: {e}")
                 raise
 
 

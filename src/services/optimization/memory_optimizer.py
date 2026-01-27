@@ -15,16 +15,6 @@ from services.monitoring.memory_profiler import (
     get_memory_profiler,
     get_memory_monitor,
 )
-from services.optimization.gc_tuner import (
-    GCTuner,
-    GCStrategy,
-    GCConfig,
-    AdaptiveGCTuner,
-    ContextualGCManager,
-    get_gc_tuner,
-    get_adaptive_gc_tuner,
-    get_contextual_gc_manager,
-)
 from infra.resource_manager import (
     ResourceManager,
     ContextualResourceManager,
@@ -51,7 +41,6 @@ class MemoryOptimizationConfig:
     enable_resource_pooling: bool = True
     warning_threshold_percent: float = 80.0
     critical_threshold_percent: float = 95.0
-    gc_strategy: GCStrategy = GCStrategy.BALANCED
 
 
 class MemoryOptimizer:
@@ -67,15 +56,6 @@ class MemoryOptimizer:
         # 컴포넌트 초기화
         self.profiler = get_memory_profiler()
         self.monitor = get_memory_monitor() if self.config.enable_monitoring else None
-        self.gc_tuner = get_gc_tuner(
-            GCConfig(strategy=self.config.gc_strategy)
-        )
-        self.adaptive_gc = (
-            get_adaptive_gc_tuner(GCConfig(strategy=self.config.gc_strategy))
-            if self.config.enable_adaptive_gc
-            else None
-        )
-        self.contextual_gc = get_contextual_gc_manager()
         self.resource_manager = (
             get_resource_manager()
             if self.config.enable_resource_pooling
@@ -88,19 +68,6 @@ class MemoryOptimizer:
         )
         
         self._stats_history: List[Dict] = []
-        self._apply_mode_settings()
-    
-    def _apply_mode_settings(self):
-        """모드별 설정 적용."""
-        if self.config.mode == MemoryOptimizationMode.STRICT:
-            logger.info("메모리 최적화 모드: STRICT (절감 우선)")
-            self.gc_tuner.set_thresholds(400, 5, 5)  # Aggressive
-        elif self.config.mode == MemoryOptimizationMode.PERFORMANCE:
-            logger.info("메모리 최적화 모드: PERFORMANCE (성능 우선)")
-            self.gc_tuner.set_thresholds(1000, 20, 20)  # Lazy
-        else:
-            logger.info("메모리 최적화 모드: NORMAL (균형)")
-            self.gc_tuner.set_thresholds(700, 10, 10)  # Balanced
     
     def start(self):
         """메모리 최적화 시작."""
@@ -119,7 +86,7 @@ class MemoryOptimizer:
         )
         self._monitor_thread.start()
         
-        logger.info("메모리 최적화 시작됨")
+        logger.info("[Monitor] [Memory] 메모리 최적화 서비스 시작됨")
     
     def stop(self):
         """메모리 최적화 중지."""
@@ -131,7 +98,7 @@ class MemoryOptimizer:
         if self._monitor_thread:
             self._monitor_thread.join(timeout=5)
         
-        logger.info("메모리 최적화 중지됨")
+        logger.info("[Monitor] [Memory] 메모리 최적화 서비스 중지됨")
     
     def _optimize_loop(self):
         """최적화 루프."""
@@ -159,10 +126,6 @@ class MemoryOptimizer:
                     if len(self._stats_history) > 1000:
                         self._stats_history.pop(0)
                 
-                # 적응형 GC 적용
-                if self.adaptive_gc:
-                    self.adaptive_gc.adapt_to_memory_pressure(metrics.percent_used)
-                
                 # 누수 감지
                 leaks = self.profiler.detect_memory_leaks()
                 if leaks:
@@ -179,7 +142,6 @@ class MemoryOptimizer:
     def get_memory_stats(self) -> Dict:
         """메모리 통계 조회."""
         metrics = self.profiler.get_current_memory()
-        gc_stats = self.gc_tuner.get_stats()
         
         return {
             "memory": {
@@ -193,12 +155,6 @@ class MemoryOptimizer:
                 "num_objects": metrics.num_objects,
                 "num_tracked": metrics.num_tracked_objects,
             },
-            "gc": {
-                "collections": gc_stats.collections,
-                "collected": gc_stats.collected,
-                "uncollectable": gc_stats.uncollectable,
-                "collection_time_ms": gc_stats.collection_time_ms,
-            },
             "mode": self.config.mode.value,
         }
     
@@ -206,26 +162,6 @@ class MemoryOptimizer:
         """메모리 히스토리 조회."""
         with self._lock:
             return self._stats_history[-last_n:]
-    
-    def force_garbage_collection(self, generation: Optional[int] = None):
-        """강제 GC 실행."""
-        collected = self.gc_tuner.force_collect(generation)
-        logger.info(f"강제 GC 실행: {collected}개 객체 수집")
-        return collected
-    
-    def get_gc_status(self) -> Dict:
-        """GC 상태 조회."""
-        gc_stats = self.gc_tuner.get_stats()
-        gc_objects = self.gc_tuner.get_gc_objects()
-        
-        return {
-            "thresholds": self.gc_tuner.get_thresholds(),
-            "collections": gc_stats.collections,
-            "collected": gc_stats.collected,
-            "uncollectable": gc_stats.uncollectable,
-            "avg_collection_time_ms": gc_stats.collection_time_ms,
-            "top_gc_objects": dict(list(gc_objects.items())[:10]),
-        }
     
     def get_top_memory_users(self, top_n: int = 10) -> List[tuple]:
         """메모리 사용량이 큰 상위 객체 조회."""

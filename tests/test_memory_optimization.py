@@ -21,20 +21,6 @@ from services.monitoring.memory_profiler import (
     reset_memory_monitor,
 )
 
-from services.optimization.gc_tuner import (
-    GCTuner,
-    GCConfig,
-    GCStrategy,
-    AdaptiveGCTuner,
-    ContextualGCManager,
-    get_gc_tuner,
-    get_adaptive_gc_tuner,
-    get_contextual_gc_manager,
-    reset_gc_tuner,
-    reset_adaptive_gc_tuner,
-    reset_contextual_gc_manager,
-)
-
 from infra.resource_manager import (
     ResourcePool,
     ResourceManager,
@@ -169,113 +155,6 @@ class TestMemoryMonitor:
         time.sleep(1)
         
         monitor.stop_monitoring()
-
-
-# ============================================================================
-# GC 튜너 테스트
-# ============================================================================
-
-class TestGCTuner:
-    """GC 튜너 테스트."""
-    
-    def test_gc_strategy_application(self):
-        """GC 전략 적용."""
-        config = GCConfig(strategy=GCStrategy.AGGRESSIVE)
-        tuner = GCTuner(config)
-        
-        thresholds = tuner.get_thresholds()
-        assert thresholds is not None
-    
-    def test_set_thresholds(self):
-        """GC 임계값 설정."""
-        config = GCConfig()
-        tuner = GCTuner(config)
-        
-        tuner.set_thresholds(500, 5, 5)
-        
-        thresholds = tuner.get_thresholds()
-        assert thresholds[0] == 500
-    
-    def test_force_collect(self):
-        """강제 GC 실행."""
-        config = GCConfig()
-        tuner = GCTuner(config)
-        
-        collected = tuner.force_collect()
-        
-        assert isinstance(collected, int)
-        assert collected >= 0
-    
-    def test_get_gc_stats(self):
-        """GC 통계 조회."""
-        config = GCConfig()
-        tuner = GCTuner(config)
-        
-        stats = tuner.get_stats()
-        
-        assert len(stats.collections) > 0
-        assert len(stats.collected) > 0
-    
-    def test_gc_tuner_singleton(self):
-        """GC 튜너 싱글톤."""
-        reset_gc_tuner()
-        
-        tuner1 = get_gc_tuner()
-        tuner2 = get_gc_tuner()
-        
-        assert tuner1 is tuner2
-    
-    def test_disable_enable_gc(self):
-        """GC 활성화/비활성화."""
-        config = GCConfig()
-        tuner = GCTuner(config)
-        
-        tuner.disable_gc()
-        tuner.enable_gc()
-        tuner.force_collect()
-
-
-# ============================================================================
-# 적응형 GC 튜너 테스트
-# ============================================================================
-
-class TestAdaptiveGCTuner:
-    """적응형 GC 튜너 테스트."""
-    
-    def test_adapt_to_low_memory(self):
-        """낮은 메모리 상태에 적응."""
-        reset_adaptive_gc_tuner()
-        
-        base_config = GCConfig()
-        adaptive_tuner = AdaptiveGCTuner(base_config)
-        
-        # 낮은 메모리 사용률
-        adaptive_tuner.adapt_to_memory_pressure(30.0)
-        
-        # 설정이 적용되었는지 확인
-        assert adaptive_tuner.tuner is not None
-    
-    def test_adapt_to_high_memory(self):
-        """높은 메모리 상태에 적응."""
-        reset_adaptive_gc_tuner()
-        
-        base_config = GCConfig()
-        adaptive_tuner = AdaptiveGCTuner(base_config)
-        
-        # 높은 메모리 사용률
-        adaptive_tuner.adapt_to_memory_pressure(85.0)
-        
-        assert adaptive_tuner.tuner is not None
-    
-    def test_adapt_to_critical_memory(self):
-        """극심한 메모리 상태에 적응."""
-        reset_adaptive_gc_tuner()
-        
-        base_config = GCConfig()
-        adaptive_tuner = AdaptiveGCTuner(base_config)
-        
-        # 극도로 높은 메모리 사용률
-        adaptive_tuner.adapt_to_memory_pressure(95.0)
 
 
 # ============================================================================
@@ -457,26 +336,6 @@ class TestMemoryOptimizer:
         
         assert "memory" in stats
         assert "objects" in stats
-        assert "gc" in stats
-    
-    def test_force_garbage_collection(self):
-        """강제 GC 실행."""
-        reset_memory_optimizer()
-        optimizer = get_memory_optimizer()
-        
-        collected = optimizer.force_garbage_collection()
-        
-        assert isinstance(collected, int)
-    
-    def test_get_gc_status(self):
-        """GC 상태 조회."""
-        reset_memory_optimizer()
-        optimizer = get_memory_optimizer()
-        
-        status = optimizer.get_gc_status()
-        
-        assert "thresholds" in status
-        assert "collections" in status
     
     def test_get_top_memory_users(self):
         """메모리 사용량 상위 조회."""
@@ -538,24 +397,6 @@ class TestEdgeCases:
 
 class TestContextualManagers:
     """컨텍스트 관리자 테스트."""
-    
-    def test_contextual_gc_manager(self):
-        """컨텍스트 기반 GC 관리자."""
-        reset_contextual_gc_manager()
-        
-        manager = get_contextual_gc_manager()
-        
-        manager.enter_performance_critical_section()
-        manager.exit_performance_critical_section()
-    
-    def test_contextual_batch_processing(self):
-        """배치 처리 컨텍스트."""
-        reset_contextual_gc_manager()
-        
-        manager = get_contextual_gc_manager()
-        
-        manager.enter_batch_processing()
-        manager.exit_batch_processing()
     
     def test_contextual_resource_manager_singleton(self):
         """컨텍스트 리소스 관리자 싱글톤."""

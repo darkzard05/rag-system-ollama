@@ -80,6 +80,7 @@ OLLAMA_TIMEOUT: float = _get_env(
 AVAILABLE_EMBEDDING_MODELS: List[str] = _models_config.get("available_embeddings", [])
 CACHE_DIR: str = _models_config.get("cache_dir", ".model_cache")
 EMBEDDING_BATCH_SIZE: Union[int, str] = _models_config.get("embedding_batch_size", "auto")
+EMBEDDING_DEVICE: str = _models_config.get("embedding_device", "auto")
 
 # --- RAG 파이프라인 설정 ---
 _rag_config = _config.get("rag", {})
