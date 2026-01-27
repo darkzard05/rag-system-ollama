@@ -316,11 +316,23 @@ def build_graph(retriever: Optional[T] = None) -> T:
 
     # 4. 컨텍스트 포맷팅 노드
     def format_context(state: GraphState) -> GraphOutput:
-        documents = state["documents"]
+        documents = state.get("documents", [])
         if not documents:
             return {"context": ""}
 
-        merged_docs = _merge_consecutive_chunks(documents)
+        # [최적화] Ollama 프롬프트 캐싱(KV Cache)을 위해 문서들을 일정한 순서로 정렬
+        # 출처(source), 페이지(page), 청크 인덱스(chunk_index) 순으로 정렬하여 
+        # 검색 결과의 순서가 바뀌더라도 프롬프트의 일관성을 유지합니다.
+        sorted_docs = sorted(
+            documents, 
+            key=lambda d: (
+                d.metadata.get("source", ""), 
+                d.metadata.get("page", 0),
+                d.metadata.get("chunk_index", -1)
+            )
+        )
+
+        merged_docs = _merge_consecutive_chunks(sorted_docs)
         formatted = []
         for i, doc in enumerate(merged_docs):
             page = doc.metadata.get("page", "?")

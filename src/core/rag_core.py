@@ -294,7 +294,7 @@ class VectorStoreCache:
 
         return (
             cache_dir,
-            os.path.join(cache_dir, "doc_splits.json"),
+            os.path.join(cache_dir, "doc_splits.pkl"),
             os.path.join(cache_dir, "faiss_index"),
             os.path.join(cache_dir, "bm25_retriever.pkl"),
         )
@@ -322,9 +322,17 @@ class VectorStoreCache:
             return None, None, None
 
         try:
-            # 1. 문서 로드 (JSON - 이미 안전함)
-            with open(self.doc_splits_path, "r", encoding="utf-8") as f:
-                doc_splits = _deserialize_docs(json.load(f))
+            # 1. 문서 로드 (Pickle - 보안 검증 포함)
+            try:
+                self.security_manager.verify_cache_integrity(
+                    self.doc_splits_path,
+                    metadata_path=self.doc_splits_path + ".meta"
+                )
+                with open(self.doc_splits_path, "rb") as f:
+                    doc_splits = pickle.load(f)
+            except Exception as e:
+                logger.warning(f"문서 캐시 로드 실패: {e}")
+                return None, None, None
 
             # 2. FAISS 로드
             # 보안: allow_dangerous_deserialization=True + 무결성 검증
@@ -403,10 +411,20 @@ class VectorStoreCache:
         try:
             os.makedirs(self.cache_dir, exist_ok=True)
 
-            # 1. 문서 저장
-            with open(self.doc_splits_path, "w", encoding="utf-8") as f:
-                json.dump(_serialize_docs(doc_splits), f, ensure_ascii=False, indent=4)
-            logger.debug(f"문서 splits 저장: {self.doc_splits_path}")
+            # 1. 문서 저장 (Pickle)
+            with open(self.doc_splits_path, "wb") as f:
+                pickle.dump(doc_splits, f)
+            
+            # 문서 캐시 메타데이터 생성
+            try:
+                doc_meta = self.security_manager.create_metadata_for_file(
+                    self.doc_splits_path,
+                    description="Document splits cache (pickle)"
+                )
+                self.security_manager.save_cache_metadata(self.doc_splits_path + ".meta", doc_meta)
+            except: pass
+            
+            logger.debug(f"문서 splits 저장 (Pickle): {self.doc_splits_path}")
 
             # 2. FAISS 저장
             vector_store.save_local(self.faiss_index_path)
