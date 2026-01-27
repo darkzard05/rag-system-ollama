@@ -9,6 +9,7 @@ The RAG System provides a production-ready REST API built with FastAPI, allowing
 - **Base URL**: `http://localhost:8000`
 - **Version**: `v1`
 - **Format**: `application/json`
+- **Recommended Model**: `qwen3:4b-instruct-2507-q4_K_M`
 
 ---
 
@@ -24,7 +25,7 @@ Verify the server status and the current model being used.
     {
       "status": "healthy",
       "timestamp": 1737528000.0,
-      "model": "qwen3:4b"
+      "model": "qwen3:4b-instruct-2507-q4_K_M"
     }
     ```
 
@@ -40,6 +41,7 @@ Upload a PDF file to the system for analysis and indexing.
     {
       "message": "✅ Document processing completed.",
       "filename": "report.pdf",
+      "chunks_processed": 142,
       "cache_used": false
     }
     ```
@@ -60,19 +62,21 @@ Get a complete answer for a specific query in a single response.
     ```json
     {
       "answer": "The report concludes that...",
+      "thought": "The user is asking for a summary...",
       "sources": [{"page": 1, "content": "..."}],
       "execution_time_ms": 1250.5
     }
     ```
 
 ### 4. Stream Query (SSE)
-Get real-time token streaming for a query using Server-Sent Events (SSE).
+Get real-time token streaming using Server-Sent Events (SSE).
 
 - **Method**: `POST`
 - **URL**: `/api/v1/stream_query`
 - **Body**: Same as Query.
 - **Data Flow**:
-    - `event: message`: Real-time text tokens.
+    - `event: thinking`: (Optional) Internal reasoning process tokens.
+    - `event: message`: Real-time response tokens.
     - `event: sources`: JSON data containing retrieved document references.
     - `event: end`: Completion signal.
 
@@ -82,14 +86,17 @@ Get real-time token streaming for a query using Server-Sent Events (SSE).
 
 ```python
 import requests
+import json
 
 payload = {"query": "Summarize the document."}
 with requests.post("http://localhost:8000/api/v1/stream_query", json=payload, stream=True) as res:
     for line in res.iter_lines():
         if line:
-            print(line.decode('utf-8'))
+            decoded_line = line.decode('utf-8')
+            if decoded_line.startswith('data: '):
+                print(decoded_line[6:])
 ```
 
 ---
 
-**Last Updated:** 2026-01-22
+**Last Updated:** 2026-01-27

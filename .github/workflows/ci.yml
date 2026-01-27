@@ -34,5 +34,7 @@ jobs:
       env:
         # Avoid connecting to real Ollama in CI
         OLLAMA_HOST: "http://localhost:11434" 
+        # Default model for CI environment validation
+        DEFAULT_OLLAMA_MODEL: "qwen3:4b-instruct-2507-q4_K_M"
         # Ensure tests don't try to use GPU
         CUDA_VISIBLE_DEVICES: ""

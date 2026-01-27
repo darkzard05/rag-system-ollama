@@ -24,7 +24,7 @@ services:
     networks:
       - rag-network
     restart: unless-stopped
-    command: streamlit run src/ui.py --server.port=8501 --server.address=0.0.0.0
+    command: streamlit run src/main.py --server.port=8501 --server.address=0.0.0.0
 
   # REST API Server
   api:
@@ -48,7 +48,7 @@ services:
     networks:
       - rag-network
     restart: unless-stopped
-    command: python -m uvicorn src.api_server:app --host 0.0.0.0 --port 8000 --reload
+    command: python -m uvicorn src.api.api_server:app --host 0.0.0.0 --port 8000 --reload
 
   # Ollama LLM Server
   ollama:
@@ -65,7 +65,7 @@ services:
     restart: unless-stopped
     # Pull default model on startup
     entrypoint: /bin/sh
-    command: -c "ollama serve & sleep 5 && ollama pull mistral && wait"
+    command: -c "ollama serve & sleep 5 && ollama pull qwen3:4b-instruct-2507-q4_K_M && wait"
 
   # Optional: Prometheus for monitoring
   prometheus:
