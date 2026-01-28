@@ -11,7 +11,7 @@ permissions:
 
 jobs:
   test:
-    name: Run Integration Tests
+    name: Run Tests
     runs-on: ubuntu-latest
     
     steps:
@@ -28,13 +28,15 @@ jobs:
         python -m pip install --upgrade pip
         if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
         
-    - name: Run Integration Tests
+    - name: Run Core Integrity Tests
       run: |
+        python tests/verify_integrity_fixes.py
+        
+    - name: Run Pipeline Integration Tests
+      run: |
+        # Run legacy integration tests with mocks
         python tests/test_rag_integration.py
       env:
-        # Avoid connecting to real Ollama in CI
         OLLAMA_HOST: "http://localhost:11434" 
-        # Default model for CI environment validation
         DEFAULT_OLLAMA_MODEL: "qwen3:4b-instruct-2507-q4_K_M"
-        # Ensure tests don't try to use GPU
         CUDA_VISIBLE_DEVICES: ""
