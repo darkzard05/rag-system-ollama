@@ -83,17 +83,16 @@ class TestRAGInitialization(unittest.TestCase):
     
     def setUp(self):
         """Set up test fixtures."""
+        from common.config import DEFAULT_OLLAMA_MODEL
         self.test_config = {
             "model": {
-                "type": "ollama",
-                "name": "qwen2:0.5b",
+                "default_ollama": DEFAULT_OLLAMA_MODEL,
                 "temperature": 0.3,
                 "num_ctx": 512,
                 "timeout": 60
             },
             "embedding": {
-                "model": "sentence-transformers/all-MiniLM-L6-v2",
-                # must match config_validation allowed values
+                "default_model": "sentence-transformers/all-MiniLM-L6-v2",
                 "batch_size": 16,
                 "cache_ttl": 300
             },
@@ -109,17 +108,18 @@ class TestRAGInitialization(unittest.TestCase):
     
     def test_config_validation(self):
         """Test that configuration validation works."""
-        from common.config import DEFAULT_OLLAMA_MODEL, VECTOR_STORE_CACHE_DIR
+        from common.config import DEFAULT_OLLAMA_MODEL, CACHE_DIR
         config = load_and_validate_config(self.test_config)
         
         # 설정 객체가 환경 변수나 기본 설정을 올바르게 포함하는지 검증
+        # ApplicationConfig 구조에 맞춰 속성 접근 수정 (model, cache, retrieval 등)
         self.assertIsNotNone(config.model.default_ollama)
-        self.assertEqual(config.rag.vector_store_cache_dir, VECTOR_STORE_CACHE_DIR)
+        self.assertEqual(config.cache.cache_dir, CACHE_DIR)
         
-        # 테스트용 입력값이 잘 반영되었는지 확인
+        # 테스트용 입력값이 잘 반영되었는지 확인 (중첩 구조 필드)
         self.assertEqual(config.chunking.chunk_size, 200)
         self.assertEqual(config.retrieval.top_k, 3)
-        logger.info("✓ Configuration validation passed (Adaptive check)")
+        logger.info("✓ Configuration validation passed (Pydantic structure check)")
     
     def test_invalid_config_temperature(self):
         """Test that invalid temperature is rejected."""
@@ -483,9 +483,11 @@ class TestPipelineIntegration(unittest.TestCase):
     def setUp(self):
         """Set up test fixtures."""
         try:
+            from common.config import DEFAULT_OLLAMA_MODEL
             self.rag = RAGSystem()
+            # ApplicationConfig 구조에 맞춰 중첩 딕셔너리로 설정 로드
             self.config = load_and_validate_config({
-                "model": {"name": "qwen2:0.5b"},
+                "model": {"default_ollama": DEFAULT_OLLAMA_MODEL},
                 "embedding": {"batch_size": 16},
                 "chunking": {"chunk_size": 200},
                 "retrieval": {"top_k": 3}

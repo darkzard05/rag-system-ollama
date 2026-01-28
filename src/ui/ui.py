@@ -23,7 +23,6 @@ from common.exceptions import (
     EmbeddingModelError,
 )
 from core.session import SessionManager
-from core.model_loader import get_available_models
 from common.utils import sync_run, apply_tooltips_to_response
 from common.config import (
     AVAILABLE_EMBEDDING_MODELS,
@@ -55,8 +54,14 @@ def _render_status_box(container):
     if container is None:
         return
         
-    status_logs = SessionManager.get("status_logs", [])
+    # [최적화] 세션이 없어도 에러 없이 빈 목록 반환
+    try:
+        status_logs = SessionManager.get("status_logs", [])
+    except:
+        status_logs = []
+        
     if not status_logs:
+        container.info("시스템 준비 중...")
         return
 
     # [스타일링: 최신순 출력 전용 테마]
@@ -283,13 +288,16 @@ def _finalize_ui_rendering(thought_container, answer_display, state):
 def render_sidebar(
     file_uploader_callback: Callable,
     model_selector_callback: Callable,
-    embedding_selector_callback: Callable
+    embedding_selector_callback: Callable,
+    is_generating: bool = False,
+    current_file_name: Optional[str] = None,
+    current_embedding_model: Optional[str] = None
 ):
     # 커스텀 얇은 구분선 컴포넌트
     thin_divider = "<hr style='margin: 12px 0; border: none; border-top: 1px solid rgba(49, 51, 63, 0.1);'>"
 
     with st.sidebar:
-        # --- 1. 브랜딩 섹션 ---
+        # --- 1. 브랜딩 섹션 (즉시 출력) ---
         st.markdown(f"""
             <div style='display: flex; align-items: center; gap: 10px; margin-bottom: 5px;'>
                 <span style='font-size: 2.2rem;'>🤖</span>
@@ -302,8 +310,6 @@ def render_sidebar(
         
         st.markdown(thin_divider, unsafe_allow_html=True)
         
-        is_generating = SessionManager.get("is_generating_answer")
-        
         # --- 2. 문서 제어 섹션 ---
         st.markdown("**📄 문서 분석**")
         st.file_uploader(
@@ -315,43 +321,20 @@ def render_sidebar(
             label_visibility="collapsed"
         )
         
-        if file_name := SessionManager.get("last_uploaded_file_name"):
-            st.caption(f"현재: **{file_name}**")
+        if current_file_name:
+            st.caption(f"현재: **{current_file_name}**")
         else:
             st.caption("분석할 PDF를 업로드하세요.")
             
         st.markdown(thin_divider, unsafe_allow_html=True)
 
-        # --- 3. 모델 설정 섹션 ---
+        # --- 3. 모델 설정 섹션 (플레이스홀더) ---
         st.markdown("**⚙️ 모델 설정**")
+        model_selector_placeholder = st.empty()
         
-        available_models = get_available_models()
-        is_ollama_error = bool(available_models) and available_models[0] == MSG_ERROR_OLLAMA_NOT_RUNNING
-        actual_models = [] if is_ollama_error else [m for m in available_models if "---" not in m]
-        
-        last_model = SessionManager.get("last_selected_model")
-        if not last_model or (actual_models and last_model not in actual_models):
-            if DEFAULT_OLLAMA_MODEL in actual_models: last_model = DEFAULT_OLLAMA_MODEL
-            elif actual_models: last_model = actual_models[0]
-            else: last_model = DEFAULT_OLLAMA_MODEL
-            SessionManager.set("last_selected_model", last_model)
-
-        try: idx = available_models.index(last_model)
-        except ValueError: idx = 0
-
-        st.selectbox(
-            "메인 LLM", 
-            available_models, 
-            index=idx, 
-            key="model_selector", 
-            on_change=model_selector_callback, 
-            disabled=(is_ollama_error or is_generating),
-            label_visibility="collapsed" # 공간 절약을 위해 라벨 숨김
-        )
-
         with st.popover("🔧 고급 설정", use_container_width=True):
             st.markdown("#### 임베딩 설정")
-            last_emb = SessionManager.get("last_selected_embedding_model") or AVAILABLE_EMBEDDING_MODELS[0]
+            last_emb = current_embedding_model or AVAILABLE_EMBEDDING_MODELS[0]
             try: emb_idx = AVAILABLE_EMBEDDING_MODELS.index(last_emb)
             except ValueError: emb_idx = 0
                 
@@ -370,10 +353,15 @@ def render_sidebar(
         # --- 4. 시스템 상태 섹션 ---
         st.markdown(f"**📊 {MSG_SYSTEM_STATUS_TITLE}**")
         status_placeholder = st.empty()
-        SessionManager.set("status_placeholder", status_placeholder)
-        _render_status_box(status_placeholder)
+        
+        # 상태 정보가 있을 때만 렌더링 (초기 렌더링 시에는 건너뜀)
+        if "_initialized" in st.session_state:
+            _render_status_box(status_placeholder)
 
-        return st.container()
+        return {
+            "model_selector": model_selector_placeholder,
+            "status_container": status_placeholder
+        }
 
 
 def render_pdf_viewer():
@@ -385,19 +373,23 @@ def _pdf_viewer_fragment():
     import fitz  # PyMuPDF
     from streamlit_pdf_viewer import pdf_viewer
     
-    st.subheader(MSG_PDF_VIEWER_TITLE)
-    
     # [UI 대칭성] 채팅창과 동일하게 테두리가 있는 컨테이너 생성
     viewer_container = st.container(height=UI_CONTAINER_HEIGHT, border=True)
 
-    pdf_path = SessionManager.get("pdf_file_path")
-    if not pdf_path:
+    # [수정] 세션 초기화 전에도 안전하도록 기본값 None 제공 및 명시적 체크
+    pdf_path_raw = SessionManager.get("pdf_file_path", None)
+    
+    if not pdf_path_raw:
         with viewer_container:
             st.info(MSG_PDF_VIEWER_NO_FILE)
         return
+    
+    # [수정] 절대 경로로 변환하여 정확한 파일 참조 보장
+    pdf_path = os.path.abspath(pdf_path_raw)
+    
     if not os.path.exists(pdf_path):
         with viewer_container:
-            st.error("⚠️ 파일을 찾을 수 없습니다.")
+            st.error(f"⚠️ 파일을 찾을 수 없습니다: {pdf_path}")
         return
 
     try:
@@ -406,7 +398,8 @@ def _pdf_viewer_fragment():
             if "current_page" not in st.session_state: 
                 st.session_state.current_page = 1
             
-            is_generating = SessionManager.get("is_generating_answer")
+            # [수정] 세션 초기화 전에도 안전하도록 기본값 False 제공
+            is_generating = SessionManager.get("is_generating_answer", False) or False
 
             # 1. PDF 뷰어 메인 영역
             with viewer_container:
@@ -414,28 +407,9 @@ def _pdf_viewer_fragment():
 
             # 2. 세련된 버튼 그룹형 탐색 툴바
             # 비율 조정: [이전|다음 | 페이지정보 | 슬라이더]
-            c1, c2, c3, c4 = st.columns([0.4, 0.4, 1.2, 4.0])
-            
+            c1, c2, c3, c4 = st.columns([4.0, 1.2, 0.4, 0.4])
+
             with c1:
-                if st.button("‹", use_container_width=True, disabled=(st.session_state.current_page <= 1 or is_generating), key="btn_pdf_prev_grp", help="이전 페이지"):
-                    st.session_state.current_page -= 1
-                    st.rerun()
-            
-            with c2:
-                if st.button("›", use_container_width=True, disabled=(st.session_state.current_page >= total_pages or is_generating), key="btn_pdf_next_grp", help="다음 페이지"):
-                    st.session_state.current_page += 1
-                    st.rerun()
-            
-            with c3:
-                # 페이지 정보를 버튼 바로 옆에 배치
-                st.markdown(
-                    f"<div style='text-align: center; line-height: 2.3rem; font-family: monospace; font-size: 0.95rem; color: #888;'>"
-                    f"<span style='color: #0068c9; font-weight: bold;'>{st.session_state.current_page}</span> / {total_pages}"
-                    f"</div>", 
-                    unsafe_allow_html=True
-                )
-            
-            with c4:
                 # 우측의 넓은 공간을 차지하는 슬라이더
                 new_page = st.slider(
                     "page_nav_wide",
@@ -449,6 +423,26 @@ def _pdf_viewer_fragment():
                 if new_page != st.session_state.current_page:
                     st.session_state.current_page = new_page
                     st.rerun()
+                                
+            with c2:
+                # 페이지 정보를 버튼 바로 옆에 배치
+                st.markdown(
+                    f"<div style='text-align: center; line-height: 2.3rem; font-family: monospace; font-size: 0.95rem; color: #888;'>"
+                    f"<span style='color: #0068c9; font-weight: bold;'>{st.session_state.current_page}</span> / {total_pages}"
+                    f"</div>", 
+                    unsafe_allow_html=True
+                )
+            
+            with c3:
+                if st.button("‹", use_container_width=True, disabled=(st.session_state.current_page <= 1 or is_generating), key="btn_pdf_prev_grp", help="이전 페이지"):
+                    st.session_state.current_page -= 1
+                    st.rerun()
+            
+            with c4:
+                if st.button("›", use_container_width=True, disabled=(st.session_state.current_page >= total_pages or is_generating), key="btn_pdf_next_grp", help="다음 페이지"):
+                    st.session_state.current_page += 1
+                    st.rerun()
+
     except Exception as e:
         with viewer_container:
             st.error(f"PDF 오류: {e}")
@@ -459,6 +453,12 @@ def inject_custom_css():
     # Streamlit 1.34+ 에서 지원하는 st.html 사용 (안전성 향상)
     st.html("""
     <style>
+    /* Streamlit 기본 상태 표시기(Running...) 숨기기 */
+    [data-testid="stStatusWidget"] {
+        visibility: hidden;
+        display: none;
+    }
+    
     /* 툴팁 기본 스타일 */
     .tooltip { 
         position: relative; 
@@ -567,7 +567,8 @@ def render_message(role: str, content: str, thought: str = None, doc_ids: list =
         # [최적화] ID 리스트로부터 문서 풀에서 원본 문서 복원
         documents = []
         if role == "assistant" and doc_ids:
-            doc_pool = SessionManager.get("doc_pool", {})
+            # [수정] 세션 초기화 전에도 안전하도록 기본값 {} 제공
+            doc_pool = SessionManager.get("doc_pool", {}) or {}
             documents = [doc_pool[d_id] for d in doc_ids if (d_id := d) in doc_pool]
         
         # Assistant 메시지이면서 참고 문서가 있다면 툴팁 적용
@@ -585,27 +586,44 @@ def render_message(role: str, content: str, thought: str = None, doc_ids: list =
 
 
 def _chat_fragment():
-    st.subheader(MSG_CHAT_TITLE)
     chat_container = st.container(height=UI_CONTAINER_HEIGHT, border=True)
-    messages = SessionManager.get_messages()
+    # [수정] 세션 초기화 전에도 안전하도록 기본값 [] 제공
+    messages = SessionManager.get_messages() or []
+    pdf_path = SessionManager.get("pdf_file_path")
+    pdf_processed = SessionManager.get("pdf_processed", False)
+    is_generating = bool(st.session_state.get("is_generating_answer", False))
+    
+    # 문서 분석 중인지 판별 (파일은 업로드됐는데 아직 처리가 안 된 상태)
+    is_processing_pdf = bool(pdf_path and not pdf_processed)
     
     # 1. 채팅 이력 렌더링
-    for msg in messages:
-        with chat_container: 
+    with chat_container:
+        for msg in messages:
             render_message(
                 msg["role"], 
                 msg["content"], 
                 thought=msg.get("thought"),
-                doc_ids=msg.get("doc_ids") # documents 대신 doc_ids 전달
+                doc_ids=msg.get("doc_ids")
             )
             
-    if not messages:
-        with chat_container: 
-            st.info(MSG_CHAT_WELCOME)
+        if not messages:
+            if is_processing_pdf:
+                st.info("📄 **문서를 분석하고 있습니다.**\n\n내용이 많을 경우 시간이 다소 소요될 수 있습니다. 완료 후 자동으로 채팅이 활성화됩니다.")
+            else:
+                st.info(MSG_CHAT_WELCOME)
             
     # 2. 사용자 입력 처리
-    is_generating = SessionManager.get("is_generating_answer")
-    if user_query := st.chat_input(MSG_CHAT_INPUT_PLACEHOLDER, disabled=is_generating, key="chat_input_clean"):
+    # 입력창 상태 결정
+    input_disabled = is_generating or is_processing_pdf
+    input_placeholder = "문서 분석 중에는 질문할 수 없습니다..." if is_processing_pdf else (
+                        "답변을 생성하는 중입니다..." if is_generating else 
+                        MSG_CHAT_INPUT_PLACEHOLDER)
+
+    if user_query := st.chat_input(
+        input_placeholder, 
+        disabled=input_disabled, 
+        key="chat_input_clean"
+    ):
         SessionManager.add_message("user", user_query)
         SessionManager.add_status_log("질문 분석 중")
         

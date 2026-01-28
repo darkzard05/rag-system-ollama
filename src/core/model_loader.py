@@ -57,7 +57,6 @@ def _fetch_available_models_cached() -> List[str]:
         logger.warning(f"Ollama 모델 목록 조회 실패: {e}")
         return []
 
-from services.optimization.batch_optimizer import get_optimal_batch_size
 
 @st.cache_resource(show_spinner=False)
 def load_embedding_model(embedding_model_name: Optional[str] = None) -> "HuggingFaceEmbeddings":
@@ -87,8 +86,8 @@ def load_embedding_model(embedding_model_name: Optional[str] = None) -> "Hugging
                 )
             embedding_model_name = AVAILABLE_EMBEDDING_MODELS[0]
 
-        # 배치 사이즈 최적화
-        batch_size = get_optimal_batch_size(device=device, model_type="embedding")
+        # [최적화] 하드웨어 감지 기반의 무거운 배치 최적화 대신 고정값 사용 (부팅 속도 향상)
+        batch_size = 32 if device == "cuda" else 4
         logger.info(f"[System] [Model] 임베딩 모델 로드: {embedding_model_name} ({device}, batch_size={batch_size})")
         
         result = HuggingFaceEmbeddings(

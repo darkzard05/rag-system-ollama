@@ -56,3 +56,6 @@ monitoring/grafana-storage/
 .env
 .gemini/
 gha-creds-*.json
+
+# Data and temporary uploads
+data/

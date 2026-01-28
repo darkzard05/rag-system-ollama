@@ -57,7 +57,7 @@ class ThreadSafeSessionManager:
         "needs_qa_chain_update": False,
         "new_file_uploaded": False,
         "show_graph": False,
-        "status_logs": ["시스템 대기 중", "PDF 업로드 필요"], 
+        "status_logs": ["시스템 대기 중"], 
     }
 
     # 클래스 레벨 속성 (공유 Lock 및 통계)
@@ -104,14 +104,21 @@ class ThreadSafeSessionManager:
             # 컨텍스트가 없는 경우(API 서버 등)를 위한 세션별 저장소 사용
             sid = cls.get_session_id()
             if sid not in cls._fallback_sessions:
-                cls._fallback_sessions[sid] = copy.deepcopy(cls.DEFAULT_SESSION_STATE)
+                # [최적화] deepcopy 대신 dict.copy() 사용 후 필요 객체만 새로 생성
+                new_state = cls.DEFAULT_SESSION_STATE.copy()
+                new_state["messages"] = []
+                new_state["doc_pool"] = {}
+                new_state["status_logs"] = list(cls.DEFAULT_SESSION_STATE["status_logs"])
+                cls._fallback_sessions[sid] = new_state
                 cls._fallback_sessions[sid]["_initialized"] = True
             return cls._fallback_sessions[sid]
         except (Exception, ImportError):
-            # 라이브러리 부재 시에도 세션별 저장소 사용
             sid = cls.get_session_id()
             if sid not in cls._fallback_sessions:
-                cls._fallback_sessions[sid] = copy.deepcopy(cls.DEFAULT_SESSION_STATE)
+                new_state = cls.DEFAULT_SESSION_STATE.copy()
+                new_state["messages"] = []
+                new_state["doc_pool"] = {}
+                cls._fallback_sessions[sid] = new_state
                 cls._fallback_sessions[sid]["_initialized"] = True
             return cls._fallback_sessions[sid]
 
@@ -120,13 +127,22 @@ class ThreadSafeSessionManager:
         if session_id:
             cls.set_session_id(session_id)
             
+        # [최적화] 이미 초기화되었다면 락 없이 즉시 반환 (성능 향상)
+        try:
+            if cls._get_state().get("_initialized", False):
+                return
+        except: pass
+
         with cls._acquire_lock():
             state = cls._get_state()
             if not state.get("_initialized", False):
-                logger.info(f"[Session] [Init] 세션 상태 초기화 중... (ID: {cls.get_session_id()})")
+                logger.info(f"[System] [Session] 세션 초기화 완료 (ID: {cls.get_session_id()})")
                 for key, value in cls.DEFAULT_SESSION_STATE.items():
                     if key not in state:
-                        state[key] = copy.deepcopy(value)
+                        # [최적화] 가변 객체만 개별적으로 초기화하여 deepcopy 방지
+                        if isinstance(value, list): state[key] = list(value)
+                        elif isinstance(value, dict): state[key] = value.copy()
+                        else: state[key] = value
                 state["_initialized"] = True
 
     @classmethod
@@ -179,7 +195,7 @@ class ThreadSafeSessionManager:
         target = cls if not isinstance(cls, type) else None
         with ThreadSafeSessionManager._acquire_lock(instance=target):
             cls._get_state().clear()
-            logger.info("[Session] [Cleanup] 모든 세션 상태 삭제")
+            logger.debug("[Session] [Cleanup] 모든 세션 상태 삭제")
 
     def clear(self) -> None:
         """인스턴스 메서드용 clear (테스트 호환성)"""
@@ -255,7 +271,7 @@ class ThreadSafeSessionManager:
     def reset_all_state(cls):
         target = cls if not isinstance(cls, type) else None
         with ThreadSafeSessionManager._acquire_lock(instance=target):
-            logger.info("[Session] [Reset] 모든 세션 상태 리셋")
+            logger.debug("[Session] [Reset] 모든 세션 상태 리셋")
             state = cls._get_state()
             for key, value in cls.DEFAULT_SESSION_STATE.items():
                 state[key] = value
@@ -320,7 +336,7 @@ class ThreadSafeSessionManager:
     def reset_for_new_file(cls):
         target = cls if not isinstance(cls, type) else None
         with ThreadSafeSessionManager._acquire_lock(instance=target):
-            logger.info("[Session] [Event] 새 파일 업로드 감지 -> RAG 상태 리셋")
+            logger.debug("[Session] [Event] 새 파일 업로드 감지 -> RAG 상태 리셋")
             state = cls._get_state()
             keys_to_reset = ["pdf_processed", "pdf_processing_error", "rag_engine", "vector_store"]
             for key in keys_to_reset:
@@ -330,10 +346,8 @@ class ThreadSafeSessionManager:
             state["needs_rag_rebuild"] = True
             state["_chat_ready_needs_refresh"] = True
             
-            # [수정] 기존 로그 보존하고 분석 시작 알림 추가
-            if "status_logs" not in state:
-                state["status_logs"] = []
-            state["status_logs"].append("--- 새 문서 분석 시작 ---")
+            # [수정] 이전 로그를 비우고 분석 시작 알림으로 새로 시작
+            state["status_logs"] = ["--- 새 문서 분석 시작 ---"]
 
     @classmethod
     def add_status_log(cls, msg: str):

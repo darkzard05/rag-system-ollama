@@ -78,3 +78,6 @@ class FilePathConstants:
     LOG_FILE = "logs/app.log"
     
     # 캐시 디렉터리는 config.yml에서 로드하므로 여기서는 정의하지 않음
+    
+    # [추가] 전용 임시 디렉터리
+    TEMP_DIR = "data/temp"

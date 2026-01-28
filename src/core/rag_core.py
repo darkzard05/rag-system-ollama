@@ -63,8 +63,6 @@ from security.cache_security import (
 
 from core.semantic_chunker import EmbeddingBasedSemanticChunker
 
-from services.optimization.batch_optimizer import get_optimal_batch_size
-
 from services.optimization.index_optimizer import get_index_optimizer, IndexOptimizationConfig
 
 from services.monitoring.performance_monitor import get_performance_monitor, OperationType
@@ -267,16 +265,8 @@ def _split_documents(
         vectors = None
 
         if use_semantic and embedder:
-            # 배치 사이즈 결정 로직 개선
-            if isinstance(EMBEDDING_BATCH_SIZE, int):
-                batch_size = EMBEDDING_BATCH_SIZE
-            elif str(EMBEDDING_BATCH_SIZE).lower() == "auto":
-                batch_size = get_optimal_batch_size(model_type="embedding")
-            else:
-                try:
-                    batch_size = int(EMBEDDING_BATCH_SIZE)
-                except (ValueError, TypeError):
-                    batch_size = 64
+            # [최적화] 무거운 자동 배치 최적화 대신 고정값 사용
+            batch_size = 32 if getattr(embedder, "model_kwargs", {}).get("device") == "cuda" else 4
 
             semantic_chunker = EmbeddingBasedSemanticChunker(
                 embedder=embedder,

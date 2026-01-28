@@ -6,7 +6,7 @@ Streamlit 프레임워크를 기반으로 UI를 구성하고 세션 상태를 �
 import logging
 import tempfile
 import os
-from typing import Any
+from typing import Any, Dict
 from pathlib import Path
 
 import nest_asyncio
@@ -20,13 +20,11 @@ logger = setup_logging(
     log_file=Path("logs/app.log")
 )
 
-from common.config import AVAILABLE_EMBEDDING_MODELS
+from common.config import AVAILABLE_EMBEDDING_MODELS, DEFAULT_OLLAMA_MODEL
 from common.constants import StringConstants, FilePathConstants
-from core.model_loader import load_embedding_model, load_llm, is_embedding_model_cached
-from core.rag_core import build_rag_pipeline
+# [Lazy Import] 무거운 코어 모듈 임포트 제거 (함수 내부로 이동)
 from core.session import SessionManager
 from ui.ui import render_left_column, render_pdf_viewer, render_sidebar, _render_status_box, inject_custom_css
-from services.optimization.memory_optimizer import get_memory_optimizer
 
 # 상수 정의
 PAGE_TITLE = StringConstants.PAGE_TITLE
@@ -36,29 +34,62 @@ MAX_FILE_SIZE_MB = StringConstants.MAX_FILE_SIZE_MB
 # 비동기 패치 적용 (최상단 실행)
 nest_asyncio.apply()
 
-@st.cache_resource
-def get_and_start_memory_optimizer():
-    """메모리 최적화 서비스를 단 한 번만 초기화하고 시작합니다."""
-    optimizer = get_memory_optimizer()
-    optimizer.start()
-    return optimizer
-
-# 메모리 최적화 서비스 시작 (캐싱 적용)
-memory_optimizer = get_and_start_memory_optimizer()
-
 # Streamlit 페이지 설정
 st.set_page_config(page_title=PAGE_TITLE, layout=LAYOUT)
 
 
 import threading
+import atexit
+import shutil
+
+@st.cache_resource
+def _init_temp_directory():
+    """임시 디렉토리를 초기화하고 이전의 잔해를 제거합니다. (앱 시작 시 1회 실행)"""
+    temp_path = Path(FilePathConstants.TEMP_DIR).absolute()
+    try:
+        if temp_path.exists():
+            # 안전을 위해 폴더 내부 파일만 삭제
+            for file in temp_path.glob("*.pdf"):
+                try:
+                    os.remove(file)
+                except: pass
+            logger.info(f"[System] [Cleanup] 임시 디렉토리 초기화 완료: {temp_path}")
+        else:
+            temp_path.mkdir(parents=True, exist_ok=True)
+            logger.info(f"[System] [Cleanup] 임시 디렉토리 생성 완료: {temp_path}")
+    except Exception as e:
+        logger.warning(f"임시 디렉토리 초기화 실패: {e}")
+    return True
+
+# 앱 시작 시 초기화 수행 (캐싱으로 인해 최초 1회만 작동)
+_init_temp_directory()
+
+def _cleanup_current_file():
+    """현재 세션에서 사용 중인 임시 파일을 삭제합니다. (종료 핸들러용)"""
+    # Streamlit 세션 상태를 직접 접근하기 어려우므로 SessionManager는 thread-safe하게 설계됨
+    try:
+        path = SessionManager.get("pdf_file_path")
+        if path and os.path.exists(path):
+            os.remove(path)
+            # logger는 이미 닫혔을 수 있으므로 print 사용
+            print(f"[System] Cleanup: Deleted temp file {path}")
+    except: pass
+
+# 앱 시작 시 초기화 수행
+_init_temp_directory()
+# 프로세스 종료 시 핸들러 등록
+atexit.register(_cleanup_current_file)
 
 def _ensure_models_are_loaded(status_container: DeltaGenerator) -> bool:
     """
     선택된 LLM 및 임베딩 모델을 순차적으로 로드하여 안정성을 확보합니다.
-    (병렬 로딩은 GPU 자원 경합으로 인해 TTFT를 증가시킬 수 있어 순차 로딩 권장)
     """
+    # [Lazy Import]
+    from core.model_loader import load_embedding_model, load_llm
+
     selected_model = SessionManager.get("last_selected_model")
     selected_embedding = SessionManager.get("last_selected_embedding_model")
+
 
     if not selected_model:
         st.warning("⚠️ LLM 모델이 선택되지 않았습니다.")
@@ -137,6 +168,9 @@ def _rebuild_rag_system(status_container: DeltaGenerator) -> None:
             if status_placeholder:
                 _render_status_box(status_placeholder)
 
+        # [Lazy Import]
+        from core.rag_core import build_rag_pipeline
+
         # RAG 파이프라인 빌드 (내부에서 상세 로그 기록 및 UI 동기화)
         success_message, cache_used = build_rag_pipeline(
             uploaded_file_name=file_name,
@@ -162,6 +196,10 @@ def _update_qa_chain(status_container: DeltaGenerator) -> None:
     selected_model = SessionManager.get("last_selected_model")
     try:
         SessionManager.add_status_log(f"🔄 LLM 교체 중: {selected_model}")
+        
+        # [Lazy Import]
+        from core.model_loader import load_llm
+        
         llm = load_llm(selected_model)
         SessionManager.set("llm", llm)
         SessionManager.replace_last_status_log(f"✅ LLM 교체 완료: {selected_model}")
@@ -195,27 +233,35 @@ def on_file_upload() -> None:
 
     # 파일이 변경된 경우에만 처리
     if uploaded_file.name != SessionManager.get("last_uploaded_file_name"):
-        # [메모리 최적화] 이전 임시 파일이 있다면 삭제하여 디스크 공간 확보
+        # [관리강화] 이전 임시 파일 즉시 삭제
         old_path = SessionManager.get("pdf_file_path")
         if old_path and os.path.exists(old_path):
             try:
                 os.remove(old_path)
-                logger.info(f"이전 임시 파일 삭제 완료: {old_path}")
+                logger.info(f"[System] [Cleanup] 이전 파일 삭제: {old_path}")
             except Exception as e:
-                logger.warning(f"이전 임시 파일 삭제 실패: {e}")
+                logger.warning(f"이전 파일 삭제 실패: {e}")
 
         SessionManager.set("last_uploaded_file_name", uploaded_file.name)
         
-        # [메모리 최적화] 파일을 임시 경로에 저장하고 경로만 세션에 유지
+        # [전용 폴더 사용] 안정적인 임시 파일 생성
         try:
-            with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp_file:
-                tmp_file.write(uploaded_file.getbuffer())
-                tmp_path = tmp_file.name
+            # 절대 경로로 변환
+            temp_dir = os.path.abspath(FilePathConstants.TEMP_DIR)
+            os.makedirs(temp_dir, exist_ok=True)
+            
+            # 파일명에 타임스탬프를 넣어 중복 방지 (안전성)
+            import time
+            safe_name = f"upload_{int(time.time())}.pdf"
+            tmp_path = os.path.join(temp_dir, safe_name)
+            
+            with open(tmp_path, "wb") as f:
+                f.write(uploaded_file.getbuffer())
             
             SessionManager.set("pdf_file_path", tmp_path)
             SessionManager.set("new_file_uploaded", True)
             st.toast(f"문서 업로드 완료: {uploaded_file.name}", icon="📄")
-            logger.info(f"새 임시 파일 저장 완료: {tmp_path}")
+            logger.info(f"[System] [Upload] 파일 저장 완료: {tmp_path}")
         except Exception as e:
             st.error(f"파일 저장 중 오류 발생: {e}")
             logger.error(f"파일 저장 오류: {e}")
@@ -255,57 +301,114 @@ def on_embedding_change() -> None:
         SessionManager.set("needs_rag_rebuild", True)
 
 
-def main() -> None:
-    """메인 애플리케이션 로직 (최적화된 선형 구조)"""
-    SessionManager.init_session()
-    
-    # [스타일링] 전역 CSS 주입 (레이아웃 틀어짐 방지)
+def _render_app_layout(is_skeleton_pass: bool) -> Dict[str, Any]:
+    """앱의 전체 레이아웃을 렌더링하고 주요 플레이스홀더를 반환합니다."""
     inject_custom_css()
+    
+    # 1. 사이드바 렌더링
+    if is_skeleton_pass:
+        sidebar_placeholders = render_sidebar(
+            file_uploader_callback=on_file_upload,
+            model_selector_callback=on_model_change,
+            embedding_selector_callback=on_embedding_change,
+            is_generating=False,
+            current_file_name=None,
+            current_embedding_model=None
+        )
+    else:
+        sidebar_placeholders = render_sidebar(
+            file_uploader_callback=on_file_upload,
+            model_selector_callback=on_model_change,
+            embedding_selector_callback=on_embedding_change,
+            is_generating=st.session_state.get("is_generating_answer", False),
+            current_file_name=st.session_state.get("last_uploaded_file_name"),
+            current_embedding_model=st.session_state.get("last_selected_embedding_model")
+        )
+    
+    # 2. 메인 영역 레이아웃
+    col_left, col_right = st.columns([1, 1])
+    with col_left:
+        st.subheader(StringConstants.MSG_CHAT_TITLE if hasattr(StringConstants, "MSG_CHAT_TITLE") else "💬 채팅")
+        render_left_column()
+        
+    with col_right:
+        st.subheader(StringConstants.MSG_PDF_VIEWER_TITLE if hasattr(StringConstants, "MSG_PDF_VIEWER_TITLE") else "📄 PDF 미리보기")
+        render_pdf_viewer()
+        
+    return sidebar_placeholders
 
-    # 1. 사이드바 및 상태 컨테이너 렌더링
-    status_container = render_sidebar(
-        file_uploader_callback=on_file_upload,
-        model_selector_callback=on_model_change,
-        embedding_selector_callback=on_embedding_change,
-    )
-    
-    # 2. 상태 변경 작업 수행 (메인 UI 렌더링 전 모든 로직 처리)
-    # 이 과정에서 발생하는 데이터 변경은 아래 3번 단계에서 즉시 반영됨
-    has_changed = False
-    
+
+def _handle_pending_tasks(status_container: DeltaGenerator) -> None:
+    """지연된 무거운 작업(RAG 빌드, 모델 교체 등)을 순차적으로 처리합니다."""
     if SessionManager.get("new_file_uploaded"):
         current_file_path = SessionManager.get("pdf_file_path")
         current_file_name = SessionManager.get("last_uploaded_file_name")
-        
         SessionManager.reset_for_new_file()
         SessionManager.set("pdf_file_path", current_file_path)
         SessionManager.set("last_uploaded_file_name", current_file_name)
         SessionManager.set("new_file_uploaded", False)
-        
         _rebuild_rag_system(status_container)
-        has_changed = True
+        st.rerun()
 
     elif SessionManager.get("needs_rag_rebuild"):
         SessionManager.set("needs_rag_rebuild", False)
         _rebuild_rag_system(status_container)
-        has_changed = True
+        st.rerun()
 
     elif SessionManager.get("needs_qa_chain_update"):
         SessionManager.set("needs_qa_chain_update", False)
         _update_qa_chain(status_container)
-        has_changed = True
+        st.rerun()
 
-    # 3. 메인 UI 레이아웃 (채팅창 + PDF 뷰어)
-    # 위에서 추가된 메시지나 상태가 이 단계에서 자연스럽게 포함되어 렌더링됨
-    col_left, col_right = st.columns([1, 1])
 
-    with col_left:
-        render_left_column()
+def main() -> None:
+    """메인 애플리케이션 오케스트레이터"""
+    # 1. 초기 UI 렌더링 (즉시 실행)
+    is_skeleton_pass = "_ui_frame_ready" not in st.session_state
+    sidebar_placeholders = _render_app_layout(is_skeleton_pass)
 
-    with col_right:
-        render_pdf_viewer()
+    # 2. UI-First: 뼈대 출력 후 리런하여 데이터 로드 단계 진입
+    if is_skeleton_pass:
+        st.session_state._ui_frame_ready = True
+        st.rerun()
 
-    # 첫 실행 플래그 해제
+    # 3. 데이터 및 세션 초기화
+    SessionManager.init_session()
+    status_container = sidebar_placeholders["status_container"]
+    SessionManager.set("status_placeholder", status_container)
+
+    # 4. 모델 목록 처리 및 선택기 활성화
+    available_models = st.session_state.get("available_models_list")
+    if not available_models:
+        with sidebar_placeholders["model_selector"]:
+            st.selectbox(
+                "메인 LLM", ["모델 목록을 불러오는 중..."], index=0, disabled=True, label_visibility="collapsed"
+            )
+            with st.spinner("Ollama 모델 검색 중..."):
+                from core.model_loader import get_available_models
+                st.session_state.available_models_list = get_available_models()
+        st.rerun()
+    else:
+        # 정상 모델 선택기 렌더링
+        is_ollama_error = available_models[0] == StringConstants.MSG_ERROR_OLLAMA_NOT_RUNNING if hasattr(StringConstants, "MSG_ERROR_OLLAMA_NOT_RUNNING") else False
+        actual_models = [] if is_ollama_error else [m for m in available_models if "---" not in m]
+        
+        last_model = SessionManager.get("last_selected_model")
+        if not last_model or (actual_models and last_model not in actual_models):
+            last_model = DEFAULT_OLLAMA_MODEL if DEFAULT_OLLAMA_MODEL in actual_models else (actual_models[0] if actual_models else DEFAULT_OLLAMA_MODEL)
+            SessionManager.set("last_selected_model", last_model)
+
+        sidebar_placeholders["model_selector"].selectbox(
+            "메인 LLM", available_models, 
+            index=available_models.index(last_model) if last_model in available_models else 0,
+            key="model_selector", on_change=on_model_change, 
+            disabled=is_ollama_error, label_visibility="collapsed"
+        )
+
+    # 5. 백그라운드 태스크 처리
+    _handle_pending_tasks(status_container)
+
+    # 6. 첫 실행 플래그 해제
     if SessionManager.get("is_first_run"):
         SessionManager.set("is_first_run", False)
 
