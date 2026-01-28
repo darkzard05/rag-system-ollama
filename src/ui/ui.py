@@ -3,6 +3,7 @@ Streamlit UI 컴포넌트 렌더링 함수들을 모아놓은 파일.
 Clean & Minimal Version: 부가 요소 제거, 직관적인 로딩 및 스트리밍.
 """
 
+from __future__ import annotations
 import asyncio
 import time
 import logging
@@ -12,8 +13,6 @@ from contextlib import aclosing
 from typing import Callable, Optional
 
 import streamlit as st
-from streamlit_pdf_viewer import pdf_viewer
-import fitz  # PyMuPDF
 
 from common.exceptions import (
     PDFProcessingError,
@@ -151,11 +150,8 @@ async def _stream_chat_response(rag_engine, user_query: str, chat_container) -> 
     try:
         with chat_container:
             with st.chat_message("assistant", avatar="🤖"):
-                # UI 컴포넌트 초기화: 처음에는 접힌 상태로 대기
+                # UI 컴포넌트 초기화: 공간만 확보하고 아무것도 표시하지 않음
                 thought_container = st.empty()
-                with thought_container:
-                    st.expander("🧠 사고 준비 중...", expanded=False)
-                
                 thought_display = None # 사고 과정 텍스트를 실시간으로 쓸 공간
                 
                 answer_display = st.empty()
@@ -182,7 +178,7 @@ async def _stream_chat_response(rag_engine, user_query: str, chat_container) -> 
                                 if thought:
                                     if not state["full_thought"]:
                                         state["thinking_start_time"] = time.time()
-                                        # 사고 시작 시 타이틀 업데이트 (여전히 접힌 상태 유지)
+                                        # [개선] 실제 사고 토큰이 들어올 때만 익스팬더 생성
                                         with thought_container:
                                             thought_expander = st.expander("🧠 사고 과정 작성 중...", expanded=False)
                                             thought_display = thought_expander.empty()
@@ -340,24 +336,38 @@ def render_pdf_viewer():
 
 @st.fragment
 def _pdf_viewer_fragment():
+    import fitz  # PyMuPDF
+    from streamlit_pdf_viewer import pdf_viewer
+    
     st.subheader(MSG_PDF_VIEWER_TITLE)
+    
+    # [UI 대칭성] 채팅창과 동일하게 테두리가 있는 컨테이너 생성
+    viewer_container = st.container(height=UI_CONTAINER_HEIGHT, border=True)
+
     pdf_path = SessionManager.get("pdf_file_path")
     if not pdf_path:
-        st.info(MSG_PDF_VIEWER_NO_FILE)
+        with viewer_container:
+            st.info(MSG_PDF_VIEWER_NO_FILE)
         return
     if not os.path.exists(pdf_path):
-        st.error("⚠️ 파일을 찾을 수 없습니다.")
+        with viewer_container:
+            st.error("⚠️ 파일을 찾을 수 없습니다.")
         return
     try:
         with fitz.open(pdf_path) as doc:
             total_pages = len(doc)
             if "current_page" not in st.session_state: st.session_state.current_page = 1
             is_generating = SessionManager.get("is_generating_answer")
-            pdf_viewer(input=pdf_path, height=UI_CONTAINER_HEIGHT, pages_to_render=[st.session_state.current_page])
+            
+            with viewer_container:
+                pdf_viewer(input=pdf_path, height=UI_CONTAINER_HEIGHT, pages_to_render=[st.session_state.current_page])
+            
             def go_prev():
                 if st.session_state.current_page > 1: st.session_state.current_page -= 1
             def go_next():
                 if st.session_state.current_page < total_pages: st.session_state.current_page += 1
+            
+            # 컨트롤 버튼은 컨테이너 외부(아래쪽)에 배치하여 채팅창 입력부와 대칭 유지
             c1, c2, c3 = st.columns([1, 1, 1])
             with c1: st.button(MSG_PDF_VIEWER_PREV_BUTTON, key="btn_pdf_prev", use_container_width=True, disabled=(st.session_state.current_page <= 1 or is_generating), on_click=go_prev)
             with c2:
@@ -366,10 +376,12 @@ def _pdf_viewer_fragment():
                 with p2: st.markdown(f"<div style='line-height: 2.3em; font-size: 1.0em;'>&nbsp;/ {total_pages} pages</div>", unsafe_allow_html=True)
             with c3: st.button(MSG_PDF_VIEWER_NEXT_BUTTON, key="btn_pdf_next", use_container_width=True, disabled=(st.session_state.current_page >= total_pages or is_generating), on_click=go_next)
     except Exception as e:
-        st.error(f"PDF 오류: {e}")
+        with viewer_container:
+            st.error(f"PDF 오류: {e}")
 
 
-def render_left_column():
+def inject_custom_css():
+    """앱 전반에 걸친 커스텀 CSS를 주입합니다."""
     st.markdown("""
     <style>
     .tooltip { position: relative; display: inline-block; border-bottom: 1px dotted #888; cursor: help; color: #0068c9; font-weight: bold; }
@@ -379,13 +391,16 @@ def render_left_column():
     @media (prefers-color-scheme: dark) { .tooltip { color: #4fa8ff; } }
     </style>
     """, unsafe_allow_html=True)
+
+
+def render_left_column():
     _chat_fragment()
 
 
 def render_message(role: str, content: str, thought: str = None, doc_ids: list = None):
     avatar_icon = "🤖" if role == "assistant" else "👤"
     with st.chat_message(role, avatar=avatar_icon):
-        if thought:
+        if thought and thought.strip():
             with st.expander("🧠 사고 완료", expanded=False):
                 st.markdown(thought)
         

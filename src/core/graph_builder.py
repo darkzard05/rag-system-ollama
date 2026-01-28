@@ -25,7 +25,13 @@ from langchain_core.runnables import RunnableConfig
 from langchain_core.callbacks.manager import adispatch_custom_event
 from langgraph.graph import StateGraph, END
 
-from common.config import QA_SYSTEM_PROMPT, RERANKER_CONFIG, QUERY_EXPANSION_PROMPT, QUERY_EXPANSION_CONFIG
+from common.config import (
+    QA_SYSTEM_PROMPT, 
+    QA_HUMAN_PROMPT,
+    RERANKER_CONFIG, 
+    QUERY_EXPANSION_PROMPT, 
+    QUERY_EXPANSION_CONFIG
+)
 from common.constants import TimeoutConstants
 from api.schemas import GraphState
 from core.model_loader import load_reranker_model
@@ -340,18 +346,10 @@ def build_graph(retriever: Optional[T] = None) -> T:
                 logger.info(f"[LLM] [Start] 답변 생성 프로세스 시작 (Model: {model_name}, Resource: {resource_status})")
                 SessionManager.add_status_log("답변 생성 시작")
                 
+                # [리팩토링] 설정에서 로드된 시스템 및 휴먼 프롬프트 사용
                 prompt_template = ChatPromptTemplate.from_messages([
                     ("system", QA_SYSTEM_PROMPT),
-                    ("human", """### [Context] ###
-{context}
-
-### [Question] ###
-{input}
-
-### [Execution Checklist] ###
-1. 위 [Question]의 언어를 확인하고, 동일한 언어로 답변을 시작하세요.
-2. 모든 정보 단위의 마지막에 [Context]에서 확인한 페이지 번호 인용(`[p.X]`)을 마침표 앞에 덧붙이세요.
-3. 명확하고 구조화된 형식으로 답변을 구성하세요."""),
+                    ("human", QA_HUMAN_PROMPT),
                 ])
 
                 generation_chain = prompt_template | llm
@@ -458,48 +456,59 @@ def build_graph(retriever: Optional[T] = None) -> T:
                 async def _consume_stream_and_dispatch_events() -> None:
                     """모델 스트림을 소비하고 가공하여 커스텀 이벤트를 발생시킵니다."""
                     answer_buffer = []
-                    buffer_size = 5  # 5토큰 단위로 묶어서 전송
+                    buffer_size = 5  # 이후 토큰은 5개 단위로 묶어서 전송
+                    is_first_content_chunk = True
                     
-                    async for chunk in generation_chain.astream(
-                        {"input": state["input"], "context": state["context"]},
-                        config=config,
-                    ):
-                        content = getattr(chunk, "content", "")
-                        thought = ""
-                        if hasattr(chunk, "additional_kwargs"):
-                            thought = chunk.additional_kwargs.get("thought") or chunk.additional_kwargs.get("thinking", "")
-                        
-                        if not content and not thought:
-                            continue
+                    try:
+                        async for chunk in generation_chain.astream(
+                            {"input": state["input"], "context": state["context"]},
+                            config=config,
+                        ):
+                            content = getattr(chunk, "content", "")
+                            thought = ""
+                            if hasattr(chunk, "additional_kwargs"):
+                                thought = chunk.additional_kwargs.get("thought") or chunk.additional_kwargs.get("thinking", "")
+                            
+                            if not content and not thought:
+                                continue
 
-                        tracker.record_chunk(content, thought)
+                            tracker.record_chunk(content, thought)
 
-                        # 사고 과정(thought)은 내용이 있을 때 즉시 전송 (보통 연속해서 들어옴)
-                        if thought:
-                            await adispatch_custom_event(
-                                "response_chunk",
-                                {"chunk": "", "thought": thought},
-                                config=config,
-                            )
-                        
-                        # 답변 본문(content)은 버퍼링하여 전송 횟수 최적화
-                        if content:
-                            answer_buffer.append(content)
-                            if len(answer_buffer) >= buffer_size:
+                            # 사고 과정(thought)은 내용이 있을 때 즉시 전송
+                            if thought:
                                 await adispatch_custom_event(
                                     "response_chunk",
-                                    {"chunk": "".join(answer_buffer), "thought": ""},
+                                    {"chunk": "", "thought": thought},
                                     config=config,
                                 )
-                                answer_buffer = []
-
-                    # 스트리밍 종료 후 남은 버퍼 플러시
-                    if answer_buffer:
-                        await adispatch_custom_event(
-                            "response_chunk",
-                            {"chunk": "".join(answer_buffer), "thought": ""},
-                            config=config,
-                        )
+                            
+                            # 답변 본문(content) 처리
+                            if content:
+                                if is_first_content_chunk:
+                                    # [최적화] 첫 번째 답변 토큰은 버퍼링 없이 즉시 전송하여 TTFT 단축
+                                    await adispatch_custom_event(
+                                        "response_chunk",
+                                        {"chunk": content, "thought": ""},
+                                        config=config,
+                                    )
+                                    is_first_content_chunk = False
+                                else:
+                                    answer_buffer.append(content)
+                                    if len(answer_buffer) >= buffer_size:
+                                        await adispatch_custom_event(
+                                            "response_chunk",
+                                            {"chunk": "".join(answer_buffer), "thought": ""},
+                                            config=config,
+                                        )
+                                        answer_buffer = []
+                    finally:
+                        # 스트리밍 종료 또는 예외 발생 시 남은 버퍼 플러시
+                        if answer_buffer:
+                            await adispatch_custom_event(
+                                "response_chunk",
+                                {"chunk": "".join(answer_buffer), "thought": ""},
+                                config=config,
+                            )
 
                 # 스트리밍 태스크 실행
                 generation_task = asyncio.create_task(_consume_stream_and_dispatch_events())

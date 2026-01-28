@@ -185,25 +185,17 @@ async def stream_query_rag(request: QueryRequest):
             async for event in rag_app.astream_events(
                 {"input": request.query}, 
                 config=run_config, 
-                version="v1"
+                version="v2"
             ):
                 kind = event["event"]
                 name = event.get("name", "Unknown")
                 data = event.get("data", {})
 
-                # 1. 텍스트 청크 스트리밍
-                chunk_text = None
-                if kind == "on_parser_stream":
+                # 1. 텍스트 청크 스트리밍 (Custom Event 필터링으로 중복 방지)
+                if kind == "on_custom_event" and name == "response_chunk":
                     chunk_text = data.get("chunk")
-                elif kind == "on_chat_model_stream":
-                    chunk = data.get("chunk")
-                    if hasattr(chunk, "content"):
-                        chunk_text = chunk.content
-                elif kind == "on_custom_event" and name == "response_chunk":
-                    chunk_text = data.get("chunk")
-
-                if chunk_text:
-                    yield f"event: message\ndata: {chunk_text}\n\n"
+                    if chunk_text:
+                        yield f"event: message\ndata: {chunk_text}\n\n"
 
                 # 2. 문서 정보 전송 (retrieve 완료 시)
                 if kind == "on_chain_end" and name == "retrieve":

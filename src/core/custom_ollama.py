@@ -13,6 +13,14 @@ class DeepThinkingChatOllama(ChatOllama):
     Ollama의 비표준 'thinking' 필드를 지원하는 커스텀 ChatOllama 클래스.
     Ollama API 응답의 message.thinking 데이터를 캡처하여 additional_kwargs에 저장합니다.
     """
+    _async_client: Optional[ollama.AsyncClient] = None
+
+    @property
+    def async_client(self) -> ollama.AsyncClient:
+        """비동기 클라이언트를 지연 초기화하고 재사용합니다."""
+        if self._async_client is None:
+            self._async_client = ollama.AsyncClient(host=self.base_url)
+        return self._async_client
 
     async def _astream(
         self,
@@ -24,7 +32,6 @@ class DeepThinkingChatOllama(ChatOllama):
         """
         비동기 스트리밍을 오버라이딩하여 thinking 필드를 직접 추출합니다.
         """
-        client = ollama.AsyncClient(host=self.base_url)
         try:
             # 메시지 형식 변환 (LangChain -> Ollama)
             formatted_messages = []
@@ -46,8 +53,8 @@ class DeepThinkingChatOllama(ChatOllama):
             if stop:
                 options["stop"] = stop
 
-            # 스트리밍 실행
-            async for part in await client.chat(
+            # 재사용되는 클라이언트를 통해 스트리밍 실행
+            async for part in await self.async_client.chat(
                 model=self.model,
                 messages=formatted_messages,
                 stream=True,

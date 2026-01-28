@@ -94,6 +94,7 @@ VECTOR_STORE_CACHE_DIR: str = _rag_config.get(
 QUERY_EXPANSION_CONFIG: Dict = _rag_config.get("query_expansion", {"enabled": True})
 _prompts_config = _rag_config.get("prompts") or {}
 QA_SYSTEM_PROMPT: str = _prompts_config.get("qa_system_prompt", "")
+QA_HUMAN_PROMPT: str = _prompts_config.get("qa_human_prompt", "")
 QUERY_EXPANSION_PROMPT: str = _prompts_config.get("query_expansion_prompt", "")
 
 # --- 캐시 보안 설정 ---

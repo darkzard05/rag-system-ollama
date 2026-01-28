@@ -9,6 +9,8 @@ Thread-Safe Session Management
 import logging
 import threading
 import time
+import copy
+import hashlib
 from typing import Dict, List, Optional, TypeVar, Any, Callable
 from contextvars import ContextVar
 
@@ -102,14 +104,14 @@ class ThreadSafeSessionManager:
             # 컨텍스트가 없는 경우(API 서버 등)를 위한 세션별 저장소 사용
             sid = cls.get_session_id()
             if sid not in cls._fallback_sessions:
-                cls._fallback_sessions[sid] = cls.DEFAULT_SESSION_STATE.copy()
+                cls._fallback_sessions[sid] = copy.deepcopy(cls.DEFAULT_SESSION_STATE)
                 cls._fallback_sessions[sid]["_initialized"] = True
             return cls._fallback_sessions[sid]
         except (Exception, ImportError):
             # 라이브러리 부재 시에도 세션별 저장소 사용
             sid = cls.get_session_id()
             if sid not in cls._fallback_sessions:
-                cls._fallback_sessions[sid] = cls.DEFAULT_SESSION_STATE.copy()
+                cls._fallback_sessions[sid] = copy.deepcopy(cls.DEFAULT_SESSION_STATE)
                 cls._fallback_sessions[sid]["_initialized"] = True
             return cls._fallback_sessions[sid]
 
@@ -124,7 +126,7 @@ class ThreadSafeSessionManager:
                 logger.info(f"[Session] [Init] 세션 상태 초기화 중... (ID: {cls.get_session_id()})")
                 for key, value in cls.DEFAULT_SESSION_STATE.items():
                     if key not in state:
-                        state[key] = value
+                        state[key] = copy.deepcopy(value)
                 state["_initialized"] = True
 
     @classmethod
@@ -275,11 +277,11 @@ class ThreadSafeSessionManager:
             # [최적화] 문서 객체가 있으면 풀링 처리
             documents = kwargs.get("documents")
             if documents:
-                import hashlib
                 doc_ids = []
                 for doc in documents:
-                    # 내용 기반 해시 생성 (중복 방지)
-                    content_hash = hashlib.sha256(doc.page_content.encode()).hexdigest()[:16]
+                    # 내용 및 출처 기반 해시 생성 (메타데이터 충돌 방지)
+                    doc_key = f"{doc.page_content}_{doc.metadata.get('source', '')}_{doc.metadata.get('page', '')}"
+                    content_hash = hashlib.sha256(doc_key.encode()).hexdigest()[:16]
                     if content_hash not in state["doc_pool"]:
                         state["doc_pool"][content_hash] = doc
                     doc_ids.append(content_hash)

@@ -1,7 +1,8 @@
-"""
+﻿"""
 RAG 파이프라인의 핵심 로직(데이터 처리, 임베딩, 검색, 생성)을 담당하는 파일.
 """
 
+from __future__ import annotations
 import functools
 import hashlib
 import json
@@ -21,15 +22,14 @@ from common.typing_utils import (
 )
 
 import streamlit as st
-from langchain.retrievers import EnsembleRetriever
-from langchain.text_splitter import RecursiveCharacterTextSplitter
-from langchain_community.document_loaders import PyMuPDFLoader
-from langchain_community.retrievers import BM25Retriever
-from langchain_community.vectorstores import FAISS
-from langchain_core.documents import Document
 
 if TYPE_CHECKING:
     from langchain_huggingface import HuggingFaceEmbeddings
+    from langchain.retrievers import EnsembleRetriever
+    from langchain_community.retrievers import BM25Retriever
+    from langchain_community.vectorstores import FAISS
+    from langchain_core.documents import Document
+    import numpy as np
 
 from common.exceptions import (
     PDFProcessingError,
@@ -69,12 +69,6 @@ from services.optimization.index_optimizer import get_index_optimizer, IndexOpti
 
 from services.monitoring.performance_monitor import get_performance_monitor, OperationType
 
-import numpy as np
-
-import fitz  # PyMuPDF
-
-
-
 logger = logging.getLogger(__name__)
 monitor = get_performance_monitor()
 
@@ -100,6 +94,7 @@ class RAGSystem:
 
     def chunk_documents(self, documents: List[str]) -> List[str]:
         """Chunk raw text documents using the configured splitter."""
+        from langchain.text_splitter import RecursiveCharacterTextSplitter
         self.process_documents(documents)
         texts = [preprocess_text(t) for t in documents if preprocess_text(t)]
         if not texts:
@@ -144,9 +139,11 @@ def _compute_file_hash(file_path: str) -> str:
 
 import concurrent.futures
 
-def _extract_page_worker(file_path: str, page_num: int, total_pages: int, file_name: str) -> Optional[Document]:
+def _extract_page_worker(file_path: str, page_num: int, total_pages: int, file_name: str) -> Optional["Document"]:
     """개별 페이지에서 텍스트를 추출하는 워커 함수 (스레드 세이프)"""
     try:
+        import fitz  # PyMuPDF
+        from langchain_core.documents import Document
         # 각 스레드에서 파일을 새로 열어 독립적인 문서 객체 사용
         with fitz.open(file_path) as doc:
             page = doc[page_num]
@@ -164,10 +161,12 @@ def _extract_page_worker(file_path: str, page_num: int, total_pages: int, file_n
         logger.warning(f"페이지 {page_num+1} 추출 실패: {e}")
     return None
 
-def _extract_pages_batch_worker(file_path: str, page_range: List[int], total_pages: int, file_name: str) -> List[Tuple[int, Document]]:
+def _extract_pages_batch_worker(file_path: str, page_range: List[int], total_pages: int, file_name: str) -> List[Tuple[int, "Document"]]:
     """페이지 범위를 배치로 처리하는 워커 함수"""
     results = []
     try:
+        import fitz  # PyMuPDF
+        from langchain_core.documents import Document
         with fitz.open(file_path) as doc:
             for page_num in page_range:
                 try:
@@ -188,12 +187,14 @@ def _extract_pages_batch_worker(file_path: str, page_range: List[int], total_pag
         logger.error(f"배치 처리 중 문서 오픈 실패: {e}")
     return results
 
-def _load_pdf_docs(file_path: str, file_name: str, on_progress=None) -> List[Document]:
+def _load_pdf_docs(file_path: str, file_name: str, on_progress=None) -> List["Document"]:
     """
     PDF 파일을 배치 기반 병렬 로드로 변환하여 최적화합니다.
     """
     with monitor.track_operation(OperationType.PDF_LOADING, {"file": file_name}) as op:
         try:
+            import fitz  # PyMuPDF
+            from langchain_core.documents import Document
             SessionManager.add_status_log(f"문서 분석 준비 중")
             if on_progress: on_progress()
             
@@ -252,14 +253,15 @@ def _load_pdf_docs(file_path: str, file_name: str, on_progress=None) -> List[Doc
             raise
 
 def _split_documents(
-    docs: List[Document],
+    docs: List["Document"],
     embedder: Optional["HuggingFaceEmbeddings"] = None,
-) -> Tuple[List[Document], Optional[List[np.ndarray]]]:
+) -> Tuple[List["Document"], Optional[List["np.ndarray"]]]:
     """
     설정에 따라 의미론적 분할기 또는 RecursiveCharacterTextSplitter를 사용해 문서를 분할합니다.
     """
     SessionManager.add_status_log("의미 단위 문장 분할 중")
     with monitor.track_operation(OperationType.SEMANTIC_CHUNKING, {"doc_count": len(docs)}) as op:
+        from langchain.text_splitter import RecursiveCharacterTextSplitter
         use_semantic = SEMANTIC_CHUNKER_CONFIG.get("enabled", False)
         split_docs = []
         vectors = None
@@ -321,6 +323,7 @@ def _serialize_docs(docs: DocumentList) -> DocumentDictList:
 
 
 def _deserialize_docs(docs_as_dicts: DocumentDictList) -> DocumentList:
+    from langchain_core.documents import Document
     return [Document(**d) for d in docs_as_dicts]
 
 
@@ -374,7 +377,7 @@ class VectorStoreCache:
     def load(
         self,
         embedder: "HuggingFaceEmbeddings",
-    ) -> Tuple[Optional[List[Document]], Optional[FAISS], Optional[BM25Retriever]]:
+    ) -> Tuple[Optional[List["Document"]], Optional["FAISS"], Optional["BM25Retriever"]]:
         """
         캐시된 RAG 컴포넌트를 로드합니다.
         
@@ -394,6 +397,8 @@ class VectorStoreCache:
             return None, None, None
 
         try:
+            from langchain_community.vectorstores import FAISS
+            from langchain_core.documents import Document
             # 1. 문서 로드 (Pickle - 보안 검증 포함)
             try:
                 self.security_manager.verify_cache_integrity(
@@ -469,8 +474,8 @@ class VectorStoreCache:
     def save(
         self,
         doc_splits: DocumentList,
-        vector_store: FAISS,
-        bm25_retriever: BM25Retriever,
+        vector_store: "FAISS",
+        bm25_retriever: "BM25Retriever",
     ) -> None:
         """
         RAG 컴포넌트를 캐시에 저장합니다.
@@ -538,14 +543,15 @@ class VectorStoreCache:
 
 @log_operation("FAISS 벡터 저장소 생성")
 def _create_vector_store(
-    docs: List[Document],
+    docs: List["Document"],
     embedder: "HuggingFaceEmbeddings",
-    vectors: Optional[List[np.ndarray]] = None,
-) -> FAISS:
+    vectors: Optional[List["np.ndarray"]] = None,
+) -> "FAISS":
     """
     FAISS 벡터 저장소를 생성합니다. 
     이미 계산된 벡터(embeddings)가 있으면 재사용하여 성능을 최적화합니다.
     """
+    from langchain_community.vectorstores import FAISS
     if vectors is not None:
         # 텍스트와 임베딩 쌍으로 생성 (임베딩 모델 재호출 방지)
         text_embeddings = zip([d.page_content for d in docs], vectors)
@@ -554,16 +560,18 @@ def _create_vector_store(
     return FAISS.from_documents(docs, embedder)
 
 
-def _create_bm25_retriever(docs: List[Document]) -> BM25Retriever:
+def _create_bm25_retriever(docs: List["Document"]) -> "BM25Retriever":
+    from langchain_community.retrievers import BM25Retriever
     retriever = BM25Retriever.from_documents(docs)
     retriever.k = RETRIEVER_CONFIG["search_kwargs"]["k"]
     return retriever
 
 
 def _create_ensemble_retriever(
-    vector_store: FAISS,
-    bm25_retriever: BM25Retriever,
-) -> EnsembleRetriever:
+    vector_store: "FAISS",
+    bm25_retriever: "BM25Retriever",
+) -> "EnsembleRetriever":
+    from langchain.retrievers import EnsembleRetriever
     faiss_retriever = vector_store.as_retriever(
         search_type=RETRIEVER_CONFIG["search_type"],
         search_kwargs=RETRIEVER_CONFIG["search_kwargs"],
@@ -582,7 +590,7 @@ def _load_and_build_retrieval_components(
     _embedder: "HuggingFaceEmbeddings",
     embedding_model_name: str,
     _on_progress=None
-) -> Tuple[DocumentList, FAISS, BM25Retriever, bool]:
+) -> Tuple[DocumentList, "FAISS", "BM25Retriever", bool]:
 
     cache = VectorStoreCache(file_path, embedding_model_name)
     doc_splits, vector_store, bm25_retriever = cache.load(_embedder)
@@ -590,6 +598,7 @@ def _load_and_build_retrieval_components(
     cache_used = all(x is not None for x in [doc_splits, vector_store, bm25_retriever])
 
     if not cache_used:
+        import numpy as np
         docs = _load_pdf_docs(file_path, file_name, on_progress=_on_progress)
         # 빈 문서 처리 추가
         if not docs:
@@ -598,9 +607,9 @@ def _load_and_build_retrieval_components(
                 details={"reason": "PDF에서 텍스트를 추출할 수 없음 (이미지 위주 또는 보호된 파일)"}
             )
 
-        if on_progress: on_progress()
+        if _on_progress: _on_progress()
         doc_splits, precomputed_vectors = _split_documents(docs, _embedder)
-        if on_progress: on_progress()
+        if _on_progress: _on_progress()
 
         if not doc_splits:
             raise InsufficientChunksError(
@@ -613,7 +622,7 @@ def _load_and_build_retrieval_components(
         optimized_vectors = precomputed_vectors
         try:
             SessionManager.add_status_log("인덱스 최적화 중")
-            if on_progress: on_progress()
+            if _on_progress: _on_progress()
             
             # [수정] 이미 의미론적 청커에서 벡터가 넘어왔다면 이를 최적화기에 전달
             if optimized_vectors is None:
@@ -631,7 +640,7 @@ def _load_and_build_retrieval_components(
                 f"(프루닝: {stats.pruned_documents})"
             )
             SessionManager.replace_last_status_log(f"중복 내용 {stats.pruned_documents}개 정리")
-            if on_progress: on_progress()
+            if _on_progress: _on_progress()
             
             doc_splits = optimized_docs
         except Exception as e:
@@ -682,6 +691,7 @@ def build_rag_pipeline(
     SessionManager.set("bm25_retriever", bm25_retriever)
 
     # 기존 호환성 유지 (EnsembleRetriever도 생성)
+    from langchain.retrievers import EnsembleRetriever
     final_retriever = EnsembleRetriever(
         retrievers=[bm25_retriever, faiss_retriever],
         weights=RETRIEVER_CONFIG["ensemble_weights"],
@@ -725,3 +735,4 @@ def update_llm_in_pipeline(llm: Optional[T]) -> None:
 
     SessionManager.set("llm", llm)
     logger.info(f"세션 LLM 업데이트 완료: '{getattr(llm, 'model', 'unknown')}'")
+

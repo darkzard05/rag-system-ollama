@@ -9,7 +9,7 @@ sys.path.append(str(Path(__file__).parent.parent / "src"))
 
 from core.graph_builder import build_graph
 from core.model_loader import load_llm
-from common.config import OLLAMA_MODEL_NAME
+from common.config import DEFAULT_OLLAMA_MODEL
 from langchain_core.runnables import RunnableConfig
 
 # Windows 인코딩 대응
@@ -19,7 +19,7 @@ if sys.platform == "win32":
 async def repro_duplicate_output():
     print("🧪 [중복 출력 재현 테스트] 이벤트 수신 로직 정밀 분석")
     
-    llm = load_llm(OLLAMA_MODEL_NAME)
+    llm = load_llm(DEFAULT_OLLAMA_MODEL)
     # 검색 없이 답변만 생성하는 빈 리트리버 그래프 생성
     app = build_graph() 
     config = {"configurable": {"llm": llm}}

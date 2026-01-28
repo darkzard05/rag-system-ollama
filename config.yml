@@ -55,11 +55,11 @@ rag:
 
   # 재순위화(Reranking) 설정
   reranker:
-    enabled: false  # 최적화 로직 적용을 위해 활성화
+    enabled: false
     model_name: "BAAI/bge-reranker-v2-m3" 
-    top_k: 6  # 최종적으로 LLM에 전달할 문서 개수 (풍부한 답변을 위해 상향)
+    top_k: 6  # 최종적으로 LLM에 전달할 문서 개수
     bypass_threshold: 0.85  # 초기 검색 점수가 이 값보다 높으면 리랭킹 생략
-    max_rerank_docs: 12     # 리랭킹에 투입할 최대 문서 수 (검토 범위 확대)
+    max_rerank_docs: 12     # 리랭킹에 투입할 최대 문서 수
 
   # 텍스트 분할 설정
   text_splitter:
@@ -78,58 +78,63 @@ rag:
 
   # 쿼리 확장 설정
   query_expansion:
-    enabled: false  # 지능형 최적화 로직 적용을 위해 활성화
-
-# --- 캐시 보안 설정 ---
-cache_security:
-  # 캐시 보안 레벨 (low/medium/high)
-  # low:    pickle만 사용 (최소 보안, 빠름)
-  # medium: 메타데이터 + SHA256 검증 (권장, 기본값)
-  # high:   권한 검사 + HMAC 서명 (최대 보안, 느림)
-  security_level: "medium"
-  
-  # HMAC 비밀 (환경변수 CACHE_HMAC_SECRET 우선)
-  # 고급 보안(high)을 사용하려면 32자 이상의 비밀 설정 필수
-  # null로 설정하면 환경변수에서만 로드 시도
-  hmac_secret: null
-  
-  # 신뢰할 수 있는 캐시 경로 화이트리스트
-  # 이 경로 아래의 캐시만 로드 가능 (high 레벨)
-  # 비워두면 모든 경로 허용
-  trusted_paths:
-    - ".model_cache"
-  
-  # 검증 실패 시 동작
-  # regenerate: 자동 재생성 (권장)
-  # fail:       오류 발생
-  # warn:       경고만 출력
-  on_validation_failure: "regenerate"
-  
-  # 파일 권한 검사 활성화 (Unix/Linux/Mac에서만 작동)
-  check_permissions: true
-  
-  # 예상 파일 권한 (8진수)
-  # 0o600: 소유자만 읽기/쓰기
-  # 0o644: 소유자 읽기/쓰기, 타인 읽기
-  expected_file_mode: 0o644
-  expected_dir_mode: 0o755
+    enabled: true
 
   # 프롬프트 설정
   prompts:
+    # 1. System Prompt: 페르소나, 절대 제약 사항, 출력 형식 정의
     qa_system_prompt: |
-      당신은 제공된 [Context]를 바탕으로 사용자의 질문에 답하는 전문 PDF 분석가입니다.
-      당신은 다음의 **절대 원칙**을 반드시 준수해야 합니다:
+      당신은 제공된 [문서 컨텍스트]를 바탕으로 사용자의 질문에 답하는 전문 PDF 분석가입니다.
+      다음의 **절대 원칙 및 답변 가이드라인**을 반드시 준수하여 답변하십시오:
 
-      1. **근거 기반**: 오직 제공된 [Context] 내의 정보만을 사용하십시오. 외부 지식을 섞지 마십시오.
-      2. **인용 형식**: 정보의 출처를 명시할 때는 반드시 `[p.X]` 형식을 사용하십시오. (예: [p.1], [p.3][p.5])
-      3. **언어 일치**: 사용자의 질문과 동일한 언어로 답변하는 언어 전문가로서 행동하십시오.
-      4. **객관성**: 추측을 배제하고 문서에 명시된 사실만을 논리적으로 전달하십시오.
+      [절대 원칙]
+      - 근거 기반: 오직 제공된 [문서 컨텍스트]의 정보만을 사용하십시오. 외부 지식을 섞지 마십시오.
+      - 인용 형식: 모든 정보 단위의 마침표 바로 앞에 출처 페이지 번호(`[p.X]`)를 반드시 기재하십시오.
+      - 언어 일치: 사용자의 질문 언어를 감지하여 동일한 언어로 답변하십시오.
+      - 객관성: 추측을 배제하고 문서에 명시된 사실만을 전달하십시오.
 
-    # 쿼리 확장(Multi-Query) 프롬프트: 검색 최적화 전략 적용
+      [답변 가이드라인]
+      - 질문이 요약을 요구하면 구조화된 목록(Bulleted list)을 사용하십시오.
+      - 문서에 답변에 필요한 정보가 없다면 "제공된 문서에서 관련 정보를 찾을 수 없습니다."라고 답변하십시오.
+      - 답변은 명확하고 전문적인 톤을 유지하십시오.
+
+    # 2. Human Prompt: 실제 데이터(Context)와 질문(Question) 배치
+    qa_human_prompt: |
+      제공된 [문서 컨텍스트]를 분석하여 아래의 [질문]에 대해 답변하십시오.
+
+      ### [문서 컨텍스트] ###
+      {context}
+
+      ### [질문] ###
+      {input}
+
+    # 3. 쿼리 확장(Multi-Query) 프롬프트
     query_expansion_prompt: |
       사용자의 질문을 문서 검색에 효과적인 3개의 짧은 검색어로 변환하세요.
       - 한 줄에 하나씩 출력
       - 부가 설명 금지
+
+# --- 캐시 보안 설정 ---
+cache_security:
+  # 캐시 보안 레벨 (low/medium/high)
+  security_level: "medium"
+  
+  # HMAC 비밀 (환경변수 CACHE_HMAC_SECRET 우선)
+  hmac_secret: null
+  
+  # 신뢰할 수 있는 캐시 경로 화이트리스트
+  trusted_paths:
+    - ".model_cache"
+  
+  # 검증 실패 시 동작
+  on_validation_failure: "regenerate"
+  
+  # 파일 권한 검사 활성화
+  check_permissions: true
+  
+  # 예상 파일 권한
+  expected_file_mode: 0o644
+  expected_dir_mode: 0o755
 
 # --- 채팅 UI 설정 ---
 ui:

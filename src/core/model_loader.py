@@ -3,6 +3,7 @@ LLM 및 임베딩 모델 로딩을 담당하는 파일.
 Optimized: 타임아웃 강화 및 로컬 Ollama 통신 안정성 확보.
 """
 
+from __future__ import annotations
 import os
 import logging
 import functools
@@ -10,10 +11,10 @@ from typing import List, TYPE_CHECKING, Optional
 
 from common.typing_utils import T
 
-import torch
 import streamlit as st
 
 if TYPE_CHECKING:
+    import torch
     from langchain_huggingface import HuggingFaceEmbeddings
     from langchain_ollama import OllamaLLM
     from sentence_transformers import CrossEncoder
@@ -61,6 +62,7 @@ from services.optimization.batch_optimizer import get_optimal_batch_size
 @st.cache_resource(show_spinner=False)
 def load_embedding_model(embedding_model_name: Optional[str] = None) -> "HuggingFaceEmbeddings":
     with monitor.track_operation(OperationType.EMBEDDING_GENERATION, {"model": embedding_model_name or "default"}) as op:
+        import torch
         from langchain_huggingface import HuggingFaceEmbeddings
         
         # 디바이스 결정 로직 개선
@@ -104,6 +106,7 @@ def load_reranker_model(model_name: str) -> Optional["CrossEncoder"]:
     - VRAM 경합 방지를 위해 디바이스 최적화 적용
     """
     try:
+        import torch
         from sentence_transformers import CrossEncoder
         
         # [최적화] 리랭커는 상대적으로 가볍고 LLM과 VRAM을 공유하면 성능이 저하되므로,

@@ -25,7 +25,7 @@ from common.constants import StringConstants, FilePathConstants
 from core.model_loader import load_embedding_model, load_llm, is_embedding_model_cached
 from core.rag_core import build_rag_pipeline
 from core.session import SessionManager
-from ui.ui import render_left_column, render_pdf_viewer, render_sidebar, _render_status_box
+from ui.ui import render_left_column, render_pdf_viewer, render_sidebar, _render_status_box, inject_custom_css
 from services.optimization.memory_optimizer import get_memory_optimizer
 
 # 상수 정의
@@ -54,7 +54,8 @@ import threading
 
 def _ensure_models_are_loaded(status_container: DeltaGenerator) -> bool:
     """
-    선택된 LLM 및 임베딩 모델을 병렬로 로드하여 대기 시간을 최소화합니다.
+    선택된 LLM 및 임베딩 모델을 순차적으로 로드하여 안정성을 확보합니다.
+    (병렬 로딩은 GPU 자원 경합으로 인해 TTFT를 증가시킬 수 있어 순차 로딩 권장)
     """
     selected_model = SessionManager.get("last_selected_model")
     selected_embedding = SessionManager.get("last_selected_embedding_model")
@@ -80,60 +81,24 @@ def _ensure_models_are_loaded(status_container: DeltaGenerator) -> bool:
         current_llm = SessionManager.get("llm")
         current_embedder = SessionManager.get("embedder")
         
-        # 로드가 필요한 항목 식별
-        needs_llm = not current_llm or getattr(current_llm, "model", None) != selected_model
-        needs_embedding = not current_embedder or getattr(current_embedder, "model_name", None) != selected_embedding
-
-        if not needs_llm and not needs_embedding:
-            return True
-
-        # 결과를 담을 리스트 (가변 객체로 스레드 간 공유)
-        results = {"llm": None, "embedder": None, "error": None}
-
-        # 병렬 로딩을 위한 스레드 함수 정의
-        def load_llm_task():
-            try:
-                SessionManager.add_status_log(f"LLM 로딩 중: {selected_model}")
-                results["llm"] = load_llm(selected_model)
-            except Exception as e:
-                results["error"] = f"LLM 로드 실패: {e}"
-
-        def load_embedding_task():
-            try:
-                SessionManager.add_status_log(f"임베딩 로딩 중: {selected_embedding}")
-                results["embedder"] = load_embedding_model(selected_embedding)
-            except Exception as e:
-                results["error"] = f"임베딩 로드 실패: {e}"
-
-        threads = []
-        if needs_llm:
-            t1 = threading.Thread(target=load_llm_task)
-            threads.append(t1)
-            t1.start()
-        
-        if needs_embedding:
-            t2 = threading.Thread(target=load_embedding_task)
-            threads.append(t2)
-            t2.start()
-
-        # 모든 로딩이 완료될 때까지 UI 갱신하며 대기
-        while any(t.is_alive() for t in threads):
+        # 1. LLM 로드
+        if not current_llm or getattr(current_llm, "model", None) != selected_model:
+            SessionManager.add_status_log(f"LLM 로딩 중: {selected_model}")
             force_sync()
-            threading.Event().wait(0.2)
-
-        # 에러 체크
-        if results["error"]:
-            raise Exception(results["error"])
-
-        # [중요] 메인 스레드 컨텍스트에서 세션에 저장
-        if results["llm"]:
-            SessionManager.set("llm", results["llm"])
+            llm = load_llm(selected_model)
+            SessionManager.set("llm", llm)
             SessionManager.replace_last_status_log(f"✅ LLM 로드 완료")
-        if results["embedder"]:
-            SessionManager.set("embedder", results["embedder"])
-            SessionManager.replace_last_status_log(f"✅ 임베딩 로드 완료")
+            force_sync()
 
-        force_sync()
+        # 2. 임베딩 모델 로드
+        if not current_embedder or getattr(current_embedder, "model_name", None) != selected_embedding:
+            SessionManager.add_status_log(f"임베딩 로딩 중: {selected_embedding}")
+            force_sync()
+            embedder = load_embedding_model(selected_embedding)
+            SessionManager.set("embedder", embedder)
+            SessionManager.replace_last_status_log(f"✅ 임베딩 로드 완료")
+            force_sync()
+
         return True
 
     except Exception as e:
@@ -290,6 +255,9 @@ def on_embedding_change() -> None:
 def main() -> None:
     """메인 애플리케이션 로직 (최적화된 선형 구조)"""
     SessionManager.init_session()
+    
+    # [스타일링] 전역 CSS 주입 (레이아웃 틀어짐 방지)
+    inject_custom_css()
 
     # 1. 사이드바 및 상태 컨테이너 렌더링
     status_container = render_sidebar(
