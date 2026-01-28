@@ -14,12 +14,42 @@ import html
 logger = logging.getLogger(__name__)
 # ... (기존 변수 및 함수 유지)
 
+def normalize_latex_delimiters(text: str) -> str:
+    """
+    LLM이 출력하는 다양한 LaTeX 수식 구분자를 Streamlit 표준($ 또는 $$)으로 변환합니다.
+    - \( ... \) -> $ ... $ (인라인)
+    - \[ ... \] -> $$ ... $$ (블록)
+    - 기호 앞뒤의 불필요한 이스케이프 제거
+    """
+    if not text:
+        return text
+
+    # 1. 블록 수식 변환: \[ ... \] -> $$ ... $$
+    text = re.sub(r'\\\[(.*?)\\\]', r'$$\1$$', text, flags=re.DOTALL)
+    
+    # 2. 인라인 수식 변환: \( ... \) -> $ ... $
+    text = re.sub(r'\\\((.*?)\\\)', r'$\1$', text, flags=re.DOTALL)
+
+    # 3. 잘못된 이스케이프 문자 정제 (예: \$ -> $)
+    # 단, 코드 블록 내의 기호는 건드리지 않도록 주의가 필요하나 일반 답변 기준 처리
+    text = text.replace(r'\$', '$')
+
+    return text
+
+
 def apply_tooltips_to_response(response_text: str, documents: list) -> str:
     """
     LLM 응답 텍스트 내의 인용구([p.X])를 찾아 툴팁 HTML로 변환합니다.
     문서의 내용을 툴팁 텍스트로 삽입합니다.
+    동시에 LaTeX 수식 구분자도 정규화합니다.
     """
-    if not documents or not response_text:
+    if not response_text:
+        return response_text
+        
+    # 0. 수식 구분자 정규화 (LaTeX 호환성 확보)
+    response_text = normalize_latex_delimiters(response_text)
+
+    if not documents:
         return response_text
 
     # 1. 페이지별 텍스트 매핑 생성

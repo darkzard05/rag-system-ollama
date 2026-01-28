@@ -1,7 +1,7 @@
-# RAG System with Ollama & LangGraph
+# GraphRAG-Ollama
 
-> **A High-Performance, Local Retrieval-Augmented Generation (RAG) Solution.**  
-> Optimized for speed and accuracy using `LangGraph` orchestration and local `Ollama` models.
+> **A High-Performance, Local Retrieval-Augmented Generation (RAG) Solution with Modern UI.**  
+> Optimized for speed and accuracy using `LangGraph` orchestration, local `Ollama` models, and a sleek Streamlit interface.
 
 [![Python 3.11+](https://img.shields.io/badge/Python-3.11+-blue.svg)](https://www.python.org)
 [![Model: qwen3:4b-instruct](https://img.shields.io/badge/Model-qwen3:4b--instruct-blueviolet.svg)](https://ollama.com/library/qwen3)
@@ -14,25 +14,26 @@
 
 ![Application Interface](image/image1.png)
 
-*The interface provides a clean chat experience with sidebar controls for document upload and model selection.*
+*GraphRAG-Ollama features a refined sidebar, real-time status logging, and a professional PDF viewer with a grouped-control navigation toolbar.*
 
 ---
 
 ## ⚡ Key Highlights
 
-### 🚀 **Performance Optimized**
-- **Zero Thinking Time:** Switch to `qwen3:4b-instruct` eliminates the 2-3 minute wait time of standard models, delivering answers in seconds.
-- **Async & Parallel:** Uses `AsyncIO` for parallel document retrieval and processing.
-- **Device-Aware:** Automatically optimizes embedding and reranking tasks based on available hardware (CPU/GPU).
+### 🚀 **Performance & Stability**
+- **Optimized Streaming:** Immediate first-token delivery with an improved integrity protocol to prevent duplicate outputs.
+- **Zero Thinking Latency:** Pre-configured for `qwen3:4b-instruct`, eliminating long reasoning loops while maintaining high accuracy.
+- **Async Resource Management:** Shared Ollama clients and intelligent model loading strategies to maximize GPU efficiency.
 
 ### 🧠 **Intelligent RAG Pipeline**
-- **LangGraph Orchestration:** Precise state management for complex reasoning flows.
-- **Hybrid Search:** Combines semantic search (Dense) with keyword search (Sparse/BM25) for best-in-class retrieval.
-- **Adaptive Reranking:** Filters irrelevant documents to ensure the LLM receives only high-quality context.
+- **Modern Orchestration:** Powered by `LangGraph` for precise control over retrieval and generation flows.
+- **Mathematical Support:** Native LaTeX rendering for complex formulas using standardized $ and $$ delimiters.
+- **Hybrid Search & Reranking:** Combines FAISS (Dense) and BM25 (Sparse) with optional reranking for superior context relevance.
 
-### 🛡️ **Enterprise-Grade Security**
-- **Cache Integrity:** Protects cached models and vectors with SHA256 checksums and HMAC verification.
-- **Safe Loading:** Prevents unauthorized model loading via strict path validation.
+### 🎨 **Refined User Experience**
+- **Grouped Navigation Toolbar:** A professional PDF viewer toolbar with grouped "Prev/Next" buttons and a precision page slider.
+- **Modern Sidebar:** Compact design using `st.popover` for advanced settings and custom status logs.
+- **Real-time Feedback:** Integrated `st.toast` notifications and dynamic status updates for long-running operations.
 
 ---
 
@@ -42,38 +43,19 @@
 - **Python 3.11+**
 - **Ollama**: Download from [ollama.ai](https://ollama.ai)
 
-### 2️⃣ Model Setup (Crucial)
-We highly recommend using the **instruct** version of Qwen3 for the best RAG experience (fast response, no long "thinking" loops).
-
+### 2️⃣ Model Setup
 ```powershell
-# Pull the recommended model
+# Pull the recommended high-performance model
 ollama pull qwen3:4b-instruct-2507-q4_K_M
-
-# (Optional) Pull embedding models if not auto-downloaded
-# The system will handle this automatically on first run.
 ```
 
 ### 3️⃣ Installation
 ```bash
 git clone https://github.com/darkzard05/rag-system-ollama.git
 cd rag-system-ollama
-
-# Create Virtual Environment
 python -m venv venv
-source venv/bin/activate  # Windows: venv\Scripts\activate
-
-# Install Dependencies
+# Windows: venv\Scripts\activate | Unix: source venv/bin/activate
 pip install -r requirements.txt
-```
-
-### 4️⃣ Configuration
-The system is pre-configured in `config.yml`.
-Ensure the default model is set correctly for optimal performance:
-
-```yaml
-# config.yml
-models:
-  default_ollama: "qwen3:4b-instruct-2507-q4_K_M"
 ```
 
 ---
@@ -81,13 +63,11 @@ models:
 ## 🖥️ Usage
 
 ### Run the Frontend (Streamlit UI)
-The main interface for chatting with your documents.
 ```bash
 streamlit run src/main.py
 ```
 
-### Run the Backend (API Server)
-For integrating RAG capabilities into other applications.
+### Run the Backend (FastAPI Server)
 ```bash
 uvicorn src.api.api_server:app --host 0.0.0.0 --port 8000
 ```
@@ -100,28 +80,16 @@ uvicorn src.api.api_server:app --host 0.0.0.0 --port 8000
 rag-system-ollama/
 ├── src/
 │   ├── main.py             # 🏁 Streamlit Entry Point
-│   ├── core/               # 🧠 RAG Engine (Graph, Retrieval, Models)
-│   ├── api/                # 🔌 FastAPI Server
-│   ├── services/           # ⚡ Monitoring & Background Services
-│   ├── security/           # 🛡️ Security & Cache Verification
-│   └── common/             # 🛠️ Config & Utils
-├── image/                  # 🖼️ Assets & Screenshots
-├── logs/                   # 📝 Application & Performance Logs
-├── reports/                # 📊 Benchmarks & Audit Reports
-└── tests/                  # 🧪 Test Suite
+│   ├── core/               # 🧠 RAG Engine (LangGraph, Custom Ollama)
+│   ├── ui/                 # 🎨 Modern UI Components
+│   └── common/             # 🛠️ Math Utils & Config
+├── docs/                   # 📚 Technical Documentation
+├── reports/                # 📊 Optimization & Audit Reports
+└── tests/                  # 🧪 Integrity & Flow Tests
 ```
-
----
-
-## 📚 Documentation & Reports
-
-- **[Model Recommendation Report](./reports/MODEL_SELECTION_RECOMMENDATION.md)**: Why we chose `qwen3:4b-instruct`.
-- **[Performance Audit](./reports/PERFORMANCE_AND_QUALITY_AUDIT.md)**: Detailed analysis of system latency and throughput.
-- **[API Reference](./docs/API.md)**: Endpoints documentation.
 
 ---
 
 ## 📄 License
 MIT License - Developed by **darkzard05**.
-
-**Status:** Stable (v2.1.0) | **Last Updated:** 2026-01-27
+**Status:** v2.2.0 | **Last Updated:** 2026-01-28

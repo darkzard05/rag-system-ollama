@@ -88,6 +88,7 @@ def _ensure_models_are_loaded(status_container: DeltaGenerator) -> bool:
             llm = load_llm(selected_model)
             SessionManager.set("llm", llm)
             SessionManager.replace_last_status_log(f"✅ LLM 로드 완료")
+            st.toast(f"LLM 로드 완료: {selected_model}", icon="✅")
             force_sync()
 
         # 2. 임베딩 모델 로드
@@ -97,6 +98,7 @@ def _ensure_models_are_loaded(status_container: DeltaGenerator) -> bool:
             embedder = load_embedding_model(selected_embedding)
             SessionManager.set("embedder", embedder)
             SessionManager.replace_last_status_log(f"✅ 임베딩 로드 완료")
+            st.toast(f"임베딩 모델 로드 완료: {selected_embedding}", icon="✅")
             force_sync()
 
         return True
@@ -212,6 +214,7 @@ def on_file_upload() -> None:
             
             SessionManager.set("pdf_file_path", tmp_path)
             SessionManager.set("new_file_uploaded", True)
+            st.toast(f"문서 업로드 완료: {uploaded_file.name}", icon="📄")
             logger.info(f"새 임시 파일 저장 완료: {tmp_path}")
         except Exception as e:
             st.error(f"파일 저장 중 오류 발생: {e}")

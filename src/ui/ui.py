@@ -64,62 +64,69 @@ def _render_status_box(container):
     <style>
     .status-outer-container {
         border: 1px solid rgba(49, 51, 63, 0.2);
-        border-radius: 8px;
-        padding: 8px;
-        background-color: #1e1e1e;
-        margin-bottom: 10px;
+        border-radius: 12px;
+        padding: 10px;
+        background-color: rgba(128, 128, 128, 0.05);
+        margin-bottom: 15px;
         width: 100%;
+        box-shadow: inset 0 1px 3px rgba(0,0,0,0.1);
     }
     .status-container {
-        font-family: 'Consolas', 'Monaco', 'Source Code Pro', monospace;
-        height: 130px;
+        font-family: 'Source Code Pro', 'Consolas', monospace;
+        height: 140px;
         overflow-y: auto;
         overflow-x: hidden;
         display: flex;
-        flex-direction: column; /* 역순 데이터이므로 위에서부터 순차 출력 */
-        gap: 2px;
+        flex-direction: column;
+        gap: 4px;
     }
     .status-line {
         flex-shrink: 0;
-        line-height: 1.4;
+        line-height: 1.5;
         margin: 0px !important;
-        padding: 2px 6px !important;
-        font-size: 0.82rem;
+        padding: 4px 8px !important;
+        font-size: 0.8rem;
         white-space: nowrap;
         overflow: hidden;
         text-overflow: ellipsis;
-        color: #888; /* 기본은 흐리게 */
+        color: #666;
+        border-left: 2px solid transparent;
+        transition: all 0.2s;
     }
     .status-newest { 
-        color: #4fc3f7; /* 최신 로그만 밝은 색 */
-        font-weight: bold;
-        background-color: rgba(79, 195, 247, 0.08);
-        border-radius: 4px;
+        color: #0068c9;
+        font-weight: 600;
+        background-color: rgba(0, 104, 201, 0.1);
+        border-radius: 6px;
+        border-left: 3px solid #0068c9;
     }
     
-    .status-container::-webkit-scrollbar { width: 3px; }
-    .status-container::-webkit-scrollbar-thumb { background: #333; }
+    @media (prefers-color-scheme: dark) {
+        .status-outer-container { background-color: rgba(255, 255, 255, 0.05); }
+        .status-line { color: #aaa; }
+        .status-newest { color: #4fa8ff; background-color: rgba(79, 168, 255, 0.15); border-left-color: #4fa8ff; }
+    }
+    
+    .status-container::-webkit-scrollbar { width: 4px; }
+    .status-container::-webkit-scrollbar-thumb { background: rgba(128, 128, 128, 0.3); border-radius: 10px; }
     </style>
     """
     
     import re
     import html
     log_content = ""
-    # [핵심] 로그를 역순으로 뒤집어 최신 내용이 0번 인덱스에 오게 함
     reversed_logs = status_logs[::-1]
     
     for i, log in enumerate(reversed_logs):
-        # HTML 이스케이프 처리로 안전성 확보
         safe_log = html.escape(log)
         clean_log = re.sub(r'[^\x00-\x7F가-힣\s\(\)\[\]\/\:\.\-\>]', '', safe_log).strip()
         if not clean_log and safe_log: clean_log = safe_log.strip()
         
-        # 첫 번째(i=0)가 가장 최신 로그
         is_newest = (i == 0)
         cls = "status-newest" if is_newest else ""
-        prefix = "⚡" if is_newest else " "
+        icon = "●" if is_newest else "○"
         
-        log_content += f"<div class='status-line {cls}' title='{clean_log}'>{prefix} {clean_log}</div>"
+        log_content += f"<div class='status-line {cls}' title='{clean_log}'>{icon} {clean_log}</div>"
     
     full_html = f"{log_html}<div class='status-outer-container'><div class='status-container'>{log_content}</div></div>"
     container.markdown(full_html, unsafe_allow_html=True)
@@ -130,6 +137,8 @@ async def _stream_chat_response(rag_engine, user_query: str, chat_container) -> 
     """
     RAG 엔진의 이벤트를 수신하여 사고 과정과 답변을 실시간으로 렌더링합니다.
     """
+    from common.utils import normalize_latex_delimiters # 루프 밖으로 이동
+    
     state = {
         "full_response": "",
         "full_thought": "",
@@ -200,7 +209,10 @@ async def _stream_chat_response(rag_engine, user_query: str, chat_container) -> 
                                                     st.markdown(state["full_thought"])
                                     
                                     state["full_response"] += content
-                                    answer_display.markdown(state["full_response"] + "▌", unsafe_allow_html=True)
+                                    
+                                    # [수정] 수식 구분자 실시간 정규화 적용
+                                    display_text = normalize_latex_delimiters(state["full_response"])
+                                    answer_display.markdown(display_text + "▌", unsafe_allow_html=True)
                                 
                             # 엔진 내부 데이터 캡처
                             elif kind == "on_chain_end":
@@ -273,59 +285,93 @@ def render_sidebar(
     model_selector_callback: Callable,
     embedding_selector_callback: Callable
 ):
+    # 커스텀 얇은 구분선 컴포넌트
+    thin_divider = "<hr style='margin: 12px 0; border: none; border-top: 1px solid rgba(49, 51, 63, 0.1);'>"
+
     with st.sidebar:
-        st.header(MSG_SIDEBAR_TITLE)
+        # --- 1. 브랜딩 섹션 ---
+        st.markdown(f"""
+            <div style='display: flex; align-items: center; gap: 10px; margin-bottom: 5px;'>
+                <span style='font-size: 2.2rem;'>🤖</span>
+                <div>
+                    <div style='font-size: 1.1rem; font-weight: bold; line-height: 1.2;'>GraphRAG-Ollama</div>
+                    <div style='font-size: 0.75rem; color: #888;'>Local Intelligence RAG System</div>
+                </div>
+            </div>
+        """, unsafe_allow_html=True)
+        
+        st.markdown(thin_divider, unsafe_allow_html=True)
+        
         is_generating = SessionManager.get("is_generating_answer")
         
-        # --- 1. 문서 불러오기 ---
-        with st.expander("📄 문서 불러오기", expanded=True):
-            st.file_uploader(
-                "PDF 파일 선택", 
-                type="pdf", 
-                key="pdf_uploader", 
-                on_change=file_uploader_callback,
-                disabled=is_generating,
-                label_visibility="collapsed" # 중복 라벨 제거
-            )
-
-        # --- 2. 모델 설정 ---
-        with st.expander("⚙️ 모델 설정", expanded=True):
-            available_models = get_available_models()
-            is_ollama_error = bool(available_models) and available_models[0] == MSG_ERROR_OLLAMA_NOT_RUNNING
-            actual_models = [] if is_ollama_error else [m for m in available_models if "---" not in m]
+        # --- 2. 문서 제어 섹션 ---
+        st.markdown("**📄 문서 분석**")
+        st.file_uploader(
+            "PDF 파일 업로드", 
+            type="pdf", 
+            key="pdf_uploader", 
+            on_change=file_uploader_callback,
+            disabled=is_generating,
+            label_visibility="collapsed"
+        )
+        
+        if file_name := SessionManager.get("last_uploaded_file_name"):
+            st.caption(f"현재: **{file_name}**")
+        else:
+            st.caption("분석할 PDF를 업로드하세요.")
             
-            last_model = SessionManager.get("last_selected_model")
-            
-            # [수정] 저장된 세션 모델이 없거나 유효하지 않은 경우의 초기값 결정 로직
-            if not last_model or (actual_models and last_model not in actual_models):
-                # 1. 설정파일의 기본 모델(DEFAULT_OLLAMA_MODEL)이 목록에 있는지 확인
-                if DEFAULT_OLLAMA_MODEL in actual_models:
-                    last_model = DEFAULT_OLLAMA_MODEL
-                # 2. 없다면 목록의 첫 번째 모델 선택
-                elif actual_models:
-                    last_model = actual_models[0]
-                # 3. 목록도 없다면 상수의 기본값 사용
-                else:
-                    last_model = DEFAULT_OLLAMA_MODEL
-                
-                SessionManager.set("last_selected_model", last_model)
+        st.markdown(thin_divider, unsafe_allow_html=True)
 
-            try: idx = available_models.index(last_model)
-            except ValueError: idx = 0
+        # --- 3. 모델 설정 섹션 ---
+        st.markdown("**⚙️ 모델 설정**")
+        
+        available_models = get_available_models()
+        is_ollama_error = bool(available_models) and available_models[0] == MSG_ERROR_OLLAMA_NOT_RUNNING
+        actual_models = [] if is_ollama_error else [m for m in available_models if "---" not in m]
+        
+        last_model = SessionManager.get("last_selected_model")
+        if not last_model or (actual_models and last_model not in actual_models):
+            if DEFAULT_OLLAMA_MODEL in actual_models: last_model = DEFAULT_OLLAMA_MODEL
+            elif actual_models: last_model = actual_models[0]
+            else: last_model = DEFAULT_OLLAMA_MODEL
+            SessionManager.set("last_selected_model", last_model)
 
-            st.selectbox(MSG_MODEL_SELECTOR_LABEL, available_models, index=idx, key="model_selector", on_change=model_selector_callback, disabled=(is_ollama_error or is_generating))
+        try: idx = available_models.index(last_model)
+        except ValueError: idx = 0
 
+        st.selectbox(
+            "메인 LLM", 
+            available_models, 
+            index=idx, 
+            key="model_selector", 
+            on_change=model_selector_callback, 
+            disabled=(is_ollama_error or is_generating),
+            label_visibility="collapsed" # 공간 절약을 위해 라벨 숨김
+        )
+
+        with st.popover("🔧 고급 설정", use_container_width=True):
+            st.markdown("#### 임베딩 설정")
             last_emb = SessionManager.get("last_selected_embedding_model") or AVAILABLE_EMBEDDING_MODELS[0]
             try: emb_idx = AVAILABLE_EMBEDDING_MODELS.index(last_emb)
             except ValueError: emb_idx = 0
                 
-            st.selectbox(MSG_EMBEDDING_SELECTOR_LABEL, AVAILABLE_EMBEDDING_MODELS, index=emb_idx, key="embedding_model_selector", on_change=embedding_selector_callback, disabled=is_generating)
+            st.selectbox(
+                "임베딩 모델", 
+                AVAILABLE_EMBEDDING_MODELS, 
+                index=emb_idx, 
+                key="embedding_model_selector", 
+                on_change=embedding_selector_callback, 
+                disabled=is_generating
+            )
+            st.info("💡 하이브리드 검색 활성 중")
+
+        st.markdown(thin_divider, unsafe_allow_html=True)
         
-        # --- 3. 시스템 상태 카드 ---
-        with st.expander("📊 " + MSG_SYSTEM_STATUS_TITLE, expanded=True):
-            status_placeholder = st.empty()
-            SessionManager.set("status_placeholder", status_placeholder)
-            _render_status_box(status_placeholder)
+        # --- 4. 시스템 상태 섹션 ---
+        st.markdown(f"**📊 {MSG_SYSTEM_STATUS_TITLE}**")
+        status_placeholder = st.empty()
+        SessionManager.set("status_placeholder", status_placeholder)
+        _render_status_box(status_placeholder)
 
         return st.container()
 
@@ -353,28 +399,56 @@ def _pdf_viewer_fragment():
         with viewer_container:
             st.error("⚠️ 파일을 찾을 수 없습니다.")
         return
+
     try:
         with fitz.open(pdf_path) as doc:
             total_pages = len(doc)
-            if "current_page" not in st.session_state: st.session_state.current_page = 1
-            is_generating = SessionManager.get("is_generating_answer")
+            if "current_page" not in st.session_state: 
+                st.session_state.current_page = 1
             
+            is_generating = SessionManager.get("is_generating_answer")
+
+            # 1. PDF 뷰어 메인 영역
             with viewer_container:
                 pdf_viewer(input=pdf_path, height=UI_CONTAINER_HEIGHT, pages_to_render=[st.session_state.current_page])
+
+            # 2. 세련된 버튼 그룹형 탐색 툴바
+            # 비율 조정: [이전|다음 | 페이지정보 | 슬라이더]
+            c1, c2, c3, c4 = st.columns([0.4, 0.4, 1.2, 4.0])
             
-            def go_prev():
-                if st.session_state.current_page > 1: st.session_state.current_page -= 1
-            def go_next():
-                if st.session_state.current_page < total_pages: st.session_state.current_page += 1
+            with c1:
+                if st.button("‹", use_container_width=True, disabled=(st.session_state.current_page <= 1 or is_generating), key="btn_pdf_prev_grp", help="이전 페이지"):
+                    st.session_state.current_page -= 1
+                    st.rerun()
             
-            # 컨트롤 버튼은 컨테이너 외부(아래쪽)에 배치하여 채팅창 입력부와 대칭 유지
-            c1, c2, c3 = st.columns([1, 1, 1])
-            with c1: st.button(MSG_PDF_VIEWER_PREV_BUTTON, key="btn_pdf_prev", use_container_width=True, disabled=(st.session_state.current_page <= 1 or is_generating), on_click=go_prev)
             with c2:
-                p1, p2 = st.columns([1, 1])
-                with p1: st.number_input("페이지 이동", min_value=1, max_value=total_pages, value=st.session_state.current_page, label_visibility="collapsed", key="num_input_page", disabled=is_generating, on_change=lambda: setattr(st.session_state, 'current_page', int(st.session_state.num_input_page)))
-                with p2: st.markdown(f"<div style='line-height: 2.3em; font-size: 1.0em;'>&nbsp;/ {total_pages} pages</div>", unsafe_allow_html=True)
-            with c3: st.button(MSG_PDF_VIEWER_NEXT_BUTTON, key="btn_pdf_next", use_container_width=True, disabled=(st.session_state.current_page >= total_pages or is_generating), on_click=go_next)
+                if st.button("›", use_container_width=True, disabled=(st.session_state.current_page >= total_pages or is_generating), key="btn_pdf_next_grp", help="다음 페이지"):
+                    st.session_state.current_page += 1
+                    st.rerun()
+            
+            with c3:
+                # 페이지 정보를 버튼 바로 옆에 배치
+                st.markdown(
+                    f"<div style='text-align: center; line-height: 2.3rem; font-family: monospace; font-size: 0.95rem; color: #888;'>"
+                    f"<span style='color: #0068c9; font-weight: bold;'>{st.session_state.current_page}</span> / {total_pages}"
+                    f"</div>", 
+                    unsafe_allow_html=True
+                )
+            
+            with c4:
+                # 우측의 넓은 공간을 차지하는 슬라이더
+                new_page = st.slider(
+                    "page_nav_wide",
+                    min_value=1,
+                    max_value=total_pages,
+                    value=st.session_state.current_page,
+                    key="pdf_nav_slider_wide",
+                    disabled=is_generating,
+                    label_visibility="collapsed"
+                )
+                if new_page != st.session_state.current_page:
+                    st.session_state.current_page = new_page
+                    st.rerun()
     except Exception as e:
         with viewer_container:
             st.error(f"PDF 오류: {e}")
@@ -382,15 +456,101 @@ def _pdf_viewer_fragment():
 
 def inject_custom_css():
     """앱 전반에 걸친 커스텀 CSS를 주입합니다."""
-    st.markdown("""
+    # Streamlit 1.34+ 에서 지원하는 st.html 사용 (안전성 향상)
+    st.html("""
     <style>
-    .tooltip { position: relative; display: inline-block; border-bottom: 1px dotted #888; cursor: help; color: #0068c9; font-weight: bold; }
-    .tooltip .tooltip-text { visibility: hidden; width: 350px; background-color: #333; color: #fff; text-align: left; border-radius: 6px; padding: 10px; font-size: 0.9em; font-weight: normal; line-height: 1.5; position: absolute; z-index: 1000; bottom: 125%; left: 50%; margin-left: -175px; opacity: 0; transition: opacity 0.3s; max-height: 200px; overflow-y: auto; box-shadow: 0px 4px 8px rgba(0,0,0,0.3); }
-    .tooltip .tooltip-text::after { content: ""; position: absolute; top: 100%; left: 50%; margin-left: -5px; border-width: 5px; border-style: solid; border-color: #333 transparent transparent transparent; }
-    .tooltip:hover .tooltip-text { visibility: visible; opacity: 1; }
-    @media (prefers-color-scheme: dark) { .tooltip { color: #4fa8ff; } }
+    /* 툴팁 기본 스타일 */
+    .tooltip { 
+        position: relative; 
+        display: inline-block; 
+        border-bottom: 1px dotted #888; 
+        cursor: help; 
+        color: #0068c9; 
+        font-weight: bold; 
+    }
+    .tooltip .tooltip-text { 
+        visibility: hidden; 
+        width: 350px; 
+        background-color: #333; 
+        color: #fff; 
+        text-align: left; 
+        border-radius: 8px; 
+        padding: 12px; 
+        font-size: 0.85rem; 
+        font-weight: normal; 
+        line-height: 1.5; 
+        position: absolute; 
+        z-index: 1000; 
+        bottom: 125%; 
+        left: 50%; 
+        margin-left: -175px; 
+        opacity: 0; 
+        transition: opacity 0.3s, transform 0.3s; 
+        transform: translateY(10px);
+        max-height: 250px; 
+        overflow-y: auto; 
+        box-shadow: 0px 8px 16px rgba(0,0,0,0.4); 
+        border: 1px solid #444;
+    }
+    .tooltip .tooltip-text::after { 
+        content: ""; 
+        position: absolute; 
+        top: 100%; 
+        left: 50%; 
+        margin-left: -5px; 
+        border-width: 5px; 
+        border-style: solid; 
+        border-color: #333 transparent transparent transparent; 
+    }
+    .tooltip:hover .tooltip-text { 
+        visibility: visible; 
+        opacity: 1; 
+        transform: translateY(0);
+    }
+    
+    /* 다크 모드 대응 */
+    @media (prefers-color-scheme: dark) { 
+        .tooltip { color: #4fa8ff; } 
+        .tooltip .tooltip-text { background-color: #262730; border-color: #444; }
+        .tooltip .tooltip-text::after { border-color: #262730 transparent transparent transparent; }
+    }
+    
+    /* 채팅 메시지 내 코드 블록 스타일 개선 */
+    code {
+        background-color: rgba(128, 128, 128, 0.15);
+        padding: 0.2rem 0.4rem;
+        border-radius: 4px;
+        font-family: 'Source Code Pro', monospace;
+    }
+    
+    /* PDF 컨트롤러 툴바 스타일 (더 세련된 버전) */
+    .pdf-nav-container {
+        background-color: rgba(128, 128, 128, 0.08);
+        border-radius: 12px;
+        padding: 4px 12px;
+        margin-top: -8px;
+        border: 1px solid rgba(49, 51, 63, 0.1);
+        display: flex;
+        align-items: center;
+    }
+    /* 슬라이더 높이 및 여백 조정 */
+    div[data-testid="stSlider"] {
+        padding-top: 10px;
+        padding-bottom: 0px;
+    }
+    /* 버튼 스타일 미세 조정 */
+    .stButton > button {
+        border-radius: 8px !important;
+        border: 1px solid rgba(49, 51, 63, 0.1) !important;
+        background-color: transparent !important;
+        transition: all 0.2s ease;
+    }
+    .stButton > button:hover {
+        background-color: rgba(0, 104, 201, 0.1) !important;
+        border-color: #0068c9 !important;
+    }
     </style>
-    """, unsafe_allow_html=True)
+    """)
 
 
 def render_left_column():
@@ -411,14 +571,19 @@ def render_message(role: str, content: str, thought: str = None, doc_ids: list =
             documents = [doc_pool[d_id] for d in doc_ids if (d_id := d) in doc_pool]
         
         # Assistant 메시지이면서 참고 문서가 있다면 툴팁 적용
-        if role == "assistant" and documents:
-            from common.utils import apply_tooltips_to_response
-            content = apply_tooltips_to_response(content, documents)
+        if role == "assistant":
+            from common.utils import apply_tooltips_to_response, normalize_latex_delimiters
+            
+            # 1. 수식 정규화
+            content = normalize_latex_delimiters(content)
+            
+            # 2. 툴팁 적용
+            if documents:
+                content = apply_tooltips_to_response(content, documents)
             
         st.markdown(content, unsafe_allow_html=True)
 
 
-@st.fragment
 def _chat_fragment():
     st.subheader(MSG_CHAT_TITLE)
     chat_container = st.container(height=UI_CONTAINER_HEIGHT, border=True)

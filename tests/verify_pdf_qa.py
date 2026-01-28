@@ -6,93 +6,82 @@ from pathlib import Path
 # Add src directory to path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 
-from core.rag_core import RAGSystem
 from core.model_loader import load_llm, load_embedding_model
+from core.rag_core import build_rag_pipeline
 from core.graph_builder import build_graph
-from common.config import OLLAMA_MODEL_NAME, AVAILABLE_EMBEDDING_MODELS
+from core.session import SessionManager
+from common.config import DEFAULT_OLLAMA_MODEL, AVAILABLE_EMBEDDING_MODELS
 from common.utils import apply_tooltips_to_response
-from langchain_core.prompts import ChatPromptTemplate
-from langchain_core.output_parsers import StrOutputParser
 
-async def test_until_success():
-    print("🚀 [최종 검증] PDF 기반 답변 생성 테스트 시작")
+async def test_full_flow():
+    print("🚀 [최종 검증] RAG 풀 파이프라인 (LangGraph) 테스트 시작")
     pdf_path = "tests/2201.07520v1.pdf"
-    session_id = "final_verify_session"
     
-    # 1. 시스템 초기화
+    if not os.path.exists(pdf_path):
+        print(f"❌ 테스트용 PDF 파일을 찾을 수 없습니다: {pdf_path}")
+        return
+
+    # 1. 세션 초기화 및 모델 로드
+    SessionManager.init_session()
     embedding_model_name = AVAILABLE_EMBEDDING_MODELS[0]
     embedder = load_embedding_model(embedding_model_name)
-    llm = load_llm(OLLAMA_MODEL_NAME)
-    rag_system = RAGSystem(session_id=session_id)
+    llm = load_llm(DEFAULT_OLLAMA_MODEL)
     
-    print(f"⚙️ 문서 인덱싱 중: {pdf_path}")
-    await asyncio.to_thread(rag_system.load_document, pdf_path, "test.pdf", embedder)
+    SessionManager.set("llm", llm)
+    SessionManager.set("embedder", embedder)
     
-    # 2. 질문 설정
+    # 2. RAG 파이프라인 빌드
+    print(f"⚙️ 문서 인덱싱 및 RAG 빌드 중: {pdf_path}")
+    success_msg, cache_used = build_rag_pipeline(
+        uploaded_file_name="2201.07520v1.pdf",
+        file_path=pdf_path,
+        embedder=embedder
+    )
+    print(f"✅ RAG 빌드 완료: {success_msg} (캐시 사용: {cache_used})")
+    
+    # 3. 그래프 생성
+    app = build_graph()
+    
+    # 4. 질문 및 답변 생성 (스트리밍 시뮬레이션)
     question = "What are CM3-Medium and CM3-Large models?"
     print(f"🤔 질문: {question}")
     
-    # 3. 성공할 때까지 최대 3회 시도
-    max_retries = 3
     full_response = ""
     retrieved_docs = []
     
-    for attempt in range(1, max_retries + 1):
-        print(f"\n🔄 시도 {attempt}/{max_retries}...")
+    print("📡 답변 스트리밍 중...")
+    async for event in app.astream_events(
+        {"input": question},
+        config={"configurable": {"llm": llm}},
+        version="v2"
+    ):
+        kind = event["event"]
+        name = event.get("name", "Unknown")
+        data = event.get("data", {})
         
-        # 검색 수행
-        retrieved_docs = await rag_system.ensemble_retriever.ainvoke(question)
-        if not retrieved_docs:
-            print("❌ 문서를 찾지 못했습니다.")
-            continue
+        if kind == "on_custom_event" and name == "response_chunk":
+            chunk = data.get("chunk", "")
+            full_response += chunk
+            if chunk: print(chunk, end="", flush=True)
             
-        context_text = "\n".join([d.page_content[:300] for d in retrieved_docs[:3]])
-        
-        # 프롬프트 구성 (최대한 단순하게)
-        prompt = ChatPromptTemplate.from_template(
-            "Use the context to answer the question briefly.\nContext: {context}\nQuestion: {question}"
-        )
-        chain = prompt | llm | StrOutputParser()
-        
-        try:
-            # 타임아웃 설정 강화
-            response = await asyncio.wait_for(
-                chain.ainvoke({"context": context_text, "question": question}),
-                timeout=60
-            )
-            
-            if response and len(response.strip()) > 20:
-                full_response = response
-                print(f"✅ 답변 생성 성공! (길이: {len(full_response)})")
-                break
-            else:
-                print("⚠️ 모델이 빈 응답 또는 너무 짧은 답변을 반환했습니다.")
-        except asyncio.TimeoutError:
-            print("⚠️ 타임아웃 발생")
-        except Exception as e:
-            print(f"⚠️ 오류 발생: {e}")
-            
-        await asyncio.sleep(2) # 잠시 대기
+        elif kind == "on_chain_end" and name == "retrieve":
+            retrieved_docs = data.get("output", {}).get("documents", [])
+            print(f"\n🔍 문서 {len(retrieved_docs)}개 검색 완료")
 
-    if not full_response:
-        print("\n❌ 모든 시도가 실패했습니다. 직접 질문으로 마지막 시도...")
-        res = await llm.ainvoke(f"Based on CM3 paper, what is CM3 model? Answer in one sentence.")
-        full_response = res.content
-
-    # 4. 결과 출력 및 포맷팅 확인
-    final_content = apply_tooltips_to_response(full_response, retrieved_docs)
-    
     print("\n" + "="*50)
     print("📋 [최종 답변 내용]")
     print(full_response)
-    print("\n📋 [포맷팅 적용 내용 (인용구 포함 여부 확인)]")
+    
+    # 5. 포맷팅 검증 (툴팁 적용)
+    final_content = apply_tooltips_to_response(full_response, retrieved_docs)
+    print("\n📋 [툴팁 적용 결과 (일부)]")
     print(final_content[:500] + "...")
     print("="*50)
     
-    if len(full_response) > 0:
-        print("\n🎉 테스트 성공: 제대로 된 답변을 수신했습니다.")
+    if len(full_response) > 50:
+        print("\n🎉 테스트 성공: RAG 파이프라인이 정상 작동합니다.")
     else:
-        print("\nFAIL: 답변을 수신하지 못했습니다.")
+        print("\nFAIL: 답변이 너무 짧거나 비어있습니다.")
 
 if __name__ == "__main__":
-    asyncio.run(test_until_success())
+    asyncio.run(test_full_flow())
