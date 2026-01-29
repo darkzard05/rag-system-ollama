@@ -6,15 +6,12 @@ Performance Monitoring Integration Tests
 
 import sys
 import unittest
-from pathlib import Path
 
 # Add src to path
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 from services.monitoring.performance_monitor import (
-    PerformanceMonitor,
     OperationType,
-    OperationMetrics,
 )
 
 
@@ -44,8 +41,10 @@ class TestPerformanceIntegration(unittest.TestCase):
 
         # 모든 오퍼레이션이 기록되었는지 확인
         all_stats = self.monitor.get_all_stats()
-        
-        tracked_types = set(stat for stat in all_stats.keys() if all_stats[stat].total_operations > 0)
+
+        tracked_types = set(
+            stat for stat in all_stats.keys() if all_stats[stat].total_operations > 0
+        )
         self.assertEqual(len(tracked_types), len(operation_types))
 
     def test_query_processing_to_llm_pipeline(self):
@@ -53,25 +52,31 @@ class TestPerformanceIntegration(unittest.TestCase):
         # 1. 쿼리 처리
         with self.monitor.track_operation(OperationType.QUERY_PROCESSING) as op:
             op.tokens = 15
-        
+
         # 2. 문서 검색
-        with self.monitor.track_operation(OperationType.DOCUMENT_RETRIEVAL, {"query_count": 1}) as op:
+        with self.monitor.track_operation(
+            OperationType.DOCUMENT_RETRIEVAL, {"query_count": 1}
+        ) as op:
             op.tokens = 500
-        
+
         # 3. 재순위화
-        with self.monitor.track_operation(OperationType.RERANKING, {"doc_count": 10}) as op:
+        with self.monitor.track_operation(
+            OperationType.RERANKING, {"doc_count": 10}
+        ) as op:
             op.tokens = 300
-        
+
         # 4. LLM 추론
-        with self.monitor.track_operation(OperationType.LLM_INFERENCE, {"doc_count": 5}) as op:
+        with self.monitor.track_operation(
+            OperationType.LLM_INFERENCE, {"doc_count": 5}
+        ) as op:
             op.tokens = 250
 
         # 검증
         report = self.monitor.generate_report()
-        
+
         self.assertIn("operations", report)
         self.assertEqual(report["total_operations"], 4)
-        
+
         # 토큰 수 합산 확인 (report에 총합이 없으니 operations에서 합산)
         total_tokens = sum(
             stats.get("tokens", {}).get("total", 0)
@@ -82,15 +87,21 @@ class TestPerformanceIntegration(unittest.TestCase):
     def test_pdf_processing_pipeline(self):
         """PDF 처리 파이프라인: PDF 로드 -> 임베딩 생성 -> 의미론적 청킹"""
         # 1. PDF 로드
-        with self.monitor.track_operation(OperationType.PDF_LOADING, {"file": "test.pdf"}) as op:
+        with self.monitor.track_operation(
+            OperationType.PDF_LOADING, {"file": "test.pdf"}
+        ) as op:
             op.tokens = 2000
 
         # 2. 임베딩 생성
-        with self.monitor.track_operation(OperationType.EMBEDDING_GENERATION, {"model": "test"}) as op:
+        with self.monitor.track_operation(
+            OperationType.EMBEDDING_GENERATION, {"model": "test"}
+        ) as op:
             op.tokens = 2000
 
         # 3. 의미론적 청킹
-        with self.monitor.track_operation(OperationType.SEMANTIC_CHUNKING, {"doc_count": 10}) as op:
+        with self.monitor.track_operation(
+            OperationType.SEMANTIC_CHUNKING, {"doc_count": 10}
+        ) as op:
             op.tokens = 1500
 
         # 검증
@@ -120,14 +131,11 @@ class TestPerformanceIntegration(unittest.TestCase):
 
     def test_metadata_preservation(self):
         """메타데이터가 보존되는지 검증"""
-        metadata = {
-            "file": "test.pdf",
-            "model": "qwen",
-            "top_k": 5,
-            "doc_count": 10
-        }
+        metadata = {"file": "test.pdf", "model": "qwen", "top_k": 5, "doc_count": 10}
 
-        with self.monitor.track_operation(OperationType.DOCUMENT_RETRIEVAL, metadata) as op:
+        with self.monitor.track_operation(
+            OperationType.DOCUMENT_RETRIEVAL, metadata
+        ) as op:
             op.tokens = 100
 
         # 메타데이터 확인
@@ -146,9 +154,15 @@ class TestPerformanceIntegration(unittest.TestCase):
 
         # 3개의 스레드에서 동시에 오퍼레이션 실행
         threads = [
-            threading.Thread(target=track_operation, args=(OperationType.DOCUMENT_RETRIEVAL, 0.05)),
-            threading.Thread(target=track_operation, args=(OperationType.LLM_INFERENCE, 0.05)),
-            threading.Thread(target=track_operation, args=(OperationType.RERANKING, 0.05)),
+            threading.Thread(
+                target=track_operation, args=(OperationType.DOCUMENT_RETRIEVAL, 0.05)
+            ),
+            threading.Thread(
+                target=track_operation, args=(OperationType.LLM_INFERENCE, 0.05)
+            ),
+            threading.Thread(
+                target=track_operation, args=(OperationType.RERANKING, 0.05)
+            ),
         ]
 
         for thread in threads:
@@ -185,7 +199,7 @@ class TestPerformanceIntegration(unittest.TestCase):
 
         # 오퍼레이션 통계 확인
         self.assertEqual(report["total_operations"], 4)
-        
+
         # 토큰 수 합산 확인
         total_tokens = sum(
             stats.get("tokens", {}).get("total", 0)
@@ -301,7 +315,9 @@ class TestPerformanceEdgeCases(unittest.TestCase):
             "query": "무엇이 성공의 열쇠인가?",
         }
 
-        with self.monitor.track_operation(OperationType.DOCUMENT_RETRIEVAL, metadata) as op:
+        with self.monitor.track_operation(
+            OperationType.DOCUMENT_RETRIEVAL, metadata
+        ) as op:
             op.tokens = 100
 
         stats = self.monitor.get_operation_stats(OperationType.DOCUMENT_RETRIEVAL)

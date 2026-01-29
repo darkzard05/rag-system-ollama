@@ -1,7 +1,6 @@
-
-import pytest
 from langchain_core.documents import Document
 from src.core.graph_builder import _merge_consecutive_chunks, format_context
+
 
 def test_metadata_to_context_string_conversion():
     """
@@ -11,26 +10,28 @@ def test_metadata_to_context_string_conversion():
     docs = [
         Document(
             page_content="첫 번째 페이지의 첫 내용입니다.",
-            metadata={"source": "test.pdf", "page": 1, "chunk_index": 0}
+            metadata={"source": "test.pdf", "page": 1, "chunk_index": 0},
         ),
         Document(
             page_content="첫 번째 페이지의 이어진 내용입니다.",
-            metadata={"source": "test.pdf", "page": 1, "chunk_index": 1}
+            metadata={"source": "test.pdf", "page": 1, "chunk_index": 1},
         ),
         Document(
             page_content="두 번째 페이지의 독립된 내용입니다.",
-            metadata={"source": "test.pdf", "page": 2, "chunk_index": 0}
-        )
+            metadata={"source": "test.pdf", "page": 2, "chunk_index": 0},
+        ),
     ]
 
     print("\n[Test] 원본 문서 메타데이터 확인...")
     for i, d in enumerate(docs):
-        print(f"  Doc {i}: Page {d.metadata['page']}, Index {d.metadata['chunk_index']}")
+        print(
+            f"  Doc {i}: Page {d.metadata['page']}, Index {d.metadata['chunk_index']}"
+        )
 
     # 2. 청크 병합 테스트
     merged_docs = _merge_consecutive_chunks(docs)
     print(f"\n[Test] 병합 후 문서 개수: {len(merged_docs)} (기대값: 2)")
-    
+
     assert len(merged_docs) == 2
     assert "이어진 내용" in merged_docs[0].page_content
     assert merged_docs[0].metadata["page"] == 1
@@ -50,11 +51,12 @@ def test_metadata_to_context_string_conversion():
     assert "[p.1]" in context_str
     assert "[p.2]" in context_str
     assert context_str.startswith("[p.1]")
-    
+
     # 페이지 1의 내용들이 하나로 합쳐져서 나타나는지 확인
     assert "첫 내용" in context_str and "이어진 내용" in context_str
-    
+
     print("\n✅ 메타데이터 전파 및 컨텍스트 포맷팅 테스트 성공!")
+
 
 if __name__ == "__main__":
     test_metadata_to_context_string_conversion()

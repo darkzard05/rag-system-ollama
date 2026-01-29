@@ -1,9 +1,9 @@
-
 import pytest
 from fastapi.testclient import TestClient
 from src.api.api_server import app
 
 client = TestClient(app)
+
 
 def test_global_exception_handler():
     """
@@ -14,9 +14,9 @@ def test_global_exception_handler():
     response = client.post(
         "/api/v1/query",
         json={"query": "테스트 질문"},
-        headers={"X-Session-ID": "test-error-session"}
+        headers={"X-Session-ID": "test-error-session"},
     )
-    
+
     data = response.json()
     assert response.status_code == 400
     assert data["error_code"] == "SESSION_ERROR"
@@ -26,17 +26,17 @@ def test_global_exception_handler():
     # 2. 잘못된 확장자 업로드 (EmptyPDFError 유발)
     print("[Test] 잘못된 파일 확장자 업로드 시도 (EmptyPDFError 유발)...\n")
     import io
+
     files = {"file": ("test.txt", io.BytesIO(b"not a pdf"), "text/plain")}
     response = client.post(
-        "/api/v1/upload",
-        files=files,
-        headers={"X-Session-ID": "test-error-session"}
+        "/api/v1/upload", files=files, headers={"X-Session-ID": "test-error-session"}
     )
-    
+
     data = response.json()
     assert response.status_code == 400
     assert data["error_code"] == "EMPTY_PDF"
     print("✅ EmptyPDFError 핸들링 확인")
+
 
 if __name__ == "__main__":
     pytest.main([__file__, "-s"])

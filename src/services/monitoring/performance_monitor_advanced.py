@@ -6,7 +6,6 @@ import time
 import logging
 from dataclasses import dataclass, field, asdict
 from typing import Dict, List, Optional, Any
-from datetime import datetime, timedelta
 from enum import Enum
 from collections import defaultdict
 from threading import RLock
@@ -15,6 +14,7 @@ import statistics
 
 class BottleneckType(Enum):
     """Bottleneck Detection Types"""
+
     CPU_INTENSIVE = "cpu_intensive"
     MEMORY_INTENSIVE = "memory_intensive"
     IO_BOUND = "io_bound"
@@ -23,6 +23,7 @@ class BottleneckType(Enum):
 
 class HealthStatus(Enum):
     """System Health Status"""
+
     HEALTHY = "healthy"
     DEGRADED = "degraded"
     CRITICAL = "critical"
@@ -31,13 +32,14 @@ class HealthStatus(Enum):
 @dataclass
 class PerformanceMetric:
     """Advanced performance metric"""
+
     name: str
     value: float
     unit: str
     timestamp: float
     component: str = ""
     context: Dict[str, Any] = field(default_factory=dict)
-    
+
     def to_dict(self) -> Dict:
         """Convert to dictionary"""
         return asdict(self)
@@ -46,6 +48,7 @@ class PerformanceMetric:
 @dataclass
 class BottleneckReport:
     """Bottleneck analysis report"""
+
     bottleneck_id: str
     bottleneck_type: BottleneckType
     component: str
@@ -55,24 +58,24 @@ class BottleneckReport:
     threshold: float
     recommendation: str
     detected_at: float
-    
+
     def to_dict(self) -> Dict:
         """Convert to dictionary"""
         data = asdict(self)
-        data['bottleneck_type'] = self.bottleneck_type.value
+        data["bottleneck_type"] = self.bottleneck_type.value
         return data
 
 
 class AdvancedPerformanceMonitor:
     """Advanced performance monitoring with bottleneck detection"""
-    
+
     def __init__(self):
         """Initialize advanced monitor"""
         self.metrics: List[PerformanceMetric] = []
         self.bottleneck_reports: List[BottleneckReport] = []
         self.component_metrics: Dict[str, List[float]] = defaultdict(list)
         self.health_history: List[tuple] = []
-        
+
         # Thresholds
         self.thresholds = {
             "cpu_usage": 80.0,
@@ -81,13 +84,18 @@ class AdvancedPerformanceMonitor:
             "cache_miss_rate": 0.5,
             "error_rate": 0.01,
         }
-        
+
         self._lock = RLock()
         self.logger = logging.getLogger(__name__)
-    
-    def record_metric(self, name: str, value: float, unit: str,
-                     component: str = "",
-                     context: Optional[Dict[str, Any]] = None) -> bool:
+
+    def record_metric(
+        self,
+        name: str,
+        value: float,
+        unit: str,
+        component: str = "",
+        context: Optional[Dict[str, Any]] = None,
+    ) -> bool:
         """Record performance metric"""
         with self._lock:
             metric = PerformanceMetric(
@@ -98,34 +106,34 @@ class AdvancedPerformanceMonitor:
                 component=component,
                 context=context or {},
             )
-            
+
             self.metrics.append(metric)
-            
+
             if component:
                 self.component_metrics[component].append(value)
-            
+
             # Check for bottleneck
             if name in self.thresholds:
                 if value > self.thresholds[name]:
                     self._detect_bottleneck(name, value, component)
-            
+
             return True
-    
+
     def _detect_bottleneck(self, metric_name: str, value: float, component: str):
         """Detect and report bottleneck"""
         threshold = self.thresholds[metric_name]
-        
+
         # Determine severity
         severity = "medium"
         if value > threshold * 2.0:
             severity = "critical"
         elif value > threshold * 1.5:
             severity = "high"
-        
+
         # Determine bottleneck type
         bottleneck_type = BottleneckType.CPU_INTENSIVE
         recommendation = "Optimize query patterns"
-        
+
         if "memory" in metric_name:
             bottleneck_type = BottleneckType.MEMORY_INTENSIVE
             recommendation = "Consider adding more memory or clearing caches"
@@ -134,7 +142,7 @@ class AdvancedPerformanceMonitor:
             recommendation = "Add indexes or optimize database queries"
         elif "error" in metric_name:
             recommendation = "Check system logs for error patterns"
-        
+
         report = BottleneckReport(
             bottleneck_id=f"bnk_{len(self.bottleneck_reports)}",
             bottleneck_type=bottleneck_type,
@@ -146,20 +154,22 @@ class AdvancedPerformanceMonitor:
             recommendation=recommendation,
             detected_at=time.time(),
         )
-        
+
         self.bottleneck_reports.append(report)
-        self.logger.warning(f"Bottleneck detected: {metric_name} = {value} (threshold: {threshold})")
-    
+        self.logger.warning(
+            f"Bottleneck detected: {metric_name} = {value} (threshold: {threshold})"
+        )
+
     def get_component_summary(self, component: str) -> Dict[str, Any]:
         """Get component performance summary"""
         with self._lock:
             if component not in self.component_metrics:
                 return {}
-            
+
             values = self.component_metrics[component]
             if not values:
                 return {}
-            
+
             values.sort()
             return {
                 "component": component,
@@ -172,31 +182,27 @@ class AdvancedPerformanceMonitor:
                 "p95": values[int(len(values) * 0.95)],
                 "p99": values[int(len(values) * 0.99)],
             }
-    
+
     def get_bottleneck_report(self) -> List[Dict[str, Any]]:
         """Get bottleneck report"""
         with self._lock:
             return [b.to_dict() for b in self.bottleneck_reports[-50:]]
-    
+
     def get_system_health(self) -> Dict[str, Any]:
         """Get overall system health assessment"""
         with self._lock:
             critical_count = sum(
-                1 for b in self.bottleneck_reports 
-                if b.severity == "critical"
+                1 for b in self.bottleneck_reports if b.severity == "critical"
             )
-            high_count = sum(
-                1 for b in self.bottleneck_reports 
-                if b.severity == "high"
-            )
-            
+            high_count = sum(1 for b in self.bottleneck_reports if b.severity == "high")
+
             if critical_count > 0:
                 status = HealthStatus.CRITICAL.value
             elif high_count > 2:
                 status = HealthStatus.DEGRADED.value
             else:
                 status = HealthStatus.HEALTHY.value
-            
+
             return {
                 "status": status,
                 "critical_issues": critical_count,
@@ -204,31 +210,34 @@ class AdvancedPerformanceMonitor:
                 "total_bottlenecks": len(self.bottleneck_reports),
                 "metrics_collected": len(self.metrics),
             }
-    
-    def get_performance_trend(self, metric_name: str, minutes: int = 60) -> Dict[str, Any]:
+
+    def get_performance_trend(
+        self, metric_name: str, minutes: int = 60
+    ) -> Dict[str, Any]:
         """Analyze performance trend"""
         with self._lock:
             cutoff_time = time.time() - (minutes * 60)
-            
+
             recent_metrics = [
-                m for m in self.metrics 
+                m
+                for m in self.metrics
                 if m.name == metric_name and m.timestamp >= cutoff_time
             ]
-            
+
             if not recent_metrics:
                 return {}
-            
+
             values = [m.value for m in recent_metrics]
             values.sort()
-            
+
             # Determine trend
             if len(values) >= 2:
-                first_half = statistics.mean(values[:len(values)//2])
-                second_half = statistics.mean(values[len(values)//2:])
+                first_half = statistics.mean(values[: len(values) // 2])
+                second_half = statistics.mean(values[len(values) // 2 :])
                 trend = "improving" if second_half < first_half else "degrading"
             else:
                 trend = "unknown"
-            
+
             return {
                 "metric_name": metric_name,
                 "period_minutes": minutes,

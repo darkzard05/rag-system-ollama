@@ -1,4 +1,3 @@
-
 import sys
 import os
 
@@ -11,9 +10,10 @@ import logging
 # 로깅 설정
 logging.basicConfig(level=logging.INFO)
 
+
 def test_session_fallback():
     print("=== SessionManager Fallback Test ===")
-    
+
     # 1. 세션 초기화 (Streamlit 없이)
     try:
         SessionManager.init_session()
@@ -40,6 +40,7 @@ def test_session_fallback():
     # 4. ready_for_chat 상태 확인 (기본값 False 예상)
     ready = SessionManager.is_ready_for_chat()
     print(f"ℹ️ is_ready_for_chat: {ready} (expected False without PDF processing)")
+
 
 if __name__ == "__main__":
     test_session_fallback()

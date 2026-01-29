@@ -8,7 +8,19 @@ This module provides:
 - Generic container types
 """
 
-from typing import TypeVar, Generic, Protocol, Callable, Dict, List, Optional, Tuple, Union, Any, overload
+from typing import (
+    TypeVar,
+    Generic,
+    Protocol,
+    Callable,
+    Dict,
+    List,
+    Optional,
+    Tuple,
+    Union,
+    Any,
+    overload,
+)
 from langchain_core.documents import Document
 
 # ============================================================================
@@ -16,17 +28,17 @@ from langchain_core.documents import Document
 # ============================================================================
 
 # Generic type variables
-T = TypeVar('T')  # Generic type
-K = TypeVar('K')  # Key type
-V = TypeVar('V')  # Value type
-U = TypeVar('U')  # Another generic type
-T_co = TypeVar('T_co', covariant=True)  # Covariant type
-T_contra = TypeVar('T_contra', contravariant=True)  # Contravariant type
+T = TypeVar("T")  # Generic type
+K = TypeVar("K")  # Key type
+V = TypeVar("V")  # Value type
+U = TypeVar("U")  # Another generic type
+T_co = TypeVar("T_co", covariant=True)  # Covariant type
+T_contra = TypeVar("T_contra", contravariant=True)  # Contravariant type
 
 # Domain-specific type variables
-DocumentT = TypeVar('DocumentT', bound=Document)
-StateT = TypeVar('StateT')
-ConfigT = TypeVar('ConfigT')
+DocumentT = TypeVar("DocumentT", bound=Document)
+StateT = TypeVar("StateT")
+ConfigT = TypeVar("ConfigT")
 
 # ============================================================================
 # Type Aliases
@@ -71,9 +83,10 @@ LogitScores = List[float]
 # Protocol Definitions (Duck Typing)
 # ============================================================================
 
+
 class Retrievable(Protocol[T_co]):
     """Protocol for objects that can be retrieved."""
-    
+
     def retrieve(self, query: str, top_k: int) -> List[T_co]:
         """Retrieve items based on a query."""
         ...
@@ -81,19 +94,21 @@ class Retrievable(Protocol[T_co]):
 
 class Rankable(Protocol):
     """Protocol for objects that can rank documents."""
-    
-    def rank(self, query: str, documents: DocumentList) -> Tuple[DocumentList, ScoreList]:
+
+    def rank(
+        self, query: str, documents: DocumentList
+    ) -> Tuple[DocumentList, ScoreList]:
         """Rank documents for a given query."""
         ...
 
 
 class Embeddable(Protocol):
     """Protocol for objects that can generate embeddings."""
-    
+
     def embed(self, text: str) -> EmbeddingVector:
         """Generate embedding for text."""
         ...
-    
+
     def embed_batch(self, texts: List[str]) -> Embeddings:
         """Generate embeddings for multiple texts."""
         ...
@@ -101,11 +116,11 @@ class Embeddable(Protocol):
 
 class GenerativeModel(Protocol):
     """Protocol for generative language models."""
-    
+
     def generate(self, prompt: str, **kwargs: Any) -> str:
         """Generate text based on prompt."""
         ...
-    
+
     async def agenerate(self, prompt: str, **kwargs: Any) -> str:
         """Asynchronously generate text based on prompt."""
         ...
@@ -113,11 +128,11 @@ class GenerativeModel(Protocol):
 
 class Configurable(Protocol):
     """Protocol for configurable objects."""
-    
+
     def configure(self, config: ConfigDict) -> None:
         """Configure the object with a configuration dictionary."""
         ...
-    
+
     def get_config(self) -> ConfigDict:
         """Get current configuration."""
         ...
@@ -127,13 +142,14 @@ class Configurable(Protocol):
 # Generic Container Classes
 # ============================================================================
 
+
 class Pipeline(Generic[T, U]):
     """Generic pipeline that transforms input of type T to output of type U."""
-    
+
     def process(self, input_data: T) -> U:
         """Process input and return output."""
         raise NotImplementedError
-    
+
     async def aprocess(self, input_data: T) -> U:
         """Asynchronously process input and return output."""
         raise NotImplementedError
@@ -141,19 +157,19 @@ class Pipeline(Generic[T, U]):
 
 class Cache(Generic[K, V]):
     """Generic cache for key-value pairs."""
-    
+
     def get(self, key: K) -> Optional[V]:
         """Get value from cache."""
         raise NotImplementedError
-    
+
     def set(self, key: K, value: V) -> None:
         """Set value in cache."""
         raise NotImplementedError
-    
+
     def delete(self, key: K) -> None:
         """Delete value from cache."""
         raise NotImplementedError
-    
+
     def clear(self) -> None:
         """Clear all cache entries."""
         raise NotImplementedError
@@ -161,27 +177,29 @@ class Cache(Generic[K, V]):
 
 class Result(Generic[T]):
     """Generic result type for operations that can succeed or fail."""
-    
-    def __init__(self, success: bool, value: Optional[T] = None, error: Optional[str] = None):
+
+    def __init__(
+        self, success: bool, value: Optional[T] = None, error: Optional[str] = None
+    ):
         self.success = success
         self.value = value
         self.error = error
-    
+
     def is_ok(self) -> bool:
         """Check if operation succeeded."""
         return self.success
-    
+
     def is_err(self) -> bool:
         """Check if operation failed."""
         return not self.success
-    
+
     @staticmethod
-    def ok(value: T) -> 'Result[T]':
+    def ok(value: T) -> "Result[T]":
         """Create successful result."""
         return Result(success=True, value=value)
-    
+
     @staticmethod
-    def err(error: str) -> 'Result[T]':
+    def err(error: str) -> "Result[T]":
         """Create error result."""
         return Result(success=False, error=error)
 
@@ -190,29 +208,30 @@ class Result(Generic[T]):
 # Overload Definitions
 # ============================================================================
 
-@overload
-def serialize_value(value: str) -> str:
-    ...
 
 @overload
-def serialize_value(value: int) -> str:
-    ...
+def serialize_value(value: str) -> str: ...
+
 
 @overload
-def serialize_value(value: float) -> str:
-    ...
+def serialize_value(value: int) -> str: ...
+
 
 @overload
-def serialize_value(value: List[T]) -> List[str]:
-    ...
+def serialize_value(value: float) -> str: ...
+
 
 @overload
-def serialize_value(value: Dict[K, V]) -> Dict[K, str]:
-    ...
+def serialize_value(value: List[T]) -> List[str]: ...
+
+
+@overload
+def serialize_value(value: Dict[K, V]) -> Dict[K, str]: ...
+
 
 def serialize_value(value: Any) -> Any:
     """Serialize a value to its string representation.
-    
+
     Supports multiple input types with proper type hints.
     """
     if isinstance(value, (str, int, float)):
@@ -226,16 +245,16 @@ def serialize_value(value: Any) -> Any:
 
 
 @overload
-def get_or_default(data: Dict[K, V], key: K) -> Optional[V]:
-    ...
+def get_or_default(data: Dict[K, V], key: K) -> Optional[V]: ...
+
 
 @overload
-def get_or_default(data: Dict[K, V], key: K, default: U) -> Union[V, U]:
-    ...
+def get_or_default(data: Dict[K, V], key: K, default: U) -> Union[V, U]: ...
+
 
 def get_or_default(data: Dict[K, V], key: K, default: Any = None) -> Any:
     """Get value from dictionary with optional default.
-    
+
     Returns the value if key exists, otherwise returns default.
     """
     return data.get(key, default)
@@ -244,6 +263,7 @@ def get_or_default(data: Dict[K, V], key: K, default: Any = None) -> Any:
 # ============================================================================
 # Type Checking Utilities
 # ============================================================================
+
 
 def is_document(obj: Any) -> bool:
     """Check if object is a Document."""
@@ -257,11 +277,13 @@ def is_document_list(obj: Any) -> bool:
 
 def validate_type(value: T, expected_type: type) -> T:
     """Validate that value is of expected type.
-    
+
     Raises TypeError if validation fails.
     """
     if not isinstance(value, expected_type):
-        raise TypeError(f"Expected {expected_type.__name__}, got {type(value).__name__}")
+        raise TypeError(
+            f"Expected {expected_type.__name__}, got {type(value).__name__}"
+        )
     return value
 
 
@@ -269,8 +291,10 @@ def validate_type(value: T, expected_type: type) -> T:
 # TypedDict Definitions (Structured Dictionaries)
 # ============================================================================
 
+
 class RetrievalState(GraphState):
     """State dict for retrieval operations."""
+
     question: str
     documents: DocumentList
     scores: ScoreList
@@ -278,6 +302,7 @@ class RetrievalState(GraphState):
 
 class GenerationState(GraphState):
     """State dict for generation operations."""
+
     question: str
     context: str
     answer: str
@@ -297,7 +322,7 @@ Batch = Union[List[str], List[Dict[str, Any]]]
 Config = Union[Dict[str, Any], ConfigDict]
 
 # Model types
-Model = Union['GenerativeModel', 'Embeddable', 'Rankable']
+Model = Union["GenerativeModel", "Embeddable", "Rankable"]
 
 # Error types
 ErrorInfo = Union[str, Exception]

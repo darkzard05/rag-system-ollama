@@ -4,32 +4,32 @@ This guide covers common issues encountered when running the RAG System, particu
 
 ## 🪟 Windows Specific Issues
 
+### ⚡ Quick Fix (Recommended)
+If you encounter crashes or DLL errors, we provide an automatic fix script:
+```powershell
+# 관리자 권한으로 실행하거나 아래 명령어를 입력하세요.
+powershell ./scripts/fix_windows_env.ps1
+```
+이 스크립트는 충돌하는 패키지를 삭제하고 Windows 안정 버전을 재설치합니다.
+
 ### 1. Application Crashes on Startup (0xc0000139 / DLL Load Failed)
 
 **Symptoms:**
 - The application crashes silently or with exit code `0xc0000139` when starting.
 - `ImportError: DLL load failed` when importing `torch` or `sentence_transformers`.
 
-**Cause:**
-This is often caused by:
-1.  Missing **Microsoft Visual C++ Redistributable** packages.
-2.  Incompatible `torchvision` version installed alongside `torch`.
-3.  Corrupted PyTorch installation.
-
 **Solutions:**
 
-#### Option A: Install VC++ Redistributable (Recommended)
-Download and install the latest supported Visual C++ redistributable packages for Visual Studio 2015, 2017, 2019, and 2022.
+#### Option A: Install VC++ Redistributable
+Download and install the latest supported Visual C++ redistributable packages.
 - [Download Link (x64)](https://aka.ms/vs/17/release/vc_redist.x64.exe)
 
-#### Option B: Clean Install without Torchvision
-This project handles text and PDF documents, so `torchvision` is generally not required. If you have it installed and are facing crashes:
+#### Option B: Clean Install using Windows Requirements
+If Option A doesn't work, use our optimized requirements file which excludes problematic packages like `torchvision`:
 
 ```bash
-pip uninstall torchvision
-pip install --force-reinstall torch --index-url https://download.pytorch.org/whl/cpu
-# Or for CUDA support (adjust version as needed)
-# pip install --force-reinstall torch --index-url https://download.pytorch.org/whl/cu121
+pip uninstall torch torchvision
+pip install -r requirements-win.txt
 ```
 
 #### Option C: Run Diagnosis Script

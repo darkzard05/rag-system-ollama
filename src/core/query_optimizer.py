@@ -1,73 +1,73 @@
 """
-RAG 전용 쿼리 최적화 모듈.
-질문의 복잡도를 분석하여 쿼리 확장(Multi-Query) 수행 여부를 결정합니다.
+LLM-based Semantic Router for Intent-based RAG Pipelines.
+Optimized for 4B models to achieve < 500ms routing latency.
 """
 
 import logging
-import re
-from typing import List, Dict, Any, Tuple
+import time
+from typing import Any
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.output_parsers import StrOutputParser
 
 logger = logging.getLogger(__name__)
 
+
 class RAGQueryOptimizer:
     """
-    RAG 시스템의 질의 최적화 엔진.
-    질문의 길이, 키워드, 구조를 분석하여 최적의 검색 전략을 제안합니다.
+    LLM Intent Classifier.
+    Categorizes queries into:
+    [A] GREETING: Simple hellos or bot identity questions.
+    [B] FACTOID: Specific, clear questions that need direct retrieval.
+    [C] RESEARCH: Complex, vague, or multi-step questions that need query expansion.
     """
-    
-    # 확장 건너뛰기용 명확한 키워드 목록
-    SIMPLE_KEYWORDS = [
-        "제목", "저자", "작성자", "날짜", "요약", "결론", 
-        "전체 내용", "라이선스", "버전", "목차"
-    ]
-    
-    # 의문사 패턴
-    QUESTION_PATTERNS = [
-        r"인가요\?", r"뭐야\?", r"누구야\?", r"언제야\?", r"어디야\?"
-    ]
+
+    ROUTING_PROMPT = """
+자 너는 이제부터 질문 분류기야. 사용자의 [질문]을 보고 아래 규칙에 따라 딱 한 글자(A, B, C)로만 대답해.
+
+[규칙]
+- [A]: 인사, 자기소개, 감정 표현 등 문서 검색이 아예 필요 없는 질문.
+- [B]: "제목이 뭐야?", "저자는 누구야?" 처럼 키워드가 명확하여 바로 검색 가능한 질문.
+- [C]: "내용 요약해줘", "전체적인 특징 분석해줘" 처럼 여러 번의 검색이나 확장이 필요한 복잡한 질문.
+
+[질문]: "{input}"
+답변(A/B/C):"""
+
+    @classmethod
+    async def classify_intent(cls, query: str, llm: Any) -> str:
+        """
+        Classifies the intent using the LLM with minimal token generation.
+        """
+        start_time = time.time()
+
+        # 4B 모델용 초경량 체인
+        prompt = ChatPromptTemplate.from_template(cls.ROUTING_PROMPT)
+        # stop 시퀀스를 설정하여 모델이 길게 말하는 것을 원천 차단 (지연 시간 최적화)
+        chain = prompt | llm.bind(stop=["\n", " ", "."]) | StrOutputParser()
+
+        try:
+            # 1-토큰 분류 실행
+            response = await chain.ainvoke({"input": query})
+            intent = response.strip().upper()
+
+            # 결과 정규화 (예외 상황 대비)
+            if "A" in intent:
+                result = "GREETING"
+            elif "C" in intent:
+                result = "RESEARCH"
+            else:
+                result = "FACTOID"  # 기본값
+
+            latency = (time.time() - start_time) * 1000
+            logger.info(
+                f"[Router] Intent: {result} | Latency: {latency:.2f}ms | Query: {query[:30]}"
+            )
+
+            return result
+        except Exception as e:
+            logger.error(f"[Router] Error: {e}")
+            return "FACTOID"  # 에러 시 안전한 기본값
 
     @classmethod
     def is_complex_query(cls, query: str) -> bool:
-        """
-        질문이 쿼리 확장이 필요한 복잡한 질문인지 판단합니다.
-        
-        Args:
-            query: 사용자의 원본 질문
-            
-        Returns:
-            bool: 확장이 필요하면 True, 단순 질문이면 False
-        """
-        query = query.strip()
-        
-        # 1. 길이 기반 판단 (매우 짧은 질문은 단순함)
-        if len(query) < 20:
-            logger.debug(f"[QueryOptimizer] 짧은 질문({len(query)}자)으로 판단: {query}")
-            return False
-            
-        # 2. 명확한 키워드 포함 여부 확인
-        for word in cls.SIMPLE_KEYWORDS:
-            if word in query:
-                logger.debug(f"[QueryOptimizer] 명확한 키워드('{word}') 포함으로 판단: {query}")
-                return False
-                
-        # 3. 단순 의문문 패턴 확인
-        for pattern in cls.QUESTION_PATTERNS:
-            if re.search(pattern, query):
-                # 단, 문장이 길지 않을 때만 단순 질문으로 간주
-                if len(query) < 40:
-                    logger.debug(f"[QueryOptimizer] 단순 의문문 패턴 감지: {query}")
-                    return False
-
-        # 4. 그 외 40자 이상의 긴 문장은 확장이 유용하다고 판단
-        if len(query) >= 40:
-            return True
-            
-        return False
-
-    @classmethod
-    def get_optimized_expansion_prompt(cls, query: str) -> str:
-        """
-        질문에 최적화된 경량화 확장 프롬프트를 반환합니다.
-        (향후 질문 타입별로 프롬프트를 다르게 가져갈 때 사용)
-        """
-        return "질문을 검색용 키워드 3개로 변환하라."
+        """Legacy helper - defaults to True to be safe."""
+        return len(query) > 30

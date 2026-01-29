@@ -2,7 +2,6 @@
 Deployment Manager for RAG System Deployment and Versioning
 """
 
-import os
 import json
 import time
 import logging
@@ -18,6 +17,7 @@ import hashlib
 
 class DeploymentStatus(Enum):
     """Deployment Status Types"""
+
     PENDING = "pending"
     IN_PROGRESS = "in_progress"
     COMPLETED = "completed"
@@ -27,6 +27,7 @@ class DeploymentStatus(Enum):
 
 class DeploymentEnvironment(Enum):
     """Deployment Target Environments"""
+
     DEVELOPMENT = "development"
     STAGING = "staging"
     PRODUCTION = "production"
@@ -35,6 +36,7 @@ class DeploymentEnvironment(Enum):
 @dataclass
 class DeploymentConfig:
     """Configuration for Deployment"""
+
     service_name: str
     version: str
     environment: DeploymentEnvironment
@@ -45,17 +47,18 @@ class DeploymentConfig:
     max_concurrent_deployments: int = 3
     deployment_timeout: int = 300  # seconds
     metadata: Dict[str, Any] = field(default_factory=dict)
-    
+
     def to_dict(self) -> Dict:
         """Convert to dictionary"""
         data = asdict(self)
-        data['environment'] = self.environment.value
+        data["environment"] = self.environment.value
         return data
 
 
 @dataclass
 class DeploymentRecord:
     """Record of a Deployment"""
+
     deployment_id: str
     service_name: str
     version: str
@@ -68,7 +71,7 @@ class DeploymentRecord:
     error_message: Optional[str] = None
     deployed_by: str = "system"
     artifacts_hash: Dict[str, str] = field(default_factory=dict)
-    
+
     def to_dict(self) -> Dict:
         """Convert to dictionary"""
         return asdict(self)
@@ -77,13 +80,14 @@ class DeploymentRecord:
 @dataclass
 class HealthCheckResult:
     """Health Check Result for Deployment"""
+
     service_name: str
     status: bool
     timestamp: float
     checks: Dict[str, bool] = field(default_factory=dict)
     error_details: Optional[str] = None
     response_time_ms: float = 0.0
-    
+
     def to_dict(self) -> Dict:
         """Convert to dictionary"""
         return asdict(self)
@@ -91,43 +95,43 @@ class HealthCheckResult:
 
 class DeploymentManager:
     """Manages deployment of RAG System versions"""
-    
+
     def __init__(self, deployment_root: str = "./deployments"):
         """
         Initialize Deployment Manager
-        
+
         Args:
             deployment_root: Root directory for deployments
         """
         self.deployment_root = Path(deployment_root)
         self.deployment_root.mkdir(parents=True, exist_ok=True)
-        
+
         self.deployments: Dict[str, DeploymentRecord] = {}
         self.deployment_history: List[DeploymentRecord] = []
         self.active_deployments: Dict[str, DeploymentConfig] = {}
         self.health_checks: Dict[str, List[HealthCheckResult]] = {}
-        
+
         self._lock = RLock()
         self.logger = logging.getLogger(__name__)
-        
+
         # Load deployment history from file
         self._load_deployment_history()
-    
+
     def _generate_deployment_id(self, service_name: str, version: str) -> str:
         """Generate unique deployment ID"""
         timestamp = datetime.now().isoformat()
         data = f"{service_name}:{version}:{timestamp}".encode()
         hash_value = hashlib.sha256(data).hexdigest()[:12]
         return f"dep-{hash_value}"
-    
+
     def _calculate_checksum(self, deployment_path: str) -> str:
         """Calculate checksum for deployment artifacts"""
         sha256_hash = hashlib.sha256()
-        
+
         path = Path(deployment_path)
         if not path.exists():
             return ""
-        
+
         if path.is_file():
             with open(path, "rb") as f:
                 for chunk in iter(lambda: f.read(4096), b""):
@@ -138,16 +142,16 @@ class DeploymentManager:
                     with open(file, "rb") as f:
                         for chunk in iter(lambda: f.read(4096), b""):
                             sha256_hash.update(chunk)
-        
+
         return sha256_hash.hexdigest()
-    
+
     def start_deployment(self, config: DeploymentConfig) -> str:
         """
         Start deployment process
-        
+
         Args:
             config: Deployment configuration
-            
+
         Returns:
             Deployment ID
         """
@@ -157,33 +161,36 @@ class DeploymentManager:
                 raise RuntimeError(
                     f"Max concurrent deployments ({config.max_concurrent_deployments}) reached"
                 )
-            
+
             deployment_id = self._generate_deployment_id(
-                config.service_name, 
-                config.version
+                config.service_name, config.version
             )
-            
+
             # Check if version already deployed
             for record in self.deployment_history:
-                if (record.service_name == config.service_name and 
-                    record.version == config.version and 
-                    record.status == DeploymentStatus.COMPLETED.value):
+                if (
+                    record.service_name == config.service_name
+                    and record.version == config.version
+                    and record.status == DeploymentStatus.COMPLETED.value
+                ):
                     raise ValueError(
                         f"Version {config.version} already deployed for {config.service_name}"
                     )
-            
+
             # Get previous version
             previous_version = None
             for record in reversed(self.deployment_history):
-                if (record.service_name == config.service_name and 
-                    record.status == DeploymentStatus.COMPLETED.value):
+                if (
+                    record.service_name == config.service_name
+                    and record.status == DeploymentStatus.COMPLETED.value
+                ):
                     previous_version = record.version
                     break
-            
+
             # Create deployment directory
             deployment_dir = self.deployment_root / deployment_id
             deployment_dir.mkdir(parents=True, exist_ok=True)
-            
+
             # Create deployment record
             record = DeploymentRecord(
                 deployment_id=deployment_id,
@@ -193,45 +200,38 @@ class DeploymentManager:
                 status=DeploymentStatus.IN_PROGRESS.value,
                 timestamp=time.time(),
                 previous_version=previous_version,
-                deployed_by=config.metadata.get("deployed_by", "system")
+                deployed_by=config.metadata.get("deployed_by", "system"),
             )
-            
+
             self.deployments[deployment_id] = record
             self.active_deployments[deployment_id] = config
-            
+
             self.logger.info(
                 f"Started deployment: {deployment_id} for {config.service_name} v{config.version}"
             )
-            
+
             return deployment_id
-    
+
     def deploy_artifacts(self, deployment_id: str, source_path: str) -> bool:
         """
-        Deploy artifacts to deployment directory
-        
-        Args:
-            deployment_id: Deployment ID
-            source_path: Source path for artifacts
-            
-        Returns:
-            Success status
+        Deploy artifacts to deployment directory with automatic cleanup on failure.
         """
         with self._lock:
             if deployment_id not in self.deployments:
                 raise ValueError(f"Deployment {deployment_id} not found")
-            
+
             record = self.deployments[deployment_id]
             if record.status != DeploymentStatus.IN_PROGRESS.value:
                 raise RuntimeError(f"Deployment {deployment_id} is not in progress")
-            
+
             source = Path(source_path)
             if not source.exists():
                 raise FileNotFoundError(f"Source path not found: {source_path}")
-            
+
             # Copy artifacts to deployment directory
             deployment_dir = self.deployment_root / deployment_id / "artifacts"
             deployment_dir.mkdir(parents=True, exist_ok=True)
-            
+
             try:
                 if source.is_file():
                     shutil.copy2(source, deployment_dir)
@@ -245,44 +245,75 @@ class DeploymentManager:
                             if dest.exists():
                                 shutil.rmtree(dest)
                             shutil.copytree(item, dest)
-                
+
                 # Calculate checksum
                 record.checksum = self._calculate_checksum(str(deployment_dir))
-                
+
                 self.logger.info(
                     f"Deployed artifacts to {deployment_id}, checksum: {record.checksum}"
                 )
                 return True
-            
+
             except Exception as e:
                 self.logger.error(f"Failed to deploy artifacts: {str(e)}")
+                # [Resource Leak Prevention] Clean up the partially copied artifacts
+                if deployment_dir.exists():
+                    shutil.rmtree(deployment_dir)
+                    self.logger.info(
+                        f"Cleaned up partial artifacts for failed deployment {deployment_id}"
+                    )
                 raise
-    
-    def health_check(self, deployment_id: str, checks: Optional[Dict[str, bool]] = None) -> HealthCheckResult:
+
+    def purge_failed_deployments(self) -> int:
+        """
+        Removes physical directories for all deployments marked as FAILED.
+        Returns the number of directories removed.
+        """
+        with self._lock:
+            count = 0
+            for deployment_id, record in self.deployments.items():
+                if record.status == DeploymentStatus.FAILED.value:
+                    dep_dir = self.deployment_root / deployment_id
+                    if dep_dir.exists():
+                        try:
+                            shutil.rmtree(dep_dir)
+                            count += 1
+                            self.logger.info(
+                                f"Purged failed deployment directory: {deployment_id}"
+                            )
+                        except Exception as e:
+                            self.logger.error(f"Failed to purge {deployment_id}: {e}")
+            return count
+
+    def health_check(
+        self, deployment_id: str, checks: Optional[Dict[str, bool]] = None
+    ) -> HealthCheckResult:
         """
         Perform health check on deployment
-        
+
         Args:
             deployment_id: Deployment ID
             checks: Dictionary of health checks
-            
+
         Returns:
             Health check result
         """
         with self._lock:
             if deployment_id not in self.deployments:
                 raise ValueError(f"Deployment {deployment_id} not found")
-            
+
             record = self.deployments[deployment_id]
-            
+
             # Default health checks
             if checks is None:
                 checks = {
-                    "artifacts_exist": (self.deployment_root / deployment_id / "artifacts").exists(),
+                    "artifacts_exist": (
+                        self.deployment_root / deployment_id / "artifacts"
+                    ).exists(),
                     "checksum_valid": bool(record.checksum),
                     "configuration_valid": deployment_id in self.active_deployments,
                 }
-            
+
             # Perform checks
             all_passed = True
             check_results = {}
@@ -290,7 +321,7 @@ class DeploymentManager:
                 check_results[check_name] = result
                 if not result:
                     all_passed = False
-            
+
             health_result = HealthCheckResult(
                 service_name=record.service_name,
                 status=all_passed,
@@ -298,109 +329,105 @@ class DeploymentManager:
                 checks=check_results,
                 response_time_ms=1.0,  # Simulated response time
             )
-            
+
             # Store health check result
             if deployment_id not in self.health_checks:
                 self.health_checks[deployment_id] = []
             self.health_checks[deployment_id].append(health_result)
-            
-            self.logger.info(
-                f"Health check for {deployment_id}: {all_passed}"
-            )
-            
+
+            self.logger.info(f"Health check for {deployment_id}: {all_passed}")
+
             return health_result
-    
+
     def complete_deployment(self, deployment_id: str) -> bool:
         """
         Complete deployment process
-        
+
         Args:
             deployment_id: Deployment ID
-            
+
         Returns:
             Success status
         """
         with self._lock:
             if deployment_id not in self.deployments:
                 raise ValueError(f"Deployment {deployment_id} not found")
-            
+
             record = self.deployments[deployment_id]
             if record.status != DeploymentStatus.IN_PROGRESS.value:
                 raise RuntimeError(f"Deployment {deployment_id} is not in progress")
-            
+
             # Update record
             record.status = DeploymentStatus.COMPLETED.value
             record.duration = time.time() - record.timestamp
-            
+
             # Add to history
             self.deployment_history.append(record)
-            
+
             # Remove from active deployments
             if deployment_id in self.active_deployments:
                 del self.active_deployments[deployment_id]
-            
+
             # Save deployment history
             self._save_deployment_history()
-            
+
             self.logger.info(
                 f"Completed deployment {deployment_id} in {record.duration:.2f}s"
             )
-            
+
             return True
-    
+
     def fail_deployment(self, deployment_id: str, error_message: str) -> bool:
         """
         Mark deployment as failed
-        
+
         Args:
             deployment_id: Deployment ID
             error_message: Error message
-            
+
         Returns:
             Success status
         """
         with self._lock:
             if deployment_id not in self.deployments:
                 raise ValueError(f"Deployment {deployment_id} not found")
-            
+
             record = self.deployments[deployment_id]
             record.status = DeploymentStatus.FAILED.value
             record.error_message = error_message
             record.duration = time.time() - record.timestamp
-            
+
             # Add to history
             self.deployment_history.append(record)
-            
+
             # Remove from active deployments
             if deployment_id in self.active_deployments:
                 del self.active_deployments[deployment_id]
-            
+
             # Save deployment history
             self._save_deployment_history()
-            
-            self.logger.error(
-                f"Failed deployment {deployment_id}: {error_message}"
-            )
-            
+
+            self.logger.error(f"Failed deployment {deployment_id}: {error_message}")
+
             return True
-    
+
     def get_deployment_status(self, deployment_id: str) -> Dict[str, Any]:
         """
         Get deployment status
-        
+
         Args:
             deployment_id: Deployment ID
-            
+
         Returns:
             Deployment status information
         """
         with self._lock:
             if deployment_id not in self.deployments:
                 raise ValueError(f"Deployment {deployment_id} not found")
-            
+
             record = self.deployments[deployment_id]
             health_check_list = self.health_checks.get(deployment_id, [])
-            
+
             return {
                 "deployment_id": deployment_id,
                 "status": record.status,
@@ -411,35 +438,38 @@ class DeploymentManager:
                 "duration": record.duration,
                 "checksum": record.checksum,
                 "previous_version": record.previous_version,
-                "health_checks": [hc.to_dict() for hc in health_check_list[-5:]],  # Last 5
+                "health_checks": [
+                    hc.to_dict() for hc in health_check_list[-5:]
+                ],  # Last 5
                 "error_message": record.error_message,
             }
-    
-    def get_deployment_history(self, service_name: Optional[str] = None, 
-                               limit: int = 10) -> List[Dict[str, Any]]:
+
+    def get_deployment_history(
+        self, service_name: Optional[str] = None, limit: int = 10
+    ) -> List[Dict[str, Any]]:
         """
         Get deployment history
-        
+
         Args:
             service_name: Filter by service name (optional)
             limit: Number of records to return
-            
+
         Returns:
             List of deployment records
         """
         with self._lock:
             history = self.deployment_history
-            
+
             if service_name:
                 history = [r for r in history if r.service_name == service_name]
-            
+
             # Return most recent
             return [r.to_dict() for r in history[-limit:]]
-    
+
     def get_active_deployments(self) -> List[Dict[str, Any]]:
         """
         Get active deployments
-        
+
         Returns:
             List of active deployment configurations
         """
@@ -454,59 +484,68 @@ class DeploymentManager:
                 }
                 for dep_id, config in self.active_deployments.items()
             ]
-    
+
     def _save_deployment_history(self):
         """Save deployment history to file"""
         try:
             history_file = self.deployment_root / "deployment_history.json"
             history_data = [r.to_dict() for r in self.deployment_history]
-            
+
             with open(history_file, "w") as f:
                 json.dump(history_data, f, indent=2, default=str)
-            
+
         except Exception as e:
             self.logger.error(f"Failed to save deployment history: {str(e)}")
-    
+
     def _load_deployment_history(self):
         """Load deployment history from file"""
         try:
             history_file = self.deployment_root / "deployment_history.json"
-            
+
             if history_file.exists():
                 with open(history_file, "r") as f:
                     history_data = json.load(f)
-                
+
                 for record_data in history_data:
                     record = DeploymentRecord(**record_data)
                     self.deployment_history.append(record)
-            
+
         except Exception as e:
             self.logger.error(f"Failed to load deployment history: {str(e)}")
-    
+
     def get_deployment_statistics(self) -> Dict[str, Any]:
         """
         Get deployment statistics
-        
+
         Returns:
             Statistics about deployments
         """
         with self._lock:
             total_deployments = len(self.deployment_history)
-            successful = sum(1 for r in self.deployment_history 
-                           if r.status == DeploymentStatus.COMPLETED.value)
-            failed = sum(1 for r in self.deployment_history 
-                        if r.status == DeploymentStatus.FAILED.value)
-            
+            successful = sum(
+                1
+                for r in self.deployment_history
+                if r.status == DeploymentStatus.COMPLETED.value
+            )
+            failed = sum(
+                1
+                for r in self.deployment_history
+                if r.status == DeploymentStatus.FAILED.value
+            )
+
             # Calculate average duration for successful deployments
             successful_deployments = [
-                r for r in self.deployment_history 
+                r
+                for r in self.deployment_history
                 if r.status == DeploymentStatus.COMPLETED.value
             ]
             avg_duration = (
-                sum(r.duration for r in successful_deployments) / len(successful_deployments)
-                if successful_deployments else 0
+                sum(r.duration for r in successful_deployments)
+                / len(successful_deployments)
+                if successful_deployments
+                else 0
             )
-            
+
             # Service breakdown
             services = {}
             for record in self.deployment_history:
@@ -515,12 +554,14 @@ class DeploymentManager:
                 services[record.service_name]["total"] += 1
                 if record.status == DeploymentStatus.COMPLETED.value:
                     services[record.service_name]["successful"] += 1
-            
+
             return {
                 "total_deployments": total_deployments,
                 "successful_deployments": successful,
                 "failed_deployments": failed,
-                "success_rate": successful / total_deployments if total_deployments > 0 else 0,
+                "success_rate": successful / total_deployments
+                if total_deployments > 0
+                else 0,
                 "average_duration_seconds": avg_duration,
                 "active_deployments": len(self.active_deployments),
                 "services": services,

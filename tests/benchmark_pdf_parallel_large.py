@@ -1,8 +1,6 @@
-
 import time
 import os
 import sys
-import concurrent.futures
 from pathlib import Path
 import fitz
 from typing import List
@@ -13,7 +11,8 @@ sys.path.append(str(project_root))
 sys.path.append(str(project_root / "src"))
 
 from langchain_core.documents import Document
-from core.rag_core import _load_pdf_docs, preprocess_text, _extract_page_worker
+from core.rag_core import _load_pdf_docs, _extract_page_worker
+
 
 def create_large_dummy_pdf(path: str, pages: int):
     """테스트를 위한 대용량 더미 PDF 생성"""
@@ -21,12 +20,15 @@ def create_large_dummy_pdf(path: str, pages: int):
     for i in range(pages):
         page = doc.new_page()
         # 각 페이지에 텍스트 삽입 (연산 부하를 위해 어느 정도 양의 텍스트 추가)
-        text = f"이것은 {i+1}페이지의 테스트용 텍스트입니다. " * 50
+        text = f"이것은 {i + 1}페이지의 테스트용 텍스트입니다. " * 50
         page.insert_text((50, 50), text)
     doc.save(path)
     doc.close()
 
-def _load_pdf_docs_sequential_benchmark(file_path: str, file_name: str) -> List[Document]:
+
+def _load_pdf_docs_sequential_benchmark(
+    file_path: str, file_name: str
+) -> List[Document]:
     docs = []
     with fitz.open(file_path) as doc_file:
         total_pages = len(doc_file)
@@ -37,17 +39,18 @@ def _load_pdf_docs_sequential_benchmark(file_path: str, file_name: str) -> List[
                 docs.append(page_doc)
     return docs
 
+
 def run_large_benchmark():
     print("--- 대용량 PDF(100p) 텍스트 추출 성능 테스트 ---")
-    
+
     large_pdf_path = "tests/large_test_dummy.pdf"
     page_count = 100
-    
+
     print(f"더미 PDF 생성 중 ({page_count}페이지)...")
     create_large_dummy_pdf(large_pdf_path, page_count)
-    
+
     file_name = "large_dummy.pdf"
-    
+
     try:
         # 1. 순차 방식 테스트
         print("\n[1] 순차 방식(Sequential) 실행 중...")
@@ -64,24 +67,25 @@ def run_large_benchmark():
         print(f"병렬 방식 완료: {para_time:.4f}초")
 
         # 결과 분석
-        print("\n" + "="*60)
-        print(f"{ '항목':<25} | { '순차 방식':<15} | { '병렬 방식':<15}")
+        print("\n" + "=" * 60)
+        print(f"{'항목':<25} | {'순차 방식':<15} | {'병렬 방식':<15}")
         print("-" * 60)
-        print(f"{ '소요 시간':<25} | {seq_time:<15.4f} | {para_time:<15.4f}")
-        print(f"{ '추출 페이지 수':<25} | {len(docs_seq):<15} | {len(docs_para):<15}")
-        
+        print(f"{'소요 시간':<25} | {seq_time:<15.4f} | {para_time:<15.4f}")
+        print(f"{'추출 페이지 수':<25} | {len(docs_seq):<15} | {len(docs_para):<15}")
+
         speedup = (seq_time / para_time) if para_time > 0 else 0
         print(f"\n성능 향상: {speedup:.2f}배 빨라짐")
-        
+
         if speedup > 1.2:
             print("✅ 대용량 문서에서 병렬화의 이점이 확실히 나타납니다.")
         else:
             print("⚠️ 성능 향상이 크지 않습니다. 시스템 환경을 확인하세요.")
-        print("="*60)
+        print("=" * 60)
 
     finally:
         if os.path.exists(large_pdf_path):
             os.remove(large_pdf_path)
+
 
 if __name__ == "__main__":
     run_large_benchmark()

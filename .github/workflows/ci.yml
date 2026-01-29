@@ -10,33 +10,130 @@ permissions:
   contents: read
 
 jobs:
-  test:
-    name: Run Tests
+  lint-and-static-analysis:
+    name: Linting & Type Checking
     runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: "3.11"
+        
+    - name: Install Linting Tools
+      run: |
+        python -m pip install --upgrade pip
+        pip install ruff mypy types-PyYAML types-psutil types-requests
+        
+    - name: Run Ruff (Lint & Format Check)
+      run: ruff check .
+      
+    - name: Run Mypy (Type Check)
+      run: |
+        export PYTHONPATH=$PYTHONPATH:$(pwd)/src
+        mypy --ignore-missing-imports src/
+
+  security-scan:
+    name: Security Scan
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: "3.11"
+        
+    - name: Install Security Tools
+      run: |
+        python -m pip install --upgrade pip
+        pip install bandit pip-audit
+        
+    - name: Run Bandit (SAST)
+      run: bandit -r src/ -ll # -ll: Report medium and high severity issues
+      
+    - name: Run pip-audit (Dependency Scan)
+      run: pip-audit -r requirements.txt --ignore-vuln PYSEC-2024-1 # Example: ignore specific false positives if needed
+
+  test:
+    name: Test (Py ${{ matrix.python-version }} on ${{ matrix.os }})
+    needs: [lint-and-static-analysis, security-scan]
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python-version: ["3.10", "3.11"]
+    runs-on: ${{ matrix.os }}
     
     steps:
     - uses: actions/checkout@v4
     
-    - name: Set up Python 3.11
+    - name: Set up Python ${{ matrix.python-version }}
       uses: actions/setup-python@v4
       with:
-        python-version: "3.11"
+        python-version: ${{ matrix.python-version }}
         cache: 'pip'
         
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
+        pip install pytest-cov
         if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+      shell: bash # Use bash on all OS for consistency
         
     - name: Run Core Integrity Tests
       run: |
+        export PYTHONPATH=$PYTHONPATH:$(pwd)/src
         python tests/verify_integrity_fixes.py
+      shell: bash
         
-    - name: Run Pipeline Integration Tests
+    - name: Run Pipeline Integration Tests with Coverage
       run: |
-        # Run legacy integration tests with mocks
-        python tests/test_rag_integration.py
+        export PYTHONPATH=$PYTHONPATH:$(pwd)/src
+        python -m pytest --cov=src --cov-report=term --cov-report=xml tests/test_rag_integration.py
+      shell: bash
       env:
         OLLAMA_HOST: "http://localhost:11434" 
         DEFAULT_OLLAMA_MODEL: "qwen3:4b-instruct-2507-q4_K_M"
         CUDA_VISIBLE_DEVICES: ""
+
+    - name: Upload Test Logs
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: test-logs-${{ matrix.os }}-py${{ matrix.python-version }}
+        path: |
+          logs/*.log
+          coverage.xml
+
+  generate-docs:
+    name: Auto-generate Documentation
+    needs: test
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: "3.11"
+        
+    - name: Install Dependencies
+      run: |
+        pip install -r requirements.txt
+        
+    - name: Export OpenAPI Spec
+      run: |
+        export PYTHONPATH=$PYTHONPATH:$(pwd)/src
+        python scripts/export_openapi.py > docs/openapi.json
+        
+    - name: Upload API Specification
+      uses: actions/upload-artifact@v4
+      with:
+        name: api-specification
+        path: docs/openapi.json
+
+        
+    

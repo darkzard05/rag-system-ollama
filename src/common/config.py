@@ -22,7 +22,7 @@ def _load_config() -> Dict[str, Any]:
     try:
         if not CONFIG_PATH.exists():
             raise FileNotFoundError(f"Config file not found at: {CONFIG_PATH}")
-            
+
         with open(CONFIG_PATH, "r", encoding="utf-8") as f:
             return yaml.safe_load(f) or {}  # 빈 파일일 경우 빈 딕셔너리 반환
     except Exception as e:
@@ -52,7 +52,8 @@ _config = _load_config()
 # --- 모델 및 설정 상수 ---
 _models_config = _config.get("models", {})
 DEFAULT_OLLAMA_MODEL: str = os.getenv(
-    "DEFAULT_OLLAMA_MODEL", _models_config.get("default_ollama", "qwen3:4b-instruct-2507-q4_K_M")
+    "DEFAULT_OLLAMA_MODEL",
+    _models_config.get("default_ollama", "qwen3:4b-instruct-2507-q4_K_M"),
 )
 
 # Ollama 서버 주소 설정 (환경 변수 우선)
@@ -70,16 +71,16 @@ OLLAMA_TEMPERATURE: float = _get_env(
 OLLAMA_NUM_CTX: int = _get_env(
     "OLLAMA_NUM_CTX", _models_config.get("num_ctx", 2048), int
 )
-OLLAMA_TOP_P: float = _get_env(
-    "OLLAMA_TOP_P", _models_config.get("top_p", 0.9), float
-)
+OLLAMA_TOP_P: float = _get_env("OLLAMA_TOP_P", _models_config.get("top_p", 0.9), float)
 OLLAMA_TIMEOUT: float = _get_env(
     "OLLAMA_TIMEOUT", _models_config.get("timeout", 900.0), float
 )
 
 AVAILABLE_EMBEDDING_MODELS: List[str] = _models_config.get("available_embeddings", [])
 CACHE_DIR: str = _models_config.get("cache_dir", ".model_cache")
-EMBEDDING_BATCH_SIZE: Union[int, str] = _models_config.get("embedding_batch_size", "auto")
+EMBEDDING_BATCH_SIZE: Union[int, str] = _models_config.get(
+    "embedding_batch_size", "auto"
+)
 EMBEDDING_DEVICE: str = _models_config.get("embedding_device", "auto")
 
 # --- RAG 파이프라인 설정 ---
@@ -102,16 +103,12 @@ _cache_security_config = _config.get("cache_security", {})
 
 # 보안 레벨 (environment variable 우선)
 CACHE_SECURITY_LEVEL: str = _get_env(
-    "CACHE_SECURITY_LEVEL",
-    _cache_security_config.get("security_level", "medium"),
-    str
+    "CACHE_SECURITY_LEVEL", _cache_security_config.get("security_level", "medium"), str
 )
 
 # HMAC 비밀 (environment variable 우선)
 CACHE_HMAC_SECRET: Optional[str] = _get_env(
-    "CACHE_HMAC_SECRET",
-    _cache_security_config.get("hmac_secret"),
-    str
+    "CACHE_HMAC_SECRET", _cache_security_config.get("hmac_secret"), str
 )
 
 # 신뢰 경로 (환경변수가 있으면 쉼표로 분리)
@@ -125,22 +122,30 @@ else:
 CACHE_VALIDATION_ON_FAILURE: str = _get_env(
     "CACHE_VALIDATION_ON_FAILURE",
     _cache_security_config.get("on_validation_failure", "regenerate"),
-    str
+    str,
 )
 
 # 파일 권한 검사
 CACHE_CHECK_PERMISSIONS: bool = _get_env(
     "CACHE_CHECK_PERMISSIONS",
     _cache_security_config.get("check_permissions", True),
-    lambda x: x.lower() == "true" if isinstance(x, str) else x
+    lambda x: x.lower() == "true" if isinstance(x, str) else x,
 )
 
 # 예상 파일 권한
 _expected_file_mode = _cache_security_config.get("expected_file_mode", 0o644)
-CACHE_EXPECTED_FILE_MODE: int = int(_expected_file_mode, 0) if isinstance(_expected_file_mode, str) else _expected_file_mode
+CACHE_EXPECTED_FILE_MODE: int = (
+    int(_expected_file_mode, 0)
+    if isinstance(_expected_file_mode, str)
+    else _expected_file_mode
+)
 
 _expected_dir_mode = _cache_security_config.get("expected_dir_mode", 0o755)
-CACHE_EXPECTED_DIR_MODE: int = int(_expected_dir_mode, 0) if isinstance(_expected_dir_mode, str) else _expected_dir_mode
+CACHE_EXPECTED_DIR_MODE: int = (
+    int(_expected_dir_mode, 0)
+    if isinstance(_expected_dir_mode, str)
+    else _expected_dir_mode
+)
 
 
 # --- 채팅 UI 상수 ---
@@ -150,21 +155,31 @@ _ui_messages = _ui_config.get("messages", {})
 
 # UI 메시지 (get 메서드로 안전하게 가져오기)
 MSG_PREPARING_ANSWER = _ui_messages.get("preparing_answer", "답변 생성 준비 중...")
-MSG_NO_RELATED_INFO = _ui_messages.get("no_related_info", "관련 정보를 찾을 수 없습니다.")
+MSG_NO_RELATED_INFO = _ui_messages.get(
+    "no_related_info", "관련 정보를 찾을 수 없습니다."
+)
 MSG_SIDEBAR_TITLE = _ui_messages.get("sidebar_title", "⚙️ 설정")
 MSG_PDF_UPLOADER_LABEL = _ui_messages.get("pdf_uploader_label", "PDF 파일 업로드")
 MSG_MODEL_SELECTOR_LABEL = _ui_messages.get("model_selector_label", "LLM 모델 선택")
-MSG_EMBEDDING_SELECTOR_LABEL = _ui_messages.get("embedding_selector_label", "임베딩 모델 선택")
+MSG_EMBEDDING_SELECTOR_LABEL = _ui_messages.get(
+    "embedding_selector_label", "임베딩 모델 선택"
+)
 MSG_SYSTEM_STATUS_TITLE = _ui_messages.get("system_status_title", "📊 시스템 상태")
-MSG_LOADING_MODELS = _ui_messages.get("loading_models", "LLM 모델 목록을 불러오는 중...")
+MSG_LOADING_MODELS = _ui_messages.get(
+    "loading_models", "LLM 모델 목록을 불러오는 중..."
+)
 MSG_PDF_VIEWER_TITLE = _ui_messages.get("pdf_viewer_title", "📄 PDF 미리보기")
-MSG_PDF_VIEWER_NO_FILE = _ui_messages.get("pdf_viewer_no_file", "미리볼 PDF가 없습니다.")
+MSG_PDF_VIEWER_NO_FILE = _ui_messages.get(
+    "pdf_viewer_no_file", "미리볼 PDF가 없습니다."
+)
 MSG_PDF_VIEWER_PREV_BUTTON = _ui_messages.get("pdf_viewer_prev_button", "← 이전")
 MSG_PDF_VIEWER_NEXT_BUTTON = _ui_messages.get("pdf_viewer_next_button", "다음 →")
 MSG_PDF_VIEWER_PAGE_SLIDER = _ui_messages.get("pdf_viewer_page_slider", "페이지 이동")
 MSG_PDF_VIEWER_ERROR = _ui_messages.get("pdf_viewer_error", "PDF 오류: {e}")
 MSG_CHAT_TITLE = _ui_messages.get("chat_title", "💬 채팅")
-MSG_CHAT_INPUT_PLACEHOLDER = _ui_messages.get("chat_input_placeholder", "PDF 내용에 대해 질문해보세요.")
+MSG_CHAT_INPUT_PLACEHOLDER = _ui_messages.get(
+    "chat_input_placeholder", "PDF 내용에 대해 질문해보세요."
+)
 MSG_CHAT_NO_QA_SYSTEM = _ui_messages.get("chat_no_qa_system", "QA 시스템 미준비")
 MSG_CHAT_WELCOME = _ui_messages.get("chat_welcome", "환영합니다!")
 MSG_CHAT_GUIDE = _ui_messages.get("chat_guide", "사용 가이드")

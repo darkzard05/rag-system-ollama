@@ -6,7 +6,6 @@ Task 20-2: Health Checking Module
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Dict, List, Optional, Any, Callable
-from datetime import datetime, timedelta
 import time
 from threading import RLock, Thread
 import random
@@ -14,6 +13,7 @@ import random
 
 class HealthStatus(Enum):
     """노드 건강 상태"""
+
     HEALTHY = "healthy"
     DEGRADED = "degraded"
     UNHEALTHY = "unhealthy"
@@ -22,6 +22,7 @@ class HealthStatus(Enum):
 
 class RecoveryStrategy(Enum):
     """복구 전략"""
+
     AUTO_RESTART = "auto_restart"
     GRACEFUL_SHUTDOWN = "graceful_shutdown"
     FAILOVER = "failover"
@@ -32,6 +33,7 @@ class RecoveryStrategy(Enum):
 @dataclass
 class HealthCheck:
     """건강 체크"""
+
     check_id: str
     name: str
     description: str
@@ -45,6 +47,7 @@ class HealthCheck:
 @dataclass
 class HealthCheckResult:
     """건강 체크 결과"""
+
     check_id: str
     check_name: str
     success: bool
@@ -57,6 +60,7 @@ class HealthCheckResult:
 @dataclass
 class NodeHealthReport:
     """노드 건강 보고서"""
+
     node_id: str
     overall_status: HealthStatus
     check_results: List[HealthCheckResult] = field(default_factory=list)
@@ -69,87 +73,89 @@ class NodeHealthReport:
 
 class HealthCheckSuite:
     """건강 체크 스위트"""
-    
+
     def __init__(self):
         self._checks: Dict[str, HealthCheck] = {}
         self._results: Dict[str, List[HealthCheckResult]] = {}
         self._lock = RLock()
-    
+
     def register_check(self, health_check: HealthCheck):
         """건강 체크 등록"""
         with self._lock:
             self._checks[health_check.check_id] = health_check
             self._results[health_check.check_id] = []
-    
+
     def execute_check(self, check_id: str) -> Optional[HealthCheckResult]:
         """건강 체크 실행"""
         with self._lock:
             if check_id not in self._checks:
                 return None
-            
+
             check = self._checks[check_id]
-            
+
             if not check.enabled:
                 return None
-        
+
         start_time = time.time()
         result = HealthCheckResult(
             check_id=check_id,
             check_name=check.name,
             success=False,
-            status=HealthStatus.UNKNOWN
+            status=HealthStatus.UNKNOWN,
         )
-        
+
         try:
             # 타임아웃 설정하여 체크 실행
             success = check.check_func()
             result.success = success
             result.status = HealthStatus.HEALTHY if success else HealthStatus.UNHEALTHY
-        
+
         except Exception as e:
             result.success = False
             result.error_message = str(e)
             result.status = HealthStatus.UNHEALTHY
-        
+
         finally:
             result.duration = time.time() - start_time
-            
+
             with self._lock:
                 if check_id in self._results:
                     self._results[check_id].append(result)
                     # 최근 1000개만 유지
                     if len(self._results[check_id]) > 1000:
                         self._results[check_id] = self._results[check_id][-1000:]
-        
+
         return result
-    
+
     def execute_all_checks(self) -> Dict[str, HealthCheckResult]:
         """모든 건강 체크 실행"""
         results = {}
-        
+
         with self._lock:
             check_ids = list(self._checks.keys())
-        
+
         for check_id in check_ids:
             result = self.execute_check(check_id)
             if result:
                 results[check_id] = result
-        
+
         return results
-    
-    def get_check_history(self, check_id: str, limit: int = 100) -> List[HealthCheckResult]:
+
+    def get_check_history(
+        self, check_id: str, limit: int = 100
+    ) -> List[HealthCheckResult]:
         """체크 이력 조회"""
         with self._lock:
             if check_id in self._results:
                 return list(self._results[check_id])[-limit:]
         return []
-    
+
     def disable_check(self, check_id: str):
         """체크 비활성화"""
         with self._lock:
             if check_id in self._checks:
                 self._checks[check_id].enabled = False
-    
+
     def enable_check(self, check_id: str):
         """체크 활성화"""
         with self._lock:
@@ -159,7 +165,7 @@ class HealthCheckSuite:
 
 class NodeHealthMonitor:
     """노드 건강 모니터"""
-    
+
     def __init__(self, node_id: str):
         """
         Args:
@@ -168,86 +174,91 @@ class NodeHealthMonitor:
         self.node_id = node_id
         self._health_suite = HealthCheckSuite()
         self._status = HealthStatus.UNKNOWN
-        self._report = NodeHealthReport(node_id=node_id, overall_status=HealthStatus.UNKNOWN)
+        self._report = NodeHealthReport(
+            node_id=node_id, overall_status=HealthStatus.UNKNOWN
+        )
         self._lock = RLock()
         self._monitoring_active = False
-    
+
     def register_health_check(self, health_check: HealthCheck):
         """건강 체크 등록"""
         self._health_suite.register_check(health_check)
-    
+
     def check_health(self) -> HealthCheckResult:
         """건강 상태 점검"""
         results = self._health_suite.execute_all_checks()
-        
+
         # 전체 상태 결정
         if not results:
             status = HealthStatus.UNKNOWN
         else:
-            critical_failures = sum(
-                1 for r in results.values()
-                if not r.success
-            )
-            
+            critical_failures = sum(1 for r in results.values() if not r.success)
+
             if critical_failures == len(results):
                 status = HealthStatus.UNHEALTHY
             elif critical_failures > 0:
                 status = HealthStatus.DEGRADED
             else:
                 status = HealthStatus.HEALTHY
-        
+
         with self._lock:
             self._status = status
             self._report.overall_status = status
             self._report.check_results = list(results.values())
-            
+
             if status == HealthStatus.HEALTHY:
                 self._report.last_healthy_time = time.time()
                 self._report.consecutive_failures = 0
             else:
                 self._report.last_unhealthy_time = time.time()
                 self._report.consecutive_failures += 1
-        
+
         # 첫 번째 결과 반환
-        return list(results.values())[0] if results else HealthCheckResult(
-            check_id="overall",
-            check_name="Overall Health",
-            success=status == HealthStatus.HEALTHY,
-            status=status
+        return (
+            list(results.values())[0]
+            if results
+            else HealthCheckResult(
+                check_id="overall",
+                check_name="Overall Health",
+                success=status == HealthStatus.HEALTHY,
+                status=status,
+            )
         )
-    
+
     def get_status(self) -> HealthStatus:
         """현재 건강 상태"""
         with self._lock:
             return self._status
-    
+
     def get_report(self) -> NodeHealthReport:
         """건강 보고서"""
         with self._lock:
             # 가동 시간 계산
             if self._report.last_unhealthy_time:
-                uptime = self._report.last_healthy_time - self._report.last_unhealthy_time
+                uptime = (
+                    self._report.last_healthy_time - self._report.last_unhealthy_time
+                )
             else:
                 uptime = time.time() - self._report.last_healthy_time
-            
+
             self._report.uptime = max(0, uptime)
             return self._report
-    
+
     def start_monitoring(self, interval: float = 10.0):
         """건강 모니터링 시작"""
         if self._monitoring_active:
             return
-        
+
         self._monitoring_active = True
-        
+
         def monitor_loop():
             while self._monitoring_active:
                 self.check_health()
                 time.sleep(interval)
-        
+
         thread = Thread(target=monitor_loop, daemon=True)
         thread.start()
-    
+
     def stop_monitoring(self):
         """건강 모니터링 중지"""
         self._monitoring_active = False
@@ -255,7 +266,7 @@ class NodeHealthMonitor:
 
 class ClusterHealthMonitor:
     """클러스터 건강 모니터"""
-    
+
     def __init__(self, num_nodes: int = 3):
         """
         Args:
@@ -263,33 +274,37 @@ class ClusterHealthMonitor:
         """
         self.num_nodes = num_nodes
         self._node_monitors: Dict[str, NodeHealthMonitor] = {
-            f"node_{i}": NodeHealthMonitor(f"node_{i}")
-            for i in range(num_nodes)
+            f"node_{i}": NodeHealthMonitor(f"node_{i}") for i in range(num_nodes)
         }
         self._recovery_strategies: Dict[str, RecoveryStrategy] = {
-            f"node_{i}": RecoveryStrategy.AUTO_RESTART
-            for i in range(num_nodes)
+            f"node_{i}": RecoveryStrategy.AUTO_RESTART for i in range(num_nodes)
         }
         self._lock = RLock()
-    
+
     def check_cluster_health(self) -> Dict[str, HealthStatus]:
         """클러스터 전체 건강 상태"""
         statuses = {}
-        
+
         with self._lock:
             for node_id, monitor in self._node_monitors.items():
                 statuses[node_id] = monitor.check_health().status
-        
+
         return statuses
-    
+
     def get_cluster_report(self) -> Dict[str, Any]:
         """클러스터 보고서"""
         health_statuses = self.check_cluster_health()
-        
-        healthy_nodes = sum(1 for s in health_statuses.values() if s == HealthStatus.HEALTHY)
-        degraded_nodes = sum(1 for s in health_statuses.values() if s == HealthStatus.DEGRADED)
-        unhealthy_nodes = sum(1 for s in health_statuses.values() if s == HealthStatus.UNHEALTHY)
-        
+
+        healthy_nodes = sum(
+            1 for s in health_statuses.values() if s == HealthStatus.HEALTHY
+        )
+        degraded_nodes = sum(
+            1 for s in health_statuses.values() if s == HealthStatus.DEGRADED
+        )
+        unhealthy_nodes = sum(
+            1 for s in health_statuses.values() if s == HealthStatus.UNHEALTHY
+        )
+
         # 전체 상태 결정
         if unhealthy_nodes > 0:
             overall_status = HealthStatus.UNHEALTHY
@@ -297,32 +312,32 @@ class ClusterHealthMonitor:
             overall_status = HealthStatus.DEGRADED
         else:
             overall_status = HealthStatus.HEALTHY
-        
+
         node_reports = {}
         with self._lock:
             for node_id, monitor in self._node_monitors.items():
                 node_reports[node_id] = {
-                    'status': health_statuses[node_id].value,
-                    'report': monitor.get_report()
+                    "status": health_statuses[node_id].value,
+                    "report": monitor.get_report(),
                 }
-        
+
         return {
-            'overall_status': overall_status.value,
-            'healthy_nodes': healthy_nodes,
-            'degraded_nodes': degraded_nodes,
-            'unhealthy_nodes': unhealthy_nodes,
-            'node_reports': node_reports,
-            'timestamp': time.time()
+            "overall_status": overall_status.value,
+            "healthy_nodes": healthy_nodes,
+            "degraded_nodes": degraded_nodes,
+            "unhealthy_nodes": unhealthy_nodes,
+            "node_reports": node_reports,
+            "timestamp": time.time(),
         }
-    
+
     def trigger_recovery(self, node_id: str) -> bool:
         """복구 시작"""
         with self._lock:
             if node_id not in self._node_monitors:
                 return False
-            
+
             strategy = self._recovery_strategies.get(node_id, RecoveryStrategy.NONE)
-        
+
         if strategy == RecoveryStrategy.AUTO_RESTART:
             return self._execute_auto_restart(node_id)
         elif strategy == RecoveryStrategy.GRACEFUL_SHUTDOWN:
@@ -331,47 +346,47 @@ class ClusterHealthMonitor:
             return self._execute_failover(node_id)
         elif strategy == RecoveryStrategy.CIRCUIT_BREAK:
             return self._execute_circuit_break(node_id)
-        
+
         return False
-    
+
     def _execute_auto_restart(self, node_id: str) -> bool:
         """자동 재시작"""
         # 모의 구현
         print(f"Auto-restarting node: {node_id}")
-        
+
         with self._lock:
             if node_id in self._node_monitors:
                 monitor = self._node_monitors[node_id]
                 monitor._report.recovery_attempts += 1
-        
+
         return True
-    
+
     def _execute_graceful_shutdown(self, node_id: str) -> bool:
         """안전한 종료"""
         print(f"Gracefully shutting down node: {node_id}")
         return True
-    
+
     def _execute_failover(self, node_id: str) -> bool:
         """장애 조치 (다른 노드로 전환)"""
         print(f"Executing failover for node: {node_id}")
         return True
-    
+
     def _execute_circuit_break(self, node_id: str) -> bool:
         """서킷 브레이커 활성화"""
         print(f"Activating circuit breaker for node: {node_id}")
         return True
-    
+
     def set_recovery_strategy(self, node_id: str, strategy: RecoveryStrategy):
         """복구 전략 설정"""
         with self._lock:
             self._recovery_strategies[node_id] = strategy
-    
+
     def start_monitoring_all(self, interval: float = 10.0):
         """모든 노드 모니터링 시작"""
         with self._lock:
             for monitor in self._node_monitors.values():
                 monitor.start_monitoring(interval)
-    
+
     def stop_monitoring_all(self):
         """모든 노드 모니터링 중지"""
         with self._lock:
@@ -381,81 +396,86 @@ class ClusterHealthMonitor:
 
 class HealthCheckFactory:
     """건강 체크 팩토리"""
-    
+
     @staticmethod
     def create_cpu_check(threshold: float = 80.0) -> HealthCheck:
         """CPU 체크"""
+
         def cpu_check() -> bool:
             # 모의 CPU 사용률
             cpu_usage = random.uniform(10, 90)
             return cpu_usage < threshold
-        
+
         return HealthCheck(
             check_id="cpu_check",
             name="CPU Usage Check",
             description=f"CPU 사용률이 {threshold}% 이하인지 확인",
             check_func=cpu_check,
-            critical=True
+            critical=True,
         )
-    
+
     @staticmethod
     def create_memory_check(threshold: float = 85.0) -> HealthCheck:
         """메모리 체크"""
+
         def memory_check() -> bool:
             # 모의 메모리 사용률
             memory_usage = random.uniform(30, 95)
             return memory_usage < threshold
-        
+
         return HealthCheck(
             check_id="memory_check",
             name="Memory Usage Check",
             description=f"메모리 사용률이 {threshold}% 이하인지 확인",
             check_func=memory_check,
-            critical=True
+            critical=True,
         )
-    
+
     @staticmethod
     def create_disk_check(threshold: float = 90.0) -> HealthCheck:
         """디스크 체크"""
+
         def disk_check() -> bool:
             # 모의 디스크 사용률
             disk_usage = random.uniform(20, 85)
             return disk_usage < threshold
-        
+
         return HealthCheck(
             check_id="disk_check",
             name="Disk Usage Check",
             description=f"디스크 사용률이 {threshold}% 이하인지 확인",
             check_func=disk_check,
-            critical=False
+            critical=False,
         )
-    
+
     @staticmethod
     def create_service_check() -> HealthCheck:
         """서비스 가용성 체크"""
+
         def service_check() -> bool:
             # 모의 서비스 상태
             return random.random() > 0.1  # 90% 성공률
-        
+
         return HealthCheck(
             check_id="service_check",
             name="Service Availability Check",
             description="서비스가 정상적으로 작동하는지 확인",
             check_func=service_check,
-            critical=True
+            critical=True,
         )
-    
+
     @staticmethod
     def create_connectivity_check() -> HealthCheck:
         """연결성 체크"""
+
         def connectivity_check() -> bool:
             # 모의 네트워크 연결성
             return random.random() > 0.05  # 95% 성공률
-        
+
         return HealthCheck(
             check_id="connectivity_check",
             name="Connectivity Check",
             description="네트워크 연결이 정상인지 확인",
             check_func=connectivity_check,
-            critical=True
+            critical=True,
         )

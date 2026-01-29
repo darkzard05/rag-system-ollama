@@ -6,16 +6,15 @@ Task 21-2: Event Logger Module
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Dict, List, Optional, Any, Callable
-from datetime import datetime, timedelta
 import time
 from threading import RLock
 from collections import deque, defaultdict
-import json
 import uuid
 
 
 class EventType(Enum):
     """이벤트 타입"""
+
     SYSTEM = "system"
     USER = "user"
     ERROR = "error"
@@ -30,6 +29,7 @@ class EventType(Enum):
 
 class EventSeverity(Enum):
     """이벤트 심각도"""
+
     CRITICAL = "critical"
     ERROR = "error"
     WARNING = "warning"
@@ -40,6 +40,7 @@ class EventSeverity(Enum):
 @dataclass
 class Event:
     """이벤트"""
+
     event_id: str = field(default_factory=lambda: str(uuid.uuid4()))
     event_type: EventType = EventType.INFO
     severity: EventSeverity = EventSeverity.INFO
@@ -58,6 +59,7 @@ class Event:
 @dataclass
 class EventQuery:
     """이벤트 쿼리"""
+
     event_type: Optional[EventType] = None
     severity: Optional[EventSeverity] = None
     source: Optional[str] = None
@@ -70,49 +72,49 @@ class EventQuery:
 
 class EventStore:
     """이벤트 저장소"""
-    
+
     def __init__(self, max_events: int = 100000):
         self.max_events = max_events
         self._events: deque = deque(maxlen=max_events)
         self._lock = RLock()
-        
+
         # 인덱스
         self._by_type: Dict[EventType, List[str]] = defaultdict(list)
         self._by_severity: Dict[EventSeverity, List[str]] = defaultdict(list)
         self._by_source: Dict[str, List[str]] = defaultdict(list)
         self._by_user: Dict[str, List[str]] = defaultdict(list)
         self._by_session: Dict[str, List[str]] = defaultdict(list)
-        
+
         # 이벤트 ID to Event 매핑
         self._events_by_id: Dict[str, Event] = {}
-    
+
     def add_event(self, event: Event):
         """이벤트 추가"""
         with self._lock:
             self._events.append(event)
             self._events_by_id[event.event_id] = event
-            
+
             # 인덱스 업데이트
             self._by_type[event.event_type].append(event.event_id)
             self._by_severity[event.severity].append(event.event_id)
             self._by_source[event.source].append(event.event_id)
-            
+
             if event.user_id:
                 self._by_user[event.user_id].append(event.event_id)
-            
+
             if event.session_id:
                 self._by_session[event.session_id].append(event.event_id)
-    
+
     def get_event(self, event_id: str) -> Optional[Event]:
         """이벤트 조회"""
         with self._lock:
             return self._events_by_id.get(event_id)
-    
+
     def query(self, query: EventQuery) -> List[Event]:
         """이벤트 쿼리"""
         with self._lock:
             results = []
-            
+
             for event in self._events:
                 # 필터 적용
                 if query.event_type and event.event_type != query.event_type:
@@ -130,14 +132,14 @@ class EventStore:
                     continue
                 if query.end_time and event.timestamp > query.end_time:
                     continue
-                
+
                 results.append(event)
-            
+
             # 시간 역순 정렬 (최신순)
             results.sort(key=lambda x: x.timestamp, reverse=True)
-            
-            return results[:query.limit]
-    
+
+            return results[: query.limit]
+
     def get_count_by_type(self) -> Dict[str, int]:
         """타입별 개수"""
         with self._lock:
@@ -145,7 +147,7 @@ class EventStore:
                 event_type.value: len(event_ids)
                 for event_type, event_ids in self._by_type.items()
             }
-    
+
     def get_count_by_severity(self) -> Dict[str, int]:
         """심각도별 개수"""
         with self._lock:
@@ -153,7 +155,7 @@ class EventStore:
                 severity.value: len(event_ids)
                 for severity, event_ids in self._by_severity.items()
             }
-    
+
     def clear(self):
         """이벤트 초기화"""
         with self._lock:
@@ -168,12 +170,12 @@ class EventStore:
 
 class EventLogger:
     """이벤트 로거"""
-    
+
     def __init__(self, max_events: int = 100000):
         self._store = EventStore(max_events)
         self._lock = RLock()
         self._handlers: List[Callable] = []
-    
+
     def log_event(
         self,
         event_type: EventType,
@@ -185,7 +187,7 @@ class EventLogger:
         tags: Optional[List[str]] = None,
         user_id: Optional[str] = None,
         session_id: Optional[str] = None,
-        correlation_id: Optional[str] = None
+        correlation_id: Optional[str] = None,
     ) -> str:
         """이벤트 로깅"""
         event = Event(
@@ -198,11 +200,11 @@ class EventLogger:
             tags=tags or [],
             user_id=user_id,
             session_id=session_id,
-            correlation_id=correlation_id
+            correlation_id=correlation_id,
         )
-        
+
         self._store.add_event(event)
-        
+
         # 핸들러 호출
         with self._lock:
             for handler in self._handlers:
@@ -210,16 +212,10 @@ class EventLogger:
                     handler(event)
                 except Exception:
                     pass
-        
+
         return event.event_id
-    
-    def log_info(
-        self,
-        title: str,
-        message: str,
-        source: str = "",
-        **kwargs
-    ) -> str:
+
+    def log_info(self, title: str, message: str, source: str = "", **kwargs) -> str:
         """INFO 레벨 로깅"""
         return self.log_event(
             EventType.INFO,
@@ -227,16 +223,10 @@ class EventLogger:
             message,
             severity=EventSeverity.INFO,
             source=source,
-            **kwargs
+            **kwargs,
         )
-    
-    def log_warning(
-        self,
-        title: str,
-        message: str,
-        source: str = "",
-        **kwargs
-    ) -> str:
+
+    def log_warning(self, title: str, message: str, source: str = "", **kwargs) -> str:
         """WARNING 레벨 로깅"""
         return self.log_event(
             EventType.WARNING,
@@ -244,16 +234,10 @@ class EventLogger:
             message,
             severity=EventSeverity.WARNING,
             source=source,
-            **kwargs
+            **kwargs,
         )
-    
-    def log_error(
-        self,
-        title: str,
-        message: str,
-        source: str = "",
-        **kwargs
-    ) -> str:
+
+    def log_error(self, title: str, message: str, source: str = "", **kwargs) -> str:
         """ERROR 레벨 로깅"""
         return self.log_event(
             EventType.ERROR,
@@ -261,22 +245,22 @@ class EventLogger:
             message,
             severity=EventSeverity.ERROR,
             source=source,
-            **kwargs
+            **kwargs,
         )
-    
+
     def log_audit(
         self,
         title: str,
         message: str,
         user_id: Optional[str] = None,
         action: Optional[str] = None,
-        **kwargs
+        **kwargs,
     ) -> str:
         """감사 로깅"""
-        metadata = kwargs.pop('metadata', {})
+        metadata = kwargs.pop("metadata", {})
         if action:
-            metadata['action'] = action
-        
+            metadata["action"] = action
+
         return self.log_event(
             EventType.AUDIT,
             title,
@@ -285,21 +269,17 @@ class EventLogger:
             source="audit",
             metadata=metadata,
             user_id=user_id,
-            **kwargs
+            **kwargs,
         )
-    
+
     def log_performance(
-        self,
-        operation: str,
-        duration: float,
-        source: str = "",
-        **kwargs
+        self, operation: str, duration: float, source: str = "", **kwargs
     ) -> str:
         """성능 로깅"""
-        metadata = kwargs.pop('metadata', {})
-        metadata['operation'] = operation
-        metadata['duration'] = duration
-        
+        metadata = kwargs.pop("metadata", {})
+        metadata["operation"] = operation
+        metadata["duration"] = duration
+
         event = self.log_event(
             EventType.PERFORMANCE,
             f"Performance: {operation}",
@@ -307,132 +287,114 @@ class EventLogger:
             severity=EventSeverity.INFO,
             source=source,
             metadata=metadata,
-            **kwargs
+            **kwargs,
         )
-        
+
         # Event 객체에도 duration 설정
         stored_event = self._store.get_event(event)
         if stored_event:
             stored_event.duration = duration
-        
+
         return event
-    
+
     def register_handler(self, handler: Callable):
         """핸들러 등록"""
         with self._lock:
             self._handlers.append(handler)
-    
+
     def unregister_handler(self, handler: Callable):
         """핸들러 등록 해제"""
         with self._lock:
             if handler in self._handlers:
                 self._handlers.remove(handler)
-    
+
     def query_events(self, query: EventQuery) -> List[Event]:
         """이벤트 쿼리"""
         return self._store.query(query)
-    
+
     def get_recent_events(self, limit: int = 100) -> List[Event]:
         """최근 이벤트 조회"""
         query = EventQuery(limit=limit)
         return self._store.query(query)
-    
+
     def get_statistics(self) -> Dict[str, Any]:
         """통계 조회"""
         with self._lock:
             return {
-                'total_events': sum(
-                    len(ids) for ids in self._store._by_type.values()
-                ),
-                'by_type': self._store.get_count_by_type(),
-                'by_severity': self._store.get_count_by_severity(),
-                'handlers': len(self._handlers)
+                "total_events": sum(len(ids) for ids in self._store._by_type.values()),
+                "by_type": self._store.get_count_by_type(),
+                "by_severity": self._store.get_count_by_severity(),
+                "handlers": len(self._handlers),
             }
-    
-    def get_events_by_correlation_id(
-        self,
-        correlation_id: str
-    ) -> List[Event]:
+
+    def get_events_by_correlation_id(self, correlation_id: str) -> List[Event]:
         """correlation ID로 이벤트 조회"""
         query = EventQuery(limit=10000)
         all_events = self._store.query(query)
-        
-        return [
-            event for event in all_events
-            if event.correlation_id == correlation_id
-        ]
-    
+
+        return [event for event in all_events if event.correlation_id == correlation_id]
+
     def get_user_activity(
         self,
         user_id: str,
         start_time: Optional[float] = None,
         end_time: Optional[float] = None,
-        limit: int = 100
+        limit: int = 100,
     ) -> List[Event]:
         """사용자 활동 조회"""
         query = EventQuery(
-            user_id=user_id,
-            start_time=start_time,
-            end_time=end_time,
-            limit=limit
+            user_id=user_id, start_time=start_time, end_time=end_time, limit=limit
         )
         return self._store.query(query)
-    
-    def get_session_events(
-        self,
-        session_id: str,
-        limit: int = 1000
-    ) -> List[Event]:
+
+    def get_session_events(self, session_id: str, limit: int = 1000) -> List[Event]:
         """세션 이벤트 조회"""
         query = EventQuery(limit=limit)
         all_events = self._store.query(query)
-        
-        return [
-            event for event in all_events
-            if event.session_id == session_id
-        ]
+
+        return [event for event in all_events if event.session_id == session_id]
 
 
 class PerformanceMonitor:
     """성능 모니터"""
-    
+
     def __init__(self, logger: EventLogger):
         self.logger = logger
         self._metrics: Dict[str, List[float]] = defaultdict(list)
         self._lock = RLock()
-    
+
     def record_metric(self, operation: str, duration: float):
         """메트릭 기록"""
         with self._lock:
             self._metrics[operation].append(duration)
-            
+
             # 로깅
             self.logger.log_performance(operation, duration, source="monitor")
-    
+
     def get_average(self, operation: str) -> Optional[float]:
         """평균 시간"""
         with self._lock:
             if operation not in self._metrics or not self._metrics[operation]:
                 return None
-            
+
             return sum(self._metrics[operation]) / len(self._metrics[operation])
-    
+
     def get_stats(self, operation: str) -> Dict[str, Any]:
         """통계"""
         with self._lock:
             if operation not in self._metrics or not self._metrics[operation]:
                 return {}
-            
+
             durations = self._metrics[operation]
             durations_sorted = sorted(durations)
-            
+
             return {
-                'operation': operation,
-                'count': len(durations),
-                'average': sum(durations) / len(durations),
-                'min': min(durations),
-                'max': max(durations),
-                'p50': durations_sorted[len(durations) // 2],
-                'p95': durations_sorted[int(len(durations) * 0.95)],
-                'p99': durations_sorted[int(len(durations) * 0.99)]
+                "operation": operation,
+                "count": len(durations),
+                "average": sum(durations) / len(durations),
+                "min": min(durations),
+                "max": max(durations),
+                "p50": durations_sorted[len(durations) // 2],
+                "p95": durations_sorted[int(len(durations) * 0.95)],
+                "p99": durations_sorted[int(len(durations) * 0.99)],
             }

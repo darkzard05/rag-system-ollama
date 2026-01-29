@@ -4,19 +4,15 @@ Optimized: 타임아웃 강화 및 로컬 Ollama 통신 안정성 확보.
 """
 
 from __future__ import annotations
-import os
 import logging
-import functools
-from typing import List, TYPE_CHECKING, Optional
-
-from common.typing_utils import T
+import os
+from typing import TYPE_CHECKING, List, Optional
 
 import streamlit as st
+from langchain_ollama import ChatOllama
 
 if TYPE_CHECKING:
-    import torch
     from langchain_huggingface import HuggingFaceEmbeddings
-    from langchain_ollama import OllamaLLM
     from sentence_transformers import CrossEncoder
 
 from common.exceptions import LLMInferenceError, EmbeddingModelError
@@ -32,25 +28,34 @@ from common.config import (
     MSG_ERROR_OLLAMA_NOT_RUNNING,
 )
 from common.utils import log_operation
-from services.monitoring.performance_monitor import get_performance_monitor, OperationType
+from services.monitoring.performance_monitor import (
+    get_performance_monitor,
+    OperationType,
+)
 
 logger = logging.getLogger(__name__)
 monitor = get_performance_monitor()
 
-@st.cache_data(ttl=600) # 모델 목록 캐시 10분
+
+@st.cache_data(ttl=600)  # 모델 목록 캐시 10분
 def _fetch_available_models_cached() -> List[str]:
     try:
         import ollama
+
         ollama_response = ollama.list()
         models = []
         if hasattr(ollama_response, "models"):
             for model in ollama_response.models:
-                name = getattr(model, "model", None) or (model.get("model") if isinstance(model, dict) else None)
-                if name: models.append(name)
+                name = getattr(model, "model", None) or (
+                    model.get("model") if isinstance(model, dict) else None
+                )
+                if name:
+                    models.append(name)
         elif isinstance(ollama_response, dict) and "models" in ollama_response:
-             for model in ollama_response["models"]:
-                 name = model.get("model") or model.get("name")
-                 if name: models.append(name)
+            for model in ollama_response["models"]:
+                name = model.get("model") or model.get("name")
+                if name:
+                    models.append(name)
         models.sort()
         return models
     except Exception as e:
@@ -59,11 +64,15 @@ def _fetch_available_models_cached() -> List[str]:
 
 
 @st.cache_resource(show_spinner=False)
-def load_embedding_model(embedding_model_name: Optional[str] = None) -> "HuggingFaceEmbeddings":
-    with monitor.track_operation(OperationType.EMBEDDING_GENERATION, {"model": embedding_model_name or "default"}) as op:
+def load_embedding_model(
+    embedding_model_name: Optional[str] = None,
+) -> "HuggingFaceEmbeddings":
+    with monitor.track_operation(
+        OperationType.EMBEDDING_GENERATION, {"model": embedding_model_name or "default"}
+    ) as op:
         import torch
         from langchain_huggingface import HuggingFaceEmbeddings
-        
+
         # 디바이스 결정 로직 개선
         if EMBEDDING_DEVICE == "auto":
             device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -71,25 +80,34 @@ def load_embedding_model(embedding_model_name: Optional[str] = None) -> "Hugging
             device = EMBEDDING_DEVICE
             # 사용자가 cuda를 선택했지만 사용 불가능한 경우 폴백
             if device == "cuda" and not torch.cuda.is_available():
-                logger.warning("CUDA가 설정되었으나 사용 불가능합니다. CPU로 전환합니다.")
-                st.warning("⚠️ CUDA GPU를 사용할 수 없어 CPU 모드로 전환합니다. 처리 속도가 느려질 수 있습니다.")
+                logger.warning(
+                    "CUDA가 설정되었으나 사용 불가능합니다. CPU로 전환합니다."
+                )
+                st.warning(
+                    "⚠️ CUDA GPU를 사용할 수 없어 CPU 모드로 전환합니다. 처리 속도가 느려질 수 있습니다."
+                )
                 device = "cpu"
 
         # Backward-compat: allow omitting model name in tests / legacy code
         if not embedding_model_name:
             from common.config import AVAILABLE_EMBEDDING_MODELS
+
             if not AVAILABLE_EMBEDDING_MODELS:
                 raise EmbeddingModelError(
                     model="(none)",
                     reason="no_embedding_models_configured",
-                    details={"msg": "AVAILABLE_EMBEDDING_MODELS가 비어 있습니다. config.yml을 확인하세요."},
+                    details={
+                        "msg": "AVAILABLE_EMBEDDING_MODELS가 비어 있습니다. config.yml을 확인하세요."
+                    },
                 )
             embedding_model_name = AVAILABLE_EMBEDDING_MODELS[0]
 
         # [최적화] 하드웨어 감지 기반의 무거운 배치 최적화 대신 고정값 사용 (부팅 속도 향상)
         batch_size = 32 if device == "cuda" else 4
-        logger.info(f"[System] [Model] 임베딩 모델 로드: {embedding_model_name} ({device}, batch_size={batch_size})")
-        
+        logger.info(
+            f"[System] [Model] 임베딩 모델 로드: {embedding_model_name} ({device}, batch_size={batch_size})"
+        )
+
         result = HuggingFaceEmbeddings(
             model_name=embedding_model_name,
             model_kwargs={"device": device},
@@ -97,6 +115,7 @@ def load_embedding_model(embedding_model_name: Optional[str] = None) -> "Hugging
             cache_folder=CACHE_DIR,
         )
         return result
+
 
 @st.cache_resource(show_spinner=False)
 def load_reranker_model(model_name: str) -> Optional["CrossEncoder"]:
@@ -107,32 +126,39 @@ def load_reranker_model(model_name: str) -> Optional["CrossEncoder"]:
     try:
         import torch
         from sentence_transformers import CrossEncoder
-        
+
         # [최적화] 리랭커는 상대적으로 가볍고 LLM과 VRAM을 공유하면 성능이 저하되므로,
         # GPU 메모리가 넉넉하지 않은 경우 CPU 사용을 고려
         is_gpu, total_mem = 0, 0
         try:
             is_gpu = torch.cuda.is_available()
             if is_gpu:
-                total_mem = torch.cuda.get_device_properties(0).total_memory // (1024**2)
-        except: pass
+                total_mem = torch.cuda.get_device_properties(0).total_memory // (
+                    1024**2
+                )
+        except Exception:
+            pass
 
         # [수정] 6GB GPU 환경에서도 리랭커 가속을 위해 기준을 4GB로 하향
         device = "cuda" if (is_gpu and total_mem > 4000) else "cpu"
-        
-        logger.info(f"[System] [Model] 리랭커 모델 로드: {model_name} (디바이스: {device})")
+
+        logger.info(
+            f"[System] [Model] 리랭커 모델 로드: {model_name} (디바이스: {device})"
+        )
         return CrossEncoder(model_name, device=device)
     except Exception as e:
         logger.error(f"Reranker 로드 실패: {e}")
         raise EmbeddingModelError(
             model=model_name,
             reason="Reranker 모델 로드 실패",
-            details={"error": str(e)}
+            details={"error": str(e)},
         )
+
 
 def get_available_models() -> List[str]:
     models = _fetch_available_models_cached()
     return models if models else [MSG_ERROR_OLLAMA_NOT_RUNNING]
+
 
 @log_operation("Ollama LLM 로드")
 def load_llm(
@@ -143,18 +169,24 @@ def load_llm(
     num_ctx: int = OLLAMA_NUM_CTX,
     timeout: float = OLLAMA_TIMEOUT,
 ) -> "ChatOllama":
-    with monitor.track_operation(OperationType.PDF_LOADING, {"model": model_name, "timeout": timeout}) as op:
+    with monitor.track_operation(
+        OperationType.PDF_LOADING, {"model": model_name, "timeout": timeout}
+    ) as op:
         if not model_name or model_name == MSG_ERROR_OLLAMA_NOT_RUNNING:
             raise LLMInferenceError(
                 model=model_name,
                 reason="model_not_selected",
-                details={"msg": "Ollama 모델이 선택되지 않았습니다."}
+                details={"msg": "Ollama 모델이 선택되지 않았습니다."},
             )
 
         from core.custom_ollama import DeepThinkingChatOllama
 
-        logger.info(f"[System] [Model] LLM 모델 로드: {model_name} (타임아웃: {timeout}s)")
-        logger.debug(f"Ollama 로드 설정: predict={num_predict}, ctx={num_ctx}, temp={temperature}")
+        logger.info(
+            f"[System] [Model] LLM 모델 로드: {model_name} (타임아웃: {timeout}s)"
+        )
+        logger.debug(
+            f"Ollama 로드 설정: predict={num_predict}, ctx={num_ctx}, temp={temperature}"
+        )
 
         # ChatOllama 사용으로 사고 과정(thinking) 필드 지원 강화
         # [Custom] DeepThinkingChatOllama를 사용하여 Ollama의 thinking 필드 캡처 지원
@@ -170,6 +202,7 @@ def load_llm(
             streaming=True,
         )
         return result
+
 
 def is_embedding_model_cached(model_name: str) -> bool:
     model_path_name = f"models--{model_name.replace('/', '--')}"

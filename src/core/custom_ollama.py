@@ -1,5 +1,5 @@
 import logging
-from typing import Any, AsyncIterator, Dict, List, Optional, Union
+from typing import Any, AsyncIterator, List, Optional
 
 from langchain_ollama import ChatOllama
 from langchain_core.messages import AIMessageChunk, BaseMessage
@@ -8,11 +8,13 @@ import ollama
 
 logger = logging.getLogger(__name__)
 
+
 class DeepThinkingChatOllama(ChatOllama):
     """
     Ollama의 비표준 'thinking' 필드를 지원하는 커스텀 ChatOllama 클래스.
     Ollama API 응답의 message.thinking 데이터를 캡처하여 additional_kwargs에 저장합니다.
     """
+
     _async_client: Optional[ollama.AsyncClient] = None
 
     @property
@@ -59,24 +61,24 @@ class DeepThinkingChatOllama(ChatOllama):
                 messages=formatted_messages,
                 stream=True,
                 options=options,
-                **kwargs
+                **kwargs,
             ):
                 message_part = part.get("message", {})
                 content = message_part.get("content", "")
                 # 핵심: message 객체 내부의 thinking 필드 추출
                 thinking = message_part.get("thinking", "")
-                
+
                 chunk = AIMessageChunk(
                     content=content,
                     additional_kwargs={"thinking": thinking} if thinking else {},
-                    id=part.get("model") # 대략적인 ID 부여
+                    id=part.get("model"),  # 대략적인 ID 부여
                 )
-                
+
                 yield ChatGenerationChunk(message=chunk)
-                
+
         except Exception as e:
             logger.error(f"[CustomOllama] 스트리밍 오류: {e}")
             raise
-        # 참고: 일부 버전에서는 client에 별도의 close()가 없을 수 있으므로 
-        # 에러 발생 시 로그만 남기고 종료합니다. 
+        # 참고: 일부 버전에서는 client에 별도의 close()가 없을 수 있으므로
+        # 에러 발생 시 로그만 남기고 종료합니다.
         # 만약 라이브러리가 명시적 close를 지원한다면 여기서 호출 가능합니다.

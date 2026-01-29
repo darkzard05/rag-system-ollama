@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 class SessionManager(ThreadSafeSessionManager):
     """
     세션 상태를 관리하는 클래스 (ThreadSafeSessionManager 기반)
-    
+
     기능:
     - Thread-safe read/write operations
     - Atomic updates
@@ -34,7 +34,9 @@ class SessionManager(ThreadSafeSessionManager):
         return super().is_ready_for_chat()
 
     @classmethod
-    def get(cls, key: str, default: Optional[SessionValue] = None) -> Optional[SessionValue]:
+    def get(
+        cls, key: str, default: Optional[SessionValue] = None
+    ) -> Optional[SessionValue]:
         """
         세션 상태에서 값을 가져옵니다.
         """
