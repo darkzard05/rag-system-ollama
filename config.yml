@@ -36,7 +36,7 @@ models:
   embedding_batch_size: "auto"
 
   # 임베딩 모델 실행 디바이스
-  embedding_device: "cpu"
+  embedding_device: "auto"
 
 
 # --- RAG 파이프라인 설정 ---
@@ -67,7 +67,7 @@ rag:
   
   # 의미론적 분할 설정
   semantic_chunker:
-    enabled: false
+    enabled: true
     breakpoint_threshold_type: "similarity_threshold"
     breakpoint_threshold_value: 0.6
     sentence_split_regex: "(?<=[.!?])\\s+" # Corrected escape for backslash

@@ -90,16 +90,22 @@ def test_api_session_isolation():
     session_a = "user-a"
     session_b = "user-b"
 
+    # [인증] 테스트용 API 키 등록 및 헤더 설정
+    api_key = "sk_admin_test_token_12345"
+    from src.api.api_server import TEST_USER, auth_manager
+    auth_manager._api_keys[api_key] = TEST_USER
+    headers = {"Authorization": f"Bearer {api_key}"}
+
     # User A tries to upload (ignoring actual processing for isolation check)
     pdf_content = b"%PDF-1.4 mock content"
     files = {"file": ("test.pdf", io.BytesIO(pdf_content), "application/pdf")}
 
     # Note: Using session_id form data as expected by api_server.py
-    client.post("/api/v1/upload", files=files, data={"session_id": session_a})
+    client.post("/api/v1/upload", files=files, data={"session_id": session_a}, headers=headers)
 
     # User B queries without uploading
     response_b = client.post(
-        "/api/v1/query", json={"query": "Where is my file?", "session_id": session_b}
+        "/api/v1/query", json={"query": "Where is my file?", "session_id": session_b}, headers=headers
     )
 
     # Should fail for User B

@@ -261,3 +261,14 @@ class EmbeddingModelError(PDFProcessingError):
             final_details["reason"] = reason
 
         super().__init__(message, final_details)
+
+
+class SessionLockTimeoutError(PDFProcessingError):
+    """
+    세션 락 획득 타임아웃 오류.
+    여러 요청이 동시에 발생하여 세션 데이터 접근이 지연될 때 발생합니다.
+    """
+
+    def __init__(self, message: str = "세션 데이터에 접근할 수 없습니다. 시스템이 바쁩니다.", details: dict = None):
+        super().__init__(message, details)
+

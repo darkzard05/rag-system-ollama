@@ -214,7 +214,7 @@ class EmbeddingBasedSemanticChunker:
         # Threshold보다 유사도가 낮은 지점을 분할점으로 선택
         breakpoints = [i + 1 for i, sim in enumerate(similarities) if sim < threshold]
 
-        logger.debug("청킹 분석: 임계값={threshold:.3f}, 분기점={len(breakpoints)}개")
+        logger.debug(f"청킹 분석: 임계값={threshold:.3f}, 유사도 리스트={['%.3f' % s for s in similarities]}, 분기점={len(breakpoints)}개")
 
         return breakpoints
 
@@ -237,7 +237,19 @@ class EmbeddingBasedSemanticChunker:
             merged_text = current_chunk["text"] + " " + chunk["text"]
             merged_len = len(merged_text)
 
-            if merged_len <= self.max_chunk_size:
+            # [수정] 의미론적 경계 보존을 위한 조건
+            # 현재 청크가 이미 최소 크기(min_chunk_size)를 만족한다면,
+            # 굳이 다음 청크(의미적으로 분리된)와 합치지 않고 독립된 청크로 유지합니다.
+            should_merge = False
+            if len(current_chunk["text"]) < self.min_chunk_size:
+                # 현재 청크가 너무 작으면 무조건 병합 시도
+                should_merge = merged_len <= self.max_chunk_size
+            else:
+                # 현재 청크가 이미 최소 크기 이상이라면, 다음 청크와의 병합은 신중해야 함.
+                # 여기서는 기본적으로 병합하지 않음 (의미 단위 보존)
+                should_merge = False
+
+            if should_merge:
                 # 벡터 병합: 각 청크의 길이를 고려한 가중 평균 (단순 평균보다 정확함)
                 len_a = len(current_chunk["text"])
                 len_b = len(chunk["text"])

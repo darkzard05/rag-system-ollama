@@ -1,6 +1,11 @@
 import os
 import shutil
+import sys
+from pathlib import Path
 from unittest.mock import MagicMock
+
+# 프로젝트 루트 추가
+sys.path.append(str(Path(__file__).parent.parent.parent / "src"))
 
 import pytest
 from langchain_core.documents import Document
@@ -10,18 +15,22 @@ from core.rag_core import VectorStoreCache
 
 def test_vector_store_save_verification():
     """캐시 저장 후 검증 로직이 정상 작동하는지 테스트합니다."""
-    file_path = "test_doc.pdf"
+    file_path = "test_dummy.pdf"
+    # 실제 파일이 있어야 해시 계산이 가능함
+    with open(file_path, "w") as f:
+        f.write("dummy content")
+
     model_name = "test_model"
 
     # Mock 객체 생성
     mock_vector_store = MagicMock()
-    mock_bm25 = MagicMock()
+    # pickle 가능한 객체로 대체
+    mock_bm25 = {"retriever": "mock"}
     doc_splits = [Document(page_content="test", metadata={"source": "test"})]
 
     cache = VectorStoreCache(file_path, model_name)
 
     # 1. 정상 저장 시나리오
-    # FAISS save_local이 호출될 때 파일들을 생성하도록 설정
     def side_effect_save(path):
         os.makedirs(path, exist_ok=True)
         with open(os.path.join(path, "index.faiss"), "w") as f:
@@ -39,6 +48,8 @@ def test_vector_store_save_verification():
     finally:
         if os.path.exists(cache.cache_dir):
             shutil.rmtree(cache.cache_dir)
+        if os.path.exists(file_path):
+            os.remove(file_path)
 
 
 def test_vector_store_save_failure_cleanup():

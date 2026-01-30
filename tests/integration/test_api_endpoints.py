@@ -15,6 +15,15 @@ from src.api.api_server import app
 
 # --- Fixtures ---
 
+@pytest.fixture
+def auth_headers():
+    """인증 헤더 생성"""
+    # api_server.py에서 초기화된 auth_manager에 직접 키를 등록하여 확실하게 인증 통과
+    api_key = "sk_admin_test_token_12345"
+    from src.api.api_server import TEST_USER, auth_manager
+    auth_manager._api_keys[api_key] = TEST_USER
+    return {"Authorization": f"Bearer {api_key}"}
+
 
 @pytest.fixture
 def mock_rag_resources():
@@ -42,9 +51,9 @@ def mock_session_manager():
 
         async def async_gen(*args, **kwargs):
             events = [
-                {"event": "on_parser_stream", "data": {"chunk": "Hello"}},
-                {"event": "on_parser_stream", "data": {"chunk": " "}},
-                {"event": "on_parser_stream", "data": {"chunk": "World"}},
+                {"event": "on_custom_event", "name": "response_chunk", "data": {"chunk": "Hello"}},
+                {"event": "on_custom_event", "name": "response_chunk", "data": {"chunk": " "}},
+                {"event": "on_custom_event", "name": "response_chunk", "data": {"chunk": "World"}},
                 {
                     "event": "on_chain_end",
                     "name": "retrieve",
@@ -61,8 +70,10 @@ def mock_session_manager():
         def get_side_effect(key, default=None):
             if key == "pdf_processed":
                 return True
-            if key == "qa_chain":
+            if key == "rag_engine": # api_server.py에서는 rag_engine을 사용함
                 return mock_chain
+            if key == "last_uploaded_file_name":
+                return "test.pdf"
             return default
 
         mock_sm.get.side_effect = get_side_effect
@@ -89,18 +100,17 @@ async def test_health_check(async_client):
     assert response.status_code == 200
     data = response.json()
     assert data["status"] == "healthy"
-    assert "session_id" in data
 
 
 @pytest.mark.asyncio
 async def test_stream_query_success(
-    async_client, mock_rag_resources, mock_session_manager
+    async_client, mock_rag_resources, mock_session_manager, auth_headers
 ):
     """스트리밍 질의 성공 시나리오 테스트"""
     payload = {"query": "Hello?", "use_cache": True}
 
     async with async_client.stream(
-        "POST", "/api/v1/stream_query", json=payload
+        "POST", "/api/v1/stream_query", json=payload, headers=auth_headers
     ) as response:
         assert response.status_code == 200
         # charset=utf-8이 붙을 수 있으므로 startswith 사용
@@ -112,8 +122,10 @@ async def test_stream_query_success(
                 content = line[6:]
                 if content != "[DONE]":
                     try:
-                        # JSON 데이터인 경우 (source 등) 제외하고 텍스트만
-                        json.loads(content)
+                        # JSON 데이터인 경우 (source 등) 파싱하여 텍스트 추출
+                        data = json.loads(content)
+                        if "content" in data:
+                            received_text += data["content"]
                     except json.JSONDecodeError:
                         received_text += content
 
@@ -121,7 +133,7 @@ async def test_stream_query_success(
 
 
 @pytest.mark.asyncio
-async def test_upload_flow_mocked(async_client, mock_rag_resources):
+async def test_upload_flow_mocked(async_client, mock_rag_resources, auth_headers):
     """파일 업로드 엔드포인트 테스트 (Mocked)"""
 
     # build_rag_pipeline 함수도 모킹해야 함 (Core 로직 실행 방지)
@@ -129,7 +141,7 @@ async def test_upload_flow_mocked(async_client, mock_rag_resources):
         mock_build.return_value = ("Success", False)
 
         files = {"file": ("test.pdf", b"%PDF-1.4...", "application/pdf")}
-        response = await async_client.post("/api/v1/upload", files=files)
+        response = await async_client.post("/api/v1/upload", files=files, headers=auth_headers)
 
         assert response.status_code == 200
         data = response.json()

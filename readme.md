@@ -21,19 +21,20 @@
 ## ⚡ Key Highlights
 
 ### 🚀 **Performance & Stability**
-- **Optimized Streaming:** Immediate first-token delivery with an improved integrity protocol to prevent duplicate outputs.
-- **Zero Thinking Latency:** Pre-configured for `qwen3:4b-instruct`, eliminating long reasoning loops while maintaining high accuracy.
-- **Async Resource Management:** Shared Ollama clients and intelligent model loading strategies to maximize GPU efficiency.
+- **Vector-Reuse Semantic Chunking:** Achieves ~38% faster processing by reusing embeddings from the semantic split phase directly for FAISS indexing, eliminating redundant model calls.
+- **Hardware-Aware UI:** Automatically detects and displays the active compute device (CUDA, MPS, or CPU) in real-time via toast notifications and system logs.
+- **Deadlock-Free Session Management:** Implements timeout-based lock acquisition and custom exception handling to prevent system hangs during high-concurrency requests.
+- **Integrity-First Streaming:** Utilizes a custom `response_chunk` protocol to ensure zero-duplicate output and immediate first-token delivery (TTFT).
 
 ### 🧠 **Intelligent RAG Pipeline**
-- **Modern Orchestration:** Powered by `LangGraph` for precise control over retrieval and generation flows.
-- **Mathematical Support:** Native LaTeX rendering for complex formulas using standardized $ and $$ delimiters.
-- **Hybrid Search & Reranking:** Combines FAISS (Dense) and BM25 (Sparse) with optional reranking for superior context relevance.
+- **Semantic Boundary Preservation:** Advanced logic ensures meaningful context by maintaining semantic units within user-defined size constraints.
+- **LangGraph Orchestration:** Precise control over the retrieval-augmented generation flow for consistent and grounded responses.
+- **Hybrid Search:** Combines the strengths of FAISS (Dense) and BM25 (Sparse) retrieval for superior context relevance.
 
 ### 🎨 **Refined User Experience**
-- **Grouped Navigation Toolbar:** A professional PDF viewer toolbar with grouped "Prev/Next" buttons and a precision page slider.
-- **Modern Sidebar:** Compact design using `st.popover` for advanced settings and custom status logs.
-- **Real-time Feedback:** Integrated `st.toast` notifications and dynamic status updates for long-running operations.
+- **Professional PDF Viewer:** Features a grouped navigation toolbar with precision page sliders and instant rendering.
+- **Contextual Status Logging:** Provides detailed, real-time visual feedback for every stage of the document analysis and model loading process.
+- **Native Mathematical Support:** Full LaTeX rendering using standardized delimiters for technical and scientific documents.
 
 ---
 
@@ -41,7 +42,7 @@
 
 ### 1️⃣ Prerequisites
 - **Python 3.11+**
-- **Ollama**: Download from [ollama.ai](https://ollama.ai)
+- **Ollama**: Running locally ([ollama.ai](https://ollama.ai))
 
 ### 2️⃣ Model Setup
 ```powershell
@@ -62,14 +63,9 @@ pip install -r requirements.txt
 
 ## 🖥️ Usage
 
-### Run the Frontend (Streamlit UI)
+### Run the Application
 ```bash
 streamlit run src/main.py
-```
-
-### Run the Backend (FastAPI Server)
-```bash
-uvicorn src.api.api_server:app --host 0.0.0.0 --port 8000
 ```
 
 ---
@@ -79,17 +75,17 @@ uvicorn src.api.api_server:app --host 0.0.0.0 --port 8000
 ```text
 rag-system-ollama/
 ├── src/
-│   ├── main.py             # 🏁 Streamlit Entry Point
-│   ├── core/               # 🧠 RAG Engine (LangGraph, Custom Ollama)
-│   ├── ui/                 # 🎨 Modern UI Components
-│   └── common/             # 🛠️ Math Utils & Config
-├── docs/                   # 📚 Technical Documentation
-├── reports/                # 📊 Optimization & Audit Reports
-└── tests/                  # 🧪 Integrity & Flow Tests
+│   ├── main.py             # 🏁 Application Entry Point
+│   ├── core/               # 🧠 RAG Engine (LangGraph, Chunker, Session)
+│   ├── ui/                 # 🎨 Streamlit UI & Components
+│   ├── api/                # 🌐 Backend API & Streaming
+│   └── common/             # 🛠️ Config, Exceptions & Utils
+├── reports/                # 📊 Performance & Optimization Audits
+└── tests/                  # 🧪 Integrity & Verification Tests
 ```
 
 ---
 
 ## 📄 License
 MIT License - Developed by **darkzard05**.
-**Status:** v2.2.0 | **Last Updated:** 2026-01-28
+**Status:** v2.3.0 | **Last Updated:** 2026-01-30

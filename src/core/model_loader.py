@@ -79,32 +79,33 @@ def load_embedding_model(
     from langchain_huggingface import HuggingFaceEmbeddings
 
     logger.info(">>> load_embedding_model 진입")
+    logger.info(f"[Debug] EMBEDDING_DEVICE 설정값: {EMBEDDING_DEVICE}")
+    logger.info(f"[Debug] torch.cuda.is_available(): {torch.cuda.is_available()}")
 
-    # 1. 디바이스 결정 로직 (VRAM 8GB 미만 감지 포함)
-    target_device = EMBEDDING_DEVICE
+    # 1. 디바이스 결정 로직 (설정값 최우선)
+    target_device = EMBEDDING_DEVICE.lower()
 
     if target_device == "auto":
+        # 'auto'일 경우 하드웨어 가속 가능 여부에 따라 자동 선택
         if torch.cuda.is_available():
-            try:
-                # RTX 2060(6GB) 등 저사양 GPU 환경에서는 LLM 속도 유지를 위해 CPU 강제 할당
-                props = torch.cuda.get_device_properties(0)
-                total_vram_gb = props.total_memory / (1024**3)
-
-                if total_vram_gb < 7.5:  # 8GB 미만 (여유값 0.5GB)
-                    logger.info(
-                        f"[Model] 저사양 VRAM 감지({total_vram_gb:.1f}GB): 임베딩을 CPU로 오프로딩합니다."
-                    )
-                    target_device = "cpu"
-                else:
-                    target_device = "cuda"
-            except Exception as e:
-                logger.warning(f"CUDA 속성 조회 실패(CPU로 전환): {e}")
-                target_device = "cpu"
+            target_device = "cuda"
+            logger.info("[Debug] 'auto' 설정으로 인해 'cuda' 선택됨")
+        elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+            target_device = "mps"  # Mac M1/M2 지원
+            logger.info("[Debug] 'auto' 설정으로 인해 'mps' 선택됨")
         else:
             target_device = "cpu"
+            logger.info("[Debug] 'auto' 설정이지만 하드웨어 가속이 불가능하여 'cpu' 선택됨")
+
+    # 명시적 설정(cuda, cpu 등)이 있는 경우 그대로 사용
+    logger.info(f"[System] [Model] 최종 결정된 디바이스: {target_device}")
+
+    # UI 표시를 위해 세션 상태에 기록
+    from core.session import SessionManager
+    SessionManager.set("current_embedding_device", target_device.upper())
 
     # [최적화] 배치 크기 설정
-    batch_size = 32 if target_device == "cuda" else 4
+    batch_size = 32 if "cuda" in target_device else 4
 
     logger.info(
         f"[System] [Model] 임베딩 모델 로드 시작: {embedding_model_name} (Device: {target_device})"

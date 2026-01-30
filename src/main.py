@@ -172,11 +172,15 @@ def _ensure_models_are_loaded(status_container: DeltaGenerator) -> bool:
             not current_embedder
             or getattr(current_embedder, "model_name", None) != selected_embedding
         ):
-            SystemNotifier.model_load(selected_embedding, device="CPU")
+            # 로드 전에는 준비 중으로 표시
+            SystemNotifier.loading(f"임베딩 모델 준비 중: {selected_embedding}")
             force_sync()
             embedder = load_embedding_model(selected_embedding)
             SessionManager.set("embedder", embedder)
-            SystemNotifier.success(f"임베딩 모델 로드 완료: {selected_embedding}")
+
+            # 실제 로드된 디바이스 정보를 세션에서 가져옴
+            actual_device = SessionManager.get("current_embedding_device", "UNKNOWN")
+            SystemNotifier.success(f"임베딩 모델 로드 완료 ({actual_device}): {selected_embedding}")
             force_sync()
 
         return True

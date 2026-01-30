@@ -1,5 +1,10 @@
 import asyncio
+import sys
+from pathlib import Path
 from unittest.mock import MagicMock, patch
+
+# 프로젝트 루트 추가
+sys.path.append(str(Path(__file__).parent.parent.parent / "src"))
 
 from cache.response_cache import ResponseCache
 from core.session import SessionManager

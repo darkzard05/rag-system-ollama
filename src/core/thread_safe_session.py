@@ -386,10 +386,14 @@ class ThreadSafeSessionManager:
 
             msg = {"role": role, "content": content}
             msg.update(kwargs)
-            state["messages"].append(msg)
 
-            if len(state["messages"]) > MAX_MESSAGE_HISTORY:
-                state["messages"] = state["messages"][-MAX_MESSAGE_HISTORY:]
+            # [최적화] Streamlit 변경 감지를 위해 리스트를 새로 할당
+            new_messages = state["messages"] + [msg]
+
+            if len(new_messages) > MAX_MESSAGE_HISTORY:
+                new_messages = new_messages[-MAX_MESSAGE_HISTORY:]
+
+            state["messages"] = new_messages
 
     @classmethod
     def is_ready_for_chat(cls) -> bool:
@@ -479,11 +483,20 @@ class _LockContext:
         self.acquired = False
 
     def __enter__(self):
+        # [수정] 무한 대기 방지: timeout 내에 획득 실패 시 즉시 예외 발생
         self.acquired = self.lock.acquire(timeout=self.timeout)
         if not self.acquired:
+            from common.exceptions import SessionLockTimeoutError
+
             self.target.failed_acquisitions += 1
-            self.lock.acquire()
-            self.acquired = True
+            # 더 이상 두 번째 self.lock.acquire() (무한대기)를 호출하지 않음
+            raise SessionLockTimeoutError(
+                details={
+                    "timeout": self.timeout,
+                    "target_type": type(self.target).__name__,
+                    "active_threads": threading.active_count(),
+                }
+            )
 
         self.target.lock_count += 1
         return self
