@@ -3,11 +3,11 @@
 """
 
 import logging
+import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import List, Dict, Optional, Callable
 from threading import RLock
-import time
 
 try:
     import ray
@@ -34,18 +34,18 @@ class EmbeddingJob:
     """임베딩 작업 정의."""
 
     job_id: str
-    texts: List[str]
+    texts: list[str]
     model_name: str
     batch_size: int = 32
     priority: int = 0  # 0=low, 1=normal, 2=high
     status: JobStatus = JobStatus.PENDING
     created_at: float = field(default_factory=time.time)
-    started_at: Optional[float] = None
-    completed_at: Optional[float] = None
-    result: Optional[List[List[float]]] = None
-    error: Optional[str] = None
+    started_at: float | None = None
+    completed_at: float | None = None
+    result: list[list[float]] | None = None
+    error: str | None = None
 
-    def duration(self) -> Optional[float]:
+    def duration(self) -> float | None:
         """작업 소요 시간."""
         if self.started_at and self.completed_at:
             return self.completed_at - self.started_at
@@ -65,8 +65,8 @@ class DistributedEmbedder:
 
     def __init__(
         self,
-        embedding_func: Callable[[List[str], str], List[List[float]]],
-        num_workers: Optional[int] = None,
+        embedding_func: Callable[[list[str], str], list[list[float]]],
+        num_workers: int | None = None,
         use_ray: bool = True,
     ):
         """초기화.
@@ -81,9 +81,9 @@ class DistributedEmbedder:
         self.use_ray = use_ray and RAY_AVAILABLE
 
         self._lock = RLock()
-        self._jobs: Dict[str, EmbeddingJob] = {}
-        self._job_queue: List[EmbeddingJob] = []
-        self._results: Dict[str, List[List[float]]] = {}
+        self._jobs: dict[str, EmbeddingJob] = {}
+        self._job_queue: list[EmbeddingJob] = []
+        self._results: dict[str, list[list[float]]] = {}
 
         if self.use_ray:
             self._init_ray()
@@ -101,7 +101,7 @@ class DistributedEmbedder:
     def submit_job(
         self,
         job_id: str,
-        texts: List[str],
+        texts: list[str],
         model_name: str,
         batch_size: int = 32,
         priority: int = 0,
@@ -147,7 +147,7 @@ class DistributedEmbedder:
 
             return job
 
-    def process_job_sync(self, job_id: str) -> Optional[List[List[float]]]:
+    def process_job_sync(self, job_id: str) -> list[list[float]] | None:
         """작업 동기식 처리.
 
         Args:
@@ -196,7 +196,7 @@ class DistributedEmbedder:
             logger.error(f"작업 실패: {job_id} - {e}")
             return None
 
-    def _process_batches(self, job: EmbeddingJob) -> List[List[float]]:
+    def _process_batches(self, job: EmbeddingJob) -> list[list[float]]:
         """배치 처리."""
         embeddings = []
 
@@ -214,8 +214,8 @@ class DistributedEmbedder:
 
     def process_jobs_distributed(
         self,
-        job_ids: Optional[List[str]] = None,
-    ) -> Dict[str, List[List[float]]]:
+        job_ids: list[str] | None = None,
+    ) -> dict[str, list[list[float]]]:
         """여러 작업을 분산 처리.
 
         Args:
@@ -243,7 +243,7 @@ class DistributedEmbedder:
 
         return results
 
-    def _process_with_ray(self, job_ids: List[str]) -> Dict[str, List[List[float]]]:
+    def _process_with_ray(self, job_ids: list[str]) -> dict[str, list[list[float]]]:
         """Ray를 사용한 분산 처리."""
         results = {}
 
@@ -252,7 +252,7 @@ class DistributedEmbedder:
         def process_remote_job(
             job_id: str,
             embedding_func,
-            texts: List[str],
+            texts: list[str],
             model_name: str,
             batch_size: int,
         ):
@@ -309,7 +309,7 @@ class DistributedEmbedder:
 
         return results
 
-    def _process_sequential(self, job_ids: List[str]) -> Dict[str, List[List[float]]]:
+    def _process_sequential(self, job_ids: list[str]) -> dict[str, list[list[float]]]:
         """순차 처리 (Ray 없을 때)."""
         results = {}
 
@@ -320,19 +320,19 @@ class DistributedEmbedder:
 
         return results
 
-    def get_job_status(self, job_id: str) -> Optional[JobStatus]:
+    def get_job_status(self, job_id: str) -> JobStatus | None:
         """작업 상태 조회."""
         with self._lock:
             if job_id not in self._jobs:
                 return None
             return self._jobs[job_id].status
 
-    def get_job_result(self, job_id: str) -> Optional[List[List[float]]]:
+    def get_job_result(self, job_id: str) -> list[list[float]] | None:
         """작업 결과 조회."""
         with self._lock:
             return self._results.get(job_id)
 
-    def get_job_info(self, job_id: str) -> Optional[Dict]:
+    def get_job_info(self, job_id: str) -> dict | None:
         """작업 정보 조회."""
         with self._lock:
             if job_id not in self._jobs:
@@ -368,12 +368,12 @@ class DistributedEmbedder:
 
             return True
 
-    def get_pending_jobs(self) -> List[str]:
+    def get_pending_jobs(self) -> list[str]:
         """대기 중인 작업 목록."""
         with self._lock:
             return [j.job_id for j in self._job_queue if j.status == JobStatus.PENDING]
 
-    def get_all_jobs_status(self) -> Dict[str, str]:
+    def get_all_jobs_status(self) -> dict[str, str]:
         """모든 작업 상태."""
         with self._lock:
             return {job_id: job.status.value for job_id, job in self._jobs.items()}
@@ -391,13 +391,13 @@ class TaskOrchestrator:
     def __init__(self, embedder: DistributedEmbedder):
         self.embedder = embedder
         self._lock = RLock()
-        self._job_groups: Dict[str, List[str]] = {}
+        self._job_groups: dict[str, list[str]] = {}
         self._completed_groups: set = set()
 
     def create_job_group(
         self,
         group_id: str,
-        jobs: List[EmbeddingJob],
+        jobs: list[EmbeddingJob],
     ) -> bool:
         """작업 그룹 생성.
 
@@ -416,7 +416,7 @@ class TaskOrchestrator:
 
             return True
 
-    def process_group(self, group_id: str) -> Dict[str, List[List[float]]]:
+    def process_group(self, group_id: str) -> dict[str, list[list[float]]]:
         """작업 그룹 처리.
 
         Returns:
@@ -444,7 +444,7 @@ class TaskOrchestrator:
         with self._lock:
             return group_id in self._completed_groups
 
-    def get_group_status(self, group_id: str) -> Dict[str, str]:
+    def get_group_status(self, group_id: str) -> dict[str, str]:
         """그룹 상태."""
         with self._lock:
             if group_id not in self._job_groups:

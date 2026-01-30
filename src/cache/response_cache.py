@@ -3,13 +3,14 @@
 RAG 시스템에 최적화된 캐싱
 """
 
+import asyncio
 import hashlib
 import json
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Callable
 from datetime import datetime
-import asyncio
+from typing import Any
 
 from services.optimization.caching_optimizer import (
     CacheManager,
@@ -25,7 +26,7 @@ class QueryCacheKey:
     """쿼리 캐시 키"""
 
     query: str
-    document_ids: List[str] = None
+    document_ids: list[str] = None
 
     def to_hash(self) -> str:
         """해시값 계산"""
@@ -43,10 +44,10 @@ class ResponseCacheEntry:
 
     query: str
     response: str
-    metadata: Dict[str, Any]
+    metadata: dict[str, Any]
     created_at: float
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """딕셔너리로 변환"""
         return {
             "query": self.query,
@@ -68,7 +69,7 @@ class ResponseCache:
     """
 
     def __init__(
-        self, cache_manager: Optional[CacheManager] = None, default_ttl_hours: int = 3
+        self, cache_manager: CacheManager | None = None, default_ttl_hours: int = 3
     ):
         self.cache_manager = cache_manager or get_cache_manager()
         self.default_ttl = default_ttl_hours * 3600  # 초 단위
@@ -76,7 +77,7 @@ class ResponseCache:
 
     async def get(
         self, query: str, use_semantic: bool = True
-    ) -> Optional[ResponseCacheEntry]:
+    ) -> ResponseCacheEntry | None:
         """
         응답 조회
 
@@ -114,8 +115,8 @@ class ResponseCache:
         self,
         query: str,
         response: str,
-        metadata: Optional[Dict[str, Any]] = None,
-        ttl_hours: Optional[int] = None,
+        metadata: dict[str, Any] | None = None,
+        ttl_hours: int | None = None,
     ) -> None:
         """
         응답 저장
@@ -175,7 +176,7 @@ class ResponseCache:
         await self.cache_manager.clear()
         logger.info("[ResponseCache] 모든 응답 캐시 삭제")
 
-    def get_stats(self) -> Dict[str, CacheStatistics]:
+    def get_stats(self) -> dict[str, CacheStatistics]:
         """통계 조회"""
         return self.cache_manager.get_stats()
 
@@ -184,8 +185,17 @@ class ResponseCache:
         return self.cache_manager.get_combined_stats()
 
     def _generate_key(self, query: str) -> str:
-        """캐시 키 생성"""
-        return hashlib.sha256(query.encode()).hexdigest()[:16]
+        """캐시 키 생성 (문서 식별자 포함으로 캐시 오염 방지)"""
+        from core.session import SessionManager
+
+        # 현재 세션의 문서 식별자 가져오기
+        doc_path = SessionManager.get("pdf_file_path", "")
+        doc_id = (
+            hashlib.sha256(doc_path.encode()).hexdigest()[:8] if doc_path else "no_doc"
+        )
+
+        combined_key = f"{doc_id}:{query}"
+        return hashlib.sha256(combined_key.encode()).hexdigest()[:16]
 
 
 class QueryCache:
@@ -199,13 +209,13 @@ class QueryCache:
     """
 
     def __init__(
-        self, cache_manager: Optional[CacheManager] = None, default_ttl_hours: int = 24
+        self, cache_manager: CacheManager | None = None, default_ttl_hours: int = 24
     ):
         self.cache_manager = cache_manager or get_cache_manager()
         self.default_ttl = default_ttl_hours * 3600
-        self.invalidation_callbacks: List[Callable] = []
+        self.invalidation_callbacks: list[Callable] = []
 
-    async def get(self, query: str, top_k: int = 5) -> Optional[List[Dict[str, Any]]]:
+    async def get(self, query: str, top_k: int = 5) -> list[dict[str, Any]] | None:
         """
         검색 결과 조회
 
@@ -234,9 +244,9 @@ class QueryCache:
     async def set(
         self,
         query: str,
-        documents: List[Dict[str, Any]],
+        documents: list[dict[str, Any]],
         top_k: int = 5,
-        ttl_hours: Optional[int] = None,
+        ttl_hours: int | None = None,
     ) -> None:
         """
         검색 결과 저장
@@ -262,7 +272,7 @@ class QueryCache:
         except Exception as e:
             logger.error(f"[QueryCache] 저장 오류: {e}")
 
-    async def invalidate(self, query: Optional[str] = None) -> None:
+    async def invalidate(self, query: str | None = None) -> None:
         """
         캐시 무효화
 
@@ -296,8 +306,16 @@ class QueryCache:
         self.invalidation_callbacks.append(callback)
 
     def _generate_key(self, query: str) -> str:
-        """캐시 키 생성"""
-        return hashlib.sha256(query.encode()).hexdigest()[:12]
+        """캐시 키 생성 (문서 식별자 포함)"""
+        from core.session import SessionManager
+
+        doc_path = SessionManager.get("pdf_file_path", "")
+        doc_id = (
+            hashlib.sha256(doc_path.encode()).hexdigest()[:8] if doc_path else "no_doc"
+        )
+
+        combined_key = f"{doc_id}:{query}"
+        return hashlib.sha256(combined_key.encode()).hexdigest()[:12]
 
 
 class DocumentCache:
@@ -312,13 +330,13 @@ class DocumentCache:
 
     def __init__(
         self,
-        cache_manager: Optional[CacheManager] = None,
+        cache_manager: CacheManager | None = None,
         default_ttl_hours: int = 7 * 24,  # 7일
     ):
         self.cache_manager = cache_manager or get_cache_manager()
         self.default_ttl = default_ttl_hours * 3600
 
-    async def get_document(self, doc_id: str) -> Optional[Dict[str, Any]]:
+    async def get_document(self, doc_id: str) -> dict[str, Any] | None:
         """문서 조회"""
         try:
             cache_key = f"doc:{doc_id}"
@@ -335,7 +353,7 @@ class DocumentCache:
             return None
 
     async def set_document(
-        self, doc_id: str, document: Dict[str, Any], ttl_hours: Optional[int] = None
+        self, doc_id: str, document: dict[str, Any], ttl_hours: int | None = None
     ) -> None:
         """문서 저장"""
         try:
@@ -351,7 +369,7 @@ class DocumentCache:
         except Exception as e:
             logger.error(f"[DocumentCache] 저장 오류: {e}")
 
-    async def get_chunks(self, doc_id: str) -> Optional[List[Dict[str, Any]]]:
+    async def get_chunks(self, doc_id: str) -> list[dict[str, Any]] | None:
         """청킹 결과 조회"""
         try:
             cache_key = f"chunks:{doc_id}"
@@ -368,7 +386,7 @@ class DocumentCache:
             return None
 
     async def set_chunks(
-        self, doc_id: str, chunks: List[Dict[str, Any]], ttl_hours: Optional[int] = None
+        self, doc_id: str, chunks: list[dict[str, Any]], ttl_hours: int | None = None
     ) -> None:
         """청킹 결과 저장"""
         try:
@@ -407,13 +425,13 @@ class CacheWarmup:
     def __init__(self, response_cache: ResponseCache, query_cache: QueryCache):
         self.response_cache = response_cache
         self.query_cache = query_cache
-        self.warmup_queries: List[Dict[str, Any]] = []
+        self.warmup_queries: list[dict[str, Any]] = []
 
     def add_warmup_query(
         self,
         query: str,
         response: str,
-        documents: Optional[List[Dict[str, Any]]] = None,
+        documents: list[dict[str, Any]] | None = None,
     ) -> None:
         """워밍업 쿼리 추가"""
         self.warmup_queries.append(
@@ -453,9 +471,9 @@ class CacheWarmup:
 
 
 # 전역 캐시 인스턴스
-_response_cache: Optional[ResponseCache] = None
-_query_cache: Optional[QueryCache] = None
-_document_cache: Optional[DocumentCache] = None
+_response_cache: ResponseCache | None = None
+_query_cache: QueryCache | None = None
+_document_cache: DocumentCache | None = None
 
 
 def get_response_cache() -> ResponseCache:

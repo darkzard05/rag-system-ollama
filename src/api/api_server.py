@@ -3,22 +3,28 @@ FastAPI 기반 RAG 시스템 백엔드 서버
 UI와 독립적으로 RAG 기능을 외부 API로 제공합니다.
 """
 
-import os
-import time
+import asyncio
 import logging
+import os
 import tempfile
-from typing import Optional
+import time
 from pathlib import Path
 
-import asyncio
-from fastapi import FastAPI, File, UploadFile, HTTPException, Form, Header
+from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, UploadFile
 from fastapi.responses import StreamingResponse
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
-from common.config import DEFAULT_OLLAMA_MODEL, AVAILABLE_EMBEDDING_MODELS
-from core.model_loader import load_llm, load_embedding_model
-from core.rag_core import build_rag_pipeline
 from api.schemas import QueryRequest, QueryResponse
+from api.streaming_handler import (
+    ServerSentEventsHandler,
+    get_adaptive_controller,
+    get_streaming_handler,
+)
+from common.config import AVAILABLE_EMBEDDING_MODELS, DEFAULT_OLLAMA_MODEL
+from core.model_loader import load_embedding_model, load_llm
+from core.rag_core import build_rag_pipeline
 from core.session import SessionManager
+from security.auth_system import AuthenticationManager
 
 # 로깅 설정
 logger = logging.getLogger(__name__)
@@ -28,6 +34,41 @@ app = FastAPI(
     description="Ollama와 LangGraph 기반의 고도화된 RAG 시스템 API",
     version="2.0.0",
 )
+
+# --- 보안 및 인증 설정 ---
+auth_scheme = HTTPBearer()
+auth_manager = AuthenticationManager()
+
+# [임시] 테스트용 유저 및 API 키 등록 (CI 환경 호환성 위해 환경 변수 지원)
+TEST_USER = "admin"
+TEST_API_KEY = os.getenv("TEST_API_KEY")
+
+auth_manager.register_user(TEST_USER, "admin_user", "admin123")
+if TEST_API_KEY:
+    # 지정된 키로 등록 (CI용)
+    auth_manager._api_keys[TEST_API_KEY] = TEST_USER
+    logger.info("[Security] 고정 API 키 활성화 (CI/Test 모드)")
+else:
+    # 무작위 키 생성 (일반 실행 모드)
+    TEST_API_KEY = auth_manager.create_api_key(TEST_USER)
+    logger.info(f"[Security] 시스템 보호 활성화. 생성된 API Key: {TEST_API_KEY}")
+
+
+async def verify_token(
+    credentials: HTTPAuthorizationCredentials = Depends(auth_scheme),
+):
+    """토큰 유효성을 검증하는 공통 의존성"""
+    token = credentials.credentials
+    # API Key 또는 JWT 토큰 모두 지원
+    user_id = auth_manager.verify_api_key(token) or auth_manager.verify_token(token)
+
+    if not user_id:
+        raise HTTPException(
+            status_code=401,
+            detail="유효하지 않거나 만료된 인증 토큰입니다.",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    return user_id
 
 
 # --- 싱글톤 리소스 관리 (동시성 제어 강화) ---
@@ -54,7 +95,7 @@ class RAGResourceManager:
 
 
 # --- 세션 격리 의존성 ---
-async def get_session_context(x_session_id: Optional[str] = Header(None)) -> str:
+async def get_session_context(x_session_id: str | None = Header(None)) -> str:
     """헤더에서 세션 ID를 추출하고 컨텍스트를 고정합니다."""
     sid = x_session_id or "default"
     SessionManager.set_session_id(sid)
@@ -77,10 +118,12 @@ async def health_check():
 
 @app.post("/api/v1/upload")
 async def upload_document(
-    file: UploadFile = File(...), session_id: str = Form("default")
+    file: UploadFile = File(...),
+    session_id: str = Form("default"),
+    user_id: str = Depends(verify_token),
 ):
     """
-    PDF 문서를 업로드하고 해당 세션에 인덱싱합니다.
+    인증된 사용자의 PDF 문서를 업로드하고 해당 세션에 인덱싱합니다.
     """
     if not file.filename.endswith(".pdf"):
         raise HTTPException(status_code=400, detail="PDF 파일만 업로드 가능합니다.")
@@ -100,9 +143,12 @@ async def upload_document(
         try:
             embedder = await RAGResourceManager.get_embedder()
 
-            # RAG 파이프라인 구축 (인덱싱 포함)
-            msg, cache_used = build_rag_pipeline(
-                uploaded_file_name=file.filename, file_path=tmp_path, embedder=embedder
+            # [수정] 무거운 동기 파이프라인 구축 작업을 별도 스레드에서 실행하여 이벤트 루프 차단 방지
+            msg, cache_used = await asyncio.to_thread(
+                build_rag_pipeline,
+                uploaded_file_name=file.filename,
+                file_path=tmp_path,
+                embedder=embedder,
             )
 
             SessionManager.set("last_uploaded_file_name", file.filename)
@@ -126,9 +172,9 @@ async def upload_document(
 
 
 @app.post("/api/v1/query", response_model=QueryResponse)
-async def query_rag(request: QueryRequest):
+async def query_rag(request: QueryRequest, user_id: str = Depends(verify_token)):
     """
-    격리된 세션 컨텍스트에서 질의를 수행합니다.
+    인증된 세션 컨텍스트에서 질의를 수행합니다.
     """
     sid = request.session_id or "default"
     SessionManager.set_session_id(sid)
@@ -172,9 +218,9 @@ async def query_rag(request: QueryRequest):
 
 
 @app.post("/api/v1/stream_query")
-async def stream_query_rag(request: QueryRequest):
+async def stream_query_rag(request: QueryRequest, user_id: str = Depends(verify_token)):
     """
-    실시간 스트리밍(SSE) 응답 시 세션 격리를 보장합니다.
+    인증된 세션에 대해 실시간 스트리밍(SSE) 응답을 제공합니다.
     """
     sid = request.session_id or "default"
     SessionManager.set_session_id(sid)
@@ -190,50 +236,88 @@ async def stream_query_rag(request: QueryRequest):
         )
 
     async def event_generator():
+        # [강화] 세션 컨텍스트 강제 재확립
+        SessionManager.set_session_id(sid)
+        SessionManager.init_session()
+
+        logger.debug(f"[API] Streaming started for session: {sid}")
+
         llm = await RAGResourceManager.get_llm()
         # 스트리밍 시에도 명시적 세션 바인딩
         run_config = {"configurable": {"llm": llm, "session_id": sid, "thread_id": sid}}
 
+        handler = get_streaming_handler()
+        controller = get_adaptive_controller()
+        sse_handler = ServerSentEventsHandler()
+
         try:
-            async for event in rag_app.astream_events(
-                {"input": request.query}, config=run_config, version="v2"
+            async for chunk in handler.stream_graph_events(
+                rag_app.astream_events(
+                    {"input": request.query}, config=run_config, version="v2"
+                ),
+                adaptive_controller=controller,
             ):
-                # (기존 스트리밍 로직 유지)
-                kind = event["event"]
-                name = event.get("name", "Unknown")
-                data = event.get("data", {})
+                # 1. 메시지(답변 및 사고 과정) 처리
+                if chunk.content:
+                    yield sse_handler.format_sse_event(
+                        "message", {"content": chunk.content}
+                    )
 
-                if kind == "on_custom_event" and name == "response_chunk":
-                    chunk_text = data.get("chunk")
-                    if chunk_text:
-                        yield f"event: message\ndata: {chunk_text}\n\n"
+                if chunk.thought:
+                    yield sse_handler.format_sse_event(
+                        "thought", {"content": chunk.thought}
+                    )
 
-                if kind == "on_chain_end" and name == "retrieve":
-                    output = data.get("output")
-                    if output and "documents" in output:
-                        docs = [
-                            {
-                                "page": d.metadata.get("page"),
-                                "content": d.page_content[:100],
-                            }
-                            for d in output["documents"]
-                        ]
-                        import json
+                # 2. 메타데이터(문서) 처리
+                if chunk.metadata and "documents" in chunk.metadata:
+                    docs = [
+                        {
+                            "page": d.metadata.get("page"),
+                            "content": d.page_content[:100],
+                        }
+                        for d in chunk.metadata["documents"]
+                    ]
+                    yield sse_handler.format_sse_event("sources", {"documents": docs})
 
-                        yield f"event: sources\ndata: {json.dumps(docs)}\n\n"
-
-            yield "event: end\ndata: [DONE]\n\n"
+            yield sse_handler.format_sse_event("end", {"status": "done"})
         except Exception as e:
             logger.error(f"Streaming error (Session: {sid}): {e}")
-            yield f"event: error\ndata: {str(e)}\n\n"
+            yield sse_handler.format_sse_error(str(e))
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")
 
 
-if __name__ == "__main__":
-    import uvicorn
+@app.on_event("startup")
+async def startup_event():
+    """서버 시작 시 백그라운드 태스크 설정"""
 
-    # 보안 권고에 따라 기본 호스트를 127.0.0.1로 설정
-    host = os.getenv("API_HOST", "127.0.0.1")
-    port = int(os.getenv("API_PORT", 8000))
-    uvicorn.run(app, host=host, port=port)
+    async def session_cleaner():
+        while True:
+            await asyncio.sleep(600)  # 10분마다 실행
+            SessionManager.cleanup_expired_sessions(max_idle_seconds=3600)
+
+    asyncio.create_task(session_cleaner())
+    logger.info("[API] 세션 자동 정리 태스크 시작됨 (주기: 10분)")
+
+
+@app.delete("/api/v1/session/{session_id}")
+async def delete_session(session_id: str, user_id: str = Depends(verify_token)):
+    """특정 세션의 데이터를 삭제하고 메모리를 해제합니다."""
+    success = SessionManager.delete_session(session_id)
+    if not success:
+        raise HTTPException(status_code=404, detail="세션을 찾을 수 없습니다.")
+    return {"message": f"Session {session_id} deleted successfully"}
+
+
+@app.get("/api/v1/admin/stats")
+async def get_system_stats(user_id: str = Depends(verify_token)):
+    """시스템 전체 통계 및 세션 정보를 반환합니다."""
+    # admin 유저만 접근 가능하도록 추가 검증 가능
+    return {
+        "session_stats": SessionManager.get_stats(),
+        "auth_stats": auth_manager.get_statistics(),
+        "active_models": {
+            "llm": DEFAULT_OLLAMA_MODEL,
+            "embedding": AVAILABLE_EMBEDDING_MODELS[0],
+        },
+    }

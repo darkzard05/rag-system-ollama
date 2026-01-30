@@ -1,7 +1,7 @@
-import sys
-import platform
 import importlib
 import os
+import platform
+import sys
 
 
 def print_step(step_name):

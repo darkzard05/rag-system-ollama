@@ -17,7 +17,6 @@ import os
 import stat
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import List, Optional, Tuple
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -83,23 +82,21 @@ class CacheMetadata(BaseModel):
     )
 
     # HMAC 서명 (선택)
-    integrity_hmac: Optional[str] = Field(
+    integrity_hmac: str | None = Field(
         default=None, description="HMAC-SHA256 서명 (base64)"
     )
 
     # 환경 정보
     python_version: str = Field(..., description="생성 환경의 Python 버전")
 
-    rank_bm25_version: Optional[str] = Field(
+    rank_bm25_version: str | None = Field(
         default=None, description="rank-bm25 라이브러리 버전"
     )
 
-    faiss_version: Optional[str] = Field(
-        default=None, description="faiss 라이브러리 버전"
-    )
+    faiss_version: str | None = Field(default=None, description="faiss 라이브러리 버전")
 
     # 추가 메타데이터
-    description: Optional[str] = Field(
+    description: str | None = Field(
         default=None, description="캐시 설명 (예: PDF 파일명)"
     )
 
@@ -141,8 +138,8 @@ class CacheSecurityManager:
     def __init__(
         self,
         security_level: str = "medium",
-        hmac_secret: Optional[str] = None,
-        trusted_paths: Optional[List[str]] = None,
+        hmac_secret: str | None = None,
+        trusted_paths: list[str] | None = None,
         check_permissions: bool = True,
     ):
         """
@@ -203,7 +200,7 @@ class CacheSecurityManager:
                 while chunk := f.read(8192):
                     hasher.update(chunk)
             return hasher.hexdigest()
-        except IOError as e:
+        except OSError as e:
             logger.error(f"파일 해시 계산 실패: {file_path} - {e}")
             raise
 
@@ -234,7 +231,7 @@ class CacheSecurityManager:
         return h.hexdigest()
 
     @staticmethod
-    def load_cache_metadata(metadata_path: str) -> Optional[CacheMetadata]:
+    def load_cache_metadata(metadata_path: str) -> CacheMetadata | None:
         """
         메타데이터 파일을 로드합니다.
 
@@ -248,7 +245,7 @@ class CacheSecurityManager:
             return None
 
         try:
-            with open(metadata_path, "r", encoding="utf-8") as f:
+            with open(metadata_path, encoding="utf-8") as f:
                 data = json.load(f)
             return CacheMetadata(**data)
         except Exception as e:
@@ -272,15 +269,15 @@ class CacheSecurityManager:
             with open(metadata_path, "w", encoding="utf-8") as f:
                 json.dump(metadata.model_dump(), f, ensure_ascii=False, indent=2)
             logger.debug(f"메타데이터 저장 완료: {metadata_path}")
-        except IOError as e:
+        except OSError as e:
             logger.error(f"메타데이터 저장 실패: {metadata_path} - {e}")
             raise
 
     def verify_cache_integrity(
         self,
         file_path: str,
-        metadata: Optional[CacheMetadata] = None,
-        metadata_path: Optional[str] = None,
+        metadata: CacheMetadata | None = None,
+        metadata_path: str | None = None,
     ) -> bool:
         """
         캐시 파일의 무결성을 검증합니다.
@@ -325,21 +322,30 @@ class CacheSecurityManager:
         except Exception as e:
             raise CacheIntegrityError(f"해시 계산 실패: {e}")
 
-        # HMAC 검증 (high 레벨)
-        if self.security_level == "high" and metadata.integrity_hmac:
-            try:
-                with open(file_path, "rb") as f:
-                    file_data = f.read()
-                current_hmac = self.compute_integrity_hmac(file_data)
+        # HMAC 검증
+        if self.hmac_secret:
+            if metadata.integrity_hmac:
+                try:
+                    with open(file_path, "rb") as f:
+                        file_data = f.read()
+                    current_hmac = self.compute_integrity_hmac(file_data)
 
-                if not hmac.compare_digest(current_hmac, metadata.integrity_hmac):
-                    raise CacheIntegrityError(
-                        f"HMAC 검증 실패 (파일 변조 감지): {file_path}"
-                    )
-            except CacheIntegrityError:
-                raise
-            except Exception as e:
-                logger.warning(f"HMAC 검증 중 오류: {e}")
+                    if not hmac.compare_digest(current_hmac, metadata.integrity_hmac):
+                        raise CacheIntegrityError(
+                            f"HMAC 검증 실패 (파일 변조 감지): {file_path}"
+                        )
+                    logger.debug(f"HMAC 검증 통과: {file_path}")
+                except CacheIntegrityError:
+                    raise
+                except Exception as e:
+                    logger.warning(f"HMAC 검증 중 오류: {e}")
+            elif self.security_level == "high":
+                # high 레벨에서는 HMAC 필드가 반드시 있어야 함
+                raise CacheIntegrityError(
+                    f"보안 수준 'high'에서는 HMAC 서명이 필수입니다: {file_path}"
+                )
+        elif self.security_level == "high":
+            logger.warning("보안 수준은 'high'이나 HMAC 비밀키가 설정되지 않았습니다.")
 
         logger.debug(f"캐시 무결성 검증 통과: {file_path}")
         return True
@@ -481,8 +487,8 @@ class CacheSecurityManager:
     def full_verification(
         self,
         file_path: str,
-        metadata_path: Optional[str] = None,
-    ) -> Tuple[bool, Optional[str]]:
+        metadata_path: str | None = None,
+    ) -> tuple[bool, str | None]:
         """
         캐시 파일에 대한 전체 보안 검증을 수행합니다.
 
@@ -524,7 +530,7 @@ class CacheSecurityManager:
     @staticmethod
     def create_metadata_for_file(
         file_path: str,
-        description: Optional[str] = None,
+        description: str | None = None,
     ) -> CacheMetadata:
         """
         파일을 위한 새로운 메타데이터를 생성합니다.

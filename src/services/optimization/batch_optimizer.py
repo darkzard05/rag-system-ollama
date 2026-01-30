@@ -3,15 +3,15 @@ GPU 메모리 상태를 감지하여 최적의 배치 사이즈를 계산하는 
 """
 
 import logging
+
 import torch
-from typing import Tuple
 
 from common.constants import PerformanceConstants
 
 logger = logging.getLogger(__name__)
 
 
-def get_gpu_memory_info() -> Tuple[bool, float]:
+def get_gpu_memory_info() -> tuple[bool, float]:
     """
     GPU 가용 여부와 총 메모리(MB)를 반환합니다.
     """
@@ -33,7 +33,6 @@ def _get_free_vram() -> float:
     try:
         device = torch.cuda.current_device()
         total = torch.cuda.get_device_properties(device).total_memory / (1024**2)
-        reserved = torch.cuda.memory_reserved(device) / (1024**2)
         allocated = torch.cuda.memory_allocated(device) / (1024**2)
         return total - allocated
     except Exception:
@@ -65,7 +64,7 @@ def get_optimal_batch_size(device: str = "auto", model_type: str = "embedding") 
 
 def validate_batch_size(
     batch_size: int, device: str = "auto", model_type: str = "embedding"
-) -> Tuple[bool, str]:
+) -> tuple[bool, str]:
     """
     설정된 배치 사이즈가 현재 자원에서 안전한지 검증합니다.
     """

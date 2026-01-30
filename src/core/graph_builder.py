@@ -3,40 +3,39 @@ LangGraph를 사용하여 RAG 파이프라인을 구성하고 실행하는 로�
 Core Logic Rebuild: 데코레이터 제거 및 순수 함수 구조로 변경하여 config 전달 보장.
 """
 
-import logging
 import asyncio
 import hashlib
+import logging
 import time
-from typing import List, Optional, Any
+from typing import Any
 
+from langchain_core.callbacks.manager import adispatch_custom_event
+from langchain_core.documents import Document
+from langchain_core.output_parsers import StrOutputParser
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.runnables import RunnableConfig
+from langgraph.graph import END, StateGraph
+
+from api.schemas import GraphState
+from common.config import (
+    QA_HUMAN_PROMPT,
+    QA_SYSTEM_PROMPT,
+    QUERY_EXPANSION_CONFIG,
+    QUERY_EXPANSION_PROMPT,
+    RERANKER_CONFIG,
+)
+from common.constants import TimeoutConstants
 from common.typing_utils import (
     DocumentList,
     GraphOutput,
     T,
 )
-
-from langchain_core.documents import Document
-from langchain_core.output_parsers import StrOutputParser
-from langchain_core.prompts import ChatPromptTemplate
-from langchain_core.runnables import RunnableConfig
-from langchain_core.callbacks.manager import adispatch_custom_event
-from langgraph.graph import StateGraph, END
-
-from common.config import (
-    QA_SYSTEM_PROMPT,
-    QA_HUMAN_PROMPT,
-    RERANKER_CONFIG,
-    QUERY_EXPANSION_PROMPT,
-    QUERY_EXPANSION_CONFIG,
-)
-from common.constants import TimeoutConstants
-from api.schemas import GraphState
+from common.utils import clean_query_text
 from core.model_loader import load_reranker_model
 from core.query_optimizer import RAGQueryOptimizer  # 추가
-from common.utils import clean_query_text
 from services.monitoring.performance_monitor import (
-    get_performance_monitor,
     OperationType,
+    get_performance_monitor,
 )
 from services.optimization.async_optimizer import get_concurrent_document_reranker
 
@@ -103,7 +102,7 @@ def _merge_consecutive_chunks(docs: DocumentList) -> DocumentList:
 # --- Graph Construction ---
 
 
-def build_graph(retriever: Optional[T] = None) -> T:
+def build_graph(retriever: T | None = None) -> T:
     """
     RAG 워크플로우를 구성하고 컴파일합니다.
     """
@@ -189,15 +188,25 @@ def build_graph(retriever: Optional[T] = None) -> T:
             # [최적화] 비동기 LLM 호출
             result = await chain.ainvoke({"input": state["input"]})
 
-            # [개선] 불렛 포인트 및 번호 제거 파싱 로직
+            # [개선] 쿼리 정규화 및 필터링 강화
             raw_queries = [q.strip() for q in result.split("\n") if q.strip()]
             clean_queries = []
+            seen = set()
+
+            # 원본 질문을 우선적으로 포함 (선택적: 품질 보장용)
+            # clean_queries.append(state["input"])
+            # seen.add(state["input"])
+
             for q in raw_queries:
                 clean_q = clean_query_text(q)
-                if clean_q:
+                # 너무 짧거나(2자 미만) 너무 긴(100자 초과) 비정상 쿼리 필터링
+                if clean_q and 2 <= len(clean_q) <= 100 and clean_q not in seen:
                     clean_queries.append(clean_q)
+                    seen.add(clean_q)
 
+            # 최대 3개까지만 사용하고, 유효한 결과가 없으면 원본 질문 사용
             final_queries = clean_queries[:3] if clean_queries else [state["input"]]
+
             logger.info(
                 f"[Query] [Complete] 검색어 {len(final_queries)}개 생성 완료: {final_queries}"
             )
@@ -314,10 +323,20 @@ def build_graph(retriever: Optional[T] = None) -> T:
                 logger.info(
                     f"[Rerank] [Start] 지능형 리랭킹 시작 ({len(documents)}개 문서)"
                 )
-                reranker = load_reranker_model(RERANKER_CONFIG.get("model_name"))
+
+                try:
+                    reranker = load_reranker_model(RERANKER_CONFIG.get("model_name"))
+                    if not reranker:
+                        raise ValueError("리랭커 모델을 로드할 수 없습니다.")
+                except Exception as e:
+                    logger.warning(
+                        f"[Rerank] [Skip] 리랭커 로드 실패, 원본 순위 유지: {e}"
+                    )
+                    return {"documents": documents[: RERANKER_CONFIG.get("top_k", 6)]}
+
                 top_k = RERANKER_CONFIG.get("top_k", 6)
 
-                async def _rerank_batch(query: str, docs: DocumentList) -> List[float]:
+                async def _rerank_batch(query: str, docs: DocumentList) -> list[float]:
                     try:
                         pairs = [[query, doc.page_content] for doc in docs]
                         scores = await asyncio.to_thread(reranker.predict, pairs)
@@ -390,8 +409,8 @@ def build_graph(retriever: Optional[T] = None) -> T:
         LLM 답변을 생성하고 스트리밍합니다.
         내부적으로 성능 지표(TTFT, 추론 시간 등)를 상세히 기록합니다.
         """
-        from core.session import SessionManager
         from common.utils import get_ollama_resource_usage
+        from core.session import SessionManager
 
         # [수정] documents가 None이거나 없을 경우를 대비한 안전한 카운팅
         docs = state.get("documents") or []
@@ -414,22 +433,41 @@ def build_graph(retriever: Optional[T] = None) -> T:
                 )
                 SessionManager.add_status_log("답변 생성 시작")
 
-                # [리팩토링] 의도에 따라 시스템 프롬프트 동적 변경
+                # [리팩토링] 의도에 따라 시스템 및 휴먼 프롬프트 동적 변경
                 intent = state.get("route_decision", "FACTOID")
 
                 if intent == "GREETING":
                     sys_prompt = "당신은 친절한 AI 어시스턴트입니다. 사용자의 인사나 일상적인 대화에 자연스럽고 따뜻하게 응답하세요."
+                    human_prompt = "{input}"  # 문서 컨텍스트 참조 지시 제거
                 else:
                     sys_prompt = QA_SYSTEM_PROMPT
+                    human_prompt = QA_HUMAN_PROMPT
 
                 prompt_template = ChatPromptTemplate.from_messages(
                     [
                         ("system", sys_prompt),
-                        ("human", QA_HUMAN_PROMPT),
+                        ("human", human_prompt),
                     ]
                 )
 
-                generation_chain = prompt_template | llm
+                # 1. 최적화: 메시지 사전 포맷팅 (Ollama SDK 직접 호출용)
+                formatted_messages = [
+                    {"role": "system", "content": sys_prompt},
+                    {
+                        "role": "user",
+                        "content": human_prompt.format(
+                            input=state["input"], context=state.get("context", "")
+                        ),
+                    },
+                ]
+
+                # 2. 최적화: Ollama 옵션 사전 설정
+                ollama_options = {
+                    "temperature": getattr(llm, "temperature", 0.5),
+                    "num_predict": getattr(llm, "num_predict", -1),
+                    "top_p": getattr(llm, "top_p", 0.9),
+                    "num_ctx": getattr(llm, "num_ctx", 4096),
+                }
 
                 class ResponsePerformanceTracker:
                     def __init__(self, query_text: str, model_instance: Any):
@@ -442,6 +480,8 @@ def build_graph(retriever: Optional[T] = None) -> T:
                         self.answer_started_at = None
                         self.answer_finished_at = None
                         self.chunk_count = 0
+                        self._resp_parts = []
+                        self._thought_parts = []
                         self.full_response = ""
                         self.full_thought = ""
                         self._log_thinking_start = False
@@ -454,42 +494,36 @@ def build_graph(retriever: Optional[T] = None) -> T:
 
                         if thought:
                             if not self._log_thinking_start:
-                                logger.info("[LLM] [Thinking] 사고 과정 시작...")
+                                # 최초 1회만 수행
                                 SessionManager.replace_last_status_log(
                                     "사고 과정 기록 중..."
                                 )
                                 self.thinking_started_at = now
                                 self._log_thinking_start = True
-                            self.full_thought += thought
+                            self._thought_parts.append(thought)
 
                         if content:
                             if not self._log_answer_start:
-                                # 답변이 시작되면 사고 과정은 종료된 것으로 간주
+                                # 최초 1회만 수행
                                 if (
                                     self.thinking_started_at
                                     and self.thinking_finished_at is None
                                 ):
                                     self.thinking_finished_at = now
-                                    thinking_dur = (
-                                        self.thinking_finished_at
-                                        - self.thinking_started_at
-                                    )
-                                    logger.info(
-                                        f"[LLM] [Thinking] 사고 완료 ({thinking_dur:.2f}s)"
-                                    )
 
-                                logger.info("[LLM] [Response] 답변 스트리밍 시작")
                                 SessionManager.replace_last_status_log(
                                     "답변 스트리밍 중..."
                                 )
                                 self.answer_started_at = now
                                 self._log_answer_start = True
 
-                            self.full_response += content
+                            self._resp_parts.append(content)
                             self.chunk_count += 1
 
                     def finalize_and_log(self):
                         self.answer_finished_at = time.time()
+                        self.full_response = "".join(self._resp_parts)
+                        self.full_thought = "".join(self._thought_parts)
 
                         total_duration = self.answer_finished_at - self.start_time
                         time_to_first_token = (
@@ -498,7 +532,6 @@ def build_graph(retriever: Optional[T] = None) -> T:
                             else 0
                         )
 
-                        # 사고 과정 시간 계산
                         thinking_duration = 0
                         if self.thinking_started_at:
                             end_time = (
@@ -508,23 +541,19 @@ def build_graph(retriever: Optional[T] = None) -> T:
                             )
                             thinking_duration = end_time - self.thinking_started_at
 
-                        # 실제 답변 생성 시간 계산
                         answer_duration = (
                             (self.answer_finished_at - self.answer_started_at)
                             if self.answer_started_at
                             else 0
                         )
-
-                        # 토큰 수 및 속도 계산
                         resp_token_count = len(self.full_response.split())
                         thought_token_count = len(self.full_thought.split())
                         tokens_per_second = (
-                            resp_token_count / answer_duration
+                            (resp_token_count / answer_duration)
                             if answer_duration > 0
                             else 0
                         )
 
-                        # 표준화된 상세 로그 기록
                         logger.info(
                             f"[LLM] [Complete] 생성 완료 | "
                             f"TTFT: {time_to_first_token:.2f}s | "
@@ -534,12 +563,10 @@ def build_graph(retriever: Optional[T] = None) -> T:
                             f"총 소요: {total_duration:.2f}s"
                         )
 
-                        # UI 상태 박스 최종 업데이트
                         SessionManager.replace_last_status_log(
                             f"답변 생성 완료 (사고: {thought_token_count}토큰, 답변: {resp_token_count}토큰)"
                         )
 
-                        # CSV 기록
                         try:
                             monitor.log_to_csv(
                                 {
@@ -555,73 +582,70 @@ def build_graph(retriever: Optional[T] = None) -> T:
                             )
                         except Exception:
                             pass
-
                         return resp_token_count, thought_token_count
 
                 tracker = ResponsePerformanceTracker(state["input"], llm)
                 timeout = TimeoutConstants.LLM_TIMEOUT
 
                 async def _consume_stream_and_dispatch_events() -> None:
-                    """모델 스트림을 소비하고 가공하여 커스텀 이벤트를 발생시킵니다."""
-                    answer_buffer = []
-                    buffer_size = 5  # 이후 토큰은 5개 단위로 묶어서 전송
-                    is_first_content_chunk = True
-
+                    """Ollama SDK를 직접 호출하여 최고 속도로 이벤트를 발생시킵니다. (최적화된 5토큰 버퍼링 적용)"""
                     try:
-                        async for chunk in generation_chain.astream(
-                            {"input": state["input"], "context": state["context"]},
-                            config=config,
+                        async_client = getattr(llm, "async_client", None)
+                        if not async_client:
+                            import ollama
+
+                            async_client = ollama.AsyncClient(
+                                host=getattr(llm, "base_url", "http://127.0.0.1:11434")
+                            )
+
+                        buffer = []
+                        # 원격 저장소에서 검증된 최적의 배치 크기
+                        batch_size = 5
+
+                        async for part in await async_client.chat(
+                            model=getattr(llm, "model", "unknown"),
+                            messages=formatted_messages,
+                            stream=True,
+                            options=ollama_options,
                         ):
-                            content = getattr(chunk, "content", "")
-                            thought = ""
-                            if hasattr(chunk, "additional_kwargs"):
-                                thought = chunk.additional_kwargs.get(
-                                    "thought"
-                                ) or chunk.additional_kwargs.get("thinking", "")
+                            msg_part = part.get("message", {})
+                            content = msg_part.get("content", "")
+                            thought = msg_part.get("thinking", "")
 
-                            if not content and not thought:
-                                continue
-
-                            tracker.record_chunk(content, thought)
-
-                            # 사고 과정(thought)은 내용이 있을 때 즉시 전송
+                            # 1. 사고 과정은 즉시 전송 (반응성 유지)
                             if thought:
+                                tracker.record_chunk("", thought)
                                 await adispatch_custom_event(
                                     "response_chunk",
                                     {"chunk": "", "thought": thought},
                                     config=config,
                                 )
 
-                            # 답변 본문(content) 처리
+                            # 2. 답변 본문은 5개 단위로 묶어서 발송 (오버헤드 최소화)
                             if content:
-                                if is_first_content_chunk:
-                                    # [최적화] 첫 번째 답변 토큰은 버퍼링 없이 즉시 전송하여 TTFT 단축
+                                buffer.append(content)
+                                if len(buffer) >= batch_size:
+                                    merged_content = "".join(buffer)
+                                    tracker.record_chunk(merged_content, "")
                                     await adispatch_custom_event(
                                         "response_chunk",
-                                        {"chunk": content, "thought": ""},
+                                        {"chunk": merged_content, "thought": ""},
                                         config=config,
                                     )
-                                    is_first_content_chunk = False
-                                else:
-                                    answer_buffer.append(content)
-                                    if len(answer_buffer) >= buffer_size:
-                                        await adispatch_custom_event(
-                                            "response_chunk",
-                                            {
-                                                "chunk": "".join(answer_buffer),
-                                                "thought": "",
-                                            },
-                                            config=config,
-                                        )
-                                        answer_buffer = []
-                    finally:
-                        # 스트리밍 종료 또는 예외 발생 시 남은 버퍼 플러시
-                        if answer_buffer:
+                                    buffer = []
+
+                        # 3. 루프 종료 후 남은 버퍼 플러시
+                        if buffer:
+                            merged_content = "".join(buffer)
+                            tracker.record_chunk(merged_content, "")
                             await adispatch_custom_event(
                                 "response_chunk",
-                                {"chunk": "".join(answer_buffer), "thought": ""},
+                                {"chunk": merged_content, "thought": ""},
                                 config=config,
                             )
+
+                    except Exception as e:
+                        logger.error(f"[Stream] SDK 직접 호출 중 오류: {e}")
 
                 # 스트리밍 태스크 실행
                 generation_task = asyncio.create_task(

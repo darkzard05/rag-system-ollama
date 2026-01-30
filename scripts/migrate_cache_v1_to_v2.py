@@ -14,7 +14,6 @@ import shutil
 import sys
 from datetime import datetime
 from pathlib import Path
-from typing import List, Tuple
 
 # 상위 디렉터리를 path에 추가하여 src 모듈 임포트 가능하게
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -56,7 +55,7 @@ class CacheMigrator:
         logger.info(f"드라이런 모드: {dry_run}")
         logger.info(f"백업 생성: {backup}")
 
-    def find_bm25_caches(self) -> List[Path]:
+    def find_bm25_caches(self) -> list[Path]:
         """
         BM25 캐시 파일 찾기.
 
@@ -80,7 +79,7 @@ class CacheMigrator:
         metadata_file = Path(str(bm25_file) + ".meta")
         return metadata_file.exists()
 
-    def migrate_single_cache(self, bm25_file: Path) -> Tuple[bool, str]:
+    def migrate_single_cache(self, bm25_file: Path) -> tuple[bool, str]:
         """
         단일 캐시 마이그레이션 수행.
 
@@ -133,7 +132,7 @@ class CacheMigrator:
 
         return backup_dir
 
-    def migrate(self) -> Tuple[int, int, List[Tuple[Path, str]]]:
+    def migrate(self) -> tuple[int, int, list[tuple[Path, str]]]:
         """
         전체 캐시 마이그레이션 수행.
 

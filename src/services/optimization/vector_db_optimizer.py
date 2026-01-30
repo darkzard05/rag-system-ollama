@@ -4,10 +4,11 @@
 
 import asyncio
 import logging
+from collections.abc import Callable, Coroutine
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Callable, Dict, List, Optional, Tuple, Coroutine
 from threading import RLock
+from typing import Any
 
 from langchain_core.documents import Document
 
@@ -50,7 +51,7 @@ class ParallelSearchConfig:
     max_concurrent_searches: int = 4
     timeout_per_search: float = 10.0
     k_results: int = 5
-    score_threshold: Optional[float] = None
+    score_threshold: float | None = None
 
 
 @dataclass
@@ -58,7 +59,7 @@ class RerankingConfig:
     """Re-ranking 설정."""
 
     enable_reranking: bool = True
-    rerank_model: Optional[str] = None
+    rerank_model: str | None = None
     top_k_before_rerank: int = 20
     top_k_after_rerank: int = 5
     diversity_penalty: float = 0.0
@@ -74,8 +75,8 @@ class BatchIndexResult:
     failed: int = 0
     duplicates_removed: int = 0
     execution_time: float = 0.0
-    failed_indices: List[int] = field(default_factory=list)
-    errors: List[str] = field(default_factory=list)
+    failed_indices: list[int] = field(default_factory=list)
+    errors: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -83,23 +84,23 @@ class SearchResult:
     """검색 결과."""
 
     query: str
-    results: List[Tuple[Document, float]]
+    results: list[tuple[Document, float]]
     execution_time: float
-    num_candidates_before_rerank: Optional[int] = None
-    num_results_after_rerank: Optional[int] = None
-    rerank_scores: Optional[List[float]] = None
+    num_candidates_before_rerank: int | None = None
+    num_results_after_rerank: int | None = None
+    rerank_scores: list[float] | None = None
 
 
 class DocumentDeduplicator:
     """문서 중복 제거기."""
 
-    def __init__(self, hash_func: Optional[Callable] = None):
+    def __init__(self, hash_func: Callable | None = None):
         """
         Args:
             hash_func: 문서 해시 함수 (기본값: content 기반)
         """
         self.hash_func = hash_func or self._default_hash
-        self.seen_hashes: Dict[str, Document] = {}
+        self.seen_hashes: dict[str, Document] = {}
         self._lock = RLock()
 
     def _default_hash(self, doc: Document) -> str:
@@ -111,7 +112,7 @@ class DocumentDeduplicator:
         combined = content + metadata_str
         return hashlib.sha256(combined.encode()).hexdigest()
 
-    def add_document(self, doc: Document) -> Tuple[bool, str]:
+    def add_document(self, doc: Document) -> tuple[bool, str]:
         """
         문서 추가 (중복이면 무시).
 
@@ -126,8 +127,8 @@ class DocumentDeduplicator:
             return True, doc_hash
 
     def deduplicate_batch(
-        self, documents: List[Document]
-    ) -> Tuple[List[Document], int]:
+        self, documents: list[Document]
+    ) -> tuple[list[Document], int]:
         """
         배치 문서 중복 제거.
 
@@ -164,8 +165,8 @@ class BatchIndexer:
 
     async def batch_index_documents(
         self,
-        documents: List[Document],
-        index_func: Callable[[List[Document]], Coroutine[Any, Any, Any]],
+        documents: list[Document],
+        index_func: Callable[[list[Document]], Coroutine[Any, Any, Any]],
     ) -> BatchIndexResult:
         """
         배치로 문서 인덱싱.
@@ -218,11 +219,11 @@ class BatchIndexer:
 
     async def _index_batch_with_retry(
         self,
-        batch: List[Document],
+        batch: list[Document],
         batch_idx: int,
         index_func: Callable,
         retry_count: int = 0,
-    ) -> Dict[str, int]:
+    ) -> dict[str, int]:
         """배치 인덱싱 (재시도 포함)."""
         try:
             # 실제 인덱싱 함수 호출
@@ -251,11 +252,11 @@ class ParallelSearcher:
 
     async def search_parallel(
         self,
-        queries: List[str],
+        queries: list[str],
         search_func: Callable[
-            [str, int], Coroutine[Any, Any, List[Tuple[Document, float]]]
+            [str, int], Coroutine[Any, Any, list[tuple[Document, float]]]
         ],
-    ) -> List[SearchResult]:
+    ) -> list[SearchResult]:
         """
         다중 쿼리 병렬 검색.
 
@@ -332,9 +333,9 @@ class Reranker:
     def rerank_results(
         self,
         query: str,
-        results: List[Tuple[Document, float]],
-        rerank_func: Optional[Callable] = None,
-    ) -> Tuple[List[Tuple[Document, float]], List[float]]:
+        results: list[tuple[Document, float]],
+        rerank_func: Callable | None = None,
+    ) -> tuple[list[tuple[Document, float]], list[float]]:
         """
         검색 결과 Re-ranking.
 
@@ -361,7 +362,9 @@ class Reranker:
 
         # 스코어로 정렬
         ranked = sorted(
-            zip(top_candidates, rerank_scores), key=lambda x: x[1], reverse=True
+            zip(top_candidates, rerank_scores, strict=False),
+            key=lambda x: x[1],
+            reverse=True,
         )
 
         # 최종 결과
@@ -376,8 +379,8 @@ class Reranker:
     def _compute_rerank_scores(
         self,
         query: str,
-        candidates: List[Tuple[Document, float]],
-    ) -> List[float]:
+        candidates: list[tuple[Document, float]],
+    ) -> list[float]:
         """기본 re-ranking 스코어 계산."""
         scores = []
 
@@ -412,9 +415,9 @@ class VectorDBOptimizer:
 
     def __init__(
         self,
-        batch_config: Optional[BatchIndexConfig] = None,
-        search_config: Optional[ParallelSearchConfig] = None,
-        rerank_config: Optional[RerankingConfig] = None,
+        batch_config: BatchIndexConfig | None = None,
+        search_config: ParallelSearchConfig | None = None,
+        rerank_config: RerankingConfig | None = None,
     ):
         self.batch_config = batch_config or BatchIndexConfig()
         self.search_config = search_config or ParallelSearchConfig()
@@ -434,8 +437,8 @@ class VectorDBOptimizer:
 
     async def optimize_indexing(
         self,
-        documents: List[Document],
-        index_func: Callable[[List[Document]], Coroutine[Any, Any, Any]],
+        documents: list[Document],
+        index_func: Callable[[list[Document]], Coroutine[Any, Any, Any]],
     ) -> BatchIndexResult:
         """최적화된 배치 인덱싱."""
         result = await self.batch_indexer.batch_index_documents(documents, index_func)
@@ -447,10 +450,10 @@ class VectorDBOptimizer:
 
     async def optimize_search(
         self,
-        queries: List[str],
+        queries: list[str],
         search_func: Callable,
-        rerank_func: Optional[Callable] = None,
-    ) -> List[SearchResult]:
+        rerank_func: Callable | None = None,
+    ) -> list[SearchResult]:
         """최적화된 병렬 검색 + Re-ranking."""
         # 병렬 검색
         search_results = await self.parallel_searcher.search_parallel(
@@ -480,14 +483,14 @@ class VectorDBOptimizer:
 
         return reranked_results
 
-    def get_metrics(self) -> Dict[str, Any]:
+    def get_metrics(self) -> dict[str, Any]:
         """최적화 메트릭 조회."""
         with self._lock:
             return self._metrics.copy()
 
 
 # 전역 인스턴스
-_optimizer_instance: Optional[VectorDBOptimizer] = None
+_optimizer_instance: VectorDBOptimizer | None = None
 
 
 def get_vector_db_optimizer() -> VectorDBOptimizer:

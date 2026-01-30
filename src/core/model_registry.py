@@ -3,11 +3,11 @@
 """
 
 import logging
+import time
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Dict, List, Optional, Set
 from threading import RLock
-import time
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -29,10 +29,10 @@ class ModelInfo:
 
     name: str
     version: str = "latest"
-    task_support: List[ModelTask] = field(default_factory=list)
+    task_support: list[ModelTask] = field(default_factory=list)
     memory_mb: int = 0
     latency_ms: int = 0
-    quantization_level: Optional[str] = None  # 4-bit, 8-bit, 16-bit
+    quantization_level: str | None = None  # 4-bit, 8-bit, 16-bit
     context_length: int = 2048
     parameters: int = 0  # 모델 파라미터 수
     quality_score: float = 0.8  # 0-1
@@ -56,7 +56,7 @@ class ModelMetrics:
     success_rate: float = 1.0
     p50_latency_ms: float = 0.0
     p99_latency_ms: float = 0.0
-    latency_history: List[float] = field(default_factory=list)
+    latency_history: list[float] = field(default_factory=list)
 
 
 class ModelRegistry:
@@ -64,9 +64,9 @@ class ModelRegistry:
 
     def __init__(self):
         self._lock = RLock()
-        self._models: Dict[str, ModelInfo] = {}
-        self._metrics: Dict[str, ModelMetrics] = {}
-        self._task_index: Dict[ModelTask, Set[str]] = {
+        self._models: dict[str, ModelInfo] = {}
+        self._metrics: dict[str, ModelMetrics] = {}
+        self._task_index: dict[ModelTask, set[str]] = {
             task: set() for task in ModelTask
         }
 
@@ -110,29 +110,29 @@ class ModelRegistry:
 
             logger.info(f"모델 등록 해제: {model_key}")
 
-    def get_model(self, name: str, version: str = "latest") -> Optional[ModelInfo]:
+    def get_model(self, name: str, version: str = "latest") -> ModelInfo | None:
         """모델 조회."""
         with self._lock:
             model_key = f"{name}:{version}"
             return self._models.get(model_key)
 
-    def get_model_by_key(self, model_key: str) -> Optional[ModelInfo]:
+    def get_model_by_key(self, model_key: str) -> ModelInfo | None:
         """모델 키로 조회."""
         with self._lock:
             return self._models.get(model_key)
 
-    def list_all_models(self) -> List[ModelInfo]:
+    def list_all_models(self) -> list[ModelInfo]:
         """모든 모델 조회."""
         with self._lock:
             return list(self._models.values())
 
-    def list_models_by_task(self, task: ModelTask) -> List[ModelInfo]:
+    def list_models_by_task(self, task: ModelTask) -> list[ModelInfo]:
         """작업별 모델 조회."""
         with self._lock:
             model_keys = self._task_index.get(task, set())
             return [self._models[key] for key in model_keys]
 
-    def list_models_sorted_by(self, sort_key: str) -> List[ModelInfo]:
+    def list_models_sorted_by(self, sort_key: str) -> list[ModelInfo]:
         """정렬하여 모델 조회.
 
         Args:
@@ -200,19 +200,19 @@ class ModelRegistry:
             if model_key in self._models:
                 self._models[model_key].last_used = time.time()
 
-    def get_metrics(self, model_key: str) -> Optional[ModelMetrics]:
+    def get_metrics(self, model_key: str) -> ModelMetrics | None:
         """메트릭 조회."""
         with self._lock:
             return self._metrics.get(model_key)
 
-    def get_all_metrics(self) -> Dict[str, ModelMetrics]:
+    def get_all_metrics(self) -> dict[str, ModelMetrics]:
         """모든 메트릭 조회."""
         with self._lock:
             return dict(self._metrics)
 
     def compare_models(
-        self, model_keys: List[str], metric: str = "latency"
-    ) -> List[tuple]:
+        self, model_keys: list[str], metric: str = "latency"
+    ) -> list[tuple]:
         """모델 비교.
 
         Returns:
@@ -247,7 +247,7 @@ class ModelRegistry:
             # 숫자가 클수록 좋은 메트릭
             return sorted(results, key=lambda x: x[1], reverse=True)
 
-    def get_least_used_model(self) -> Optional[str]:
+    def get_least_used_model(self) -> str | None:
         """가장 적게 사용된 모델 조회."""
         with self._lock:
             if not self._models:
@@ -255,7 +255,7 @@ class ModelRegistry:
 
             return min(self._models.keys(), key=lambda k: self._models[k].last_used)
 
-    def get_model_stats_summary(self) -> Dict[str, Any]:
+    def get_model_stats_summary(self) -> dict[str, Any]:
         """모델 통계 요약."""
         with self._lock:
             total_models = len(self._models)
@@ -275,7 +275,7 @@ class ModelRegistry:
                 ),
             }
 
-    def reset_metrics(self, model_key: Optional[str] = None):
+    def reset_metrics(self, model_key: str | None = None):
         """메트릭 리셋."""
         with self._lock:
             if model_key:
@@ -287,7 +287,7 @@ class ModelRegistry:
 
 
 # 전역 인스턴스
-_registry_instance: Optional[ModelRegistry] = None
+_registry_instance: ModelRegistry | None = None
 
 
 def get_model_registry() -> ModelRegistry:

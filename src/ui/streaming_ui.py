@@ -3,17 +3,17 @@ UI 스트리밍 통합 - Streamlit과 스트리밍 처리기 연동
 """
 
 import logging
-from typing import Optional, List
+
 import streamlit as st
 from langchain_core.documents import Document
 
 from api.streaming_handler import (
-    get_streaming_handler,
-    get_adaptive_controller,
-    StreamingResponseHandler,
-    StreamingResponseBuilder,
     AdaptiveStreamingController,
     StreamChunk,
+    StreamingResponseBuilder,
+    StreamingResponseHandler,
+    get_adaptive_controller,
+    get_streaming_handler,
 )
 
 logger = logging.getLogger(__name__)
@@ -31,8 +31,8 @@ class StreamlitStreamingUI:
 
     def __init__(self):
         self.builder = StreamingResponseBuilder()
-        self.streaming_handler: Optional[StreamingResponseHandler] = None
-        self.adaptive_controller: Optional[AdaptiveStreamingController] = None
+        self.streaming_handler: StreamingResponseHandler | None = None
+        self.adaptive_controller: AdaptiveStreamingController | None = None
 
     async def stream_response_to_ui(
         self,
@@ -57,63 +57,67 @@ class StreamlitStreamingUI:
         self.adaptive_controller = get_adaptive_controller()
         self.builder = StreamingResponseBuilder()
 
-        with chat_container:
-            with st.chat_message("assistant", avatar="🤖"):
-                # 응답 표시 컨테이너
-                response_container = st.empty()
-                metrics_container = st.empty()
+        with chat_container, st.chat_message("assistant", avatar="🤖"):
+            # 응답 표시 컨테이너
+            response_container = st.empty()
+            metrics_container = st.empty()
 
-                # 응답 텍스트
-                response_text = ""
+            # 응답 텍스트
+            response_text = ""
 
-                async def on_chunk(chunk: StreamChunk) -> None:
-                    """청크 수신 시 콜백"""
-                    nonlocal response_text
+            async def on_chunk(chunk: StreamChunk) -> None:
+                """청크 수신 시 콜백"""
+                nonlocal response_text
 
-                    response_text += chunk.content
-                    self.builder.add_chunk(chunk)
+                response_text += chunk.content
+                self.builder.add_chunk(chunk)
 
-                    # 메트릭 기록
-                    self.adaptive_controller.record_latency(chunk.timestamp * 1000)
+                # 메트릭 기록 (실제 지연 시간 계산)
+                latency_ms = (time.time() - chunk.timestamp) * 1000
+                self.adaptive_controller.record_latency(latency_ms)
 
-                    # UI 업데이트
-                    self._update_response_display(
-                        response_container,
-                        metrics_container,
-                        response_text,
-                        chunk.chunk_index,
-                        show_metrics,
-                        show_tokens_per_second,
-                    )
-
-                async def on_complete() -> None:
-                    """스트리밍 완료 시 콜백"""
-                    # 최종 메트릭 표시
-                    metrics = self.streaming_handler.metrics
-                    logger.info(
-                        f"[Streaming Complete] "
-                        f"총 토큰: {metrics.total_tokens}, "
-                        f"처리 시간: {metrics.total_time:.2f}초, "
-                        f"속도: {metrics.tokens_per_second:.1f} tok/s, "
-                        f"첫 토큰 지연: {metrics.first_token_latency * 1000:.2f}ms"
-                    )
-
-                    # 최종 메트릭 표시
-                    if show_metrics:
-                        self._display_final_metrics(metrics_container, metrics)
-
-                async def on_error(error: Exception) -> None:
-                    """에러 발생 시 콜백"""
-                    error_msg = f"⚠️ 스트리밍 오류: {str(error)}"
-                    logger.error(error_msg)
-                    response_container.error(error_msg)
-
-                # 스트리밍 실행
-                metrics = await self.streaming_handler.stream_response(
-                    response_generator, on_chunk, on_complete, on_error
+                # UI 업데이트
+                self._update_response_display(
+                    response_container,
+                    metrics_container,
+                    response_text,
+                    chunk.chunk_index,
+                    show_metrics,
+                    show_tokens_per_second,
                 )
 
-                return response_text
+            async def on_complete() -> None:
+                """스트리밍 완료 시 콜백"""
+                # 최종 메트릭 표시
+                metrics = self.streaming_handler.metrics
+                logger.info(
+                    f"[Streaming Complete] "
+                    f"총 토큰: {metrics.total_tokens}, "
+                    f"처리 시간: {metrics.total_time:.2f}초, "
+                    f"속도: {metrics.tokens_per_second:.1f} tok/s, "
+                    f"첫 토큰 지연: {metrics.first_token_latency * 1000:.2f}ms"
+                )
+
+                # 최종 메트릭 표시
+                if show_metrics:
+                    self._display_final_metrics(metrics_container, metrics)
+
+            async def on_error(error: Exception) -> None:
+                """에러 발생 시 콜백"""
+                error_msg = f"⚠️ 스트리밍 오류: {str(error)}"
+                logger.error(error_msg)
+                response_container.error(error_msg)
+
+            # 스트리밍 실행
+            metrics = await self.streaming_handler.stream_response(
+                response_generator,
+                on_chunk,
+                on_complete,
+                on_error,
+                adaptive_controller=self.adaptive_controller,
+            )
+
+            return response_text
 
     def _update_response_display(
         self,
@@ -185,7 +189,7 @@ class DocumentCitationUI:
 
     @staticmethod
     def format_response_with_citations(
-        response_text: str, documents: List[Document]
+        response_text: str, documents: list[Document]
     ) -> str:
         """
         응답 텍스트에 문서 인용 포맷팅
@@ -224,7 +228,7 @@ class DocumentCitationUI:
 
     @staticmethod
     def display_document_panel(
-        documents: List[Document], title: str = "📚 참고 문서"
+        documents: list[Document], title: str = "📚 참고 문서"
     ) -> None:
         """
         문서 패널 표시
@@ -310,7 +314,7 @@ class StreamingMetricsDisplay:
 
 
 # 전역 인스턴스
-_streamlit_ui: Optional[StreamlitStreamingUI] = None
+_streamlit_ui: StreamlitStreamingUI | None = None
 
 
 def get_streamlit_streaming_ui() -> StreamlitStreamingUI:

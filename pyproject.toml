@@ -1,0 +1,35 @@
+[tool.ruff]
+# 검사 대상 디렉토리
+src = ["src"]
+target-version = "py310"
+line-length = 88
+
+[tool.ruff.lint]
+# 활성화할 규칙 세트
+select = [
+    "E",   # pycodestyle errors
+    "W",   # pycodestyle warnings
+    "F",   # pyflakes
+    "I",   # isort (import sorting)
+    "UP",  # pyupgrade (modern python syntax)
+    "B",   # flake8-bugbear
+    "C4",  # flake8-comprehensions
+    "SIM", # flake8-simplify
+    "PT",  # flake8-pytest-style
+]
+
+# 무시할 규칙
+ignore = [
+    "E501", # Line too long (formatter handles this)
+    "B008", # Do not perform function call in argument defaults
+    "UP007", # Use `X | Y` for type annotations (keep Optional for compatibility)
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["api", "common", "core", "infra", "security", "services", "ui"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+skip-magic-trailing-comma = false
+line-ending = "auto"

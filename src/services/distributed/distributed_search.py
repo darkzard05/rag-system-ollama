@@ -11,11 +11,10 @@ import logging
 import time
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Dict, List, Optional
 
+from langchain_core.callbacks import CallbackManagerForRetrieverRun
 from langchain_core.documents import Document
 from langchain_core.retrievers import BaseRetriever
-from langchain_core.callbacks import CallbackManagerForRetrieverRun
 
 logger = logging.getLogger(__name__)
 
@@ -53,7 +52,7 @@ class NodeSearchEngine:
         self.retriever = retriever
         self._lock = asyncio.Lock()
 
-    async def asearch(self, query: str, top_k: int = 5) -> List[SearchResult]:
+    async def asearch(self, query: str, top_k: int = 5) -> list[SearchResult]:
         """비동기 검색 수행"""
         async with self._lock:
             try:
@@ -82,13 +81,13 @@ class DistributedRetriever(BaseRetriever):
     LangChain의 BaseRetriever를 상속받아 기존 파이프라인에 즉시 투입 가능합니다.
     """
 
-    engines: List[NodeSearchEngine]
+    engines: list[NodeSearchEngine]
     top_k: int = 5
     timeout: float = 10.0
 
     def _get_relevant_documents(
         self, query: str, *, run_manager: CallbackManagerForRetrieverRun
-    ) -> List[Document]:
+    ) -> list[Document]:
         """동기 호출 시 비동기 루프 실행 (LangChain 표준)"""
         return asyncio.run(
             self._aget_relevant_documents(query, run_manager=run_manager)
@@ -98,8 +97,8 @@ class DistributedRetriever(BaseRetriever):
         self,
         query: str,
         *,
-        run_manager: Optional[CallbackManagerForRetrieverRun] = None,
-    ) -> List[Document]:
+        run_manager: CallbackManagerForRetrieverRun | None = None,
+    ) -> list[Document]:
         """모든 노드에서 병렬 검색 후 결과 병합"""
         start_time = time.time()
 
@@ -114,7 +113,7 @@ class DistributedRetriever(BaseRetriever):
             return []
 
         # 3. 결과 병합 및 중복 제거 (Global Merge)
-        all_results: List[SearchResult] = [
+        all_results: list[SearchResult] = [
             res for sublist in responses for res in sublist
         ]
 
@@ -143,7 +142,7 @@ class DistributedSearchManager:
     """분산 검색 엔진들을 관리하고 리트리버를 생성하는 팩토리 클래스"""
 
     def __init__(self):
-        self._engines: Dict[str, NodeSearchEngine] = {}
+        self._engines: dict[str, NodeSearchEngine] = {}
 
     def add_node(self, node_id: str, retriever: BaseRetriever):
         """새로운 검색 노드 추가"""

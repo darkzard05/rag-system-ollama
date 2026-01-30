@@ -3,12 +3,12 @@ Task 19-2: Search Results Aggregation Module
 검색 결과 수집 및 통합 - 다중 노드 결과 병합 및 중복 제거
 """
 
+import hashlib
+import time
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import List, Dict, Optional, Tuple, Any
-import time
 from threading import RLock
-import hashlib
+from typing import Any
 
 
 class AggregationStrategy(Enum):
@@ -37,10 +37,10 @@ class AggregatedResult:
     doc_id: str
     content: str
     aggregated_score: float
-    source_nodes: List[str] = field(default_factory=list)
+    source_nodes: list[str] = field(default_factory=list)
     occurrence_count: int = 1
-    original_scores: List[float] = field(default_factory=list)
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    original_scores: list[float] = field(default_factory=list)
+    metadata: dict[str, Any] = field(default_factory=dict)
     aggregation_timestamp: float = field(default_factory=time.time)
 
     def __lt__(self, other):
@@ -78,7 +78,7 @@ class ContentHash:
         if hash1 == hash2:
             return True
         # 간단한 문자 매칭 기반 유사도
-        matches = sum(1 for c1, c2 in zip(hash1, hash2) if c1 == c2)
+        matches = sum(1 for c1, c2 in zip(hash1, hash2, strict=False) if c1 == c2)
         return matches / len(hash1) >= threshold
 
 
@@ -94,15 +94,15 @@ class SearchResultAggregator:
         """
         self.dedup_strategy = dedup_strategy
         self._lock = RLock()
-        self._content_hashes: Dict[str, str] = {}
-        self._id_map: Dict[str, str] = {}
+        self._content_hashes: dict[str, str] = {}
+        self._id_map: dict[str, str] = {}
 
     def aggregate_results(
         self,
-        search_results: Dict[str, List[Any]],
+        search_results: dict[str, list[Any]],
         strategy: AggregationStrategy = AggregationStrategy.DEDUP_CONTENT,
-        top_k: Optional[int] = None,
-    ) -> Tuple[List[AggregatedResult], AggregationMetrics]:
+        top_k: int | None = None,
+    ) -> tuple[list[AggregatedResult], AggregationMetrics]:
         """
         다중 노드의 검색 결과 통합
 
@@ -157,8 +157,8 @@ class SearchResultAggregator:
         return aggregated, metrics
 
     def _merge_all(
-        self, search_results: Dict[str, List[Any]], metrics: AggregationMetrics
-    ) -> List[AggregatedResult]:
+        self, search_results: dict[str, list[Any]], metrics: AggregationMetrics
+    ) -> list[AggregatedResult]:
         """모든 결과 단순 병합"""
         aggregated = []
 
@@ -179,12 +179,12 @@ class SearchResultAggregator:
         return aggregated
 
     def _dedup_by_content(
-        self, search_results: Dict[str, List[Any]], metrics: AggregationMetrics
-    ) -> List[AggregatedResult]:
+        self, search_results: dict[str, list[Any]], metrics: AggregationMetrics
+    ) -> list[AggregatedResult]:
         """콘텐츠 기반 중복 제거 (O(N) 최적화)"""
-        aggregated_map: Dict[str, AggregatedResult] = {}
+        aggregated_map: dict[str, AggregatedResult] = {}
         # [최적화] 해시를 키로 사용하여 즉시 조회
-        content_hash_to_id: Dict[str, str] = {}
+        content_hash_to_id: dict[str, str] = {}
 
         for node_id, results in search_results.items():
             metrics.total_input_results += len(results)
@@ -217,10 +217,10 @@ class SearchResultAggregator:
         return list(aggregated_map.values())
 
     def _dedup_by_id(
-        self, search_results: Dict[str, List[Any]], metrics: AggregationMetrics
-    ) -> List[AggregatedResult]:
+        self, search_results: dict[str, list[Any]], metrics: AggregationMetrics
+    ) -> list[AggregatedResult]:
         """ID 기반 중복 제거"""
-        aggregated_map: Dict[str, AggregatedResult] = {}
+        aggregated_map: dict[str, AggregatedResult] = {}
 
         for node_id, results in search_results.items():
             metrics.total_input_results += len(results)
@@ -247,11 +247,11 @@ class SearchResultAggregator:
         return list(aggregated_map.values())
 
     def _weighted_score_aggregation(
-        self, search_results: Dict[str, List[Any]], metrics: AggregationMetrics
-    ) -> List[AggregatedResult]:
+        self, search_results: dict[str, list[Any]], metrics: AggregationMetrics
+    ) -> list[AggregatedResult]:
         """가중 스코어 재계산"""
-        aggregated_map: Dict[str, AggregatedResult] = {}
-        node_weights = {node_id: 1.0 for node_id in search_results}
+        aggregated_map: dict[str, AggregatedResult] = {}
+        node_weights = dict.fromkeys(search_results, 1.0)
 
         # 노드 가중치 정규화
         total_nodes = len(search_results)
@@ -292,8 +292,8 @@ class SearchResultAggregator:
         return list(aggregated_map.values())
 
     def _top_k_per_node(
-        self, search_results: Dict[str, List[Any]], metrics: AggregationMetrics
-    ) -> List[AggregatedResult]:
+        self, search_results: dict[str, list[Any]], metrics: AggregationMetrics
+    ) -> list[AggregatedResult]:
         """노드당 top-k 결과 취합"""
         aggregated = []
         k_per_node = 5  # 노드당 5개
@@ -359,8 +359,8 @@ class ConsistencyValidator:
         self._lock = RLock()
 
     def validate_aggregation(
-        self, aggregated: List[AggregatedResult]
-    ) -> Dict[str, Any]:
+        self, aggregated: list[AggregatedResult]
+    ) -> dict[str, Any]:
         """
         통합 결과 검증
 
@@ -419,8 +419,8 @@ class ResultDeduplicator:
         self._lock = RLock()
 
     def find_duplicates(
-        self, results: List[Any], similarity_threshold: float = 0.8
-    ) -> List[Tuple[int, int, float]]:
+        self, results: list[Any], similarity_threshold: float = 0.8
+    ) -> list[tuple[int, int, float]]:
         """
         중복 결과 찾기
 
@@ -451,5 +451,5 @@ class ResultDeduplicator:
         hash1 = ContentHash.calculate(result1.content)
         hash2 = ContentHash.calculate(result2.content)
 
-        matches = sum(1 for c1, c2 in zip(hash1, hash2) if c1 == c2)
+        matches = sum(1 for c1, c2 in zip(hash1, hash2, strict=False) if c1 == c2)
         return matches / len(hash1)

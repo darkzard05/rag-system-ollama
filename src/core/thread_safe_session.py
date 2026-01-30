@@ -6,13 +6,16 @@ Thread-Safe Session Management
 인스턴스 및 클래스 메서드 호출을 모두 지원합니다.
 """
 
+import hashlib
 import logging
 import threading
-import hashlib
-from typing import Dict, List, Optional, TypeVar, Any, Callable
+import time
+from collections.abc import Callable
 from contextvars import ContextVar
+from typing import Any, TypeVar
 
 import streamlit as st
+
 from common.typing_utils import SessionData, SessionKey, SessionValue
 
 logger = logging.getLogger(__name__)
@@ -87,31 +90,39 @@ class ThreadSafeSessionManager:
 
     @classmethod
     def get_session_id(cls) -> str:
-        """[추가] 현재 컨텍스트의 세션 ID를 가져옵니다."""
-        return _session_id_var.get()
+        """현재 컨텍스트의 세션 ID를 가져옵니다."""
+        sid = _session_id_var.get()
+        if sid == "default":
+            # API 환경에서 세션 ID가 설정되지 않은 채 호출되는 경우를 추적
+            import inspect
+
+            caller = inspect.stack()[1].function
+            logger.debug(f"[Session] Warning: session_id is 'default' in {caller}")
+        return sid
 
     @classmethod
     def _get_state(cls):
         """Streamlit session_state 또는 폴백 딕셔너리를 반환합니다."""
         try:
-            # Streamlit 컨텍스트 확인 (runtime 체크)
             from streamlit.runtime.scriptrunner import get_script_run_ctx
 
             if get_script_run_ctx() is not None:
                 return st.session_state
 
-            # 컨텍스트가 없는 경우(API 서버 등)를 위한 세션별 저장소 사용
             sid = cls.get_session_id()
             if sid not in cls._fallback_sessions:
-                # [최적화] deepcopy 대신 dict.copy() 사용 후 필요 객체만 새로 생성
                 new_state = cls.DEFAULT_SESSION_STATE.copy()
                 new_state["messages"] = []
                 new_state["doc_pool"] = {}
                 new_state["status_logs"] = list(
                     cls.DEFAULT_SESSION_STATE["status_logs"]
                 )
+                new_state["_last_activity"] = time.time()  # 활동 시간 기록
                 cls._fallback_sessions[sid] = new_state
                 cls._fallback_sessions[sid]["_initialized"] = True
+
+            # 활동 시간 업데이트
+            cls._fallback_sessions[sid]["_last_activity"] = time.time()
             return cls._fallback_sessions[sid]
         except (Exception, ImportError):
             sid = cls.get_session_id()
@@ -119,12 +130,37 @@ class ThreadSafeSessionManager:
                 new_state = cls.DEFAULT_SESSION_STATE.copy()
                 new_state["messages"] = []
                 new_state["doc_pool"] = {}
+                new_state["_last_activity"] = time.time()
                 cls._fallback_sessions[sid] = new_state
                 cls._fallback_sessions[sid]["_initialized"] = True
+
+            cls._fallback_sessions[sid]["_last_activity"] = time.time()
             return cls._fallback_sessions[sid]
 
     @classmethod
-    def init_session(cls, session_id: Optional[str] = None):
+    def cleanup_expired_sessions(cls, max_idle_seconds: int = 3600):
+        """[추가] 일정 시간 동안 활동이 없는 세션을 삭제하여 메모리를 확보합니다."""
+        now = time.time()
+        expired_ids = []
+
+        with cls._global_lock:
+            for sid, state in cls._fallback_sessions.items():
+                if sid == "default":
+                    continue
+                last_activity = state.get("_last_activity", 0)
+                if now - last_activity > max_idle_seconds:
+                    expired_ids.append(sid)
+
+        for sid in expired_ids:
+            cls.delete_session(sid)
+
+        if expired_ids:
+            logger.info(
+                f"[Session] [Cleanup] 만료된 세션 {len(expired_ids)}개 삭제 완료"
+            )
+
+    @classmethod
+    def init_session(cls, session_id: str | None = None):
         if session_id:
             cls.set_session_id(session_id)
 
@@ -153,9 +189,7 @@ class ThreadSafeSessionManager:
                 state["_initialized"] = True
 
     @classmethod
-    def get(
-        cls, key: str, default: Optional[SessionValue] = None
-    ) -> Optional[SessionValue]:
+    def get(cls, key: str, default: SessionValue | None = None) -> SessionValue | None:
         target = cls if not isinstance(cls, type) else None
         with ThreadSafeSessionManager._acquire_lock(instance=target):
             return cls._get_state().get(key, default)
@@ -211,7 +245,7 @@ class ThreadSafeSessionManager:
         self.clear_all()
 
     @classmethod
-    def atomic_read(cls, keys: List[str]) -> Dict[str, Any]:
+    def atomic_read(cls, keys: list[str]) -> dict[str, Any]:
         target = cls if not isinstance(cls, type) else None
         with ThreadSafeSessionManager._acquire_lock(instance=target):
             state = cls._get_state()
@@ -219,7 +253,7 @@ class ThreadSafeSessionManager:
 
     @classmethod
     def atomic_update(
-        cls, update_func: Callable[[Dict[str, Any]], Dict[str, Any]]
+        cls, update_func: Callable[[dict[str, Any]], dict[str, Any]]
     ) -> bool:
         target = cls if not isinstance(cls, type) else None
         with ThreadSafeSessionManager._acquire_lock(instance=target):
@@ -235,13 +269,39 @@ class ThreadSafeSessionManager:
                 return False
 
     @classmethod
-    def get_all_state(cls) -> Dict[str, Any]:
+    def delete_session(cls, session_id: str) -> bool:
+        """[추가] 특정 세션을 메모리 저장소에서 완전히 삭제합니다."""
+        target = cls if not isinstance(cls, type) else None
+        with ThreadSafeSessionManager._acquire_lock(instance=target):
+            if session_id in cls._fallback_sessions:
+                # 대량의 데이터를 담고 있을 수 있는 객체들 명시적 초기화 후 삭제
+                session_data = cls._fallback_sessions[session_id]
+
+                # [최적화] 벡터 저장소 메모리 명시적 해제
+                vs = session_data.get("vector_store")
+                if vs and hasattr(vs, "index") and hasattr(vs.index, "reset"):
+                    try:
+                        vs.index.reset()
+                    except:
+                        pass
+
+                if isinstance(session_data, dict):
+                    session_data.clear()
+                del cls._fallback_sessions[session_id]
+                logger.info(
+                    f"[Session] [Cleanup] 세션 데이터 삭제됨 (ID: {session_id})"
+                )
+                return True
+            return False
+
+    @classmethod
+    def get_all_state(cls) -> dict[str, Any]:
         target = cls if not isinstance(cls, type) else None
         with ThreadSafeSessionManager._acquire_lock(instance=target):
             return dict(cls._get_state())
 
     @classmethod
-    def get_stats(cls) -> Dict[str, Any]:
+    def get_stats(cls) -> dict[str, Any]:
         target = cls
         session_keys = 0
         try:
@@ -255,14 +315,14 @@ class ThreadSafeSessionManager:
             "session_keys": session_keys,
         }
 
-    def set_multiple(self, data: Dict[str, Any]) -> bool:
+    def set_multiple(self, data: dict[str, Any]) -> bool:
         with self._acquire_lock(self):
             state = self._get_state()
             for key, value in data.items():
                 state[key] = value
             return True
 
-    def get_multiple(self, keys: List[str]) -> Dict[str, Any]:
+    def get_multiple(self, keys: list[str]) -> dict[str, Any]:
         return self.atomic_read(keys)
 
     def reset_stats(self) -> None:
@@ -273,7 +333,7 @@ class ThreadSafeSessionManager:
         return self.failed_acquisitions == 0
 
     @classmethod
-    def get_messages(cls) -> List[Dict[str, str]]:
+    def get_messages(cls) -> list[dict[str, str]]:
         target = cls if not isinstance(cls, type) else None
         with ThreadSafeSessionManager._acquire_lock(instance=target):
             return cls._get_state().get("messages", []).copy()
@@ -285,11 +345,18 @@ class ThreadSafeSessionManager:
             logger.debug("[Session] [Reset] 모든 세션 상태 리셋")
             state = cls._get_state()
             for key, value in cls.DEFAULT_SESSION_STATE.items():
-                state[key] = value
-            if hasattr(state, "_initialized"):
-                state._initialized = True
-            else:
+                # [수정] 가변 객체는 복사본을 할당하여 DEFAULT_SESSION_STATE 오염 방지
+                if isinstance(value, list):
+                    state[key] = list(value)
+                elif isinstance(value, dict):
+                    state[key] = value.copy()
+                else:
+                    state[key] = value
+
+            if isinstance(state, dict):
                 state["_initialized"] = True
+            else:
+                state._initialized = True
 
     @classmethod
     def add_message(cls, role: str, content: str, **kwargs):
@@ -349,6 +416,16 @@ class ThreadSafeSessionManager:
         with ThreadSafeSessionManager._acquire_lock(instance=target):
             logger.debug("[Session] [Event] 새 파일 업로드 감지 -> RAG 상태 리셋")
             state = cls._get_state()
+
+            # [최적화] 이전 벡터 저장소 메모리 명시적 해제 시도
+            old_vs = state.get("vector_store")
+            if old_vs and hasattr(old_vs, "index") and hasattr(old_vs.index, "reset"):
+                try:
+                    old_vs.index.reset()
+                    logger.debug("[Session] [Cleanup] FAISS 인덱스 메모리 해제 완료")
+                except Exception as e:
+                    logger.warning(f"FAISS 메모리 해제 실패: {e}")
+
             keys_to_reset = [
                 "pdf_processed",
                 "pdf_processing_error",

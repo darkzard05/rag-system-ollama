@@ -5,14 +5,15 @@
 
 import json
 import logging
-from dataclasses import dataclass
-from typing import Any, AsyncIterator, Callable, Coroutine, Dict, List, Optional
-from datetime import datetime
 import time
+from collections.abc import AsyncIterator, Callable, Coroutine
+from dataclasses import dataclass
+from datetime import datetime
+from typing import Any
 
 from services.monitoring.performance_monitor import (
-    get_performance_monitor,
     OperationType,
+    get_performance_monitor,
 )
 
 logger = logging.getLogger(__name__)
@@ -28,7 +29,8 @@ class StreamChunk:
     token_count: int
     chunk_index: int
     is_final: bool = False
-    thought: Optional[str] = None  # 사고 과정 필드 추가
+    thought: str | None = None  # 사고 과정 필드 추가
+    metadata: dict[str, Any] | None = None  # 메타데이터 (문서 등) 추가
 
 
 @dataclass
@@ -58,28 +60,24 @@ class TokenStreamBuffer:
     def __init__(self, buffer_size: int = 10, timeout_ms: float = 100.0):
         self.buffer_size = buffer_size
         self.timeout_ms = timeout_ms
-        self.buffer: List[str] = []
+        self.buffer: list[str] = []
         self.last_flush_time: float = time.time()
 
-    def add_token(self, token: str) -> Optional[str]:
+    def add_token(self, token: str) -> str | None:
         """
         토큰 추가
-
-        Returns:
-            플러시해야 할 버퍼 내용, 또는 None
         """
         self.buffer.append(token)
 
-        current_time = time.time()
-        elapsed_ms = (current_time - self.last_flush_time) * 1000
-
-        # 버퍼 풀 또는 타임아웃 시 플러시
-        if len(self.buffer) >= self.buffer_size or elapsed_ms >= self.timeout_ms:
+        # 버퍼 풀 시 즉시 플러시 (시간 측정 없이)
+        if len(self.buffer) >= self.buffer_size:
             return self.flush()
 
+        # 타임아웃 기반 플러시는 일정 시간 간격으로만 체크 (선택적 최적화 가능)
+        # 여기서는 오버헤드 감소를 위해 버퍼가 찰 때까지 기다리는 것을 우선함
         return None
 
-    def flush(self) -> Optional[str]:
+    def flush(self) -> str | None:
         """버퍼 플러시"""
         if not self.buffer:
             return None
@@ -110,16 +108,122 @@ class StreamingResponseHandler:
         self.buffer = TokenStreamBuffer(buffer_size, timeout_ms)
         self.metrics = StreamingMetrics()
         self.chunk_index = 0
-        self.start_time: Optional[float] = None
-        self.first_token_time: Optional[float] = None
+        self.start_time: float | None = None
+        self.first_token_time: float | None = None
+
+    async def stream_graph_events(
+        self,
+        event_stream: AsyncIterator[dict[str, Any]],
+        adaptive_controller: "AdaptiveStreamingController | None" = None,
+    ) -> AsyncIterator[StreamChunk]:
+        """
+        LangGraph 이벤트를 소비하여 가공된 스트리밍 청크를 생성 (리소스 안전 관리 최적화)
+        """
+        from contextlib import aclosing
+
+        self.start_time = time.time()
+        self.chunk_index = 0
+        self.metrics = StreamingMetrics()
+        self.first_token_time = None
+        self.buffer.reset()
+
+        try:
+            async with aclosing(event_stream) as stream:
+                async for event in stream:
+                    kind = event["event"]
+                    name = event.get("name", "Unknown")
+                    data = event.get("data", {})
+
+                    # 1. 커스텀 응답 청크 이벤트 처리
+                    if kind == "on_custom_event" and name == "response_chunk":
+                        content = data.get("chunk", "")
+                        thought = data.get("thought", "")
+                        current_time = time.time()
+
+                        # 사고 과정 처리 (버퍼링 없이 즉시 전송)
+                        if thought:
+                            yield StreamChunk(
+                                content="",
+                                timestamp=current_time,
+                                token_count=0,
+                                chunk_index=self.chunk_index,
+                                thought=thought,
+                            )
+                            self.chunk_index += 1
+
+                        # 답변 본문 처리 (적응형 버퍼링)
+                        if content:
+                            if self.first_token_time is None:
+                                self.first_token_time = current_time
+
+                            buffered_content = self.buffer.add_token(content)
+                            if buffered_content:
+                                if adaptive_controller:
+                                    self.buffer.buffer_size = (
+                                        adaptive_controller.get_buffer_size()
+                                    )
+
+                                chunk = StreamChunk(
+                                    content=buffered_content,
+                                    timestamp=current_time,
+                                    token_count=max(1, len(buffered_content) // 4),
+                                    chunk_index=self.chunk_index,
+                                )
+                                self.metrics.total_tokens += chunk.token_count
+                                self.metrics.chunk_count += 1
+                                yield chunk
+                                self.chunk_index += 1
+
+                    # 2. 메타데이터 처리
+                    elif kind == "on_chain_end":
+                        if name == "retrieve":
+                            output = data.get("output", {})
+                            if "documents" in output:
+                                yield StreamChunk(
+                                    content="",
+                                    timestamp=time.time(),
+                                    token_count=0,
+                                    chunk_index=self.chunk_index,
+                                    metadata={"documents": output["documents"]},
+                                )
+                                self.chunk_index += 1
+        except Exception as e:
+            logger.error(f"[Streaming] 스트림 처리 중 오류: {e}")
+            # 에러 발생 시 현재까지의 내용이라도 보내기 위해 아래 finally 절로 이동
+        finally:
+            # 남은 버퍼 플러시
+            remaining = self.buffer.flush()
+            if remaining:
+                final_chunk = StreamChunk(
+                    content=remaining,
+                    timestamp=time.time(),
+                    token_count=len(remaining.split()),
+                    chunk_index=self.chunk_index,
+                    is_final=True,
+                )
+                self.metrics.total_tokens += final_chunk.token_count
+                self.metrics.chunk_count += 1
+                yield final_chunk
+
+            # 최종 메트릭 계산
+            self.metrics.total_time = time.time() - self.start_time
+            if self.first_token_time:
+                self.metrics.first_token_latency = (
+                    self.first_token_time - self.start_time
+                )
+            if self.metrics.total_time > 0:
+                self.metrics.tokens_per_second = (
+                    self.metrics.total_tokens / self.metrics.total_time
+                )
 
     async def stream_response(
         self,
         response_generator: AsyncIterator[str],
         on_chunk: Callable[[StreamChunk], Coroutine[Any, Any, None]],
-        on_complete: Optional[Callable[[], Coroutine[Any, Any, None]]] = None,
-        on_error: Optional[Callable[[Exception], Coroutine[Any, Any, None]]] = None,
+        on_complete: Callable[[], Coroutine[Any, Any, None]] | None = None,
+        on_error: Callable[[Exception], Coroutine[Any, Any, None]] | None = None,
         operation_name: str = "response_streaming",
+        adaptive_controller: "AdaptiveStreamingController | None" = None,
     ) -> StreamingMetrics:
         """
         응답을 스트리밍으로 처리
@@ -130,6 +234,7 @@ class StreamingResponseHandler:
             on_complete: 스트리밍 완료 시 호출할 콜백
             on_error: 에러 발생 시 호출할 콜백
             operation_name: 작업 이름
+            adaptive_controller: 적응형 스트리밍 제어기
 
         Returns:
             스트리밍 성능 메트릭
@@ -144,6 +249,12 @@ class StreamingResponseHandler:
         ) as op:
             try:
                 async for token in response_generator:
+                    # 적응형 버퍼 크기 적용
+                    if adaptive_controller:
+                        new_size = adaptive_controller.get_buffer_size()
+                        if self.buffer.buffer_size != new_size:
+                            self.buffer.buffer_size = new_size
+
                     # 첫 토큰 시간 기록
                     if self.first_token_time is None:
                         self.first_token_time = time.time()
@@ -247,7 +358,7 @@ class ServerSentEventsHandler:
 
     @staticmethod
     def format_sse_event(
-        event_type: str, data: Dict[str, Any], event_id: Optional[int] = None
+        event_type: str, data: dict[str, Any], event_id: int | None = None
     ) -> str:
         """
         SSE 형식으로 이벤트 포매팅
@@ -288,7 +399,7 @@ class StreamingResponseBuilder:
     """
 
     def __init__(self, max_buffer_size: int = 100000):
-        self.chunks: List[StreamChunk] = []
+        self.chunks: list[StreamChunk] = []
         self.max_buffer_size = max_buffer_size
         self.total_content = ""
 
@@ -308,7 +419,7 @@ class StreamingResponseBuilder:
         """누적된 전체 내용 반환"""
         return self.total_content
 
-    def get_chunks(self) -> List[StreamChunk]:
+    def get_chunks(self) -> list[StreamChunk]:
         """모든 청크 반환"""
         return self.chunks
 
@@ -330,14 +441,14 @@ class AdaptiveStreamingController:
 
     def __init__(
         self,
-        initial_buffer_size: int = 10,
-        min_buffer_size: int = 5,
-        max_buffer_size: int = 50,
+        initial_buffer_size: int = 1,
+        min_buffer_size: int = 1,
+        max_buffer_size: int = 10,
     ):
         self.current_buffer_size = initial_buffer_size
         self.min_buffer_size = min_buffer_size
         self.max_buffer_size = max_buffer_size
-        self.latency_samples: List[float] = []
+        self.latency_samples: list[float] = []
         self.max_samples = 50
 
     def record_latency(self, latency_ms: float) -> None:
@@ -382,7 +493,7 @@ class AdaptiveStreamingController:
         """현재 버퍼 크기 반환"""
         return self.current_buffer_size
 
-    def get_metrics(self) -> Dict[str, float]:
+    def get_metrics(self) -> dict[str, float]:
         """성능 메트릭 반환"""
         if not self.latency_samples:
             return {}
@@ -397,8 +508,8 @@ class AdaptiveStreamingController:
 
 
 # 전역 핸들러 인스턴스
-_streaming_handler: Optional[StreamingResponseHandler] = None
-_adaptive_controller: Optional[AdaptiveStreamingController] = None
+_streaming_handler: StreamingResponseHandler | None = None
+_adaptive_controller: AdaptiveStreamingController | None = None
 
 
 def get_streaming_handler() -> StreamingResponseHandler:

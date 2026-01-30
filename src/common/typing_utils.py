@@ -8,19 +8,16 @@ This module provides:
 - Generic container types
 """
 
+from collections.abc import Callable
 from typing import (
-    TypeVar,
+    Any,
     Generic,
     Protocol,
-    Callable,
-    Dict,
-    List,
-    Optional,
-    Tuple,
+    TypeVar,
     Union,
-    Any,
     overload,
 )
+
 from langchain_core.documents import Document
 
 # ============================================================================
@@ -45,39 +42,39 @@ ConfigT = TypeVar("ConfigT")
 # ============================================================================
 
 # Document and retrieval types
-DocumentList = List[Document]
-DocumentDict = Dict[str, Any]
-DocumentDictList = List[DocumentDict]
-QueryList = List[str]
-ScoreList = List[float]
+DocumentList = list[Document]
+DocumentDict = dict[str, Any]
+DocumentDictList = list[DocumentDict]
+QueryList = list[str]
+ScoreList = list[float]
 
 # Graph and state types
-GraphState = Dict[str, Any]
-GraphOutput = Dict[str, Any]
+GraphState = dict[str, Any]
+GraphOutput = dict[str, Any]
 NodeFunction = Callable[[GraphState], GraphOutput]
 AsyncNodeFunction = Callable[[GraphState], Any]  # Returns Awaitable
 
 # Configuration and settings
-ConfigDict = Dict[str, Any]
-ModelConfig = Dict[str, Any]
-EmbeddingConfig = Dict[str, Any]
-ChunkingConfig = Dict[str, Any]
+ConfigDict = dict[str, Any]
+ModelConfig = dict[str, Any]
+EmbeddingConfig = dict[str, Any]
+ChunkingConfig = dict[str, Any]
 
 # Batch and performance types
-BatchData = List[Union[str, Dict[str, Any]]]
-BatchResult = List[List[float]]
-MemoryInfo = Tuple[bool, int]  # (is_available, memory_mb)
+BatchData = list[Union[str, dict[str, Any]]]
+BatchResult = list[list[float]]
+MemoryInfo = tuple[bool, int]  # (is_available, memory_mb)
 
 # Session types
-SessionData = Dict[str, Any]
+SessionData = dict[str, Any]
 SessionKey = str
 SessionValue = Any
 
 # LLM and embedding types
 TokenCount = int
-EmbeddingVector = List[float]
-Embeddings = List[EmbeddingVector]
-LogitScores = List[float]
+EmbeddingVector = list[float]
+Embeddings = list[EmbeddingVector]
+LogitScores = list[float]
 
 # ============================================================================
 # Protocol Definitions (Duck Typing)
@@ -87,7 +84,7 @@ LogitScores = List[float]
 class Retrievable(Protocol[T_co]):
     """Protocol for objects that can be retrieved."""
 
-    def retrieve(self, query: str, top_k: int) -> List[T_co]:
+    def retrieve(self, query: str, top_k: int) -> list[T_co]:
         """Retrieve items based on a query."""
         ...
 
@@ -97,7 +94,7 @@ class Rankable(Protocol):
 
     def rank(
         self, query: str, documents: DocumentList
-    ) -> Tuple[DocumentList, ScoreList]:
+    ) -> tuple[DocumentList, ScoreList]:
         """Rank documents for a given query."""
         ...
 
@@ -109,7 +106,7 @@ class Embeddable(Protocol):
         """Generate embedding for text."""
         ...
 
-    def embed_batch(self, texts: List[str]) -> Embeddings:
+    def embed_batch(self, texts: list[str]) -> Embeddings:
         """Generate embeddings for multiple texts."""
         ...
 
@@ -158,7 +155,7 @@ class Pipeline(Generic[T, U]):
 class Cache(Generic[K, V]):
     """Generic cache for key-value pairs."""
 
-    def get(self, key: K) -> Optional[V]:
+    def get(self, key: K) -> V | None:
         """Get value from cache."""
         raise NotImplementedError
 
@@ -178,9 +175,7 @@ class Cache(Generic[K, V]):
 class Result(Generic[T]):
     """Generic result type for operations that can succeed or fail."""
 
-    def __init__(
-        self, success: bool, value: Optional[T] = None, error: Optional[str] = None
-    ):
+    def __init__(self, success: bool, value: T | None = None, error: str | None = None):
         self.success = success
         self.value = value
         self.error = error
@@ -222,11 +217,11 @@ def serialize_value(value: float) -> str: ...
 
 
 @overload
-def serialize_value(value: List[T]) -> List[str]: ...
+def serialize_value(value: list[T]) -> list[str]: ...
 
 
 @overload
-def serialize_value(value: Dict[K, V]) -> Dict[K, str]: ...
+def serialize_value(value: dict[K, V]) -> dict[K, str]: ...
 
 
 def serialize_value(value: Any) -> Any:
@@ -245,14 +240,14 @@ def serialize_value(value: Any) -> Any:
 
 
 @overload
-def get_or_default(data: Dict[K, V], key: K) -> Optional[V]: ...
+def get_or_default(data: dict[K, V], key: K) -> V | None: ...
 
 
 @overload
-def get_or_default(data: Dict[K, V], key: K, default: U) -> Union[V, U]: ...
+def get_or_default(data: dict[K, V], key: K, default: U) -> Union[V, U]: ...
 
 
-def get_or_default(data: Dict[K, V], key: K, default: Any = None) -> Any:
+def get_or_default(data: dict[K, V], key: K, default: Any = None) -> Any:
     """Get value from dictionary with optional default.
 
     Returns the value if key exists, otherwise returns default.
@@ -313,13 +308,13 @@ class GenerationState(GraphState):
 # ============================================================================
 
 # LLM response types
-LLMResponse = Union[str, Dict[str, Any]]
+LLMResponse = Union[str, dict[str, Any]]
 
 # Batch types
-Batch = Union[List[str], List[Dict[str, Any]]]
+Batch = Union[list[str], list[dict[str, Any]]]
 
 # Config types
-Config = Union[Dict[str, Any], ConfigDict]
+Config = Union[dict[str, Any], ConfigDict]
 
 # Model types
 Model = Union["GenerativeModel", "Embeddable", "Rankable"]

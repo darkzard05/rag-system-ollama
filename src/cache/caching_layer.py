@@ -2,21 +2,21 @@
 Multi-Layer Caching System for RAG Performance Optimization
 """
 
-import time
+import hashlib
 import logging
 import pickle
-from dataclasses import dataclass, field, asdict
-from typing import Dict, List, Optional, Any, Generic, TypeVar
+import time
+from dataclasses import asdict, dataclass, field
 from enum import Enum
 from pathlib import Path
 from threading import RLock
-import hashlib
+from typing import Any, Generic, TypeVar
 
 from common.config import (
-    CACHE_SECURITY_LEVEL,
-    CACHE_HMAC_SECRET,
-    CACHE_TRUSTED_PATHS,
     CACHE_CHECK_PERMISSIONS,
+    CACHE_HMAC_SECRET,
+    CACHE_SECURITY_LEVEL,
+    CACHE_TRUSTED_PATHS,
 )
 from security.cache_security import (
     CacheSecurityManager,
@@ -49,7 +49,7 @@ class CacheEntry:
     key: str
     value: Any
     timestamp: float
-    ttl_seconds: Optional[int] = None
+    ttl_seconds: int | None = None
     access_count: int = 0
     last_accessed: float = field(default_factory=time.time)
     size_bytes: int = 0
@@ -60,7 +60,7 @@ class CacheEntry:
             return False
         return (time.time() - self.timestamp) > self.ttl_seconds
 
-    def to_dict(self) -> Dict:
+    def to_dict(self) -> dict:
         """Convert to dictionary"""
         return asdict(self)
 
@@ -82,7 +82,7 @@ class CacheStats:
         total = self.total_hits + self.total_misses
         return self.total_hits / total if total > 0 else 0
 
-    def to_dict(self) -> Dict:
+    def to_dict(self) -> dict:
         """Convert to dictionary"""
         return asdict(self)
 
@@ -102,7 +102,7 @@ class MemoryCache(Generic[T]):
         """
         self.max_size = max_size
         self.eviction_policy = eviction_policy
-        self.entries: Dict[str, CacheEntry] = {}
+        self.entries: dict[str, CacheEntry] = {}
         self.stats = CacheStats()
         self._lock = RLock()
         self.logger = logging.getLogger(__name__)
@@ -141,7 +141,7 @@ class MemoryCache(Generic[T]):
                 del self.entries[fifo_key]
                 self.stats.eviction_count += 1
 
-    def put(self, key: str, value: T, ttl_seconds: Optional[int] = None) -> bool:
+    def put(self, key: str, value: T, ttl_seconds: int | None = None) -> bool:
         """
         Put value in cache
 
@@ -171,7 +171,7 @@ class MemoryCache(Generic[T]):
 
             return True
 
-    def get(self, key: str) -> Optional[T]:
+    def get(self, key: str) -> T | None:
         """
         Get value from cache
 
@@ -273,7 +273,7 @@ class DiskCache:
         key_hash = hashlib.sha256(key.encode()).hexdigest()
         return self.cache_dir / f"{key_hash}.cache"
 
-    def put(self, key: str, value: Any, ttl_seconds: Optional[int] = None) -> bool:
+    def put(self, key: str, value: Any, ttl_seconds: int | None = None) -> bool:
         """
         Put value in disk cache with metadata for integrity verification
         """
@@ -306,7 +306,7 @@ class DiskCache:
                 self.logger.error(f"Failed to write disk cache: {str(e)}")
                 return False
 
-    def get(self, key: str) -> Optional[Any]:
+    def get(self, key: str) -> Any | None:
         """
         Get value from disk cache with full security verification
         """
@@ -423,8 +423,8 @@ class MultiLayerCache:
         self,
         key: str,
         value: Any,
-        ttl_seconds: Optional[int] = None,
-        cache_levels: Optional[List[CacheLevel]] = None,
+        ttl_seconds: int | None = None,
+        cache_levels: list[CacheLevel] | None = None,
     ) -> bool:
         """
         Put value in cache (multi-level)
@@ -462,7 +462,7 @@ class MultiLayerCache:
 
         return success
 
-    def get(self, key: str) -> Optional[Any]:
+    def get(self, key: str) -> Any | None:
         """
         Get value from cache (multi-level with fallback)
 
@@ -509,7 +509,7 @@ class MultiLayerCache:
             del self.l3_store[key]
         return success
 
-    def clear(self) -> Dict[str, int]:
+    def clear(self) -> dict[str, int]:
         """Clear all cache levels"""
         return {
             "l1": self.l1_cache.clear(),
@@ -517,14 +517,14 @@ class MultiLayerCache:
             "l3": len(self.l3_store) if self.l3_enabled else 0,
         }
 
-    def get_stats(self) -> Dict[str, CacheStats]:
+    def get_stats(self) -> dict[str, CacheStats]:
         """Get statistics for all cache levels"""
         return {
             "l1": self.l1_cache.get_stats(),
             "l2": self.l2_cache.get_stats(),
         }
 
-    def warmup(self, data: Dict[str, Any], ttl_seconds: Optional[int] = None) -> int:
+    def warmup(self, data: dict[str, Any], ttl_seconds: int | None = None) -> int:
         """
         Warmup cache with initial data
 
@@ -553,11 +553,11 @@ class CacheInvalidator:
             cache: Multi-layer cache instance
         """
         self.cache = cache
-        self.invalidation_patterns: Dict[str, List[str]] = {}
+        self.invalidation_patterns: dict[str, list[str]] = {}
         self._lock = RLock()
         self.logger = logging.getLogger(__name__)
 
-    def register_pattern(self, pattern: str, keys: List[str]):
+    def register_pattern(self, pattern: str, keys: list[str]):
         """
         Register cache invalidation pattern
 

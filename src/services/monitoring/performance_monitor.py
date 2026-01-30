@@ -12,17 +12,18 @@ Features:
 - Real-time metrics collection
 """
 
-import time
-import os
 import csv
-import psutil
-import threading
-from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Any
-from collections import deque
-from enum import Enum
-from datetime import datetime
 import json
+import os
+import threading
+import time
+from collections import deque
+from dataclasses import dataclass, field
+from datetime import datetime
+from enum import Enum
+from typing import Any
+
+import psutil
 
 try:
     from common.logging_config import get_logger
@@ -67,22 +68,22 @@ class OperationMetrics:
 
     operation_type: OperationType
     start_time: float
-    end_time: Optional[float] = None
-    memory_start: Optional[float] = None
-    memory_end: Optional[float] = None
+    end_time: float | None = None
+    memory_start: float | None = None
+    memory_end: float | None = None
     tokens: int = 0
-    error: Optional[str] = None
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    error: str | None = None
+    metadata: dict[str, Any] = field(default_factory=dict)
 
     @property
-    def duration_seconds(self) -> Optional[float]:
+    def duration_seconds(self) -> float | None:
         """Get operation duration in seconds."""
         if self.end_time is None:
             return None
         return self.end_time - self.start_time
 
     @property
-    def memory_delta_mb(self) -> Optional[float]:
+    def memory_delta_mb(self) -> float | None:
         """Get memory delta in MB."""
         if self.memory_start is None or self.memory_end is None:
             return None
@@ -104,8 +105,8 @@ class PerformanceStats:
     successful_operations: int = 0
     failed_operations: int = 0
     total_duration_seconds: float = 0.0
-    min_duration_seconds: Optional[float] = None
-    max_duration_seconds: Optional[float] = None
+    min_duration_seconds: float | None = None
+    max_duration_seconds: float | None = None
     avg_duration_seconds: float = 0.0
     p50_duration_seconds: float = 0.0
     p95_duration_seconds: float = 0.0
@@ -128,7 +129,7 @@ class ResponseTimeTracker:
     def __init__(self, max_history: int = 1000):
         self._lock = threading.RLock()
         self._max_history = max_history
-        self._timings: Dict[OperationType, deque] = {}
+        self._timings: dict[OperationType, deque] = {}
 
     def record_duration(
         self, operation_type: OperationType, duration_seconds: float
@@ -149,7 +150,7 @@ class ResponseTimeTracker:
                 f"[{operation_type.value}] Duration recorded: {duration_seconds:.3f}s"
             )
 
-    def get_stats(self, operation_type: OperationType) -> Dict[str, float]:
+    def get_stats(self, operation_type: OperationType) -> dict[str, float]:
         """
         Get timing statistics for operation type.
 
@@ -189,7 +190,7 @@ class ResponseTimeTracker:
             }
 
     @staticmethod
-    def _percentile(data: List[float], percentile: int) -> float:
+    def _percentile(data: list[float], percentile: int) -> float:
         """Calculate percentile."""
         if not data:
             return 0.0
@@ -217,7 +218,7 @@ class MemoryMonitor:
         self._memory_samples: deque = deque(maxlen=max_history)
         self._process = psutil.Process()
 
-    def get_current_usage(self) -> Dict[str, float]:
+    def get_current_usage(self) -> dict[str, float]:
         """
         Get current memory usage in MB.
 
@@ -240,8 +241,8 @@ class MemoryMonitor:
             return {"rss_mb": 0.0, "vms_mb": 0.0}
 
     def get_memory_delta(
-        self, start_memory: Dict[str, float], end_memory: Dict[str, float]
-    ) -> Dict[str, float]:
+        self, start_memory: dict[str, float], end_memory: dict[str, float]
+    ) -> dict[str, float]:
         """
         Calculate memory delta between two measurements.
 
@@ -257,7 +258,7 @@ class MemoryMonitor:
             "vms_delta_mb": end_memory["vms_mb"] - start_memory["vms_mb"],
         }
 
-    def get_stats(self) -> Dict[str, float]:
+    def get_stats(self) -> dict[str, float]:
         """
         Get memory statistics from samples.
 
@@ -329,7 +330,7 @@ class TokenCounter:
         return max(1, token_estimate)
 
     @staticmethod
-    def count_tokens_in_list(texts: List[str]) -> int:
+    def count_tokens_in_list(texts: list[str]) -> int:
         """
         Count tokens in multiple texts.
 
@@ -356,7 +357,7 @@ class PerformanceMonitor:
         self._response_tracker = ResponseTimeTracker()
         self._memory_monitor = MemoryMonitor()
         self._token_counter = TokenCounter()
-        self._operations: List[OperationMetrics] = []
+        self._operations: list[OperationMetrics] = []
         self._max_operations = 10000
 
         self.csv_path = os.path.join("logs", "performance_metrics.csv")
@@ -389,7 +390,7 @@ class PerformanceMonitor:
         except Exception as e:
             logger.error(f"Failed to initialize performance CSV: {e}")
 
-    def log_to_csv(self, data: Dict[str, Any]):
+    def log_to_csv(self, data: dict[str, Any]):
         """성능 데이터를 CSV 파일에 기록"""
         try:
             with self._lock:
@@ -416,7 +417,7 @@ class PerformanceMonitor:
     # ========================================================================
 
     def track_operation(
-        self, operation_type: OperationType, metadata: Optional[Dict[str, Any]] = None
+        self, operation_type: OperationType, metadata: dict[str, Any] | None = None
     ):
         """
         Create operation context manager for tracking.
@@ -526,7 +527,7 @@ class PerformanceMonitor:
             # Percentiles
             sorted_durations = sorted(durations) if durations else []
 
-            def percentile(data: List[float], p: int) -> float:
+            def percentile(data: list[float], p: int) -> float:
                 if not data:
                     return 0.0
                 idx = int(len(data) * p / 100)
@@ -566,7 +567,7 @@ class PerformanceMonitor:
                 else 0.0,
             )
 
-    def get_all_stats(self) -> Dict[OperationType, PerformanceStats]:
+    def get_all_stats(self) -> dict[OperationType, PerformanceStats]:
         """
         Get statistics for all operation types.
 
@@ -578,7 +579,7 @@ class PerformanceMonitor:
                 op_type: self.get_operation_stats(op_type) for op_type in OperationType
             }
 
-    def get_memory_stats(self) -> Dict[str, float]:
+    def get_memory_stats(self) -> dict[str, float]:
         """
         Get memory statistics.
 
@@ -591,7 +592,7 @@ class PerformanceMonitor:
     # Reporting
     # ========================================================================
 
-    def generate_report(self) -> Dict[str, Any]:
+    def generate_report(self) -> dict[str, Any]:
         """
         Generate comprehensive performance report.
 
@@ -694,9 +695,7 @@ class PerformanceMonitor:
     # Management
     # ========================================================================
 
-    def get_operation_count(
-        self, operation_type: Optional[OperationType] = None
-    ) -> int:
+    def get_operation_count(self, operation_type: OperationType | None = None) -> int:
         """
         Get count of operations.
 
@@ -721,7 +720,7 @@ class PerformanceMonitor:
             self._memory_monitor.clear()
             logger.info("All metrics cleared")
 
-    def get_health_status(self) -> Dict[str, Any]:
+    def get_health_status(self) -> dict[str, Any]:
         """
         Get health status based on performance metrics.
 
@@ -769,7 +768,7 @@ class OperationTracker:
         self,
         monitor: PerformanceMonitor,
         operation_type: OperationType,
-        metadata: Dict[str, Any],
+        metadata: dict[str, Any],
     ):
         """
         Initialize operation tracker.
@@ -815,7 +814,7 @@ class OperationTracker:
 # Global Instance
 # ============================================================================
 
-_global_monitor: Optional[PerformanceMonitor] = None
+_global_monitor: PerformanceMonitor | None = None
 _monitor_lock = threading.Lock()
 
 
@@ -843,7 +842,7 @@ def get_performance_monitor() -> PerformanceMonitor:
 
 
 def track_operation(
-    operation_type: OperationType, metadata: Optional[Dict[str, Any]] = None
+    operation_type: OperationType, metadata: dict[str, Any] | None = None
 ):
     """
     Track an operation using global monitor.
@@ -870,7 +869,7 @@ def record_response_time(
     get_performance_monitor().record_response_time(operation_type, duration_seconds)
 
 
-def get_performance_report() -> Dict[str, Any]:
+def get_performance_report() -> dict[str, Any]:
     """Get performance report from global monitor."""
     return get_performance_monitor().generate_report()
 

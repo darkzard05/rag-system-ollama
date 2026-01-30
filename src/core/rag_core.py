@@ -3,13 +3,15 @@ RAG 파이프라인의 핵심 로직(데이터 처리, 임베딩, 검색, 생성
 """
 
 from __future__ import annotations
+
 import functools
 import hashlib
 import json
 import logging
 import os
 import pickle
-from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple
+from collections.abc import Callable
+from typing import TYPE_CHECKING, Any
 
 from common.typing_utils import (
     DocumentDictList,
@@ -17,50 +19,45 @@ from common.typing_utils import (
     T,
 )
 
-import streamlit as st
-
 if TYPE_CHECKING:
-    from langchain_huggingface import HuggingFaceEmbeddings
+    import numpy as np
     from langchain.retrievers import EnsembleRetriever
     from langchain_community.retrievers import BM25Retriever
     from langchain_community.vectorstores import FAISS
     from langchain_core.documents import Document
-    import numpy as np
+    from langchain_huggingface import HuggingFaceEmbeddings
 
-from common.exceptions import (
-    PDFProcessingError,
-    EmptyPDFError,
-    InsufficientChunksError,
-    VectorStoreError,
-)
 from common.config import (
+    CACHE_CHECK_PERMISSIONS,
+    CACHE_HMAC_SECRET,
+    CACHE_SECURITY_LEVEL,
+    CACHE_TRUSTED_PATHS,
     RETRIEVER_CONFIG,
     SEMANTIC_CHUNKER_CONFIG,
     TEXT_SPLITTER_CONFIG,
     VECTOR_STORE_CACHE_DIR,
-    CACHE_SECURITY_LEVEL,
-    CACHE_HMAC_SECRET,
-    CACHE_TRUSTED_PATHS,
-    CACHE_CHECK_PERMISSIONS,
 )
-from core.session import SessionManager
+from common.exceptions import (
+    EmptyPDFError,
+    InsufficientChunksError,
+    PDFProcessingError,
+    VectorStoreError,
+)
 from common.utils import log_operation, preprocess_text
 from core.graph_builder import build_graph
+from core.semantic_chunker import EmbeddingBasedSemanticChunker
+from core.session import SessionManager
 from security.cache_security import (
-    CacheSecurityManager,
     CacheIntegrityError,
     CachePermissionError,
+    CacheSecurityManager,
     CacheTrustError,
 )
-
-from core.semantic_chunker import EmbeddingBasedSemanticChunker
-
-from services.optimization.index_optimizer import get_index_optimizer
-
 from services.monitoring.performance_monitor import (
-    get_performance_monitor,
     OperationType,
+    get_performance_monitor,
 )
+from services.optimization.index_optimizer import get_index_optimizer
 
 logger = logging.getLogger(__name__)
 monitor = get_performance_monitor()
@@ -82,7 +79,7 @@ class RAGSystem:
 
     async def load_document(
         self, file_path: str, file_name: str, embedder: HuggingFaceEmbeddings
-    ) -> Tuple[str, bool]:
+    ) -> tuple[str, bool]:
         """
         문서를 로드하고 인덱싱 파이프라인을 실행합니다.
 
@@ -99,7 +96,7 @@ class RAGSystem:
             uploaded_file_name=file_name, file_path=file_path, embedder=embedder
         )
 
-    async def aquery(self, query: str, llm: Optional[T] = None) -> Dict[str, Any]:
+    async def aquery(self, query: str, llm: T | None = None) -> dict[str, Any]:
         """
         질문에 대한 답변을 생성합니다.
 
@@ -129,7 +126,7 @@ class RAGSystem:
         # LangGraph 호출
         return await rag_engine.ainvoke({"input": query}, config=config)
 
-    def get_status(self) -> List[str]:
+    def get_status(self) -> list[str]:
         """현재 세션의 작업 로그를 가져옵니다."""
         self._ensure_session_context()
         return SessionManager.get("status_logs", [])
@@ -139,7 +136,7 @@ class RAGSystem:
         self._ensure_session_context()
         SessionManager.reset_all_state()
 
-    def process_documents(self, documents: List[str]) -> None:
+    def process_documents(self, documents: list[str]) -> None:
         """입력 문서 리스트를 검증합니다. (테스트 호환성 유지)"""
         if not documents:
             raise EmptyPDFError(
@@ -166,7 +163,7 @@ import concurrent.futures
 
 def _extract_page_worker(
     file_path: str, page_num: int, total_pages: int, file_name: str
-) -> Optional["Document"]:
+) -> Document | None:
     """개별 페이지에서 텍스트를 추출하는 워커 함수 (스레드 세이프)"""
     try:
         import fitz  # PyMuPDF
@@ -191,8 +188,8 @@ def _extract_page_worker(
 
 
 def _extract_pages_batch_worker(
-    file_path: str, page_range: List[int], total_pages: int, file_name: str
-) -> List[Tuple[int, "Document"]]:
+    file_path: str, page_range: list[int], total_pages: int, file_name: str
+) -> list[tuple[int, Document]]:
     """페이지 범위를 배치로 처리하는 워커 함수"""
     results = []
     try:
@@ -228,8 +225,8 @@ def _extract_pages_batch_worker(
 
 
 def _load_pdf_docs(
-    file_path: str, file_name: str, on_progress: Optional[Callable[[], None]] = None
-) -> List[Document]:
+    file_path: str, file_name: str, on_progress: Callable[[], None] | None = None
+) -> list[Document]:
     """
     PDF 파일을 배치 기반 병렬 로드로 변환하여 최적화합니다.
     """
@@ -256,8 +253,8 @@ def _load_pdf_docs(
                     filename=file_name, details={"reason": "PDF 페이지가 없습니다."}
                 )
 
-            # [최적화] 페이지 수에 따라 동적으로 병렬화 결정
-            if total_pages <= 15:
+            # [최적화] 페이지 수에 따라 동적으로 병렬화 결정 (임계값 5p로 하향)
+            if total_pages <= 5:
                 docs = []
                 with fitz.open(file_path) as doc:
                     for i in range(total_pages):
@@ -289,8 +286,10 @@ def _load_pdf_docs(
                 if on_progress:
                     on_progress()
 
-                max_workers = min(os.cpu_count() or 4, 8)
-                batch_size = (total_pages + max_workers - 1) // max_workers
+                # [최적화] 워커 수를 CPU 코어 수에 맞춰 더 적극적으로 할당
+                max_workers = min(os.cpu_count() or 4, 12)
+                # 페이지를 더 작게 쪼개어 부하 분산
+                batch_size = max(1, total_pages // (max_workers * 2))
                 batches = [
                     list(range(i, min(i + batch_size, total_pages)))
                     for i in range(0, total_pages, batch_size)
@@ -300,7 +299,7 @@ def _load_pdf_docs(
                 completed_pages = 0
 
                 with concurrent.futures.ThreadPoolExecutor(
-                    max_workers=len(batches)
+                    max_workers=max_workers
                 ) as executor:
                     futures = [
                         executor.submit(
@@ -319,11 +318,18 @@ def _load_pdf_docs(
                             all_results[page_idx] = doc
 
                         completed_pages += len(batch_results)
+                        # [수정] SessionManager 업데이트는 스레드 세이프하므로 유지하되,
+                        # UI 갱신 콜백(on_progress)은 메인 루프인 이곳에서 호출하여 안전성 확보
                         SessionManager.replace_last_status_log(
                             f"텍스트 추출 중 ({min(completed_pages, total_pages)}/{total_pages}p)"
                         )
                         if on_progress:
-                            on_progress()
+                            try:
+                                on_progress()
+                            except Exception as e:
+                                logger.debug(
+                                    f"UI 업데이트 건너뜀 (Context missing): {e}"
+                                )
 
                 docs = [r for r in all_results if r is not None]
 
@@ -348,9 +354,9 @@ def _load_pdf_docs(
 
 
 def _split_documents(
-    docs: List[Document],
-    embedder: Optional[HuggingFaceEmbeddings] = None,
-) -> Tuple[List[Document], Optional[List[np.ndarray]]]:
+    docs: list[Document],
+    embedder: HuggingFaceEmbeddings | None = None,
+) -> tuple[list[Document], list[np.ndarray] | None]:
     """
     설정에 따라 의미론적 분할기 또는 RecursiveCharacterTextSplitter를 사용해 문서를 분할합니다.
     """
@@ -458,7 +464,7 @@ class VectorStoreCache:
 
     def _get_cache_paths(
         self, file_path: str, embedding_model_name: str
-    ) -> Tuple[str, str, str, str]:
+    ) -> tuple[str, str, str, str]:
         file_hash = _compute_file_hash(file_path)
         # 파일 경로에 안전하지 않은 문자 제거
         model_name_slug = embedding_model_name.replace("/", "_").replace("\\", "_")
@@ -490,10 +496,8 @@ class VectorStoreCache:
 
     def load(
         self,
-        embedder: "HuggingFaceEmbeddings",
-    ) -> Tuple[
-        Optional[List["Document"]], Optional["FAISS"], Optional["BM25Retriever"]
-    ]:
+        embedder: HuggingFaceEmbeddings,
+    ) -> tuple[list[Document] | None, FAISS | None, BM25Retriever | None]:
         """
         캐시된 RAG 컴포넌트를 로드합니다.
 
@@ -575,83 +579,89 @@ class VectorStoreCache:
     def save(
         self,
         doc_splits: DocumentList,
-        vector_store: "FAISS",
-        bm25_retriever: "BM25Retriever",
+        vector_store: FAISS,
+        bm25_retriever: BM25Retriever,
     ) -> None:
         """
         RAG 컴포넌트를 캐시에 저장합니다.
-
-        보안 처리:
-        - 메타데이터 생성 (SHA256 해시 포함)
-        - HMAC 서명 (high 레벨)
-        - 파일 권한 설정
+        저장 후 파일 존재 여부를 검증하여 무결성을 보장합니다.
         """
         try:
             os.makedirs(self.cache_dir, exist_ok=True)
 
             # 1. 문서 저장 (Pickle)
-            with open(self.doc_splits_path, "wb") as f:
-                pickle.dump(doc_splits, f)
-
-            # 문서 캐시 메타데이터 생성
             try:
+                with open(self.doc_splits_path, "wb") as f:
+                    pickle.dump(doc_splits, f)
+
+                # 문서 캐시 메타데이터 생성
                 doc_meta = self.security_manager.create_metadata_for_file(
                     self.doc_splits_path, description="Document splits cache (pickle)"
                 )
                 self.security_manager.save_cache_metadata(
                     self.doc_splits_path + ".meta", doc_meta
                 )
-            except:
-                pass
-
-            logger.debug(f"문서 splits 저장 (Pickle): {self.doc_splits_path}")
+            except Exception as e:
+                logger.error(f"문서 데이터 저장 실패: {e}")
+                raise OSError(f"Failed to save doc_splits: {e}")
 
             # 2. FAISS 저장
-            vector_store.save_local(self.faiss_index_path)
-            logger.debug(f"FAISS 벡터 저장소 저장: {self.faiss_index_path}")
-
-            # 3. BM25 저장 (Pickle) + 메타데이터
-            with open(self.bm25_retriever_path, "wb") as f:
-                pickle.dump(bm25_retriever, f)
-            logger.debug(f"BM25 리트리버 저장: {self.bm25_retriever_path}")
-
-            # 메타데이터 생성 및 저장
             try:
+                vector_store.save_local(self.faiss_index_path)
+            except Exception as e:
+                logger.error(f"FAISS 인덱스 저장 실패: {e}")
+                raise OSError(f"Failed to save FAISS index: {e}")
+
+            # 3. BM25 저장 (Pickle)
+            try:
+                with open(self.bm25_retriever_path, "wb") as f:
+                    pickle.dump(bm25_retriever, f)
+
                 metadata = self.security_manager.create_metadata_for_file(
                     self.bm25_retriever_path, description="BM25 retriever cache"
                 )
 
-                # high 레벨: HMAC 서명 추가
                 if CACHE_SECURITY_LEVEL == "high" and CACHE_HMAC_SECRET:
-                    try:
-                        with open(self.bm25_retriever_path, "rb") as f:
-                            file_data = f.read()
-                        metadata.integrity_hmac = (
-                            self.security_manager.compute_integrity_hmac(file_data)
-                        )
-                        logger.debug("HMAC 서명 생성 완료")
-                    except Exception as e:
-                        logger.warning(f"HMAC 서명 생성 실패: {e}")
+                    with open(self.bm25_retriever_path, "rb") as f:
+                        file_data = f.read()
+                    metadata.integrity_hmac = (
+                        self.security_manager.compute_integrity_hmac(file_data)
+                    )
 
-                bm25_metadata_path = self.bm25_retriever_path + ".meta"
-                self.security_manager.save_cache_metadata(bm25_metadata_path, metadata)
-                logger.info(f"캐시 메타데이터 저장: {bm25_metadata_path}")
-            except Exception as e:
-                logger.warning(
-                    f"메타데이터 저장 실패: {e}. 캐시는 저장되었지만 검증 불가능합니다."
+                self.security_manager.save_cache_metadata(
+                    self.bm25_retriever_path + ".meta", metadata
                 )
+            except Exception as e:
+                logger.error(f"BM25 리트리버 저장 실패: {e}")
+                raise OSError(f"Failed to save BM25 retriever: {e}")
 
-            logger.info(f"RAG 캐시 저장 완료: '{self.cache_dir}'")
+            # --- 검증 단계 (Verification) ---
+            required_paths = [
+                self.doc_splits_path,
+                os.path.join(self.faiss_index_path, "index.faiss"),
+                os.path.join(self.faiss_index_path, "index.pkl"),
+                self.bm25_retriever_path,
+            ]
+
+            missing = [p for p in required_paths if not os.path.exists(p)]
+            if missing:
+                error_msg = f"캐시 저장 검증 실패. 누락된 파일: {missing}"
+                logger.error(error_msg)
+                self._purge_cache(reason="Verification Failed After Save")
+                raise OSError(error_msg)
+
+            logger.info(f"RAG 캐시 저장 및 검증 완료: '{self.cache_dir}'")
         except Exception as e:
             logger.error(f"캐시 저장 실패: {e}")
+            self._purge_cache(reason=f"Exception during save: {type(e).__name__}")
             raise
 
 
 @log_operation("FAISS 벡터 저장소 생성")
 def _create_vector_store(
-    docs: List[Document],
+    docs: list[Document],
     embedder: HuggingFaceEmbeddings,
-    vectors: Optional[List[np.ndarray]] = None,
+    vectors: list[np.ndarray] | None = None,
 ) -> FAISS:
     """
     FAISS 벡터 저장소를 생성합니다.
@@ -661,7 +671,9 @@ def _create_vector_store(
 
     if vectors is not None and len(vectors) == len(docs):
         # 텍스트와 임베딩 쌍으로 생성 (임베딩 모델 재호출 방지)
-        text_embeddings = list(zip([d.page_content for d in docs], vectors))
+        text_embeddings = list(
+            zip([d.page_content for d in docs], vectors, strict=False)
+        )
         metadatas = [d.metadata for d in docs]
         return FAISS.from_embeddings(
             text_embeddings=text_embeddings, embedding=embedder, metadatas=metadatas
@@ -671,7 +683,7 @@ def _create_vector_store(
     return FAISS.from_documents(docs, embedder)
 
 
-def _create_bm25_retriever(docs: List["Document"]) -> "BM25Retriever":
+def _create_bm25_retriever(docs: list[Document]) -> BM25Retriever:
     from langchain_community.retrievers import BM25Retriever
 
     retriever = BM25Retriever.from_documents(docs)
@@ -680,9 +692,9 @@ def _create_bm25_retriever(docs: List["Document"]) -> "BM25Retriever":
 
 
 def _create_ensemble_retriever(
-    vector_store: "FAISS",
-    bm25_retriever: "BM25Retriever",
-) -> "EnsembleRetriever":
+    vector_store: FAISS,
+    bm25_retriever: BM25Retriever,
+) -> EnsembleRetriever:
     from langchain.retrievers import EnsembleRetriever
 
     faiss_retriever = vector_store.as_retriever(
@@ -696,14 +708,13 @@ def _create_ensemble_retriever(
 
 
 @log_operation("검색 컴포넌트 로드/생성")
-@st.cache_resource(show_spinner=False)
 def _load_and_build_retrieval_components(
     file_path: str,
     file_name: str,
-    _embedder: "HuggingFaceEmbeddings",
+    _embedder: HuggingFaceEmbeddings,
     embedding_model_name: str,
     _on_progress=None,
-) -> Tuple[DocumentList, "FAISS", "BM25Retriever", bool]:
+) -> tuple[DocumentList, FAISS, BM25Retriever, bool]:
     cache = VectorStoreCache(file_path, embedding_model_name)
     doc_splits, vector_store, bm25_retriever = cache.load(_embedder)
 
@@ -785,9 +796,9 @@ def _load_and_build_retrieval_components(
 def build_rag_pipeline(
     uploaded_file_name: str,
     file_path: str,
-    embedder: "HuggingFaceEmbeddings",
+    embedder: HuggingFaceEmbeddings,
     on_progress=None,
-) -> Tuple[str, bool]:
+) -> tuple[str, bool]:
     """
     RAG 파이프라인을 구축하고 세션에 저장합니다.
     """
@@ -846,7 +857,7 @@ def build_rag_pipeline(
 
 
 @log_operation("파이프라인 LLM 업데이트")
-def update_llm_in_pipeline(llm: Optional[T]) -> None:
+def update_llm_in_pipeline(llm: T | None) -> None:
     """
     세션의 LLM을 교체합니다.
 

@@ -4,9 +4,11 @@ Optimized: 타임아웃 강화 및 로컬 Ollama 통신 안정성 확보.
 """
 
 from __future__ import annotations
+
+import asyncio
 import logging
 import os
-from typing import TYPE_CHECKING, List, Optional
+from typing import TYPE_CHECKING
 
 import streamlit as st
 from langchain_ollama import ChatOllama
@@ -15,30 +17,33 @@ if TYPE_CHECKING:
     from langchain_huggingface import HuggingFaceEmbeddings
     from sentence_transformers import CrossEncoder
 
-from common.exceptions import LLMInferenceError, EmbeddingModelError
 from common.config import (
     CACHE_DIR,
-    OLLAMA_NUM_PREDICT,
-    OLLAMA_TEMPERATURE,
-    OLLAMA_NUM_CTX,
-    OLLAMA_TOP_P,
-    OLLAMA_TIMEOUT,
-    OLLAMA_BASE_URL,
     EMBEDDING_DEVICE,
     MSG_ERROR_OLLAMA_NOT_RUNNING,
+    OLLAMA_BASE_URL,
+    OLLAMA_NUM_CTX,
+    OLLAMA_NUM_PREDICT,
+    OLLAMA_TEMPERATURE,
+    OLLAMA_TIMEOUT,
+    OLLAMA_TOP_P,
 )
+from common.exceptions import EmbeddingModelError, LLMInferenceError
 from common.utils import log_operation
 from services.monitoring.performance_monitor import (
-    get_performance_monitor,
     OperationType,
+    get_performance_monitor,
 )
 
 logger = logging.getLogger(__name__)
 monitor = get_performance_monitor()
 
+# [추가] 동시 로딩 방지를 위한 글로벌 비동기 락
+_loading_lock = asyncio.Lock()
+
 
 @st.cache_data(ttl=600)  # 모델 목록 캐시 10분
-def _fetch_available_models_cached() -> List[str]:
+def _fetch_available_models_cached() -> list[str]:
     try:
         import ollama
 
@@ -65,60 +70,64 @@ def _fetch_available_models_cached() -> List[str]:
 
 @st.cache_resource(show_spinner=False)
 def load_embedding_model(
-    embedding_model_name: Optional[str] = None,
-) -> "HuggingFaceEmbeddings":
-    with monitor.track_operation(
-        OperationType.EMBEDDING_GENERATION, {"model": embedding_model_name or "default"}
-    ) as op:
-        import torch
-        from langchain_huggingface import HuggingFaceEmbeddings
+    embedding_model_name: str | None = None,
+) -> HuggingFaceEmbeddings:
+    """
+    임베딩 모델을 로드합니다. (Thread-safe & VRAM Optimized)
+    """
+    import torch
+    from langchain_huggingface import HuggingFaceEmbeddings
 
-        # 디바이스 결정 로직 개선
-        if EMBEDDING_DEVICE == "auto":
-            device = "cuda" if torch.cuda.is_available() else "cpu"
+    logger.info(">>> load_embedding_model 진입")
+
+    # 1. 디바이스 결정 로직 (VRAM 8GB 미만 감지 포함)
+    target_device = EMBEDDING_DEVICE
+
+    if target_device == "auto":
+        if torch.cuda.is_available():
+            try:
+                # RTX 2060(6GB) 등 저사양 GPU 환경에서는 LLM 속도 유지를 위해 CPU 강제 할당
+                props = torch.cuda.get_device_properties(0)
+                total_vram_gb = props.total_memory / (1024**3)
+
+                if total_vram_gb < 7.5:  # 8GB 미만 (여유값 0.5GB)
+                    logger.info(
+                        f"[Model] 저사양 VRAM 감지({total_vram_gb:.1f}GB): 임베딩을 CPU로 오프로딩합니다."
+                    )
+                    target_device = "cpu"
+                else:
+                    target_device = "cuda"
+            except Exception as e:
+                logger.warning(f"CUDA 속성 조회 실패(CPU로 전환): {e}")
+                target_device = "cpu"
         else:
-            device = EMBEDDING_DEVICE
-            # 사용자가 cuda를 선택했지만 사용 불가능한 경우 폴백
-            if device == "cuda" and not torch.cuda.is_available():
-                logger.warning(
-                    "CUDA가 설정되었으나 사용 불가능합니다. CPU로 전환합니다."
-                )
-                st.warning(
-                    "⚠️ CUDA GPU를 사용할 수 없어 CPU 모드로 전환합니다. 처리 속도가 느려질 수 있습니다."
-                )
-                device = "cpu"
+            target_device = "cpu"
 
-        # Backward-compat: allow omitting model name in tests / legacy code
-        if not embedding_model_name:
-            from common.config import AVAILABLE_EMBEDDING_MODELS
+    # [최적화] 배치 크기 설정
+    batch_size = 32 if target_device == "cuda" else 4
 
-            if not AVAILABLE_EMBEDDING_MODELS:
-                raise EmbeddingModelError(
-                    model="(none)",
-                    reason="no_embedding_models_configured",
-                    details={
-                        "msg": "AVAILABLE_EMBEDDING_MODELS가 비어 있습니다. config.yml을 확인하세요."
-                    },
-                )
-            embedding_model_name = AVAILABLE_EMBEDDING_MODELS[0]
+    logger.info(
+        f"[System] [Model] 임베딩 모델 로드 시작: {embedding_model_name} (Device: {target_device})"
+    )
 
-        # [최적화] 하드웨어 감지 기반의 무거운 배치 최적화 대신 고정값 사용 (부팅 속도 향상)
-        batch_size = 32 if device == "cuda" else 4
-        logger.info(
-            f"[System] [Model] 임베딩 모델 로드: {embedding_model_name} ({device}, batch_size={batch_size})"
-        )
-
+    try:
+        # HuggingFaceEmbeddings는 내부적으로 스레드 세이프하지 않을 수 있으므로 주의 필요
         result = HuggingFaceEmbeddings(
-            model_name=embedding_model_name,
-            model_kwargs={"device": device},
-            encode_kwargs={"device": device, "batch_size": batch_size},
+            model_name=embedding_model_name
+            or "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
+            model_kwargs={"device": target_device},
+            encode_kwargs={"device": target_device, "batch_size": batch_size},
             cache_folder=CACHE_DIR,
         )
+        logger.info("[System] [Model] 임베딩 모델 로드 성공")
         return result
+    except Exception as e:
+        logger.error(f"임베딩 모델 로드 실패: {e}")
+        raise EmbeddingModelError(model=embedding_model_name, reason=str(e)) from e
 
 
 @st.cache_resource(show_spinner=False)
-def load_reranker_model(model_name: str) -> Optional["CrossEncoder"]:
+def load_reranker_model(model_name: str) -> CrossEncoder | None:
     """
     [최적화] 리랭커 모델 로드
     - VRAM 경합 방지를 위해 디바이스 최적화 적용
@@ -152,10 +161,10 @@ def load_reranker_model(model_name: str) -> Optional["CrossEncoder"]:
             model=model_name,
             reason="Reranker 모델 로드 실패",
             details={"error": str(e)},
-        )
+        ) from e
 
 
-def get_available_models() -> List[str]:
+def get_available_models() -> list[str]:
     models = _fetch_available_models_cached()
     return models if models else [MSG_ERROR_OLLAMA_NOT_RUNNING]
 
@@ -168,10 +177,10 @@ def load_llm(
     top_p: float = OLLAMA_TOP_P,
     num_ctx: int = OLLAMA_NUM_CTX,
     timeout: float = OLLAMA_TIMEOUT,
-) -> "ChatOllama":
+) -> ChatOllama:
     with monitor.track_operation(
         OperationType.PDF_LOADING, {"model": model_name, "timeout": timeout}
-    ) as op:
+    ):
         if not model_name or model_name == MSG_ERROR_OLLAMA_NOT_RUNNING:
             raise LLMInferenceError(
                 model=model_name,

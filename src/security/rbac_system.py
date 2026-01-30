@@ -3,12 +3,12 @@ Task 22-1: RBAC (Role-Based Access Control) System
 역할 기반 접근 제어 시스템
 """
 
+import time
+import uuid
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Dict, List, Optional, Set, Any
-import time
 from threading import RLock
-import uuid
+from typing import Any
 
 
 class ActionType(Enum):
@@ -42,7 +42,7 @@ class Permission:
     description: str = ""
     action: ActionType = ActionType.READ
     resource: ResourceType = ResourceType.DATA
-    resource_id: Optional[str] = None  # 특정 리소스에 대한 권한
+    resource_id: str | None = None  # 특정 리소스에 대한 권한
     created_at: float = field(default_factory=time.time)
 
     def __hash__(self):
@@ -61,7 +61,7 @@ class Role:
     role_id: str = field(default_factory=lambda: str(uuid.uuid4()))
     name: str = ""
     description: str = ""
-    permissions: Set[Permission] = field(default_factory=set)
+    permissions: set[Permission] = field(default_factory=set)
     created_at: float = field(default_factory=time.time)
     is_admin: bool = False
 
@@ -95,9 +95,9 @@ class User:
     user_id: str = field(default_factory=lambda: str(uuid.uuid4()))
     username: str = ""
     email: str = ""
-    roles: Set[Role] = field(default_factory=set)
+    roles: set[Role] = field(default_factory=set)
     created_at: float = field(default_factory=time.time)
-    last_login: Optional[float] = None
+    last_login: float | None = None
     is_active: bool = True
     is_locked: bool = False
     failed_login_attempts: int = 0
@@ -131,20 +131,20 @@ class AccessLog:
     user_id: str = ""
     action: ActionType = ActionType.READ
     resource: ResourceType = ResourceType.DATA
-    resource_id: Optional[str] = None
+    resource_id: str | None = None
     allowed: bool = False
     timestamp: float = field(default_factory=time.time)
-    details: Dict[str, Any] = field(default_factory=dict)
+    details: dict[str, Any] = field(default_factory=dict)
 
 
 class RBAC:
     """역할 기반 접근 제어"""
 
     def __init__(self):
-        self._users: Dict[str, User] = {}
-        self._roles: Dict[str, Role] = {}
-        self._permissions: Dict[str, Permission] = {}
-        self._access_logs: List[AccessLog] = []
+        self._users: dict[str, User] = {}
+        self._roles: dict[str, Role] = {}
+        self._permissions: dict[str, Permission] = {}
+        self._access_logs: list[AccessLog] = []
         self._max_logs = 100000
         self._lock = RLock()
 
@@ -173,7 +173,7 @@ class RBAC:
         name: str,
         action: ActionType,
         resource: ResourceType,
-        resource_id: Optional[str] = None,
+        resource_id: str | None = None,
     ) -> str:
         """권한 생성"""
         with self._lock:
@@ -183,7 +183,7 @@ class RBAC:
             self._permissions[permission.permission_id] = permission
             return permission.permission_id
 
-    def get_permission(self, permission_id: str) -> Optional[Permission]:
+    def get_permission(self, permission_id: str) -> Permission | None:
         """권한 조회"""
         with self._lock:
             return self._permissions.get(permission_id)
@@ -197,12 +197,12 @@ class RBAC:
             self._roles[role.role_id] = role
             return role.role_id
 
-    def get_role(self, role_id: str) -> Optional[Role]:
+    def get_role(self, role_id: str) -> Role | None:
         """역할 조회"""
         with self._lock:
             return self._roles.get(role_id)
 
-    def get_role_by_name(self, name: str) -> Optional[Role]:
+    def get_role_by_name(self, name: str) -> Role | None:
         """이름으로 역할 조회"""
         with self._lock:
             for role in self._roles.values():
@@ -241,12 +241,12 @@ class RBAC:
             self._users[user.user_id] = user
             return user.user_id
 
-    def get_user(self, user_id: str) -> Optional[User]:
+    def get_user(self, user_id: str) -> User | None:
         """사용자 조회"""
         with self._lock:
             return self._users.get(user_id)
 
-    def get_user_by_username(self, username: str) -> Optional[User]:
+    def get_user_by_username(self, username: str) -> User | None:
         """사용자명으로 사용자 조회"""
         with self._lock:
             for user in self._users.values():
@@ -283,7 +283,7 @@ class RBAC:
         user_id: str,
         action: ActionType,
         resource: ResourceType,
-        resource_id: Optional[str] = None,
+        resource_id: str | None = None,
     ) -> bool:
         """접근 권한 확인"""
         with self._lock:
@@ -355,9 +355,9 @@ class RBAC:
         user_id: str,
         action: ActionType,
         resource: ResourceType,
-        resource_id: Optional[str],
+        resource_id: str | None,
         allowed: bool,
-        details: Optional[Dict[str, Any]] = None,
+        details: dict[str, Any] | None = None,
     ):
         """접근 로그 기록"""
         log = AccessLog(
@@ -377,10 +377,10 @@ class RBAC:
 
     def get_access_logs(
         self,
-        user_id: Optional[str] = None,
+        user_id: str | None = None,
         limit: int = 100,
-        allowed_only: Optional[bool] = None,
-    ) -> List[AccessLog]:
+        allowed_only: bool | None = None,
+    ) -> list[AccessLog]:
         """접근 로그 조회"""
         with self._lock:
             logs = self._access_logs
@@ -433,7 +433,7 @@ class RBAC:
                 return True
             return False
 
-    def get_user_permissions(self, user_id: str) -> Set[Permission]:
+    def get_user_permissions(self, user_id: str) -> set[Permission]:
         """사용자 권한 조회"""
         with self._lock:
             user = self._users.get(user_id)
@@ -449,7 +449,7 @@ class RBAC:
 
             return permissions
 
-    def get_statistics(self) -> Dict[str, Any]:
+    def get_statistics(self) -> dict[str, Any]:
         """통계"""
         with self._lock:
             total_access_allowed = sum(1 for log in self._access_logs if log.allowed)

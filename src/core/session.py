@@ -4,7 +4,6 @@ Thread-safe 구현: ThreadSafeSessionManager를 기반으로 동시성 안전성
 """
 
 import logging
-from typing import List, Dict, Optional
 
 from common.typing_utils import SessionKey, SessionValue
 from core.thread_safe_session import ThreadSafeSessionManager
@@ -34,16 +33,14 @@ class SessionManager(ThreadSafeSessionManager):
         return super().is_ready_for_chat()
 
     @classmethod
-    def get(
-        cls, key: str, default: Optional[SessionValue] = None
-    ) -> Optional[SessionValue]:
+    def get(cls, key: str, default: SessionValue | None = None) -> SessionValue | None:
         """
         세션 상태에서 값을 가져옵니다.
         """
         return super().get(key, default)
 
     @classmethod
-    def get_messages(cls) -> List[Dict[str, str]]:
+    def get_messages(cls) -> list[dict[str, str]]:
         """
         메시지 목록을 가져옵니다.
         """
@@ -55,6 +52,13 @@ class SessionManager(ThreadSafeSessionManager):
         세션 상태에 값을 설정합니다.
         """
         super().set(key, value)
+
+    @classmethod
+    def delete_session(cls, session_id: str) -> bool:
+        """
+        특정 세션을 삭제합니다.
+        """
+        return super().delete_session(session_id)
 
     @classmethod
     def reset_all_state(cls):

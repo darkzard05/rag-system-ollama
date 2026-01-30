@@ -2,16 +2,16 @@
 Migration System for RAG System Database and Schema Migrations
 """
 
+import hashlib
 import json
-import time
 import logging
-from dataclasses import dataclass, field, asdict
-from typing import Dict, List, Optional, Any
+import time
+from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from enum import Enum
 from pathlib import Path
 from threading import RLock
-import hashlib
+from typing import Any
 
 
 class MigrationStatus(Enum):
@@ -43,13 +43,13 @@ class MigrationScript:
     version: str
     script: str  # SQL or code
     checksum: str = ""
-    dependencies: List[str] = field(default_factory=list)
-    rollback_script: Optional[str] = None
+    dependencies: list[str] = field(default_factory=list)
+    rollback_script: str | None = None
     description: str = ""
     author: str = ""
     created_at: float = field(default_factory=time.time)
 
-    def to_dict(self) -> Dict:
+    def to_dict(self) -> dict:
         """Convert to dictionary"""
         data = asdict(self)
         data["migration_type"] = self.migration_type.value
@@ -67,11 +67,11 @@ class MigrationRecord:
     timestamp: float
     duration: float = 0.0
     affected_records: int = 0
-    error_message: Optional[str] = None
+    error_message: str | None = None
     executed_by: str = "system"
     rows_changed: int = 0
 
-    def to_dict(self) -> Dict:
+    def to_dict(self) -> dict:
         """Convert to dictionary"""
         return asdict(self)
 
@@ -83,10 +83,10 @@ class SchemaVersion:
     version: str
     timestamp: float
     description: str
-    tables: Dict[str, List[str]] = field(default_factory=dict)  # table -> columns
-    indexes: Dict[str, List[str]] = field(default_factory=dict)  # table -> indexes
+    tables: dict[str, list[str]] = field(default_factory=dict)  # table -> columns
+    indexes: dict[str, list[str]] = field(default_factory=dict)  # table -> indexes
 
-    def to_dict(self) -> Dict:
+    def to_dict(self) -> dict:
         """Convert to dictionary"""
         return asdict(self)
 
@@ -105,9 +105,9 @@ class MigrationSystem:
         self.migration_root = Path(migration_root)
         self.migration_root.mkdir(parents=True, exist_ok=True)
 
-        self.migrations: Dict[str, MigrationScript] = {}
-        self.migration_history: List[MigrationRecord] = []
-        self.current_schema_version: Optional[SchemaVersion] = None
+        self.migrations: dict[str, MigrationScript] = {}
+        self.migration_history: list[MigrationRecord] = []
+        self.current_schema_version: SchemaVersion | None = None
         self.db_connection = db_connection
 
         self._lock = RLock()
@@ -131,8 +131,8 @@ class MigrationSystem:
         name: str,
         script: str,
         migration_type: MigrationType,
-        rollback_script: Optional[str] = None,
-        dependencies: Optional[List[str]] = None,
+        rollback_script: str | None = None,
+        dependencies: list[str] | None = None,
         description: str = "",
         author: str = "system",
     ) -> str:
@@ -177,7 +177,7 @@ class MigrationSystem:
 
             return migration_id
 
-    def validate_migration(self, migration_id: str) -> Dict[str, Any]:
+    def validate_migration(self, migration_id: str) -> dict[str, Any]:
         """
         Validate migration before execution
 
@@ -235,7 +235,7 @@ class MigrationSystem:
 
     def execute_migration(
         self, migration_id: str, dry_run: bool = False
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Execute migration
 
@@ -346,7 +346,7 @@ class MigrationSystem:
 
                 raise
 
-    def rollback_migration(self, migration_id: str) -> Dict[str, Any]:
+    def rollback_migration(self, migration_id: str) -> dict[str, Any]:
         """
         Rollback a migration
 
@@ -420,7 +420,7 @@ class MigrationSystem:
                 )
                 raise
 
-    def get_migration_status(self, migration_id: str) -> Dict[str, Any]:
+    def get_migration_status(self, migration_id: str) -> dict[str, Any]:
         """
         Get migration status
 
@@ -457,7 +457,7 @@ class MigrationSystem:
                 "description": migration.description,
             }
 
-    def get_migration_history(self, limit: int = 20) -> List[Dict[str, Any]]:
+    def get_migration_history(self, limit: int = 20) -> list[dict[str, Any]]:
         """
         Get migration history
 
@@ -470,7 +470,7 @@ class MigrationSystem:
         with self._lock:
             return [r.to_dict() for r in self.migration_history[-limit:]]
 
-    def get_pending_migrations(self) -> List[Dict[str, Any]]:
+    def get_pending_migrations(self) -> list[dict[str, Any]]:
         """
         Get pending migrations
 
@@ -498,7 +498,7 @@ class MigrationSystem:
 
             return pending
 
-    def check_schema_compatibility(self, target_version: str) -> Dict[str, Any]:
+    def check_schema_compatibility(self, target_version: str) -> dict[str, Any]:
         """
         Check schema compatibility between versions
 
@@ -534,7 +534,7 @@ class MigrationSystem:
                 ],
             }
 
-    def get_schema_version(self) -> Dict[str, Any]:
+    def get_schema_version(self) -> dict[str, Any]:
         """
         Get current schema version
 
@@ -586,7 +586,7 @@ class MigrationSystem:
                 migration_dir = self.migration_root / migration_type.value
                 if migration_dir.exists():
                     for migration_file in migration_dir.glob("*.json"):
-                        with open(migration_file, "r") as f:
+                        with open(migration_file) as f:
                             migration_data = json.load(f)
                         # Convert migration_type string back to enum
                         migration_data["migration_type"] = MigrationType(
@@ -604,7 +604,7 @@ class MigrationSystem:
             history_file = self.migration_root / "migration_history.json"
 
             if history_file.exists():
-                with open(history_file, "r") as f:
+                with open(history_file) as f:
                     history_data = json.load(f)
 
                 for record_data in history_data:
@@ -614,7 +614,7 @@ class MigrationSystem:
         except Exception as e:
             self.logger.error(f"Failed to load migration history: {str(e)}")
 
-    def get_migration_statistics(self) -> Dict[str, Any]:
+    def get_migration_statistics(self) -> dict[str, Any]:
         """
         Get migration statistics
 

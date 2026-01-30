@@ -5,10 +5,10 @@
 import logging
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Dict, List, Optional, Set, Tuple
 from threading import RLock
-import numpy as np
+from typing import Any
 
+import numpy as np
 from langchain_core.documents import Document
 
 logger = logging.getLogger(__name__)
@@ -79,8 +79,8 @@ class VectorQuantizer:
         self._lock = RLock()
 
     def quantize_vectors(
-        self, vectors: List[np.ndarray]
-    ) -> Tuple[List[np.ndarray], Dict[str, Any]]:
+        self, vectors: list[np.ndarray]
+    ) -> tuple[list[np.ndarray], dict[str, Any]]:
         """
         벡터 양자화.
 
@@ -101,8 +101,8 @@ class VectorQuantizer:
             return self._product_quantization(vectors)
 
     def _quantize_int8(
-        self, vectors: List[np.ndarray]
-    ) -> Tuple[List[np.ndarray], Dict]:
+        self, vectors: list[np.ndarray]
+    ) -> tuple[list[np.ndarray], dict]:
         """INT8 양자화."""
         quantized = []
         scales = []
@@ -138,8 +138,8 @@ class VectorQuantizer:
         return quantized, metadata
 
     def _quantize_int4(
-        self, vectors: List[np.ndarray]
-    ) -> Tuple[List[np.ndarray], Dict]:
+        self, vectors: list[np.ndarray]
+    ) -> tuple[list[np.ndarray], dict]:
         """INT4 양자화 (더 높은 압축)."""
         quantized = []
         scales = []
@@ -169,8 +169,8 @@ class VectorQuantizer:
         return quantized, metadata
 
     def _product_quantization(
-        self, vectors: List[np.ndarray]
-    ) -> Tuple[List[np.ndarray], Dict]:
+        self, vectors: list[np.ndarray]
+    ) -> tuple[list[np.ndarray], dict]:
         """Product Quantization (PQ)."""
         # 간단한 PQ 구현
         quantized = []
@@ -206,9 +206,9 @@ class VectorQuantizer:
 
     def dequantize_vectors(
         self,
-        quantized_vectors: List[np.ndarray],
-        metadata: Dict[str, Any],
-    ) -> List[np.ndarray]:
+        quantized_vectors: list[np.ndarray],
+        metadata: dict[str, Any],
+    ) -> list[np.ndarray]:
         """양자화된 벡터 복원."""
         method = metadata.get("method", "none")
 
@@ -223,15 +223,17 @@ class VectorQuantizer:
 
     def _dequantize_int8(
         self,
-        quantized_vectors: List[np.ndarray],
-        metadata: Dict,
-    ) -> List[np.ndarray]:
+        quantized_vectors: list[np.ndarray],
+        metadata: dict,
+    ) -> list[np.ndarray]:
         """INT8 복원."""
         scales = metadata.get("scales", [])
         offsets = metadata.get("offsets", [])
 
         dequantized = []
-        for q_vec, scale, offset in zip(quantized_vectors, scales, offsets):
+        for q_vec, scale, offset in zip(
+            quantized_vectors, scales, offsets, strict=False
+        ):
             vec = (q_vec.astype(np.float32) * scale) + offset
             dequantized.append(vec)
 
@@ -239,15 +241,17 @@ class VectorQuantizer:
 
     def _dequantize_int4(
         self,
-        quantized_vectors: List[np.ndarray],
-        metadata: Dict,
-    ) -> List[np.ndarray]:
+        quantized_vectors: list[np.ndarray],
+        metadata: dict,
+    ) -> list[np.ndarray]:
         """INT4 복원."""
         scales = metadata.get("scales", [])
         offsets = metadata.get("offsets", [])
 
         dequantized = []
-        for q_vec, scale, offset in zip(quantized_vectors, scales, offsets):
+        for q_vec, scale, offset in zip(
+            quantized_vectors, scales, offsets, strict=False
+        ):
             vec = (q_vec.astype(np.float32) * scale) + offset
             dequantized.append(vec)
 
@@ -263,9 +267,9 @@ class DocumentPruner:
 
     def prune_similar_documents(
         self,
-        documents: List[Document],
-        vectors: Optional[List[np.ndarray]] = None,
-    ) -> Tuple[List[Document], List[int]]:
+        documents: list[Document],
+        vectors: list[np.ndarray] | None = None,
+    ) -> tuple[list[Document], list[int]]:
         """
         [최적화] 유사도 기반 문서 제거 (NumPy 벡터화 연산 버전).
 
@@ -332,10 +336,10 @@ class MetadataIndexer:
     """메타데이터 인덱싱 엔진."""
 
     def __init__(self):
-        self.indexes: Dict[str, Dict[Any, Set[int]]] = {}
+        self.indexes: dict[str, dict[Any, set[int]]] = {}
         self._lock = RLock()
 
-    def build_indexes(self, documents: List[Document]):
+    def build_indexes(self, documents: list[Document]):
         """메타데이터 인덱스 구축."""
         with self._lock:
             self.indexes.clear()
@@ -355,7 +359,7 @@ class MetadataIndexer:
         self,
         field: str,
         value: Any,
-    ) -> Set[int]:
+    ) -> set[int]:
         """메타데이터로 문서 검색."""
         with self._lock:
             if field not in self.indexes:
@@ -366,7 +370,7 @@ class MetadataIndexer:
 
             return self.indexes[field][value].copy()
 
-    def get_stats(self) -> Dict[str, int]:
+    def get_stats(self) -> dict[str, int]:
         """메타데이터 인덱스 통계."""
         with self._lock:
             return {field: len(values) for field, values in self.indexes.items()}
@@ -377,11 +381,11 @@ class LRUVectorCache:
 
     def __init__(self, max_size: int = 1000):
         self.max_size = max_size
-        self.cache: Dict[str, np.ndarray] = {}
-        self.access_order: List[str] = []
+        self.cache: dict[str, np.ndarray] = {}
+        self.access_order: list[str] = []
         self._lock = RLock()
 
-    def get(self, key: str) -> Optional[np.ndarray]:
+    def get(self, key: str) -> np.ndarray | None:
         """캐시에서 벡터 조회."""
         with self._lock:
             if key not in self.cache:
@@ -413,7 +417,7 @@ class LRUVectorCache:
             self.cache.clear()
             self.access_order.clear()
 
-    def get_stats(self) -> Dict[str, int]:
+    def get_stats(self) -> dict[str, int]:
         """캐시 통계."""
         with self._lock:
             return {
@@ -442,9 +446,9 @@ class IndexOptimizer:
 
     def optimize_index(
         self,
-        documents: List[Document],
-        vectors: List[np.ndarray],
-    ) -> Tuple[List[Document], List[np.ndarray], IndexStats]:
+        documents: list[Document],
+        vectors: list[np.ndarray],
+    ) -> tuple[list[Document], list[np.ndarray], IndexStats]:
         """
         인덱스 최적화.
 
@@ -486,8 +490,8 @@ class IndexOptimizer:
         self,
         field: str,
         value: Any,
-        documents: List[Document],
-    ) -> List[Tuple[int, Document]]:
+        documents: list[Document],
+    ) -> list[tuple[int, Document]]:
         """메타데이터 기반 검색."""
         doc_indices = self.metadata_indexer.search_by_metadata(field, value)
         return [(idx, documents[idx]) for idx in sorted(doc_indices)]
@@ -498,11 +502,11 @@ class IndexOptimizer:
 
 
 # 전역 인스턴스
-_optimizer_instance: Optional[IndexOptimizer] = None
+_optimizer_instance: IndexOptimizer | None = None
 
 
 def get_index_optimizer(
-    config: Optional[IndexOptimizationConfig] = None,
+    config: IndexOptimizationConfig | None = None,
 ) -> IndexOptimizer:
     """전역 인덱스 최적화 인스턴스 조회."""
     global _optimizer_instance

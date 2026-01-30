@@ -3,14 +3,14 @@ Task 22-3: Encryption Utilities
 데이터 암호화 및 보호 유틸리티
 """
 
-from dataclasses import dataclass
-from enum import Enum
-from typing import Dict, Any, Optional
-import os
-import json
 import base64
 import hashlib
 import hmac
+import json
+import os
+from dataclasses import dataclass
+from enum import Enum
+from typing import Any
 
 
 class EncryptionMethod(Enum):
@@ -36,7 +36,7 @@ class EncryptedData:
 class SimpleAESEncryptor:
     """간단한 AES 암호화 (모의 구현)"""
 
-    def __init__(self, key: Optional[str] = None):
+    def __init__(self, key: str | None = None):
         """
         초기화
         실제 환경에서는 cryptography 라이브러리 사용
@@ -76,7 +76,7 @@ class SimpleAESEncryptor:
             timestamp=time.time(),
         )
 
-    def decrypt(self, encrypted_data: EncryptedData) -> Optional[str]:
+    def decrypt(self, encrypted_data: EncryptedData) -> str | None:
         """데이터 복호화"""
         try:
             ciphertext_bytes = base64.b64decode(encrypted_data.ciphertext)
@@ -97,7 +97,7 @@ class SimpleAESEncryptor:
 class DataEncryptor:
     """데이터 암호화 관리자"""
 
-    def __init__(self, encryption_key: Optional[str] = None):
+    def __init__(self, encryption_key: str | None = None):
         self._aes_encryptor = SimpleAESEncryptor(encryption_key)
         self._key = encryption_key or "default-key"
 
@@ -116,7 +116,7 @@ class DataEncryptor:
 
         return base64.b64encode(json.dumps(payload).encode()).decode()
 
-    def decrypt_string(self, encrypted_string: str) -> Optional[str]:
+    def decrypt_string(self, encrypted_string: str) -> str | None:
         """문자열 복호화"""
         try:
             payload = json.loads(base64.b64decode(encrypted_string).decode())
@@ -134,12 +134,12 @@ class DataEncryptor:
         except Exception:
             return None
 
-    def encrypt_dict(self, data: Dict[str, Any]) -> str:
+    def encrypt_dict(self, data: dict[str, Any]) -> str:
         """딕셔너리 암호화"""
         json_str = json.dumps(data)
         return self.encrypt_string(json_str)
 
-    def decrypt_dict(self, encrypted_string: str) -> Optional[Dict[str, Any]]:
+    def decrypt_dict(self, encrypted_string: str) -> dict[str, Any] | None:
         """딕셔너리 복호화"""
         decrypted = self.decrypt_string(encrypted_string)
 
@@ -173,7 +173,7 @@ class EncryptionManager:
 
     def __init__(self):
         self._default_encryptor = DataEncryptor()
-        self._field_configs: Dict[str, Dict[str, Any]] = {}
+        self._field_configs: dict[str, dict[str, Any]] = {}
 
     def configure_field_encryption(
         self,
@@ -184,7 +184,7 @@ class EncryptionManager:
         """필드 암호화 설정"""
         self._field_configs[field_name] = {"encrypt": should_encrypt, "method": method}
 
-    def encrypt_sensitive_data(self, data: Dict[str, Any]) -> Dict[str, Any]:
+    def encrypt_sensitive_data(self, data: dict[str, Any]) -> dict[str, Any]:
         """민감한 데이터 암호화"""
         encrypted_data = data.copy()
 
@@ -212,7 +212,7 @@ class EncryptionManager:
 
         return encrypted_data
 
-    def decrypt_sensitive_data(self, data: Dict[str, Any]) -> Dict[str, Any]:
+    def decrypt_sensitive_data(self, data: dict[str, Any]) -> dict[str, Any]:
         """민감한 데이터 복호화"""
         decrypted_data = data.copy()
 
@@ -252,7 +252,7 @@ class EncryptionManager:
         except Exception:
             return False
 
-    def get_encryption_status(self) -> Dict[str, Any]:
+    def get_encryption_status(self) -> dict[str, Any]:
         """암호화 상태"""
         return {
             "encryption_enabled": True,
@@ -275,7 +275,7 @@ class SecureDataStorage:
 
     def __init__(self):
         self._encryption_manager = EncryptionManager()
-        self._data_store: Dict[str, Any] = {}
+        self._data_store: dict[str, Any] = {}
 
     def store(self, key: str, value: Any, sensitive: bool = False) -> bool:
         """데이터 저장"""
@@ -302,7 +302,7 @@ class SecureDataStorage:
         except Exception:
             return False
 
-    def retrieve(self, key: str) -> Optional[Any]:
+    def retrieve(self, key: str) -> Any | None:
         """데이터 조회"""
         if key not in self._data_store:
             return None

@@ -6,8 +6,9 @@ Graceful Degradation, 폴백 전략
 import asyncio
 import logging
 from abc import ABC, abstractmethod
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -57,7 +58,7 @@ class CachedFallback(FallbackStrategy):
     캐시된 이전 결과 반환
     """
 
-    def __init__(self, cache: Dict[str, Any]):
+    def __init__(self, cache: dict[str, Any]):
         self.cache = cache
 
     async def execute(self, original_error: Exception, *args, **kwargs) -> Any:
@@ -99,7 +100,7 @@ class ChainedFallback(FallbackStrategy):
     여러 폴백 전략을 순차적으로 시도
     """
 
-    def __init__(self, strategies: List[FallbackStrategy]):
+    def __init__(self, strategies: list[FallbackStrategy]):
         self.strategies = strategies
 
     async def execute(self, original_error: Exception, *args, **kwargs) -> Any:
@@ -126,7 +127,7 @@ class FallbackConfig:
     """폴백 설정"""
 
     strategy: FallbackStrategy
-    error_types: List[type] = field(default_factory=lambda: [Exception])
+    error_types: list[type] = field(default_factory=lambda: [Exception])
     enabled: bool = True
     log_fallback: bool = True
 
@@ -145,10 +146,10 @@ class GracefulDegradation:
     """
 
     def __init__(self):
-        self.fallback_chain: List[FallbackConfig] = []
+        self.fallback_chain: list[FallbackConfig] = []
 
     def add_fallback(
-        self, strategy: FallbackStrategy, error_types: Optional[List[type]] = None
+        self, strategy: FallbackStrategy, error_types: list[type] | None = None
     ) -> None:
         """폴백 전략 추가"""
         config = FallbackConfig(
@@ -156,7 +157,7 @@ class GracefulDegradation:
         )
         self.fallback_chain.append(config)
 
-    def _should_use_fallback(self, error: Exception, error_types: List[type]) -> bool:
+    def _should_use_fallback(self, error: Exception, error_types: list[type]) -> bool:
         """폴백 사용 여부"""
         return any(isinstance(error, exc_type) for exc_type in error_types)
 
@@ -231,7 +232,7 @@ class ServiceAvailability:
     """
 
     def __init__(self):
-        self.available_services: Dict[str, bool] = {}
+        self.available_services: dict[str, bool] = {}
         self.degradation_level = 0  # 0 = 정상, 1 = 경미, 2 = 심각
 
     def mark_service_unavailable(self, service_name: str) -> None:
@@ -258,9 +259,7 @@ class ServiceAvailability:
 
         total_services = len(self.available_services)
 
-        if total_services == 0:
-            self.degradation_level = 0
-        elif unavailable_count == 0:
+        if total_services == 0 or unavailable_count == 0:
             self.degradation_level = 0
         elif unavailable_count < total_services / 2:
             self.degradation_level = 1  # 경미
@@ -272,7 +271,7 @@ class ServiceAvailability:
             f"({unavailable_count}/{total_services})"
         )
 
-    def get_status(self) -> Dict[str, Any]:
+    def get_status(self) -> dict[str, Any]:
         """시스템 상태 조회"""
         return {
             "available_services": self.available_services,
@@ -283,8 +282,8 @@ class ServiceAvailability:
 
 # 전역 인스턴스
 
-_graceful_degradation: Optional[GracefulDegradation] = None
-_service_availability: Optional[ServiceAvailability] = None
+_graceful_degradation: GracefulDegradation | None = None
+_service_availability: ServiceAvailability | None = None
 
 
 def get_graceful_degradation() -> GracefulDegradation:

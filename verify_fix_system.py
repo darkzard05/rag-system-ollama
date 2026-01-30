@@ -1,15 +1,15 @@
 import asyncio
 import logging
-import sys
 import os
+import sys
 from pathlib import Path
 
 # 프로젝트 루트를 경로에 추가
 sys.path.append(str(Path(__file__).parent / "src"))
 
-from core.rag_core import RAGSystem
-from core.model_loader import load_llm, load_embedding_model
 from common.config import DEFAULT_OLLAMA_MODEL
+from core.model_loader import load_embedding_model, load_llm
+from core.rag_core import RAGSystem
 
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"

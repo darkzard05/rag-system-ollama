@@ -2,17 +2,17 @@
 Rollback System for RAG System Version Rollback and Recovery
 """
 
+import hashlib
 import json
-import time
 import logging
 import shutil
-from dataclasses import dataclass, field, asdict
-from typing import Dict, List, Optional, Any
+import time
+from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from enum import Enum
 from pathlib import Path
 from threading import RLock
-import hashlib
+from typing import Any
 
 
 class RollbackStatus(Enum):
@@ -45,11 +45,11 @@ class Checkpoint:
     timestamp: float
     size_bytes: int = 0
     location: str = ""
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    metadata: dict[str, Any] = field(default_factory=dict)
     created_by: str = "system"
     description: str = ""
 
-    def to_dict(self) -> Dict:
+    def to_dict(self) -> dict:
         """Convert to dictionary"""
         data = asdict(self)
         data["checkpoint_type"] = self.checkpoint_type.value
@@ -68,11 +68,11 @@ class RollbackRecord:
     duration: float = 0.0
     checkpoints_used: int = 0
     data_loss_estimate: int = 0  # milliseconds of data loss
-    error_message: Optional[str] = None
+    error_message: str | None = None
     initiated_by: str = "system"
     reason: str = ""
 
-    def to_dict(self) -> Dict:
+    def to_dict(self) -> dict:
         """Convert to dictionary"""
         return asdict(self)
 
@@ -84,13 +84,13 @@ class RecoveryPlan:
     plan_id: str
     target_version: str
     target_checkpoint: str
-    steps: List[Dict[str, Any]] = field(default_factory=list)
+    steps: list[dict[str, Any]] = field(default_factory=list)
     estimated_duration: float = 0.0
     estimated_data_loss: int = 0
     risk_level: str = "low"  # low, medium, high
     created_at: float = field(default_factory=time.time)
 
-    def to_dict(self) -> Dict:
+    def to_dict(self) -> dict:
         """Convert to dictionary"""
         return asdict(self)
 
@@ -111,9 +111,9 @@ class RollbackSystem:
         self.checkpoint_root = Path(checkpoint_root)
         self.checkpoint_root.mkdir(parents=True, exist_ok=True)
 
-        self.checkpoints: Dict[str, Checkpoint] = {}
-        self.rollback_history: List[RollbackRecord] = []
-        self.recovery_plans: Dict[str, RecoveryPlan] = {}
+        self.checkpoints: dict[str, Checkpoint] = {}
+        self.rollback_history: list[RollbackRecord] = []
+        self.recovery_plans: dict[str, RecoveryPlan] = {}
         self.current_version: str = "1.0.0"
         self.retention_days = retention_days
 
@@ -141,7 +141,7 @@ class RollbackSystem:
         name: str,
         version: str,
         checkpoint_type: CheckpointType,
-        data_path: Optional[str] = None,
+        data_path: str | None = None,
         description: str = "",
         created_by: str = "system",
     ) -> str:
@@ -215,9 +215,9 @@ class RollbackSystem:
 
     def list_checkpoints(
         self,
-        version: Optional[str] = None,
-        checkpoint_type: Optional[CheckpointType] = None,
-    ) -> List[Dict[str, Any]]:
+        version: str | None = None,
+        checkpoint_type: CheckpointType | None = None,
+    ) -> list[dict[str, Any]]:
         """
         List available checkpoints
 
@@ -314,7 +314,7 @@ class RollbackSystem:
 
             return plan.plan_id
 
-    def validate_recovery_plan(self, plan_id: str) -> Dict[str, Any]:
+    def validate_recovery_plan(self, plan_id: str) -> dict[str, Any]:
         """
         Validate a recovery plan before execution
 
@@ -359,7 +359,7 @@ class RollbackSystem:
 
     def execute_recovery_plan(
         self, plan_id: str, dry_run: bool = False
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Execute recovery plan
 
@@ -477,8 +477,8 @@ class RollbackSystem:
                 raise
 
     def manual_rollback(
-        self, target_version: str, checkpoint_id: Optional[str] = None, reason: str = ""
-    ) -> Dict[str, Any]:
+        self, target_version: str, checkpoint_id: str | None = None, reason: str = ""
+    ) -> dict[str, Any]:
         """
         Perform manual rollback
 
@@ -512,7 +512,7 @@ class RollbackSystem:
 
             return self.execute_recovery_plan(plan_id)
 
-    def get_rollback_history(self, limit: int = 20) -> List[Dict[str, Any]]:
+    def get_rollback_history(self, limit: int = 20) -> list[dict[str, Any]]:
         """
         Get rollback history
 
@@ -525,7 +525,7 @@ class RollbackSystem:
         with self._lock:
             return [r.to_dict() for r in self.rollback_history[-limit:]]
 
-    def get_checkpoint_info(self, checkpoint_id: str) -> Dict[str, Any]:
+    def get_checkpoint_info(self, checkpoint_id: str) -> dict[str, Any]:
         """
         Get detailed checkpoint information
         """
@@ -549,7 +549,7 @@ class RollbackSystem:
                 "age_hours": (time.time() - checkpoint.timestamp) / 3600,
             }
 
-    def sync_checkpoints(self) -> Dict[str, int]:
+    def sync_checkpoints(self) -> dict[str, int]:
         """
         Synchronizes the internal registry with the physical file system.
         Removes records for non-existent directories and cleans up un-indexed folders.
@@ -641,7 +641,7 @@ class RollbackSystem:
                     metadata_file = checkpoint_dir / "checkpoint.json"
 
                     if metadata_file.exists():
-                        with open(metadata_file, "r") as f:
+                        with open(metadata_file) as f:
                             checkpoint_data = json.load(f)
                         # Convert checkpoint_type string back to enum
                         checkpoint_data["checkpoint_type"] = CheckpointType(
@@ -659,7 +659,7 @@ class RollbackSystem:
             history_file = self.checkpoint_root / "rollback_history.json"
 
             if history_file.exists():
-                with open(history_file, "r") as f:
+                with open(history_file) as f:
                     history_data = json.load(f)
 
                 for record_data in history_data:
@@ -669,7 +669,7 @@ class RollbackSystem:
         except Exception as e:
             self.logger.error(f"Failed to load rollback history: {str(e)}")
 
-    def get_rollback_statistics(self) -> Dict[str, Any]:
+    def get_rollback_statistics(self) -> dict[str, Any]:
         """
         Get rollback statistics
 

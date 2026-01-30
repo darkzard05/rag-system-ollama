@@ -3,12 +3,12 @@ Task 19-3: Distributed Reranking Module
 분산 재순위지정 - 다중 노드 결과의 최종 순위 결정
 """
 
+import math
+import time
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import List, Dict, Optional, Tuple, Any
-import time
 from threading import RLock
-import math
+from typing import Any
 
 
 class RerankerStrategy(Enum):
@@ -41,8 +41,8 @@ class RerankingResult:
     reranked_score: float
     original_rank: int
     final_rank: int
-    reranking_factors: Dict[str, float] = field(default_factory=dict)
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    reranking_factors: dict[str, float] = field(default_factory=dict)
+    metadata: dict[str, Any] = field(default_factory=dict)
     timestamp: float = field(default_factory=time.time)
 
     def __lt__(self, other):
@@ -69,12 +69,12 @@ class SimilarityCalculator:
     """유사도 계산기"""
 
     @staticmethod
-    def cosine_similarity(vec1: List[float], vec2: List[float]) -> float:
+    def cosine_similarity(vec1: list[float], vec2: list[float]) -> float:
         """코사인 유사도"""
         if not vec1 or not vec2:
             return 0.0
 
-        dot_product = sum(a * b for a, b in zip(vec1, vec2))
+        dot_product = sum(a * b for a, b in zip(vec1, vec2, strict=False))
         norm1 = sum(x**2 for x in vec1) ** 0.5
         norm2 = sum(x**2 for x in vec2) ** 0.5
 
@@ -84,18 +84,18 @@ class SimilarityCalculator:
         return dot_product / (norm1 * norm2)
 
     @staticmethod
-    def manhattan_distance(vec1: List[float], vec2: List[float]) -> float:
+    def manhattan_distance(vec1: list[float], vec2: list[float]) -> float:
         """맨해튼 거리"""
         if not vec1 or not vec2:
             return 0.0
-        return sum(abs(a - b) for a, b in zip(vec1, vec2))
+        return sum(abs(a - b) for a, b in zip(vec1, vec2, strict=False))
 
     @staticmethod
-    def euclidean_distance(vec1: List[float], vec2: List[float]) -> float:
+    def euclidean_distance(vec1: list[float], vec2: list[float]) -> float:
         """유클리디안 거리"""
         if not vec1 or not vec2:
             return 0.0
-        return sum((a - b) ** 2 for a, b in zip(vec1, vec2)) ** 0.5
+        return sum((a - b) ** 2 for a, b in zip(vec1, vec2, strict=False)) ** 0.5
 
 
 class DiversityCalculator:
@@ -105,7 +105,7 @@ class DiversityCalculator:
         self._lock = RLock()
 
     def calculate_diversity_penalty(
-        self, result: Any, selected_results: List[Any], diversity_weight: float = 0.3
+        self, result: Any, selected_results: list[Any], diversity_weight: float = 0.3
     ) -> float:
         """
         다양성 페널티 계산
@@ -138,7 +138,7 @@ class DiversityCalculator:
         return penalty
 
     def _calculate_metadata_similarity(
-        self, result: Any, selected_results: List[Any]
+        self, result: Any, selected_results: list[Any]
     ) -> float:
         """메타데이터 유사도"""
         if not selected_results:
@@ -169,7 +169,7 @@ class DiversityCalculator:
         return sum(similarities) / len(similarities) if similarities else 0.0
 
     def _calculate_content_similarity(
-        self, result: Any, selected_results: List[Any]
+        self, result: Any, selected_results: list[Any]
     ) -> float:
         """콘텐츠 유사도"""
         if not selected_results:
@@ -263,12 +263,12 @@ class DistributedReranker:
 
     def rerank(
         self,
-        results: List[Any],
-        query_text: Optional[str] = None,
+        results: list[Any],
+        query_text: str | None = None,
         strategy: RerankerStrategy = RerankerStrategy.SCORE_ONLY,
-        top_k: Optional[int] = None,
+        top_k: int | None = None,
         **kwargs,
-    ) -> Tuple[List[RerankingResult], RerankingMetrics]:
+    ) -> tuple[list[RerankingResult], RerankingMetrics]:
         """
         검색 결과 재순위지정
 
@@ -335,8 +335,8 @@ class DistributedReranker:
         return reranked, metrics
 
     def _rerank_by_score(
-        self, results: List[Any], metrics: RerankingMetrics
-    ) -> List[RerankingResult]:
+        self, results: list[Any], metrics: RerankingMetrics
+    ) -> list[RerankingResult]:
         """점수만 기반 재순위지정"""
         reranked = []
 
@@ -362,11 +362,11 @@ class DistributedReranker:
 
     def _rerank_by_diversity(
         self,
-        results: List[Any],
+        results: list[Any],
         metrics: RerankingMetrics,
         diversity_weight: float = 0.3,
         **kwargs,
-    ) -> List[RerankingResult]:
+    ) -> list[RerankingResult]:
         """다양성을 고려한 재순위지정"""
         reranked = []
         selected_results = []
@@ -412,8 +412,8 @@ class DistributedReranker:
         return reranked
 
     def _rerank_by_recency(
-        self, results: List[Any], metrics: RerankingMetrics
-    ) -> List[RerankingResult]:
+        self, results: list[Any], metrics: RerankingMetrics
+    ) -> list[RerankingResult]:
         """시간성을 고려한 재순위지정"""
         reranked = []
 
@@ -457,11 +457,11 @@ class DistributedReranker:
 
     def _rerank_by_cross_encoder(
         self,
-        results: List[Any],
-        query_text: Optional[str],
+        results: list[Any],
+        query_text: str | None,
         metrics: RerankingMetrics,
         **kwargs,
-    ) -> List[RerankingResult]:
+    ) -> list[RerankingResult]:
         """교차 인코더 기반 재순위지정"""
         reranked = []
 
@@ -502,11 +502,11 @@ class DistributedReranker:
 
     def _rerank_by_mmr(
         self,
-        results: List[Any],
+        results: list[Any],
         metrics: RerankingMetrics,
         mmr_lambda: float = 0.5,
         **kwargs,
-    ) -> List[RerankingResult]:
+    ) -> list[RerankingResult]:
         """Maximal Marginal Relevance 기반 재순위지정"""
         reranked = []
         selected_indices = []
@@ -562,11 +562,11 @@ class DistributedReranker:
 
     def _rerank_by_fusion(
         self,
-        results: List[Any],
-        query_text: Optional[str],
+        results: list[Any],
+        query_text: str | None,
         metrics: RerankingMetrics,
         **kwargs,
-    ) -> List[RerankingResult]:
+    ) -> list[RerankingResult]:
         """여러 전략 통합한 재순위지정"""
         # 1. 점수 기반
         score_reranked, _ = self.rerank(results, strategy=RerankerStrategy.SCORE_ONLY)
@@ -582,7 +582,7 @@ class DistributedReranker:
         )
 
         # 통합 (평균 순위)
-        rank_map: Dict[str, List[int]] = {}
+        rank_map: dict[str, list[int]] = {}
         for r in score_reranked:
             rank_map[r.doc_id] = [r.final_rank]
         for r in relevance_reranked:

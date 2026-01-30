@@ -6,11 +6,12 @@ AsyncIO 최적화 성능 비교 분석
 """
 
 import asyncio
-import time
-import statistics
-from typing import List, Callable, Coroutine, Any
-from dataclasses import dataclass
 import logging
+import statistics
+import time
+from collections.abc import Callable, Coroutine
+from dataclasses import dataclass
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -35,10 +36,10 @@ class AsyncBenchmark:
 
     def __init__(self, iterations: int = 100):
         self.iterations = iterations
-        self.results: List[BenchmarkResult] = []
+        self.results: list[BenchmarkResult] = []
 
     async def benchmark_sequential(
-        self, name: str, tasks: List[Callable[[], Coroutine[Any, Any, Any]]]
+        self, name: str, tasks: list[Callable[[], Coroutine[Any, Any, Any]]]
     ) -> BenchmarkResult:
         """
         순차 처리 벤치마크
@@ -65,7 +66,7 @@ class AsyncBenchmark:
         return self._create_result(name, times, len(tasks))
 
     async def benchmark_parallel(
-        self, name: str, tasks: List[Callable[[], Coroutine[Any, Any, Any]]]
+        self, name: str, tasks: list[Callable[[], Coroutine[Any, Any, Any]]]
     ) -> BenchmarkResult:
         """
         병렬 처리 벤치마크
@@ -91,7 +92,7 @@ class AsyncBenchmark:
         return self._create_result(name, times, len(tasks))
 
     def _create_result(
-        self, name: str, times: List[float], call_count: int
+        self, name: str, times: list[float], call_count: int
     ) -> BenchmarkResult:
         """벤치마크 결과 객체 생성"""
         total = sum(times)
@@ -155,13 +156,13 @@ async def simulate_query_expansion(delay_ms: int = 50) -> str:
     return "expanded_query"
 
 
-async def simulate_document_retrieval(delay_ms: int = 100) -> List[str]:
+async def simulate_document_retrieval(delay_ms: int = 100) -> list[str]:
     """문서 검색 시뮬레이션"""
     await asyncio.sleep(delay_ms / 1000)
     return [f"doc_{i}" for i in range(5)]
 
 
-async def simulate_reranking(delay_ms: int = 80) -> List[float]:
+async def simulate_reranking(delay_ms: int = 80) -> list[float]:
     """리랭킹 시뮬레이션"""
     await asyncio.sleep(delay_ms / 1000)
     return [0.9, 0.8, 0.7, 0.6, 0.5]

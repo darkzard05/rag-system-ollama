@@ -6,8 +6,9 @@ Optimized for 4B models to achieve < 500ms routing latency.
 import logging
 import time
 from typing import Any
-from langchain_core.prompts import ChatPromptTemplate
+
 from langchain_core.output_parsers import StrOutputParser
+from langchain_core.prompts import ChatPromptTemplate
 
 logger = logging.getLogger(__name__)
 

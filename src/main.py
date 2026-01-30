@@ -4,8 +4,8 @@ Streamlit 프레임워크를 기반으로 UI를 구성하고 세션 상태를 �
 """
 
 import os
-from typing import Any, Dict
 from pathlib import Path
+from typing import Any
 
 import nest_asyncio
 import streamlit as st
@@ -16,17 +16,18 @@ from common.logging_config import setup_logging
 
 logger = setup_logging(log_level="INFO", log_file=Path("logs/app.log"))
 
-from common.config import AVAILABLE_EMBEDDING_MODELS, DEFAULT_OLLAMA_MODEL
-from common.constants import StringConstants, FilePathConstants
+from common.config import AVAILABLE_EMBEDDING_MODELS
+from common.constants import FilePathConstants, StringConstants
 
 # [Lazy Import] 무거운 코어 모듈 임포트 제거 (함수 내부로 이동)
 from core.session import SessionManager
+from infra.notification_system import SystemNotifier
 from ui.ui import (
+    _render_status_box,
+    inject_custom_css,
     render_left_column,
     render_pdf_viewer,
     render_sidebar,
-    _render_status_box,
-    inject_custom_css,
 )
 
 # 상수 정의
@@ -35,34 +36,71 @@ LAYOUT = StringConstants.LAYOUT
 MAX_FILE_SIZE_MB = StringConstants.MAX_FILE_SIZE_MB
 
 # 비동기 패치 적용 (최상단 실행)
+
 nest_asyncio.apply()
 
-# Streamlit 페이지 설정
-st.set_page_config(page_title=PAGE_TITLE, layout=LAYOUT)
+# Streamlit 페이지 설정 (최우선 실행 - UI 즉시 표시용)
+from common.constants import StringConstants
 
+st.set_page_config(page_title=StringConstants.PAGE_TITLE, layout=StringConstants.LAYOUT)
 
 import atexit
+import threading
+import time
+from pathlib import Path
 
 
-@st.cache_resource
-def _init_temp_directory():
-    """임시 디렉토리를 초기화하고 이전의 잔해를 제거합니다. (앱 시작 시 1회 실행)"""
-    temp_path = Path(FilePathConstants.TEMP_DIR).absolute()
-    try:
-        if temp_path.exists():
-            # 안전을 위해 폴더 내부 파일만 삭제
-            for file in temp_path.glob("*.pdf"):
-                try:
-                    os.remove(file)
-                except:
-                    pass
-            logger.info(f"[System] [Cleanup] 임시 디렉토리 초기화 완료: {temp_path}")
-        else:
-            temp_path.mkdir(parents=True, exist_ok=True)
-            logger.info(f"[System] [Cleanup] 임시 디렉토리 생성 완료: {temp_path}")
-    except Exception as e:
-        logger.warning(f"임시 디렉토리 초기화 실패: {e}")
+# [Extreme Lazy Import] 로깅 설정조차 필요한 시점으로 미룸
+def get_logger():
+    from common.logging_config import setup_logging
+
+    return setup_logging(log_level="INFO", log_file=Path("logs/app.log"))
+
+
+@st.cache_resource(show_spinner=False)
+def _check_windows_integrity():
+    """Windows 환경의 라이브러리 충돌을 1회만 체크합니다."""
+    import platform
+
+    if platform.system() == "Windows":
+        try:
+            import torch
+            import torchvision
+
+            return True
+        except ImportError as e:
+            if "0xc0000139" in str(e) or "DLL load failed" in str(e):
+                return str(e)
     return True
+
+
+@st.cache_resource(show_spinner=False)
+def _init_temp_directory():
+    """임시 디렉토리를 초기화하고 잔해를 백그라운드에서 제거합니다."""
+    from common.constants import FilePathConstants
+
+    temp_path = Path(FilePathConstants.TEMP_DIR).absolute()
+    temp_path.mkdir(parents=True, exist_ok=True)
+
+    def cleanup_task():
+        try:
+            # UI가 먼저 뜨도록 잠시 대기
+            time.sleep(1)
+            from infra.deployment_manager import get_deployment_manager
+
+            manager = get_deployment_manager()
+            # 실제 임시 디렉토리(temp_path)와 배포 디렉토리를 모두 정리
+            manager.cleanup_orphaned_artifacts(max_age_hours=24, target_dir=temp_path)
+            manager.cleanup_orphaned_artifacts(max_age_hours=24)  # 기본 배포 폴더 정리
+            logger.info(
+                f"[System] [Janitor] 백그라운드 자원 정리 완료 (대상: {temp_path} 및 deployments/)"
+            )
+        except Exception as e:
+            logger.error(f"[System] [Janitor] 리소스 정리 중 실패: {e}")
+
+    # 백그라운드 스레드 시작
+    threading.Thread(target=cleanup_task, daemon=True).start()
+    return str(temp_path)
 
 
 # 앱 시작 시 초기화 수행 (캐싱으로 인해 최초 1회만 작동)
@@ -122,12 +160,11 @@ def _ensure_models_are_loaded(status_container: DeltaGenerator) -> bool:
 
         # 1. LLM 로드
         if not current_llm or getattr(current_llm, "model", None) != selected_model:
-            SessionManager.add_status_log(f"LLM 로딩 중: {selected_model}")
+            SystemNotifier.model_load(selected_model, device="GPU")  # LLM은 보통 GPU
             force_sync()
             llm = load_llm(selected_model)
             SessionManager.set("llm", llm)
-            SessionManager.replace_last_status_log("✅ LLM 로드 완료")
-            st.toast(f"LLM 로드 완료: {selected_model}", icon="✅")
+            SystemNotifier.success(f"LLM 로드 완료: {selected_model}")
             force_sync()
 
         # 2. 임베딩 모델 로드
@@ -135,12 +172,11 @@ def _ensure_models_are_loaded(status_container: DeltaGenerator) -> bool:
             not current_embedder
             or getattr(current_embedder, "model_name", None) != selected_embedding
         ):
-            SessionManager.add_status_log(f"임베딩 로딩 중: {selected_embedding}")
+            SystemNotifier.model_load(selected_embedding, device="CPU")
             force_sync()
             embedder = load_embedding_model(selected_embedding)
             SessionManager.set("embedder", embedder)
-            SessionManager.replace_last_status_log("✅ 임베딩 로드 완료")
-            st.toast(f"임베딩 모델 로드 완료: {selected_embedding}", icon="✅")
+            SystemNotifier.success(f"임베딩 모델 로드 완료: {selected_embedding}")
             force_sync()
 
         return True
@@ -277,11 +313,10 @@ def on_file_upload() -> None:
 
             SessionManager.set("pdf_file_path", tmp_path)
             SessionManager.set("new_file_uploaded", True)
-            st.toast(f"문서 업로드 완료: {uploaded_file.name}", icon="📄")
+            SystemNotifier.success(f"문서 업로드 완료: {uploaded_file.name}", icon="📄")
             logger.info(f"[System] [Upload] 파일 저장 완료: {tmp_path}")
         except Exception as e:
-            st.error(f"파일 저장 중 오류 발생: {e}")
-            logger.error(f"파일 저장 오류: {e}")
+            SystemNotifier.error("파일 저장 중 오류 발생", details=str(e))
 
 
 def on_model_change() -> None:
@@ -318,31 +353,22 @@ def on_embedding_change() -> None:
         SessionManager.set("needs_rag_rebuild", True)
 
 
-def _render_app_layout(is_skeleton_pass: bool) -> Dict[str, Any]:
+def _render_app_layout(
+    is_skeleton_pass: bool, available_models: list[str] | None = None
+) -> dict[str, Any]:
     """앱의 전체 레이아웃을 렌더링하고 주요 플레이스홀더를 반환합니다."""
     inject_custom_css()
 
     # 1. 사이드바 렌더링
-    if is_skeleton_pass:
-        sidebar_placeholders = render_sidebar(
-            file_uploader_callback=on_file_upload,
-            model_selector_callback=on_model_change,
-            embedding_selector_callback=on_embedding_change,
-            is_generating=False,
-            current_file_name=None,
-            current_embedding_model=None,
-        )
-    else:
-        sidebar_placeholders = render_sidebar(
-            file_uploader_callback=on_file_upload,
-            model_selector_callback=on_model_change,
-            embedding_selector_callback=on_embedding_change,
-            is_generating=st.session_state.get("is_generating_answer", False),
-            current_file_name=st.session_state.get("last_uploaded_file_name"),
-            current_embedding_model=st.session_state.get(
-                "last_selected_embedding_model"
-            ),
-        )
+    sidebar_placeholders = render_sidebar(
+        file_uploader_callback=on_file_upload,
+        model_selector_callback=on_model_change,
+        embedding_selector_callback=on_embedding_change,
+        is_generating=st.session_state.get("is_generating_answer", False),
+        current_file_name=st.session_state.get("last_uploaded_file_name"),
+        current_embedding_model=st.session_state.get("last_selected_embedding_model"),
+        available_models=available_models,
+    )
 
     # 2. 메인 영역 레이아웃
     col_left, col_right = st.columns([1, 1])
@@ -390,90 +416,48 @@ def _handle_pending_tasks(status_container: DeltaGenerator) -> None:
 
 def main() -> None:
     """메인 애플리케이션 오케스트레이터"""
-    # [추가] Windows 환경 무결성 체크
-    import platform
+    # 1. 초기 레이아웃 및 세션 즉시 준비
+    from ui.ui import inject_custom_css
 
-    if platform.system() == "Windows":
-        try:
-            import torch
-            import torchvision
-        except ImportError as e:
-            if "0xc0000139" in str(e) or "DLL load failed" in str(e):
-                st.error("⚠️ **Windows 환경 라이브러리 충돌 감지**")
-                st.info(
-                    "현재 시스템에 설치된 PyTorch 라이브러리에 충돌이 있거나 필수 DLL이 누락되었습니다."
-                )
-                st.code("python scripts/diagnose_windows.py")
-                st.stop()
+    inject_custom_css()
 
-    # 1. 초기 UI 렌더링 (즉시 실행)
-    is_skeleton_pass = "_ui_frame_ready" not in st.session_state
-    sidebar_placeholders = _render_app_layout(is_skeleton_pass)
+    from core.session import SessionManager
 
-    # 2. UI-First: 뼈대 출력 후 리런하여 데이터 로드 단계 진입
-    if is_skeleton_pass:
-        st.session_state._ui_frame_ready = True
-        st.rerun()
-
-    # 3. 데이터 및 세션 초기화
     SessionManager.init_session()
+
+    # 2. 모델 목록 가져오기 (이미 세션에 있으면 즉시 사용)
+    available_models = st.session_state.get("available_models_list")
+
+    # 레이아웃 렌더링 (데이터 상태를 직접 전달)
+    sidebar_placeholders = _render_app_layout(
+        is_skeleton_pass=(available_models is None), available_models=available_models
+    )
     status_container = sidebar_placeholders["status_container"]
     SessionManager.set("status_placeholder", status_container)
 
-    # 4. 모델 목록 처리 및 선택기 활성화
-    available_models = st.session_state.get("available_models_list")
+    # 모델 목록이 없으면 로딩 시도
     if not available_models:
-        with sidebar_placeholders["model_selector"]:
-            st.selectbox(
-                "메인 LLM",
-                ["모델 목록을 불러오는 중..."],
-                index=0,
-                disabled=True,
-                label_visibility="collapsed",
-            )
-            with st.spinner("Ollama 모델 검색 중..."):
-                from core.model_loader import get_available_models
+        from core.model_loader import get_available_models
 
-                st.session_state.available_models_list = get_available_models()
-        st.rerun()
-    else:
-        # 정상 모델 선택기 렌더링
-        is_ollama_error = (
-            available_models[0] == StringConstants.MSG_ERROR_OLLAMA_NOT_RUNNING
-            if hasattr(StringConstants, "MSG_ERROR_OLLAMA_NOT_RUNNING")
-            else False
-        )
-        actual_models = (
-            [] if is_ollama_error else [m for m in available_models if "---" not in m]
-        )
+        available_models = get_available_models()
+        st.session_state.available_models_list = available_models
+        st.rerun()  # 목록을 가져온 후 UI 업데이트를 위해 재실행
 
-        last_model = SessionManager.get("last_selected_model")
-        if not last_model or (actual_models and last_model not in actual_models):
-            last_model = (
-                DEFAULT_OLLAMA_MODEL
-                if DEFAULT_OLLAMA_MODEL in actual_models
-                else (actual_models[0] if actual_models else DEFAULT_OLLAMA_MODEL)
-            )
-            SessionManager.set("last_selected_model", last_model)
-
-        sidebar_placeholders["model_selector"].selectbox(
-            "메인 LLM",
-            available_models,
-            index=available_models.index(last_model)
-            if last_model in available_models
-            else 0,
-            key="model_selector",
-            on_change=on_model_change,
-            disabled=is_ollama_error,
-            label_visibility="collapsed",
-        )
-
-    # 5. 백그라운드 태스크 처리
+    # 4. 백그라운드 태스크 처리 (RAG 빌드, 모델 교체 등)
     _handle_pending_tasks(status_container)
 
-    # 6. 첫 실행 플래그 해제
+    # 5. 첫 실행 플래그 해제 및 기본 모델 예열 시도
     if SessionManager.get("is_first_run"):
         SessionManager.set("is_first_run", False)
+        # [최적화] 백그라운드에서 임베딩 모델 미리 로드 (첫 질문 시 지연 방지)
+        from common.config import AVAILABLE_EMBEDDING_MODELS
+        from core.model_loader import load_embedding_model
+
+        if AVAILABLE_EMBEDDING_MODELS:
+            st.session_state.warmup_triggered = True
+            # 임베딩 모델 로드는 캐싱되므로 여기서 호출하면 나중에 즉시 사용 가능
+            load_embedding_model(AVAILABLE_EMBEDDING_MODELS[0])
+            logger.info("[System] [Warmup] 임베딩 모델 예열 완료")
 
 
 if __name__ == "__main__":

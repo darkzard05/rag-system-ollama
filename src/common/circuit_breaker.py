@@ -4,11 +4,12 @@
 """
 
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
 from threading import RLock
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -37,7 +38,7 @@ class CircuitBreakerMetrics:
     successful_requests: int = 0
     failed_requests: int = 0
     rejected_requests: int = 0
-    state_changes: List[str] = field(default_factory=list)
+    state_changes: list[str] = field(default_factory=list)
 
     @property
     def failure_rate(self) -> float:
@@ -90,7 +91,7 @@ class CircuitBreaker:
         self.state = CircuitBreakerState.CLOSED
         self.failure_count = 0
         self.success_count = 0
-        self.last_failure_time: Optional[datetime] = None
+        self.last_failure_time: datetime | None = None
         self.last_state_change_time = datetime.now()
 
         self.metrics = CircuitBreakerMetrics()
@@ -251,7 +252,7 @@ class CircuitBreaker:
         with self.lock:
             return self.state.value
 
-    def get_metrics(self) -> Dict[str, Any]:
+    def get_metrics(self) -> dict[str, Any]:
         """메트릭 조회"""
         with self.lock:
             return {
@@ -290,12 +291,12 @@ class CircuitBreakerRegistry:
     """
 
     def __init__(self):
-        self.global_breakers: Dict[str, CircuitBreaker] = {}
-        self.session_breakers: Dict[str, Dict[str, CircuitBreaker]] = {}
+        self.global_breakers: dict[str, CircuitBreaker] = {}
+        self.session_breakers: dict[str, dict[str, CircuitBreaker]] = {}
         self.lock = RLock()
 
     def get_breaker(
-        self, service_name: str, session_id: Optional[str] = None, **kwargs
+        self, service_name: str, session_id: str | None = None, **kwargs
     ) -> CircuitBreaker:
         """
         서킷 브레이커 획득
@@ -326,7 +327,7 @@ class CircuitBreakerRegistry:
             if session_id in self.session_breakers:
                 del self.session_breakers[session_id]
 
-    def get_all_metrics(self) -> Dict[str, Dict[str, Any]]:
+    def get_all_metrics(self) -> dict[str, dict[str, Any]]:
         """모든 서킷 브레이커의 메트릭 조회"""
         with self.lock:
             metrics = {
@@ -347,7 +348,7 @@ class CircuitBreakerRegistry:
 
 # 전역 레지스트리
 
-_circuit_breaker_registry: Optional[CircuitBreakerRegistry] = None
+_circuit_breaker_registry: CircuitBreakerRegistry | None = None
 
 
 def get_circuit_breaker_registry() -> CircuitBreakerRegistry:

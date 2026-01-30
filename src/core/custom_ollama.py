@@ -1,10 +1,11 @@
 import logging
-from typing import Any, AsyncIterator, List, Optional
+from collections.abc import AsyncIterator
+from typing import Any
 
-from langchain_ollama import ChatOllama
+import ollama
 from langchain_core.messages import AIMessageChunk, BaseMessage
 from langchain_core.outputs import ChatGenerationChunk
-import ollama
+from langchain_ollama import ChatOllama
 
 logger = logging.getLogger(__name__)
 
@@ -15,7 +16,7 @@ class DeepThinkingChatOllama(ChatOllama):
     Ollama API 응답의 message.thinking 데이터를 캡처하여 additional_kwargs에 저장합니다.
     """
 
-    _async_client: Optional[ollama.AsyncClient] = None
+    _async_client: ollama.AsyncClient | None = None
 
     @property
     def async_client(self) -> ollama.AsyncClient:
@@ -26,9 +27,9 @@ class DeepThinkingChatOllama(ChatOllama):
 
     async def _astream(
         self,
-        messages: List[BaseMessage],
-        stop: Optional[List[str]] = None,
-        run_manager: Optional[Any] = None,
+        messages: list[BaseMessage],
+        stop: list[str] | None = None,
+        run_manager: Any | None = None,
         **kwargs: Any,
     ) -> AsyncIterator[ChatGenerationChunk]:
         """

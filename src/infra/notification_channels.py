@@ -5,11 +5,12 @@ Task 21-3: Notification Channels Module
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Any
-from email.mime.text import MIMEText
-from email.mime.multipart import MIMEMultipart
 from datetime import datetime
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
 from threading import RLock
+from typing import Any
+
 import requests
 
 
@@ -20,8 +21,8 @@ class EmailTemplate:
     name: str
     subject: str
     html_body: str
-    text_body: Optional[str] = None
-    variables: List[str] = field(default_factory=list)
+    text_body: str | None = None
+    variables: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -67,7 +68,7 @@ class NotificationChannel(ABC):
             self._failed_count += 1
             self._message_count += 1
 
-    def get_stats(self) -> Dict[str, Any]:
+    def get_stats(self) -> dict[str, Any]:
         """통계"""
         with self._lock:
             return {
@@ -92,7 +93,7 @@ class EmailChannel(NotificationChannel):
         username: str = "",
         password: str = "",
         from_address: str = "",
-        config: Optional[ChannelConfig] = None,
+        config: ChannelConfig | None = None,
     ):
         super().__init__(config or ChannelConfig())
         self.smtp_server = smtp_server
@@ -100,7 +101,7 @@ class EmailChannel(NotificationChannel):
         self.username = username
         self.password = password
         self.from_address = from_address
-        self._templates: Dict[str, EmailTemplate] = {}
+        self._templates: dict[str, EmailTemplate] = {}
 
         # 기본 템플릿
         self._register_default_templates()
@@ -153,7 +154,7 @@ class EmailChannel(NotificationChannel):
             self.record_failed()
             return False
 
-    def _get_email_recipients(self, notification: Any) -> List[str]:
+    def _get_email_recipients(self, notification: Any) -> list[str]:
         """이메일 수신자 조회"""
         recipients = []
 
@@ -218,7 +219,7 @@ class SlackChannel(NotificationChannel):
     """Slack 채널"""
 
     def __init__(
-        self, webhook_urls: Dict[str, str], config: Optional[ChannelConfig] = None
+        self, webhook_urls: dict[str, str], config: ChannelConfig | None = None
     ):
         super().__init__(config or ChannelConfig())
         self.webhook_urls = webhook_urls
@@ -260,7 +261,7 @@ class SlackChannel(NotificationChannel):
             self.record_failed()
             return False
 
-    def _build_payload(self, notification: Any) -> Dict[str, Any]:
+    def _build_payload(self, notification: Any) -> dict[str, Any]:
         """Slack 페이로드 구성"""
         # 우선순위별 색상
         priority_colors = {
@@ -308,7 +309,7 @@ class SlackChannel(NotificationChannel):
 class WebhookChannel(NotificationChannel):
     """웹훅 채널"""
 
-    def __init__(self, webhook_urls: List[str], config: Optional[ChannelConfig] = None):
+    def __init__(self, webhook_urls: list[str], config: ChannelConfig | None = None):
         super().__init__(config or ChannelConfig())
         self.webhook_urls = webhook_urls
 
@@ -356,7 +357,7 @@ class WebhookChannel(NotificationChannel):
             self.record_failed()
             return False
 
-    def _build_payload(self, notification: Any) -> Dict[str, Any]:
+    def _build_payload(self, notification: Any) -> dict[str, Any]:
         """웹훅 페이로드 구성"""
         payload = {
             "notification_id": getattr(notification, "notification_id", ""),
@@ -395,11 +396,11 @@ class ChannelFactory:
         )
 
     @staticmethod
-    def create_slack_channel(webhook_urls: Dict[str, str]) -> SlackChannel:
+    def create_slack_channel(webhook_urls: dict[str, str]) -> SlackChannel:
         """Slack 채널 생성"""
         return SlackChannel(webhook_urls)
 
     @staticmethod
-    def create_webhook_channel(webhook_urls: List[str]) -> WebhookChannel:
+    def create_webhook_channel(webhook_urls: list[str]) -> WebhookChannel:
         """웹훅 채널 생성"""
         return WebhookChannel(webhook_urls)

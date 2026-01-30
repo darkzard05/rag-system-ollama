@@ -2,17 +2,17 @@
 Deployment Manager for RAG System Deployment and Versioning
 """
 
+import hashlib
 import json
-import time
 import logging
 import shutil
-from dataclasses import dataclass, field, asdict
-from typing import Dict, List, Optional, Any
+import time
+from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from enum import Enum
 from pathlib import Path
 from threading import RLock
-import hashlib
+from typing import Any
 
 
 class DeploymentStatus(Enum):
@@ -46,9 +46,9 @@ class DeploymentConfig:
     rollback_on_failure: bool = True
     max_concurrent_deployments: int = 3
     deployment_timeout: int = 300  # seconds
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    metadata: dict[str, Any] = field(default_factory=dict)
 
-    def to_dict(self) -> Dict:
+    def to_dict(self) -> dict:
         """Convert to dictionary"""
         data = asdict(self)
         data["environment"] = self.environment.value
@@ -67,12 +67,12 @@ class DeploymentRecord:
     timestamp: float
     duration: float = 0.0
     checksum: str = ""
-    previous_version: Optional[str] = None
-    error_message: Optional[str] = None
+    previous_version: str | None = None
+    error_message: str | None = None
     deployed_by: str = "system"
-    artifacts_hash: Dict[str, str] = field(default_factory=dict)
+    artifacts_hash: dict[str, str] = field(default_factory=dict)
 
-    def to_dict(self) -> Dict:
+    def to_dict(self) -> dict:
         """Convert to dictionary"""
         return asdict(self)
 
@@ -84,11 +84,11 @@ class HealthCheckResult:
     service_name: str
     status: bool
     timestamp: float
-    checks: Dict[str, bool] = field(default_factory=dict)
-    error_details: Optional[str] = None
+    checks: dict[str, bool] = field(default_factory=dict)
+    error_details: str | None = None
     response_time_ms: float = 0.0
 
-    def to_dict(self) -> Dict:
+    def to_dict(self) -> dict:
         """Convert to dictionary"""
         return asdict(self)
 
@@ -106,10 +106,10 @@ class DeploymentManager:
         self.deployment_root = Path(deployment_root)
         self.deployment_root.mkdir(parents=True, exist_ok=True)
 
-        self.deployments: Dict[str, DeploymentRecord] = {}
-        self.deployment_history: List[DeploymentRecord] = []
-        self.active_deployments: Dict[str, DeploymentConfig] = {}
-        self.health_checks: Dict[str, List[HealthCheckResult]] = {}
+        self.deployments: dict[str, DeploymentRecord] = {}
+        self.deployment_history: list[DeploymentRecord] = []
+        self.active_deployments: dict[str, DeploymentConfig] = {}
+        self.health_checks: dict[str, list[HealthCheckResult]] = {}
 
         self._lock = RLock()
         self.logger = logging.getLogger(__name__)
@@ -286,7 +286,7 @@ class DeploymentManager:
             return count
 
     def health_check(
-        self, deployment_id: str, checks: Optional[Dict[str, bool]] = None
+        self, deployment_id: str, checks: dict[str, bool] | None = None
     ) -> HealthCheckResult:
         """
         Perform health check on deployment
@@ -411,7 +411,7 @@ class DeploymentManager:
 
             return True
 
-    def get_deployment_status(self, deployment_id: str) -> Dict[str, Any]:
+    def get_deployment_status(self, deployment_id: str) -> dict[str, Any]:
         """
         Get deployment status
 
@@ -445,8 +445,8 @@ class DeploymentManager:
             }
 
     def get_deployment_history(
-        self, service_name: Optional[str] = None, limit: int = 10
-    ) -> List[Dict[str, Any]]:
+        self, service_name: str | None = None, limit: int = 10
+    ) -> list[dict[str, Any]]:
         """
         Get deployment history
 
@@ -466,7 +466,7 @@ class DeploymentManager:
             # Return most recent
             return [r.to_dict() for r in history[-limit:]]
 
-    def get_active_deployments(self) -> List[Dict[str, Any]]:
+    def get_active_deployments(self) -> list[dict[str, Any]]:
         """
         Get active deployments
 
@@ -503,7 +503,7 @@ class DeploymentManager:
             history_file = self.deployment_root / "deployment_history.json"
 
             if history_file.exists():
-                with open(history_file, "r") as f:
+                with open(history_file) as f:
                     history_data = json.load(f)
 
                 for record_data in history_data:
@@ -513,7 +513,7 @@ class DeploymentManager:
         except Exception as e:
             self.logger.error(f"Failed to load deployment history: {str(e)}")
 
-    def get_deployment_statistics(self) -> Dict[str, Any]:
+    def get_deployment_statistics(self) -> dict[str, Any]:
         """
         Get deployment statistics
 
@@ -566,3 +566,61 @@ class DeploymentManager:
                 "active_deployments": len(self.active_deployments),
                 "services": services,
             }
+
+    def cleanup_orphaned_artifacts(
+        self, max_age_hours: int = 24, target_dir: Path | None = None
+    ) -> int:
+        """
+        [리소스 정리] 생성된 지 오래된 고스트 디렉토리나 임시 파일을 정리합니다.
+
+        Args:
+            max_age_hours: 삭제 기준 시간 (시간 단위)
+            target_dir: 정리할 대상 디렉토리 (None이면 deployment_root 사용)
+
+        Returns:
+            삭제된 항목 수
+        """
+        with self._lock:
+            count = 0
+            now = time.time()
+            max_age_seconds = max_age_hours * 3600
+
+            root = target_dir if target_dir is not None else self.deployment_root
+
+            if not root.exists():
+                return 0
+
+            for item in root.iterdir():
+                # 활성 배포 중인 폴더는 제외 (target_dir이 deployment_root일 때만 유효)
+                if target_dir is None and item.name in self.active_deployments:
+                    continue
+
+                # 폴더 또는 파일의 수정 시간 확인
+                mtime = item.stat().st_mtime
+                if (now - mtime) > max_age_seconds:
+                    try:
+                        if item.is_dir():
+                            shutil.rmtree(item)
+                        else:
+                            item.unlink()
+                        count += 1
+                        self.logger.info(f"Cleaned up orphaned artifact: {item.name}")
+                    except Exception as e:
+                        self.logger.error(f"Failed to cleanup {item.name}: {e}")
+
+            return count
+
+
+# [추가] 전역 싱글톤 인스턴스 관리
+_deployment_manager_instance = None
+_instance_lock = RLock()
+
+
+def get_deployment_manager() -> "DeploymentManager":
+    """DeploymentManager의 전역 싱글톤 인스턴스를 반환합니다."""
+    global _deployment_manager_instance
+    if _deployment_manager_instance is None:
+        with _instance_lock:
+            if _deployment_manager_instance is None:
+                _deployment_manager_instance = DeploymentManager()
+    return _deployment_manager_instance

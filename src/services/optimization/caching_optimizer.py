@@ -9,13 +9,14 @@ import logging
 import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import Any, Dict, Optional, Generic, TypeVar
 from threading import RLock
+from typing import Any, Generic, TypeVar
+
 import numpy as np
 
 from services.monitoring.performance_monitor import (
-    get_performance_monitor,
     OperationType,
+    get_performance_monitor,
 )
 
 logger = logging.getLogger(__name__)
@@ -35,7 +36,7 @@ class CacheEntry:
     accessed_at: float
     ttl_seconds: float
     hit_count: int = 0
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    metadata: dict[str, Any] = field(default_factory=dict)
 
     def is_expired(self) -> bool:
         """TTL 만료 여부 확인"""
@@ -80,7 +81,7 @@ class CacheBackend(ABC, Generic[T]):
     """캐시 백엔드 추상 클래스"""
 
     @abstractmethod
-    async def get(self, key: str) -> Optional[T]:
+    async def get(self, key: str) -> T | None:
         """값 조회"""
         pass
 
@@ -125,11 +126,11 @@ class MemoryCache(CacheBackend[T]):
         self.max_size = max_size
         self.max_memory_mb = max_memory_mb
         self.default_ttl = ttl_seconds
-        self.cache: Dict[str, CacheEntry] = {}
+        self.cache: dict[str, CacheEntry] = {}
         self.lock = RLock()
         self.stats = CacheStatistics()
 
-    async def get(self, key: str) -> Optional[T]:
+    async def get(self, key: str) -> T | None:
         """값 조회"""
         with self.lock:
             entry = self.cache.get(key)
@@ -265,8 +266,8 @@ class SemanticCache(CacheBackend[T]):
         self.similarity_threshold = similarity_threshold
         self.max_entries = max_entries
         self.default_ttl = ttl_seconds
-        self.embeddings: Dict[str, np.ndarray] = {}
-        self.cache: Dict[str, CacheEntry] = {}
+        self.embeddings: dict[str, np.ndarray] = {}
+        self.cache: dict[str, CacheEntry] = {}
         self.lock = RLock()
         self.stats = CacheStatistics()
 
@@ -276,8 +277,8 @@ class SemanticCache(CacheBackend[T]):
         return len(self.cache)
 
     async def get(
-        self, query: str, similarity_threshold: Optional[float] = None
-    ) -> Optional[T]:
+        self, query: str, similarity_threshold: float | None = None
+    ) -> T | None:
         """
         의미적으로 유사한 항목 조회
 
@@ -459,8 +460,8 @@ class CacheManager:
         self.enable_memory_cache = enable_memory_cache
         self.enable_semantic_cache = enable_semantic_cache
 
-        self.memory_cache: Optional[MemoryCache] = None
-        self.semantic_cache: Optional[SemanticCache] = None
+        self.memory_cache: MemoryCache | None = None
+        self.semantic_cache: SemanticCache | None = None
 
         if enable_memory_cache:
             self.memory_cache = MemoryCache(max_size=memory_cache_size)
@@ -472,7 +473,7 @@ class CacheManager:
 
         self.lock = RLock()
 
-    async def get(self, key: str, use_semantic: bool = False) -> Optional[Any]:
+    async def get(self, key: str, use_semantic: bool = False) -> Any | None:
         """값 조회"""
         with monitor.track_operation(
             OperationType.QUERY_PROCESSING,
@@ -531,7 +532,7 @@ class CacheManager:
             if self.semantic_cache:
                 await self.semantic_cache.clear()
 
-    def get_stats(self) -> Dict[str, CacheStatistics]:
+    def get_stats(self) -> dict[str, CacheStatistics]:
         """통합 통계"""
         stats = {}
 
@@ -560,7 +561,7 @@ class CacheManager:
 
 
 # 전역 캐시 관리자 인스턴스
-_cache_manager: Optional[CacheManager] = None
+_cache_manager: CacheManager | None = None
 
 
 def get_cache_manager(

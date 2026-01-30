@@ -5,7 +5,6 @@ CI/CD 파이프라인에서 문서 자동화에 사용됩니다.
 
 import json
 import sys
-import os
 from pathlib import Path
 
 # src 디렉토리를 경로에 추가
@@ -13,10 +12,12 @@ sys.path.append(str(Path(__file__).parent.parent / "src"))
 
 from api.api_server import app
 
+
 def export_openapi():
     """OpenAPI 스펙을 JSON 형식으로 표준 출력에 기록합니다."""
     openapi_schema = app.openapi()
     print(json.dumps(openapi_schema, indent=2, ensure_ascii=False))
+
 
 if __name__ == "__main__":
     export_openapi()

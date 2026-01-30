@@ -3,13 +3,13 @@ Task 20-3: Metrics Aggregation Module
 메트릭 집계 및 분석 - 시계열 분석, 이상 탐지, 알림
 """
 
+import statistics
+import time
+from collections import deque
 from dataclasses import dataclass
 from enum import Enum
-from typing import Dict, List, Optional, Any
-import time
 from threading import RLock
-from collections import deque
-import statistics
+from typing import Any
 
 
 class AnomalyType(Enum):
@@ -36,7 +36,7 @@ class AnomalyResult:
     """이상 탐지 결과"""
 
     is_anomaly: bool
-    anomaly_type: Optional[AnomalyType] = None
+    anomaly_type: AnomalyType | None = None
     confidence: float = 0.0
     expected_value: float = 0.0
     deviation: float = 0.0
@@ -109,7 +109,7 @@ class TimeSeriesAnalyzer:
 
         return stats
 
-    def _calculate_trend(self, values: List[float]) -> str:
+    def _calculate_trend(self, values: list[float]) -> str:
         """추세 계산"""
         if len(values) < 2:
             return "stable"
@@ -134,7 +134,7 @@ class TimeSeriesAnalyzer:
         else:
             return "stable"
 
-    def _calculate_volatility(self, values: List[float]) -> float:
+    def _calculate_volatility(self, values: list[float]) -> float:
         """변동성 계산"""
         if len(values) < 2:
             return 0.0
@@ -149,7 +149,7 @@ class TimeSeriesAnalyzer:
 
         return statistics.stdev(returns) if len(returns) > 1 else 0.0
 
-    def get_data(self, limit: Optional[int] = None) -> List[TimeSeriesPoint]:
+    def get_data(self, limit: int | None = None) -> list[TimeSeriesPoint]:
         """데이터 조회"""
         with self._lock:
             data = list(self._data)
@@ -174,7 +174,7 @@ class AnomalyDetector:
     def detect_anomaly(
         self,
         current_value: float,
-        historical_values: List[float],
+        historical_values: list[float],
         method: str = "zscore",
     ) -> AnomalyResult:
         """이상 탐지"""
@@ -191,7 +191,7 @@ class AnomalyDetector:
             return AnomalyResult(is_anomaly=False)
 
     def _detect_zscore(
-        self, current_value: float, historical_values: List[float]
+        self, current_value: float, historical_values: list[float]
     ) -> AnomalyResult:
         """Z-score 방법"""
         if len(historical_values) < 2:
@@ -227,7 +227,7 @@ class AnomalyDetector:
         )
 
     def _detect_iqr(
-        self, current_value: float, historical_values: List[float]
+        self, current_value: float, historical_values: list[float]
     ) -> AnomalyResult:
         """Interquartile Range 방법"""
         if len(historical_values) < 4:
@@ -263,7 +263,7 @@ class AnomalyDetector:
         )
 
     def _detect_mad(
-        self, current_value: float, historical_values: List[float]
+        self, current_value: float, historical_values: list[float]
     ) -> AnomalyResult:
         """Median Absolute Deviation 방법"""
         if not historical_values:
@@ -304,7 +304,7 @@ class AlertManager:
 
     def __init__(self):
         self._alerts: deque = deque(maxlen=1000)
-        self._alert_rules: Dict[str, Dict[str, Any]] = {}
+        self._alert_rules: dict[str, dict[str, Any]] = {}
         self._lock = RLock()
 
     def register_alert_rule(
@@ -328,7 +328,7 @@ class AlertManager:
 
     def check_alert_rules(
         self, metric_name: str, current_value: float
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """알림 규칙 확인"""
         triggered_alerts = []
 
@@ -377,12 +377,12 @@ class AlertManager:
         else:
             return False
 
-    def get_alerts(self, limit: int = 100) -> List[Dict[str, Any]]:
+    def get_alerts(self, limit: int = 100) -> list[dict[str, Any]]:
         """알림 조회"""
         with self._lock:
             return list(self._alerts)[-limit:]
 
-    def get_alert_summary(self) -> Dict[str, Any]:
+    def get_alert_summary(self) -> dict[str, Any]:
         """알림 요약"""
         with self._lock:
             alerts = list(self._alerts)
@@ -413,13 +413,13 @@ class MetricsAggregator:
             num_nodes: 노드 개수
         """
         self.num_nodes = num_nodes
-        self._time_series_analyzers: Dict[str, TimeSeriesAnalyzer] = {
+        self._time_series_analyzers: dict[str, TimeSeriesAnalyzer] = {
             f"node_{i}": TimeSeriesAnalyzer() for i in range(num_nodes)
         }
-        self._anomaly_detectors: Dict[str, AnomalyDetector] = {
+        self._anomaly_detectors: dict[str, AnomalyDetector] = {
             f"node_{i}": AnomalyDetector() for i in range(num_nodes)
         }
-        self._alert_managers: Dict[str, AlertManager] = {
+        self._alert_managers: dict[str, AlertManager] = {
             f"node_{i}": AlertManager() for i in range(num_nodes)
         }
         self._lock = RLock()
@@ -429,7 +429,7 @@ class MetricsAggregator:
         if node_id in self._time_series_analyzers:
             self._time_series_analyzers[node_id].add_point(time.time(), value, label)
 
-    def get_time_series_stats(self, node_id: str) -> Optional[TimeSeriesStats]:
+    def get_time_series_stats(self, node_id: str) -> TimeSeriesStats | None:
         """시계열 통계"""
         if node_id in self._time_series_analyzers:
             return self._time_series_analyzers[node_id].get_stats()
@@ -467,7 +467,7 @@ class MetricsAggregator:
 
     def check_alerts(
         self, node_id: str, metric_name: str, current_value: float
-    ) -> List[Dict]:
+    ) -> list[dict]:
         """알림 확인"""
         if node_id in self._alert_managers:
             return self._alert_managers[node_id].check_alert_rules(
@@ -475,7 +475,7 @@ class MetricsAggregator:
             )
         return []
 
-    def get_cluster_stats(self) -> Dict[str, Any]:
+    def get_cluster_stats(self) -> dict[str, Any]:
         """클러스터 통계"""
         stats = {}
 
@@ -494,7 +494,7 @@ class MetricsAggregator:
 
         return stats
 
-    def get_cluster_alerts(self) -> Dict[str, Dict]:
+    def get_cluster_alerts(self) -> dict[str, dict]:
         """클러스터 알림"""
         alerts = {}
 

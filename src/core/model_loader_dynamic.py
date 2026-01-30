@@ -4,11 +4,11 @@
 
 import asyncio
 import logging
+import time
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Dict, Optional, Set
 from threading import RLock
-import time
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -45,12 +45,12 @@ class ModelCache:
     def __init__(self, config: ModelCacheConfig):
         self.config = config
         self._lock = RLock()
-        self._cache: Dict[str, Any] = {}
-        self._load_times: Dict[str, float] = {}
-        self._access_times: Dict[str, float] = {}
-        self._access_counts: Dict[str, int] = {}
+        self._cache: dict[str, Any] = {}
+        self._load_times: dict[str, float] = {}
+        self._access_times: dict[str, float] = {}
+        self._access_counts: dict[str, int] = {}
 
-    def get(self, model_key: str) -> Optional[Any]:
+    def get(self, model_key: str) -> Any | None:
         """캐시에서 모델 조회."""
         with self._lock:
             if model_key not in self._cache:
@@ -141,7 +141,7 @@ class ModelCache:
             self._access_times.clear()
             self._access_counts.clear()
 
-    def get_stats(self) -> Dict[str, int]:
+    def get_stats(self) -> dict[str, int]:
         """캐시 통계."""
         with self._lock:
             return {
@@ -159,20 +159,20 @@ class DynamicModelLoader:
     def __init__(
         self,
         strategy: ModelLoadingStrategy = ModelLoadingStrategy.LAZY,
-        cache_config: Optional[ModelCacheConfig] = None,
+        cache_config: ModelCacheConfig | None = None,
     ):
         self.strategy = strategy
         self.cache_config = cache_config or ModelCacheConfig()
         self.cache = ModelCache(self.cache_config)
 
         self._lock = RLock()
-        self._loading: Set[str] = set()  # 로딩 중인 모델
-        self._loaded_models: Dict[str, Any] = {}  # 실제 로드된 모델
-        self._load_count: Dict[str, int] = {}  # 로드 횟수
+        self._loading: set[str] = set()  # 로딩 중인 모델
+        self._loaded_models: dict[str, Any] = {}  # 실제 로드된 모델
+        self._load_count: dict[str, int] = {}  # 로드 횟수
 
     async def load_model(
         self, model_key: str, timeout_seconds: float = 30.0
-    ) -> Optional[Any]:
+    ) -> Any | None:
         """모델 로드 (캐시 우선).
 
         Args:
@@ -225,7 +225,7 @@ class DynamicModelLoader:
 
     async def _load_model_async(
         self, model_key: str, timeout_seconds: float
-    ) -> Optional[Any]:
+    ) -> Any | None:
         """비동기 모델 로드 (구현 필요)."""
         # 이 부분은 실제 Ollama 통합 시 구현
         # 여기서는 시뮬레이션
@@ -242,7 +242,7 @@ class DynamicModelLoader:
         self.cache.remove(model_key)
         logger.info(f"모델 언로드: {model_key}")
 
-    def get_loaded_models(self) -> Dict[str, Any]:
+    def get_loaded_models(self) -> dict[str, Any]:
         """로드된 모든 모델 조회."""
         with self._lock:
             return dict(self._loaded_models)
@@ -265,7 +265,7 @@ class DynamicModelLoader:
         await asyncio.gather(*tasks, return_exceptions=True)
         logger.info(f"사전 로드 완료: {len(model_keys)}개 모델")
 
-    def get_cache_stats(self) -> Dict:
+    def get_cache_stats(self) -> dict:
         """캐시 통계."""
         return self.cache.get_stats()
 
@@ -281,12 +281,12 @@ class DynamicModelLoader:
 
 
 # 전역 인스턴스
-_loader_instance: Optional[DynamicModelLoader] = None
+_loader_instance: DynamicModelLoader | None = None
 
 
 def get_dynamic_model_loader(
     strategy: ModelLoadingStrategy = ModelLoadingStrategy.LAZY,
-    cache_config: Optional[ModelCacheConfig] = None,
+    cache_config: ModelCacheConfig | None = None,
 ) -> DynamicModelLoader:
     """전역 동적 모델 로더 조회."""
     global _loader_instance

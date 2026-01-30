@@ -2,13 +2,13 @@
 WebSocket Handler for Real-time Communication
 """
 
-import time
 import logging
-from dataclasses import dataclass, field, asdict
-from typing import Dict, List, Optional, Any
+import time
+from collections import deque
+from dataclasses import asdict, dataclass, field
 from enum import Enum
 from threading import RLock
-from collections import deque
+from typing import Any
 
 
 class MessageType(Enum):
@@ -27,11 +27,11 @@ class WSMessage:
     """WebSocket Message"""
 
     message_type: MessageType
-    data: Dict[str, Any]
+    data: dict[str, Any]
     timestamp: float = field(default_factory=time.time)
     client_id: str = ""
 
-    def to_dict(self) -> Dict:
+    def to_dict(self) -> dict:
         """Convert to dictionary"""
         return {
             "type": self.message_type.value,
@@ -48,11 +48,11 @@ class ClientConnection:
     client_id: str
     connected_at: float
     last_heartbeat: float
-    subscriptions: List[str] = field(default_factory=list)
+    subscriptions: list[str] = field(default_factory=list)
     authenticated: bool = False
-    user_id: Optional[str] = None
+    user_id: str | None = None
 
-    def to_dict(self) -> Dict:
+    def to_dict(self) -> dict:
         """Convert to dictionary"""
         return asdict(self)
 
@@ -67,10 +67,10 @@ class WebSocketManager:
         Args:
             max_message_queue: Maximum message queue size
         """
-        self.connections: Dict[str, ClientConnection] = {}
+        self.connections: dict[str, ClientConnection] = {}
         self.message_queue: deque = deque(maxlen=max_message_queue)
-        self.message_handlers: Dict[MessageType, callable] = {}
-        self.broadcast_channels: Dict[str, List[str]] = {}  # channel -> client_ids
+        self.message_handlers: dict[MessageType, callable] = {}
+        self.broadcast_channels: dict[str, list[str]] = {}  # channel -> client_ids
 
         self._lock = RLock()
         self.logger = logging.getLogger(__name__)
@@ -81,7 +81,7 @@ class WebSocketManager:
             self.message_handlers[message_type] = handler
             self.logger.info(f"Registered handler for {message_type.value}")
 
-    def client_connect(self, client_id: str) -> Dict[str, Any]:
+    def client_connect(self, client_id: str) -> dict[str, Any]:
         """
         Handle client connection
 
@@ -259,8 +259,8 @@ class WebSocketManager:
             return count
 
     def handle_message(
-        self, client_id: str, message_data: Dict[str, Any]
-    ) -> Dict[str, Any]:
+        self, client_id: str, message_data: dict[str, Any]
+    ) -> dict[str, Any]:
         """
         Handle incoming message
 
@@ -296,17 +296,17 @@ class WebSocketManager:
                 self.logger.error(f"Error handling message: {str(e)}")
                 return {"error": str(e)}
 
-    def get_connected_clients(self) -> List[Dict[str, Any]]:
+    def get_connected_clients(self) -> list[dict[str, Any]]:
         """Get list of connected clients"""
         with self._lock:
             return [c.to_dict() for c in self.connections.values()]
 
-    def get_channel_subscribers(self, channel: str) -> List[str]:
+    def get_channel_subscribers(self, channel: str) -> list[str]:
         """Get subscribers of channel"""
         with self._lock:
             return self.broadcast_channels.get(channel, [])
 
-    def get_client_info(self, client_id: str) -> Optional[Dict[str, Any]]:
+    def get_client_info(self, client_id: str) -> dict[str, Any] | None:
         """Get client information"""
         with self._lock:
             if client_id in self.connections:
@@ -340,7 +340,7 @@ class WebSocketManager:
 
             return len(disconnected)
 
-    def get_statistics(self) -> Dict[str, Any]:
+    def get_statistics(self) -> dict[str, Any]:
         """Get WebSocket statistics"""
         with self._lock:
             authenticated_count = sum(
@@ -373,7 +373,7 @@ class StreamingHandler:
         self.logger = logging.getLogger(__name__)
 
     def stream_search_results(
-        self, client_id: str, query: str, results: List[Dict]
+        self, client_id: str, query: str, results: list[dict]
     ) -> bool:
         """
         Stream search results to client
@@ -408,7 +408,7 @@ class StreamingHandler:
             return False
 
     def stream_monitoring_data(
-        self, channel: str, monitoring_data: Dict[str, Any]
+        self, channel: str, monitoring_data: dict[str, Any]
     ) -> int:
         """
         Stream monitoring data to subscribers
@@ -432,7 +432,7 @@ class StreamingHandler:
             self.logger.error(f"Error streaming monitoring data: {str(e)}")
             return 0
 
-    def send_notification(self, channel: str, notification: Dict[str, Any]) -> int:
+    def send_notification(self, channel: str, notification: dict[str, Any]) -> int:
         """
         Send notification to channel
 

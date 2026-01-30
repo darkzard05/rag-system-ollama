@@ -3,12 +3,13 @@ Task 20-2: Health Checking Module
 분산 시스템 건강도 체크 및 자동 복구
 """
 
+import random
+import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Dict, List, Optional, Any, Callable
-import time
 from threading import RLock, Thread
-import random
+from typing import Any
 
 
 class HealthStatus(Enum):
@@ -53,7 +54,7 @@ class HealthCheckResult:
     success: bool
     timestamp: float = field(default_factory=time.time)
     duration: float = 0.0
-    error_message: Optional[str] = None
+    error_message: str | None = None
     status: HealthStatus = HealthStatus.UNKNOWN
 
 
@@ -63,9 +64,9 @@ class NodeHealthReport:
 
     node_id: str
     overall_status: HealthStatus
-    check_results: List[HealthCheckResult] = field(default_factory=list)
+    check_results: list[HealthCheckResult] = field(default_factory=list)
     last_healthy_time: float = field(default_factory=time.time)
-    last_unhealthy_time: Optional[float] = None
+    last_unhealthy_time: float | None = None
     consecutive_failures: int = 0
     recovery_attempts: int = 0
     uptime: float = 0.0
@@ -75,8 +76,8 @@ class HealthCheckSuite:
     """건강 체크 스위트"""
 
     def __init__(self):
-        self._checks: Dict[str, HealthCheck] = {}
-        self._results: Dict[str, List[HealthCheckResult]] = {}
+        self._checks: dict[str, HealthCheck] = {}
+        self._results: dict[str, list[HealthCheckResult]] = {}
         self._lock = RLock()
 
     def register_check(self, health_check: HealthCheck):
@@ -85,7 +86,7 @@ class HealthCheckSuite:
             self._checks[health_check.check_id] = health_check
             self._results[health_check.check_id] = []
 
-    def execute_check(self, check_id: str) -> Optional[HealthCheckResult]:
+    def execute_check(self, check_id: str) -> HealthCheckResult | None:
         """건강 체크 실행"""
         with self._lock:
             if check_id not in self._checks:
@@ -127,7 +128,7 @@ class HealthCheckSuite:
 
         return result
 
-    def execute_all_checks(self) -> Dict[str, HealthCheckResult]:
+    def execute_all_checks(self) -> dict[str, HealthCheckResult]:
         """모든 건강 체크 실행"""
         results = {}
 
@@ -143,7 +144,7 @@ class HealthCheckSuite:
 
     def get_check_history(
         self, check_id: str, limit: int = 100
-    ) -> List[HealthCheckResult]:
+    ) -> list[HealthCheckResult]:
         """체크 이력 조회"""
         with self._lock:
             if check_id in self._results:
@@ -273,15 +274,15 @@ class ClusterHealthMonitor:
             num_nodes: 노드 개수
         """
         self.num_nodes = num_nodes
-        self._node_monitors: Dict[str, NodeHealthMonitor] = {
+        self._node_monitors: dict[str, NodeHealthMonitor] = {
             f"node_{i}": NodeHealthMonitor(f"node_{i}") for i in range(num_nodes)
         }
-        self._recovery_strategies: Dict[str, RecoveryStrategy] = {
+        self._recovery_strategies: dict[str, RecoveryStrategy] = {
             f"node_{i}": RecoveryStrategy.AUTO_RESTART for i in range(num_nodes)
         }
         self._lock = RLock()
 
-    def check_cluster_health(self) -> Dict[str, HealthStatus]:
+    def check_cluster_health(self) -> dict[str, HealthStatus]:
         """클러스터 전체 건강 상태"""
         statuses = {}
 
@@ -291,7 +292,7 @@ class ClusterHealthMonitor:
 
         return statuses
 
-    def get_cluster_report(self) -> Dict[str, Any]:
+    def get_cluster_report(self) -> dict[str, Any]:
         """클러스터 보고서"""
         health_statuses = self.check_cluster_health()
 

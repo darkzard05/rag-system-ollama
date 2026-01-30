@@ -3,19 +3,19 @@
 Utils Rebuild: 복잡한 데코레이터 제거 및 비동기 헬퍼 단순화.
 """
 
-import logging
 import asyncio
-import re
-import time
 import functools
 import html
+import logging
+import re
+import time
 
 logger = logging.getLogger(__name__)
 # ... (기존 변수 및 함수 유지)
 
 
 def normalize_latex_delimiters(text: str) -> str:
-    """
+    r"""
     LLM이 출력하는 다양한 LaTeX 수식 구분자를 Streamlit 표준($ 또는 $$)으로 변환합니다.
     - \( ... \) -> $ ... $ (인라인)
     - \[ ... \] -> $$ ... $$ (블록)
@@ -95,6 +95,7 @@ def apply_tooltips_to_response(response_text: str, documents: list) -> str:
 
             safe_text = html.escape(raw_text).replace("\n", "<br>")
 
+            # [복구] 클릭 기능을 제거하고 툴팁만 제공 (세션 초기화 방지)
             return (
                 f'<span class="tooltip">{display_text}'
                 f'<span class="tooltip-text">{safe_text}</span>'
@@ -143,12 +144,17 @@ def clean_query_text(query: str) -> str:
     return query.strip()
 
 
+import streamlit as st
+
+
+@st.cache_data(ttl=5)  # 5초 동안 리소스 정보 캐싱
 def get_ollama_resource_usage(model_name: str) -> str:
     """
     Ollama API를 통해 특정 모델의 리소스 사용 상태(GPU/CPU)를 조회합니다.
     """
     try:
         import requests
+
         from common.config import OLLAMA_BASE_URL
 
         # Ollama ps API 호출
@@ -182,10 +188,10 @@ def format_error_message(e: Exception) -> str:
     발생한 예외 객체를 분석하여 사용자에게 보여줄 친절한 메시지를 반환합니다.
     """
     from common.exceptions import (
+        EmbeddingModelError,
         EmptyPDFError,
         InsufficientChunksError,
         LLMInferenceError,
-        EmbeddingModelError,
     )
 
     err_type = type(e).__name__

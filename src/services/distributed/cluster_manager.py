@@ -3,11 +3,11 @@
 """
 
 import logging
+import time
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Dict, List, Optional
 from threading import RLock, Thread
-import time
+
 import psutil
 
 logger = logging.getLogger(__name__)
@@ -72,7 +72,7 @@ class HealthCheckConfig:
 class ClusterManager:
     """클러스터 관리자."""
 
-    def __init__(self, num_nodes: int = 1, config: Optional[HealthCheckConfig] = None):
+    def __init__(self, num_nodes: int = 1, config: HealthCheckConfig | None = None):
         """초기화.
 
         Args:
@@ -83,8 +83,8 @@ class ClusterManager:
         self.config = config or HealthCheckConfig()
 
         self._lock = RLock()
-        self._nodes: Dict[str, NodeMetrics] = {}
-        self._health_monitor_thread: Optional[Thread] = None
+        self._nodes: dict[str, NodeMetrics] = {}
+        self._health_monitor_thread: Thread | None = None
         self._stop_monitoring = False
 
         # 로컬 머신을 노드로 등록
@@ -156,17 +156,17 @@ class ClusterManager:
             except Exception as e:
                 logger.error(f"헬스 모니터링 오류: {e}")
 
-    def get_node_metrics(self, node_id: str) -> Optional[NodeMetrics]:
+    def get_node_metrics(self, node_id: str) -> NodeMetrics | None:
         """노드 메트릭 조회."""
         with self._lock:
             return self._nodes.get(node_id)
 
-    def get_all_nodes_metrics(self) -> Dict[str, NodeMetrics]:
+    def get_all_nodes_metrics(self) -> dict[str, NodeMetrics]:
         """모든 노드 메트릭."""
         with self._lock:
             return dict(self._nodes)
 
-    def get_healthy_nodes(self) -> List[str]:
+    def get_healthy_nodes(self) -> list[str]:
         """정상 노드 목록."""
         with self._lock:
             return [
@@ -175,7 +175,7 @@ class ClusterManager:
                 if node.status == NodeStatus.HEALTHY
             ]
 
-    def get_cluster_status(self) -> Dict:
+    def get_cluster_status(self) -> dict:
         """클러스터 상태."""
         with self._lock:
             nodes = self._nodes
@@ -225,7 +225,7 @@ class ClusterManager:
             node.completed_jobs += completed
             node.failed_jobs += failed
 
-    def get_node_load(self, node_id: str) -> Optional[float]:
+    def get_node_load(self, node_id: str) -> float | None:
         """노드 부하 (0.0 - 1.0)."""
         with self._lock:
             if node_id not in self._nodes:
@@ -237,7 +237,7 @@ class ClusterManager:
             load = (node.cpu_percent + node.memory_percent) / 200.0
             return min(load, 1.0)
 
-    def select_best_node(self) -> Optional[str]:
+    def select_best_node(self) -> str | None:
         """가장 부하가 낮은 노드 선택."""
         with self._lock:
             healthy_nodes = {
@@ -257,7 +257,7 @@ class ClusterManager:
 
             return best_node[0]
 
-    def get_nodes_sorted_by_load(self) -> List[str]:
+    def get_nodes_sorted_by_load(self) -> list[str]:
         """노드를 부하 순서로 정렬."""
         with self._lock:
             sorted_nodes = sorted(
@@ -288,7 +288,7 @@ class NodeMonitor:
             self._metrics.update()
             return self._metrics
 
-    def get_summary(self) -> Dict:
+    def get_summary(self) -> dict:
         """요약 정보."""
         with self._lock:
             return {
@@ -305,7 +305,7 @@ class ResourceTracker:
 
     def __init__(self):
         self._lock = RLock()
-        self._resource_history: Dict[str, List[Dict]] = {}
+        self._resource_history: dict[str, list[dict]] = {}
         self._max_history_size = 1000
 
     def record_resource_usage(self, node_id: str, metrics: NodeMetrics):
@@ -332,13 +332,13 @@ class ResourceTracker:
         self,
         node_id: str,
         limit: int = 100,
-    ) -> List[Dict]:
+    ) -> list[dict]:
         """리소스 사용 이력 조회."""
         with self._lock:
             history = self._resource_history.get(node_id, [])
             return history[-limit:]
 
-    def get_peak_usage(self, node_id: str) -> Optional[Dict]:
+    def get_peak_usage(self, node_id: str) -> dict | None:
         """최고 사용량."""
         with self._lock:
             history = self._resource_history.get(node_id, [])
@@ -354,7 +354,7 @@ class ResourceTracker:
                 "peak_memory_percent": peak_memory,
             }
 
-    def get_average_usage(self, node_id: str) -> Optional[Dict]:
+    def get_average_usage(self, node_id: str) -> dict | None:
         """평균 사용량."""
         with self._lock:
             history = self._resource_history.get(node_id, [])

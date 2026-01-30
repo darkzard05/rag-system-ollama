@@ -8,7 +8,8 @@
 
 import logging
 import re
-from typing import List, Any, TYPE_CHECKING, Tuple
+from typing import TYPE_CHECKING, Any
+
 import numpy as np
 from langchain_core.documents import Document
 
@@ -63,7 +64,7 @@ class EmbeddingBasedSemanticChunker:
         # ✅ 정규식 사전 컴파일 (성능 최적화)
         self._sentence_pattern = re.compile(self.sentence_split_regex)
 
-    def _split_sentences(self, text: str) -> List[dict]:
+    def _split_sentences(self, text: str) -> list[dict]:
         """
         문장 단위로 텍스트를 분할하고 오프셋 정보를 함께 반환합니다.
         Returns:
@@ -154,7 +155,7 @@ class EmbeddingBasedSemanticChunker:
 
         return final_sentences
 
-    def _get_embeddings(self, texts: List[str]) -> np.ndarray:
+    def _get_embeddings(self, texts: list[str]) -> np.ndarray:
         """
         텍스트 리스트의 임베딩을 생성합니다 (배치 처리).
         """
@@ -168,7 +169,7 @@ class EmbeddingBasedSemanticChunker:
             logger.error(f"임베딩 생성 중 오류 발생: {e}")
             raise
 
-    def _calculate_similarities(self, embeddings: np.ndarray) -> List[float]:
+    def _calculate_similarities(self, embeddings: np.ndarray) -> list[float]:
         """
         인접 문장 간의 코사인 유사도를 계산합니다.
         """
@@ -187,7 +188,7 @@ class EmbeddingBasedSemanticChunker:
 
         return similarities.tolist()
 
-    def _find_breakpoints(self, similarities: List[float]) -> List[int]:
+    def _find_breakpoints(self, similarities: list[float]) -> list[int]:
         """
         유사도 분포를 분석하여 분할 지점(breakpoints)을 찾습니다.
         """
@@ -217,7 +218,7 @@ class EmbeddingBasedSemanticChunker:
 
         return breakpoints
 
-    def _optimize_chunk_sizes(self, chunks: List[dict]) -> List[dict]:
+    def _optimize_chunk_sizes(self, chunks: list[dict]) -> list[dict]:
         """
         생성된 청크들의 크기를 검사하여 병합하며, 벡터도 가중 평균으로 계산합니다.
         """
@@ -262,7 +263,7 @@ class EmbeddingBasedSemanticChunker:
 
         return optimized
 
-    def split_text(self, text: str) -> List[dict]:
+    def split_text(self, text: str) -> list[dict]:
         """
         텍스트를 의미론적으로 분할합니다.
         Returns:
@@ -295,7 +296,7 @@ class EmbeddingBasedSemanticChunker:
             if sentences:
                 sentence_texts = [s["text"] for s in sentences]
                 embeddings = self._get_embeddings(sentence_texts)
-                for s, v in zip(sentences, embeddings):
+                for s, v in zip(sentences, embeddings, strict=False):
                     s["vector"] = v
             return sentences
 
@@ -357,8 +358,8 @@ class EmbeddingBasedSemanticChunker:
         return self._optimize_chunk_sizes(chunks)
 
     def split_documents(
-        self, docs: List["Document"]
-    ) -> Tuple[List["Document"], List[np.ndarray]]:
+        self, docs: list["Document"]
+    ) -> tuple[list["Document"], list[np.ndarray]]:
         """
         LangChain Document 객체 리스트를 받아 의미론적 분할을 수행합니다.
         문서들을 통합하여 문맥을 유지하되, 오프셋 매핑을 통해

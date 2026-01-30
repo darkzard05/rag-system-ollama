@@ -5,10 +5,11 @@
 
 import asyncio
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from enum import Enum
-from typing import Any, Callable, Dict, List, Optional, Type, TypeVar
 from datetime import datetime, timedelta
+from enum import Enum
+from typing import Any, TypeVar
 
 logger = logging.getLogger(__name__)
 T = TypeVar("T")
@@ -33,7 +34,7 @@ class RetryConfig:
     exponential_base: float = 2.0
     strategy: RetryStrategy = RetryStrategy.EXPONENTIAL_BACKOFF
     jitter: bool = True  # 지터 추가 (동시 재시도 방지)
-    retryable_exceptions: List[Type[Exception]] = field(
+    retryable_exceptions: list[type[Exception]] = field(
         default_factory=lambda: [
             ConnectionError,
             TimeoutError,
@@ -179,7 +180,7 @@ class TimeoutManager:
         self.default_timeout = default_timeout
 
     async def execute_with_timeout(
-        self, func: Callable, timeout: Optional[float] = None, *args, **kwargs
+        self, func: Callable, timeout: float | None = None, *args, **kwargs
     ) -> Any:
         """
         타임아웃이 적용된 함수 실행
@@ -230,7 +231,7 @@ class AdaptiveTimeout:
         self.initial_timeout = initial_timeout
         self.min_timeout = min_timeout
         self.percentile = percentile  # p95 사용
-        self.execution_times: List[float] = []
+        self.execution_times: list[float] = []
         self.max_history = 100
 
     def record_execution_time(self, duration: float) -> None:
@@ -272,9 +273,9 @@ class ErrorContext:
     error_message: str
     timestamp: datetime = field(default_factory=datetime.now)
     attempt: int = 0
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    metadata: dict[str, Any] = field(default_factory=dict)
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """딕셔너리로 변환"""
         return {
             "error_type": self.error_type,
@@ -293,8 +294,8 @@ class ErrorRecoveryChain:
     """
 
     def __init__(self):
-        self.strategies: List[Callable] = []
-        self.error_history: List[ErrorContext] = []
+        self.strategies: list[Callable] = []
+        self.error_history: list[ErrorContext] = []
 
     def add_recovery_strategy(self, strategy: Callable) -> None:
         """복구 전략 추가"""
@@ -357,7 +358,7 @@ class ErrorRecoveryChain:
             logger.error("[ErrorRecovery] 모든 복구 전략 실패")
             raise
 
-    def get_error_history(self, hours: int = 1) -> List[ErrorContext]:
+    def get_error_history(self, hours: int = 1) -> list[ErrorContext]:
         """에러 히스토리 조회"""
         cutoff_time = datetime.now() - timedelta(hours=hours)
         return [ctx for ctx in self.error_history if ctx.timestamp > cutoff_time]
@@ -389,11 +390,11 @@ class CircuitBreakerOpen(Exception):
 
 # 전역 재시도 정책
 
-_default_retry_policy: Optional[RetryPolicy] = None
-_default_timeout_manager: Optional[TimeoutManager] = None
+_default_retry_policy: RetryPolicy | None = None
+_default_timeout_manager: TimeoutManager | None = None
 
 
-def get_retry_policy(config: Optional[RetryConfig] = None) -> RetryPolicy:
+def get_retry_policy(config: RetryConfig | None = None) -> RetryPolicy:
     """기본 재시도 정책 반환"""
     global _default_retry_policy
     if _default_retry_policy is None:

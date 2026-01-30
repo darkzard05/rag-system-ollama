@@ -2,14 +2,14 @@
 Advanced Performance Monitoring System for RAG
 """
 
-import time
 import logging
-from dataclasses import dataclass, field, asdict
-from typing import Dict, List, Optional, Any
-from enum import Enum
-from collections import defaultdict
-from threading import RLock
 import statistics
+import time
+from collections import defaultdict
+from dataclasses import asdict, dataclass, field
+from enum import Enum
+from threading import RLock
+from typing import Any
 
 
 class BottleneckType(Enum):
@@ -38,9 +38,9 @@ class PerformanceMetric:
     unit: str
     timestamp: float
     component: str = ""
-    context: Dict[str, Any] = field(default_factory=dict)
+    context: dict[str, Any] = field(default_factory=dict)
 
-    def to_dict(self) -> Dict:
+    def to_dict(self) -> dict:
         """Convert to dictionary"""
         return asdict(self)
 
@@ -59,7 +59,7 @@ class BottleneckReport:
     recommendation: str
     detected_at: float
 
-    def to_dict(self) -> Dict:
+    def to_dict(self) -> dict:
         """Convert to dictionary"""
         data = asdict(self)
         data["bottleneck_type"] = self.bottleneck_type.value
@@ -71,10 +71,10 @@ class AdvancedPerformanceMonitor:
 
     def __init__(self):
         """Initialize advanced monitor"""
-        self.metrics: List[PerformanceMetric] = []
-        self.bottleneck_reports: List[BottleneckReport] = []
-        self.component_metrics: Dict[str, List[float]] = defaultdict(list)
-        self.health_history: List[tuple] = []
+        self.metrics: list[PerformanceMetric] = []
+        self.bottleneck_reports: list[BottleneckReport] = []
+        self.component_metrics: dict[str, list[float]] = defaultdict(list)
+        self.health_history: list[tuple] = []
 
         # Thresholds
         self.thresholds = {
@@ -94,7 +94,7 @@ class AdvancedPerformanceMonitor:
         value: float,
         unit: str,
         component: str = "",
-        context: Optional[Dict[str, Any]] = None,
+        context: dict[str, Any] | None = None,
     ) -> bool:
         """Record performance metric"""
         with self._lock:
@@ -160,7 +160,7 @@ class AdvancedPerformanceMonitor:
             f"Bottleneck detected: {metric_name} = {value} (threshold: {threshold})"
         )
 
-    def get_component_summary(self, component: str) -> Dict[str, Any]:
+    def get_component_summary(self, component: str) -> dict[str, Any]:
         """Get component performance summary"""
         with self._lock:
             if component not in self.component_metrics:
@@ -183,12 +183,12 @@ class AdvancedPerformanceMonitor:
                 "p99": values[int(len(values) * 0.99)],
             }
 
-    def get_bottleneck_report(self) -> List[Dict[str, Any]]:
+    def get_bottleneck_report(self) -> list[dict[str, Any]]:
         """Get bottleneck report"""
         with self._lock:
             return [b.to_dict() for b in self.bottleneck_reports[-50:]]
 
-    def get_system_health(self) -> Dict[str, Any]:
+    def get_system_health(self) -> dict[str, Any]:
         """Get overall system health assessment"""
         with self._lock:
             critical_count = sum(
@@ -213,7 +213,7 @@ class AdvancedPerformanceMonitor:
 
     def get_performance_trend(
         self, metric_name: str, minutes: int = 60
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Analyze performance trend"""
         with self._lock:
             cutoff_time = time.time() - (minutes * 60)

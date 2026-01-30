@@ -2,12 +2,11 @@
 임베딩 동기화 - 분산 환경에서의 일관성 유지.
 """
 
-import logging
 import hashlib
-from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Tuple
-from threading import RLock
+import logging
 import time
+from dataclasses import dataclass, field
+from threading import RLock
 
 logger = logging.getLogger(__name__)
 
@@ -36,17 +35,17 @@ class EmbeddingSynchronizer:
 
     def __init__(self):
         self._lock = RLock()
-        self._local_embeddings: Dict[str, List[List[float]]] = {}
-        self._remote_embeddings: Dict[str, Dict[str, List[List[float]]]] = {}
-        self._checksums: Dict[str, EmbeddingChecksum] = {}
-        self._sync_status: Dict[str, Dict] = {}
+        self._local_embeddings: dict[str, list[list[float]]] = {}
+        self._remote_embeddings: dict[str, dict[str, list[list[float]]]] = {}
+        self._checksums: dict[str, EmbeddingChecksum] = {}
+        self._sync_status: dict[str, dict] = {}
 
     def register_local_embeddings(
         self,
         job_id: str,
-        embeddings: List[List[float]],
+        embeddings: list[list[float]],
         model_name: str,
-        texts: List[str],
+        texts: list[str],
     ) -> EmbeddingChecksum:
         """로컬 임베딩 등록.
 
@@ -88,7 +87,7 @@ class EmbeddingSynchronizer:
         self,
         job_id: str,
         node_id: str,
-        embeddings: List[List[float]],
+        embeddings: list[list[float]],
     ) -> bool:
         """원격 임베딩 등록.
 
@@ -121,10 +120,10 @@ class EmbeddingSynchronizer:
     def verify_consistency(
         self,
         job_id: str,
-        embeddings: List[List[float]],
+        embeddings: list[list[float]],
         model_name: str,
-        texts: List[str],
-    ) -> Tuple[bool, Optional[str]]:
+        texts: list[str],
+    ) -> tuple[bool, str | None]:
         """임베딩 일관성 검증.
 
         Args:
@@ -176,7 +175,7 @@ class EmbeddingSynchronizer:
         self,
         job_id: str,
         resolution_strategy: str = "average",
-    ) -> Optional[List[List[float]]]:
+    ) -> list[list[float]] | None:
         """여러 노드의 임베딩 동기화.
 
         Args:
@@ -214,9 +213,9 @@ class EmbeddingSynchronizer:
 
     def _merge_by_average(
         self,
-        local: List[List[float]],
-        remote_dict: Dict[str, List[List[float]]],
-    ) -> List[List[float]]:
+        local: list[list[float]],
+        remote_dict: dict[str, list[list[float]]],
+    ) -> list[list[float]]:
         """평균을 이용한 병합."""
         all_embeddings = [local] + list(remote_dict.values())
 
@@ -244,9 +243,9 @@ class EmbeddingSynchronizer:
 
     def _merge_by_majority(
         self,
-        local: List[List[float]],
-        remote_dict: Dict[str, List[List[float]]],
-    ) -> List[List[float]]:
+        local: list[list[float]],
+        remote_dict: dict[str, list[list[float]]],
+    ) -> list[list[float]]:
         """다수결을 이용한 병합 (임베딩이 유사한 경우 우선)."""
         # 간단한 구현: 로컬 임베딩이 대부분 일치하면 로컬 사용
         all_embeddings = [local] + list(remote_dict.values())
@@ -269,8 +268,8 @@ class EmbeddingSynchronizer:
 
     def _calculate_similarity(
         self,
-        embeddings1: List[List[float]],
-        embeddings2: List[List[float]],
+        embeddings1: list[list[float]],
+        embeddings2: list[list[float]],
     ) -> float:
         """두 임베딩 집합의 유사도 (0-1)."""
         if len(embeddings1) != len(embeddings2):
@@ -280,9 +279,9 @@ class EmbeddingSynchronizer:
             return 1.0
 
         similarities = []
-        for v1, v2 in zip(embeddings1, embeddings2):
+        for v1, v2 in zip(embeddings1, embeddings2, strict=False):
             # 코사인 유사도
-            dot_product = sum(a * b for a, b in zip(v1, v2))
+            dot_product = sum(a * b for a, b in zip(v1, v2, strict=False))
             norm1 = sum(a**2 for a in v1) ** 0.5
             norm2 = sum(b**2 for b in v2) ** 0.5
 
@@ -292,12 +291,12 @@ class EmbeddingSynchronizer:
 
         return sum(similarities) / len(similarities) if similarities else 0.0
 
-    def get_sync_status(self, job_id: str) -> Optional[Dict]:
+    def get_sync_status(self, job_id: str) -> dict | None:
         """동기화 상태 조회."""
         with self._lock:
             return self._sync_status.get(job_id)
 
-    def get_all_sync_status(self) -> Dict[str, Dict]:
+    def get_all_sync_status(self) -> dict[str, dict]:
         """모든 동기화 상태."""
         with self._lock:
             return dict(self._sync_status)
@@ -313,7 +312,7 @@ class EmbeddingSynchronizer:
             logger.info(f"임베딩 정리: {job_id}")
 
     @staticmethod
-    def _hash_texts(texts: List[str]) -> str:
+    def _hash_texts(texts: list[str]) -> str:
         """텍스트 리스트의 해시."""
         content = "".join(texts)
         return hashlib.sha256(content.encode()).hexdigest()[:16]
@@ -324,7 +323,7 @@ class EmbeddingSynchronizer:
         return hashlib.sha256(s.encode()).hexdigest()[:16]
 
     @staticmethod
-    def _hash_embeddings(embeddings: List[List[float]]) -> str:
+    def _hash_embeddings(embeddings: list[list[float]]) -> str:
         """임베딩 데이터의 해시."""
         if not embeddings:
             return hashlib.sha256(b"").hexdigest()[:16]
@@ -339,15 +338,15 @@ class ConsistencyValidator:
 
     def __init__(self):
         self._lock = RLock()
-        self._validation_results: Dict[str, Dict] = {}
+        self._validation_results: dict[str, dict] = {}
 
     def validate_batch(
         self,
         job_id: str,
-        embeddings: List[List[float]],
+        embeddings: list[list[float]],
         expected_count: int,
         expected_dim: int,
-    ) -> Tuple[bool, List[str]]:
+    ) -> tuple[bool, list[str]]:
         """배치 유효성 검증.
 
         Returns:
@@ -385,7 +384,7 @@ class ConsistencyValidator:
 
         return is_valid, errors
 
-    def get_validation_result(self, job_id: str) -> Optional[Dict]:
+    def get_validation_result(self, job_id: str) -> dict | None:
         """검증 결과 조회."""
         with self._lock:
             return self._validation_results.get(job_id)
@@ -401,16 +400,16 @@ class CacheSync:
 
     def __init__(self):
         self._lock = RLock()
-        self._local_cache: Dict[str, List[List[float]]] = {}
-        self._cache_version: Dict[str, int] = {}
+        self._local_cache: dict[str, list[list[float]]] = {}
+        self._cache_version: dict[str, int] = {}
 
-    def put_in_cache(self, key: str, embeddings: List[List[float]]):
+    def put_in_cache(self, key: str, embeddings: list[list[float]]):
         """캐시에 임베딩 저장."""
         with self._lock:
             self._local_cache[key] = embeddings
             self._cache_version[key] = self._cache_version.get(key, 0) + 1
 
-    def get_from_cache(self, key: str) -> Optional[List[List[float]]]:
+    def get_from_cache(self, key: str) -> list[list[float]] | None:
         """캐시에서 임베딩 조회."""
         with self._lock:
             return self._local_cache.get(key)

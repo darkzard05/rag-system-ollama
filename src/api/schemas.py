@@ -2,9 +2,10 @@
 애플리케이션 전체에서 사용되는 데이터 구조(스키마)를 정의합니다.
 """
 
-from typing import List, Dict, Optional, Any, TypedDict
-from pydantic import BaseModel, Field
+from typing import Any, TypedDict
+
 from langchain_core.documents import Document
+from pydantic import BaseModel, Field
 
 
 class GraphState(TypedDict):
@@ -14,11 +15,11 @@ class GraphState(TypedDict):
     """
 
     input: str
-    search_queries: List[str]
-    documents: List[Document]
-    context: Optional[str]
-    response: Optional[str]
-    route_decision: Optional[str]  # 추가됨
+    search_queries: list[str]
+    documents: list[Document]
+    context: str | None
+    response: str | None
+    route_decision: str | None  # 추가됨
 
 
 class QueryRequest(BaseModel):
@@ -33,7 +34,7 @@ class QueryResponse(BaseModel):
     """질의 응답 스키마"""
 
     answer: str
-    sources: List[Dict[str, Any]] = []
+    sources: list[dict[str, Any]] = []
     execution_time_ms: float
 
 
@@ -41,7 +42,7 @@ class SearchResult(BaseModel):
     """검색 결과 스키마"""
 
     content: str
-    metadata: Dict[str, Any]
+    metadata: dict[str, Any]
     score: float
 
 
@@ -49,5 +50,5 @@ class SearchResponse(BaseModel):
     """검색 응답 스키마"""
 
     query: str
-    results: List[SearchResult]
+    results: list[SearchResult]
     count: int

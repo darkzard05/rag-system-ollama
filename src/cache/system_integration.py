@@ -4,10 +4,10 @@ System Integration Layer - Orchestrates all RAG components
 
 import logging
 import time
-from dataclasses import dataclass, asdict
-from typing import Dict, List, Optional, Any
+from dataclasses import asdict, dataclass
 from datetime import datetime
 from threading import RLock
+from typing import Any
 
 
 @dataclass
@@ -23,7 +23,7 @@ class SystemConfig:
     cache_ttl_seconds: int = 3600
     max_cache_size: int = 1000
 
-    def to_dict(self) -> Dict:
+    def to_dict(self) -> dict:
         """Convert to dictionary"""
         return asdict(self)
 
@@ -39,7 +39,7 @@ class SystemIntegration:
     - Notifications (Event Logger)
     """
 
-    def __init__(self, config: Optional[SystemConfig] = None):
+    def __init__(self, config: SystemConfig | None = None):
         """
         Initialize system integration
 
@@ -49,9 +49,9 @@ class SystemIntegration:
         self.config = config or SystemConfig()
 
         # Component registries
-        self.components: Dict[str, Any] = {}
-        self.services: Dict[str, Any] = {}
-        self.middleware_stack: List[callable] = []
+        self.components: dict[str, Any] = {}
+        self.services: dict[str, Any] = {}
+        self.middleware_stack: list[callable] = []
 
         # State tracking
         self.is_initialized = False
@@ -109,7 +109,7 @@ class SystemIntegration:
             self.logger.info(f"Middleware registered: {middleware.__name__}")
             return True
 
-    def initialize(self) -> Dict[str, Any]:
+    def initialize(self) -> dict[str, Any]:
         """
         Initialize all components
 
@@ -160,7 +160,7 @@ class SystemIntegration:
                 self.logger.error(f"Initialization failed: {str(e)}")
                 return {"status": "failed", "error": str(e)}
 
-    def execute_request(self, request: Dict[str, Any]) -> Dict[str, Any]:
+    def execute_request(self, request: dict[str, Any]) -> dict[str, Any]:
         """
         Execute request through middleware stack
 
@@ -198,7 +198,7 @@ class SystemIntegration:
                     "request_id": self.request_count,
                 }
 
-    def get_system_status(self) -> Dict[str, Any]:
+    def get_system_status(self) -> dict[str, Any]:
         """
         Get system status
 
@@ -223,7 +223,7 @@ class SystemIntegration:
                 "timestamp": datetime.now().isoformat(),
             }
 
-    def authenticate_request(self, request: Dict[str, Any], token: str) -> bool:
+    def authenticate_request(self, request: dict[str, Any], token: str) -> bool:
         """
         Authenticate request using RBAC
 
@@ -242,7 +242,7 @@ class SystemIntegration:
             # Validate token (simulated)
             return token is not None and len(token) > 0
 
-    def check_cache(self, request: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    def check_cache(self, request: dict[str, Any]) -> dict[str, Any] | None:
         """
         Check if response is cached
 
@@ -265,7 +265,7 @@ class SystemIntegration:
             # Try to get from cache (simulated)
             return None
 
-    def store_cache(self, request: Dict[str, Any], response: Dict[str, Any]) -> bool:
+    def store_cache(self, request: dict[str, Any], response: dict[str, Any]) -> bool:
         """
         Store response in cache
 
@@ -335,7 +335,7 @@ class SystemIntegration:
             )
             return True
 
-    def get_deployment_info(self, deployment_id: str) -> Optional[Dict[str, Any]]:
+    def get_deployment_info(self, deployment_id: str) -> dict[str, Any] | None:
         """
         Get deployment information
 
@@ -408,7 +408,7 @@ class SystemIntegration:
 
             return True
 
-    def get_system_health(self) -> Dict[str, Any]:
+    def get_system_health(self) -> dict[str, Any]:
         """
         Get comprehensive system health
 
@@ -433,7 +433,7 @@ class SystemIntegration:
                 "services_running": len(self.services),
             }
 
-    def shutdown(self) -> Dict[str, Any]:
+    def shutdown(self) -> dict[str, Any]:
         """
         Shutdown system
 

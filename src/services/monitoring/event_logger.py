@@ -3,13 +3,14 @@ Task 21-2: Event Logger Module
 이벤트 로깅 및 추적 시스템
 """
 
+import time
+import uuid
+from collections import defaultdict, deque
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Dict, List, Optional, Any, Callable
-import time
 from threading import RLock
-from collections import deque, defaultdict
-import uuid
+from typing import Any
 
 
 class EventType(Enum):
@@ -49,24 +50,24 @@ class Event:
     source: str = ""
     timestamp: float = field(default_factory=time.time)
     duration: float = 0.0
-    metadata: Dict[str, Any] = field(default_factory=dict)
-    tags: List[str] = field(default_factory=list)
-    user_id: Optional[str] = None
-    session_id: Optional[str] = None
-    correlation_id: Optional[str] = None
+    metadata: dict[str, Any] = field(default_factory=dict)
+    tags: list[str] = field(default_factory=list)
+    user_id: str | None = None
+    session_id: str | None = None
+    correlation_id: str | None = None
 
 
 @dataclass
 class EventQuery:
     """이벤트 쿼리"""
 
-    event_type: Optional[EventType] = None
-    severity: Optional[EventSeverity] = None
-    source: Optional[str] = None
-    user_id: Optional[str] = None
-    tags: List[str] = field(default_factory=list)
-    start_time: Optional[float] = None
-    end_time: Optional[float] = None
+    event_type: EventType | None = None
+    severity: EventSeverity | None = None
+    source: str | None = None
+    user_id: str | None = None
+    tags: list[str] = field(default_factory=list)
+    start_time: float | None = None
+    end_time: float | None = None
     limit: int = 100
 
 
@@ -79,14 +80,14 @@ class EventStore:
         self._lock = RLock()
 
         # 인덱스
-        self._by_type: Dict[EventType, List[str]] = defaultdict(list)
-        self._by_severity: Dict[EventSeverity, List[str]] = defaultdict(list)
-        self._by_source: Dict[str, List[str]] = defaultdict(list)
-        self._by_user: Dict[str, List[str]] = defaultdict(list)
-        self._by_session: Dict[str, List[str]] = defaultdict(list)
+        self._by_type: dict[EventType, list[str]] = defaultdict(list)
+        self._by_severity: dict[EventSeverity, list[str]] = defaultdict(list)
+        self._by_source: dict[str, list[str]] = defaultdict(list)
+        self._by_user: dict[str, list[str]] = defaultdict(list)
+        self._by_session: dict[str, list[str]] = defaultdict(list)
 
         # 이벤트 ID to Event 매핑
-        self._events_by_id: Dict[str, Event] = {}
+        self._events_by_id: dict[str, Event] = {}
 
     def add_event(self, event: Event):
         """이벤트 추가"""
@@ -105,12 +106,12 @@ class EventStore:
             if event.session_id:
                 self._by_session[event.session_id].append(event.event_id)
 
-    def get_event(self, event_id: str) -> Optional[Event]:
+    def get_event(self, event_id: str) -> Event | None:
         """이벤트 조회"""
         with self._lock:
             return self._events_by_id.get(event_id)
 
-    def query(self, query: EventQuery) -> List[Event]:
+    def query(self, query: EventQuery) -> list[Event]:
         """이벤트 쿼리"""
         with self._lock:
             results = []
@@ -140,7 +141,7 @@ class EventStore:
 
             return results[: query.limit]
 
-    def get_count_by_type(self) -> Dict[str, int]:
+    def get_count_by_type(self) -> dict[str, int]:
         """타입별 개수"""
         with self._lock:
             return {
@@ -148,7 +149,7 @@ class EventStore:
                 for event_type, event_ids in self._by_type.items()
             }
 
-    def get_count_by_severity(self) -> Dict[str, int]:
+    def get_count_by_severity(self) -> dict[str, int]:
         """심각도별 개수"""
         with self._lock:
             return {
@@ -174,7 +175,7 @@ class EventLogger:
     def __init__(self, max_events: int = 100000):
         self._store = EventStore(max_events)
         self._lock = RLock()
-        self._handlers: List[Callable] = []
+        self._handlers: list[Callable] = []
 
     def log_event(
         self,
@@ -183,11 +184,11 @@ class EventLogger:
         message: str,
         severity: EventSeverity = EventSeverity.INFO,
         source: str = "",
-        metadata: Optional[Dict[str, Any]] = None,
-        tags: Optional[List[str]] = None,
-        user_id: Optional[str] = None,
-        session_id: Optional[str] = None,
-        correlation_id: Optional[str] = None,
+        metadata: dict[str, Any] | None = None,
+        tags: list[str] | None = None,
+        user_id: str | None = None,
+        session_id: str | None = None,
+        correlation_id: str | None = None,
     ) -> str:
         """이벤트 로깅"""
         event = Event(
@@ -252,8 +253,8 @@ class EventLogger:
         self,
         title: str,
         message: str,
-        user_id: Optional[str] = None,
-        action: Optional[str] = None,
+        user_id: str | None = None,
+        action: str | None = None,
         **kwargs,
     ) -> str:
         """감사 로깅"""
@@ -308,16 +309,16 @@ class EventLogger:
             if handler in self._handlers:
                 self._handlers.remove(handler)
 
-    def query_events(self, query: EventQuery) -> List[Event]:
+    def query_events(self, query: EventQuery) -> list[Event]:
         """이벤트 쿼리"""
         return self._store.query(query)
 
-    def get_recent_events(self, limit: int = 100) -> List[Event]:
+    def get_recent_events(self, limit: int = 100) -> list[Event]:
         """최근 이벤트 조회"""
         query = EventQuery(limit=limit)
         return self._store.query(query)
 
-    def get_statistics(self) -> Dict[str, Any]:
+    def get_statistics(self) -> dict[str, Any]:
         """통계 조회"""
         with self._lock:
             return {
@@ -327,7 +328,7 @@ class EventLogger:
                 "handlers": len(self._handlers),
             }
 
-    def get_events_by_correlation_id(self, correlation_id: str) -> List[Event]:
+    def get_events_by_correlation_id(self, correlation_id: str) -> list[Event]:
         """correlation ID로 이벤트 조회"""
         query = EventQuery(limit=10000)
         all_events = self._store.query(query)
@@ -337,17 +338,17 @@ class EventLogger:
     def get_user_activity(
         self,
         user_id: str,
-        start_time: Optional[float] = None,
-        end_time: Optional[float] = None,
+        start_time: float | None = None,
+        end_time: float | None = None,
         limit: int = 100,
-    ) -> List[Event]:
+    ) -> list[Event]:
         """사용자 활동 조회"""
         query = EventQuery(
             user_id=user_id, start_time=start_time, end_time=end_time, limit=limit
         )
         return self._store.query(query)
 
-    def get_session_events(self, session_id: str, limit: int = 1000) -> List[Event]:
+    def get_session_events(self, session_id: str, limit: int = 1000) -> list[Event]:
         """세션 이벤트 조회"""
         query = EventQuery(limit=limit)
         all_events = self._store.query(query)
@@ -360,7 +361,7 @@ class PerformanceMonitor:
 
     def __init__(self, logger: EventLogger):
         self.logger = logger
-        self._metrics: Dict[str, List[float]] = defaultdict(list)
+        self._metrics: dict[str, list[float]] = defaultdict(list)
         self._lock = RLock()
 
     def record_metric(self, operation: str, duration: float):
@@ -371,7 +372,7 @@ class PerformanceMonitor:
             # 로깅
             self.logger.log_performance(operation, duration, source="monitor")
 
-    def get_average(self, operation: str) -> Optional[float]:
+    def get_average(self, operation: str) -> float | None:
         """평균 시간"""
         with self._lock:
             if operation not in self._metrics or not self._metrics[operation]:
@@ -379,7 +380,7 @@ class PerformanceMonitor:
 
             return sum(self._metrics[operation]) / len(self._metrics[operation])
 
-    def get_stats(self, operation: str) -> Dict[str, Any]:
+    def get_stats(self, operation: str) -> dict[str, Any]:
         """통계"""
         with self._lock:
             if operation not in self._metrics or not self._metrics[operation]:

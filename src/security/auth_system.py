@@ -3,17 +3,17 @@ Task 22-2: Authentication System
 인증 및 토큰 관리 시스템
 """
 
-from dataclasses import dataclass, field
-from enum import Enum
-from typing import Dict, List, Optional, Any, Tuple
-import time
-from threading import RLock
-import uuid
+import base64
 import hashlib
 import hmac
-import secrets
 import json
-import base64
+import secrets
+import time
+import uuid
+from dataclasses import dataclass, field
+from enum import Enum
+from threading import RLock
+from typing import Any
 
 
 class TokenType(Enum):
@@ -34,10 +34,10 @@ class Token:
     user_id: str = ""
     token_string: str = field(default_factory=lambda: secrets.token_urlsafe(32))
     created_at: float = field(default_factory=time.time)
-    expires_at: Optional[float] = None
-    last_used: Optional[float] = None
+    expires_at: float | None = None
+    last_used: float | None = None
     is_valid: bool = True
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    metadata: dict[str, Any] = field(default_factory=dict)
 
     def is_expired(self) -> bool:
         """만료 여부"""
@@ -56,8 +56,8 @@ class Session:
     created_at: float = field(default_factory=time.time)
     last_activity: float = field(default_factory=time.time)
     expires_at: float = field(default_factory=lambda: time.time() + 3600)
-    ip_address: Optional[str] = None
-    user_agent: Optional[str] = None
+    ip_address: str | None = None
+    user_agent: str | None = None
     is_active: bool = True
 
     def is_valid(self) -> bool:
@@ -72,7 +72,7 @@ class PasswordHasher:
     ITERATIONS = 100000
 
     @staticmethod
-    def hash_password(password: str, salt: Optional[str] = None) -> Tuple[str, str]:
+    def hash_password(password: str, salt: str | None = None) -> tuple[str, str]:
         """비밀번호 해싱"""
         if not salt:
             salt = secrets.token_hex(32)
@@ -133,7 +133,7 @@ class SimpleJWT:
 
         return f"{message}.{signature_encoded}"
 
-    def verify_token(self, token: str) -> Optional[Dict[str, Any]]:
+    def verify_token(self, token: str) -> dict[str, Any] | None:
         """토큰 검증"""
         try:
             parts = token.split(".")
@@ -173,13 +173,13 @@ class AuthenticationManager:
     """인증 관리자"""
 
     def __init__(self):
-        self._users: Dict[
-            str, Dict[str, Any]
+        self._users: dict[
+            str, dict[str, Any]
         ] = {}  # user_id -> {password_hash, salt, ...}
-        self._tokens: Dict[str, Token] = {}
-        self._sessions: Dict[str, Session] = {}
-        self._api_keys: Dict[str, str] = {}  # api_key -> user_id
-        self._failed_logins: Dict[str, List[float]] = {}  # user_id -> [timestamps]
+        self._tokens: dict[str, Token] = {}
+        self._sessions: dict[str, Session] = {}
+        self._api_keys: dict[str, str] = {}  # api_key -> user_id
+        self._failed_logins: dict[str, list[float]] = {}  # user_id -> [timestamps]
         self._lock = RLock()
         self._max_failed_attempts = 5
         self._lockout_duration = 900  # 15분
@@ -208,9 +208,9 @@ class AuthenticationManager:
         self,
         user_id: str,
         password: str,
-        ip_address: Optional[str] = None,
-        user_agent: Optional[str] = None,
-    ) -> Optional[Tuple[str, str]]:  # (access_token, session_id)
+        ip_address: str | None = None,
+        user_agent: str | None = None,
+    ) -> tuple[str, str] | None:  # (access_token, session_id)
         """사용자 인증"""
         with self._lock:
             if user_id not in self._users:
@@ -285,7 +285,7 @@ class AuthenticationManager:
         if user_id in self._failed_logins:
             del self._failed_logins[user_id]
 
-    def verify_token(self, token_string: str) -> Optional[str]:  # user_id
+    def verify_token(self, token_string: str) -> str | None:  # user_id
         """토큰 검증"""
         with self._lock:
             payload = self._jwt.verify_token(token_string)
@@ -311,7 +311,7 @@ class AuthenticationManager:
 
             return api_key
 
-    def verify_api_key(self, api_key: str) -> Optional[str]:  # user_id
+    def verify_api_key(self, api_key: str) -> str | None:  # user_id
         """API 키 검증"""
         with self._lock:
             return self._api_keys.get(api_key)
@@ -324,7 +324,7 @@ class AuthenticationManager:
                 return True
             return False
 
-    def get_session(self, session_id: str) -> Optional[Session]:
+    def get_session(self, session_id: str) -> Session | None:
         """세션 조회"""
         with self._lock:
             return self._sessions.get(session_id)
@@ -375,7 +375,7 @@ class AuthenticationManager:
 
             return True
 
-    def get_statistics(self) -> Dict[str, Any]:
+    def get_statistics(self) -> dict[str, Any]:
         """통계"""
         with self._lock:
             active_sessions = sum(1 for s in self._sessions.values() if s.is_valid())

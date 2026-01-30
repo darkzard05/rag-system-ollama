@@ -13,8 +13,9 @@ config.yml의 값들을 검증하여 타입 안정성과 제약 조건을 보장
 """
 
 import logging
-from typing import Optional, Literal
-from pydantic import BaseModel, Field, field_validator, model_validator, ConfigDict
+from typing import Literal
+
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 logger = logging.getLogger(__name__)
 
@@ -196,7 +197,7 @@ class ApplicationConfig(BaseModel):
         return len(errors) == 0, errors
 
 
-def load_and_validate_config(config_dict: Optional[dict] = None) -> ApplicationConfig:
+def load_and_validate_config(config_dict: dict | None = None) -> ApplicationConfig:
     """설정 로드 및 검증.
 
     Args:

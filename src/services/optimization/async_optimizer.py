@@ -5,19 +5,22 @@ AsyncIO 최적화 계층 - 동시 LLM 처리, 병렬 문서 검색, 메모리 �
 import asyncio
 import hashlib
 import logging
+from collections.abc import Callable, Coroutine
 from dataclasses import dataclass
-from typing import Any, Callable, Coroutine, List, Optional, Set, Tuple, Dict
+from typing import Any
+
 from langchain_core.documents import Document
+
 from services.monitoring.performance_monitor import (
-    get_performance_monitor,
     OperationType,
+    get_performance_monitor,
 )
 
 logger = logging.getLogger(__name__)
 monitor = get_performance_monitor()
 
 # Type aliases
-DocumentList = List[Document]
+DocumentList = list[Document]
 
 
 @dataclass
@@ -61,16 +64,16 @@ class ConcurrentQueryExpander:
     - 성능 모니터링 통합
     """
 
-    def __init__(self, config: Optional[AsyncConfig] = None):
+    def __init__(self, config: AsyncConfig | None = None):
         self.config = config or AsyncConfig()
         self.semaphore = AsyncSemaphore(self.config.max_concurrent_queries)
 
     async def expand_queries_concurrently(
         self,
-        queries: List[str],
+        queries: list[str],
         expander_func: Callable[[str], Coroutine[Any, Any, str]],
-        metadata: Optional[Dict[str, Any]] = None,
-    ) -> Tuple[List[str], Dict[str, int]]:
+        metadata: dict[str, Any] | None = None,
+    ) -> tuple[list[str], dict[str, int]]:
         """
         여러 쿼리를 동시에 확장
 
@@ -103,7 +106,7 @@ class ConcurrentQueryExpander:
 
             async def _expand_with_limit(
                 query: str, index: int
-            ) -> Tuple[int, List[str]]:
+            ) -> tuple[int, list[str]]:
                 """세마포어 제한과 함께 단일 쿼리 확장"""
                 async with self.semaphore:
                     try:
@@ -167,7 +170,7 @@ class ConcurrentQueryExpander:
 
     async def expand_single_query(
         self, query: str, expander_func: Callable[[str], Coroutine[Any, Any, str]]
-    ) -> List[str]:
+    ) -> list[str]:
         """단일 쿼리 확장 (헬퍼 함수)"""
         expanded_queries, _ = await self.expand_queries_concurrently(
             [query], expander_func
@@ -186,17 +189,17 @@ class ConcurrentDocumentRetriever:
     - 성능 모니터링
     """
 
-    def __init__(self, config: Optional[AsyncConfig] = None):
+    def __init__(self, config: AsyncConfig | None = None):
         self.config = config or AsyncConfig()
         self.semaphore = AsyncSemaphore(self.config.max_concurrent_retrievals)
 
     async def retrieve_documents_parallel(
         self,
-        queries: List[str],
+        queries: list[str],
         retriever_func: Callable[[str], Coroutine[Any, Any, DocumentList]],
         deduplicate: bool = True,
-        metadata: Optional[Dict[str, Any]] = None,
-    ) -> Tuple[DocumentList, Dict[str, Any]]:
+        metadata: dict[str, Any] | None = None,
+    ) -> tuple[DocumentList, dict[str, Any]]:
         """
         여러 쿼리로부터 문서를 병렬 검색
 
@@ -219,7 +222,7 @@ class ConcurrentDocumentRetriever:
 
             async def _retrieve_with_limit(
                 query: str, index: int
-            ) -> Tuple[int, DocumentList]:
+            ) -> tuple[int, DocumentList]:
                 """세마포어 제한과 함께 단일 쿼리 검색"""
                 async with self.semaphore:
                     try:
@@ -280,7 +283,7 @@ class ConcurrentDocumentRetriever:
 
     def _deduplicate_documents(
         self, documents: DocumentList
-    ) -> Tuple[DocumentList, int]:
+    ) -> tuple[DocumentList, int]:
         """
         SHA256 기반 중복 제거
 
@@ -291,7 +294,7 @@ class ConcurrentDocumentRetriever:
             (중복 제거된 문서, 제거된 문서 수)
         """
         unique_docs = []
-        seen: Set[str] = set()
+        seen: set[str] = set()
         duplicate_count = 0
 
         for doc in documents:
@@ -319,7 +322,7 @@ class ConcurrentDocumentReranker:
     - 성능 모니터링
     """
 
-    def __init__(self, config: Optional[AsyncConfig] = None):
+    def __init__(self, config: AsyncConfig | None = None):
         self.config = config or AsyncConfig()
         self.semaphore = AsyncSemaphore(self.config.max_concurrent_rerankings)
 
@@ -327,10 +330,10 @@ class ConcurrentDocumentReranker:
         self,
         query: str,
         documents: DocumentList,
-        reranker_func: Callable[[str, DocumentList], Coroutine[Any, Any, List[float]]],
+        reranker_func: Callable[[str, DocumentList], Coroutine[Any, Any, list[float]]],
         top_k: int = 5,
-        metadata: Optional[Dict[str, Any]] = None,
-    ) -> Tuple[DocumentList, Dict[str, Any]]:
+        metadata: dict[str, Any] | None = None,
+    ) -> tuple[DocumentList, dict[str, Any]]:
         """
         문서를 배치로 나누어 동시 리랭킹
 
@@ -367,7 +370,7 @@ class ConcurrentDocumentReranker:
 
             async def _rerank_batch(
                 batch: DocumentList, batch_idx: int
-            ) -> Tuple[int, List[Tuple[Document, float]]]:
+            ) -> tuple[int, list[tuple[Document, float]]]:
                 """배치 리랭킹"""
                 async with self.semaphore:
                     try:
@@ -376,7 +379,7 @@ class ConcurrentDocumentReranker:
                             timeout=self.config.timeout_reranking,
                         )
 
-                        scored_pairs = list(zip(batch, scores))
+                        scored_pairs = list(zip(batch, scores, strict=False))
                         logger.debug(
                             f"[AsyncOptimizer] 배치 {batch_idx} 리랭킹 완료: "
                             f"{len(scored_pairs)} 문서"
@@ -401,7 +404,7 @@ class ConcurrentDocumentReranker:
             batch_results = await asyncio.gather(*tasks, return_exceptions=False)
 
             # 결과 수집 및 정렬
-            all_scored: List[Tuple[Document, float]] = []
+            all_scored: list[tuple[Document, float]] = []
             for _, scored_pairs in sorted(batch_results, key=lambda x: x[0]):
                 all_scored.extend(scored_pairs)
 
@@ -418,7 +421,7 @@ class ConcurrentDocumentReranker:
 
             logger.info(
                 f"[Optimizer] [Rerank] 병렬 리랭킹 완료: "
-                f"{len(results)} 결과 도출 (상위 {k}개 유지)"
+                f"{len(all_scored)} 결과 도출 (상위 {top_k}개 유지)"
             )
 
             op.tokens = sum(len(doc.page_content.split()) for doc in final_docs)
@@ -436,18 +439,18 @@ class ConcurrentEmbeddingGenerator:
     - 성능 모니터링
     """
 
-    def __init__(self, config: Optional[AsyncConfig] = None):
+    def __init__(self, config: AsyncConfig | None = None):
         self.config = config or AsyncConfig()
         self.semaphore = AsyncSemaphore(self.config.max_concurrent_embeddings)
-        self.embedding_cache: Dict[str, Any] = {}
+        self.embedding_cache: dict[str, Any] = {}
 
     async def generate_embeddings_parallel(
         self,
-        texts: List[str],
-        embedding_func: Callable[[List[str]], Coroutine[Any, Any, Any]],
+        texts: list[str],
+        embedding_func: Callable[[list[str]], Coroutine[Any, Any, Any]],
         use_cache: bool = True,
-        metadata: Optional[Dict[str, Any]] = None,
-    ) -> Tuple[List[Any], Dict[str, Any]]:
+        metadata: dict[str, Any] | None = None,
+    ) -> tuple[list[Any], dict[str, Any]]:
         """
         여러 텍스트를 배치로 병렬 임베딩
 
@@ -460,6 +463,7 @@ class ConcurrentEmbeddingGenerator:
         Returns:
             (임베딩 리스트, 통계 딕셔너리)
         """
+        batch_size = self.config.batch_size_embeddings
         with monitor.track_operation(
             OperationType.EMBEDDING_GENERATION,
             {"text_count": len(texts), "batch_size": batch_size, **(metadata or {})},
@@ -505,8 +509,8 @@ class ConcurrentEmbeddingGenerator:
             )
 
             async def _embed_batch(
-                batch: List[str], batch_idx: int
-            ) -> Tuple[int, List[Any]]:
+                batch: list[str], batch_idx: int
+            ) -> tuple[int, list[Any]]:
                 """배치 임베딩"""
                 async with self.semaphore:
                     try:
@@ -565,7 +569,7 @@ class ConcurrentEmbeddingGenerator:
             op.tokens = sum(len(text.split()) for text in texts)
             return embeddings_result, stats
 
-    def clear_cache(self) -> Dict[str, Any]:
+    def clear_cache(self) -> dict[str, Any]:
         """임베딩 캐시 초기화"""
         cache_size = len(self.embedding_cache)
         self.embedding_cache.clear()
@@ -574,7 +578,7 @@ class ConcurrentEmbeddingGenerator:
 
 
 # 전역 인스턴스
-_async_config: Optional[AsyncConfig] = None
+_async_config: AsyncConfig | None = None
 
 
 def get_async_config() -> AsyncConfig:
@@ -593,28 +597,28 @@ def set_async_config(config: AsyncConfig) -> None:
 
 
 def get_concurrent_query_expander(
-    config: Optional[AsyncConfig] = None,
+    config: AsyncConfig | None = None,
 ) -> ConcurrentQueryExpander:
     """ConcurrentQueryExpander 인스턴스 반환"""
     return ConcurrentQueryExpander(config or get_async_config())
 
 
 def get_concurrent_document_retriever(
-    config: Optional[AsyncConfig] = None,
+    config: AsyncConfig | None = None,
 ) -> ConcurrentDocumentRetriever:
     """ConcurrentDocumentRetriever 인스턴스 반환"""
     return ConcurrentDocumentRetriever(config or get_async_config())
 
 
 def get_concurrent_document_reranker(
-    config: Optional[AsyncConfig] = None,
+    config: AsyncConfig | None = None,
 ) -> ConcurrentDocumentReranker:
     """ConcurrentDocumentReranker 인스턴스 반환"""
     return ConcurrentDocumentReranker(config or get_async_config())
 
 
 def get_concurrent_embedding_generator(
-    config: Optional[AsyncConfig] = None,
+    config: AsyncConfig | None = None,
 ) -> ConcurrentEmbeddingGenerator:
     """ConcurrentEmbeddingGenerator 인스턴스 반환"""
     return ConcurrentEmbeddingGenerator(config or get_async_config())

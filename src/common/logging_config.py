@@ -12,7 +12,6 @@ import logging
 import logging.handlers
 import warnings
 from pathlib import Path
-from typing import Optional
 
 
 class ContextFilter(logging.Filter):
@@ -34,7 +33,7 @@ class ContextFilter(logging.Filter):
 
 def setup_logging(
     log_level: str = "INFO",
-    log_file: Optional[Path] = None,
+    log_file: Path | None = None,
     console_output: bool = True,
 ) -> logging.Logger:
     """

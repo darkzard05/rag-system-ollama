@@ -5,7 +5,6 @@
 import logging
 from dataclasses import dataclass
 from enum import Enum
-from typing import Dict, List, Optional, Tuple
 from threading import RLock
 
 from src.core.model_registry import ModelRegistry, ModelTask, get_model_registry
@@ -26,24 +25,24 @@ class SelectionStrategy(Enum):
 class SelectionConstraint:
     """모델 선택 제약 조건."""
 
-    max_latency_ms: Optional[float] = None  # 최대 응답 시간
-    max_memory_mb: Optional[float] = None  # 최대 메모리
-    min_quality_score: Optional[float] = None  # 최소 품질 점수 (0-1)
-    required_quantization: Optional[str] = None  # 필수 양자화 타입
+    max_latency_ms: float | None = None  # 최대 응답 시간
+    max_memory_mb: float | None = None  # 최대 메모리
+    min_quality_score: float | None = None  # 최소 품질 점수 (0-1)
+    required_quantization: str | None = None  # 필수 양자화 타입
 
 
 class ModelPerformanceComparator:
     """모델 성능 비교자."""
 
-    def __init__(self, registry: Optional[ModelRegistry] = None):
+    def __init__(self, registry: ModelRegistry | None = None):
         self.registry = registry or get_model_registry()
         self._lock = RLock()
 
     def compare_by_metric(
         self,
-        model_keys: List[str],
+        model_keys: list[str],
         metric_name: str = "latency_ms",
-    ) -> List[Tuple[str, float]]:
+    ) -> list[tuple[str, float]]:
         """메트릭 기준 모델 비교.
 
         Args:
@@ -79,9 +78,9 @@ class ModelPerformanceComparator:
 
     def rank_models(
         self,
-        model_keys: List[str],
-        weights: Dict[str, float],
-    ) -> List[Tuple[str, float]]:
+        model_keys: list[str],
+        weights: dict[str, float],
+    ) -> list[tuple[str, float]]:
         """가중치 기반 모델 순위.
 
         Args:
@@ -105,7 +104,7 @@ class ModelPerformanceComparator:
         # 메트릭별 정규화된 값 계산
         metric_scores = {}  # model_key -> {metric -> normalized_score}
 
-        for metric_name in weights.keys():
+        for metric_name in weights:
             comparisons = self.compare_by_metric(model_keys, metric_name)
 
             if not comparisons:
@@ -145,7 +144,7 @@ class ModelPerformanceComparator:
             scores = metric_scores.get(model_key, {})
             final_score = sum(
                 scores.get(metric, 0.0) * normalized_weights[metric]
-                for metric in weights.keys()
+                for metric in weights
             )
             final_scores.append((model_key, final_score))
 
@@ -158,18 +157,18 @@ class ModelPerformanceComparator:
 class ModelSelector:
     """자동 모델 선택기."""
 
-    def __init__(self, registry: Optional[ModelRegistry] = None):
+    def __init__(self, registry: ModelRegistry | None = None):
         self.registry = registry or get_model_registry()
         self.comparator = ModelPerformanceComparator(self.registry)
         self._lock = RLock()
-        self._current_model: Dict[ModelTask, Optional[str]] = {}
+        self._current_model: dict[ModelTask, str | None] = {}
 
     def select_model(
         self,
         task: ModelTask,
         strategy: SelectionStrategy = SelectionStrategy.BALANCED,
-        constraint: Optional[SelectionConstraint] = None,
-    ) -> Optional[str]:
+        constraint: SelectionConstraint | None = None,
+    ) -> str | None:
         """작업에 맞는 최적 모델 선택.
 
         Args:
@@ -212,9 +211,9 @@ class ModelSelector:
 
     def _apply_constraints(
         self,
-        model_keys: List[str],
+        model_keys: list[str],
         constraint: SelectionConstraint,
-    ) -> List[str]:
+    ) -> list[str]:
         """제약 조건 적용.
 
         Returns:
@@ -256,9 +255,9 @@ class ModelSelector:
 
     def _select_by_strategy(
         self,
-        model_keys: List[str],
+        model_keys: list[str],
         strategy: SelectionStrategy,
-    ) -> Optional[str]:
+    ) -> str | None:
         """전략 기반 모델 선택."""
         if not model_keys:
             return None
@@ -296,7 +295,7 @@ class ModelSelector:
 
         return model_keys[0]
 
-    def get_current_model(self, task: ModelTask) -> Optional[str]:
+    def get_current_model(self, task: ModelTask) -> str | None:
         """작업의 현재 선택 모델 조회."""
         with self._lock:
             return self._current_model.get(task)
@@ -323,7 +322,7 @@ class ModelSelector:
         self,
         task: ModelTask,
         strategy: SelectionStrategy = SelectionStrategy.BALANCED,
-    ) -> Dict:
+    ) -> dict:
         """모델 추천 정보.
 
         Returns:
@@ -354,14 +353,14 @@ class ModelSelector:
 class AdaptiveModelSelector:
     """적응형 모델 선택기 - 실시간 성능 기반 전환."""
 
-    def __init__(self, registry: Optional[ModelRegistry] = None):
+    def __init__(self, registry: ModelRegistry | None = None):
         self.registry = registry or get_model_registry()
         self.selector = ModelSelector(self.registry)
         self._lock = RLock()
         self._performance_threshold = 0.8  # 성능 임계값 (0-1)
-        self._switch_history: Dict[ModelTask, List[str]] = {}
+        self._switch_history: dict[ModelTask, list[str]] = {}
 
-    def evaluate_and_adapt(self, task: ModelTask) -> Optional[str]:
+    def evaluate_and_adapt(self, task: ModelTask) -> str | None:
         """성능 평가 후 적응형 모델 선택.
 
         현재 모델의 성능이 임계값 이하면 다른 모델로 전환.
@@ -411,12 +410,12 @@ class AdaptiveModelSelector:
         if 0.0 <= threshold <= 1.0:
             self._performance_threshold = threshold
 
-    def get_switch_history(self, task: ModelTask) -> List[str]:
+    def get_switch_history(self, task: ModelTask) -> list[str]:
         """작업의 모델 전환 이력."""
         with self._lock:
             return self._switch_history.get(task, [])
 
-    def get_adaptation_stats(self) -> Dict:
+    def get_adaptation_stats(self) -> dict:
         """적응 통계."""
         with self._lock:
             total_switches = sum(len(v) for v in self._switch_history.values())
@@ -429,8 +428,8 @@ class AdaptiveModelSelector:
 
 
 # 전역 인스턴스
-_selector_instance: Optional[ModelSelector] = None
-_adaptive_selector_instance: Optional[AdaptiveModelSelector] = None
+_selector_instance: ModelSelector | None = None
+_adaptive_selector_instance: AdaptiveModelSelector | None = None
 
 
 def get_model_selector() -> ModelSelector:

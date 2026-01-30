@@ -2,10 +2,11 @@
 config.yml 파일과 환경 변수에서 애플리케이션 설정을 로드합니다.
 """
 
-import os
 import logging
+import os
 from pathlib import Path
-from typing import Dict, List, Any, Union, Optional
+from typing import Any, Union
+
 import yaml
 from dotenv import load_dotenv
 
@@ -17,13 +18,13 @@ PROJECT_ROOT = Path(__file__).parent.parent.parent
 CONFIG_PATH = PROJECT_ROOT / "config.yml"
 
 
-def _load_config() -> Dict[str, Any]:
+def _load_config() -> dict[str, Any]:
     """YAML 설정 파일을 로드합니다."""
     try:
         if not CONFIG_PATH.exists():
             raise FileNotFoundError(f"Config file not found at: {CONFIG_PATH}")
 
-        with open(CONFIG_PATH, "r", encoding="utf-8") as f:
+        with open(CONFIG_PATH, encoding="utf-8") as f:
             return yaml.safe_load(f) or {}  # 빈 파일일 경우 빈 딕셔너리 반환
     except Exception as e:
         # 설정 로드 실패는 치명적이므로 로그 남기고 재발생
@@ -76,7 +77,7 @@ OLLAMA_TIMEOUT: float = _get_env(
     "OLLAMA_TIMEOUT", _models_config.get("timeout", 900.0), float
 )
 
-AVAILABLE_EMBEDDING_MODELS: List[str] = _models_config.get("available_embeddings", [])
+AVAILABLE_EMBEDDING_MODELS: list[str] = _models_config.get("available_embeddings", [])
 CACHE_DIR: str = _models_config.get("cache_dir", ".model_cache")
 EMBEDDING_BATCH_SIZE: Union[int, str] = _models_config.get(
     "embedding_batch_size", "auto"
@@ -85,14 +86,14 @@ EMBEDDING_DEVICE: str = _models_config.get("embedding_device", "auto")
 
 # --- RAG 파이프라인 설정 ---
 _rag_config = _config.get("rag", {})
-RETRIEVER_CONFIG: Dict = _rag_config.get("retriever", {})
-RERANKER_CONFIG: Dict = _rag_config.get("reranker", {})
-TEXT_SPLITTER_CONFIG: Dict = _rag_config.get("text_splitter", {})
-SEMANTIC_CHUNKER_CONFIG: Dict = _rag_config.get("semantic_chunker", {})
+RETRIEVER_CONFIG: dict = _rag_config.get("retriever", {})
+RERANKER_CONFIG: dict = _rag_config.get("reranker", {})
+TEXT_SPLITTER_CONFIG: dict = _rag_config.get("text_splitter", {})
+SEMANTIC_CHUNKER_CONFIG: dict = _rag_config.get("semantic_chunker", {})
 VECTOR_STORE_CACHE_DIR: str = _rag_config.get(
     "vector_store_cache_dir", ".model_cache/vector_store_cache"
 )
-QUERY_EXPANSION_CONFIG: Dict = _rag_config.get("query_expansion", {"enabled": True})
+QUERY_EXPANSION_CONFIG: dict = _rag_config.get("query_expansion", {"enabled": True})
 _prompts_config = _rag_config.get("prompts") or {}
 QA_SYSTEM_PROMPT: str = _prompts_config.get("qa_system_prompt", "")
 QA_HUMAN_PROMPT: str = _prompts_config.get("qa_human_prompt", "")
@@ -107,16 +108,16 @@ CACHE_SECURITY_LEVEL: str = _get_env(
 )
 
 # HMAC 비밀 (environment variable 우선)
-CACHE_HMAC_SECRET: Optional[str] = _get_env(
+CACHE_HMAC_SECRET: str | None = _get_env(
     "CACHE_HMAC_SECRET", _cache_security_config.get("hmac_secret"), str
 )
 
 # 신뢰 경로 (환경변수가 있으면 쉼표로 분리)
 _trusted_paths_env = os.getenv("TRUSTED_CACHE_PATHS")
 if _trusted_paths_env:
-    CACHE_TRUSTED_PATHS: List[str] = [p.strip() for p in _trusted_paths_env.split(",")]
+    CACHE_TRUSTED_PATHS: list[str] = [p.strip() for p in _trusted_paths_env.split(",")]
 else:
-    CACHE_TRUSTED_PATHS: List[str] = _cache_security_config.get("trusted_paths", [])
+    CACHE_TRUSTED_PATHS: list[str] = _cache_security_config.get("trusted_paths", [])
 
 # 검증 실패 시 동작
 CACHE_VALIDATION_ON_FAILURE: str = _get_env(
