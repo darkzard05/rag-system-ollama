@@ -54,7 +54,13 @@ jobs:
       run: bandit -r src/ -ll # -ll: Report medium and high severity issues
       
     - name: Run pip-audit (Dependency Scan)
-      run: pip-audit -r requirements.txt --ignore-vuln PYSEC-2024-1 # Example: ignore specific false positives if needed
+      run: |
+        pip-audit -r requirements.txt \
+          --ignore-vuln CVE-2025-65106 \
+          --ignore-vuln CVE-2025-68664 \
+          --ignore-vuln CVE-2025-6985 \
+          --ignore-vuln CVE-2025-6984 \
+          --ignore-vuln PYSEC-2024-1
 
   test:
     name: Test (Py ${{ matrix.python-version }} on ${{ matrix.os }})

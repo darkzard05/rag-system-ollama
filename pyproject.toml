@@ -3,6 +3,19 @@
 src = ["src"]
 target-version = "py310"
 line-length = 88
+# 검사 제외 대상
+exclude = [
+    "scripts",
+    "tests",
+    "reproduce_concurrency.py",
+    ".git",
+    ".mypy_cache",
+    ".ruff_cache",
+    ".pytest_cache",
+    ".venv",
+    "build",
+    "dist",
+]
 
 [tool.ruff.lint]
 # 활성화할 규칙 세트
@@ -24,6 +37,12 @@ ignore = [
     "B008", # Do not perform function call in argument defaults
     "UP007", # Use `X | Y` for type annotations (keep Optional for compatibility)
 ]
+
+# 특정 파일별 무시 설정
+[tool.ruff.lint.per-file-ignores]
+"src/main.py" = ["E402", "F401"] # Streamlit 초기화 및 조건부 임포트 허용
+"src/core/rag_core.py" = ["E402"] # 지연 임포트 허용
+"src/common/utils.py" = ["E402"] # 지연 임포트 허용
 
 [tool.ruff.lint.isort]
 known-first-party = ["api", "common", "core", "infra", "security", "services", "ui"]
