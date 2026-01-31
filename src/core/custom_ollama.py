@@ -16,13 +16,14 @@ class DeepThinkingChatOllama(ChatOllama):
     Ollama API 응답의 message.thinking 데이터를 캡처하여 additional_kwargs에 저장합니다.
     """
 
-    _async_client: ollama.AsyncClient | None = None
-
     @property
     def async_client(self) -> ollama.AsyncClient:
         """비동기 클라이언트를 지연 초기화하고 재사용합니다."""
-        if self._async_client is None:
-            self._async_client = ollama.AsyncClient(host=self.base_url)
+        # Pydantic 모델의 필드 보호를 우회하기 위해 object.__setattr__ 사용
+        if not hasattr(self, "_async_client") or self._async_client is None:
+            object.__setattr__(
+                self, "_async_client", ollama.AsyncClient(host=self.base_url)
+            )
         return self._async_client
 
     async def _astream(

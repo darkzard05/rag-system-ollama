@@ -46,7 +46,7 @@ class SystemNotifier:
             icon = cls.ICONS.get(level, "ℹ️")
 
         # 2. 백엔드 로깅 (콘솔/파일)
-        log_msg = f"[{level.upper()}] {message}"
+        f"[{level.upper()}] {message}"
         if level == "error":
             logger.error(message)
         elif level == "warning":
@@ -85,9 +85,7 @@ class SystemNotifier:
         cls._notify(message, "warning", show_toast)
 
     @classmethod
-    def error(
-        cls, message: str, details: str | None = None, show_toast: bool = True
-    ):
+    def error(cls, message: str, details: str | None = None, show_toast: bool = True):
         """에러 알림"""
         full_msg = f"{message}: {details}" if details else message
         cls._notify(full_msg, "error", show_toast)

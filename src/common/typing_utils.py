@@ -81,10 +81,10 @@ LogitScores = list[float]
 # ============================================================================
 
 
-class Retrievable(Protocol[T_co]):
+class Retrievable(Protocol[T]):
     """Protocol for objects that can be retrieved."""
 
-    def retrieve(self, query: str, top_k: int) -> list[T_co]:
+    def retrieve(self, query: str, top_k: int) -> list[T]:
         """Retrieve items based on a query."""
         ...
 
@@ -270,7 +270,7 @@ def is_document_list(obj: Any) -> bool:
     return isinstance(obj, list) and all(isinstance(doc, Document) for doc in obj)
 
 
-def validate_type(value: T, expected_type: type) -> T:
+def validate_type(value: Any, expected_type: type[T]) -> T:
     """Validate that value is of expected type.
 
     Raises TypeError if validation fails.
@@ -279,7 +279,7 @@ def validate_type(value: T, expected_type: type) -> T:
         raise TypeError(
             f"Expected {expected_type.__name__}, got {type(value).__name__}"
         )
-    return value
+    return value  # type: ignore[return-value]
 
 
 # ============================================================================

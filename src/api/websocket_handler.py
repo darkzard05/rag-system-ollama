@@ -5,6 +5,7 @@ WebSocket Handler for Real-time Communication
 import logging
 import time
 from collections import deque
+from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
 from enum import Enum
 from threading import RLock
@@ -69,13 +70,13 @@ class WebSocketManager:
         """
         self.connections: dict[str, ClientConnection] = {}
         self.message_queue: deque = deque(maxlen=max_message_queue)
-        self.message_handlers: dict[MessageType, callable] = {}
+        self.message_handlers: dict[MessageType, Callable] = {}
         self.broadcast_channels: dict[str, list[str]] = {}  # channel -> client_ids
 
         self._lock = RLock()
         self.logger = logging.getLogger(__name__)
 
-    def register_handler(self, message_type: MessageType, handler: callable):
+    def register_handler(self, message_type: MessageType, handler: Callable):
         """Register message handler"""
         with self._lock:
             self.message_handlers[message_type] = handler
@@ -200,13 +201,17 @@ class WebSocketManager:
             Success status
         """
         with self._lock:
-            if client_id in self.connections:
-                if channel in self.connections[client_id].subscriptions:
-                    self.connections[client_id].subscriptions.remove(channel)
+            if (
+                client_id in self.connections
+                and channel in self.connections[client_id].subscriptions
+            ):
+                self.connections[client_id].subscriptions.remove(channel)
 
-            if channel in self.broadcast_channels:
-                if client_id in self.broadcast_channels[channel]:
-                    self.broadcast_channels[channel].remove(client_id)
+            if (
+                channel in self.broadcast_channels
+                and client_id in self.broadcast_channels[channel]
+            ):
+                self.broadcast_channels[channel].remove(client_id)
 
             return True
 

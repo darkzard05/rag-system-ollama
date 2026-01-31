@@ -513,7 +513,7 @@ class TestPerformance:
 
         # 시간 측정
         start = time.time()
-        hash_value = CacheSecurityManager.compute_file_hash(file_path)
+        CacheSecurityManager.compute_file_hash(file_path)
         elapsed = time.time() - start
 
         logger.info(f"1MB 파일 해시 계산: {elapsed:.3f}초")
@@ -537,7 +537,7 @@ class TestPerformance:
 
         # 로드 시간
         start = time.time()
-        loaded = security_manager.load_cache_metadata(metadata_path)
+        security_manager.load_cache_metadata(metadata_path)
         load_time = time.time() - start
 
         logger.info(

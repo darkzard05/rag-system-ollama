@@ -57,10 +57,9 @@ async def test_prompt_caching():
             if (
                 event.get("event") == "on_custom_event"
                 and event.get("name") == "response_chunk"
-            ):
-                if ttft == 0:
-                    ttft = time.time() - start_time
-                    print(f"⚡ 첫 토큰 도달 시간 (TTFT): {ttft:.2f}s")
+            ) and ttft == 0:
+                ttft = time.time() - start_time
+                print(f"⚡ 첫 토큰 도달 시간 (TTFT): {ttft:.2f}s")
 
         total_time = time.time() - start_time
         return ttft, total_time

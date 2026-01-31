@@ -74,14 +74,12 @@ class HighFidelityAppSimulator(unittest.TestCase):
 
         # 1. 첫 번째 질문
         self.run_streamlit_cycle("Q1: Hello?")
-        self.assertEqual(len(self.shared_storage.get("messages", [])), 2)
+        assert len(self.shared_storage.get("messages", [])) == 2
 
         # 2. Rerun (입력 없음)
         self.run_streamlit_cycle()
-        self.assertEqual(
-            len(self.shared_storage.get("messages", [])),
-            2,
-            "Rerun 후에도 데이터가 유지되어야 함",
+        assert len(self.shared_storage.get("messages", [])) == 2, (
+            "Rerun 후에도 데이터가 유지되어야 함"
         )
 
         # 3. 두 번째 질문
@@ -93,11 +91,11 @@ class HighFidelityAppSimulator(unittest.TestCase):
         for m in final_msgs:
             print(f"  - {m['role']}: {m['content']}")
 
-        self.assertEqual(len(final_msgs), 4)
-        self.assertEqual(final_msgs[0]["content"], "Q1: Hello?")
-        self.assertEqual(final_msgs[1]["role"], "assistant")
-        self.assertEqual(final_msgs[2]["content"], "Q2: How are you?")
-        self.assertEqual(final_msgs[3]["role"], "assistant")
+        assert len(final_msgs) == 4
+        assert final_msgs[0]["content"] == "Q1: Hello?"
+        assert final_msgs[1]["role"] == "assistant"
+        assert final_msgs[2]["content"] == "Q2: How are you?"
+        assert final_msgs[3]["role"] == "assistant"
 
         print(
             "\n✅ [성공] 고충실도 시뮬레이션 결과, 모든 데이터가 완벽하게 유지됩니다."

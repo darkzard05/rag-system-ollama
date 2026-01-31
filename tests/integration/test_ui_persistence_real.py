@@ -69,9 +69,9 @@ class TestAppPersistenceFlow(unittest.TestCase):
 
         # --- [STEP 5] 검증: 첫 번째 대화가 살아있는가? ---
         messages = SessionManager.get_messages()
-        self.assertEqual(len(messages), 2, "첫 번째 질문/답변이 세션에 있어야 합니다.")
-        self.assertEqual(messages[0]["content"], q1)
-        self.assertEqual(messages[1]["content"], ans1)
+        assert len(messages) == 2, "첫 번째 질문/답변이 세션에 있어야 합니다."
+        assert messages[0]["content"] == q1
+        assert messages[1]["content"] == ans1
 
         # --- [STEP 6] 두 번째 질문 (Main Thread) ---
         q2 = "두 번째 질문입니다."
@@ -79,14 +79,12 @@ class TestAppPersistenceFlow(unittest.TestCase):
 
         # --- [STEP 7] 최종 검증: 이전 히스토리가 모두 유지되는가? ---
         final_messages = SessionManager.get_messages()
-        self.assertEqual(
-            len(final_messages),
-            3,
-            "두 번째 질문 추가 후 총 3개의 메시지가 유지되어야 합니다.",
+        assert len(final_messages) == 3, (
+            "두 번째 질문 추가 후 총 3개의 메시지가 유지되어야 합니다."
         )
-        self.assertEqual(final_messages[0]["content"], q1)
-        self.assertEqual(final_messages[1]["content"], ans1)
-        self.assertEqual(final_messages[2]["content"], q2)
+        assert final_messages[0]["content"] == q1
+        assert final_messages[1]["content"] == ans1
+        assert final_messages[2]["content"] == q2
 
         print(
             "\n✅ [성공] 비동기 동기화 후에도 이전 답변이 완벽하게 유지됨을 확인했습니다."

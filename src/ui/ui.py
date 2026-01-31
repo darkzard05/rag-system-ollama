@@ -10,6 +10,7 @@ import os
 import time
 from collections.abc import Callable
 from contextlib import aclosing
+from typing import Any
 
 import streamlit as st
 
@@ -31,12 +32,14 @@ from ui.components.status_box import render_status_box as _render_status_box
 logger = logging.getLogger(__name__)
 
 
-async def _stream_chat_response(rag_engine, user_query: str, chat_container) -> str:
+async def _stream_chat_response(
+    rag_engine, user_query: str, chat_container
+) -> dict[str, Any]:
     """
     적응형 스트리밍 핸들러를 사용하여 사고 과정과 답변을 실시간으로 렌더링합니다.
     """
 
-    state = {
+    state: dict[str, Any] = {
         "full_response": "",
         "full_thought": "",
         "retrieved_docs": [],
@@ -47,7 +50,11 @@ async def _stream_chat_response(rag_engine, user_query: str, chat_container) -> 
 
     current_llm = SessionManager.get("llm")
     if not current_llm:
-        return "❌ 오류: LLM 모델이 로드되지 않았습니다."
+        return {
+            "response": "❌ 오류: LLM 모델이 로드되지 않았습니다.",
+            "thought": "",
+            "documents": [],
+        }
 
     status_placeholder = SessionManager.get("status_placeholder")
     run_config = {"configurable": {"llm": current_llm}}
@@ -61,90 +68,88 @@ async def _stream_chat_response(rag_engine, user_query: str, chat_container) -> 
     last_render_time = 0.0
     render_interval = 0.05  # 약 20fps로 UI 업데이트 제한
 
+    # 스트리밍 응답 렌더링
     try:
-        with chat_container:
-            with st.chat_message("assistant", avatar="🤖"):
-                thought_container = st.empty()
-                thought_display = None
-                answer_display = st.empty()
-                answer_display.markdown(f"⌛ {MSG_PREPARING_ANSWER}")
+        with chat_container, st.chat_message("assistant", avatar="🤖"):
+            thought_container = st.empty()
+            thought_display = None
+            answer_display = st.empty()
+            answer_display.markdown(f"⌛ {MSG_PREPARING_ANSWER}")
 
-                # 적응형 스트리밍 적용 및 리소스 안전 관리
-                event_generator = rag_engine.astream_events(
-                    {"input": user_query}, config=run_config, version="v2"
+            # 적응형 스트리밍 적용 및 리소스 안전 관리
+            event_generator = rag_engine.astream_events(
+                {"input": user_query}, config=run_config, version="v2"
+            )
+
+            async with aclosing(
+                handler.stream_graph_events(
+                    event_generator, adaptive_controller=controller
                 )
+            ) as stream:
+                async for chunk in stream:
+                    # 상태 박스 동기화 (주기적: 오버헤드 감소를 위해 빈도 낮춤)
+                    if chunk.chunk_index % 20 == 0:
+                        _render_status_box(status_placeholder)
 
-                async with aclosing(
-                    handler.stream_graph_events(
-                        event_generator, adaptive_controller=controller
-                    )
-                ) as stream:
-                    async for chunk in stream:
-                        # 상태 박스 동기화 (주기적: 오버헤드 감소를 위해 빈도 낮춤)
-                        if chunk.chunk_index % 20 == 0:
-                            _render_status_box(status_placeholder)
+                    # 1. 메타데이터(문서) 처리
+                    if chunk.metadata and "documents" in chunk.metadata:
+                        state["retrieved_docs"] = chunk.metadata["documents"]
 
-                        # 1. 메타데이터(문서) 처리
-                        if chunk.metadata and "documents" in chunk.metadata:
-                            state["retrieved_docs"] = chunk.metadata["documents"]
-
-                        # 2. 사고 과정 처리
-                        if chunk.thought:
-                            if not state["full_thought"]:
-                                state["thinking_start_time"] = time.time()
-                                with thought_container:
-                                    thought_expander = st.expander(
-                                        "🧠 사고 과정 작성 중...", expanded=False
-                                    )
-                                    thought_display = thought_expander.empty()
-
-                            state["full_thought"] += chunk.thought
-
-                            # 사고 과정 디바운싱
-                            current_time = time.time()
-                            if current_time - last_render_time > render_interval:
-                                if thought_display:
-                                    thought_display.markdown(
-                                        state["full_thought"] + "▌"
-                                    )
-                                last_render_time = current_time
-
-                        # 3. 답변 본문 처리
-                        if chunk.content:
-                            if not state["full_response"]:
-                                state["thinking_end_time"] = time.time()
-                                if state["full_thought"]:
-                                    thinking_dur = (
-                                        state["thinking_end_time"]
-                                        - state["thinking_start_time"]
-                                    )
-                                    with thought_container:
-                                        label = f"🧠 사고 완료 ({thinking_dur:.1f}초)"
-                                        with st.expander(label, expanded=False):
-                                            st.markdown(state["full_thought"])
-
-                            state["full_response"] += chunk.content
-
-                            # UI 렌더링 시간 측정 및 디바운싱 적용
-                            current_time = time.time()
-                            if (
-                                current_time - last_render_time > render_interval
-                                or chunk.is_final
-                            ):
-                                render_start = current_time
-
-                                # 성능 최적화: 스트리밍 중에는 무거운 수식 정규화를 건너뛰고 최종 결과에서만 수행
-                                answer_display.markdown(
-                                    state["full_response"] + "▌", unsafe_allow_html=True
+                    # 2. 사고 과정 처리
+                    if chunk.thought:
+                        if not state["full_thought"]:
+                            state["thinking_start_time"] = time.time()
+                            with thought_container:
+                                thought_expander = st.expander(
+                                    "🧠 사고 과정 작성 중...", expanded=False
                                 )
+                                thought_display = thought_expander.empty()
 
-                                # UI 렌더링 시간 기록 (적응형 제어용)
-                                render_latency = (time.time() - render_start) * 1000
-                                controller.record_latency(render_latency)
-                                last_render_time = time.time()
+                        state["full_thought"] += chunk.thought
 
-                # 최종 렌더링 및 정리
-                _finalize_ui_rendering(thought_container, answer_display, state)
+                        # 사고 과정 디바운싱
+                        current_time = time.time()
+                        if current_time - last_render_time > render_interval:
+                            if thought_display:
+                                thought_display.markdown(state["full_thought"] + "▌")
+                            last_render_time = current_time
+
+                    # 3. 답변 본문 처리
+                    if chunk.content:
+                        if not state["full_response"]:
+                            state["thinking_end_time"] = time.time()
+                            if state["full_thought"]:
+                                thinking_dur = (
+                                    state["thinking_end_time"]
+                                    - state["thinking_start_time"]
+                                )
+                                with thought_container:
+                                    label = f"🧠 사고 완료 ({thinking_dur:.1f}초)"
+                                    with st.expander(label, expanded=False):
+                                        st.markdown(state["full_thought"])
+
+                        state["full_response"] += chunk.content
+
+                        # UI 렌더링 시간 측정 및 디바운싱 적용
+                        current_time = time.time()
+                        if (
+                            current_time - last_render_time > render_interval
+                            or chunk.is_final
+                        ):
+                            render_start = current_time
+
+                            # 성능 최적화: 스트리밍 중에는 무거운 수식 정규화를 건너뛰고 최종 결과에서만 수행
+                            answer_display.markdown(
+                                state["full_response"] + "▌", unsafe_allow_html=True
+                            )
+
+                            # UI 렌더링 시간 기록 (적응형 제어용)
+                            render_latency = (time.time() - render_start) * 1000
+                            controller.record_latency(render_latency)
+                            last_render_time = time.time()
+
+            # 최종 렌더링 및 정리
+            _finalize_ui_rendering(thought_container, answer_display, state)
 
         return {
             "response": state["full_response"],
@@ -452,15 +457,15 @@ def inject_custom_css():
         visibility: hidden;
         display: none;
     }
-    
+
     /* 툴팁 기본 스타일 */
-    .tooltip { 
-        position: relative; 
-        display: inline-block; 
-        border-bottom: 1px dotted #888; 
-        cursor: pointer; 
-        color: #0068c9; 
-        font-weight: bold; 
+    .tooltip {
+        position: relative;
+        display: inline-block;
+        border-bottom: 1px dotted #888;
+        cursor: pointer;
+        color: #0068c9;
+        font-weight: bold;
         transition: all 0.2s;
         padding: 0 2px;
         border-radius: 4px;
@@ -469,60 +474,60 @@ def inject_custom_css():
         background-color: rgba(0, 104, 201, 0.1);
         color: #004a8b;
     }
-    
+
     /* 인용 링크 기본 스타일 제거 */
     .citation-link {
         text-decoration: none !important;
         color: inherit !important;
     }
-    
-    .tooltip .tooltip-text { 
-        visibility: hidden; 
-        width: 350px; 
-        background-color: #333; 
-        color: #fff; 
-        text-align: left; 
-        border-radius: 8px; 
-        padding: 12px; 
-        font-size: 0.85rem; 
-        font-weight: normal; 
-        line-height: 1.5; 
-        position: absolute; 
-        z-index: 1000; 
-        bottom: 125%; 
-        left: 50%; 
-        margin-left: -175px; 
-        opacity: 0; 
-        transition: opacity 0.3s, transform 0.3s; 
+
+    .tooltip .tooltip-text {
+        visibility: hidden;
+        width: 350px;
+        background-color: #333;
+        color: #fff;
+        text-align: left;
+        border-radius: 8px;
+        padding: 12px;
+        font-size: 0.85rem;
+        font-weight: normal;
+        line-height: 1.5;
+        position: absolute;
+        z-index: 1000;
+        bottom: 125%;
+        left: 50%;
+        margin-left: -175px;
+        opacity: 0;
+        transition: opacity 0.3s, transform 0.3s;
         transform: translateY(10px);
-        max-height: 250px; 
-        overflow-y: auto; 
-        box-shadow: 0px 8px 16px rgba(0,0,0,0.4); 
+        max-height: 250px;
+        overflow-y: auto;
+        box-shadow: 0px 8px 16px rgba(0,0,0,0.4);
         border: 1px solid #444;
     }
-    .tooltip .tooltip-text::after { 
-        content: ""; 
-        position: absolute; 
-        top: 100%; 
-        left: 50%; 
-        margin-left: -5px; 
-        border-width: 5px; 
-        border-style: solid; 
-        border-color: #333 transparent transparent transparent; 
+    .tooltip .tooltip-text::after {
+        content: "";
+        position: absolute;
+        top: 100%;
+        left: 50%;
+        margin-left: -5px;
+        border-width: 5px;
+        border-style: solid;
+        border-color: #333 transparent transparent transparent;
     }
-    .tooltip:hover .tooltip-text { 
-        visibility: visible; 
-        opacity: 1; 
+    .tooltip:hover .tooltip-text {
+        visibility: visible;
+        opacity: 1;
         transform: translateY(0);
     }
-    
+
     /* 다크 모드 대응 */
-    @media (prefers-color-scheme: dark) { 
-        .tooltip { color: #4fa8ff; } 
+    @media (prefers-color-scheme: dark) {
+        .tooltip { color: #4fa8ff; }
         .tooltip .tooltip-text { background-color: #262730; border-color: #444; }
         .tooltip .tooltip-text::after { border-color: #262730 transparent transparent transparent; }
     }
-    
+
     /* 채팅 메시지 내 코드 블록 스타일 개선 */
     code {
         background-color: rgba(128, 128, 128, 0.15);
@@ -530,7 +535,7 @@ def inject_custom_css():
         border-radius: 4px;
         font-family: 'Source Code Pro', monospace;
     }
-    
+
     /* PDF 컨트롤러 툴바 스타일 (더 세련된 버전) */
     .pdf-nav-container {
         background-color: rgba(128, 128, 128, 0.08);
@@ -565,7 +570,12 @@ def render_left_column():
     _chat_fragment()
 
 
-def render_message(role: str, content: str, thought: str = None, doc_ids: list = None):
+def render_message(
+    role: str,
+    content: str,
+    thought: str | None = None,
+    doc_ids: list[Any] | None = None,
+):
     avatar_icon = "🤖" if role == "assistant" else "👤"
     with st.chat_message(role, avatar=avatar_icon):
         if thought and thought.strip():

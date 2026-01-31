@@ -158,7 +158,7 @@ def _compute_file_hash(file_path: str) -> str:
         return ""
 
 
-import concurrent.futures
+import concurrent.futures  # noqa: E402
 
 
 def _extract_page_worker(
@@ -246,7 +246,7 @@ def _load_pdf_docs(
                 raise PDFProcessingError(
                     filename=file_name,
                     details={"reason": f"파일을 열 수 없음: {str(e)}"},
-                )
+                ) from e
 
             if total_pages == 0:
                 raise EmptyPDFError(
@@ -341,16 +341,16 @@ def _load_pdf_docs(
                     },
                 )
 
-            SessionManager.replace_last_status_log(
-                f"텍스트 {len(docs)}개 구간 확보 완료"
-            )
+            SessionManager.replace_last_status_log(f"추출 완료 (구간 {len(docs)}개)")
             op.tokens = sum(len(doc.page_content.split()) for doc in docs)
             return docs
         except (PDFProcessingError, EmptyPDFError):
             raise
         except Exception as e:
             logger.error(f"PDF 로드 중 예상치 못한 오류: {e}")
-            raise PDFProcessingError(filename=file_name, details={"reason": str(e)})
+            raise PDFProcessingError(
+                filename=file_name, details={"reason": str(e)}
+            ) from e
 
 
 def _split_documents(
@@ -360,7 +360,7 @@ def _split_documents(
     """
     설정에 따라 의미론적 분할기 또는 RecursiveCharacterTextSplitter를 사용해 문서를 분할합니다.
     """
-    SessionManager.add_status_log("의미 단위 문장 분할 중")
+    SessionManager.add_status_log("문장 분할 중...")
     with monitor.track_operation(
         OperationType.SEMANTIC_CHUNKING, {"doc_count": len(docs)}
     ) as op:
@@ -533,6 +533,11 @@ class VectorStoreCache:
 
                     # 무결성 검증 (파일인 경우에만 SHA256 체크)
                     if os.path.isfile(path):
+                        # [보안 강화] 고보안 레벨에서는 HMAC 검증이 실패하거나 비밀키가 없으면 로드를 거부함
+                        if CACHE_SECURITY_LEVEL == "high" and not CACHE_HMAC_SECRET:
+                            raise CacheIntegrityError(
+                                f"보안 레벨 'high'에서는 HMAC 비밀키가 필수입니다: {path}"
+                            )
                         self.security_manager.verify_cache_integrity(path)
                     elif os.path.isdir(path):
                         # FAISS 인덱스 디렉토리 내의 핵심 파일 검증
@@ -603,14 +608,25 @@ class VectorStoreCache:
                 )
             except Exception as e:
                 logger.error(f"문서 데이터 저장 실패: {e}")
-                raise OSError(f"Failed to save doc_splits: {e}")
+                raise OSError(f"Failed to save doc_splits: {e}") from e
 
             # 2. FAISS 저장
             try:
                 vector_store.save_local(self.faiss_index_path)
+
+                # [수정] FAISS 내부 핵심 파일들(index.faiss, index.pkl)에 대한 메타데이터 생성
+                for filename in ["index.faiss", "index.pkl"]:
+                    file_p = os.path.join(self.faiss_index_path, filename)
+                    if os.path.exists(file_p):
+                        meta = self.security_manager.create_metadata_for_file(
+                            file_p, description=f"FAISS index part: {filename}"
+                        )
+                        self.security_manager.save_cache_metadata(
+                            file_p + ".meta", meta
+                        )
             except Exception as e:
                 logger.error(f"FAISS 인덱스 저장 실패: {e}")
-                raise OSError(f"Failed to save FAISS index: {e}")
+                raise OSError(f"Failed to save FAISS index: {e}") from e
 
             # 3. BM25 저장 (Pickle)
             try:
@@ -633,7 +649,7 @@ class VectorStoreCache:
                 )
             except Exception as e:
                 logger.error(f"BM25 리트리버 저장 실패: {e}")
-                raise OSError(f"Failed to save BM25 retriever: {e}")
+                raise OSError(f"Failed to save BM25 retriever: {e}") from e
 
             # --- 검증 단계 (Verification) ---
             required_paths = [
@@ -722,72 +738,78 @@ def _load_and_build_retrieval_components(
 
     if not cache_used:
         import numpy as np
+        import torch
 
         docs = _load_pdf_docs(file_path, file_name, on_progress=_on_progress)
-        # 빈 문서 처리 추가
+        # 빈 문서 처리
         if not docs:
             raise EmptyPDFError(
                 filename=file_name,
-                details={
-                    "reason": "PDF에서 텍스트를 추출할 수 없음 (이미지 위주 또는 보호된 파일)"
-                },
+                details={"reason": "PDF에서 텍스트를 추출할 수 없습니다."},
             )
 
         if _on_progress:
             _on_progress()
+
+        # [최적화 1] 문서 크기에 따른 바이패스 전략 (2000자 미만은 고속 처리)
+        total_text_len = sum(len(d.page_content) for d in docs)
+        is_small_doc = total_text_len < 2000
+
+        # [최적화 2] 1차 분할 및 임베딩 생성 (단일 패스)
         doc_splits, precomputed_vectors = _split_documents(docs, _embedder)
         if _on_progress:
             _on_progress()
 
         if not doc_splits:
-            raise InsufficientChunksError(
-                chunk_count=0,
-                min_required=1,
-                details={"reason": "청킹 후 유효한 청크가 없음"},
-            )
+            raise InsufficientChunksError(chunk_count=0, min_required=1)
 
-        # [최적화] 인덱스 최적화 적용 및 임베딩 재사용
+        # [최적화 3] 벡터 재사용을 통한 인덱스 최적화
         optimized_vectors = precomputed_vectors
-        try:
-            SessionManager.add_status_log("인덱스 최적화 중")
-            if _on_progress:
-                _on_progress()
+        if not is_small_doc:
+            try:
+                SessionManager.add_status_log("인덱스 최적화 중")
+                if _on_progress:
+                    _on_progress()
 
-            # [수정] 이미 의미론적 청커에서 벡터가 넘어왔다면 이를 최적화기에 전달
-            if optimized_vectors is None:
-                # 벡터가 없는 경우(기본 스플리터 사용 시)에만 새로 생성
-                texts = [d.page_content for d in doc_splits]
-                vectors = _embedder.embed_documents(texts)
-                optimized_vectors = [np.array(v) for v in vectors]
+                # 벡터가 없으면(기본 분할기 사용 시) 한 번만 생성
+                if optimized_vectors is None:
+                    texts = [d.page_content for d in doc_splits]
+                    vectors = _embedder.embed_documents(texts)
+                    optimized_vectors = [np.array(v) for v in vectors]
 
-            optimizer = get_index_optimizer()
-            # 최적화된 문서와 '벡터'를 함께 반환받음
-            optimized_docs, optimized_vectors, stats = optimizer.optimize_index(
-                doc_splits, optimized_vectors
-            )
+                optimizer = get_index_optimizer()
+                doc_splits, optimized_vectors, stats = optimizer.optimize_index(
+                    doc_splits, optimized_vectors
+                )
 
-            logger.info(
-                f"인덱스 최적화 완료: {len(doc_splits)} -> {len(optimized_docs)} 청크 "
-                f"(프루닝: {stats.pruned_documents})"
-            )
-            SessionManager.replace_last_status_log(
-                f"중복 내용 {stats.pruned_documents}개 정리"
-            )
-            if _on_progress:
-                _on_progress()
+                logger.info(f"인덱스 최적화 완료: 중복 {stats.pruned_documents}개 제거")
+                SessionManager.replace_last_status_log(
+                    f"중복 내용 {stats.pruned_documents}개 정리"
+                )
+                if _on_progress:
+                    _on_progress()
+            except Exception as e:
+                logger.warning(f"인덱스 최적화 단계 건너뜀 (경미한 오류): {e}")
+                # 오류 발생 시에도 doc_splits와 optimized_vectors는 유지됨
 
-            doc_splits = optimized_docs
-        except Exception as e:
-            logger.warning(f"인덱스 최적화 실패 (계속 진행): {e}")
-            # 최적화 실패 시에도 precomputed_vectors는 유지됨
-
-        # 최적화된 벡터(또는 의미론적 청커에서 온 벡터)가 있으면 재사용
+        # [최적화 4] 계산된 벡터를 FAISS에 직접 주입 (GPU 추가 호출 0회)
         vector_store = _create_vector_store(
             doc_splits, _embedder, vectors=optimized_vectors
         )
-        bm25_retriever = _create_bm25_retriever(doc_splits)
+        bm25_retriever = _create_bm25_retriever(doc_splits or [])
+
+        # 캐시 저장
         cache.save(doc_splits, vector_store, bm25_retriever)
-        SessionManager.add_status_log("신규 인덱싱 완료")  # 추가
+
+        # [최적화 5] GPU 자원 즉시 반환 (Ollama와의 VRAM 경합 방지)
+        if torch.cuda.is_available():
+            try:
+                torch.cuda.empty_cache()
+                logger.debug("[System] [Memory] CUDA 캐시 비우기 완료")
+            except Exception:
+                pass
+
+        SessionManager.add_status_log("신규 인덱싱 완료")
 
     return doc_splits, vector_store, bm25_retriever, cache_used
 

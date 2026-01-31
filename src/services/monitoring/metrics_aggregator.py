@@ -390,7 +390,7 @@ class AlertManager:
         if not alerts:
             return {"total_alerts": 0, "critical": 0, "warning": 0, "info": 0}
 
-        severity_counts = {}
+        severity_counts: dict[str, int] = {}
         for alert in alerts:
             severity = alert["severity"]
             severity_counts[severity] = severity_counts.get(severity, 0) + 1

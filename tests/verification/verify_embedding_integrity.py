@@ -23,9 +23,9 @@ def verify_integrity():
     embedder = load_embedding_model(model_name)
 
     test_text = """
-    인공지능 기술은 빠르게 발전하고 있습니다. 
-    특히 거대언어모델(LLM)은 자연어 처리 분야에서 혁신을 일으키고 있습니다. 
-    RAG 시스템은 외부 지식을 활용하여 모델의 답변 정확도를 높입니다. 
+    인공지능 기술은 빠르게 발전하고 있습니다.
+    특히 거대언어모델(LLM)은 자연어 처리 분야에서 혁신을 일으키고 있습니다.
+    RAG 시스템은 외부 지식을 활용하여 모델의 답변 정확도를 높입니다.
     이 테스트는 임베딩 재사용 로직의 무결성을 검증하기 위한 것입니다.
     """
     docs = [Document(page_content=test_text, metadata={"source": "integrity_test.pdf"})]

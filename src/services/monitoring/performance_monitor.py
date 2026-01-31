@@ -324,7 +324,7 @@ class TokenCounter:
             return 0
 
         # Split by whitespace and estimate
-        words = text.split()
+        text.split()
         # Average word length ~5 chars, average ~1.3 tokens per word
         token_estimate = int(len(text) / 4)
         return max(1, token_estimate)
@@ -393,11 +393,10 @@ class PerformanceMonitor:
     def log_to_csv(self, data: dict[str, Any]):
         """성능 데이터를 CSV 파일에 기록"""
         try:
-            with self._lock:
-                with open(self.csv_path, "a", newline="", encoding="utf-8") as f:
-                    writer = csv.writer(f)
-                    writer.writerow(
-                        [
+            with self._lock, open(self.csv_path, "a", newline="", encoding="utf-8") as f:
+                writer = csv.writer(f)
+                writer.writerow(
+                    [
                             datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                             data.get("model", "unknown"),
                             round(data.get("ttft", 0), 3),
@@ -603,7 +602,7 @@ class PerformanceMonitor:
             all_stats = self.get_all_stats()
             memory_stats = self.get_memory_stats()
 
-            report = {
+            report: dict[str, Any] = {
                 "timestamp": datetime.now().isoformat(),
                 "total_operations": len(self._operations),
                 "memory": memory_stats,

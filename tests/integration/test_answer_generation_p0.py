@@ -88,7 +88,6 @@ async def test_answer_generation_p0():
 
         full_response = ""
         events_count = 0
-        metadata_received = False
 
         # 3. 스트리밍 이벤트 검증
         async for event in app.astream_events(
@@ -98,7 +97,7 @@ async def test_answer_generation_p0():
 
             # 메타데이터 이벤트 확인 (사용자 정의 이벤트)
             if kind == "on_custom_event" and event["name"] == "metadata_update":
-                metadata_received = True
+                pass
 
             # 채팅 모델 스트림 확인
             elif kind == "on_chat_model_stream":

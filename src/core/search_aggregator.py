@@ -162,7 +162,7 @@ class SearchResultAggregator:
         """모든 결과 단순 병합"""
         aggregated = []
 
-        for node_id, results in search_results.items():
+        for _node_id, results in search_results.items():
             metrics.total_input_results += len(results)
 
             for result in results:
@@ -186,7 +186,7 @@ class SearchResultAggregator:
         # [최적화] 해시를 키로 사용하여 즉시 조회
         content_hash_to_id: dict[str, str] = {}
 
-        for node_id, results in search_results.items():
+        for _node_id, results in search_results.items():
             metrics.total_input_results += len(results)
 
             for result in results:
@@ -222,7 +222,7 @@ class SearchResultAggregator:
         """ID 기반 중복 제거"""
         aggregated_map: dict[str, AggregatedResult] = {}
 
-        for node_id, results in search_results.items():
+        for _node_id, results in search_results.items():
             metrics.total_input_results += len(results)
 
             for result in results:
@@ -338,11 +338,13 @@ class SearchResultAggregator:
             metrics.score_adjustments += 1
             agg.aggregated_score = (agg.aggregated_score + result.score) / 2
 
-        elif self.dedup_strategy == DuplicateStrategy.KEEP_LATEST:
+        elif (
+            self.dedup_strategy == DuplicateStrategy.KEEP_LATEST
+            and result.timestamp > agg.aggregation_timestamp
+        ):
             # 최신 타임스탬프 유지
-            if result.timestamp > agg.aggregation_timestamp:
-                agg.aggregated_score = result.score
-                agg.aggregation_timestamp = result.timestamp
+            agg.aggregated_score = result.score
+            agg.aggregation_timestamp = result.timestamp
 
         # 공통 처리
         if result.node_id not in agg.source_nodes:

@@ -140,6 +140,9 @@ class EmailChannel(NotificationChannel):
 
             # 메시지 구성
             template = self._templates.get("notification")
+            if not template:
+                return False
+
             subject = self._render_template(template.subject, notification)
             html_body = self._render_template(template.html_body, notification)
 
@@ -164,9 +167,8 @@ class EmailChannel(NotificationChannel):
                 if "@" in str(recipient_id):
                     recipients.append(recipient_id)
 
-        if hasattr(notification, "metadata"):
-            if "email" in notification.metadata:
-                recipients.append(notification.metadata["email"])
+        if hasattr(notification, "metadata") and "email" in notification.metadata:
+            recipients.append(notification.metadata["email"])
 
         return recipients
 

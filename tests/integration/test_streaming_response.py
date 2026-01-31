@@ -32,7 +32,7 @@ class TestTokenStreamBuffer(unittest.TestCase):
         """단일 토큰 추가"""
         buffer = TokenStreamBuffer(buffer_size=10)
         result = buffer.add_token("hello")
-        self.assertIsNone(result)  # 버퍼 미만이므로 None
+        assert result is None  # 버퍼 미만이므로 None
 
     def test_buffer_flush_on_full(self):
         """버퍼 풀 시 플러시"""
@@ -41,10 +41,10 @@ class TestTokenStreamBuffer(unittest.TestCase):
         result2 = buffer.add_token("b")
         result3 = buffer.add_token("c")
 
-        self.assertIsNone(result1)
-        self.assertIsNone(result2)
-        self.assertIsNotNone(result3)  # 3개 도달 시 플러시
-        self.assertEqual(result3, "abc")
+        assert result1 is None
+        assert result2 is None
+        assert result3 is not None  # 3개 도달 시 플러시
+        assert result3 == "abc"
 
     def test_buffer_manual_flush(self):
         """수동 플러시"""
@@ -54,8 +54,8 @@ class TestTokenStreamBuffer(unittest.TestCase):
         buffer.add_token("world")
 
         result = buffer.flush()
-        self.assertEqual(result, "hello world")
-        self.assertEqual(len(buffer.buffer), 0)
+        assert result == "hello world"
+        assert len(buffer.buffer) == 0
 
     def test_buffer_reset(self):
         """버퍼 리셋"""
@@ -63,7 +63,7 @@ class TestTokenStreamBuffer(unittest.TestCase):
         buffer.add_token("test")
         buffer.reset()
 
-        self.assertEqual(len(buffer.buffer), 0)
+        assert len(buffer.buffer) == 0
 
 
 class TestStreamChunk(unittest.TestCase):
@@ -75,9 +75,9 @@ class TestStreamChunk(unittest.TestCase):
             content="test content", timestamp=time.time(), token_count=2, chunk_index=0
         )
 
-        self.assertEqual(chunk.content, "test content")
-        self.assertEqual(chunk.token_count, 2)
-        self.assertFalse(chunk.is_final)
+        assert chunk.content == "test content"
+        assert chunk.token_count == 2
+        assert not chunk.is_final
 
     def test_stream_chunk_final(self):
         """최종 청크"""
@@ -89,7 +89,7 @@ class TestStreamChunk(unittest.TestCase):
             is_final=True,
         )
 
-        self.assertTrue(chunk.is_final)
+        assert chunk.is_final
 
 
 class TestStreamingResponseHandler(unittest.TestCase):
@@ -117,9 +117,9 @@ class TestStreamingResponseHandler(unittest.TestCase):
                 self._mock_token_generator(["hello", " ", "world"]), on_chunk
             )
 
-            self.assertGreater(len(chunks_received), 0)
-            self.assertGreater(
-                metrics.total_tokens, 0
+            assert len(chunks_received) > 0
+            assert (
+                metrics.total_tokens > 0
             )  # 토큰 개수 확인 (정확히 3개가 아닐 수 있음)
 
         asyncio.run(_test())
@@ -137,10 +137,10 @@ class TestStreamingResponseHandler(unittest.TestCase):
                 self._mock_token_generator(["a", "b", "c", "d", "e"]), on_chunk
             )
 
-            self.assertGreater(metrics.total_tokens, 0)  # 5개 이상
-            self.assertGreater(metrics.total_time, 0)
-            self.assertGreater(metrics.tokens_per_second, 0)
-            self.assertGreater(metrics.first_token_latency, 0)
+            assert metrics.total_tokens > 0  # 5개 이상
+            assert metrics.total_time > 0
+            assert metrics.tokens_per_second > 0
+            assert metrics.first_token_latency > 0
 
         asyncio.run(_test())
 
@@ -161,7 +161,7 @@ class TestStreamingResponseHandler(unittest.TestCase):
                 self._mock_token_generator(["test"]), on_chunk, on_complete
             )
 
-            self.assertTrue(completion_called)
+            assert completion_called
 
         asyncio.run(_test())
 
@@ -186,7 +186,7 @@ class TestStreamingResponseHandler(unittest.TestCase):
                 _error_generator(), on_chunk, on_error=on_error
             )
 
-            self.assertTrue(error_caught)
+            assert error_caught
 
         asyncio.run(_test())
 
@@ -201,7 +201,7 @@ class TestStreamingResponseHandler(unittest.TestCase):
                 self._mock_token_generator(["first", "second"]), on_chunk
             )
 
-            self.assertGreater(metrics.first_token_latency, 0)
+            assert metrics.first_token_latency > 0
 
         asyncio.run(_test())
 
@@ -216,7 +216,7 @@ class TestStreamingResponseHandler(unittest.TestCase):
                 self._mock_token_generator(["a", "bb", "ccc"]), on_chunk
             )
 
-            self.assertGreater(metrics.avg_chunk_size, 0)
+            assert metrics.avg_chunk_size > 0
 
         asyncio.run(_test())
 
@@ -230,11 +230,11 @@ class TestStreamingResponseHandler(unittest.TestCase):
             async def on_chunk(chunk: StreamChunk):
                 chunks.append(chunk)
 
-            metrics = await self.handler.stream_response(
+            await self.handler.stream_response(
                 self._mock_token_generator([large_token, large_token]), on_chunk
             )
 
-            self.assertGreater(len(chunks), 0)
+            assert len(chunks) > 0
 
         asyncio.run(_test())
 
@@ -247,36 +247,36 @@ class TestServerSentEventsHandler(unittest.TestCase):
         data = {"token": "hello", "index": 0}
         sse = ServerSentEventsHandler.format_sse_event("chunk", data)
 
-        self.assertIn("event: chunk", sse)
-        self.assertIn("data:", sse)
-        self.assertIn("hello", sse)
+        assert "event: chunk" in sse
+        assert "data:" in sse
+        assert "hello" in sse
 
     def test_format_sse_event_with_id(self):
         """ID가 있는 SSE 이벤트"""
         data = {"token": "test"}
         sse = ServerSentEventsHandler.format_sse_event("chunk", data, event_id=1)
 
-        self.assertIn("id: 1", sse)
+        assert "id: 1" in sse
 
     def test_format_sse_error(self):
         """SSE 에러 포매팅"""
         sse = ServerSentEventsHandler.format_sse_error("Test error", 500)
 
-        self.assertIn("event: error", sse)
-        self.assertIn("Test error", sse)
+        assert "event: error" in sse
+        assert "Test error" in sse
 
     def test_format_sse_keepalive(self):
         """SSE keep-alive"""
         sse = ServerSentEventsHandler.format_sse_keepalive()
 
-        self.assertIn("keep-alive", sse)
+        assert "keep-alive" in sse
 
     def test_sse_korean_support(self):
         """한글 지원"""
         data = {"message": "안녕하세요"}
         sse = ServerSentEventsHandler.format_sse_event("message", data)
 
-        self.assertIn("안녕하세요", sse)
+        assert "안녕하세요" in sse
 
 
 class TestStreamingResponseBuilder(unittest.TestCase):
@@ -292,7 +292,7 @@ class TestStreamingResponseBuilder(unittest.TestCase):
         )
 
         self.builder.add_chunk(chunk)
-        self.assertEqual(self.builder.get_content(), "hello")
+        assert self.builder.get_content() == "hello"
 
     def test_accumulate_chunks(self):
         """청크 누적"""
@@ -303,8 +303,8 @@ class TestStreamingResponseBuilder(unittest.TestCase):
             self.builder.add_chunk(chunk)
 
         content = self.builder.get_content()
-        self.assertEqual(len(self.builder.get_chunks()), 5)
-        self.assertIn("chunk0", content)
+        assert len(self.builder.get_chunks()) == 5
+        assert "chunk0" in content
 
     def test_get_chunks(self):
         """청크 반환"""
@@ -315,8 +315,8 @@ class TestStreamingResponseBuilder(unittest.TestCase):
         self.builder.add_chunk(chunk)
         chunks = self.builder.get_chunks()
 
-        self.assertEqual(len(chunks), 1)
-        self.assertEqual(chunks[0].content, "test")
+        assert len(chunks) == 1
+        assert chunks[0].content == "test"
 
     def test_reset_builder(self):
         """빌더 리셋"""
@@ -327,8 +327,8 @@ class TestStreamingResponseBuilder(unittest.TestCase):
         self.builder.add_chunk(chunk)
         self.builder.reset()
 
-        self.assertEqual(self.builder.get_content(), "")
-        self.assertEqual(len(self.builder.get_chunks()), 0)
+        assert self.builder.get_content() == ""
+        assert len(self.builder.get_chunks()) == 0
 
 
 class TestAdaptiveStreamingController(unittest.TestCase):
@@ -340,14 +340,14 @@ class TestAdaptiveStreamingController(unittest.TestCase):
     def test_initial_buffer_size(self):
         """초기 버퍼 크기"""
         size = self.controller.get_buffer_size()
-        self.assertEqual(size, 10)
+        assert size == 10
 
     def test_record_latency(self):
         """지연 기록"""
         self.controller.record_latency(50.0)
         metrics = self.controller.get_metrics()
 
-        self.assertEqual(metrics["min_latency_ms"], 50.0)
+        assert metrics["min_latency_ms"] == 50.0
 
     def test_buffer_increase_on_high_latency(self):
         """높은 지연 시 버퍼 증가"""
@@ -356,7 +356,7 @@ class TestAdaptiveStreamingController(unittest.TestCase):
             self.controller.record_latency(250.0)
 
         size = self.controller.get_buffer_size()
-        self.assertGreater(size, 10)
+        assert size > 10
 
     def test_buffer_decrease_on_low_latency(self):
         """낮은 지연 시 버퍼 감소 또는 유지"""
@@ -372,7 +372,7 @@ class TestAdaptiveStreamingController(unittest.TestCase):
 
         final_size = self.controller.get_buffer_size()
         # 버퍼 크기가 감소하거나 최대치에 도달
-        self.assertLessEqual(final_size, initial_size + 5)
+        assert final_size <= initial_size + 5
 
     def test_get_metrics(self):
         """메트릭 조회"""
@@ -382,9 +382,9 @@ class TestAdaptiveStreamingController(unittest.TestCase):
 
         metrics = self.controller.get_metrics()
 
-        self.assertIn("avg_latency_ms", metrics)
-        self.assertIn("min_latency_ms", metrics)
-        self.assertIn("max_latency_ms", metrics)
+        assert "avg_latency_ms" in metrics
+        assert "min_latency_ms" in metrics
+        assert "max_latency_ms" in metrics
 
 
 class TestStreamingMetrics(unittest.TestCase):
@@ -394,8 +394,8 @@ class TestStreamingMetrics(unittest.TestCase):
         """메트릭 초기화"""
         metrics = StreamingMetrics()
 
-        self.assertEqual(metrics.total_tokens, 0)
-        self.assertEqual(metrics.chunk_count, 0)
+        assert metrics.total_tokens == 0
+        assert metrics.chunk_count == 0
 
     def test_metrics_calculation(self):
         """메트릭 계산"""
@@ -403,8 +403,8 @@ class TestStreamingMetrics(unittest.TestCase):
         metrics.tokens_per_second = 20.0
         metrics.avg_chunk_size = 10.0
 
-        self.assertEqual(metrics.tokens_per_second, 20.0)
-        self.assertEqual(metrics.avg_chunk_size, 10.0)
+        assert metrics.tokens_per_second == 20.0
+        assert metrics.avg_chunk_size == 10.0
 
 
 class TestGlobalInstances(unittest.TestCase):
@@ -413,12 +413,12 @@ class TestGlobalInstances(unittest.TestCase):
     def test_get_streaming_handler(self):
         """스트리밍 핸들러 인스턴스"""
         handler = get_streaming_handler()
-        self.assertIsNotNone(handler)
+        assert handler is not None
 
     def test_get_adaptive_controller(self):
         """적응형 컨트롤러 인스턴스"""
         controller = get_adaptive_controller()
-        self.assertIsNotNone(controller)
+        assert controller is not None
 
 
 class TestIntegration(unittest.TestCase):
@@ -442,10 +442,10 @@ class TestIntegration(unittest.TestCase):
                 chunks.append(chunk)
                 builder.add_chunk(chunk)
 
-            metrics = await handler.stream_response(token_gen(), on_chunk)
+            await handler.stream_response(token_gen(), on_chunk)
 
-            self.assertEqual(builder.get_content(), "hello world")
-            self.assertGreater(len(chunks), 0)
+            assert builder.get_content() == "hello world"
+            assert len(chunks) > 0
 
         asyncio.run(_test())
 
@@ -467,7 +467,7 @@ class TestIntegration(unittest.TestCase):
             await handler.stream_response(token_gen(), on_chunk)
 
             metrics = controller.get_metrics()
-            self.assertGreater(len(metrics), 0)
+            assert len(metrics) > 0
 
         asyncio.run(_test())
 
@@ -481,8 +481,8 @@ class TestIntegration(unittest.TestCase):
 
         sse = ServerSentEventsHandler.format_sse_event("chunk", sse_data, 1)
 
-        self.assertIn("id: 1", sse)
-        self.assertIn("test", sse)
+        assert "id: 1" in sse
+        assert "test" in sse
 
 
 if __name__ == "__main__":

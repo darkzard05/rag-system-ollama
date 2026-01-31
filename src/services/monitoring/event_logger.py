@@ -3,6 +3,7 @@ Task 21-2: Event Logger Module
 이벤트 로깅 및 추적 시스템
 """
 
+import contextlib
 import time
 import uuid
 from collections import defaultdict, deque
@@ -126,9 +127,8 @@ class EventStore:
                     continue
                 if query.user_id and event.user_id != query.user_id:
                     continue
-                if query.tags:
-                    if not any(tag in event.tags for tag in query.tags):
-                        continue
+                if query.tags and not any(tag in event.tags for tag in query.tags):
+                    continue
                 if query.start_time and event.timestamp < query.start_time:
                     continue
                 if query.end_time and event.timestamp > query.end_time:
@@ -209,10 +209,8 @@ class EventLogger:
         # 핸들러 호출
         with self._lock:
             for handler in self._handlers:
-                try:
+                with contextlib.suppress(Exception):
                     handler(event)
-                except Exception:
-                    pass
 
         return event.event_id
 

@@ -15,12 +15,14 @@ from src.api.api_server import app
 
 # --- Fixtures ---
 
+
 @pytest.fixture
 def auth_headers():
     """인증 헤더 생성"""
     # api_server.py에서 초기화된 auth_manager에 직접 키를 등록하여 확실하게 인증 통과
     api_key = "sk_admin_test_token_12345"
     from src.api.api_server import TEST_USER, auth_manager
+
     auth_manager._api_keys[api_key] = TEST_USER
     return {"Authorization": f"Bearer {api_key}"}
 
@@ -51,9 +53,21 @@ def mock_session_manager():
 
         async def async_gen(*args, **kwargs):
             events = [
-                {"event": "on_custom_event", "name": "response_chunk", "data": {"chunk": "Hello"}},
-                {"event": "on_custom_event", "name": "response_chunk", "data": {"chunk": " "}},
-                {"event": "on_custom_event", "name": "response_chunk", "data": {"chunk": "World"}},
+                {
+                    "event": "on_custom_event",
+                    "name": "response_chunk",
+                    "data": {"chunk": "Hello"},
+                },
+                {
+                    "event": "on_custom_event",
+                    "name": "response_chunk",
+                    "data": {"chunk": " "},
+                },
+                {
+                    "event": "on_custom_event",
+                    "name": "response_chunk",
+                    "data": {"chunk": "World"},
+                },
                 {
                     "event": "on_chain_end",
                     "name": "retrieve",
@@ -70,7 +84,7 @@ def mock_session_manager():
         def get_side_effect(key, default=None):
             if key == "pdf_processed":
                 return True
-            if key == "rag_engine": # api_server.py에서는 rag_engine을 사용함
+            if key == "rag_engine":  # api_server.py에서는 rag_engine을 사용함
                 return mock_chain
             if key == "last_uploaded_file_name":
                 return "test.pdf"
@@ -141,7 +155,9 @@ async def test_upload_flow_mocked(async_client, mock_rag_resources, auth_headers
         mock_build.return_value = ("Success", False)
 
         files = {"file": ("test.pdf", b"%PDF-1.4...", "application/pdf")}
-        response = await async_client.post("/api/v1/upload", files=files, headers=auth_headers)
+        response = await async_client.post(
+            "/api/v1/upload", files=files, headers=auth_headers
+        )
 
         assert response.status_code == 200
         data = response.json()

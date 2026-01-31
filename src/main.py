@@ -16,13 +16,13 @@ from common.logging_config import setup_logging
 
 logger = setup_logging(log_level="INFO", log_file=Path("logs/app.log"))
 
-from common.config import AVAILABLE_EMBEDDING_MODELS
-from common.constants import FilePathConstants, StringConstants
+from common.config import AVAILABLE_EMBEDDING_MODELS  # noqa: E402
+from common.constants import FilePathConstants, StringConstants  # noqa: E402
 
 # [Lazy Import] 무거운 코어 모듈 임포트 제거 (함수 내부로 이동)
-from core.session import SessionManager
-from infra.notification_system import SystemNotifier
-from ui.ui import (
+from core.session import SessionManager  # noqa: E402
+from infra.notification_system import SystemNotifier  # noqa: E402
+from ui.ui import (  # noqa: E402
     _render_status_box,
     inject_custom_css,
     render_left_column,
@@ -44,10 +44,10 @@ from common.constants import StringConstants
 
 st.set_page_config(page_title=StringConstants.PAGE_TITLE, layout=StringConstants.LAYOUT)
 
-import atexit
-import threading
-import time
-from pathlib import Path
+import atexit  # noqa: E402
+import threading  # noqa: E402
+import time  # noqa: E402
+from pathlib import Path  # noqa: E402
 
 
 # [Extreme Lazy Import] 로깅 설정조차 필요한 시점으로 미룸
@@ -90,7 +90,8 @@ def _init_temp_directory():
 
             manager = get_deployment_manager()
             # 실제 임시 디렉토리(temp_path)와 배포 디렉토리를 모두 정리
-            manager.cleanup_orphaned_artifacts(max_age_hours=24, target_dir=temp_path)
+            # [수정] 임시 파일은 1시간만 지나도 정리 (테스트 반복 시 쌓임 방지)
+            manager.cleanup_orphaned_artifacts(max_age_hours=1, target_dir=temp_path)
             manager.cleanup_orphaned_artifacts(max_age_hours=24)  # 기본 배포 폴더 정리
             logger.info(
                 f"[System] [Janitor] 백그라운드 자원 정리 완료 (대상: {temp_path} 및 deployments/)"
@@ -113,10 +114,18 @@ def _cleanup_current_file():
     try:
         path = SessionManager.get("pdf_file_path")
         if path and os.path.exists(path):
-            os.remove(path)
-            # logger는 이미 닫혔을 수 있으므로 print 사용
-            print(f"[System] Cleanup: Deleted temp file {path}")
-    except:
+            # [Windows] 파일 잠금 해제를 위한 재시도 로직
+            for attempt in range(3):
+                try:
+                    os.remove(path)
+                    print(f"[System] Cleanup: Deleted temp file {path}")
+                    return
+                except PermissionError:
+                    if attempt < 2:  # 마지막 시도가 아니면 대기
+                        time.sleep(0.5)
+                except Exception:
+                    pass
+    except Exception:
         pass
 
 
@@ -158,29 +167,29 @@ def _ensure_models_are_loaded(status_container: DeltaGenerator) -> bool:
         current_llm = SessionManager.get("llm")
         current_embedder = SessionManager.get("embedder")
 
-        # 1. LLM 로드
-        if not current_llm or getattr(current_llm, "model", None) != selected_model:
-            SystemNotifier.model_load(selected_model, device="GPU")  # LLM은 보통 GPU
-            force_sync()
-            llm = load_llm(selected_model)
-            SessionManager.set("llm", llm)
-            SystemNotifier.success(f"LLM 로드 완료: {selected_model}")
-            force_sync()
-
-        # 2. 임베딩 모델 로드
+        # 1. 임베딩 모델 우선 로드 (분석 시작을 위해)
+        current_embedder = SessionManager.get("embedder")
         if (
             not current_embedder
             or getattr(current_embedder, "model_name", None) != selected_embedding
         ):
-            # 로드 전에는 준비 중으로 표시
-            SystemNotifier.loading(f"임베딩 모델 준비 중: {selected_embedding}")
+            SystemNotifier.loading("임베딩 로드 중...")
             force_sync()
             embedder = load_embedding_model(selected_embedding)
             SessionManager.set("embedder", embedder)
-
-            # 실제 로드된 디바이스 정보를 세션에서 가져옴
             actual_device = SessionManager.get("current_embedding_device", "UNKNOWN")
-            SystemNotifier.success(f"임베딩 모델 로드 완료 ({actual_device}): {selected_embedding}")
+            SystemNotifier.success(f"임베딩 준비 완료 ({actual_device})")
+            force_sync()
+
+        # 2. LLM 로드 및 백그라운드 예열
+        current_llm = SessionManager.get("llm")
+        if not current_llm or getattr(current_llm, "model", None) != selected_model:
+            SystemNotifier.model_load(selected_model, device="GPU")
+            force_sync()
+            llm = load_llm(selected_model)
+            SessionManager.set("llm", llm)
+            # ...
+            SystemNotifier.success("LLM 준비 완료")
             force_sync()
 
         return True

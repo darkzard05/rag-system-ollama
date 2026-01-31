@@ -5,10 +5,9 @@ Optimized: 타임아웃 강화 및 로컬 Ollama 통신 안정성 확보.
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import os
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import streamlit as st
 from langchain_ollama import ChatOllama
@@ -16,6 +15,8 @@ from langchain_ollama import ChatOllama
 if TYPE_CHECKING:
     from langchain_huggingface import HuggingFaceEmbeddings
     from sentence_transformers import CrossEncoder
+
+import threading
 
 from common.config import (
     CACHE_DIR,
@@ -38,8 +39,9 @@ from services.monitoring.performance_monitor import (
 logger = logging.getLogger(__name__)
 monitor = get_performance_monitor()
 
-# [추가] 동시 로딩 방지를 위한 글로벌 비동기 락
-_loading_lock = asyncio.Lock()
+# [추가] 다중 스레드 중복 로딩 방지를 위한 전역 락 및 공유 저장소
+_model_init_lock = threading.RLock()
+_loaded_model_instances: dict[str, Any] = {}
 
 
 @st.cache_data(ttl=600)  # 모델 목록 캐시 10분
@@ -75,11 +77,24 @@ def load_embedding_model(
     """
     임베딩 모델을 로드합니다. (Thread-safe & VRAM Optimized)
     """
-    import torch
-    from langchain_huggingface import HuggingFaceEmbeddings
+    global _loaded_model_instances
+    model_key = (
+        embedding_model_name
+        or "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
+    )
 
-    logger.info(">>> load_embedding_model 진입")
-    logger.info(f"[Debug] EMBEDDING_DEVICE 설정값: {EMBEDDING_DEVICE}")
+    # [수정] 중복 진입 방지를 위한 이중 확인 잠금 (Double-Checked Locking)
+    with _model_init_lock:
+        if model_key in _loaded_model_instances:
+            # 이미 다른 스레드에서 로드를 완료했으므로 공유 인스턴스 반환
+            return _loaded_model_instances[model_key]
+
+        import torch
+        from langchain_huggingface import HuggingFaceEmbeddings
+
+        logger.info(f">>> load_embedding_model 진입 (Model: {model_key})")
+        logger.info(f"[Debug] EMBEDDING_DEVICE 설정값: {EMBEDDING_DEVICE}")
+
     logger.info(f"[Debug] torch.cuda.is_available(): {torch.cuda.is_available()}")
 
     # 1. 디바이스 결정 로직 (설정값 최우선)
@@ -95,13 +110,16 @@ def load_embedding_model(
             logger.info("[Debug] 'auto' 설정으로 인해 'mps' 선택됨")
         else:
             target_device = "cpu"
-            logger.info("[Debug] 'auto' 설정이지만 하드웨어 가속이 불가능하여 'cpu' 선택됨")
+            logger.info(
+                "[Debug] 'auto' 설정이지만 하드웨어 가속이 불가능하여 'cpu' 선택됨"
+            )
 
     # 명시적 설정(cuda, cpu 등)이 있는 경우 그대로 사용
     logger.info(f"[System] [Model] 최종 결정된 디바이스: {target_device}")
 
     # UI 표시를 위해 세션 상태에 기록
     from core.session import SessionManager
+
     SessionManager.set("current_embedding_device", target_device.upper())
 
     # [최적화] 배치 크기 설정
@@ -120,7 +138,10 @@ def load_embedding_model(
             encode_kwargs={"device": target_device, "batch_size": batch_size},
             cache_folder=CACHE_DIR,
         )
-        logger.info("[System] [Model] 임베딩 모델 로드 성공")
+        # [수정] 성공적으로 로드된 경우 공유 저장소에 등록
+        _loaded_model_instances[model_key] = result
+
+        logger.info(f"[System] [Model] 임베딩 모델 로드 성공: {model_key}")
         return result
     except Exception as e:
         logger.error(f"임베딩 모델 로드 실패: {e}")

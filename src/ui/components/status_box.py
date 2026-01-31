@@ -16,7 +16,7 @@ def render_status_box(container):
     # [최적화] 세션이 없어도 에러 없이 빈 목록 반환
     try:
         status_logs = SessionManager.get("status_logs", [])
-    except:
+    except Exception:
         status_logs = []
 
     if not status_logs:
@@ -57,20 +57,20 @@ def render_status_box(container):
         border-left: 2px solid transparent;
         transition: all 0.2s;
     }
-    .status-newest { 
+    .status-newest {
         color: #0068c9;
         font-weight: 600;
         background-color: rgba(0, 104, 201, 0.1);
         border-radius: 6px;
         border-left: 3px solid #0068c9;
     }
-    
+
     @media (prefers-color-scheme: dark) {
         .status-outer-container { background-color: rgba(255, 255, 255, 0.05); }
         .status-line { color: #aaa; }
         .status-newest { color: #4fa8ff; background-color: rgba(79, 168, 255, 0.15); border-left-color: #4fa8ff; }
     }
-    
+
     .status-container::-webkit-scrollbar { width: 4px; }
     .status-container::-webkit-scrollbar-thumb { background: rgba(128, 128, 128, 0.3); border-radius: 10px; }
     </style>

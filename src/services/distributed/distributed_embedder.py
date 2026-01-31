@@ -105,7 +105,7 @@ class DistributedEmbedder:
         model_name: str,
         batch_size: int = 32,
         priority: int = 0,
-    ) -> EmbeddingJob:
+    ) -> EmbeddingJob | None:
         """임베딩 작업 제출.
 
         Args:
@@ -450,6 +450,6 @@ class TaskOrchestrator:
             if group_id not in self._job_groups:
                 return {}
 
-            job_ids = self._job_groups[group_id]
+            self._job_groups[group_id]
 
         return self.embedder.get_all_jobs_status()

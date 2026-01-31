@@ -100,7 +100,7 @@ class EmbeddingBasedSemanticChunker:
                 raw_segment = text[last_pos:sep_end]
                 leading_spaces = len(raw_segment) - len(raw_segment.lstrip())
 
-                real_start = last_pos + leading_spaces
+                last_pos + leading_spaces
 
                 # replace("\n", " ")는 길이를 변화시키지 않음 (1문자->1문자).
                 # 하지만 strip()은 길이를 줄임.
@@ -214,7 +214,9 @@ class EmbeddingBasedSemanticChunker:
         # Threshold보다 유사도가 낮은 지점을 분할점으로 선택
         breakpoints = [i + 1 for i, sim in enumerate(similarities) if sim < threshold]
 
-        logger.debug(f"청킹 분석: 임계값={threshold:.3f}, 유사도 리스트={['%.3f' % s for s in similarities]}, 분기점={len(breakpoints)}개")
+        logger.debug(
+            f"청킹 분석: 임계값={threshold:.3f}, 유사도 리스트={[f'{s:.3f}' for s in similarities]}, 분기점={len(breakpoints)}개"
+        )
 
         return breakpoints
 
@@ -432,7 +434,7 @@ class EmbeddingBasedSemanticChunker:
 
             # 순차 탐색
             found = False
-            for i, r in enumerate(doc_ranges):
+            for _i, r in enumerate(doc_ranges):
                 if r["start"] <= c_center < r["end"]:
                     matched_metadata = r["metadata"].copy() if r["metadata"] else {}
                     found = True

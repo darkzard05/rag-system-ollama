@@ -39,8 +39,8 @@ async def benchmark_parallel_retrieval():
     print("\n--- [Sequential] 순차 검색 실행 ---")
     start_time = time.time()
 
-    res1 = bm25_retriever.invoke(query)
-    res2 = faiss_retriever.invoke(query)
+    bm25_retriever.invoke(query)
+    faiss_retriever.invoke(query)
 
     seq_time = time.time() - start_time
     print(f"⏱️ 소요 시간: {seq_time:.4f}초")
@@ -51,7 +51,7 @@ async def benchmark_parallel_retrieval():
 
     # asyncio.gather를 사용하여 동시 실행 (ainvoke 사용)
     # BM25Retriever는 보통 동기이므로 asyncio.to_thread 활용 시뮬레이션
-    results = await asyncio.gather(
+    await asyncio.gather(
         asyncio.to_thread(bm25_retriever.invoke, query), faiss_retriever.ainvoke(query)
     )
 

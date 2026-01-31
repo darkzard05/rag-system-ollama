@@ -226,10 +226,10 @@ def main():
 예시:
   # 일반 마이그레이션
   python migrate_cache_v1_to_v2.py --cache-dir .model_cache
-  
+
   # 드라이런 (실제 작업 없음)
   python migrate_cache_v1_to_v2.py --cache-dir .model_cache --dry-run
-  
+
   # 백업 없이 마이그레이션
   python migrate_cache_v1_to_v2.py --cache-dir .model_cache --no-backup
         """,

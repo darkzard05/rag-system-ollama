@@ -54,7 +54,7 @@ def apply_tooltips_to_response(response_text: str, documents: list) -> str:
 
     # 1. 페이지별 텍스트 매핑 생성
     # 여러 청크가 같은 페이지일 수 있으므로 텍스트를 병합합니다.
-    page_content_map = {}
+    page_content_map: dict[str, str] = {}
     for doc in documents:
         page = doc.metadata.get("page")
         if not page:
@@ -144,7 +144,7 @@ def clean_query_text(query: str) -> str:
     return query.strip()
 
 
-import streamlit as st
+import streamlit as st  # noqa: E402
 
 
 @st.cache_data(ttl=5)  # 5초 동안 리소스 정보 캐싱

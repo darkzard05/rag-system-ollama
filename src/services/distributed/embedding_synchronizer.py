@@ -392,7 +392,7 @@ class ConsistencyValidator:
     def is_valid(self, job_id: str) -> bool:
         """유효성 확인."""
         result = self.get_validation_result(job_id)
-        return result and result.get("valid", False) if result else False
+        return bool(result.get("valid", False)) if result else False
 
 
 class CacheSync:

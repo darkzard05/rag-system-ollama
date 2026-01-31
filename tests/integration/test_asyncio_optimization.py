@@ -33,18 +33,18 @@ class TestAsyncConfig(unittest.TestCase):
     def test_async_config_default_values(self):
         """기본값 확인"""
         config = AsyncConfig()
-        self.assertEqual(config.max_concurrent_queries, 5)
-        self.assertEqual(config.max_concurrent_retrievals, 10)
-        self.assertEqual(config.timeout_llm, 30.0)
+        assert config.max_concurrent_queries == 5
+        assert config.max_concurrent_retrievals == 10
+        assert config.timeout_llm == 30.0
 
     def test_async_config_custom_values(self):
         """커스텀 설정 확인"""
         config = AsyncConfig(
             max_concurrent_queries=3, max_concurrent_retrievals=5, timeout_llm=60.0
         )
-        self.assertEqual(config.max_concurrent_queries, 3)
-        self.assertEqual(config.max_concurrent_retrievals, 5)
-        self.assertEqual(config.timeout_llm, 60.0)
+        assert config.max_concurrent_queries == 3
+        assert config.max_concurrent_retrievals == 5
+        assert config.timeout_llm == 60.0
 
 
 class TestAsyncSemaphore(unittest.TestCase):
@@ -74,7 +74,7 @@ class TestAsyncSemaphore(unittest.TestCase):
                     await asyncio.sleep(0.01)
 
             await asyncio.gather(*[_task() for _ in range(5)])
-            self.assertEqual(counter, 5)
+            assert counter == 5
 
         asyncio.run(_test())
 
@@ -95,8 +95,8 @@ class TestConcurrentQueryExpander(unittest.TestCase):
             result, stats = await self.expander.expand_queries_concurrently(
                 ["test query"], _expand_func
             )
-            self.assertGreater(len(result), 0)
-            self.assertEqual(stats["input_queries"], 1)
+            assert len(result) > 0
+            assert stats["input_queries"] == 1
 
         asyncio.run(_test())
 
@@ -110,8 +110,8 @@ class TestConcurrentQueryExpander(unittest.TestCase):
             result, stats = await self.expander.expand_queries_concurrently(
                 ["query1", "query2", "query3"], _expand_func
             )
-            self.assertGreater(len(result), 3)
-            self.assertEqual(stats["input_queries"], 3)
+            assert len(result) > 3
+            assert stats["input_queries"] == 3
 
         asyncio.run(_test())
 
@@ -129,7 +129,7 @@ class TestConcurrentQueryExpander(unittest.TestCase):
                 ["query"], _slow_expand
             )
             # 타임아웃 시에도 폴백으로 원본 쿼리 반환
-            self.assertIn("query", result)
+            assert "query" in result
 
         asyncio.run(_test())
 
@@ -144,7 +144,7 @@ class TestConcurrentQueryExpander(unittest.TestCase):
                 ["query"], _error_expand
             )
             # 에러 시에도 원본 쿼리 반환
-            self.assertEqual(result, ["query"])
+            assert result == ["query"]
 
         asyncio.run(_test())
 
@@ -156,7 +156,7 @@ class TestConcurrentQueryExpander(unittest.TestCase):
 
         async def _test():
             result = await self.expander.expand_single_query("test", _expand_func)
-            self.assertGreater(len(result), 0)
+            assert len(result) > 0
 
         asyncio.run(_test())
 
@@ -181,8 +181,8 @@ class TestConcurrentDocumentRetriever(unittest.TestCase):
             docs, stats = await self.retriever.retrieve_documents_parallel(
                 ["query1", "query2"], _retrieve_func
             )
-            self.assertGreater(len(docs), 0)
-            self.assertEqual(stats["query_count"], 2)
+            assert len(docs) > 0
+            assert stats["query_count"] == 2
 
         asyncio.run(_test())
 
@@ -203,8 +203,8 @@ class TestConcurrentDocumentRetriever(unittest.TestCase):
                 ["query"], _retrieve_func, deduplicate=True
             )
             # 중복이 제거되어야 함 (같은 내용 + 같은 source)
-            self.assertEqual(len(docs), 1)
-            self.assertGreater(stats["duplicates_removed"], 0)
+            assert len(docs) == 1
+            assert stats["duplicates_removed"] > 0
 
         asyncio.run(_test())
 
@@ -222,7 +222,7 @@ class TestConcurrentDocumentRetriever(unittest.TestCase):
                 ["query"], _retrieve_func, deduplicate=False
             )
             # 중복이 유지되어야 함
-            self.assertEqual(len(docs), 2)
+            assert len(docs) == 2
 
         asyncio.run(_test())
 
@@ -240,7 +240,7 @@ class TestConcurrentDocumentRetriever(unittest.TestCase):
                 ["query"], _slow_retrieve
             )
             # 타임아웃 시에도 에러 없이 처리
-            self.assertIsInstance(docs, list)
+            assert isinstance(docs, list)
 
         asyncio.run(_test())
 
@@ -268,7 +268,7 @@ class TestConcurrentDocumentReranker(unittest.TestCase):
             result, stats = await self.reranker.rerank_documents_parallel(
                 "query", docs, _rerank_func, top_k=3
             )
-            self.assertEqual(len(result), 3)
+            assert len(result) == 3
 
         asyncio.run(_test())
 
@@ -283,8 +283,8 @@ class TestConcurrentDocumentReranker(unittest.TestCase):
             result, stats = await self.reranker.rerank_documents_parallel(
                 "query", docs, _rerank_func, top_k=10
             )
-            self.assertEqual(len(result), 10)
-            self.assertGreater(stats["batch_count"], 1)
+            assert len(result) == 10
+            assert stats["batch_count"] > 1
 
         asyncio.run(_test())
 
@@ -300,7 +300,7 @@ class TestConcurrentDocumentReranker(unittest.TestCase):
             result, stats = await self.reranker.rerank_documents_parallel(
                 "query", docs, _rerank_func, top_k=5
             )
-            self.assertEqual(len(result), 5)
+            assert len(result) == 5
 
         asyncio.run(_test())
 
@@ -319,7 +319,7 @@ class TestConcurrentDocumentReranker(unittest.TestCase):
                 "query", docs, _slow_rerank, top_k=3
             )
             # 타임아웃 시에도 결과 반환
-            self.assertIsInstance(result, list)
+            assert isinstance(result, list)
 
         asyncio.run(_test())
 
@@ -340,8 +340,8 @@ class TestConcurrentEmbeddingGenerator(unittest.TestCase):
             embeddings, stats = await self.generator.generate_embeddings_parallel(
                 ["text1", "text2", "text3"], _embed_func
             )
-            self.assertEqual(len(embeddings), 3)
-            self.assertEqual(stats["input_count"], 3)
+            assert len(embeddings) == 3
+            assert stats["input_count"] == 3
 
         asyncio.run(_test())
 
@@ -362,7 +362,6 @@ class TestConcurrentEmbeddingGenerator(unittest.TestCase):
             embeddings1, stats1 = await self.generator.generate_embeddings_parallel(
                 ["text"], _embed_func, use_cache=True
             )
-            first_call_count = call_count
 
             # 같은 텍스트로 두 번째 호출
             embeddings2, stats2 = await self.generator.generate_embeddings_parallel(
@@ -370,8 +369,8 @@ class TestConcurrentEmbeddingGenerator(unittest.TestCase):
             )
 
             # 캐시 히트가 발생했어야 함
-            self.assertEqual(stats2["cache_hits"], 1)
-            self.assertEqual(stats2["cache_misses"], 0)
+            assert stats2["cache_hits"] == 1
+            assert stats2["cache_misses"] == 0
 
         asyncio.run(_test())
 
@@ -385,8 +384,8 @@ class TestConcurrentEmbeddingGenerator(unittest.TestCase):
             embeddings, stats = await self.generator.generate_embeddings_parallel(
                 [f"text_{i}" for i in range(100)], _embed_func
             )
-            self.assertEqual(len(embeddings), 100)
-            self.assertGreater(stats["batch_count"], 1)
+            assert len(embeddings) == 100
+            assert stats["batch_count"] > 1
 
         asyncio.run(_test())
 
@@ -404,10 +403,10 @@ class TestConcurrentEmbeddingGenerator(unittest.TestCase):
 
             # 캐시 초기화
             result = self.generator.clear_cache()
-            self.assertEqual(result["cleared_entries"], 1)
+            assert result["cleared_entries"] == 1
 
             # 캐시가 비워졌는지 확인
-            self.assertEqual(len(self.generator.embedding_cache), 0)
+            assert len(self.generator.embedding_cache) == 0
 
         asyncio.run(_test())
 
@@ -419,13 +418,13 @@ class TestGlobalInstances(unittest.TestCase):
         """전역 설정 관리"""
         # 기본값
         config1 = get_async_config()
-        self.assertEqual(config1.max_concurrent_queries, 5)
+        assert config1.max_concurrent_queries == 5
 
         # 커스텀 설정
         custom_config = AsyncConfig(max_concurrent_queries=10)
         set_async_config(custom_config)
         config2 = get_async_config()
-        self.assertEqual(config2.max_concurrent_queries, 10)
+        assert config2.max_concurrent_queries == 10
 
         # 초기화
         set_async_config(AsyncConfig())
@@ -462,8 +461,8 @@ class TestIntegration(unittest.TestCase):
             docs, _ = await retriever.retrieve_documents_parallel(expanded, _retrieve)
 
             # 결과 확인
-            self.assertGreater(len(expanded), 0)
-            self.assertGreater(len(docs), 0)
+            assert len(expanded) > 0
+            assert len(docs) > 0
 
         asyncio.run(_test())
 

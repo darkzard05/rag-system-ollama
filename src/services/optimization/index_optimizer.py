@@ -174,7 +174,6 @@ class VectorQuantizer:
         """Product Quantization (PQ)."""
         # 간단한 PQ 구현
         quantized = []
-        codebooks = []
         assignments = []
 
         num_subspaces = 4
@@ -303,7 +302,7 @@ class DocumentPruner:
                 row_indices, col_indices = np.where(sim_matrix >= self.min_similarity)
 
                 # 5. 제거할 인덱스 확정 (중복된 열 인덱스들)
-                removed_indices = sorted(list(set(col_indices.tolist())))
+                removed_indices = sorted(set(col_indices.tolist()))
                 kept_indices = [
                     i for i in range(len(documents)) if i not in removed_indices
                 ]
@@ -417,15 +416,15 @@ class LRUVectorCache:
             self.cache.clear()
             self.access_order.clear()
 
-    def get_stats(self) -> dict[str, int]:
+    def get_stats(self) -> dict[str, Any]:
         """캐시 통계."""
         with self._lock:
             return {
                 "size": len(self.cache),
                 "max_size": self.max_size,
-                "utilization": len(self.cache) / self.max_size
+                "utilization": float(len(self.cache) / self.max_size)
                 if self.max_size > 0
-                else 0,
+                else 0.0,
             }
 
 

@@ -342,8 +342,11 @@ class CircuitBreakerRegistry:
     def reset_all(self) -> None:
         """모든 서킷 브레이커 리셋"""
         with self.lock:
-            for breaker in self.breakers.values():
+            for breaker in self.global_breakers.values():
                 breaker.reset()
+            for session_group in self.session_breakers.values():
+                for breaker in session_group.values():
+                    breaker.reset()
 
 
 # 전역 레지스트리

@@ -168,7 +168,7 @@ async def upload_document(
 
     except Exception as e:
         logger.error(f"업로드 오류 (Session: {session_id}): {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 
 @app.post("/api/v1/query", response_model=QueryResponse)
@@ -214,7 +214,7 @@ async def query_rag(request: QueryRequest, user_id: str = Depends(verify_token))
 
     except Exception as e:
         logger.error(f"질의 오류 (Session: {sid}): {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 
 @app.post("/api/v1/stream_query")

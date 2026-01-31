@@ -6,6 +6,8 @@ from pathlib import Path
 # 프로젝트 루트를 경로에 추가
 sys.path.append(str(Path(__file__).parent.parent.parent / "src"))
 
+import contextlib
+
 from common.circuit_breaker import CircuitBreakerOpen, get_circuit_breaker_registry
 
 logging.basicConfig(level=logging.INFO)
@@ -33,11 +35,9 @@ async def test_circuit_breaker_isolation():
     print(f"[*] 사용자 A ({user_a}) 장애 유발 중...")
     breaker_a = registry.get_breaker(service, session_id=user_a, failure_threshold=3)
 
-    for i in range(3):
-        try:
+    for _i in range(3):
+        with contextlib.suppress(ConnectionError):
             await breaker_a.call_async(failing_service)
-        except ConnectionError:
-            pass
 
     print(f"[!] 사용자 A 서킷 상태: {breaker_a.get_state()}")
 

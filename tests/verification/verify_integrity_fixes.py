@@ -30,11 +30,9 @@ class TestIntegrityFixes(unittest.TestCase):
         TSM.init_session()
 
         # 검증: 세션 2는 세션 1의 데이터를 공유하지 않아야 함
-        self.assertEqual(len(TSM.get_messages()), 0, "S2 should have 0 messages")
-        self.assertNotIn(
-            "S1 Start",
-            TSM.get("status_logs"),
-            "S2 should not share status logs with S1",
+        assert len(TSM.get_messages()) == 0, "S2 should have 0 messages"
+        assert "S1 Start" not in TSM.get("status_logs"), (
+            "S2 should not share status logs with S1"
         )
 
         # 세션 2 데이터 수정
@@ -43,8 +41,8 @@ class TestIntegrityFixes(unittest.TestCase):
         # 세션 1 재확인
         TSM.set_session_id("session_1")
         messages_s1 = TSM.get_messages()
-        self.assertEqual(len(messages_s1), 1)
-        self.assertEqual(messages_s1[0]["content"], "Hello from S1")
+        assert len(messages_s1) == 1
+        assert messages_s1[0]["content"] == "Hello from S1"
 
         print("✅ 세션 격리 및 Deepcopy 검증 통과")
 
@@ -72,18 +70,16 @@ class TestIntegrityFixes(unittest.TestCase):
         messages = TSM.get_messages()
 
         # 검증: 해시가 달라야 하므로 풀에 2개의 문서가 있어야 함
-        self.assertEqual(
-            len(doc_pool),
-            2,
-            "Doc pool should contain 2 unique entries for different metadata",
+        assert len(doc_pool) == 2, (
+            "Doc pool should contain 2 unique entries for different metadata"
         )
 
         # 각 메시지가 자신의 올바른 문서를 가리키는지 확인
         id1 = messages[0]["doc_ids"][0]
         id2 = messages[1]["doc_ids"][0]
-        self.assertNotEqual(id1, id2, "IDs should be different for different metadata")
-        self.assertEqual(doc_pool[id1].metadata["source"], "doc1.pdf")
-        self.assertEqual(doc_pool[id2].metadata["source"], "doc2.pdf")
+        assert id1 != id2, "IDs should be different for different metadata"
+        assert doc_pool[id1].metadata["source"] == "doc1.pdf"
+        assert doc_pool[id2].metadata["source"] == "doc2.pdf"
 
         print("✅ 문서 풀링 메타데이터 무결성 검증 통과")
 
@@ -126,14 +122,14 @@ class TestAsyncIntegrityFixes(unittest.IsolatedAsyncioTestCase):
                 dispatched_chunks.append("".join(answer_buffer))
 
         full_text = "".join(dispatched_chunks)
-        self.assertEqual(
-            full_text, "".join(tokens), "All tokens should be preserved in final output"
+        assert full_text == "".join(tokens), (
+            "All tokens should be preserved in final output"
         )
-        self.assertEqual(
-            len(dispatched_chunks), 3, "Should have 3 dispatch calls: T1, [T2-T6], [T7]"
+        assert len(dispatched_chunks) == 3, (
+            "Should have 3 dispatch calls: T1, [T2-T6], [T7]"
         )
-        self.assertEqual(
-            dispatched_chunks[-1], "T7", "Last chunk should be flushed in finally block"
+        assert dispatched_chunks[-1] == "T7", (
+            "Last chunk should be flushed in finally block"
         )
 
         print("✅ 스트리밍 버퍼 플러시 무결성 검증 통과")

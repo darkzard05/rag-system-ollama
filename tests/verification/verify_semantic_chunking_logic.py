@@ -15,7 +15,8 @@ from langchain_huggingface import HuggingFaceEmbeddings
 from core.semantic_chunker import EmbeddingBasedSemanticChunker
 
 # 로깅 설정 추가
-logging.basicConfig(level=logging.DEBUG, format='[%(levelname)s] %(message)s')
+logging.basicConfig(level=logging.DEBUG, format="[%(levelname)s] %(message)s")
+
 
 async def verify_logic():
     print("🔍 [Verification] 의미론적 청킹 논리 및 벡터 무결성 검증")
@@ -25,10 +26,10 @@ async def verify_logic():
 
     # 테스트 데이터: 명확히 주제가 바뀌는 4개의 문장
     test_text = (
-        "인공지능과 머신러닝은 현대 과학의 핵심 기술입니다. " # 주제 A
-        "딥러닝은 신경망을 통해 복잡한 데이터를 처리합니다. " # 주제 A
-        "신선한 토마토와 올리브유는 파스타 요리의 기본 재료입니다. " # 주제 B
-        "불 조절은 맛있는 스테이크를 굽는 데 가장 중요한 요소입니다." # 주제 B
+        "인공지능과 머신러닝은 현대 과학의 핵심 기술입니다. "  # 주제 A
+        "딥러닝은 신경망을 통해 복잡한 데이터를 처리합니다. "  # 주제 A
+        "신선한 토마토와 올리브유는 파스타 요리의 기본 재료입니다. "  # 주제 B
+        "불 조절은 맛있는 스테이크를 굽는 데 가장 중요한 요소입니다."  # 주제 B
     )
 
     doc = Document(page_content=test_text, metadata={"source": "test_logic.pdf"})
@@ -37,9 +38,9 @@ async def verify_logic():
     chunker = EmbeddingBasedSemanticChunker(
         embedder=embedder,
         breakpoint_threshold_type="similarity_threshold",
-        breakpoint_threshold_value=0.5, # 0.5 미만이면 분리
+        breakpoint_threshold_value=0.5,  # 0.5 미만이면 분리
         min_chunk_size=10,
-        max_chunk_size=500
+        max_chunk_size=500,
     )
 
     print("\n1. 문장 분할 및 유사도 분석 시작...")
@@ -56,14 +57,20 @@ async def verify_logic():
     if len(split_docs) >= 2:
         print("\n✅ 결과 분석: 주제가 바뀌는 지점에서 성공적으로 분리되었습니다.")
         # AI 관련 내용이 첫 번째 청크에 있는지 확인
-        if "인공지능" in split_docs[0].page_content and "파스타" in split_docs[1].page_content:
+        if (
+            "인공지능" in split_docs[0].page_content
+            and "파스타" in split_docs[1].page_content
+        ):
             print("✅ 내용 매칭: 주제별 그룹화가 완벽합니다.")
     else:
-        print("\n❌ 결과 분석: 모든 문장이 하나의 청크로 묶였습니다. 임계값 조정이 필요합니다.")
+        print(
+            "\n❌ 결과 분석: 모든 문장이 하나의 청크로 묶였습니다. 임계값 조정이 필요합니다."
+        )
 
     # 벡터 재사용 확인
     if vectors and len(vectors) == len(split_docs):
         print("✅ 벡터 무결성: 모든 청크에 대해 재사용 가능한 벡터가 생성되었습니다.")
+
 
 if __name__ == "__main__":
     asyncio.run(verify_logic())

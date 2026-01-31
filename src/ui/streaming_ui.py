@@ -3,6 +3,7 @@ UI 스트리밍 통합 - Streamlit과 스트리밍 처리기 연동
 """
 
 import logging
+import time
 
 import streamlit as st
 from langchain_core.documents import Document
@@ -74,7 +75,8 @@ class StreamlitStreamingUI:
 
                 # 메트릭 기록 (실제 지연 시간 계산)
                 latency_ms = (time.time() - chunk.timestamp) * 1000
-                self.adaptive_controller.record_latency(latency_ms)
+                if self.adaptive_controller:
+                    self.adaptive_controller.record_latency(latency_ms)
 
                 # UI 업데이트
                 self._update_response_display(
@@ -88,6 +90,9 @@ class StreamlitStreamingUI:
 
             async def on_complete() -> None:
                 """스트리밍 완료 시 콜백"""
+                if not self.streaming_handler:
+                    return
+
                 # 최종 메트릭 표시
                 metrics = self.streaming_handler.metrics
                 logger.info(
@@ -109,7 +114,7 @@ class StreamlitStreamingUI:
                 response_container.error(error_msg)
 
             # 스트리밍 실행
-            metrics = await self.streaming_handler.stream_response(
+            await self.streaming_handler.stream_response(
                 response_generator,
                 on_chunk,
                 on_complete,
@@ -134,7 +139,7 @@ class StreamlitStreamingUI:
             response_container.markdown(response_text + " ▌", unsafe_allow_html=True)
 
             # 메트릭 표시
-            if show_metrics and chunk_index % 10 == 0:  # 10개 청크마다 업데이트
+            if show_metrics and chunk_index % 10 == 0 and self.streaming_handler:
                 metrics = self.streaming_handler.metrics
 
                 if metrics.tokens_per_second > 0 and show_tokens_per_second:

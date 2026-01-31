@@ -62,7 +62,7 @@ async def test_distributed_executor_with_local_nodes(sample_query_embedding):
     assert len(results) > 0
 
     # 결과가 두 노드에서 섞여 있는지 확인 (확률적이므로 로깅만)
-    node_ids = set(r.node_id for r in results)
+    node_ids = {r.node_id for r in results}
     print(f"Nodes found in results: {node_ids}")
 
     # 작업 상태 확인
@@ -99,7 +99,7 @@ async def test_http_remote_node_mocked(sample_query_embedding):
         mock_post.return_value.__aenter__.return_value = mock_post.return_value
         mock_post.return_value.__aexit__.return_value = None
 
-        node = HTTPRemoteNode("remote_1", "http://example.com")
+        HTTPRemoteNode("remote_1", "http://example.com")
 
         # 실제로는 여기서 mock_post가 호출되지 않음 (AsyncClient context manager 이슈)
         # 더 확실한 방법: respx 라이브러리를 쓰거나, AsyncClient 자체를 모킹해야 함.

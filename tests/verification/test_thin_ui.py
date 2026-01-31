@@ -37,8 +37,8 @@ def main():
     st.metric("UI Interaction Latency", f"{load_time:.4f}s")
 
     st.info("""
-    이 화면이 뜨는 속도를 기존 main.py와 비교해보세요. 
-    기존 앱이 'torch'와 'langchain'을 로드하느라 5~10초 걸릴 때, 
+    이 화면이 뜨는 속도를 기존 main.py와 비교해보세요.
+    기존 앱이 'torch'와 'langchain'을 로드하느라 5~10초 걸릴 때,
     이 앱은 임포트 오버헤드가 없어 즉시 실행됩니다.
     """)
 

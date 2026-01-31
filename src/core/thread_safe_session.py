@@ -6,6 +6,8 @@ Thread-Safe Session Management
 인스턴스 및 클래스 메서드 호출을 모두 지원합니다.
 """
 
+import builtins
+import contextlib
 import hashlib
 import logging
 import threading
@@ -62,11 +64,14 @@ class ThreadSafeSessionManager:
     }
 
     # 클래스 레벨 속성 (공유 Lock 및 통계)
-    _global_lock = threading.RLock()
+    _global_management_lock = threading.RLock()
+    _session_locks: dict[str, threading.RLock] = {}
     _default_lock_timeout = 5.0
     lock_count = 0
     failed_acquisitions = 0
-    _fallback_sessions = {}  # [수정] 단일 state에서 다중 세션 저장소로 변경
+    _fallback_sessions: dict[
+        str, Any
+    ] = {}  # [수정] 단일 state에서 다중 세션 저장소로 변경
 
     def __init__(self, lock_timeout: float = 5.0):
         """인스턴스 기반 사용을 위한 초기화"""
@@ -76,11 +81,26 @@ class ThreadSafeSessionManager:
         self.failed_acquisitions = 0
 
     @classmethod
+    def _get_session_lock(cls, session_id: str) -> threading.RLock:
+        """세션별 전용 락을 가져오거나 생성합니다."""
+        with cls._global_management_lock:
+            if session_id not in cls._session_locks:
+                cls._session_locks[session_id] = threading.RLock()
+            return cls._session_locks[session_id]
+
+    @classmethod
     def _acquire_lock(cls, instance=None):
-        """Lock 획득 context manager"""
-        lock = instance.lock if instance else cls._global_lock
-        timeout = instance.lock_timeout if instance else cls._default_lock_timeout
-        target = instance if instance else cls
+        """Lock 획득 context manager (세션별 격리 적용)"""
+        if instance:
+            lock = instance.lock
+            timeout = instance.lock_timeout
+            target = instance
+        else:
+            sid = cls.get_session_id()
+            lock = cls._get_session_lock(sid)
+            timeout = cls._default_lock_timeout
+            target = cls
+
         return _LockContext(lock, timeout, target)
 
     @classmethod
@@ -110,32 +130,35 @@ class ThreadSafeSessionManager:
                 return st.session_state
 
             sid = cls.get_session_id()
-            if sid not in cls._fallback_sessions:
-                new_state = cls.DEFAULT_SESSION_STATE.copy()
-                new_state["messages"] = []
-                new_state["doc_pool"] = {}
-                new_state["status_logs"] = list(
-                    cls.DEFAULT_SESSION_STATE["status_logs"]
-                )
-                new_state["_last_activity"] = time.time()  # 활동 시간 기록
-                cls._fallback_sessions[sid] = new_state
-                cls._fallback_sessions[sid]["_initialized"] = True
+            # [수정] 전역 저장소 접근 시 관리 락을 사용하여 레이스 컨디션 방지
+            with cls._global_management_lock:
+                if sid not in cls._fallback_sessions:
+                    new_state = cls.DEFAULT_SESSION_STATE.copy()
+                    new_state["messages"] = []
+                    new_state["doc_pool"] = {}
+                    new_state["status_logs"] = list(
+                        cls.DEFAULT_SESSION_STATE["status_logs"]
+                    )
+                    new_state["_last_activity"] = time.time()  # 활동 시간 기록
+                    cls._fallback_sessions[sid] = new_state
+                    cls._fallback_sessions[sid]["_initialized"] = True
 
-            # 활동 시간 업데이트
-            cls._fallback_sessions[sid]["_last_activity"] = time.time()
-            return cls._fallback_sessions[sid]
+                # 활동 시간 업데이트
+                cls._fallback_sessions[sid]["_last_activity"] = time.time()
+                return cls._fallback_sessions[sid]
         except (Exception, ImportError):
             sid = cls.get_session_id()
-            if sid not in cls._fallback_sessions:
-                new_state = cls.DEFAULT_SESSION_STATE.copy()
-                new_state["messages"] = []
-                new_state["doc_pool"] = {}
-                new_state["_last_activity"] = time.time()
-                cls._fallback_sessions[sid] = new_state
-                cls._fallback_sessions[sid]["_initialized"] = True
+            with cls._global_management_lock:
+                if sid not in cls._fallback_sessions:
+                    new_state = cls.DEFAULT_SESSION_STATE.copy()
+                    new_state["messages"] = []
+                    new_state["doc_pool"] = {}
+                    new_state["_last_activity"] = time.time()
+                    cls._fallback_sessions[sid] = new_state
+                    cls._fallback_sessions[sid]["_initialized"] = True
 
-            cls._fallback_sessions[sid]["_last_activity"] = time.time()
-            return cls._fallback_sessions[sid]
+                cls._fallback_sessions[sid]["_last_activity"] = time.time()
+                return cls._fallback_sessions[sid]
 
     @classmethod
     def cleanup_expired_sessions(cls, max_idle_seconds: int = 3600):
@@ -143,7 +166,8 @@ class ThreadSafeSessionManager:
         now = time.time()
         expired_ids = []
 
-        with cls._global_lock:
+        # [수정] 순회 중 크기 변경 에러를 방지하기 위해 락 범위 안에서 ID 추출
+        with cls._global_management_lock:
             for sid, state in cls._fallback_sessions.items():
                 if sid == "default":
                     continue
@@ -153,10 +177,14 @@ class ThreadSafeSessionManager:
 
         for sid in expired_ids:
             cls.delete_session(sid)
+            # 세션 락도 함께 제거
+            with cls._global_management_lock:
+                if sid in cls._session_locks:
+                    del cls._session_locks[sid]
 
         if expired_ids:
             logger.info(
-                f"[Session] [Cleanup] 만료된 세션 {len(expired_ids)}개 삭제 완료"
+                f"[Session] [Cleanup] 만료된 세션 {len(expired_ids)}개 및 락 삭제 완료"
             )
 
     @classmethod
@@ -271,27 +299,28 @@ class ThreadSafeSessionManager:
     @classmethod
     def delete_session(cls, session_id: str) -> bool:
         """[추가] 특정 세션을 메모리 저장소에서 완전히 삭제합니다."""
+        # 1. 먼저 해당 세션의 개별 락을 획득하여 내부 데이터(벡터 스토어 등) 정리
         target = cls if not isinstance(cls, type) else None
         with ThreadSafeSessionManager._acquire_lock(instance=target):
-            if session_id in cls._fallback_sessions:
-                # 대량의 데이터를 담고 있을 수 있는 객체들 명시적 초기화 후 삭제
-                session_data = cls._fallback_sessions[session_id]
+            # 2. 전역 관리 락을 획득하여 저장소에서 제거
+            with cls._global_management_lock:
+                if session_id in cls._fallback_sessions:
+                    # 대량의 데이터를 담고 있을 수 있는 객체들 명시적 초기화 후 삭제
+                    session_data = cls._fallback_sessions[session_id]
 
-                # [최적화] 벡터 저장소 메모리 명시적 해제
-                vs = session_data.get("vector_store")
-                if vs and hasattr(vs, "index") and hasattr(vs.index, "reset"):
-                    try:
-                        vs.index.reset()
-                    except:
-                        pass
+                    # [최적화] 벡터 저장소 메모리 명시적 해제
+                    vs = session_data.get("vector_store")
+                    if vs and hasattr(vs, "index") and hasattr(vs.index, "reset"):
+                        with contextlib.suppress(builtins.BaseException):
+                            vs.index.reset()
 
-                if isinstance(session_data, dict):
-                    session_data.clear()
-                del cls._fallback_sessions[session_id]
-                logger.info(
-                    f"[Session] [Cleanup] 세션 데이터 삭제됨 (ID: {session_id})"
-                )
-                return True
+                    if isinstance(session_data, dict):
+                        session_data.clear()
+                    del cls._fallback_sessions[session_id]
+                    logger.info(
+                        f"[Session] [Cleanup] 세션 데이터 삭제됨 (ID: {session_id})"
+                    )
+                    return True
             return False
 
     @classmethod
@@ -304,10 +333,8 @@ class ThreadSafeSessionManager:
     def get_stats(cls) -> dict[str, Any]:
         target = cls
         session_keys = 0
-        try:
+        with contextlib.suppress(Exception):
             session_keys = len(cls._get_state())
-        except Exception:
-            pass
 
         return {
             "lock_acquisitions": target.lock_count,
@@ -443,8 +470,17 @@ class ThreadSafeSessionManager:
             state["needs_rag_rebuild"] = True
             state["_chat_ready_needs_refresh"] = True
 
-            # [수정] 이전 로그를 비우고 분석 시작 알림으로 새로 시작
-            state["status_logs"] = ["--- 새 문서 분석 시작 ---"]
+            # [수정] 구분선 없이 새 작업 알림만 추가
+            if "status_logs" not in state:
+                state["status_logs"] = []
+
+            start_msg = "새 문서 분석 시작"
+            if not state["status_logs"] or state["status_logs"][-1] != start_msg:
+                state["status_logs"].append(start_msg)
+
+            # 최신 30개 유지 정책 적용
+            if len(state["status_logs"]) > 30:
+                state["status_logs"] = state["status_logs"][-30:]
 
     @classmethod
     def add_status_log(cls, msg: str):

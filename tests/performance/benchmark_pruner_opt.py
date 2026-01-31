@@ -23,7 +23,7 @@ def old_school_pruning(documents, vectors, min_similarity=0.95):
 
     kept_indices = []
     removed_indices = []
-    for i, (doc_i, vec_i) in enumerate(zip(documents, vectors, strict=False)):
+    for i, (_doc_i, vec_i) in enumerate(zip(documents, vectors, strict=False)):
         is_duplicate = False
         for j in kept_indices:
             if _cosine_similarity(vec_i, vectors[j]) >= min_similarity:

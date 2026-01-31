@@ -30,7 +30,7 @@ async def verify_duplicate_fix_final():
         {"input": question}, config=config, version="v2"
     ):
         kind = event["event"]
-        name = event.get("name", "Unknown")
+        event.get("name", "Unknown")
         data = event.get("data", {})
 
         if kind == "on_parser_stream":

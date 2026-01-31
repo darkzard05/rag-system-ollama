@@ -29,7 +29,7 @@ def test_rag_full_cycle():
                 found_keys.append(f"{attr}(key={val.key})")
             elif isinstance(val, list) and len(val) > 0 and hasattr(val[0], "key"):
                 found_keys.append(f"{attr}[0](key={val[0].key})")
-        except:
+        except Exception:
             pass
     print(f"   {found_keys}")
 

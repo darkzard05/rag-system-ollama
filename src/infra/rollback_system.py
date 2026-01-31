@@ -330,7 +330,7 @@ class RollbackSystem:
 
             plan = self.recovery_plans[plan_id]
 
-            validation = {
+            validation: dict[str, Any] = {
                 "plan_id": plan_id,
                 "valid": True,
                 "issues": [],
@@ -570,13 +570,16 @@ class RollbackSystem:
             cleaned_dirs = 0
             if self.checkpoint_root.exists():
                 for folder in self.checkpoint_root.iterdir():
-                    if folder.is_dir() and folder.name.startswith("chk-"):
-                        if folder.name not in self.checkpoints:
-                            try:
-                                shutil.rmtree(folder)
-                                cleaned_dirs += 1
-                            except:
-                                pass
+                    if (
+                        folder.is_dir()
+                        and folder.name.startswith("chk-")
+                        and folder.name not in self.checkpoints
+                    ):
+                        try:
+                            shutil.rmtree(folder)
+                            cleaned_dirs += 1
+                        except Exception:
+                            pass
 
             return {
                 "removed_records": removed_records,
@@ -700,7 +703,7 @@ class RollbackSystem:
                 by_type[checkpoint_type] += 1
 
             # Average data loss for completed rollbacks
-            avg_data_loss = 0
+            avg_data_loss: float = 0.0
             if rollbacks_completed > 0:
                 total_loss = sum(
                     r.data_loss_estimate

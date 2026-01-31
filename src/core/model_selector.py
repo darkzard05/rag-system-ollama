@@ -6,6 +6,7 @@ import logging
 from dataclasses import dataclass
 from enum import Enum
 from threading import RLock
+from typing import Any
 
 from src.core.model_registry import ModelRegistry, ModelTask, get_model_registry
 
@@ -52,24 +53,32 @@ class ModelPerformanceComparator:
         Returns:
             (모델_키, 메트릭값) 정렬된 튜플 리스트 (낮을수록 좋음)
         """
-        results = []
+        results: list[tuple[str, float]] = []
 
         for model_key in model_keys:
             model = self.registry.get_model_by_key(model_key)
             if not model:
                 continue
 
+            value: float | None = None
             if metric_name == "latency_ms":
-                value = model.latency_ms
+                value = (
+                    float(model.latency_ms) if model.latency_ms is not None else None
+                )
             elif metric_name == "memory_mb":
-                value = model.memory_mb
+                value = float(model.memory_mb) if model.memory_mb is not None else None
             elif metric_name == "quality_score":
-                value = model.quality_score
+                value = (
+                    float(model.quality_score)
+                    if model.quality_score is not None
+                    else None
+                )
             else:
                 logger.warning(f"메트릭 없음: {metric_name}")
                 continue
 
-            results.append((model_key, value))
+            if value is not None:
+                results.append((model_key, value))
 
         # 오름차순 정렬 (낮을수록 좋음)
         results.sort(key=lambda x: x[1] if x[1] is not None else float("inf"))
@@ -102,7 +111,9 @@ class ModelPerformanceComparator:
         normalized_weights = {k: v / total_weight for k, v in weights.items()}
 
         # 메트릭별 정규화된 값 계산
-        metric_scores = {}  # model_key -> {metric -> normalized_score}
+        metric_scores: dict[
+            str, dict[str, float]
+        ] = {}  # model_key -> {metric -> normalized_score}
 
         for metric_name in weights:
             comparisons = self.compare_by_metric(model_keys, metric_name)
@@ -245,9 +256,11 @@ class ModelSelector:
                     continue
 
             # 양자화 확인
-            if constraint.required_quantization is not None:
-                if model.quantization_level != constraint.required_quantization:
-                    continue
+            if (
+                constraint.required_quantization is not None
+                and model.quantization_level != constraint.required_quantization
+            ):
+                continue
 
             filtered.append(model_key)
 
@@ -331,7 +344,7 @@ class ModelSelector:
         current_model = self.get_current_model(task)
         recommended_model = self.select_model(task, strategy)
 
-        result = {
+        result: dict[str, Any] = {
             "task": task.value,
             "current_model": current_model,
             "recommended_model": recommended_model,

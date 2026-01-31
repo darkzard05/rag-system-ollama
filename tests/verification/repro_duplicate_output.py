@@ -36,7 +36,7 @@ async def repro_duplicate_output():
         {"input": question}, config=config, version="v2"
     ):
         kind = event["event"]
-        name = event.get("name", "Unknown")
+        event.get("name", "Unknown")
         data = event.get("data", {})
 
         chunk_text = None

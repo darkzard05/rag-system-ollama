@@ -18,6 +18,10 @@ RAG 시스템 전용 예외 클래스 모음.
         logger.error(f"PDF 처리 오류: {e}")
 """
 
+from __future__ import annotations
+
+from typing import Any
+
 
 class PDFProcessingError(Exception):
     """
@@ -30,7 +34,7 @@ class PDFProcessingError(Exception):
         details (dict): 추가 컨텍스트 정보 (파일명, 라인 번호 등)
     """
 
-    def __init__(self, message: str, details: dict = None):
+    def __init__(self, message: str, details: dict[Any, Any] | None = None):
         """
         PDF 처리 예외 초기화.
 
@@ -64,7 +68,9 @@ class EmptyPDFError(PDFProcessingError):
     - OCR 기능 추가 (향후)
     """
 
-    def __init__(self, filename: str = None, details: dict = None):
+    def __init__(
+        self, filename: str | None = None, details: dict[Any, Any] | None = None
+    ):
         """
         빈 PDF 예외 초기화.
 
@@ -97,7 +103,10 @@ class InsufficientChunksError(PDFProcessingError):
     """
 
     def __init__(
-        self, chunk_count: int = None, min_required: int = None, details: dict = None
+        self,
+        chunk_count: int | None = None,
+        min_required: int | None = None,
+        details: dict[Any, Any] | None = None,
     ):
         """
         불충분한 청크 예외 초기화.
@@ -139,7 +148,12 @@ class VectorStoreError(PDFProcessingError):
     - 디스크 공간 확보
     """
 
-    def __init__(self, operation: str = None, reason: str = None, details: dict = None):
+    def __init__(
+        self,
+        operation: str | None = None,
+        reason: str | None = None,
+        details: dict[Any, Any] | None = None,
+    ):
         """
         벡터 저장소 오류 초기화.
 
@@ -183,7 +197,12 @@ class LLMInferenceError(PDFProcessingError):
     - 질문 단순화
     """
 
-    def __init__(self, model: str = None, reason: str = None, details: dict = None):
+    def __init__(
+        self,
+        model: str | None = None,
+        reason: str | None = None,
+        details: dict[Any, Any] | None = None,
+    ):
         """
         LLM 추론 오류 초기화.
 
@@ -239,7 +258,12 @@ class EmbeddingModelError(PDFProcessingError):
     - 다른 모델 선택
     """
 
-    def __init__(self, model: str = None, reason: str = None, details: dict = None):
+    def __init__(
+        self,
+        model: str | None = None,
+        reason: str | None = None,
+        details: dict[Any, Any] | None = None,
+    ):
         """
         임베딩 모델 오류 초기화.
 
@@ -269,6 +293,9 @@ class SessionLockTimeoutError(PDFProcessingError):
     여러 요청이 동시에 발생하여 세션 데이터 접근이 지연될 때 발생합니다.
     """
 
-    def __init__(self, message: str = "세션 데이터에 접근할 수 없습니다. 시스템이 바쁩니다.", details: dict = None):
+    def __init__(
+        self,
+        message: str = "세션 데이터에 접근할 수 없습니다. 시스템이 바쁩니다.",
+        details: dict[Any, Any] | None = None,
+    ):
         super().__init__(message, details)
-

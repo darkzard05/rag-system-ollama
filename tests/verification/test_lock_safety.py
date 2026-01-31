@@ -7,6 +7,8 @@ from pathlib import Path
 # 프로젝트 루트 추가
 sys.path.append(str(Path(__file__).parent.parent.parent / "src"))
 
+import pytest
+
 from common.exceptions import SessionLockTimeoutError
 from core.thread_safe_session import ThreadSafeSessionManager
 
@@ -34,20 +36,21 @@ class TestSessionDeadlockPrevention(unittest.TestCase):
         print("[Main] 락 획득을 시도합니다 (timeout=1.0s)...")
         start_time = time.time()
 
-        with self.assertRaises(SessionLockTimeoutError) as cm:
+        with pytest.raises(SessionLockTimeoutError) as cm:
             with manager._acquire_lock(manager):
                 # 여기는 도달하지 않아야 함
                 pass
 
         duration = time.time() - start_time
         print(f"[Main] 기대한 대로 예외 발생! (소요 시간: {duration:.2f}s)")
-        print(f"[Main] 예외 메시지: {cm.exception.message}")
-        print(f"[Main] 상세 정보: {cm.exception.details}")
+        print(f"[Main] 예외 메시지: {cm.value.message}")
+        print(f"[Main] 상세 정보: {cm.value.details}")
 
-        self.assertGreaterEqual(duration, 1.0)
-        self.assertLess(duration, 2.0)
+        assert duration >= 1.0
+        assert duration < 2.0
 
         t1.join()
+
 
 if __name__ == "__main__":
     unittest.main()

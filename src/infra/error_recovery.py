@@ -100,13 +100,10 @@ class RetryPolicy:
             return False
 
         # 재시도 가능한 예외 확인
-        if not any(
+        return any(
             isinstance(exception, exc_type)
             for exc_type in self.config.retryable_exceptions
-        ):
-            return False
-
-        return True
+        )
 
     async def execute_with_retry(self, func: Callable, *args, **kwargs) -> Any:
         """
@@ -154,7 +151,7 @@ class RetryPolicy:
                         func_name=func.__name__,
                         attempts=self.config.max_attempts,
                         last_error=str(e),
-                    )
+                    ) from e
 
                 # 대기 후 재시도
                 delay = self.backoff.calculate_delay(attempt)

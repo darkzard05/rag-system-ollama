@@ -32,6 +32,7 @@ for path in [str(BASE_DIR), str(SRC_DIR)]:
         sys.path.insert(0, path)
 
 import psutil
+import pytest
 
 from common.config_validation import load_and_validate_config
 from common.exceptions import (
@@ -125,12 +126,12 @@ class TestRAGInitialization(unittest.TestCase):
 
         # 설정 객체가 환경 변수나 기본 설정을 올바르게 포함하는지 검증
         # ApplicationConfig 구조에 맞춰 속성 접근 수정 (model, cache, retrieval 등)
-        self.assertIsNotNone(config.model.default_ollama)
-        self.assertEqual(config.cache.cache_dir, CACHE_DIR)
+        assert config.model.default_ollama is not None
+        assert config.cache.cache_dir == CACHE_DIR
 
         # 테스트용 입력값이 잘 반영되었는지 확인 (중첩 구조 필드)
-        self.assertEqual(config.chunking.chunk_size, 200)
-        self.assertEqual(config.retrieval.top_k, 3)
+        assert config.chunking.chunk_size == 200
+        assert config.retrieval.top_k == 3
         logger.info("✓ Configuration validation passed (Pydantic structure check)")
 
     def test_invalid_config_temperature(self):
@@ -138,7 +139,7 @@ class TestRAGInitialization(unittest.TestCase):
         invalid_config = self.test_config.copy()
         invalid_config["model"]["temperature"] = 1.5  # Invalid
 
-        with self.assertRaises(ValueError):
+        with pytest.raises(ValueError):
             load_and_validate_config(invalid_config)
         logger.info("✓ Invalid temperature rejection passed")
 
@@ -149,7 +150,7 @@ class TestRAGInitialization(unittest.TestCase):
             8  # Invalid (allowed: 16,32,64,128,256,512)
         )
 
-        with self.assertRaises(ValueError):
+        with pytest.raises(ValueError):
             load_and_validate_config(invalid_config)
         logger.info("✓ Invalid batch size rejection passed")
 
@@ -157,11 +158,11 @@ class TestRAGInitialization(unittest.TestCase):
         """Test that GPU memory detection works."""
         is_available, total_memory = get_gpu_memory_info()
 
-        self.assertIsInstance(is_available, bool)
-        self.assertIsInstance(total_memory, int)
+        assert isinstance(is_available, bool)
+        assert isinstance(total_memory, int)
 
         if is_available:
-            self.assertGreater(total_memory, 0)
+            assert total_memory > 0
             logger.info(f"✓ GPU detected: {total_memory}MB")
         else:
             logger.info("✓ No GPU available (CPU mode)")
@@ -170,9 +171,9 @@ class TestRAGInitialization(unittest.TestCase):
         """Test that optimal batch size is calculated correctly."""
         batch_size = get_optimal_batch_size(device="cpu", model_type="embedding")
 
-        self.assertIsInstance(batch_size, int)
-        self.assertGreater(batch_size, 0)
-        self.assertIn(batch_size, [16, 32, 64, 128, 256, 512])
+        assert isinstance(batch_size, int)
+        assert batch_size > 0
+        assert batch_size in [16, 32, 64, 128, 256, 512]
         logger.info(f"✓ Optimal batch size calculated: {batch_size}")
 
     def test_batch_size_validation(self):
@@ -181,14 +182,14 @@ class TestRAGInitialization(unittest.TestCase):
             batch_size=64, device="cpu", model_type="embedding"
         )
 
-        self.assertTrue(is_valid)
+        assert is_valid
         logger.info(f"✓ Batch size validation: {message}")
 
     def test_rag_system_initialization(self):
         """Test that RAG system initializes without errors."""
         try:
             rag = RAGSystem()
-            self.assertIsNotNone(rag)
+            assert rag is not None
             logger.info("✓ RAG system initialized successfully")
         except Exception as e:
             logger.error(f"✗ RAG system initialization failed: {e}")
@@ -208,7 +209,7 @@ class TestDocumentProcessing(unittest.TestCase):
 
     def test_empty_document_handling(self):
         """Test that empty documents are handled properly."""
-        with self.assertRaises(EmptyPDFError):
+        with pytest.raises(EmptyPDFError):
             self.rag.process_documents(documents=[])
         logger.info("✓ Empty document handling passed")
 
@@ -219,13 +220,13 @@ class TestDocumentProcessing(unittest.TestCase):
         try:
             chunks = self.rag.chunk_documents([sample_text])
 
-            self.assertIsInstance(chunks, list)
-            self.assertGreater(len(chunks), 0)
+            assert isinstance(chunks, list)
+            assert len(chunks) > 0
 
             # Verify chunks are strings
             for chunk in chunks:
-                self.assertIsInstance(chunk, str)
-                self.assertGreater(len(chunk), 0)
+                assert isinstance(chunk, str)
+                assert len(chunk) > 0
 
             logger.info(f"✓ Document chunking: {len(chunks)} chunks created")
         except Exception as e:
@@ -234,13 +235,6 @@ class TestDocumentProcessing(unittest.TestCase):
     def test_duplicate_chunk_removal(self):
         """Test that duplicate chunks are removed."""
         # Create chunks with duplicates
-        chunks = [
-            "This is chunk 1.",
-            "This is chunk 2.",
-            "This is chunk 1.",  # Duplicate
-            "This is chunk 3.",
-            "This is chunk 2.",  # Duplicate
-        ]
 
         try:
             # This would be handled internally by the graph builder
@@ -258,9 +252,9 @@ class TestDocumentProcessing(unittest.TestCase):
             __name__ + ".load_embedding_model", return_value=MagicMock()
         ) as _mock:
             model = load_embedding_model()
-            self.assertIsNotNone(model)
+            assert model is not None
             batch_size = get_optimal_batch_size(model_type="embedding")
-            self.assertIn(batch_size, [16, 32, 64, 128, 256, 512])
+            assert batch_size in [16, 32, 64, 128, 256, 512]
             logger.info(f"✓ Batch embedding (mocked) with batch_size={batch_size}")
 
 
@@ -278,12 +272,11 @@ class TestRetrieval(unittest.TestCase):
         """Test that retrieval returns correct number of results."""
         try:
             # Mock a query
-            query = "Tell me about artificial intelligence"
             top_k = 3
 
             # This would require actual documents in the vector store
             # For now, just verify the function exists and is callable
-            self.assertTrue(hasattr(self.rag, "retrieve_documents"))
+            assert hasattr(self.rag, "retrieve_documents")
             logger.info(f"✓ Retrieval function verified (top_k={top_k})")
         except Exception as e:
             logger.warning(f"Retrieval test skipped: {e}")
@@ -294,8 +287,8 @@ class TestRetrieval(unittest.TestCase):
 
         try:
             # Verify threshold is applied
-            self.assertGreaterEqual(threshold, 0.0)
-            self.assertLessEqual(threshold, 1.0)
+            assert threshold >= 0.0
+            assert threshold <= 1.0
             logger.info(f"✓ Similarity threshold validation: {threshold}")
         except Exception as e:
             logger.warning(f"Threshold test skipped: {e}")
@@ -315,7 +308,7 @@ class TestResponseGeneration(unittest.TestCase):
         """Test basic response generation without documents."""
         try:
             # Check that generate_response exists
-            self.assertTrue(hasattr(self.rag, "generate_response"))
+            assert hasattr(self.rag, "generate_response")
             logger.info("✓ Response generation function exists")
         except Exception as e:
             logger.warning(f"Response generation test skipped: {e}")
@@ -325,8 +318,8 @@ class TestResponseGeneration(unittest.TestCase):
         valid_temperatures = [0.0, 0.3, 0.5, 0.7, 1.0]
 
         for temp in valid_temperatures:
-            self.assertGreaterEqual(temp, 0.0)
-            self.assertLessEqual(temp, 1.0)
+            assert temp >= 0.0
+            assert temp <= 1.0
 
         logger.info("✓ Valid temperature range verified: 0.0-1.0")
 
@@ -345,16 +338,16 @@ class TestTimeoutHandling(unittest.TestCase):
         """Test that retriever timeout is configured."""
         # Should be 30 seconds based on constants
         expected_timeout = 30
-        self.assertIsInstance(expected_timeout, int)
-        self.assertGreater(expected_timeout, 0)
+        assert isinstance(expected_timeout, int)
+        assert expected_timeout > 0
         logger.info(f"✓ Retriever timeout configured: {expected_timeout}s")
 
     def test_llm_timeout_config(self):
         """Test that LLM timeout is configured."""
         # Should be 300 seconds based on constants
         expected_timeout = 300
-        self.assertIsInstance(expected_timeout, int)
-        self.assertGreater(expected_timeout, 0)
+        assert isinstance(expected_timeout, int)
+        assert expected_timeout > 0
         logger.info(f"✓ LLM timeout configured: {expected_timeout}s")
 
     @patch("time.sleep")
@@ -362,7 +355,7 @@ class TestTimeoutHandling(unittest.TestCase):
         """Test that timeout errors are handled gracefully."""
         try:
             # Simulate a timeout by raising an asyncio.TimeoutError
-            with self.assertRaises(TimeoutError):
+            with pytest.raises(TimeoutError):
                 raise TimeoutError("Operation timed out")
             logger.info("✓ Timeout error handling verified")
         except Exception as e:
@@ -376,49 +369,49 @@ class TestExceptionHandling(unittest.TestCase):
         """Test that PDFProcessingError is the base exception."""
         error = PDFProcessingError("Test error", {"detail": "test"})
 
-        self.assertIsInstance(error, Exception)
-        self.assertEqual(error.message, "Test error")
-        self.assertEqual(error.details["detail"], "test")
+        assert isinstance(error, Exception)
+        assert error.message == "Test error"
+        assert error.details["detail"] == "test"
         logger.info("✓ PDFProcessingError hierarchy verified")
 
     def test_empty_pdf_error(self):
         """Test EmptyPDFError exception."""
         error = EmptyPDFError(filename="test.pdf")
 
-        self.assertIsInstance(error, PDFProcessingError)
-        self.assertIn("추출 가능한 텍스트", error.message)
+        assert isinstance(error, PDFProcessingError)
+        assert "추출 가능한 텍스트" in error.message
         logger.info("✓ EmptyPDFError verified")
 
     def test_insufficient_chunks_error(self):
         """Test InsufficientChunksError exception."""
         error = InsufficientChunksError(chunk_count=1, min_required=3)
 
-        self.assertIsInstance(error, PDFProcessingError)
-        self.assertEqual(error.details["chunk_count"], 1)
+        assert isinstance(error, PDFProcessingError)
+        assert error.details["chunk_count"] == 1
         logger.info("✓ InsufficientChunksError verified")
 
     def test_vector_store_error(self):
         """Test VectorStoreError exception."""
         error = VectorStoreError(operation="add_documents", reason="Store failed")
 
-        self.assertIsInstance(error, PDFProcessingError)
-        self.assertEqual(error.details.get("operation"), "add_documents")
+        assert isinstance(error, PDFProcessingError)
+        assert error.details.get("operation") == "add_documents"
         logger.info("✓ VectorStoreError verified")
 
     def test_llm_inference_error(self):
         """Test LLMInferenceError exception."""
         error = LLMInferenceError(model="qwen2:0.5b", reason="timeout")
 
-        self.assertIsInstance(error, PDFProcessingError)
-        self.assertEqual(error.details.get("model"), "qwen2:0.5b")
+        assert isinstance(error, PDFProcessingError)
+        assert error.details.get("model") == "qwen2:0.5b"
         logger.info("✓ LLMInferenceError verified")
 
     def test_embedding_model_error(self):
         """Test EmbeddingModelError exception."""
         error = EmbeddingModelError(model="all-MiniLM-L6-v2", reason="Loading failed")
 
-        self.assertIsInstance(error, PDFProcessingError)
-        self.assertEqual(error.details.get("model"), "all-MiniLM-L6-v2")
+        assert isinstance(error, PDFProcessingError)
+        assert error.details.get("model") == "all-MiniLM-L6-v2"
         logger.info("✓ EmbeddingModelError verified")
 
 
@@ -434,7 +427,7 @@ class TestMemoryManagement(unittest.TestCase):
         """Test baseline memory usage."""
         memory_mb = self.initial_memory
 
-        self.assertGreater(memory_mb, 0)
+        assert memory_mb > 0
         logger.info(f"✓ Baseline memory usage: {memory_mb:.1f}MB")
 
     def test_garbage_collection(self):
@@ -442,7 +435,7 @@ class TestMemoryManagement(unittest.TestCase):
         gc.collect()
 
         current_memory = self.process.memory_info().rss / 1024 / 1024
-        self.assertGreater(current_memory, 0)
+        assert current_memory > 0
         logger.info("✓ Garbage collection completed")
 
     def test_memory_leak_detection(self):
@@ -461,7 +454,7 @@ class TestMemoryManagement(unittest.TestCase):
 
         # Memory should not grow significantly
         growth = final - initial
-        self.assertLess(growth, 50)  # Less than 50MB growth
+        assert growth < 50  # Less than 50MB growth
         logger.info(f"✓ Memory growth acceptable: {growth:.1f}MB")
 
 
@@ -477,8 +470,8 @@ class TestPerformanceMonitoring(unittest.TestCase):
 
         elapsed = time.time() - start_time
 
-        self.assertGreaterEqual(elapsed, 0.1)
-        self.assertLess(elapsed, 1.0)  # Should complete quickly
+        assert elapsed >= 0.1
+        assert elapsed < 1.0  # Should complete quickly
         logger.info(f"✓ Response time tracking: {elapsed:.3f}s")
 
     def test_batch_size_impact(self):
@@ -489,8 +482,8 @@ class TestPerformanceMonitoring(unittest.TestCase):
             "llm": get_optimal_batch_size(model_type="llm"),
         }
 
-        for key, size in batch_sizes.items():
-            self.assertIn(size, [4, 8, 16, 32, 64, 128, 256, 512])
+        for _key, size in batch_sizes.items():
+            assert size in [4, 8, 16, 32, 64, 128, 256, 512]
 
         logger.info(f"✓ Batch sizes optimized: {batch_sizes}")
 
@@ -518,8 +511,8 @@ class TestPipelineIntegration(unittest.TestCase):
 
     def test_pipeline_initialization(self):
         """Test that the entire pipeline initializes."""
-        self.assertIsNotNone(self.rag)
-        self.assertIsNotNone(self.config)
+        assert self.rag is not None
+        assert self.config is not None
         logger.info("✓ Pipeline initialization successful")
 
     def test_streaming_events_emission(self):
@@ -548,8 +541,8 @@ class TestPipelineIntegration(unittest.TestCase):
             event_names = [e.get("name") for e in events]
 
             # Check for core RAG nodes in events
-            self.assertIn("router", event_names)
-            self.assertIn("retrieve", event_names)
+            assert "router" in event_names
+            assert "retrieve" in event_names
             logger.info(f"✓ Streaming events verified: {len(events)} events captured")
         except Exception as e:
             logger.warning(f"Streaming event test skipped/failed: {e}")
@@ -558,7 +551,7 @@ class TestPipelineIntegration(unittest.TestCase):
         """Test that pipeline handles errors gracefully."""
         try:
             # Test empty input handling
-            with self.assertRaises(EmptyPDFError):
+            with pytest.raises(EmptyPDFError):
                 self.rag.process_documents(documents=[])
 
             logger.info("✓ Pipeline error recovery verified")
@@ -571,7 +564,7 @@ class TestPipelineIntegration(unittest.TestCase):
         try:
             mock_build.return_value = MagicMock()
             graph = build_graph()
-            self.assertIsNotNone(graph)
+            assert graph is not None
             logger.info("✓ Graph builder mock check passed")
         except Exception as e:
             logger.warning(f"Graph builder test skipped: {e}")
@@ -589,7 +582,7 @@ class TestConcurrency(unittest.TestCase):
 
         try:
             result = asyncio.run(test_async())
-            self.assertEqual(result, "completed")
+            assert result == "completed"
             logger.info("✓ Async operations working")
         except Exception as e:
             logger.warning(f"Async test skipped: {e}")
@@ -604,7 +597,7 @@ class TestConcurrency(unittest.TestCase):
                 return True
 
             result = loop.run_until_complete(simple_task())
-            self.assertTrue(result)
+            assert result
             loop.close()
 
             logger.info("✓ Event loop safety verified")

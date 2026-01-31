@@ -172,7 +172,8 @@ class TestMemoryCache:
         stats = cache.get_stats()
         assert stats.total_hits >= 2
         assert stats.total_misses >= 1
-        assert stats.hit_rate > 0 and stats.hit_rate <= 1.0
+        assert stats.hit_rate > 0
+        assert stats.hit_rate <= 1.0
 
     @pytest.mark.asyncio
     async def test_lru_eviction(self):
@@ -193,7 +194,7 @@ class TestMemoryCache:
 
         # 이제 key2는 제거되었고 key1, key3은 있어야 함
         result1 = await cache.get("key1")
-        result2 = await cache.get("key2")
+        await cache.get("key2")
         result3 = await cache.get("key3")
 
         assert result1 is not None or result3 is not None  # 최소한 하나는 있어야 함
@@ -399,7 +400,7 @@ class TestQueryCache:
         ]
 
         await cache.set("test query", documents)
-        result = await cache.get("test query")
+        await cache.get("test query")
 
         # 저장은 성공했는지 확인
         assert cache is not None

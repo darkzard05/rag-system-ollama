@@ -205,7 +205,7 @@ class BatchIndexer:
 
         # 결과 집계
         for batch_idx, batch_result in enumerate(batch_results):
-            if isinstance(batch_result, Exception):
+            if isinstance(batch_result, BaseException):
                 result.failed += len(batches[batch_idx])
                 result.failed_indices.append(batch_idx)
                 result.errors.append(str(batch_result))
@@ -227,7 +227,7 @@ class BatchIndexer:
         """배치 인덱싱 (재시도 포함)."""
         try:
             # 실제 인덱싱 함수 호출
-            result = await asyncio.wait_for(
+            await asyncio.wait_for(
                 index_func(batch), timeout=self.config.timeout_per_batch
             )
             return {"indexed": len(batch), "failed": 0}
@@ -278,9 +278,9 @@ class ParallelSearcher:
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
         # 에러 처리
-        search_results = []
+        search_results: list[SearchResult] = []
         for result in results:
-            if isinstance(result, Exception):
+            if isinstance(result, BaseException):
                 logger.error(f"검색 실패: {result}")
             else:
                 search_results.append(result)

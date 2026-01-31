@@ -14,7 +14,7 @@ def check_vc_redist():
     """Checks if Microsoft Visual C++ Redistributable is likely installed."""
     print("Checking for Visual C++ Redistributable...")
     # System32 should contain vcruntime140.dll for 2015-2022 redist
-    system32 = os.path.join(os.environ.get("SystemRoot", "C:\\Windows"), "System32")
+    system32 = os.path.join(os.environ.get("SYSTEMROOT", "C:\\Windows"), "System32")
     vcr_dll = os.path.join(system32, "vcruntime140.dll")
 
     if os.path.exists(vcr_dll):
@@ -32,7 +32,7 @@ def check_import(module_name):
         # For torch, we also want to check CUDA
         module = importlib.import_module(module_name)
         version = getattr(module, "__version__", "unknown")
-        path = getattr(module, "__file__", "unknown")
+        getattr(module, "__file__", "unknown")
         print(f"✅ SUCCESS: {module_name} imported. Version: {version}")
 
         if module_name == "torch":

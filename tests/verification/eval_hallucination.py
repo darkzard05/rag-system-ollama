@@ -96,7 +96,7 @@ async def evaluate_hallucination():
         [Answer to Evaluate]: {full_response}
 
         [Task]:
-        Does the [Answer to Evaluate] contain information NOT found in the [Context]? 
+        Does the [Answer to Evaluate] contain information NOT found in the [Context]?
         Or did it correctly refuse to answer if the info was missing?
 
         [Criteria]:

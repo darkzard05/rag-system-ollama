@@ -4,6 +4,7 @@ config.yml 파일과 환경 변수에서 애플리케이션 설정을 로드합�
 
 import logging
 import os
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any, Union
 
@@ -29,10 +30,10 @@ def _load_config() -> dict[str, Any]:
     except Exception as e:
         # 설정 로드 실패는 치명적이므로 로그 남기고 재발생
         logger.critical(f"Failed to load configuration: {e}")
-        raise RuntimeError(f"설정 파일 로드 실패: {e}")
+        raise RuntimeError(f"설정 파일 로드 실패: {e}") from e
 
 
-def _get_env(key: str, default: Any, cast_type: type = str) -> Any:
+def _get_env(key: str, default: Any, cast_type: Callable[[Any], Any] = str) -> Any:
     """환경 변수를 안전하게 가져오고 타입 변환합니다."""
     value = os.getenv(key)
     if value is None:
@@ -40,8 +41,9 @@ def _get_env(key: str, default: Any, cast_type: type = str) -> Any:
     try:
         return cast_type(value)
     except (ValueError, TypeError):
+        cast_type_name = getattr(cast_type, "__name__", str(cast_type))
         logger.warning(
-            f"환경 변수 '{key}'의 값 '{value}'을(를) {cast_type.__name__} 타입으로 변환할 수 없습니다. "
+            f"환경 변수 '{key}'의 값 '{value}'을(를) {cast_type_name} 타입으로 변환할 수 없습니다. "
             f"기본값 '{default}'을(를) 사용합니다."
         )
         return default
@@ -64,13 +66,13 @@ OLLAMA_BASE_URL: str = _get_env(
 
 # 예측 파라미터 (환경 변수 우선, 실패 시 config.yml, 마지막으로 하드코딩된 기본값)
 OLLAMA_NUM_PREDICT: int = _get_env(
-    "OLLAMA_NUM_PREDICT", _models_config.get("ollama_num_predict", 2048), int
+    "OLLAMA_NUM_PREDICT", _models_config.get("ollama_num_predict", 4096), int
 )
 OLLAMA_TEMPERATURE: float = _get_env(
     "OLLAMA_TEMPERATURE", _models_config.get("temperature", 0.5), float
 )
 OLLAMA_NUM_CTX: int = _get_env(
-    "OLLAMA_NUM_CTX", _models_config.get("num_ctx", 2048), int
+    "OLLAMA_NUM_CTX", _models_config.get("num_ctx", 4096), int
 )
 OLLAMA_TOP_P: float = _get_env("OLLAMA_TOP_P", _models_config.get("top_p", 0.9), float)
 OLLAMA_TIMEOUT: float = _get_env(
@@ -114,10 +116,11 @@ CACHE_HMAC_SECRET: str | None = _get_env(
 
 # 신뢰 경로 (환경변수가 있으면 쉼표로 분리)
 _trusted_paths_env = os.getenv("TRUSTED_CACHE_PATHS")
+CACHE_TRUSTED_PATHS: list[str]
 if _trusted_paths_env:
-    CACHE_TRUSTED_PATHS: list[str] = [p.strip() for p in _trusted_paths_env.split(",")]
+    CACHE_TRUSTED_PATHS = [p.strip() for p in _trusted_paths_env.split(",")]
 else:
-    CACHE_TRUSTED_PATHS: list[str] = _cache_security_config.get("trusted_paths", [])
+    CACHE_TRUSTED_PATHS = _cache_security_config.get("trusted_paths", [])
 
 # 검증 실패 시 동작
 CACHE_VALIDATION_ON_FAILURE: str = _get_env(

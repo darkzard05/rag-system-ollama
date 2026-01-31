@@ -135,7 +135,7 @@ class ClusterManager:
                 time.sleep(self.config.interval_seconds)
 
                 with self._lock:
-                    for node_id, node in self._nodes.items():
+                    for _node_id, node in self._nodes.items():
                         # 메트릭 업데이트
                         node.update()
 

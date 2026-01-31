@@ -73,7 +73,7 @@ class ConcurrentQueryExpander:
         queries: list[str],
         expander_func: Callable[[str], Coroutine[Any, Any, str]],
         metadata: dict[str, Any] | None = None,
-    ) -> tuple[list[str], dict[str, int]]:
+    ) -> tuple[list[str], dict[str, Any]]:
         """
         여러 쿼리를 동시에 확장
 

@@ -301,7 +301,7 @@ class SemanticCache(CacheBackend[T]):
 
                 # 가장 유사한 항목 찾기
                 best_match = None
-                best_similarity = 0
+                best_similarity: float = 0.0
 
                 for key, cached_embedding in self.embeddings.items():
                     entry = self.cache.get(key)

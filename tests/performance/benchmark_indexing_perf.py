@@ -46,7 +46,7 @@ async def benchmark_indexing():
 
     # 1회차: 최적화 로직용 임베딩
     print("  Step 1: 최적화용 임베딩 생성 중...")
-    vectors_1 = embedder.embed_documents(texts)
+    embedder.embed_documents(texts)
 
     # 2회차: FAISS 생성 (내부에서 다시 임베딩 수행)
     print("  Step 2: FAISS 생성 (강제 재임베딩) 중...")

@@ -73,7 +73,7 @@ class TestMemoryProfiler:
         snap1 = profiler.take_snapshot()
 
         # 일부 메모리 할당
-        large_list = [i for i in range(100000)]
+        list(range(100000))
 
         # 두 번째 스냅샷
         snap2 = profiler.take_snapshot()

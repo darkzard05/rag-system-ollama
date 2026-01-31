@@ -4,6 +4,7 @@ System Integration Layer - Orchestrates all RAG components
 
 import logging
 import time
+from collections.abc import Callable
 from dataclasses import asdict, dataclass
 from datetime import datetime
 from threading import RLock
@@ -51,7 +52,7 @@ class SystemIntegration:
         # Component registries
         self.components: dict[str, Any] = {}
         self.services: dict[str, Any] = {}
-        self.middleware_stack: list[callable] = []
+        self.middleware_stack: list[Callable] = []
 
         # State tracking
         self.is_initialized = False
@@ -94,7 +95,7 @@ class SystemIntegration:
             self.logger.info(f"Service registered: {name}")
             return True
 
-    def register_middleware(self, middleware: callable) -> bool:
+    def register_middleware(self, middleware: Callable) -> bool:
         """
         Register middleware
 
@@ -106,7 +107,8 @@ class SystemIntegration:
         """
         with self._lock:
             self.middleware_stack.append(middleware)
-            self.logger.info(f"Middleware registered: {middleware.__name__}")
+            middleware_name = getattr(middleware, "__name__", str(middleware))
+            self.logger.info(f"Middleware registered: {middleware_name}")
             return True
 
     def initialize(self) -> dict[str, Any]:
@@ -260,7 +262,7 @@ class SystemIntegration:
                 return None
 
             # Generate cache key from request
-            cache_key = str(request)
+            str(request)
 
             # Try to get from cache (simulated)
             return None
@@ -280,11 +282,7 @@ class SystemIntegration:
             return False
 
         with self._lock:
-            if "cache" not in self.components:
-                return False
-
-            # Store in cache (simulated)
-            return True
+            return "cache" in self.components
 
     def record_metrics(
         self, metric_name: str, value: float, component: str = ""

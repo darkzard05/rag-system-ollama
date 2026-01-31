@@ -3,6 +3,7 @@ Task 20-2: Health Checking Module
 분산 시스템 건강도 체크 및 자동 복구
 """
 
+import logging
 import random
 import time
 from collections.abc import Callable
@@ -10,6 +11,8 @@ from dataclasses import dataclass, field
 from enum import Enum
 from threading import RLock, Thread
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 
 class HealthStatus(Enum):
@@ -340,41 +343,46 @@ class ClusterHealthMonitor:
             strategy = self._recovery_strategies.get(node_id, RecoveryStrategy.NONE)
 
         if strategy == RecoveryStrategy.AUTO_RESTART:
-            return self._execute_auto_restart(node_id)
+            return self._restart_node(node_id)
         elif strategy == RecoveryStrategy.GRACEFUL_SHUTDOWN:
-            return self._execute_graceful_shutdown(node_id)
+            return self._shutdown_node(node_id)
         elif strategy == RecoveryStrategy.FAILOVER:
-            return self._execute_failover(node_id)
+            return self._failover(node_id)
         elif strategy == RecoveryStrategy.CIRCUIT_BREAK:
-            return self._execute_circuit_break(node_id)
+            return self._circuit_break(node_id)
 
         return False
 
-    def _execute_auto_restart(self, node_id: str) -> bool:
-        """자동 재시작"""
-        # 모의 구현
-        print(f"Auto-restarting node: {node_id}")
-
+    def _restart_node(self, node_id: str) -> bool:
+        """노드 재시작 시뮬레이션"""
+        logger.info(f"Auto-restarting node: {node_id}")
         with self._lock:
             if node_id in self._node_monitors:
                 monitor = self._node_monitors[node_id]
+                monitor._status = HealthStatus.HEALTHY
+                monitor._report.overall_status = HealthStatus.HEALTHY
+                monitor._report.last_healthy_time = time.time()
                 monitor._report.recovery_attempts += 1
+                return True
+        return False
 
+    def _shutdown_node(self, node_id: str) -> bool:
+        """노드 종료 시뮬레이션"""
+        logger.warning(f"Gracefully shutting down node: {node_id}")
+        with self._lock:
+            if node_id in self._node_monitors:
+                self._node_monitors[node_id]._status = HealthStatus.UNKNOWN
+                return True
+        return False
+
+    def _failover(self, node_id: str) -> bool:
+        """페일오버 시뮬레이션"""
+        logger.warning(f"Executing failover for node: {node_id}")
         return True
 
-    def _execute_graceful_shutdown(self, node_id: str) -> bool:
-        """안전한 종료"""
-        print(f"Gracefully shutting down node: {node_id}")
-        return True
-
-    def _execute_failover(self, node_id: str) -> bool:
-        """장애 조치 (다른 노드로 전환)"""
-        print(f"Executing failover for node: {node_id}")
-        return True
-
-    def _execute_circuit_break(self, node_id: str) -> bool:
-        """서킷 브레이커 활성화"""
-        print(f"Activating circuit breaker for node: {node_id}")
+    def _circuit_break(self, node_id: str) -> bool:
+        """서킷 브레이커 활성화 시뮬레이션"""
+        logger.warning(f"Activating circuit breaker for node: {node_id}")
         return True
 
     def set_recovery_strategy(self, node_id: str, strategy: RecoveryStrategy):

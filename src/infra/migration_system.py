@@ -192,7 +192,7 @@ class MigrationSystem:
                 raise ValueError(f"Migration {migration_id} not found")
 
             migration = self.migrations[migration_id]
-            validation_result = {
+            validation_result: dict[str, Any] = {
                 "migration_id": migration_id,
                 "valid": True,
                 "issues": [],
@@ -260,12 +260,13 @@ class MigrationSystem:
             migration = self.migrations[migration_id]
 
             if dry_run:
-                return {
+                result: dict[str, Any] = {
                     "migration_id": migration_id,
                     "status": "validated",
                     "dry_run": True,
                     "message": "Migration passed validation (dry run)",
                 }
+                return result
 
             start_time = time.time()
 
@@ -478,11 +479,11 @@ class MigrationSystem:
             List of migrations not yet executed
         """
         with self._lock:
-            executed_ids = set(
+            executed_ids = {
                 r.migration_id
                 for r in self.migration_history
                 if r.status == MigrationStatus.COMPLETED.value
-            )
+            }
 
             pending = [
                 {
@@ -524,7 +525,7 @@ class MigrationSystem:
             return {
                 "current_version": current_version,
                 "target_version": target_version,
-                "compatible": True if not major_change else False,
+                "compatible": bool(not major_change),
                 "requires_migration": current_version != target_version,
                 "breaking_changes": major_change,
                 "migrations_required": [

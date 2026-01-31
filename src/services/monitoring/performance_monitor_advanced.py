@@ -113,9 +113,8 @@ class AdvancedPerformanceMonitor:
                 self.component_metrics[component].append(value)
 
             # Check for bottleneck
-            if name in self.thresholds:
-                if value > self.thresholds[name]:
-                    self._detect_bottleneck(name, value, component)
+            if name in self.thresholds and value > self.thresholds[name]:
+                self._detect_bottleneck(name, value, component)
 
             return True
 

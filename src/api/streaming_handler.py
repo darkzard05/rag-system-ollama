@@ -65,16 +65,18 @@ class TokenStreamBuffer:
 
     def add_token(self, token: str) -> str | None:
         """
-        토큰 추가
+        토큰 추가 및 조건부 플러시
         """
         self.buffer.append(token)
+        current_time = time.time()
 
-        # 버퍼 풀 시 즉시 플러시 (시간 측정 없이)
-        if len(self.buffer) >= self.buffer_size:
+        # 1. 버퍼가 설정된 크기에 도달했거나
+        # 2. 마지막 플러시 이후 지정된 타임아웃(ms)이 지났으면 즉시 플러시
+        if (len(self.buffer) >= self.buffer_size) or (
+            (current_time - self.last_flush_time) * 1000 >= self.timeout_ms
+        ):
             return self.flush()
 
-        # 타임아웃 기반 플러시는 일정 시간 간격으로만 체크 (선택적 최적화 가능)
-        # 여기서는 오버헤드 감소를 위해 버퍼가 찰 때까지 기다리는 것을 우선함
         return None
 
     def flush(self) -> str | None:
@@ -128,7 +130,7 @@ class StreamingResponseHandler:
         self.buffer.reset()
 
         try:
-            async with aclosing(event_stream) as stream:
+            async with aclosing(event_stream) as stream:  # type: ignore[type-var]
                 async for event in stream:
                     kind = event["event"]
                     name = event.get("name", "Unknown")
@@ -507,28 +509,17 @@ class AdaptiveStreamingController:
         }
 
 
-# 전역 핸들러 인스턴스
-_streaming_handler: StreamingResponseHandler | None = None
-_adaptive_controller: AdaptiveStreamingController | None = None
-
-
 def get_streaming_handler() -> StreamingResponseHandler:
-    """스트리밍 응답 처리기 인스턴스 반환"""
-    global _streaming_handler
-    if _streaming_handler is None:
-        _streaming_handler = StreamingResponseHandler()
-    return _streaming_handler
+    """
+    스트리밍 응답 처리기 인스턴스를 반환합니다.
+    [보안/동시성 수정] 요청별 격리를 위해 항상 새로운 인스턴스를 생성합니다.
+    """
+    return StreamingResponseHandler()
 
 
 def get_adaptive_controller() -> AdaptiveStreamingController:
-    """적응형 스트리밍 제어기 인스턴스 반환"""
-    global _adaptive_controller
-    if _adaptive_controller is None:
-        _adaptive_controller = AdaptiveStreamingController()
-    return _adaptive_controller
-
-
-def reset_streaming_handler() -> None:
-    """스트리밍 처리기 초기화"""
-    global _streaming_handler
-    _streaming_handler = None
+    """
+    적응형 스트리밍 제어기 인스턴스를 반환합니다.
+    [보안/동시성 수정] 요청별 격리를 위해 항상 새로운 인스턴스를 생성합니다.
+    """
+    return AdaptiveStreamingController()

@@ -24,7 +24,7 @@ async def simulate_legacy_batched():
     first_token_time = None
     buffer = ""
 
-    for i in range(20):  # 20 tokens to hit buffer limit
+    for _i in range(20):  # 20 tokens to hit buffer limit
         await asyncio.sleep(0.5)  # 2 tokens/sec
         token = "T"
         buffer += token
@@ -46,7 +46,7 @@ async def simulate_bypass_logic():
     buffer = ""
     is_first = True
 
-    for i in range(20):
+    for _i in range(20):
         await asyncio.sleep(0.5)
         token = "T"
         buffer += token

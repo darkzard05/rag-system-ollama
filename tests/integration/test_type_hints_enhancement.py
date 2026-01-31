@@ -14,6 +14,8 @@ import unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
+import pytest
+
 from common.logging_config import get_logger
 from common.typing_utils import (
     BatchData,
@@ -50,17 +52,17 @@ class TestTypeVars(unittest.TestCase):
     def test_generic_typevars(self):
         """Test that generic TypeVars are defined."""
         # These should be importable without errors
-        self.assertIsNotNone(T)
-        self.assertIsNotNone(K)
-        self.assertIsNotNone(V)
-        self.assertIsNotNone(U)
+        assert T is not None
+        assert K is not None
+        assert V is not None
+        assert U is not None
         logger.info("✓ Generic TypeVars verified")
 
     def test_bound_typevars(self):
         """Test that bound TypeVars are defined."""
-        self.assertIsNotNone(DocumentT)
-        self.assertIsNotNone(StateT)
-        self.assertIsNotNone(ConfigT)
+        assert DocumentT is not None
+        assert StateT is not None
+        assert ConfigT is not None
         logger.info("✓ Bound TypeVars verified")
 
 
@@ -69,26 +71,26 @@ class TestTypeAliases(unittest.TestCase):
 
     def test_document_aliases(self):
         """Test document-related type aliases."""
-        self.assertTrue(hasattr(DocumentList, "__origin__"))
-        self.assertTrue(hasattr(DocumentDict, "__class__"))
-        self.assertTrue(hasattr(DocumentDictList, "__origin__"))
+        assert hasattr(DocumentList, "__origin__")
+        assert hasattr(DocumentDict, "__class__")
+        assert hasattr(DocumentDictList, "__origin__")
         logger.info("✓ Document type aliases verified")
 
     def test_graph_aliases(self):
         """Test graph-related type aliases."""
-        self.assertTrue(hasattr(GraphState, "__class__"))
-        self.assertTrue(hasattr(GraphOutput, "__class__"))
+        assert hasattr(GraphState, "__class__")
+        assert hasattr(GraphOutput, "__class__")
         logger.info("✓ Graph type aliases verified")
 
     def test_config_aliases(self):
         """Test configuration type aliases."""
-        self.assertTrue(hasattr(ConfigDict, "__class__"))
+        assert hasattr(ConfigDict, "__class__")
         logger.info("✓ Config type aliases verified")
 
     def test_batch_aliases(self):
         """Test batch processing type aliases."""
-        self.assertTrue(hasattr(BatchData, "__origin__"))
-        self.assertTrue(hasattr(BatchResult, "__origin__"))
+        assert hasattr(BatchData, "__origin__")
+        assert hasattr(BatchResult, "__origin__")
         logger.info("✓ Batch type aliases verified")
 
 
@@ -106,7 +108,7 @@ class TestProtocols(unittest.TestCase):
         # Should be callable as Retrievable
         retriever = MyRetriever()
         result = retriever.retrieve("test", 5)
-        self.assertEqual(result, [])
+        assert result == []
         logger.info("✓ Retrievable protocol verified")
 
     def test_rankable_protocol(self):
@@ -118,7 +120,7 @@ class TestProtocols(unittest.TestCase):
 
         ranker = MyRanker()
         docs, scores = ranker.rank("test", [])
-        self.assertEqual(docs, [])
+        assert docs == []
         logger.info("✓ Rankable protocol verified")
 
     def test_embeddable_protocol(self):
@@ -134,8 +136,8 @@ class TestProtocols(unittest.TestCase):
         embedder = MyEmbedder()
         vec = embedder.embed("test")
         vecs = embedder.embed_batch(["test"])
-        self.assertEqual(len(vec), 2)
-        self.assertEqual(len(vecs), 1)
+        assert len(vec) == 2
+        assert len(vecs) == 1
         logger.info("✓ Embeddable protocol verified")
 
 
@@ -155,7 +157,7 @@ class TestGenerics(unittest.TestCase):
 
         pipeline = StringToIntPipeline()
         result = pipeline.process("test")
-        self.assertEqual(result, 4)
+        assert result == 4
         logger.info("✓ Pipeline generic class verified")
 
     def test_cache_generic(self):
@@ -180,22 +182,22 @@ class TestGenerics(unittest.TestCase):
         cache = DictCache()
         cache.set("key1", "value1")
         result = cache.get("key1")
-        self.assertEqual(result, "value1")
+        assert result == "value1"
         logger.info("✓ Cache generic class verified")
 
     def test_result_generic(self):
         """Test Result generic class."""
         # Success result
         success = Result.ok(42)
-        self.assertTrue(success.is_ok())
-        self.assertFalse(success.is_err())
-        self.assertEqual(success.value, 42)
+        assert success.is_ok()
+        assert not success.is_err()
+        assert success.value == 42
 
         # Error result
         error = Result.err("Something went wrong")
-        self.assertFalse(error.is_ok())
-        self.assertTrue(error.is_err())
-        self.assertEqual(error.error, "Something went wrong")
+        assert not error.is_ok()
+        assert error.is_err()
+        assert error.error == "Something went wrong"
 
         logger.info("✓ Result generic class verified")
 
@@ -207,23 +209,23 @@ class TestOverloads(unittest.TestCase):
         """Test serialize_value with different input types."""
         # String
         result = serialize_value("hello")
-        self.assertEqual(result, "hello")
+        assert result == "hello"
 
         # Integer
         result = serialize_value(42)
-        self.assertEqual(result, "42")
+        assert result == "42"
 
         # Float
         result = serialize_value(3.14)
-        self.assertEqual(result, "3.14")
+        assert result == "3.14"
 
         # List
         result = serialize_value([1, 2, 3])
-        self.assertEqual(result, ["1", "2", "3"])
+        assert result == ["1", "2", "3"]
 
         # Dict
         result = serialize_value({"a": 1, "b": 2})
-        self.assertEqual(result["a"], "1")
+        assert result["a"] == "1"
 
         logger.info("✓ serialize_value overloads verified")
 
@@ -233,15 +235,15 @@ class TestOverloads(unittest.TestCase):
 
         # With default
         result = get_or_default(data, "a")
-        self.assertEqual(result, "value_a")
+        assert result == "value_a"
 
         # With missing key and default
         result = get_or_default(data, "c", "default_c")
-        self.assertEqual(result, "default_c")
+        assert result == "default_c"
 
         # With missing key and no default
         result = get_or_default(data, "d")
-        self.assertIsNone(result)
+        assert result is None
 
         logger.info("✓ get_or_default overloads verified")
 
@@ -253,10 +255,10 @@ class TestTypeCheckingUtilities(unittest.TestCase):
         """Test validate_type function."""
         # Valid type
         result = validate_type("hello", str)
-        self.assertEqual(result, "hello")
+        assert result == "hello"
 
         # Invalid type
-        with self.assertRaises(TypeError):
+        with pytest.raises(TypeError):
             validate_type(42, str)
 
         logger.info("✓ validate_type function verified")
@@ -265,8 +267,8 @@ class TestTypeCheckingUtilities(unittest.TestCase):
         """Test document type checking functions."""
         # is_document requires Document type which we can skip for this test
         # Just verify the functions exist and are callable
-        self.assertTrue(callable(is_document))
-        self.assertTrue(callable(is_document_list))
+        assert callable(is_document)
+        assert callable(is_document_list)
         logger.info("✓ Document checking functions verified")
 
 
@@ -280,8 +282,8 @@ class TestTypeImports(unittest.TestCase):
             # Just verify typing_utils imports are correct
             from common.typing_utils import DocumentDictList, DocumentList
 
-            self.assertIsNotNone(DocumentList)
-            self.assertIsNotNone(DocumentDictList)
+            assert DocumentList is not None
+            assert DocumentDictList is not None
             logger.info("✓ rag_core type hints verified")
         except Exception as e:
             logger.warning(f"rag_core import test skipped: {e}")
@@ -291,8 +293,8 @@ class TestTypeImports(unittest.TestCase):
         try:
             from common.typing_utils import GraphOutput, GraphState
 
-            self.assertIsNotNone(GraphState)
-            self.assertIsNotNone(GraphOutput)
+            assert GraphState is not None
+            assert GraphOutput is not None
             logger.info("✓ graph_builder type hints verified")
         except Exception as e:
             logger.warning(f"graph_builder import test skipped: {e}")
@@ -302,9 +304,9 @@ class TestTypeImports(unittest.TestCase):
         try:
             from common.typing_utils import SessionData, SessionKey, SessionValue
 
-            self.assertIsNotNone(SessionData)
-            self.assertIsNotNone(SessionKey)
-            self.assertIsNotNone(SessionValue)
+            assert SessionData is not None
+            assert SessionKey is not None
+            assert SessionValue is not None
             logger.info("✓ session type hints verified")
         except Exception as e:
             logger.warning(f"session import test skipped: {e}")
@@ -319,11 +321,10 @@ class TestTypeHintsComprehensiveness(unittest.TestCase):
 
         for var_name in required_vars:
             # Check that each is defined in typing_utils
-            self.assertTrue(
+            assert (
                 hasattr(sys.modules.get("common.typing_utils"), var_name)
-                or var_name in dir(),
-                f"{var_name} not found in typing_utils",
-            )
+                or var_name in dir()
+            ), f"{var_name} not found in typing_utils"
 
         logger.info(f"✓ All {len(required_vars)} TypeVars verified")
 
@@ -338,8 +339,8 @@ class TestTypeHintsComprehensiveness(unittest.TestCase):
         ]
 
         for protocol_name in required_protocols:
-            self.assertTrue(
-                callable(eval(protocol_name)), f"{protocol_name} protocol not callable"
+            assert callable(eval(protocol_name)), (
+                f"{protocol_name} protocol not callable"
             )
 
         logger.info(f"✓ All {len(required_protocols)} Protocols verified")
@@ -349,9 +350,8 @@ class TestTypeHintsComprehensiveness(unittest.TestCase):
         required_generics = ["Pipeline", "Cache", "Result"]
 
         for generic_name in required_generics:
-            self.assertTrue(
-                callable(eval(generic_name)),
-                f"{generic_name} generic class not callable",
+            assert callable(eval(generic_name)), (
+                f"{generic_name} generic class not callable"
             )
 
         logger.info(f"✓ All {len(required_generics)} Generic classes verified")

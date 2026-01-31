@@ -53,7 +53,8 @@ def test_metadata_to_context_string_conversion():
     assert context_str.startswith("[p.1]")
 
     # 페이지 1의 내용들이 하나로 합쳐져서 나타나는지 확인
-    assert "첫 내용" in context_str and "이어진 내용" in context_str
+    assert "첫 내용" in context_str
+    assert "이어진 내용" in context_str
 
     print("\n✅ 메타데이터 전파 및 컨텍스트 포맷팅 테스트 성공!")
 

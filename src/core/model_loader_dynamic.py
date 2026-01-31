@@ -80,10 +80,9 @@ class ModelCache:
         """
         with self._lock:
             # 용량 초과 시 제거
-            if len(self._cache) >= self.config.max_models:
-                if not self._evict():
-                    logger.error(f"모델 제거 실패: {model_key}")
-                    return False
+            if len(self._cache) >= self.config.max_models and not self._evict():
+                logger.error(f"모델 제거 실패: {model_key}")
+                return False
 
             self._cache[model_key] = model
             self._load_times[model_key] = time.time()
@@ -205,18 +204,14 @@ class DynamicModelLoader:
             # 실제 모델 로드 시뮬레이션 (실제는 Ollama 호출)
             model = await self._load_model_async(model_key, timeout_seconds)
 
-            if model:
-                # 캐시에 저장
-                if self.cache.put(model_key, model):
-                    with self._lock:
-                        self._loaded_models[model_key] = model
-                        self._load_count[model_key] = (
-                            self._load_count.get(model_key, 0) + 1
-                        )
+            if model and self.cache.put(model_key, model):
+                with self._lock:
+                    self._loaded_models[model_key] = model
+                    self._load_count[model_key] = self._load_count.get(model_key, 0) + 1
 
-                    elapsed = asyncio.get_event_loop().time() - start_time
-                    logger.info(f"모델 로드 완료: {model_key} ({elapsed:.2f}s)")
-                    return model
+                elapsed = asyncio.get_event_loop().time() - start_time
+                logger.info(f"모델 로드 완료: {model_key} ({elapsed:.2f}s)")
+                return model
         finally:
             with self._lock:
                 self._loading.discard(model_key)

@@ -8,7 +8,7 @@ def test_streaming_api():
     try:
         res = requests.get(f"{base_url}/health")
         print(f"상태: {res.json()}")
-    except:
+    except Exception:
         print(
             "에러: API 서버가 실행 중인지 확인하세요 (uvicorn src.api.api_server:app)"
         )

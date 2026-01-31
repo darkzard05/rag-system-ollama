@@ -4,6 +4,7 @@
 """
 
 import asyncio
+import contextlib
 import time
 
 import pytest
@@ -248,10 +249,8 @@ class TestCircuitBreaker:
 
         # 2회 실패로 OPEN 상태로 전환
         for _ in range(2):
-            try:
+            with contextlib.suppress(Exception):
                 breaker.call(failing_func)
-            except Exception:
-                pass
 
         assert breaker.get_state() == "open"
 
@@ -263,10 +262,8 @@ class TestCircuitBreaker:
             raise Exception("Error")
 
         # OPEN 상태로 전환
-        try:
+        with contextlib.suppress(Exception):
             breaker.call(failing_func)
-        except Exception:
-            pass
 
         # 다음 요청은 즉시 거절
         with pytest.raises(CircuitBreakerOpen):
@@ -282,10 +279,8 @@ class TestCircuitBreaker:
         def failing_func():
             raise Exception("Error")
 
-        try:
+        with contextlib.suppress(Exception):
             breaker.call(failing_func)
-        except Exception:
-            pass
 
         assert breaker.get_state() == "open"
 
@@ -459,7 +454,7 @@ class TestIntegration:
         """재시도 + 서킷 브레이커"""
         retry_config = RetryConfig(max_attempts=3, initial_delay=0.01, jitter=False)
         retry_policy = RetryPolicy(retry_config)
-        breaker = CircuitBreaker("service", failure_threshold=1)
+        CircuitBreaker("service", failure_threshold=1)
 
         call_count = [0]
 

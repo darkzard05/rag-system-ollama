@@ -76,7 +76,7 @@ class TestRBACBasics:
         # 권한 추가
         result = rbac.add_permission_to_role(role_id, perm_id)
 
-        assert result == True
+        assert result
         role = rbac.get_role(role_id)
         assert len(role.permissions) > 0
 
@@ -99,7 +99,7 @@ class TestRBACBasics:
         # 역할 할당
         result = rbac.assign_role_to_user(user_id, role.role_id)
 
-        assert result == True
+        assert result
         user = rbac.get_user(user_id)
         assert len(user.roles) > 0
 
@@ -130,7 +130,7 @@ class TestAccessControl:
         # 접근 확인
         result = rbac.check_access(user_id, ActionType.READ, ResourceType.CONFIG)
 
-        assert result == True
+        assert result
 
     def test_07_check_access_denied(self, rbac):
         """접근 거부"""
@@ -139,7 +139,7 @@ class TestAccessControl:
 
         result = rbac.check_access(user_id, ActionType.DELETE, ResourceType.CONFIG)
 
-        assert result == False
+        assert not result
 
     def test_08_admin_access(self, rbac):
         """Admin 접근"""
@@ -153,7 +153,7 @@ class TestAccessControl:
         # 모든 접근 허용되어야 함
         result = rbac.check_access(user_id, ActionType.ADMIN, ResourceType.SYSTEM)
 
-        assert result == True
+        assert result
 
     def test_09_lock_and_unlock_user(self, rbac):
         """사용자 잠금/해제"""
@@ -162,16 +162,16 @@ class TestAccessControl:
         # 사용자 잠금
         rbac.lock_user(user_id)
         user = rbac.get_user(user_id)
-        assert user.is_locked == True
+        assert user.is_locked
 
         # 접근 거부
         result = rbac.check_access(user_id, ActionType.READ, ResourceType.DATA)
-        assert result == False
+        assert not result
 
         # 사용자 잠금 해제
         rbac.unlock_user(user_id)
         user = rbac.get_user(user_id)
-        assert user.is_locked == False
+        assert not user.is_locked
 
     def test_10_access_logs(self, rbac):
         """접근 로그"""
@@ -202,7 +202,7 @@ class TestAuthentication:
             user_id="user1", username="john", password="SecurePass123!"
         )
 
-        assert result == True
+        assert result
 
     def test_12_authenticate_user(self, auth_manager):
         """사용자 인증"""
@@ -266,7 +266,7 @@ class TestAuthentication:
 
         # API 키 취소
         result = auth_manager.revoke_api_key(api_key)
-        assert result == True
+        assert result
 
 
 # ==============================================
@@ -332,7 +332,7 @@ class TestEncryption:
 
         # password와 email이 암호화됨
         assert isinstance(encrypted_data["password"], dict)
-        assert encrypted_data["password"].get("encrypted") == True
+        assert encrypted_data["password"].get("encrypted")
         assert encrypted_data["normal_field"] == "public_info"
 
     def test_20_secure_data_storage(self):
@@ -350,7 +350,7 @@ class TestEncryption:
 
         # 데이터 삭제
         result = storage.delete("my_secret")
-        assert result == True
+        assert result
 
     def test_21_pii_masking(self):
         """개인식별정보 마스킹"""
@@ -404,7 +404,7 @@ class TestIntegratedSecurity:
             can_access = rbac.check_access(
                 user_rbac.user_id, ActionType.READ, ResourceType.CONFIG
             )
-            assert can_access == True
+            assert can_access
 
     def test_23_security_statistics(self, auth_manager, rbac):
         """보안 통계"""

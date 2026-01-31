@@ -57,7 +57,7 @@ async def test_streaming_buffer():
 
         # 검증: 버퍼링이 작동한다면 대부분의 청크 크기가 1보다 커야 함
         one_char_chunks = [s for s in chunk_sizes if s <= 1]
-        one_char_ratio = (len(one_char_chunks) / total_events) * 100
+        (len(one_char_chunks) / total_events) * 100
 
         if avg_size > 3:
             print(

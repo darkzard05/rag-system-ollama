@@ -19,6 +19,8 @@ from pathlib import Path
 # src 디렉토리를 Python 경로에 추가
 sys.path.insert(0, str(Path(__file__).parent.parent.parent / "src"))
 
+import pytest
+
 from common.exceptions import (
     EmbeddingModelError,
     EmptyPDFError,
@@ -35,34 +37,34 @@ class TestPDFProcessingError(unittest.TestCase):
     def test_basic_exception_creation(self):
         """기본 예외 생성"""
         exc = PDFProcessingError("테스트 오류")
-        self.assertEqual(exc.message, "테스트 오류")
-        self.assertEqual(exc.details, {})
+        assert exc.message == "테스트 오류"
+        assert exc.details == {}
 
     def test_exception_with_details(self):
         """상세 정보 포함 예외 생성"""
         details = {"file": "test.pdf", "line": 10}
         exc = PDFProcessingError("테스트 오류", details=details)
-        self.assertEqual(exc.message, "테스트 오류")
-        self.assertEqual(exc.details, details)
+        assert exc.message == "테스트 오류"
+        assert exc.details == details
 
     def test_exception_str_representation(self):
         """예외의 문자열 표현"""
         exc = PDFProcessingError("테스트 오류")
-        self.assertEqual(str(exc), "테스트 오류")
+        assert str(exc) == "테스트 오류"
 
     def test_exception_str_with_details(self):
         """상세 정보 포함 문자열 표현"""
         details = {"file": "test.pdf", "line": 10}
         exc = PDFProcessingError("테스트 오류", details=details)
         str_repr = str(exc)
-        self.assertIn("테스트 오류", str_repr)
-        self.assertIn("file=test.pdf", str_repr)
-        self.assertIn("line=10", str_repr)
+        assert "테스트 오류" in str_repr
+        assert "file=test.pdf" in str_repr
+        assert "line=10" in str_repr
 
     def test_exception_is_exception(self):
         """PDFProcessingError가 Exception을 상속"""
         exc = PDFProcessingError("테스트")
-        self.assertIsInstance(exc, Exception)
+        assert isinstance(exc, Exception)
 
 
 class TestEmptyPDFError(unittest.TestCase):
@@ -71,26 +73,26 @@ class TestEmptyPDFError(unittest.TestCase):
     def test_empty_pdf_error_without_filename(self):
         """파일명 없는 빈 PDF 예외"""
         exc = EmptyPDFError()
-        self.assertIn("텍스트가 없습니다", exc.message)
+        assert "텍스트가 없습니다" in exc.message
 
     def test_empty_pdf_error_with_filename(self):
         """파일명 있는 빈 PDF 예외"""
         exc = EmptyPDFError(filename="document.pdf")
-        self.assertIn("document.pdf", exc.message)
-        self.assertEqual(exc.details["filename"], "document.pdf")
+        assert "document.pdf" in exc.message
+        assert exc.details["filename"] == "document.pdf"
 
     def test_empty_pdf_error_with_details(self):
         """추가 정보 포함"""
         details = {"pages": 5, "format": "image_only"}
         exc = EmptyPDFError(filename="scan.pdf", details=details)
-        self.assertIn("scan.pdf", exc.message)
-        self.assertEqual(exc.details["filename"], "scan.pdf")
+        assert "scan.pdf" in exc.message
+        assert exc.details["filename"] == "scan.pdf"
 
     def test_empty_pdf_error_inheritance(self):
         """EmptyPDFError가 PDFProcessingError를 상속"""
         exc = EmptyPDFError("test.pdf")
-        self.assertIsInstance(exc, PDFProcessingError)
-        self.assertIsInstance(exc, Exception)
+        assert isinstance(exc, PDFProcessingError)
+        assert isinstance(exc, Exception)
 
 
 class TestInsufficientChunksError(unittest.TestCase):
@@ -99,26 +101,26 @@ class TestInsufficientChunksError(unittest.TestCase):
     def test_insufficient_chunks_basic(self):
         """기본 불충분 청크 예외"""
         exc = InsufficientChunksError()
-        self.assertIn("부족합니다", exc.message)
+        assert "부족합니다" in exc.message
 
     def test_insufficient_chunks_with_counts(self):
         """청크 개수 포함"""
         exc = InsufficientChunksError(chunk_count=3, min_required=10)
-        self.assertIn("3", exc.message)
-        self.assertIn("10", exc.message)
-        self.assertEqual(exc.details["chunk_count"], 3)
-        self.assertEqual(exc.details["min_required"], 10)
+        assert "3" in exc.message
+        assert "10" in exc.message
+        assert exc.details["chunk_count"] == 3
+        assert exc.details["min_required"] == 10
 
     def test_insufficient_chunks_with_details(self):
         """추가 정보 포함"""
         details = {"file_size": "2MB", "reason": "짧은 문서"}
         exc = InsufficientChunksError(chunk_count=2, min_required=5, details=details)
-        self.assertEqual(exc.details["file_size"], "2MB")
+        assert exc.details["file_size"] == "2MB"
 
     def test_insufficient_chunks_inheritance(self):
         """InsufficientChunksError가 PDFProcessingError를 상속"""
         exc = InsufficientChunksError(1, 10)
-        self.assertIsInstance(exc, PDFProcessingError)
+        assert isinstance(exc, PDFProcessingError)
 
 
 class TestVectorStoreError(unittest.TestCase):
@@ -127,25 +129,25 @@ class TestVectorStoreError(unittest.TestCase):
     def test_vector_store_error_basic(self):
         """기본 벡터 저장소 예외"""
         exc = VectorStoreError()
-        self.assertIn("벡터 저장소", exc.message)
+        assert "벡터 저장소" in exc.message
 
     def test_vector_store_error_with_operation(self):
         """작업 정보 포함"""
         exc = VectorStoreError(operation="create", reason="메모리 부족")
-        self.assertIn("create", exc.message)
-        self.assertIn("메모리 부족", exc.message)
-        self.assertEqual(exc.details["operation"], "create")
+        assert "create" in exc.message
+        assert "메모리 부족" in exc.message
+        assert exc.details["operation"] == "create"
 
     def test_vector_store_error_with_reason_only(self):
         """이유만 포함"""
         exc = VectorStoreError(reason="디스크 쓰기 실패")
-        self.assertIn("디스크 쓰기 실패", exc.message)
+        assert "디스크 쓰기 실패" in exc.message
 
     def test_vector_store_error_with_details(self):
         """추가 정보 포함"""
         details = {"available_memory": "512MB", "required": "1GB"}
         exc = VectorStoreError(operation="load", reason="메모리", details=details)
-        self.assertEqual(exc.details["available_memory"], "512MB")
+        assert exc.details["available_memory"] == "512MB"
 
 
 class TestLLMInferenceError(unittest.TestCase):
@@ -154,32 +156,32 @@ class TestLLMInferenceError(unittest.TestCase):
     def test_llm_inference_error_basic(self):
         """기본 LLM 예외"""
         exc = LLMInferenceError()
-        self.assertIn("LLM", exc.message)
+        assert "LLM" in exc.message
 
     def test_llm_inference_error_timeout(self):
         """타임아웃 오류"""
         exc = LLMInferenceError(model="gpt-3", reason="timeout")
-        self.assertIn("시간 제한", exc.message)
-        self.assertIn("간단한 질문", exc.message)
+        assert "시간 제한" in exc.message
+        assert "간단한 질문" in exc.message
 
     def test_llm_inference_error_connection(self):
         """연결 오류"""
         exc = LLMInferenceError(model="ollama", reason="connection_error")
-        self.assertIn("Ollama", exc.message)
-        self.assertIn("연결할 수 없습니다", exc.message)
+        assert "Ollama" in exc.message
+        assert "연결할 수 없습니다" in exc.message
 
     def test_llm_inference_error_out_of_memory(self):
         """메모리 부족 오류"""
         exc = LLMInferenceError(model="llama", reason="out_of_memory")
-        self.assertIn("메모리 부족", exc.message)
-        self.assertIn("종료", exc.message)
+        assert "메모리 부족" in exc.message
+        assert "종료" in exc.message
 
     def test_llm_inference_error_with_details(self):
         """추가 정보 포함"""
         details = {"attempts": 3, "elapsed": "45.2s"}
         exc = LLMInferenceError(model="model", reason="timeout", details=details)
-        self.assertEqual(exc.details["attempts"], 3)
-        self.assertEqual(exc.details["elapsed"], "45.2s")
+        assert exc.details["attempts"] == 3
+        assert exc.details["elapsed"] == "45.2s"
 
 
 class TestEmbeddingModelError(unittest.TestCase):
@@ -188,18 +190,18 @@ class TestEmbeddingModelError(unittest.TestCase):
     def test_embedding_model_error_basic(self):
         """기본 임베딩 모델 예외"""
         exc = EmbeddingModelError()
-        self.assertIn("임베딩", exc.message)
+        assert "임베딩" in exc.message
 
     def test_embedding_model_error_with_model_name(self):
         """모델명 포함"""
         exc = EmbeddingModelError(model="sentence-transformers/all-MiniLM-L6-v2")
-        self.assertIn("all-MiniLM-L6-v2", exc.message)
+        assert "all-MiniLM-L6-v2" in exc.message
 
     def test_embedding_model_error_with_reason(self):
         """이유 포함"""
         exc = EmbeddingModelError(model="bert-base", reason="다운로드 실패")
-        self.assertIn("bert-base", exc.message)
-        self.assertIn("다운로드 실패", exc.message)
+        assert "bert-base" in exc.message
+        assert "다운로드 실패" in exc.message
 
     def test_embedding_model_error_with_details(self):
         """추가 정보 포함"""
@@ -207,7 +209,7 @@ class TestEmbeddingModelError(unittest.TestCase):
         exc = EmbeddingModelError(
             model="model", reason="download_failed", details=details
         )
-        self.assertEqual(exc.details["status_code"], 404)
+        assert exc.details["status_code"] == 404
 
 
 class TestExceptionHierarchy(unittest.TestCase):
@@ -223,8 +225,8 @@ class TestExceptionHierarchy(unittest.TestCase):
             EmbeddingModelError(),
         ]
         for exc in exceptions:
-            self.assertIsInstance(exc, PDFProcessingError)
-            self.assertIsInstance(exc, Exception)
+            assert isinstance(exc, PDFProcessingError)
+            assert isinstance(exc, Exception)
 
     def test_exception_catching_by_base(self):
         """기본 예외로 모든 커스텀 예외 캐치"""
@@ -240,7 +242,7 @@ class TestExceptionHierarchy(unittest.TestCase):
             try:
                 raise exc
             except PDFProcessingError as e:
-                self.assertIsNotNone(e.message)
+                assert e.message is not None
 
 
 class TestExceptionCatching(unittest.TestCase):
@@ -248,21 +250,21 @@ class TestExceptionCatching(unittest.TestCase):
 
     def test_catch_and_re_raise(self):
         """캐치 후 재발생"""
-        with self.assertRaises(EmptyPDFError):
+        with pytest.raises(EmptyPDFError):
             try:
                 raise EmptyPDFError("doc.pdf")
             except EmptyPDFError as e:
-                self.assertIn("doc.pdf", e.message)
+                assert "doc.pdf" in e.message
                 raise
 
     def test_catch_specific_exception(self):
         """특정 예외 캐치"""
-        with self.assertRaises(InsufficientChunksError):
+        with pytest.raises(InsufficientChunksError):
             raise InsufficientChunksError(chunk_count=0, min_required=1)
 
     def test_catch_base_exception(self):
         """기본 예외로 캐치"""
-        with self.assertRaises(PDFProcessingError):
+        with pytest.raises(PDFProcessingError):
             raise EmptyPDFError("test.pdf")
 
     def test_multiple_exception_types(self):
@@ -277,9 +279,8 @@ class TestExceptionCatching(unittest.TestCase):
             try:
                 raise exc
             except PDFProcessingError as e:
-                self.assertTrue(
-                    expected_keyword in e.message or expected_keyword in str(e),
-                    f"Expected '{expected_keyword}' in '{e.message}' or '{str(e)}'",
+                assert expected_keyword in e.message or expected_keyword in str(e), (
+                    f"Expected '{expected_keyword}' in '{e.message}' or '{str(e)}'"
                 )
 
 

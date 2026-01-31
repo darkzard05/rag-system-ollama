@@ -118,7 +118,7 @@ class DistributedRetriever(BaseRetriever):
         ]
 
         # 중복 제거 (Content Hash 기준)
-        unique_results = {}
+        unique_results: dict[str, SearchResult] = {}
         for res in all_results:
             content_hash = hashlib.sha256(res.doc.page_content.encode()).hexdigest()
             if (

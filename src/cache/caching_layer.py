@@ -111,7 +111,7 @@ class MemoryCache(Generic[T]):
         """Calculate size of value in bytes"""
         try:
             return len(pickle.dumps(value))
-        except:
+        except Exception:
             return 0
 
     def _evict_if_needed(self):
@@ -412,10 +412,10 @@ class MultiLayerCache:
             l2_cache_dir: Directory for L2 cache
             l3_enabled: Enable L3 distributed cache
         """
-        self.l1_cache = MemoryCache(max_size=l1_max_size)
+        self.l1_cache: MemoryCache[Any] = MemoryCache(max_size=l1_max_size)
         self.l2_cache = DiskCache(cache_dir=l2_cache_dir)
         self.l3_enabled = l3_enabled
-        self.l3_store = {}  # Simulated distributed cache
+        self.l3_store: dict[str, Any] = {}  # Simulated distributed cache
 
         self.logger = logging.getLogger(__name__)
 

@@ -67,8 +67,3 @@ class RAGQueryOptimizer:
         except Exception as e:
             logger.error(f"[Router] Error: {e}")
             return "FACTOID"  # 에러 시 안전한 기본값
-
-    @classmethod
-    def is_complex_query(cls, query: str) -> bool:
-        """Legacy helper - defaults to True to be safe."""
-        return len(query) > 30

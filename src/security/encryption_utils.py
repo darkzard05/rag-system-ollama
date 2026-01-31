@@ -200,15 +200,16 @@ class EncryptionManager:
         ]
 
         for key, value in encrypted_data.items():
-            if key in sensitive_fields or key in self._field_configs:
-                if isinstance(value, str):
-                    config = self._field_configs.get(key, {"encrypt": True})
+            if (key in sensitive_fields or key in self._field_configs) and isinstance(
+                value, str
+            ):
+                config = self._field_configs.get(key, {"encrypt": True})
 
-                    if config.get("encrypt"):
-                        encrypted_data[key] = {
-                            "encrypted": True,
-                            "value": self._default_encryptor.encrypt_string(value),
-                        }
+                if config.get("encrypt"):
+                    encrypted_data[key] = {
+                        "encrypted": True,
+                        "value": self._default_encryptor.encrypt_string(value),
+                    }
 
         return encrypted_data
 

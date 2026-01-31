@@ -90,31 +90,31 @@ class TestBasicOperations(unittest.TestCase):
         self.manager.set("test_key", "test_value")
         value = self.manager.get("test_key")
 
-        self.assertEqual(value, "test_value")
+        assert value == "test_value"
         logger.info("✓ Set and get operation verified")
 
     def test_get_with_default(self):
         """Test get with default value."""
         value = self.manager.get("nonexistent", default="default_value")
 
-        self.assertEqual(value, "default_value")
+        assert value == "default_value"
         logger.info("✓ Get with default verified")
 
     def test_delete(self):
         """Test delete operation."""
         self.manager.set("temp_key", "temp_value")
-        self.assertTrue(self.manager.exists("temp_key"))
+        assert self.manager.exists("temp_key")
 
         self.manager.delete("temp_key")
-        self.assertFalse(self.manager.exists("temp_key"))
+        assert not self.manager.exists("temp_key")
         logger.info("✓ Delete operation verified")
 
     def test_exists(self):
         """Test exists check."""
         self.manager.set("exists_key", "value")
 
-        self.assertTrue(self.manager.exists("exists_key"))
-        self.assertFalse(self.manager.exists("nonexistent"))
+        assert self.manager.exists("exists_key")
+        assert not self.manager.exists("nonexistent")
         logger.info("✓ Exists check verified")
 
     def test_clear_all(self):
@@ -124,8 +124,8 @@ class TestBasicOperations(unittest.TestCase):
 
         self.manager.clear_all()
 
-        self.assertFalse(self.manager.exists("key1"))
-        self.assertFalse(self.manager.exists("key2"))
+        assert not self.manager.exists("key1")
+        assert not self.manager.exists("key2")
         logger.info("✓ Clear all operation verified")
 
 
@@ -158,7 +158,7 @@ class TestConcurrentAccess(unittest.TestCase):
         # Verify all values were written
         for i in range(100):
             value = self.manager.get(f"key_{i}")
-            self.assertEqual(value, f"value_{i}")
+            assert value == f"value_{i}"
 
         logger.info("✓ Concurrent writes verified (100 threads)")
 
@@ -179,8 +179,8 @@ class TestConcurrentAccess(unittest.TestCase):
                 future.result()
 
         # All reads should return same value
-        self.assertEqual(len(results), 200)
-        self.assertTrue(all(v == "shared_value" for v in results))
+        assert len(results) == 200
+        assert all(v == "shared_value" for v in results)
         logger.info("✓ Concurrent reads verified (200 threads)")
 
     def test_concurrent_read_write_mix(self):
@@ -227,7 +227,7 @@ class TestConcurrentAccess(unittest.TestCase):
 
         # Verify all values were deleted
         for i in range(50):
-            self.assertFalse(self.manager.exists(f"delete_key_{i}"))
+            assert not self.manager.exists(f"delete_key_{i}")
 
         logger.info("✓ Concurrent deletes verified (50 threads)")
 
@@ -282,7 +282,7 @@ class TestRaceConditions(unittest.TestCase):
                 future.result()
 
         final_count = self.manager.get("atomic_counter", 0)
-        self.assertEqual(final_count, 100)
+        assert final_count == 100
         logger.info(f"✓ Atomic counter verified: {final_count}")
 
     def test_dictionary_update_race_condition(self):
@@ -306,7 +306,7 @@ class TestRaceConditions(unittest.TestCase):
                 future.result()
 
         final_data = self.manager.get("dict_data", {})
-        self.assertEqual(final_data.get("count"), 50)
+        assert final_data.get("count") == 50
         logger.info(
             f"✓ Dictionary update race condition: count = {final_data.get('count')}"
         )
@@ -340,13 +340,13 @@ class TestDeadlockPrevention(unittest.TestCase):
             # Another read (nested)
             value2 = self.manager.get("test_key")
 
-            self.assertIn("_modified", value2)
+            assert "_modified" in value2
 
         thread = threading.Thread(target=nested_operation)
         thread.start()
         thread.join(timeout=2.0)
 
-        self.assertFalse(thread.is_alive(), "Thread should complete (no deadlock)")
+        assert not thread.is_alive(), "Thread should complete (no deadlock)"
         logger.info("✓ No deadlock in nested operations")
 
     def test_no_deadlock_under_lock_contention(self):
@@ -364,9 +364,7 @@ class TestDeadlockPrevention(unittest.TestCase):
                 future.result()
 
         elapsed = time.time() - start_time
-        self.assertLess(
-            elapsed, 10.0, "High contention should complete within 10 seconds"
-        )
+        assert elapsed < 10.0, "High contention should complete within 10 seconds"
         logger.info(f"✓ No deadlock under contention (completed in {elapsed:.2f}s)")
 
     def test_lock_timeout_mechanism(self):
@@ -374,7 +372,7 @@ class TestDeadlockPrevention(unittest.TestCase):
         # Create manager with very short timeout
         short_timeout_manager = ThreadSafeSessionManager(lock_timeout=0.1)
 
-        stats_before = short_timeout_manager.get_stats()
+        short_timeout_manager.get_stats()
 
         # Try operations (may hit timeout under extreme conditions)
         for _ in range(1000):
@@ -409,9 +407,9 @@ class TestBatchOperations(unittest.TestCase):
 
         values = self.manager.get_multiple(["key1", "key2", "key3"])
 
-        self.assertEqual(values["key1"], "value1")
-        self.assertEqual(values["key2"], "value2")
-        self.assertEqual(values["key3"], "value3")
+        assert values["key1"] == "value1"
+        assert values["key2"] == "value2"
+        assert values["key3"] == "value3"
         logger.info("✓ Get multiple operations verified")
 
     def test_set_multiple(self):
@@ -424,9 +422,9 @@ class TestBatchOperations(unittest.TestCase):
 
         success = self.manager.set_multiple(data)
 
-        self.assertTrue(success)
+        assert success
         for key, value in data.items():
-            self.assertEqual(self.manager.get(key), value)
+            assert self.manager.get(key) == value
         logger.info("✓ Set multiple operations verified")
 
     def test_atomic_read_consistency(self):
@@ -437,9 +435,9 @@ class TestBatchOperations(unittest.TestCase):
         # Read should be consistent (no partial updates visible)
         values = self.manager.atomic_read(["read_key1", "read_key2"])
 
-        self.assertEqual(len(values), 2)
-        self.assertIn("read_key1", values)
-        self.assertIn("read_key2", values)
+        assert len(values) == 2
+        assert "read_key1" in values
+        assert "read_key2" in values
         logger.info("✓ Atomic read consistency verified")
 
 
@@ -465,8 +463,8 @@ class TestStatistics(unittest.TestCase):
 
         stats = self.manager.get_stats()
 
-        self.assertIn("session_keys", stats)
-        self.assertIn("failed_acquisitions", stats)
+        assert "session_keys" in stats
+        assert "failed_acquisitions" in stats
         logger.info(f"✓ Statistics tracked: {stats}")
 
     def test_health_check(self):
@@ -475,7 +473,7 @@ class TestStatistics(unittest.TestCase):
 
         is_healthy = self.manager.is_healthy()
 
-        self.assertTrue(is_healthy)
+        assert is_healthy
         logger.info("✓ Health check verified")
 
     def test_stats_reset(self):
@@ -485,7 +483,7 @@ class TestStatistics(unittest.TestCase):
 
         stats = self.manager.get_stats()
 
-        self.assertEqual(stats["failed_acquisitions"], 0)
+        assert stats["failed_acquisitions"] == 0
         logger.info("✓ Statistics reset verified")
 
 
@@ -507,15 +505,15 @@ class TestConvenienceFunctions(unittest.TestCase):
         ts_set("conv_key", "conv_value")
         value = ts_get("conv_key")
 
-        self.assertEqual(value, "conv_value")
+        assert value == "conv_value"
         logger.info("✓ Convenience set/get verified")
 
     def test_convenience_exists(self):
         """Test convenience function for exists."""
         ts_set("exist_key", "value")
 
-        self.assertTrue(ts_exists("exist_key"))
-        self.assertFalse(ts_exists("nonexistent"))
+        assert ts_exists("exist_key")
+        assert not ts_exists("nonexistent")
         logger.info("✓ Convenience exists verified")
 
     def test_convenience_delete(self):
@@ -523,7 +521,7 @@ class TestConvenienceFunctions(unittest.TestCase):
         ts_set("del_key", "value")
         ts_delete("del_key")
 
-        self.assertFalse(ts_exists("del_key"))
+        assert not ts_exists("del_key")
         logger.info("✓ Convenience delete verified")
 
 

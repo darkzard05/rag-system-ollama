@@ -109,7 +109,7 @@ class CacheMetadata(BaseModel):
         try:
             int(v, 16)
         except ValueError:
-            raise ValueError("file_hash는 유효한 16진수 문자열이어야 합니다")
+            raise ValueError("file_hash는 유효한 16진수 문자열이어야 합니다") from None
         return v
 
     @field_validator("created_at")
@@ -119,7 +119,7 @@ class CacheMetadata(BaseModel):
         try:
             datetime.fromisoformat(v.replace("Z", "+00:00"))
         except (ValueError, AttributeError):
-            raise ValueError("created_at는 ISO 8601 형식이어야 합니다")
+            raise ValueError("created_at는 ISO 8601 형식이어야 합니다") from None
         return v
 
 
@@ -320,7 +320,7 @@ class CacheSecurityManager:
         except CacheIntegrityError:
             raise
         except Exception as e:
-            raise CacheIntegrityError(f"해시 계산 실패: {e}")
+            raise CacheIntegrityError(f"해시 계산 실패: {e}") from e
 
         # HMAC 검증
         if self.hmac_secret:
@@ -412,9 +412,10 @@ class CacheSecurityManager:
             return True
 
         st = os.stat(dir_path)
-        current_uid = os.getuid()
+        # Windows에서는 getuid가 없으므로 getattr로 안전하게 접근하거나 환경 체크
+        current_uid = getattr(os, "getuid", lambda: -1)()
 
-        if st.st_uid != current_uid:
+        if current_uid != -1 and st.st_uid != current_uid:
             msg = (
                 f"캐시 디렉터리 소유권이 일치하지 않습니다: {dir_path}\n"
                 f"  소유자 UID: {st.st_uid}, 현재 UID: {current_uid}"

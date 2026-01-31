@@ -4,6 +4,7 @@ Core Logic Rebuild: 데코레이터 제거 및 순수 함수 구조로 변경하
 """
 
 import asyncio
+import contextlib
 import hashlib
 import logging
 import time
@@ -62,7 +63,7 @@ def _merge_consecutive_chunks(docs: DocumentList) -> DocumentList:
         ),
     )
 
-    merged = []
+    merged: DocumentList = []
     if not sorted_docs:
         return merged
 
@@ -162,14 +163,11 @@ def build_graph(retriever: T | None = None) -> T:
                 f"[Query] [Start] 질문 분석 및 검색어 확장 시작: '{state['input'][:50]}...'"
             )
 
-            # [최적화] 지능형 쿼리 라우팅
-            if not RAGQueryOptimizer.is_complex_query(state["input"]):
-                logger.info("[Query] [Routing] 단순 질문 감지 -> 확장 생략")
-                SessionManager.replace_last_status_log("단순 질문 분석 완료")
-                SessionManager.add_status_log("문서 검색 중")
-                return {"search_queries": [state["input"]]}
-
+            # [최적화] 의도 기반 지능형 라우팅 적용
+            # 이미 'router' 노드에서 RESEARCH(심층 분석)로 판단된 경우에만 이 노드에 진입하므로,
+            # 별도의 글자 수 체크 없이 즉시 확장을 수행합니다.
             if not QUERY_EXPANSION_CONFIG.get("enabled", True):
+                logger.info("[Query] [Skip] 쿼리 확장 비활성화 상태")
                 return {"search_queries": [state["input"]]}
 
         llm = config.get("configurable", {}).get("llm")
@@ -211,9 +209,9 @@ def build_graph(retriever: T | None = None) -> T:
                 f"[Query] [Complete] 검색어 {len(final_queries)}개 생성 완료: {final_queries}"
             )
             SessionManager.replace_last_status_log(
-                f"질문 정밀 분석 완료 (검색어 {len(final_queries)}개)"
+                f"질문 분석 완료 (검색어 {len(final_queries)}개)"
             )
-            SessionManager.add_status_log("문서 검색 중")
+            SessionManager.add_status_log("문서 검색 중...")
 
             op.tokens = len(result.split())
             return {"search_queries": final_queries}
@@ -284,9 +282,9 @@ def build_graph(retriever: T | None = None) -> T:
                 f"[Retrieval] [Complete] 병렬 하이브리드 검색 완료: {len(unique_docs)} 문서 확보"
             )
             SessionManager.replace_last_status_log(
-                f"병렬 검색을 통해 관련 문장 {len(unique_docs)}개 확보"
+                f"문서 {len(unique_docs)}개 검색 완료"
             )
-            SessionManager.add_status_log("핵심 문장 엄선 중 (Reranking)")
+            SessionManager.add_status_log("핵심 문장 선별 중...")
 
             op.tokens = sum(len(doc.page_content.split()) for doc in unique_docs)
             return {"documents": unique_docs}
@@ -359,9 +357,9 @@ def build_graph(retriever: T | None = None) -> T:
                     f"[Rerank] [Complete] 리랭킹 완료: {rerank_stats['input_count']} -> {rerank_stats['output_count']} 문서 선정"
                 )
                 SessionManager.replace_last_status_log(
-                    f"핵심 문장 {rerank_stats['output_count']}개 엄선 완료"
+                    f"핵심 문장 {rerank_stats['output_count']}개 선별 완료"
                 )
-                SessionManager.add_status_log("답변 작성 준비 중")
+                SessionManager.add_status_log("답변 생성 중...")
 
                 op.tokens = sum(len(doc.page_content.split()) for doc in final_docs)
                 return {"documents": final_docs}
@@ -391,7 +389,7 @@ def build_graph(retriever: T | None = None) -> T:
 
         merged_docs = _merge_consecutive_chunks(sorted_docs)
         formatted = []
-        for i, doc in enumerate(merged_docs):
+        for _i, doc in enumerate(merged_docs):
             page = doc.metadata.get("page", "?")
             # 모델이 출력 형식과 혼동하지 않도록 형식을 변경합니다.
             formatted.append(
@@ -443,7 +441,7 @@ def build_graph(retriever: T | None = None) -> T:
                     sys_prompt = QA_SYSTEM_PROMPT
                     human_prompt = QA_HUMAN_PROMPT
 
-                prompt_template = ChatPromptTemplate.from_messages(
+                ChatPromptTemplate.from_messages(
                     [
                         ("system", sys_prompt),
                         ("human", human_prompt),
@@ -471,21 +469,21 @@ def build_graph(retriever: T | None = None) -> T:
 
                 class ResponsePerformanceTracker:
                     def __init__(self, query_text: str, model_instance: Any):
-                        self.start_time = time.time()
-                        self.query = query_text
-                        self.model = model_instance
-                        self.first_token_at = None
-                        self.thinking_started_at = None
-                        self.thinking_finished_at = None
-                        self.answer_started_at = None
-                        self.answer_finished_at = None
-                        self.chunk_count = 0
-                        self._resp_parts = []
-                        self._thought_parts = []
-                        self.full_response = ""
-                        self.full_thought = ""
-                        self._log_thinking_start = False
-                        self._log_answer_start = False
+                        self.start_time: float = time.time()
+                        self.query: str = query_text
+                        self.model: Any = model_instance
+                        self.first_token_at: float | None = None
+                        self.thinking_started_at: float | None = None
+                        self.thinking_finished_at: float | None = None
+                        self.answer_started_at: float | None = None
+                        self.answer_finished_at: float | None = None
+                        self.chunk_count: int = 0
+                        self._resp_parts: list[str] = []
+                        self._thought_parts: list[str] = []
+                        self.full_response: str = ""
+                        self.full_thought: str = ""
+                        self._log_thinking_start: bool = False
+                        self._log_answer_start: bool = False
 
                     def record_chunk(self, content: str, thought: str):
                         now = time.time()
@@ -564,10 +562,10 @@ def build_graph(retriever: T | None = None) -> T:
                         )
 
                         SessionManager.replace_last_status_log(
-                            f"답변 생성 완료 (사고: {thought_token_count}토큰, 답변: {resp_token_count}토큰)"
+                            f"완료 (사고 {thought_token_count} / 답변 {resp_token_count})"
                         )
 
-                        try:
+                        with contextlib.suppress(Exception):
                             monitor.log_to_csv(
                                 {
                                     "model": getattr(self.model, "model", "unknown"),
@@ -580,8 +578,6 @@ def build_graph(retriever: T | None = None) -> T:
                                     "tps": tokens_per_second,
                                 }
                             )
-                        except Exception:
-                            pass
                         return resp_token_count, thought_token_count
 
                 tracker = ResponsePerformanceTracker(state["input"], llm)
@@ -674,11 +670,9 @@ def build_graph(retriever: T | None = None) -> T:
                     # [최적화 핵심] 노드가 종료될 때 생성 태스크가 살아있다면 반드시 취소
                     if not generation_task.done():
                         generation_task.cancel()
-                        try:
+                        with contextlib.suppress(asyncio.CancelledError, Exception):
                             # 취소가 완료될 때까지 대기하여 자원 정리 보장
                             await generation_task
-                        except (asyncio.CancelledError, Exception):
-                            pass
 
                 # 최종 지표 기록 (정상 종료 시에만 실행됨)
                 resp_tokens, thought_tokens = tracker.finalize_and_log()

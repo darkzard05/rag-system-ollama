@@ -26,7 +26,7 @@ class QueryCacheKey:
     """쿼리 캐시 키"""
 
     query: str
-    document_ids: list[str] = None
+    document_ids: list[str] | None = None
 
     def to_hash(self) -> str:
         """해시값 계산"""
@@ -73,7 +73,7 @@ class ResponseCache:
     ):
         self.cache_manager = cache_manager or get_cache_manager()
         self.default_ttl = default_ttl_hours * 3600  # 초 단위
-        self.access_log = []
+        self.access_log: list[dict[str, Any]] = []
 
     async def get(
         self, query: str, use_semantic: bool = True

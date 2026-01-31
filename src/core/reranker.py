@@ -368,8 +368,8 @@ class DistributedReranker:
         **kwargs,
     ) -> list[RerankingResult]:
         """다양성을 고려한 재순위지정"""
-        reranked = []
-        selected_results = []
+        reranked: list[RerankingResult] = []
+        selected_results: list[Any] = []
 
         def get_score(r):
             return r.aggregated_score if hasattr(r, "aggregated_score") else r.score
@@ -508,8 +508,8 @@ class DistributedReranker:
         **kwargs,
     ) -> list[RerankingResult]:
         """Maximal Marginal Relevance 기반 재순위지정"""
-        reranked = []
-        selected_indices = []
+        reranked: list[RerankingResult] = []
+        selected_indices: list[int] = []
         remaining_indices = list(range(len(results)))
 
         def get_score(r):

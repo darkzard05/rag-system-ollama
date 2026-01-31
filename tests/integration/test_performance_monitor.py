@@ -45,10 +45,10 @@ class TestResponseTimeTracker(unittest.TestCase):
         self.tracker.record_duration(OperationType.LLM_INFERENCE, 1.5)
         stats = self.tracker.get_stats(OperationType.LLM_INFERENCE)
 
-        self.assertEqual(stats["count"], 1)
-        self.assertEqual(stats["avg"], 1.5)
-        self.assertEqual(stats["min"], 1.5)
-        self.assertEqual(stats["max"], 1.5)
+        assert stats["count"] == 1
+        assert stats["avg"] == 1.5
+        assert stats["min"] == 1.5
+        assert stats["max"] == 1.5
         logger.info("✓ Single duration recording verified")
 
     def test_record_multiple_durations(self):
@@ -59,10 +59,10 @@ class TestResponseTimeTracker(unittest.TestCase):
 
         stats = self.tracker.get_stats(OperationType.LLM_INFERENCE)
 
-        self.assertEqual(stats["count"], 5)
-        self.assertEqual(stats["min"], 0.5)
-        self.assertEqual(stats["max"], 2.5)
-        self.assertEqual(stats["avg"], 1.5)
+        assert stats["count"] == 5
+        assert stats["min"] == 0.5
+        assert stats["max"] == 2.5
+        assert stats["avg"] == 1.5
         logger.info("✓ Multiple duration recording verified")
 
     def test_percentile_calculation(self):
@@ -72,11 +72,11 @@ class TestResponseTimeTracker(unittest.TestCase):
 
         stats = self.tracker.get_stats(OperationType.LLM_INFERENCE)
 
-        self.assertIsNotNone(stats["p50"])
-        self.assertIsNotNone(stats["p95"])
-        self.assertIsNotNone(stats["p99"])
-        self.assertLess(stats["p50"], stats["p95"])
-        self.assertLess(stats["p95"], stats["p99"])
+        assert stats["p50"] is not None
+        assert stats["p95"] is not None
+        assert stats["p99"] is not None
+        assert stats["p50"] < stats["p95"]
+        assert stats["p95"] < stats["p99"]
         logger.info(
             f"✓ Percentiles verified: p50={stats['p50']:.3f}, p95={stats['p95']:.3f}, p99={stats['p99']:.3f}"
         )
@@ -91,9 +91,9 @@ class TestResponseTimeTracker(unittest.TestCase):
         retrieval_stats = self.tracker.get_stats(OperationType.DOCUMENT_RETRIEVAL)
         embedding_stats = self.tracker.get_stats(OperationType.EMBEDDING_GENERATION)
 
-        self.assertEqual(llm_stats["count"], 1)
-        self.assertEqual(retrieval_stats["count"], 1)
-        self.assertEqual(embedding_stats["count"], 1)
+        assert llm_stats["count"] == 1
+        assert retrieval_stats["count"] == 1
+        assert embedding_stats["count"] == 1
         logger.info("✓ Multiple operation types tracking verified")
 
     def test_clear_timings(self):
@@ -102,7 +102,7 @@ class TestResponseTimeTracker(unittest.TestCase):
         self.tracker.clear()
 
         stats = self.tracker.get_stats(OperationType.LLM_INFERENCE)
-        self.assertEqual(stats["count"], 0)
+        assert stats["count"] == 0
         logger.info("✓ Clear operation verified")
 
 
@@ -122,10 +122,10 @@ class TestMemoryMonitor(unittest.TestCase):
         """Test reading current memory usage."""
         memory = self.monitor.get_current_usage()
 
-        self.assertIn("rss_mb", memory)
-        self.assertIn("vms_mb", memory)
-        self.assertGreater(memory["rss_mb"], 0)
-        self.assertGreater(memory["vms_mb"], 0)
+        assert "rss_mb" in memory
+        assert "vms_mb" in memory
+        assert memory["rss_mb"] > 0
+        assert memory["vms_mb"] > 0
         logger.info(
             f"✓ Memory usage: RSS={memory['rss_mb']:.2f}MB, VMS={memory['vms_mb']:.2f}MB"
         )
@@ -137,8 +137,8 @@ class TestMemoryMonitor(unittest.TestCase):
 
         delta = self.monitor.get_memory_delta(start, end)
 
-        self.assertEqual(delta["rss_delta_mb"], 5.0)
-        self.assertEqual(delta["vms_delta_mb"], 10.0)
+        assert delta["rss_delta_mb"] == 5.0
+        assert delta["vms_delta_mb"] == 10.0
         logger.info(
             f"✓ Memory delta: RSS={delta['rss_delta_mb']:.2f}MB, VMS={delta['vms_delta_mb']:.2f}MB"
         )
@@ -151,8 +151,8 @@ class TestMemoryMonitor(unittest.TestCase):
 
         stats = self.monitor.get_stats()
 
-        self.assertEqual(stats["sample_count"], 10)
-        self.assertGreaterEqual(stats["max_rss_mb"], stats["min_rss_mb"])
+        assert stats["sample_count"] == 10
+        assert stats["max_rss_mb"] >= stats["min_rss_mb"]
         logger.info(f"✓ Memory samples collected: {stats['sample_count']}")
 
     def test_clear_samples(self):
@@ -161,7 +161,7 @@ class TestMemoryMonitor(unittest.TestCase):
         self.monitor.clear()
 
         stats = self.monitor.get_stats()
-        self.assertEqual(stats["sample_count"], 0)
+        assert stats["sample_count"] == 0
         logger.info("✓ Memory samples cleared")
 
 
@@ -180,7 +180,7 @@ class TestTokenCounter(unittest.TestCase):
     def test_empty_text(self):
         """Test counting tokens in empty text."""
         tokens = TokenCounter.count_tokens("")
-        self.assertEqual(tokens, 0)
+        assert tokens == 0
         logger.info("✓ Empty text token counting verified")
 
     def test_simple_text(self):
@@ -189,8 +189,8 @@ class TestTokenCounter(unittest.TestCase):
         tokens = TokenCounter.count_tokens(text)
 
         # Rough estimation: ~4 chars per token
-        self.assertGreater(tokens, 0)
-        self.assertLess(tokens, len(text))
+        assert tokens > 0
+        assert tokens < len(text)
         logger.info(f"✓ Simple text tokens: {len(text)} chars → {tokens} tokens")
 
     def test_long_text(self):
@@ -198,7 +198,7 @@ class TestTokenCounter(unittest.TestCase):
         text = " ".join(["word"] * 1000)
         tokens = TokenCounter.count_tokens(text)
 
-        self.assertGreater(tokens, 0)
+        assert tokens > 0
         logger.info(f"✓ Long text tokens: {len(text)} chars → {tokens} tokens")
 
     def test_count_tokens_in_list(self):
@@ -207,7 +207,7 @@ class TestTokenCounter(unittest.TestCase):
         total_tokens = TokenCounter.count_tokens_in_list(texts)
 
         individual_sum = sum(TokenCounter.count_tokens(t) for t in texts)
-        self.assertEqual(total_tokens, individual_sum)
+        assert total_tokens == individual_sum
         logger.info(
             f"✓ List token counting: {len(texts)} texts → {total_tokens} tokens"
         )
@@ -233,7 +233,7 @@ class TestPerformanceMonitor(unittest.TestCase):
 
         # Check that operation was recorded
         count = self.monitor.get_operation_count(OperationType.LLM_INFERENCE)
-        self.assertEqual(count, 1)
+        assert count == 1
         logger.info("✓ Context manager operation tracking verified")
 
     def test_operation_metrics(self):
@@ -246,9 +246,9 @@ class TestPerformanceMonitor(unittest.TestCase):
 
         stats = self.monitor.get_operation_stats(OperationType.EMBEDDING_GENERATION)
 
-        self.assertEqual(stats.successful_operations, 1)
-        self.assertGreater(stats.avg_duration_seconds, 0)
-        self.assertEqual(stats.total_tokens, 50)
+        assert stats.successful_operations == 1
+        assert stats.avg_duration_seconds > 0
+        assert stats.total_tokens == 50
         logger.info(
             f"✓ Operation metrics: duration={stats.avg_duration_seconds:.3f}s, tokens={stats.total_tokens}"
         )
@@ -263,7 +263,7 @@ class TestPerformanceMonitor(unittest.TestCase):
 
         stats = self.monitor.get_operation_stats(OperationType.QUERY_PROCESSING)
 
-        self.assertEqual(stats.failed_operations, 1)
+        assert stats.failed_operations == 1
         logger.info("✓ Error tracking verified")
 
     def test_multiple_operations(self):
@@ -274,10 +274,10 @@ class TestPerformanceMonitor(unittest.TestCase):
                 op.tokens = (i + 1) * 10
 
         count = self.monitor.get_operation_count(OperationType.LLM_INFERENCE)
-        self.assertEqual(count, 5)
+        assert count == 5
 
         stats = self.monitor.get_operation_stats(OperationType.LLM_INFERENCE)
-        self.assertEqual(stats.total_tokens, sum(range(1, 6)) * 10)
+        assert stats.total_tokens == sum(range(1, 6)) * 10
         logger.info(
             f"✓ Multiple operations: {count} tracked, {stats.total_tokens} total tokens"
         )
@@ -301,9 +301,9 @@ class TestPerformanceMonitor(unittest.TestCase):
             OperationType.EMBEDDING_GENERATION
         )
 
-        self.assertEqual(llm_count, 1)
-        self.assertEqual(retrieval_count, 1)
-        self.assertEqual(embedding_count, 1)
+        assert llm_count == 1
+        assert retrieval_count == 1
+        assert embedding_count == 1
         logger.info("✓ Operation type filtering verified")
 
     def test_get_all_stats(self):
@@ -316,16 +316,16 @@ class TestPerformanceMonitor(unittest.TestCase):
 
         all_stats = self.monitor.get_all_stats()
 
-        self.assertIn(OperationType.LLM_INFERENCE, all_stats)
-        self.assertIn(OperationType.DOCUMENT_RETRIEVAL, all_stats)
+        assert OperationType.LLM_INFERENCE in all_stats
+        assert OperationType.DOCUMENT_RETRIEVAL in all_stats
         logger.info(f"✓ All stats retrieved: {len(all_stats)} operation types")
 
     def test_memory_stats(self):
         """Test memory statistics."""
         memory_stats = self.monitor.get_memory_stats()
 
-        self.assertIn("current_rss_mb", memory_stats)
-        self.assertGreaterEqual(memory_stats["current_rss_mb"], 0)
+        assert "current_rss_mb" in memory_stats
+        assert memory_stats["current_rss_mb"] >= 0
         logger.info(f"✓ Memory stats: current={memory_stats['current_rss_mb']:.2f}MB")
 
     def test_health_status(self):
@@ -335,10 +335,10 @@ class TestPerformanceMonitor(unittest.TestCase):
 
         health = self.monitor.get_health_status()
 
-        self.assertIn("status", health)
-        self.assertIn("memory_mb", health)
-        self.assertIn("total_operations", health)
-        self.assertIn("issues", health)
+        assert "status" in health
+        assert "memory_mb" in health
+        assert "total_operations" in health
+        assert "issues" in health
         logger.info(
             f"✓ Health status: {health['status']}, memory={health['memory_mb']:.2f}MB"
         )
@@ -360,28 +360,28 @@ class TestReportGeneration(unittest.TestCase):
         """Test report generation with no operations."""
         report = self.monitor.generate_report()
 
-        self.assertIn("timestamp", report)
-        self.assertIn("total_operations", report)
-        self.assertIn("memory", report)
-        self.assertIn("operations", report)
-        self.assertEqual(report["total_operations"], 0)
+        assert "timestamp" in report
+        assert "total_operations" in report
+        assert "memory" in report
+        assert "operations" in report
+        assert report["total_operations"] == 0
         logger.info("✓ Empty report generation verified")
 
     def test_report_with_operations(self):
         """Test report generation with operations."""
-        for i in range(3):
+        for _i in range(3):
             with self.monitor.track_operation(OperationType.LLM_INFERENCE) as op:
                 time.sleep(0.01)
                 op.tokens = 100
 
         report = self.monitor.generate_report()
 
-        self.assertEqual(report["total_operations"], 3)
-        self.assertIn("llm_inference", report["operations"])
+        assert report["total_operations"] == 3
+        assert "llm_inference" in report["operations"]
 
         llm_op = report["operations"]["llm_inference"]
-        self.assertEqual(llm_op["total"], 3)
-        self.assertEqual(llm_op["tokens"]["total"], 300)
+        assert llm_op["total"] == 3
+        assert llm_op["tokens"]["total"] == 300
         logger.info(
             f"✓ Report with operations: {report['total_operations']} operations logged"
         )
@@ -394,14 +394,14 @@ class TestReportGeneration(unittest.TestCase):
         report = self.monitor.generate_report()
 
         # Check structure
-        self.assertIsInstance(report["memory"], dict)
-        self.assertIsInstance(report["operations"], dict)
+        assert isinstance(report["memory"], dict)
+        assert isinstance(report["operations"], dict)
 
         if "document_retrieval" in report["operations"]:
             op_data = report["operations"]["document_retrieval"]
-            self.assertIn("duration", op_data)
-            self.assertIn("tokens", op_data)
-            self.assertIn("memory_delta_mb", op_data)
+            assert "duration" in op_data
+            assert "tokens" in op_data
+            assert "memory_delta_mb" in op_data
 
         logger.info("✓ Report structure verified")
 
@@ -413,7 +413,7 @@ class TestReportGeneration(unittest.TestCase):
         self.monitor.clear_metrics()
 
         count = self.monitor.get_operation_count()
-        self.assertEqual(count, 0)
+        assert count == 0
         logger.info("✓ Metrics clearing verified")
 
 
@@ -463,10 +463,10 @@ class TestMonitoringIntegration(unittest.TestCase):
 
         # Verify all operations tracked
         total = self.monitor.get_operation_count()
-        self.assertEqual(total, 5)
+        assert total == 5
 
         report = self.monitor.generate_report()
-        self.assertEqual(report["total_operations"], 5)
+        assert report["total_operations"] == 5
 
         logger.info(f"✓ Full RAG simulation: {total} operations tracked")
 
@@ -493,13 +493,13 @@ class TestMonitoringIntegration(unittest.TestCase):
             t.join()
 
         count = self.monitor.get_operation_count()
-        self.assertEqual(count, 3)
+        assert count == 3
         logger.info(f"✓ Concurrent operations: {count} operations tracked")
 
     def test_performance_degradation_detection(self):
         """Test detecting performance degradation."""
         # Record fast operations
-        for i in range(5):
+        for _i in range(5):
             with self.monitor.track_operation(OperationType.LLM_INFERENCE) as op:
                 time.sleep(0.01)
                 op.tokens = 100
@@ -507,7 +507,7 @@ class TestMonitoringIntegration(unittest.TestCase):
         stats_fast = self.monitor.get_operation_stats(OperationType.LLM_INFERENCE)
 
         # Record slower operations
-        for i in range(5):
+        for _i in range(5):
             with self.monitor.track_operation(OperationType.LLM_INFERENCE) as op:
                 time.sleep(0.05)
                 op.tokens = 100
@@ -515,9 +515,7 @@ class TestMonitoringIntegration(unittest.TestCase):
         stats_slow = self.monitor.get_operation_stats(OperationType.LLM_INFERENCE)
 
         # New average should be higher
-        self.assertGreater(
-            stats_slow.avg_duration_seconds, stats_fast.avg_duration_seconds
-        )
+        assert stats_slow.avg_duration_seconds > stats_fast.avg_duration_seconds
         logger.info(
             f"✓ Degradation detected: {stats_fast.avg_duration_seconds:.3f}s → {stats_slow.avg_duration_seconds:.3f}s"
         )

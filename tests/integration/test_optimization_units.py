@@ -147,7 +147,7 @@ def test_merge_consecutive_chunks_missing_metadata():
 
 
 def test_merge_consecutive_chunks_large_number_of_docs(benchmark):
-    base_doc = Document(
+    Document(
         page_content="test content",
         metadata={"source": "large.pdf", "page": 1, "chunk_index": 0},
     )
