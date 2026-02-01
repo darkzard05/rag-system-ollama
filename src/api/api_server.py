@@ -10,7 +10,16 @@ import tempfile
 import time
 from pathlib import Path
 
-from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, UploadFile
+from fastapi import (
+    Depends,
+    FastAPI,
+    File,
+    Form,
+    Header,
+    HTTPException,
+    Request,
+    UploadFile,
+)
 from fastapi.responses import StreamingResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
@@ -98,8 +107,9 @@ class RAGResourceManager:
 async def get_session_context(x_session_id: str | None = Header(None)) -> str:
     """헤더에서 세션 ID를 추출하고 컨텍스트를 고정합니다."""
     sid = x_session_id or "default"
-    SessionManager.set_session_id(sid)
-    SessionManager.init_session()
+    # [개선] 세션 설정 및 초기화 작업을 별도 스레드에서 실행하여 이벤트 루프 보호
+    await asyncio.to_thread(SessionManager.set_session_id, sid)
+    await asyncio.to_thread(SessionManager.init_session)
     return sid
 
 
@@ -218,7 +228,11 @@ async def query_rag(request: QueryRequest, user_id: str = Depends(verify_token))
 
 
 @app.post("/api/v1/stream_query")
-async def stream_query_rag(request: QueryRequest, user_id: str = Depends(verify_token)):
+async def stream_query_rag(
+    request: QueryRequest,
+    fastapi_request: Request,
+    user_id: str = Depends(verify_token),
+):
     """
     인증된 세션에 대해 실시간 스트리밍(SSE) 응답을 제공합니다.
     """
@@ -257,7 +271,18 @@ async def stream_query_rag(request: QueryRequest, user_id: str = Depends(verify_
                 ),
                 adaptive_controller=controller,
             ):
-                # 1. 메시지(답변 및 사고 과정) 처리
+                # 클라이언트 연결 끊김 확인 (자원 보호)
+                if await fastapi_request.is_disconnected():
+                    logger.info(f"[API] Client disconnected, stopping stream: {sid}")
+                    break
+
+                # 1. 상태 업데이트 처리
+                if chunk.status:
+                    yield sse_handler.format_sse_event(
+                        "status", {"message": chunk.status, "node": chunk.node_name}
+                    )
+
+                # 2. 메시지(답변 및 사고 과정) 처리
                 if chunk.content:
                     yield sse_handler.format_sse_event(
                         "message", {"content": chunk.content}
@@ -268,7 +293,7 @@ async def stream_query_rag(request: QueryRequest, user_id: str = Depends(verify_
                         "thought", {"content": chunk.thought}
                     )
 
-                # 2. 메타데이터(문서) 처리
+                # 3. 메타데이터(문서) 처리
                 if chunk.metadata and "documents" in chunk.metadata:
                     docs = [
                         {
@@ -284,7 +309,15 @@ async def stream_query_rag(request: QueryRequest, user_id: str = Depends(verify_
             logger.error(f"Streaming error (Session: {sid}): {e}")
             yield sse_handler.format_sse_error(str(e))
 
-    return StreamingResponse(event_generator(), media_type="text/event-stream")
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache, no-transform",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",  # Nginx 버퍼링 방지
+        },
+    )
 
 
 @app.on_event("startup")
@@ -294,7 +327,8 @@ async def startup_event():
     async def session_cleaner():
         while True:
             await asyncio.sleep(600)  # 10분마다 실행
-            SessionManager.cleanup_expired_sessions(max_idle_seconds=3600)
+            # [개선] 대규모 세션 정리 시 루프 차단 방지를 위해 별도 스레드에서 실행
+            await asyncio.to_thread(SessionManager.cleanup_expired_sessions, 3600)
 
     asyncio.create_task(session_cleaner())
     logger.info("[API] 세션 자동 정리 태스크 시작됨 (주기: 10분)")

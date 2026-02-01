@@ -23,7 +23,6 @@ from common.constants import FilePathConstants, StringConstants  # noqa: E402
 from core.session import SessionManager  # noqa: E402
 from infra.notification_system import SystemNotifier  # noqa: E402
 from ui.ui import (  # noqa: E402
-    _render_status_box,
     inject_custom_css,
     render_left_column,
     render_pdf_viewer,
@@ -135,7 +134,7 @@ _init_temp_directory()
 atexit.register(_cleanup_current_file)
 
 
-def _ensure_models_are_loaded(status_container: DeltaGenerator) -> bool:
+def _ensure_models_are_loaded() -> bool:
     """
     선택된 LLM 및 임베딩 모델을 순차적으로 로드하여 안정성을 확보합니다.
     """
@@ -146,7 +145,7 @@ def _ensure_models_are_loaded(status_container: DeltaGenerator) -> bool:
     selected_embedding = SessionManager.get("last_selected_embedding_model")
 
     if not selected_model:
-        st.warning("⚠️ LLM 모델이 선택되지 않았습니다.")
+        st.warning("⚠️ 추론 모델이 선택되지 않았습니다.")
         return False
 
     if not selected_embedding:
@@ -158,11 +157,9 @@ def _ensure_models_are_loaded(status_container: DeltaGenerator) -> bool:
             return False
 
     try:
-        status_placeholder = SessionManager.get("status_placeholder")
-
         def force_sync():
-            if status_placeholder:
-                _render_status_box(status_placeholder)
+            # 상태 로그 업데이트 시 UI에 반영될 수 있도록 세션 매니저 로그만 업데이트
+            pass
 
         current_llm = SessionManager.get("llm")
         current_embedder = SessionManager.get("embedder")
@@ -173,12 +170,20 @@ def _ensure_models_are_loaded(status_container: DeltaGenerator) -> bool:
             not current_embedder
             or getattr(current_embedder, "model_name", None) != selected_embedding
         ):
-            SystemNotifier.loading("임베딩 로드 중...")
+            SystemNotifier.loading("임베딩 모델 로드 시작")
             force_sync()
             embedder = load_embedding_model(selected_embedding)
             SessionManager.set("embedder", embedder)
-            actual_device = SessionManager.get("current_embedding_device", "UNKNOWN")
-            SystemNotifier.success(f"임베딩 준비 완료 ({actual_device})")
+            
+            # [수정] 캐시된 경우를 대비해 객체에서 직접 디바이스 정보 추출 및 명칭 통일 (CUDA -> GPU)
+            actual_device = SessionManager.get("current_embedding_device")
+            if not actual_device or actual_device == "UNKNOWN":
+                actual_device = getattr(embedder, "model_kwargs", {}).get("device", "UNKNOWN").upper()
+            
+            if actual_device == "CUDA":
+                actual_device = "GPU"
+            
+            SystemNotifier.success(f"임베딩 모델 준비 완료 ({actual_device})")
             force_sync()
 
         # 2. LLM 로드 및 백그라운드 예열
@@ -189,7 +194,7 @@ def _ensure_models_are_loaded(status_container: DeltaGenerator) -> bool:
             llm = load_llm(selected_model)
             SessionManager.set("llm", llm)
             # ...
-            SystemNotifier.success("LLM 준비 완료")
+            SystemNotifier.success("추론 모델 준비 완료")
             force_sync()
 
         return True
@@ -200,7 +205,7 @@ def _ensure_models_are_loaded(status_container: DeltaGenerator) -> bool:
         return False
 
 
-def _rebuild_rag_system(status_container: DeltaGenerator) -> None:
+def _rebuild_rag_system() -> None:
     """
     업로드된 파일과 선택된 모델을 사용하여 RAG 파이프라인을 재구축합니다.
     """
@@ -219,17 +224,17 @@ def _rebuild_rag_system(status_container: DeltaGenerator) -> None:
         return
 
     try:
-        if not _ensure_models_are_loaded(status_container):
+        if not _ensure_models_are_loaded():
             return
 
         embedder = SessionManager.get("embedder")
+        
+        # [추가] 분석 시작 알림
+        SystemNotifier.loading(f"'{file_name}' 분석 시작")
 
-        # 실시간 상태 박스 업데이트를 위한 콜백 정의
-        status_placeholder = SessionManager.get("status_placeholder")
-
+        # 실시간 상태 박스 업데이트를 위한 콜백 정의 (이제 내부 로그만 사용)
         def sync_ui():
-            if status_placeholder:
-                _render_status_box(status_placeholder)
+            pass
 
         # [Lazy Import]
         from core.rag_core import build_rag_pipeline
@@ -242,38 +247,38 @@ def _rebuild_rag_system(status_container: DeltaGenerator) -> None:
             on_progress=sync_ui,
         )
 
-        SessionManager.add_message("assistant", success_message)
+        SessionManager.add_message("system", success_message)
+        SessionManager.add_message("system", "READY_FOR_QUERY")
 
     except Exception as e:
         logger.error(f"RAG 빌드 실패: {e}", exc_info=True)
         error_msg = f"문서 처리 중 오류가 발생했습니다: {str(e)}"
         SessionManager.set("pdf_processing_error", error_msg)
-        SessionManager.add_message("assistant", f"❌ {error_msg}")
-        status_container.error(error_msg)
+        SessionManager.add_message("system", f"❌ {error_msg}")
 
 
-def _update_qa_chain(status_container: DeltaGenerator) -> None:
+def _update_qa_chain() -> None:
     """
     문서 인덱싱은 유지한 채 LLM(QA Chain)만 교체합니다.
     """
     selected_model = SessionManager.get("last_selected_model")
     try:
-        SessionManager.add_status_log(f"🔄 LLM 교체 중: {selected_model}")
+        SessionManager.add_status_log("🔄 추론 모델 교체 중")
 
         # [Lazy Import]
         from core.model_loader import load_llm
 
         llm = load_llm(selected_model)
         SessionManager.set("llm", llm)
-        SessionManager.replace_last_status_log(f"✅ LLM 교체 완료: {selected_model}")
+        SessionManager.replace_last_status_log("✅ 추론 모델 교체 완료")
 
         logger.info(f"LLM updated to: {selected_model}")
-        msg = f"✅ QA 시스템이 '{selected_model}' 모델로 업데이트되었습니다."
-        SessionManager.add_message("assistant", msg)
+        msg = "✅ 추론 모델이 업데이트되었습니다."
+        SessionManager.add_message("system", msg)
 
     except Exception as e:
         logger.error(f"QA 업데이트 실패: {e}", exc_info=True)
-        status_container.error(f"업데이트 실패: {e}")
+        SessionManager.add_message("assistant", f"❌ 업데이트 실패: {e}")
 
 
 # --- Callbacks ---
@@ -327,6 +332,7 @@ def on_file_upload() -> None:
             SessionManager.set("pdf_file_path", tmp_path)
             SessionManager.set("new_file_uploaded", True)
             SystemNotifier.success(f"문서 업로드 완료: {uploaded_file.name}", icon="📄")
+            SystemNotifier.info("문서 내용 분석 및 인덱싱 시작")
             logger.info(f"[System] [Upload] 파일 저장 완료: {tmp_path}")
         except Exception as e:
             SystemNotifier.error("파일 저장 중 오류 발생", details=str(e))
@@ -341,7 +347,7 @@ def on_model_change() -> None:
         return
 
     if not SessionManager.get("is_first_run"):
-        SessionManager.add_message("assistant", f"🔄 LLM 변경 요청: {selected}")
+        SessionManager.add_message("system", "🔄 추론 모델 변경 요청")
 
     SessionManager.set("last_selected_model", selected)
     # 이미 문서가 처리된 상태라면 QA 체인만 업데이트하면 됨
@@ -358,7 +364,7 @@ def on_embedding_change() -> None:
         return
 
     if not SessionManager.get("is_first_run"):
-        SessionManager.add_message("assistant", f"🔄 임베딩 모델 변경 요청: {selected}")
+        SessionManager.add_message("system", "🔄 임베딩 모델 변경 요청")
 
     SessionManager.set("last_selected_embedding_model", selected)
     # 임베딩 모델이 바뀌면 문서를 다시 인덱싱해야 함
@@ -370,6 +376,10 @@ def _render_app_layout(
     is_skeleton_pass: bool, available_models: list[str] | None = None
 ) -> dict[str, Any]:
     """앱의 전체 레이아웃을 렌더링하고 주요 플레이스홀더를 반환합니다."""
+    # 0. 창 높이 측정 (단 1회 실행하여 중복 키 에러 방지)
+    from ui.ui import update_window_height
+    update_window_height()
+    
     inject_custom_css()
 
     # 1. 사이드바 렌더링
@@ -401,10 +411,10 @@ def _render_app_layout(
         )
         render_pdf_viewer()
 
-    return sidebar_placeholders
 
 
-def _handle_pending_tasks(status_container: DeltaGenerator) -> None:
+
+def _handle_pending_tasks() -> None:
     """지연된 무거운 작업(RAG 빌드, 모델 교체 등)을 순차적으로 처리합니다."""
     if SessionManager.get("new_file_uploaded"):
         current_file_path = SessionManager.get("pdf_file_path")
@@ -413,17 +423,17 @@ def _handle_pending_tasks(status_container: DeltaGenerator) -> None:
         SessionManager.set("pdf_file_path", current_file_path)
         SessionManager.set("last_uploaded_file_name", current_file_name)
         SessionManager.set("new_file_uploaded", False)
-        _rebuild_rag_system(status_container)
+        _rebuild_rag_system()
         st.rerun()
 
     elif SessionManager.get("needs_rag_rebuild"):
         SessionManager.set("needs_rag_rebuild", False)
-        _rebuild_rag_system(status_container)
+        _rebuild_rag_system()
         st.rerun()
 
     elif SessionManager.get("needs_qa_chain_update"):
         SessionManager.set("needs_qa_chain_update", False)
-        _update_qa_chain(status_container)
+        _update_qa_chain()
         st.rerun()
 
 
@@ -442,11 +452,9 @@ def main() -> None:
     available_models = st.session_state.get("available_models_list")
 
     # 레이아웃 렌더링 (데이터 상태를 직접 전달)
-    sidebar_placeholders = _render_app_layout(
+    _render_app_layout(
         is_skeleton_pass=(available_models is None), available_models=available_models
     )
-    status_container = sidebar_placeholders["status_container"]
-    SessionManager.set("status_placeholder", status_container)
 
     # 모델 목록이 없으면 로딩 시도
     if not available_models:
@@ -457,7 +465,7 @@ def main() -> None:
         st.rerun()  # 목록을 가져온 후 UI 업데이트를 위해 재실행
 
     # 4. 백그라운드 태스크 처리 (RAG 빌드, 모델 교체 등)
-    _handle_pending_tasks(status_container)
+    _handle_pending_tasks()
 
     # 5. 첫 실행 플래그 해제 및 기본 모델 예열 시도
     if SessionManager.get("is_first_run"):

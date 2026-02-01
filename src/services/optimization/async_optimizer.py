@@ -285,7 +285,7 @@ class ConcurrentDocumentRetriever:
         self, documents: DocumentList
     ) -> tuple[DocumentList, int]:
         """
-        SHA256 기반 중복 제거
+        고성능 튜플 기반 중복 제거 (SHA256보다 빠름)
 
         Args:
             documents: 원본 문서 리스트
@@ -294,17 +294,16 @@ class ConcurrentDocumentRetriever:
             (중복 제거된 문서, 제거된 문서 수)
         """
         unique_docs = []
-        seen: set[str] = set()
+        seen = set()
         duplicate_count = 0
 
         for doc in documents:
-            # 문서 내용 + 출처 정보를 함께 해싱
-            doc_key = doc.page_content + doc.metadata.get("source", "")
-            doc_hash = hashlib.sha256(doc_key.encode()).hexdigest()
+            # 문서 내용 + 출처 정보를 함께 튜플로 구성 (Python set에서 효율적으로 해싱됨)
+            doc_key = (doc.page_content, doc.metadata.get("source"), doc.metadata.get("page"))
 
-            if doc_hash not in seen:
+            if doc_key not in seen:
                 unique_docs.append(doc)
-                seen.add(doc_hash)
+                seen.add(doc_key)
             else:
                 duplicate_count += 1
 

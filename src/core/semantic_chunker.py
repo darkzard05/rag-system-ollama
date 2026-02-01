@@ -96,12 +96,6 @@ class EmbeddingBasedSemanticChunker:
 
             if cleaned_text:
                 # strip()으로 인해 앞쪽 공백이 제거되었을 수 있으므로 오프셋 보정
-                # 앞쪽 공백 길이 계산
-                raw_segment = text[last_pos:sep_end]
-                leading_spaces = len(raw_segment) - len(raw_segment.lstrip())
-
-                last_pos + leading_spaces
-
                 # replace("\n", " ")는 길이를 변화시키지 않음 (1문자->1문자).
                 # 하지만 strip()은 길이를 줄임.
                 # 정확한 매핑을 위해:
@@ -171,20 +165,22 @@ class EmbeddingBasedSemanticChunker:
 
     def _calculate_similarities(self, embeddings: np.ndarray) -> list[float]:
         """
-        인접 문장 간의 코사인 유사도를 계산합니다.
+        인접 문장 간의 코사인 유사도를 효율적으로 계산합니다.
         """
         if len(embeddings) < 2:
             return []
 
-        # 1. 벡터 정규화 (L2 Norm)
+        # 1. 벡터 정규화 (L2 Norm) - NumPy 최적화 방식
+        # 각 행의 노름(norm)을 계산하고 0으로 나누기 방지
         norms = np.linalg.norm(embeddings, axis=1, keepdims=True)
-        # 0으로 나누기 방지
-        normalized_embeddings = embeddings / np.where(norms == 0, 1e-10, norms)
+        norms[norms == 0] = 1e-10
+        
+        # 정규화된 벡터 생성
+        normalized_embeddings = embeddings / norms
 
-        # 2. 인접 벡터 간 내적 (유사도)
-        similarities = np.sum(
-            normalized_embeddings[:-1] * normalized_embeddings[1:], axis=1
-        )
+        # 2. 인접 벡터 간 내적 (유사도) - 슬라이싱을 이용한 벡터화 연산
+        # (N-1, D) * (N-1, D) -> sum axis=1 -> (N-1,)
+        similarities = np.einsum('ij,ij->i', normalized_embeddings[:-1], normalized_embeddings[1:])
 
         return similarities.tolist()
 
@@ -385,8 +381,8 @@ class EmbeddingBasedSemanticChunker:
             logger.warning("split_documents: 입력 문서 리스트가 비어있습니다.")
             return [], []
 
-        # 1. 문서 통합 및 오프셋 매핑 구축
-        full_text = ""
+        # 1. 문서 통합 및 오프셋 매핑 구축 (join()을 사용하여 효율성 개선)
+        text_parts = []
         doc_ranges = []
         current_offset = 0
 
@@ -397,78 +393,50 @@ class EmbeddingBasedSemanticChunker:
 
             # 문서 사이 공백 추가 (첫 문서 제외)
             if current_offset > 0:
-                full_text += " "
+                text_parts.append(" ")
                 current_offset += 1
 
             start = current_offset
-            full_text += content
+            text_parts.append(content)
             end = current_offset + len(content)
 
             doc_ranges.append({"start": start, "end": end, "metadata": doc.metadata})
-
             current_offset = end
+
+        full_text = "".join(text_parts)
 
         if not full_text.strip():
             logger.warning("split_documents: 병합된 텍스트가 비어있습니다.")
             return [], []
 
         # 2. 청킹 수행 (오프셋 및 벡터 정보 포함)
-        # split_text는 이제 [{'text': str, 'start': int, 'end': int, 'vector': np.ndarray}]를 반환
         chunk_dicts = self.split_text(full_text)
 
-        # 3. 메타데이터 역매핑 및 문서 객체 생성
+        # 3. 메타데이터 역매핑 및 문서 객체 생성 (이진 탐색 최적화)
+        import bisect
+        
         final_docs = []
         final_vectors = []
+        
+        # 탐색을 위한 시작 오프셋 리스트 생성
+        doc_starts = [r["start"] for r in doc_ranges]
 
         for chunk in chunk_dicts:
             c_start = chunk["start"]
             c_end = chunk["end"]
             c_text = chunk["text"]
-            c_vector = chunk["vector"]  # 이미 계산된 벡터
+            c_vector = chunk["vector"]
 
             # 청크의 중심점 계산
             c_center = (c_start + c_end) // 2
-
-            # 중심점이 속한 원본 문서 찾기
-            matched_metadata = {}
-
-            # 순차 탐색
-            found = False
-            for _i, r in enumerate(doc_ranges):
-                if r["start"] <= c_center < r["end"]:
-                    matched_metadata = r["metadata"].copy() if r["metadata"] else {}
-                    found = True
-                    break
-
-            # [Fix] 정확한 범위를 못 찾은 경우 (문서 사이 공백에 중심점이 위치)
-            # 가장 가까운 문서를 찾아 매핑 (Gap 보정)
-            if not found and doc_ranges:
-                # 1. 범위 밖 (맨 앞보다 전, 맨 뒤보다 후)
-                if c_center < doc_ranges[0]["start"]:
-                    matched_metadata = doc_ranges[0]["metadata"].copy()
-                elif c_center >= doc_ranges[-1]["end"]:
-                    matched_metadata = doc_ranges[-1]["metadata"].copy()
-                else:
-                    # 2. 문서 사이 Gap에 위치한 경우
-                    # 현재 c_center보다 시작점이 큰 첫 번째 문서를 찾으면, 그 문서(Next)나 그 앞 문서(Prev) 중 가까운 것 선택
-                    for i, r in enumerate(doc_ranges):
-                        if r["start"] > c_center:
-                            # r은 Gap 바로 뒤의 문서
-                            prev_r = doc_ranges[i - 1] if i > 0 else r
-
-                            # 거리 비교: (Gap~Next) vs (Prev~Gap)
-                            dist_to_next = r["start"] - c_center
-                            dist_to_prev = c_center - prev_r["end"]
-
-                            if dist_to_prev <= dist_to_next:
-                                matched_metadata = prev_r["metadata"].copy()
-                            else:
-                                matched_metadata = r["metadata"].copy()
-                            break
-
-            # 최후의 안전장치: 여전히 비어있다면 첫 번째 문서 정보 사용
-            if not matched_metadata and doc_ranges:
-                matched_metadata = doc_ranges[0]["metadata"].copy()
+            
+            # 이진 탐색으로 해당 오프셋이 포함된 문서 인덱스 탐색
+            # bisect_right: c_center보다 큰 첫 번째 start의 위치 - 1 이 해당 문서
+            idx = bisect.bisect_right(doc_starts, c_center) - 1
+            
+            # 인덱스 범위 보정
+            idx = max(0, min(idx, len(doc_ranges) - 1))
+            matched_metadata = doc_ranges[idx]["metadata"].copy() if doc_ranges[idx]["metadata"] else {}
 
             final_docs.append(Document(page_content=c_text, metadata=matched_metadata))
             final_vectors.append(c_vector)

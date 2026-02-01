@@ -16,9 +16,9 @@ services:
       - LOG_LEVEL=INFO
     volumes:
       - ./src:/app/src
-      - ./cache:/app/cache
+      - ./.model_cache:/app/.model_cache
       - ./logs:/app/logs
-      - ./models:/app/models
+      - ./data:/app/data
     depends_on:
       - ollama
     networks:
@@ -41,8 +41,9 @@ services:
       - LOG_LEVEL=INFO
     volumes:
       - ./src:/app/src
-      - ./cache:/app/cache
+      - ./.model_cache:/app/.model_cache
       - ./logs:/app/logs
+      - ./data:/app/data
     depends_on:
       - ollama
     networks:

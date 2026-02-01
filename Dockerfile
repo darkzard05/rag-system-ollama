@@ -14,6 +14,7 @@ WORKDIR /app
 
 # Copy requirements first for better caching
 COPY requirements.txt .
+COPY requirements/ ./requirements/
 
 # Stage 2: Build dependencies (optional - for GPU support)
 FROM base as builder
@@ -33,7 +34,7 @@ COPY --from=builder /usr/local/bin /usr/local/bin
 COPY . .
 
 # Create necessary directories
-RUN mkdir -p logs models cache
+RUN mkdir -p logs .model_cache data
 
 # Set environment variables
 ENV PYTHONUNBUFFERED=1

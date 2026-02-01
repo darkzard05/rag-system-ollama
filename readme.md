@@ -12,7 +12,7 @@
 
 ## 📸 Preview
 
-![Application Interface](image/image1.png)
+![Application Interface](assets/image1.png)
 
 *GraphRAG-Ollama features a refined sidebar, real-time status logging, and a professional PDF viewer with a grouped-control navigation toolbar.*
 
@@ -61,11 +61,55 @@ pip install -r requirements.txt
 
 ---
 
-## 🖥️ Usage
+## 🐳 Docker Setup (Recommended)
 
-### Run the Application
+The easiest way to run the entire system is using Docker Compose. This will automatically set up the UI, API, and Ollama server with the required models.
+
 ```bash
-streamlit run src/main.py
+# Start all services
+docker-compose up --build
+```
+
+- **Streamlit UI**: [http://localhost:8501](http://localhost:8501)
+- **REST API**: [http://localhost:8000](http://localhost:8000)
+- **Ollama**: Automatically managed as a container.
+
+---
+
+## 📊 Monitoring & API
+
+If you are using Docker, you can access built-in monitoring and API documentation:
+
+### 📈 Monitoring
+- **Grafana**: [http://localhost:3000](http://localhost:3000) (ID/PW: `admin` / `admin`)
+- **Prometheus**: [http://localhost:9090](http://localhost:9090)
+
+### 🔌 API Reference
+- **Swagger UI**: [http://localhost:8000/docs](http://localhost:8000/docs)
+- **ReDoc**: [http://localhost:8000/redoc](http://localhost:8000/redoc)
+
+---
+
+## ⚙️ Configuration
+
+The system can be customized via `config.yml` or environmental variables in `.env`.
+
+- **Model Selection**: Change default LLM or Embedding models.
+- **RAG Parameters**: Adjust chunk size, overlap, and retrieval weights.
+- **Security**: Configure RBAC and cache encryption.
+
+---
+
+## 🧪 Testing
+
+Run the full test suite to ensure system integrity:
+
+```bash
+# Run all tests
+pytest
+
+# Run tests with coverage report
+pytest --cov=src
 ```
 
 ---
@@ -80,9 +124,21 @@ rag-system-ollama/
 │   ├── ui/                 # 🎨 Streamlit UI & Components
 │   ├── api/                # 🌐 Backend API & Streaming
 │   └── common/             # 🛠️ Config, Exceptions & Utils
+├── docs/                   # 📚 Technical Documentation (Architecture, Ops, API)
 ├── reports/                # 📊 Performance & Optimization Audits
+├── scripts/                # 🛠️ Maintenance & Debugging Scripts
+├── requirements/           # 📦 Dependency management
 └── tests/                  # 🧪 Integrity & Verification Tests
 ```
+
+---
+
+## 📚 Internal Documentation
+
+For more detailed information, please refer to the [Documentation Index](./docs/README.md):
+- [Architecture & Protocols](./docs/architecture/ARCHITECTURE.md)
+- [Deployment & Security](./docs/ops/DEPLOYMENT.md)
+- [API Specifications](./docs/api/API.md)
 
 ---
 

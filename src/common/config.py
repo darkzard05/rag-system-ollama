@@ -80,7 +80,7 @@ OLLAMA_TIMEOUT: float = _get_env(
 )
 
 AVAILABLE_EMBEDDING_MODELS: list[str] = _models_config.get("available_embeddings", [])
-CACHE_DIR: str = _models_config.get("cache_dir", ".model_cache")
+CACHE_DIR: str = str(PROJECT_ROOT / _models_config.get("cache_dir", ".model_cache"))
 EMBEDDING_BATCH_SIZE: Union[int, str] = _models_config.get(
     "embedding_batch_size", "auto"
 )
@@ -92,11 +92,16 @@ RETRIEVER_CONFIG: dict = _rag_config.get("retriever", {})
 RERANKER_CONFIG: dict = _rag_config.get("reranker", {})
 TEXT_SPLITTER_CONFIG: dict = _rag_config.get("text_splitter", {})
 SEMANTIC_CHUNKER_CONFIG: dict = _rag_config.get("semantic_chunker", {})
-VECTOR_STORE_CACHE_DIR: str = _rag_config.get(
-    "vector_store_cache_dir", ".model_cache/vector_store_cache"
+VECTOR_STORE_CACHE_DIR: str = str(
+    PROJECT_ROOT / _rag_config.get("vector_store_cache_dir", ".model_cache/vector_store_cache")
 )
 QUERY_EXPANSION_CONFIG: dict = _rag_config.get("query_expansion", {"enabled": True})
 _prompts_config = _rag_config.get("prompts") or {}
+ANALYSIS_PROTOCOL: str = _prompts_config.get("analysis_protocol", "")
+RESEARCH_SYSTEM_PROMPT: str = _prompts_config.get("research_system_prompt", "")
+FACTOID_SYSTEM_PROMPT: str = _prompts_config.get("factoid_system_prompt", "")
+GREETING_SYSTEM_PROMPT: str = _prompts_config.get("greeting_system_prompt", "")
+OUT_OF_CONTEXT_SYSTEM_PROMPT: str = _prompts_config.get("out_of_context_system_prompt", "")
 QA_SYSTEM_PROMPT: str = _prompts_config.get("qa_system_prompt", "")
 QA_HUMAN_PROMPT: str = _prompts_config.get("qa_human_prompt", "")
 QUERY_EXPANSION_PROMPT: str = _prompts_config.get("query_expansion_prompt", "")

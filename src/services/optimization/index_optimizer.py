@@ -119,7 +119,7 @@ class VectorQuantizer:
             offset = vec_min
 
             # 양자화
-            quantized_vec = np.round((vec - offset) / scale).astype(np.int8)
+            quantized_vec = np.round((vec - offset) / scale).astype(np.uint8)
             quantized.append(quantized_vec)
 
             scales.append(scale)
@@ -447,12 +447,12 @@ class IndexOptimizer:
         self,
         documents: list[Document],
         vectors: list[np.ndarray],
-    ) -> tuple[list[Document], list[np.ndarray], IndexStats]:
+    ) -> tuple[list[Document], list[np.ndarray], dict[str, Any], IndexStats]:
         """
         인덱스 최적화.
 
         Returns:
-            (최적화된 문서, 최적화된 벡터, 통계)
+            (최적화된 문서, 최적화된 벡터, 양자화 메타데이터, 통계)
         """
         self.stats = IndexStats(
             total_documents=len(documents),
@@ -483,7 +483,7 @@ class IndexOptimizer:
             self.metadata_indexer.build_indexes(documents)
             self.stats.num_unique_metadata_fields = len(self.metadata_indexer.indexes)
 
-        return documents, vectors, self.stats
+        return documents, vectors, quant_metadata, self.stats
 
     def search_with_metadata(
         self,

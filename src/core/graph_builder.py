@@ -5,7 +5,6 @@ Core Logic Rebuild: 데코레이터 제거 및 순수 함수 구조로 변경하
 
 import asyncio
 import contextlib
-import hashlib
 import logging
 import time
 from typing import Any
@@ -19,11 +18,16 @@ from langgraph.graph import END, StateGraph
 
 from api.schemas import GraphState
 from common.config import (
+    ANALYSIS_PROTOCOL,
+    FACTOID_SYSTEM_PROMPT,
+    GREETING_SYSTEM_PROMPT,
+    OUT_OF_CONTEXT_SYSTEM_PROMPT,
     QA_HUMAN_PROMPT,
     QA_SYSTEM_PROMPT,
     QUERY_EXPANSION_CONFIG,
     QUERY_EXPANSION_PROMPT,
     RERANKER_CONFIG,
+    RESEARCH_SYSTEM_PROMPT,
 )
 from common.constants import TimeoutConstants
 from common.typing_utils import (
@@ -268,15 +272,15 @@ def build_graph(retriever: T | None = None) -> T:
             results = await asyncio.gather(*tasks)
             all_documents = [doc for sublist in results for doc in sublist]
 
-            # 중복 제거 (SHA256 해시 기반)
+            # 중복 제거 (경량 튜플 기반 식별)
             unique_docs = []
             seen = set()
             for doc in all_documents:
-                doc_key = doc.page_content + doc.metadata.get("source", "")
-                doc_hash = hashlib.sha256(doc_key.encode()).hexdigest()
-                if doc_hash not in seen:
+                # 내용과 출처 정보를 조합하여 식별자 생성 (해싱 오버헤드 최소화)
+                doc_id = (doc.page_content, doc.metadata.get("source"), doc.metadata.get("page"))
+                if doc_id not in seen:
                     unique_docs.append(doc)
-                    seen.add(doc_hash)
+                    seen.add(doc_id)
 
             logger.info(
                 f"[Retrieval] [Complete] 병렬 하이브리드 검색 완료: {len(unique_docs)} 문서 확보"
@@ -433,13 +437,19 @@ def build_graph(retriever: T | None = None) -> T:
 
                 # [리팩토링] 의도에 따라 시스템 및 휴먼 프롬프트 동적 변경
                 intent = state.get("route_decision", "FACTOID")
+                human_prompt = QA_HUMAN_PROMPT
 
                 if intent == "GREETING":
-                    sys_prompt = "당신은 친절한 AI 어시스턴트입니다. 사용자의 인사나 일상적인 대화에 자연스럽고 따뜻하게 응답하세요."
+                    sys_prompt = GREETING_SYSTEM_PROMPT or "당신은 친절한 AI 어시스턴트입니다."
                     human_prompt = "{input}"  # 문서 컨텍스트 참조 지시 제거
+                elif intent == "RESEARCH":
+                    sys_prompt = f"{ANALYSIS_PROTOCOL}\n\n{RESEARCH_SYSTEM_PROMPT}"
+                elif intent == "FACTOID":
+                    sys_prompt = f"{ANALYSIS_PROTOCOL}\n\n{FACTOID_SYSTEM_PROMPT}"
+                elif intent == "OUT_OF_CONTEXT":
+                    sys_prompt = OUT_OF_CONTEXT_SYSTEM_PROMPT or QA_SYSTEM_PROMPT
                 else:
-                    sys_prompt = QA_SYSTEM_PROMPT
-                    human_prompt = QA_HUMAN_PROMPT
+                    sys_prompt = f"{ANALYSIS_PROTOCOL}\n\n{QA_SYSTEM_PROMPT}"
 
                 ChatPromptTemplate.from_messages(
                     [
@@ -584,21 +594,22 @@ def build_graph(retriever: T | None = None) -> T:
                 timeout = TimeoutConstants.LLM_TIMEOUT
 
                 async def _consume_stream_and_dispatch_events() -> None:
-                    """Ollama SDK를 직접 호출하여 최고 속도로 이벤트를 발생시킵니다. (최적화된 5토큰 버퍼링 적용)"""
+                    """Ollama SDK를 직접 호출하여 최고 속도로 이벤트를 발생시킵니다. 작업 중단 시 클라이언트를 강제 종료하여 서버 자원을 보호합니다."""
+                    client = None
                     try:
-                        async_client = getattr(llm, "async_client", None)
-                        if not async_client:
-                            import ollama
-
-                            async_client = ollama.AsyncClient(
-                                host=getattr(llm, "base_url", "http://127.0.0.1:11434")
-                            )
+                        # [개선] 요청마다 전용 비동기 클라이언트 생성 (연결 격리 및 강제 종료 보장)
+                        import ollama
+                        client = ollama.AsyncClient(
+                            host=getattr(llm, "base_url", "http://127.0.0.1:11434")
+                        )
 
                         buffer = []
-                        # 원격 저장소에서 검증된 최적의 배치 크기
+                        total_content_chunks = 0
+                        initial_burst_limit = 3
                         batch_size = 5
 
-                        async for part in await async_client.chat(
+                        # [보안] 클라이언트 컨텍스트 내에서 실행
+                        async for part in await client.chat(
                             model=getattr(llm, "model", "unknown"),
                             messages=formatted_messages,
                             stream=True,
@@ -608,7 +619,6 @@ def build_graph(retriever: T | None = None) -> T:
                             content = msg_part.get("content", "")
                             thought = msg_part.get("thinking", "")
 
-                            # 1. 사고 과정은 즉시 전송 (반응성 유지)
                             if thought:
                                 tracker.record_chunk("", thought)
                                 await adispatch_custom_event(
@@ -617,20 +627,27 @@ def build_graph(retriever: T | None = None) -> T:
                                     config=config,
                                 )
 
-                            # 2. 답변 본문은 5개 단위로 묶어서 발송 (오버헤드 최소화)
                             if content:
-                                buffer.append(content)
-                                if len(buffer) >= batch_size:
-                                    merged_content = "".join(buffer)
-                                    tracker.record_chunk(merged_content, "")
+                                total_content_chunks += 1
+                                if total_content_chunks <= initial_burst_limit:
+                                    tracker.record_chunk(content, "")
                                     await adispatch_custom_event(
                                         "response_chunk",
-                                        {"chunk": merged_content, "thought": ""},
+                                        {"chunk": content, "thought": ""},
                                         config=config,
                                     )
-                                    buffer = []
+                                else:
+                                    buffer.append(content)
+                                    if len(buffer) >= batch_size:
+                                        merged_content = "".join(buffer)
+                                        tracker.record_chunk(merged_content, "")
+                                        await adispatch_custom_event(
+                                            "response_chunk",
+                                            {"chunk": merged_content, "thought": ""},
+                                            config=config,
+                                        )
+                                        buffer = []
 
-                        # 3. 루프 종료 후 남은 버퍼 플러시
                         if buffer:
                             merged_content = "".join(buffer)
                             tracker.record_chunk(merged_content, "")
@@ -640,8 +657,20 @@ def build_graph(retriever: T | None = None) -> T:
                                 config=config,
                             )
 
+                    except asyncio.CancelledError:
+                        # [핵심] 취소 시 로그 남기고 상위로 전파
+                        logger.warning(f"[Stream] 작업이 외부에서 취소되었습니다 (Session: {config.get('configurable', {}).get('session_id')})")
+                        raise
                     except Exception as e:
                         logger.error(f"[Stream] SDK 직접 호출 중 오류: {e}")
+                    finally:
+                        # [핵심] 종료/에러/취소 시 반드시 클라이언트를 닫아 Ollama 서버에 중단 신호(TCP Disconnect) 전달
+                        if client:
+                            try:
+                                await client.aclose()
+                                logger.debug("[Stream] Ollama 클라이언트 연결 닫기 완료 (자원 반환)")
+                            except Exception:
+                                pass
 
                 # 스트리밍 태스크 실행
                 generation_task = asyncio.create_task(

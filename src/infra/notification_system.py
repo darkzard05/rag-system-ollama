@@ -35,18 +35,19 @@ class SystemNotifier:
         cls,
         message: str,
         level: str = "info",
-        show_toast: bool = False,
+        show_toast: bool = False, # 하위 호환성을 위해 유지하되 무시
         icon: str | None = None,
         duration: int = 4000,
+        add_to_chat: bool = True,
     ) -> None:
-        """내부 통합 알림 처리 로직"""
+        """내부 통합 알림 처리 로직 (이제 토스트를 사용하지 않음)"""
 
         # 1. 아이콘 결정
         if not icon:
             icon = cls.ICONS.get(level, "ℹ️")
 
         # 2. 백엔드 로깅 (콘솔/파일)
-        f"[{level.upper()}] {message}"
+        log_msg = f"[{level.upper()}] {message}"
         if level == "error":
             logger.error(message)
         elif level == "warning":
@@ -54,52 +55,48 @@ class SystemNotifier:
         else:
             logger.info(message)
 
-        # 3. 세션 상태 로그 추가 (UI Status Box용)
-        # 로딩 중이거나 짧은 상태 메시지인 경우 기존 로그를 대체할지 여부 결정 로직 추가 가능
+        # 3. 세션 상태 로그 추가 및 메시지 이전
+        # [수정] 단순 로그가 아니라 실제 채팅 메시지로 추가하여 '메시지 이전' 실현
         SessionManager.add_status_log(message)
+        
+        if add_to_chat:
+            # 채팅창에 일반 메시지 형태로 추가 (아이콘 포함)
+            prefix = icon + " " if icon else ""
+            SessionManager.add_message("system", f"{prefix}{message}")
 
-        # 4. Streamlit Toast 알림 (옵션)
-        if show_toast:
-            try:
-                st.toast(message, icon=icon)
-            except Exception as e:
-                logger.debug(f"Toast 표시 실패 (비 UI 스레드 가능성): {e}")
-
-        # 5. UI 강제 동기화 (선택적)
-        # 상태 박스가 있는 컨테이너를 즉시 업데이트하려면 여기서 콜백을 호출할 수 있음
-        # 하지만 성능을 위해 호출자가 명시적으로 처리하는 것을 권장
+        # 4. [제거됨] Streamlit Toast 알림은 더 이상 사용하지 않음
+        # 모든 알림은 채팅창이나 사이드바의 캡션 등을 통해 전달됨
 
     @classmethod
     def info(cls, message: str, show_toast: bool = False, icon: str | None = None):
         """일반 정보 알림"""
-        cls._notify(message, "info", show_toast, icon)
+        cls._notify(message, "info", show_toast=False, icon=icon)
 
     @classmethod
-    def success(cls, message: str, show_toast: bool = True, icon: str | None = None):
-        """성공 알림 (기본적으로 Toast 표시)"""
-        cls._notify(message, "success", show_toast, icon)
+    def success(cls, message: str, show_toast: bool = False, icon: str | None = None):
+        """성공 알림"""
+        cls._notify(message, "success", show_toast=False, icon=icon)
 
     @classmethod
-    def warning(cls, message: str, show_toast: bool = True):
+    def warning(cls, message: str, show_toast: bool = False):
         """경고 알림"""
-        cls._notify(message, "warning", show_toast)
+        cls._notify(message, "warning", show_toast=False)
 
     @classmethod
-    def error(cls, message: str, details: str | None = None, show_toast: bool = True):
+    def error(cls, message: str, details: str | None = None, show_toast: bool = False):
         """에러 알림"""
         full_msg = f"{message}: {details}" if details else message
-        cls._notify(full_msg, "error", show_toast)
-        # 에러는 세션에도 별도 기록 가능
+        cls._notify(full_msg, "error", show_toast=False)
         SessionManager.set("last_error", full_msg)
 
     @classmethod
     def loading(cls, message: str, show_toast: bool = False):
         """로딩/작업 진행 중 알림"""
-        cls._notify(message, "info", show_toast, icon=cls.ICONS["loading"])
+        cls._notify(message, "info", show_toast=False, icon=cls.ICONS["loading"])
 
     @classmethod
     def model_load(cls, model_name: str, device: str = "GPU"):
         """모델 로딩 전용 알림"""
         icon = cls.ICONS["brain"] if device == "GPU" else cls.ICONS["setting"]
-        msg = f"모델 로드 시작 ({device}): {model_name}"
-        cls._notify(msg, "info", show_toast=True, icon=icon)
+        msg = f"추론 모델 로드 시작 ({device})"
+        cls._notify(msg, "info", show_toast=False, icon=icon)

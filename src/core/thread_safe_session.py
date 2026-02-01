@@ -61,6 +61,10 @@ class ThreadSafeSessionManager:
         "new_file_uploaded": False,
         "show_graph": False,
         "status_logs": ["시스템 대기 중"],
+        "doc_insight": None,  # 🚀 문서 요약 인사이트 저장용
+        "current_embedding_device": "UNKNOWN",  # 🚀 현재 사용 중인 임베딩 디바이스 (CPU/CUDA 등)
+        "current_page": 1,  # 🚀 PDF 뷰어의 현재 페이지
+        "pdf_nav_slider_wide": 1,  # 🚀 슬라이더 위젯 상태 키
     }
 
     # 클래스 레벨 속성 (공유 Lock 및 통계)
@@ -519,16 +523,35 @@ class _LockContext:
         self.acquired = False
 
     def __enter__(self):
-        # [수정] 무한 대기 방지: timeout 내에 획득 실패 시 즉시 예외 발생
-        self.acquired = self.lock.acquire(timeout=self.timeout)
-        if not self.acquired:
-            from common.exceptions import SessionLockTimeoutError
+        # [개선] 현재 실행 중인 스레드가 이벤트 루프 스레드인지 확인 (FastAPI 대응)
+        try:
+            import asyncio
+            is_in_loop = False
+            with contextlib.suppress(RuntimeError):
+                asyncio.get_running_loop()
+                is_in_loop = True
+        except ImportError:
+            is_in_loop = False
 
+        # 이벤트 루프 스레드라면 아주 짧은 타임아웃으로 시도하고, 실패 시 즉시 양보하도록 설계
+        # (실제 완벽한 비동기 락은 아니지만 루프 프리징을 최소화함)
+        actual_timeout = 0.1 if is_in_loop else self.timeout
+
+        self.acquired = self.lock.acquire(timeout=actual_timeout)
+        
+        if not self.acquired:
+            # 이벤트 루프에서 0.1초 내에 획득 실패 시, 
+            # 일반적인 동기 스레드와 달리 루프 보호를 위해 즉시 에러 발생 또는 재시도 로직 유도
+            from common.exceptions import SessionLockTimeoutError
             self.target.failed_acquisitions += 1
-            # 더 이상 두 번째 self.lock.acquire() (무한대기)를 호출하지 않음
+            
+            error_msg = "이벤트 루프 보호를 위해 세션 락 획득이 거부되었습니다." if is_in_loop else f"{self.timeout}초 내에 세션 락을 획득하지 못했습니다."
+            
             raise SessionLockTimeoutError(
+                error_msg,
                 details={
-                    "timeout": self.timeout,
+                    "timeout": actual_timeout,
+                    "is_event_loop": is_in_loop,
                     "target_type": type(self.target).__name__,
                     "active_threads": threading.active_count(),
                 }

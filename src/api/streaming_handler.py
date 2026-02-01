@@ -31,6 +31,8 @@ class StreamChunk:
     is_final: bool = False
     thought: str | None = None  # 사고 과정 필드 추가
     metadata: dict[str, Any] | None = None  # 메타데이터 (문서 등) 추가
+    node_name: str | None = None  # 현재 실행 중인 노드 이름
+    status: str | None = None  # 현재 상태 메시지
 
 
 @dataclass
@@ -106,12 +108,13 @@ class StreamingResponseHandler:
     - SSE 호환성
     """
 
-    def __init__(self, buffer_size: int = 10, timeout_ms: float = 100.0):
+    def __init__(self, buffer_size: int = 1, timeout_ms: float = 30.0):
         self.buffer = TokenStreamBuffer(buffer_size, timeout_ms)
         self.metrics = StreamingMetrics()
         self.chunk_index = 0
         self.start_time: float | None = None
         self.first_token_time: float | None = None
+        self.last_chunk_time: float | None = None
 
     async def stream_graph_events(
         self,
@@ -124,10 +127,21 @@ class StreamingResponseHandler:
         from contextlib import aclosing
 
         self.start_time = time.time()
+        self.last_chunk_time = self.start_time
         self.chunk_index = 0
         self.metrics = StreamingMetrics()
         self.first_token_time = None
         self.buffer.reset()
+
+        # 노드 이름 매핑 (UI 피드백용)
+        node_status_map = {
+            "router": "질문 의도 분석 중...",
+            "generate_queries": "검색어 확장 중...",
+            "retrieve": "관련 문서 검색 중...",
+            "rerank_documents": "문서 순위 재조정 중...",
+            "format_context": "컨텍스트 구성 중...",
+            "generate_response": "답변 생성 중...",
+        }
 
         try:
             async with aclosing(event_stream) as stream:  # type: ignore[type-var]
@@ -136,11 +150,31 @@ class StreamingResponseHandler:
                     name = event.get("name", "Unknown")
                     data = event.get("data", {})
 
-                    # 1. 커스텀 응답 청크 이벤트 처리
-                    if kind == "on_custom_event" and name == "response_chunk":
+                    # 1. 노드 시작 이벤트 처리 (상태 업데이트용)
+                    if kind == "on_chain_start" and name in node_status_map:
+                        yield StreamChunk(
+                            content="",
+                            timestamp=time.time(),
+                            token_count=0,
+                            chunk_index=self.chunk_index,
+                            node_name=name,
+                            status=node_status_map[name],
+                        )
+                        self.chunk_index += 1
+
+                    # 2. 커스텀 응답 청크 이벤트 처리
+                    elif kind == "on_custom_event" and name == "response_chunk":
                         content = data.get("chunk", "")
                         thought = data.get("thought", "")
                         current_time = time.time()
+
+                        # 지연 시간 기록 및 적응형 제어
+                        if adaptive_controller and self.last_chunk_time:
+                            latency_ms = (current_time - self.last_chunk_time) * 1000
+                            adaptive_controller.record_latency(latency_ms)
+                            self.buffer.buffer_size = adaptive_controller.get_buffer_size()
+
+                        self.last_chunk_time = current_time
 
                         # 사고 과정 처리 (버퍼링 없이 즉시 전송)
                         if thought:
@@ -157,14 +191,14 @@ class StreamingResponseHandler:
                         if content:
                             if self.first_token_time is None:
                                 self.first_token_time = current_time
+                                # 첫 토큰은 버퍼링 없이 즉시 플러시하여 TTFT 최적화
+                                if self.buffer.buffer:
+                                    flushed = self.buffer.flush()
+                                    if flushed:
+                                        content = flushed + content
 
                             buffered_content = self.buffer.add_token(content)
                             if buffered_content:
-                                if adaptive_controller:
-                                    self.buffer.buffer_size = (
-                                        adaptive_controller.get_buffer_size()
-                                    )
-
                                 chunk = StreamChunk(
                                     content=buffered_content,
                                     timestamp=current_time,
@@ -353,9 +387,9 @@ class ServerSentEventsHandler:
     Server-Sent Events (SSE) 처리기
 
     특징:
-    - SSE 형식 생성
-    - Keep-alive 지원
-    - 타임아웃 관리
+    - SSE 표준 준수 (W3C Recommendation)
+    - 멀티라인 데이터 지원
+    - Keep-alive 및 재연결 설정 지원
     """
 
     @staticmethod
@@ -363,25 +397,37 @@ class ServerSentEventsHandler:
         event_type: str, data: dict[str, Any], event_id: int | None = None
     ) -> str:
         """
-        SSE 형식으로 이벤트 포매팅
-
+        SSE 형식으로 이벤트 포매팅 (표준 준수)
+        
+        Args:
+            event_type: 이벤트 이름 (message, status, thought 등)
+            data: 전송할 데이터 (JSON 직렬화 가능해야 함)
+            event_id: 선택적 이벤트 ID
+            
         Returns:
-            SSE 형식 문자열
+            SSE 규격에 맞는 문자열
         """
         lines = []
 
         if event_id is not None:
             lines.append(f"id: {event_id}")
 
-        lines.append(f"event: {event_type}")
-        lines.append(f"data: {json.dumps(data, ensure_ascii=False)}")
-        lines.append("")  # 빈 줄로 이벤트 종료
+        if event_type:
+            lines.append(f"event: {event_type}")
 
-        return "\n".join(lines)
+        # JSON 데이터 인코딩
+        json_data = json.dumps(data, ensure_ascii=False)
+        
+        # SSE 규격상 데이터가 여러 줄인 경우 각 줄마다 'data: ' 접두사를 붙여야 함
+        for line in json_data.split("\n"):
+            lines.append(f"data: {line}")
+
+        lines.append("")  # 빈 줄로 이벤트 종료 구분
+        return "\n".join(lines) + "\n"
 
     @staticmethod
     def format_sse_error(error_message: str, error_code: int = 500) -> str:
-        """SSE 에러 포매팅"""
+        """표준화된 SSE 에러 이벤트 포매팅"""
         data = {
             "error": error_message,
             "code": error_code,
@@ -391,8 +437,8 @@ class ServerSentEventsHandler:
 
     @staticmethod
     def format_sse_keepalive(message: str = "keep-alive") -> str:
-        """SSE keep-alive 포매팅"""
-        return f": {message}\n"
+        """SSE keep-alive (주석 형식) 포매팅 - 연결 유지용"""
+        return f": {message}\n\n"
 
 
 class StreamingResponseBuilder:

@@ -13,6 +13,7 @@ import pickle
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
+import numpy as np
 from common.typing_utils import (
     DocumentDictList,
     DocumentList,
@@ -20,7 +21,6 @@ from common.typing_utils import (
 )
 
 if TYPE_CHECKING:
-    import numpy as np
     from langchain.retrievers import EnsembleRetriever
     from langchain_community.retrievers import BM25Retriever
     from langchain_community.vectorstores import FAISS
@@ -188,15 +188,16 @@ def _extract_page_worker(
 
 
 def _extract_pages_batch_worker(
-    file_path: str, page_range: list[int], total_pages: int, file_name: str
+    file_bytes: bytes, page_range: list[int], total_pages: int, file_name: str
 ) -> list[tuple[int, Document]]:
-    """페이지 범위를 배치로 처리하는 워커 함수"""
+    """페이지 범위를 배치로 처리하는 워커 함수 (메모리 스트림 사용으로 파일 잠금 방지)"""
     results = []
     try:
         import fitz  # PyMuPDF
         from langchain_core.documents import Document
 
-        with fitz.open(file_path) as doc:
+        # [개선] 파일 경로 대신 메모리 버퍼로부터 문서를 열어 공유 위반 방지
+        with fitz.open(stream=file_bytes, filetype="pdf") as doc:
             for page_num in page_range:
                 try:
                     page = doc[page_num]
@@ -253,10 +254,15 @@ def _load_pdf_docs(
                     filename=file_name, details={"reason": "PDF 페이지가 없습니다."}
                 )
 
+            # [개선] 파일을 한 번만 읽어 메모리에 버퍼링 (파일 잠금 원천 방지 및 I/O 최적화)
+            with open(file_path, "rb") as f:
+                file_bytes = f.read()
+
             # [최적화] 페이지 수에 따라 동적으로 병렬화 결정 (임계값 5p로 하향)
             if total_pages <= 5:
                 docs = []
-                with fitz.open(file_path) as doc:
+                # [개선] 단일 스레드에서도 메모리 스트림 사용
+                with fitz.open(stream=file_bytes, filetype="pdf") as doc:
                     for i in range(total_pages):
                         page = doc[i]
                         text = page.get_text()
@@ -304,7 +310,7 @@ def _load_pdf_docs(
                     futures = [
                         executor.submit(
                             _extract_pages_batch_worker,
-                            file_path,
+                            file_bytes,  # [수정] 파일 경로 대신 메모리 데이터 전달
                             batch,
                             total_pages,
                             file_name,
@@ -434,6 +440,7 @@ def _deserialize_docs(docs_as_dicts: DocumentDictList) -> DocumentList:
 def _compute_config_hash() -> str:
     """설정 변경 감지용 해시 생성 (보안용 아님)"""
     config_dict = {
+        "version": "2.1",  # 🚀 전처리 로직 변경으로 인한 캐시 무효화 강제
         "semantic_chunker": SEMANTIC_CHUNKER_CONFIG,
         "text_splitter": TEXT_SPLITTER_CONFIG,
         "retriever": RETRIEVER_CONFIG,
@@ -446,13 +453,14 @@ def _compute_config_hash() -> str:
 class VectorStoreCache:
     """벡터 저장소 및 리트리버 캐시 관리자"""
 
-    def __init__(self, file_path: str, embedding_model_name: str):
+    def __init__(self, file_path: str, embedding_model_name: str, file_hash: str | None = None):
+        self._file_hash = file_hash or _compute_file_hash(file_path)
         (
             self.cache_dir,
             self.doc_splits_path,
             self.faiss_index_path,
             self.bm25_retriever_path,
-        ) = self._get_cache_paths(file_path, embedding_model_name)
+        ) = self._get_cache_paths(self._file_hash, embedding_model_name)
 
         # 캐시 보안 관리자 초기화
         self.security_manager = CacheSecurityManager(
@@ -463,9 +471,8 @@ class VectorStoreCache:
         )
 
     def _get_cache_paths(
-        self, file_path: str, embedding_model_name: str
+        self, file_hash: str, embedding_model_name: str
     ) -> tuple[str, str, str, str]:
-        file_hash = _compute_file_hash(file_path)
         # 파일 경로에 안전하지 않은 문자 제거
         model_name_slug = embedding_model_name.replace("/", "_").replace("\\", "_")
         config_hash = _compute_config_hash()
@@ -476,9 +483,9 @@ class VectorStoreCache:
 
         return (
             cache_dir,
-            os.path.join(cache_dir, "doc_splits.pkl"),
+            os.path.join(cache_dir, "doc_splits.json"),  # [.pkl -> .json]
             os.path.join(cache_dir, "faiss_index"),
-            os.path.join(cache_dir, "bm25_retriever.pkl"),
+            os.path.join(cache_dir, "bm25_docs.json"),   # [.pkl -> .json]
         )
 
     def _purge_cache(self, reason: str):
@@ -557,9 +564,10 @@ class VectorStoreCache:
                     logger.warning(f"캐시 권한 경고 ({desc}): {e}")
 
             # --- 2. 데이터 로드 (모든 검증 통과 후) ---
-            # 1. 문서 로드 (Pickle)
-            with open(self.doc_splits_path, "rb") as f:
-                doc_splits = pickle.load(f)  # nosec: 보안 검증 완료 후 로드
+            # 1. 문서 로드 (Pickle 대신 JSON 사용)
+            with open(self.doc_splits_path, "r", encoding="utf-8") as f:
+                doc_dicts = json.load(f)
+            doc_splits = _deserialize_docs(doc_dicts)
 
             # 2. FAISS 로드
             # 이미 위에서 무결성/신뢰 검증을 마쳤으므로 안전하게 로드
@@ -569,11 +577,16 @@ class VectorStoreCache:
                 allow_dangerous_deserialization=True,
             )
 
-            # 3. BM25 로드 (Pickle)
-            with open(self.bm25_retriever_path, "rb") as f:
-                bm25_retriever = pickle.load(f)  # nosec: 보안 검증 완료 후 로드
+            # 3. BM25 로드 (Rebuild from JSON docs)
+            with open(self.bm25_retriever_path, "r", encoding="utf-8") as f:
+                bm25_doc_dicts = json.load(f)
+            bm25_docs = _deserialize_docs(bm25_doc_dicts)
+            
+            from langchain_community.retrievers import BM25Retriever
+            bm25_retriever = BM25Retriever.from_documents(bm25_docs)
+            bm25_retriever.k = RETRIEVER_CONFIG["search_kwargs"]["k"]
 
-            logger.info(f"RAG 캐시 안전 로드 완료: '{self.cache_dir}'")
+            logger.info(f"RAG 캐시 안전 로드 완료 (JSON): '{self.cache_dir}'")
             return doc_splits, vector_store, bm25_retriever
 
         except Exception as e:
@@ -594,14 +607,15 @@ class VectorStoreCache:
         try:
             os.makedirs(self.cache_dir, exist_ok=True)
 
-            # 1. 문서 저장 (Pickle)
+            # 1. 문서 저장 (Pickle 대신 JSON 사용)
             try:
-                with open(self.doc_splits_path, "wb") as f:
-                    pickle.dump(doc_splits, f)
+                serialized_splits = _serialize_docs(doc_splits)
+                with open(self.doc_splits_path, "w", encoding="utf-8") as f:
+                    json.dump(serialized_splits, f, ensure_ascii=False)
 
                 # 문서 캐시 메타데이터 생성
                 doc_meta = self.security_manager.create_metadata_for_file(
-                    self.doc_splits_path, description="Document splits cache (pickle)"
+                    self.doc_splits_path, description="Document splits cache (JSON)"
                 )
                 self.security_manager.save_cache_metadata(
                     self.doc_splits_path + ".meta", doc_meta
@@ -628,13 +642,17 @@ class VectorStoreCache:
                 logger.error(f"FAISS 인덱스 저장 실패: {e}")
                 raise OSError(f"Failed to save FAISS index: {e}") from e
 
-            # 3. BM25 저장 (Pickle)
+            # 3. BM25 저장 (JSON 사용 - 내부 문서를 추출하여 저장)
             try:
-                with open(self.bm25_retriever_path, "wb") as f:
-                    pickle.dump(bm25_retriever, f)
+                # BM25Retriever에서 문서 추출
+                bm25_docs = getattr(bm25_retriever, "docs", doc_splits)
+                serialized_bm25 = _serialize_docs(bm25_docs)
+                
+                with open(self.bm25_retriever_path, "w", encoding="utf-8") as f:
+                    json.dump(serialized_bm25, f, ensure_ascii=False)
 
                 metadata = self.security_manager.create_metadata_for_file(
-                    self.bm25_retriever_path, description="BM25 retriever cache"
+                    self.bm25_retriever_path, description="BM25 docs cache (JSON)"
                 )
 
                 if CACHE_SECURITY_LEVEL == "high" and CACHE_HMAC_SECRET:
@@ -648,8 +666,8 @@ class VectorStoreCache:
                     self.bm25_retriever_path + ".meta", metadata
                 )
             except Exception as e:
-                logger.error(f"BM25 리트리버 저장 실패: {e}")
-                raise OSError(f"Failed to save BM25 retriever: {e}") from e
+                logger.error(f"BM25 리트리버 데이터 저장 실패: {e}")
+                raise OSError(f"Failed to save BM25 docs: {e}") from e
 
             # --- 검증 단계 (Verification) ---
             required_paths = [
@@ -681,22 +699,83 @@ def _create_vector_store(
 ) -> FAISS:
     """
     FAISS 벡터 저장소를 생성합니다.
-    이미 계산된 벡터(embeddings)가 있으면 재사용하여 성능을 최적화합니다.
+    [최적화] 데이터 규모에 따라 Flat 또는 HNSW 인덱스를 자동 선택하고 코사인 유사도를 적용합니다.
     """
     from langchain_community.vectorstores import FAISS
+    from langchain_community.vectorstores.utils import DistanceStrategy
 
-    if vectors is not None and len(vectors) == len(docs):
-        # 텍스트와 임베딩 쌍으로 생성 (임베딩 모델 재호출 방지)
-        text_embeddings = list(
-            zip([d.page_content for d in docs], vectors, strict=False)
+    # 1. 임베딩 데이터 준비 및 정규화 (코사인 유사도용)
+    if vectors is None:
+        texts = [d.page_content for d in docs]
+        vectors_list = embedder.embed_documents(texts)
+        vectors = np.array(vectors_list).astype("float32")
+    else:
+        # [수정] list[np.ndarray] 형태인 경우 2D numpy array로 변환
+        if isinstance(vectors, list):
+            vectors = np.array(vectors).astype("float32")
+
+    # [최적화] FAISS의 C++ 최적화 정규화 함수 사용 (SIMD 가속)
+    import faiss
+    faiss.normalize_L2(vectors)
+    normalized_vectors = vectors
+
+    text_embeddings = list(
+        zip([d.page_content for d in docs], normalized_vectors, strict=False)
+    )
+    metadatas = [d.metadata for d in docs]
+
+    # 2. 데이터 규모에 따른 인덱스 전략 결정
+    chunk_count = len(docs)
+
+    # LangChain FAISS에서는 distance_strategy를 통해 내부 메트릭 결정
+    # METRIC_INNER_PRODUCT + Normalized Vectors = Cosine Similarity
+    distance_strategy = DistanceStrategy.MAX_INNER_PRODUCT
+
+    if chunk_count >= 1000:
+        # HNSW 적용 (대규모 고속 검색)
+        logger.info(f"[FAISS] HNSW 인덱스 구축 시작 (Chunks: {chunk_count})")
+
+        import faiss
+        from langchain_community.docstore.in_memory import InMemoryDocstore
+        import uuid
+
+        d = normalized_vectors.shape[1]
+        # HNSW 파라미터: m=32, ef_construction=128
+        index = faiss.IndexHNSWFlat(d, 32, faiss.METRIC_INNER_PRODUCT)
+        index.hnsw.efConstruction = 128
+        
+        # 벡터 추가
+        index.add(normalized_vectors)
+        
+        # Docstore 및 ID 맵 생성
+        docstore = InMemoryDocstore({})
+        index_to_docstore_id = {}
+        
+        for i, (content, metadata) in enumerate(zip([d.page_content for d in docs], metadatas, strict=False)):
+            doc_id = str(uuid.uuid4())
+            doc = Document(page_content=content, metadata=metadata)
+            docstore.add({doc_id: doc})
+            index_to_docstore_id[i] = doc_id
+            
+        vector_store = FAISS(
+            embedding_function=embedder,
+            index=index,
+            docstore=docstore,
+            index_to_docstore_id=index_to_docstore_id,
+            distance_strategy=distance_strategy
         )
-        metadatas = [d.metadata for d in docs]
-        return FAISS.from_embeddings(
-            text_embeddings=text_embeddings, embedding=embedder, metadatas=metadatas
+        logger.info("[FAISS] HNSW 최적화 인덱스 직접 구축 완료")
+    else:
+        # 소규모는 정확한 검색(Flat) 수행
+        logger.debug(f"[FAISS] Flat 인덱스 사용 (Chunks: {chunk_count})")
+        vector_store = FAISS.from_embeddings(
+            text_embeddings=text_embeddings,
+            embedding=embedder,
+            metadatas=metadatas,
+            distance_strategy=distance_strategy
         )
 
-    # 벡터가 없거나 개수가 맞지 않으면 기존 방식대로 생성
-    return FAISS.from_documents(docs, embedder)
+    return vector_store
 
 
 def _create_bm25_retriever(docs: list[Document]) -> BM25Retriever:
@@ -730,8 +809,9 @@ def _load_and_build_retrieval_components(
     _embedder: HuggingFaceEmbeddings,
     embedding_model_name: str,
     _on_progress=None,
+    _file_hash: str | None = None
 ) -> tuple[DocumentList, FAISS, BM25Retriever, bool]:
-    cache = VectorStoreCache(file_path, embedding_model_name)
+    cache = VectorStoreCache(file_path, embedding_model_name, file_hash=_file_hash)
     doc_splits, vector_store, bm25_retriever = cache.load(_embedder)
 
     cache_used = all(x is not None for x in [doc_splits, vector_store, bm25_retriever])
@@ -778,9 +858,15 @@ def _load_and_build_retrieval_components(
                     optimized_vectors = [np.array(v) for v in vectors]
 
                 optimizer = get_index_optimizer()
-                doc_splits, optimized_vectors, stats = optimizer.optimize_index(
+                doc_splits, optimized_vectors, q_meta, stats = optimizer.optimize_index(
                     doc_splits, optimized_vectors
                 )
+
+                # [수정] 양자화된 벡터를 원래의 스케일로 복원하여 검색 정확도 보장
+                if q_meta and q_meta.get("method") != "none":
+                    optimized_vectors = optimizer.quantizer.dequantize_vectors(
+                        optimized_vectors, q_meta
+                    )
 
                 logger.info(f"인덱스 최적화 완료: 중복 {stats.pruned_documents}개 제거")
                 SessionManager.replace_last_status_log(
@@ -824,7 +910,10 @@ def build_rag_pipeline(
     """
     RAG 파이프라인을 구축하고 세션에 저장합니다.
     """
-    # [최적화] embedder 객체는 해싱에서 제외(_)하고, 모델명을 명시적 키로 전달
+    # [최적화] 파일 해시는 여기서 한 번만 계산하여 하위 함수로 전달
+    file_hash = _compute_file_hash(file_path)
+
+    # [최적화] embedder 객체는 해싱에서 제외하고, 모델명과 파일 해시를 명시적 키로 전달
     doc_splits, vector_store, bm25_retriever, cache_used = (
         _load_and_build_retrieval_components(
             file_path,
@@ -832,6 +921,7 @@ def build_rag_pipeline(
             _embedder=embedder,
             embedding_model_name=embedder.model_name,
             _on_progress=on_progress,
+            _file_hash=file_hash
         )
     )
 
@@ -871,10 +961,9 @@ def build_rag_pipeline(
     )
 
     if cache_used:
-        return f"✅ '{uploaded_file_name}' 문서의 저장된 캐시를 불러왔습니다.", True
+        return f"'{uploaded_file_name}' 문서 캐시 데이터 로드 완료", True
     return (
-        f"✅ '{uploaded_file_name}' 문서 처리가 완료되었습니다.\n\n"
-        "이제 문서 내용에 대해 자유롭게 질문해보세요."
+        f"'{uploaded_file_name}' 신규 문서 인덱싱 완료"
     ), False
 
 

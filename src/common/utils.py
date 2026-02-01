@@ -11,7 +11,28 @@ import re
 import time
 
 logger = logging.getLogger(__name__)
-# ... (기존 변수 및 함수 유지)
+
+# --- 사전 컴파일된 정규표현식 (성능 최적화) ---
+_RE_LATEX_BLOCK = re.compile(r"\\\[(.*?)\\\]", re.DOTALL)
+_RE_LATEX_INLINE = re.compile(r"\\\((.*?)\\\)", re.DOTALL)
+_RE_CITATION_TOOLTIP = re.compile(
+    r"([\[\(])(?:Document\s+\d+[,.]?\s*)?(?:[Pp](?:age)?\.?\s*)(\d+)([\]\)])",
+    re.IGNORECASE,
+)
+_RE_WHITESPACE = re.compile(r"\s+")
+_RE_CLEAN_LIST_NUM = re.compile(r"^\d+[\.\)]\s*")
+_RE_CLEAN_LIST_BULLET = re.compile(r"^[\-\*•]\s*")
+
+# [수정] 정규식 완화:
+# 1. ^\d+[\.\)\s]+ : 문두의 숫자와 점/괄호 (예: "1. ", "1) ")
+# 2. ^\s*[\-\*\u2022]\s* : 문두의 불렛 포인트 (예: "- ", "* ")
+# 3. ^["']+|["']+$ : 문두/문미의 따옴표
+# 4. (?:^Example:|^Query:)\s* : "Example:" 같은 접두사 제거
+_RE_QUERY_CLEAN_PREFIX = re.compile(
+    r"^(?:\d+[\.\)\s]+|\s*[\-\*\u2022]\s*|(?:Example|Query|Question):\s*)+",
+    re.IGNORECASE,
+)
+_RE_QUERY_CLEAN_QUOTES = re.compile(r'^["\']+|["\']+$')
 
 
 def normalize_latex_delimiters(text: str) -> str:
@@ -25,10 +46,10 @@ def normalize_latex_delimiters(text: str) -> str:
         return text
 
     # 1. 블록 수식 변환: \[ ... \] -> $$ ... $$
-    text = re.sub(r"\\\[(.*?)\\\]", r"$$\1$$", text, flags=re.DOTALL)
+    text = _RE_LATEX_BLOCK.sub(r"$$\1$$", text)
 
     # 2. 인라인 수식 변환: \( ... \) -> $ ... $
-    text = re.sub(r"\\\((.*?)\\\)", r"$\1$", text, flags=re.DOTALL)
+    text = _RE_LATEX_INLINE.sub(r"$\1$", text)
 
     # 3. 잘못된 이스케이프 문자 정제 (예: \$ -> $)
     # 단, 코드 블록 내의 기호는 건드리지 않도록 주의가 필요하나 일반 답변 기준 처리
@@ -71,16 +92,7 @@ def apply_tooltips_to_response(response_text: str, documents: list) -> str:
         else:
             page_content_map[page_key] = content
 
-    # 2. 정규표현식으로 인용 패턴 찾기 및 치환
-    # 목표: [p.123], (p. 123), [page 123], [p 123] 등을 모두 포착 (대소문자 무관, 공백 허용)
-    # Group 1: Opening Bracket
-    # Group 2: Page Number
-    # Group 3: Closing Bracket
-    pattern = re.compile(
-        r"([\[\(])(?:Document\s+\d+[,.]?\s*)?(?:[Pp](?:age)?\.?\s*)(\d+)([\]\)])",
-        re.IGNORECASE,
-    )
-
+    # 2. 정규표현식으로 인용 패턴 찾기 및 치환 (사전 컴파일된 객체 사용)
     def replacement(match):
         page_num = match.group(2)
 
@@ -95,52 +107,45 @@ def apply_tooltips_to_response(response_text: str, documents: list) -> str:
 
             safe_text = html.escape(raw_text).replace("\n", "<br>")
 
-            # [복구] 클릭 기능을 제거하고 툴팁만 제공 (세션 초기화 방지)
+            # 세련된 인라인 배지 스타일로 반환
             return (
-                f'<span class="tooltip">{display_text}'
-                f'<span class="tooltip-text">{safe_text}</span>'
-                f"</span>"
+                f'<span class="citation-badge">{page_num}</span>'
             )
         else:
             return display_text
 
     # 3. 괄호가 없는 p.123 형태도 추가로 잡기 위한 2차 패턴 (선택사항, 노이즈 주의)
     # 여기서는 안전하게 괄호가 있는 경우만 먼저 완벽히 처리합니다.
-    new_response = pattern.sub(replacement, response_text)
+    new_response = _RE_CITATION_TOOLTIP.sub(replacement, response_text)
 
     return new_response
 
 
-_RE_WHITESPACE = re.compile(r"\s+")
-# [수정] 정규식 완화:
-# 1. ^\d+[\.\)\s]+ : 문두의 숫자와 점/괄호 (예: "1. ", "1) ")
-# 2. ^\s*[\-\*\u2022]\s* : 문두의 불렛 포인트 (예: "- ", "* ")
-# 3. ^["']+|["']+$ : 문두/문미의 따옴표
-# 4. (?:^Example:|^Query:)\s* : "Example:" 같은 접두사 제거
-_RE_QUERY_CLEAN_PREFIX = re.compile(
-    r"^(?:\d+[\.\)\s]+|\s*[\-\*\u2022]\s*|(?:Example|Query|Question):\s*)+",
-    re.IGNORECASE,
-)
-_RE_QUERY_CLEAN_QUOTES = re.compile(r'^["\']+|["\']+$')
-
-
 def preprocess_text(text: str) -> str:
-    """텍스트 정제: 널 문자 및 연속 공백 제거"""
+    """텍스트 정제: 널 문자를 공백으로 치환하고 연속 공백을 정규화"""
     if not text:
         return ""
-    text = text.replace("\x00", "")
-    return _RE_WHITESPACE.sub(" ", text).strip()
+    
+    # 1. 물리적 정제 (널 문자를 공백으로 치환하여 단어 붙음 방지)
+    text = text.replace("\x00", " ")
+    
+    # 2. 연속된 공백 및 줄바꿈을 단일 공백으로 통합
+    text = _RE_WHITESPACE.sub(" ", text).strip()
+    
+    return text
 
 
 def clean_query_text(query: str) -> str:
-    """쿼리 텍스트에서 불필요한 기호 및 번호 제거"""
+    """쿼리 텍스트에서 불필요한 기호, 번호, 접두사(Example:, Question: 등) 제거"""
     if not query:
         return ""
-    # 1. '1.', '2.', '- ', '* ' 등 시작 패턴 제거
-    query = re.sub(r"^\d+[\.\)]\s*", "", query)
-    query = re.sub(r"^[\-\*•]\s*", "", query)
-    # 2. 따옴표 제거
-    query = query.replace('"', "").replace("'", "")
+        
+    # 1. 문두의 숫자, 불렛, 접두사(Example:, Query: 등) 일괄 제거
+    query = _RE_QUERY_CLEAN_PREFIX.sub("", query.strip())
+    
+    # 2. 문두/문미 따옴표 제거
+    query = _RE_QUERY_CLEAN_QUOTES.sub("", query.strip())
+    
     return query.strip()
 
 
@@ -203,7 +208,7 @@ def format_error_message(e: Exception) -> str:
     elif isinstance(e, InsufficientChunksError):
         return "⚠️ 문서의 유효한 텍스트가 너무 적어 분석할 수 없습니다."
     elif isinstance(e, LLMInferenceError):
-        return f"🤖 AI 모델 응답 중 오류가 발생했습니다: {msg}"
+        return f"🤖 추론 모델 응답 중 오류가 발생했습니다: {msg}"
     elif isinstance(e, EmbeddingModelError):
         return "🧠 임베딩 모델 로드에 실패했습니다. 자원(VRAM/RAM)이 부족한지 확인해 주세요."
 

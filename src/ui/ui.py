@@ -21,13 +21,9 @@ from common.config import (
     MSG_CHAT_NO_QA_SYSTEM,
     MSG_CHAT_WELCOME,
     MSG_PDF_VIEWER_NO_FILE,
-    MSG_PREPARING_ANSWER,
-    MSG_SYSTEM_STATUS_TITLE,
     UI_CONTAINER_HEIGHT,
 )
-from common.utils import apply_tooltips_to_response
 from core.session import SessionManager
-from ui.components.status_box import render_status_box as _render_status_box
 
 logger = logging.getLogger(__name__)
 
@@ -51,12 +47,11 @@ async def _stream_chat_response(
     current_llm = SessionManager.get("llm")
     if not current_llm:
         return {
-            "response": "❌ 오류: LLM 모델이 로드되지 않았습니다.",
+            "response": "❌ 오류: 추론 모델이 로드되지 않았습니다.",
             "thought": "",
             "documents": [],
         }
 
-    status_placeholder = SessionManager.get("status_placeholder")
     run_config = {"configurable": {"llm": current_llm}}
     SessionManager.set("is_generating_answer", True)
 
@@ -64,19 +59,26 @@ async def _stream_chat_response(
     handler = get_streaming_handler()
     controller = get_adaptive_controller()
 
-    # UI 디바운싱 설정 (루프 외부에서 정의하여 UnboundLocalError 방지)
+    # UI 디바운싱 설정
     last_render_time = 0.0
-    render_interval = 0.05  # 약 20fps로 UI 업데이트 제한
+    render_interval = 0.05
 
     # 스트리밍 응답 렌더링
     try:
         with chat_container, st.chat_message("assistant", avatar="🤖"):
-            thought_container = st.empty()
-            thought_display = None
-            answer_display = st.empty()
-            answer_display.markdown(f"⌛ {MSG_PREPARING_ANSWER}")
+            # 파이프라인 상태 표시 (메시지 최상단에 텍스트 로그로 누적)
+            status_container = st.empty()
+            pipeline_logs = []
 
-            # 적응형 스트리밍 적용 및 리소스 안전 관리
+            def update_pipeline_display(new_log: str):
+                pipeline_logs.append(f"└─ `PROCESS` {new_log}")
+                status_container.markdown("  \n".join(pipeline_logs))
+
+            # 사고 과정 및 답변 표시용 컨테이너
+            thought_area = st.container()
+            answer_area = st.empty()
+
+            # 적응형 스트리밍 적용
             event_generator = rag_engine.astream_events(
                 {"input": user_query}, config=run_config, version="v2"
             )
@@ -87,74 +89,90 @@ async def _stream_chat_response(
                 )
             ) as stream:
                 async for chunk in stream:
-                    # 상태 박스 동기화 (주기적: 오버헤드 감소를 위해 빈도 낮춤)
-                    if chunk.chunk_index % 20 == 0:
-                        _render_status_box(status_placeholder)
+                    # A. 상태 업데이트 처리 (누적 로그 방식)
+                    if chunk.status:
+                        update_pipeline_display(chunk.status)
+                        SessionManager.add_status_log(chunk.status)
 
-                    # 1. 메타데이터(문서) 처리
+                    # B. 메타데이터(문서) 처리
                     if chunk.metadata and "documents" in chunk.metadata:
                         state["retrieved_docs"] = chunk.metadata["documents"]
+                        doc_count = len(state["retrieved_docs"])
+                        update_pipeline_display(f"관련 지식 {doc_count}개 확보 완료")
 
-                    # 2. 사고 과정 처리
+                    # C. 사고 과정 처리
                     if chunk.thought:
+                        # 사고 과정 시작 시 타이밍 기록
                         if not state["full_thought"]:
                             state["thinking_start_time"] = time.time()
-                            with thought_container:
-                                thought_expander = st.expander(
-                                    "🧠 사고 과정 작성 중...", expanded=False
-                                )
-                                thought_display = thought_expander.empty()
+                            with thought_area:
+                                st.caption("AI의 사고 흐름:")
+                                thought_display = st.empty()
 
                         state["full_thought"] += chunk.thought
 
-                        # 사고 과정 디바운싱
                         current_time = time.time()
                         if current_time - last_render_time > render_interval:
-                            if thought_display:
-                                thought_display.markdown(state["full_thought"] + "▌")
+                            thought_display.markdown(f"*{state['full_thought']}*")
                             last_render_time = current_time
 
-                    # 3. 답변 본문 처리
+                    # D. 답변 본문 처리
                     if chunk.content:
+                        # 첫 토큰 수신 시 파이프라인 로그 정리 및 답변 시작
                         if not state["full_response"]:
+                            status_container.empty()  # 진행 로그 제거 (답변 집중)
                             state["thinking_end_time"] = time.time()
+
+                            # 사고 과정이 있었다면 예쁘게 마무리
                             if state["full_thought"]:
                                 thinking_dur = (
                                     state["thinking_end_time"]
                                     - state["thinking_start_time"]
                                 )
-                                with thought_container:
-                                    label = f"🧠 사고 완료 ({thinking_dur:.1f}초)"
-                                    with st.expander(label, expanded=False):
+                                with thought_area:
+                                    with st.expander(
+                                        f"💭 사고 완료 ({thinking_dur:.1f}초)",
+                                        expanded=False,
+                                    ):
                                         st.markdown(state["full_thought"])
+                                    if "thought_display" in locals():
+                                        thought_display.empty()
 
                         state["full_response"] += chunk.content
 
-                        # UI 렌더링 시간 측정 및 디바운싱 적용
                         current_time = time.time()
                         if (
                             current_time - last_render_time > render_interval
                             or chunk.is_final
                         ):
                             render_start = current_time
+                            answer_area.markdown(state["full_response"] + "▌")
 
-                            # 성능 최적화: 스트리밍 중에는 무거운 수식 정규화를 건너뛰고 최종 결과에서만 수행
-                            answer_display.markdown(
-                                state["full_response"] + "▌", unsafe_allow_html=True
-                            )
-
-                            # UI 렌더링 시간 기록 (적응형 제어용)
+                            # 렌더링 성능 피드백
                             render_latency = (time.time() - render_start) * 1000
                             controller.record_latency(render_latency)
                             last_render_time = time.time()
 
-            # 최종 렌더링 및 정리
-            _finalize_ui_rendering(thought_container, answer_display, state)
+            # 2. 최종 정돈 (인용구, 피드백 등)
+            _finalize_ui_rendering(thought_area, answer_area, state)
+
+            # 성능 메트릭 계산
+            total_dur = time.time() - state["start_time"]
+            token_count = len(state["full_response"].split())
+            tps = token_count / total_dur if total_dur > 0 else 0
+
+            metrics = {
+                "duration": total_dur,
+                "tps": tps,
+                "doc_count": len(state["retrieved_docs"]),
+                "model": SessionManager.get("last_selected_model", "Unknown"),
+            }
 
         return {
             "response": state["full_response"],
             "thought": state["full_thought"],
             "documents": state["retrieved_docs"],
+            "metrics": metrics if state["full_response"] else None,
         }
 
     except Exception as e:
@@ -168,7 +186,6 @@ async def _stream_chat_response(
         return {"response": friendly_msg, "thought": "", "documents": []}
     finally:
         SessionManager.set("is_generating_answer", False)
-        _render_status_box(status_placeholder)
 
 
 def _finalize_ui_rendering(thought_container, answer_display, state):
@@ -176,7 +193,6 @@ def _finalize_ui_rendering(thought_container, answer_display, state):
     # 1. 사고 과정 정리
     if state["full_thought"]:
         with thought_container:
-            # 타이밍 정보가 있으면 사용, 없으면 토큰 수 사용
             if state.get("thinking_start_time") and state.get("thinking_end_time"):
                 dur = state["thinking_end_time"] - state["thinking_start_time"]
                 label = f"🧠 사고 완료 ({dur:.1f}초)"
@@ -184,12 +200,17 @@ def _finalize_ui_rendering(thought_container, answer_display, state):
                 label = f"🧠 사고 완료 ({len(state['full_thought'].split())} tokens)"
 
             with st.expander(label, expanded=False):
-                st.markdown(state["full_thought"])
+                st.markdown(
+                    f'<div class="thought-container">{state["full_thought"]}</div>',
+                    unsafe_allow_html=True,
+                )
     else:
         thought_container.empty()
 
-    # 2. 답변 본문 최종 렌더링 (툴팁 및 하이라이트 적용)
+    # 2. 답변 본문 최종 렌더링
     if state["full_response"]:
+        from common.utils import apply_tooltips_to_response
+
         if state["retrieved_docs"]:
             final_html = apply_tooltips_to_response(
                 state["full_response"], state["retrieved_docs"]
@@ -197,142 +218,62 @@ def _finalize_ui_rendering(thought_container, answer_display, state):
             answer_display.markdown(final_html, unsafe_allow_html=True)
         else:
             answer_display.markdown(state["full_response"], unsafe_allow_html=True)
+
+        # 2. 지능형 출처 표시 (st.pills & st.popover)
+        if state["retrieved_docs"]:
+            st.divider()
+            c1, c2 = st.columns([0.85, 0.15])
+
+            with c1:
+                # 중복 제거 및 페이지 정렬 (이동을 위해 페이지 번호 저장)
+                unique_sources = {}
+                for doc in state["retrieved_docs"]:
+                    src = doc.metadata.get("source", "Unknown")
+                    pg = doc.metadata.get("page", "?")
+                    key = f"📄 {src} (p.{pg})"
+                    if key not in unique_sources:
+                        unique_sources[key] = pg
+
+            pill_key = f"pills_{int(state['start_time'])}"
+            
+            # [수정] 위젯 생성 전 상태를 먼저 체크하고 처리하여 StreamlitAPIException 방지
+            if pill_key in st.session_state and st.session_state[pill_key]:
+                selection = st.session_state[pill_key]
+                target_pg = unique_sources.get(selection)
+                if target_pg and str(target_pg).isdigit():
+                    new_pg = int(target_pg)
+                    st.session_state.current_page = new_pg
+                    # 슬라이더 위젯 상태도 강제 업데이트하여 동기화
+                    st.session_state.pdf_nav_slider_wide = new_pg
+                    # 상태 초기화 (위젯 생성 전이므로 안전)
+                    st.session_state[pill_key] = None
+                    st.rerun()
+
+            # st.pills를 활용한 칩 기반 인터페이스
+            selected_pill = st.pills(
+                "📍 참고 지식 (클릭 시 이동):",
+                options=list(unique_sources.keys()),
+                selection_mode="single",
+                key=pill_key,
+            )
+
+            with c2:
+                # 피드백 위젯
+                st.feedback("thumbs", key=f"fb_{int(state['start_time'])}")
+
+        # 3. 하단 메트릭 캡션
+        total_dur = time.time() - state["start_time"]
+        token_count = len(state["full_response"].split())
+        tps = token_count / total_dur if total_dur > 0 else 0
+        doc_count = len(state["retrieved_docs"])
+        current_model = SessionManager.get("last_selected_model", "Unknown")
+
+        # 표준 캡션 사용
+        st.caption(
+            f"⏱️ {total_dur:.1f}s | 🚀 {tps:.1f} t/s | 📄 {doc_count} refs | 🤖 {current_model}"
+        )
     else:
         answer_display.error("⚠️ 답변이 생성되지 않았습니다.")
-
-
-def render_sidebar(
-    file_uploader_callback: Callable,
-    model_selector_callback: Callable,
-    embedding_selector_callback: Callable,
-    is_generating: bool = False,
-    current_file_name: str | None = None,
-    current_embedding_model: str | None = None,
-    available_models: list[str] | None = None,
-):
-    # 커스텀 얇은 구분선 컴포넌트
-    thin_divider = "<hr style='margin: 12px 0; border: none; border-top: 1px solid rgba(49, 51, 63, 0.1);'>"
-
-    with st.sidebar:
-        # --- 1. 브랜딩 섹션 (즉시 출력) ---
-        st.markdown(
-            """
-            <div style='display: flex; align-items: center; gap: 10px; margin-bottom: 5px;'>
-                <span style='font-size: 2.2rem;'>🤖</span>
-                <div>
-                    <div style='font-size: 1.1rem; font-weight: bold; line-height: 1.2;'>GraphRAG-Ollama</div>
-                    <div style='font-size: 0.75rem; color: #888;'>Local Intelligence RAG System</div>
-                </div>
-            </div>
-        """,
-            unsafe_allow_html=True,
-        )
-
-        st.markdown(thin_divider, unsafe_allow_html=True)
-
-        # --- 2. 문서 제어 섹션 ---
-        st.markdown("**📄 문서 분석**")
-        st.file_uploader(
-            "PDF 파일 업로드",
-            type="pdf",
-            key="pdf_uploader",
-            on_change=file_uploader_callback,
-            disabled=is_generating,
-            label_visibility="collapsed",
-        )
-
-        if current_file_name:
-            st.caption(f"현재: **{current_file_name}**")
-        else:
-            st.caption("분석할 PDF를 업로드하세요.")
-
-        st.markdown(thin_divider, unsafe_allow_html=True)
-
-        # --- 3. 모델 설정 섹션 ---
-        st.markdown("**⚙️ 모델 설정**")
-
-        # 모델 목록 상태에 따른 선택창 렌더링 (사라짐 방지)
-        from common.config import DEFAULT_OLLAMA_MODEL
-
-        if available_models is None:
-            # 로딩 중 상태 (고정된 위치)
-            st.selectbox(
-                "메인 LLM",
-                ["모델 목록을 불러오는 중..."],
-                index=0,
-                disabled=True,
-                key="model_selector_loading",
-                label_visibility="collapsed",
-            )
-        else:
-            # 로딩 완료 상태
-            is_ollama_error = (
-                available_models[0] == "Ollama 서버가 실행 중이지 않습니다."
-                if available_models
-                else False
-            )
-            actual_models = (
-                []
-                if is_ollama_error
-                else [m for m in available_models if "---" not in m]
-            )
-
-            # 현재 선택된 모델 인덱스 계산
-            last_model = SessionManager.get("last_selected_model")
-            if not last_model or (actual_models and last_model not in actual_models):
-                last_model = (
-                    DEFAULT_OLLAMA_MODEL
-                    if DEFAULT_OLLAMA_MODEL in actual_models
-                    else (actual_models[0] if actual_models else available_models[0])
-                )
-                SessionManager.set("last_selected_model", last_model)
-
-            try:
-                model_idx = available_models.index(last_model)
-            except ValueError:
-                model_idx = 0
-
-            st.selectbox(
-                "메인 LLM",
-                available_models,
-                index=model_idx,
-                key="model_selector",
-                on_change=model_selector_callback,
-                disabled=is_ollama_error or is_generating,
-                label_visibility="collapsed",
-            )
-
-        with st.popover("🔧 고급 설정", use_container_width=True):
-            st.markdown("#### 임베딩 설정")
-            last_emb = current_embedding_model or AVAILABLE_EMBEDDING_MODELS[0]
-            try:
-                emb_idx = AVAILABLE_EMBEDDING_MODELS.index(last_emb)
-            except ValueError:
-                emb_idx = 0
-
-            st.selectbox(
-                "임베딩 모델",
-                AVAILABLE_EMBEDDING_MODELS,
-                index=emb_idx,
-                key="embedding_model_selector",
-                on_change=embedding_selector_callback,
-                disabled=is_generating or (available_models is None),
-            )
-            st.info("💡 하이브리드 검색 활성 중")
-
-        st.markdown(thin_divider, unsafe_allow_html=True)
-
-        # --- 4. 시스템 상태 섹션 ---
-        st.markdown(f"**📊 {MSG_SYSTEM_STATUS_TITLE}**")
-        status_placeholder = st.empty()
-
-        # 상태 정보가 있을 때만 렌더링 (초기 렌더링 시에는 건너뜀)
-        if "_initialized" in st.session_state:
-            _render_status_box(status_placeholder)
-
-        return {
-            "status_container": status_placeholder,
-        }
 
 
 def render_pdf_viewer():
@@ -344,8 +285,12 @@ def _pdf_viewer_fragment():
     import fitz  # PyMuPDF
     from streamlit_pdf_viewer import pdf_viewer
 
+    # 1. 이미 계산된 높이 가져오기 (폴백 800)
+    win_h = st.session_state.get("last_valid_height", 800)
+    container_h = max(400, win_h - 250)
+
     # [UI 대칭성] 채팅창과 동일하게 테두리가 있는 컨테이너 생성
-    viewer_container = st.container(height=UI_CONTAINER_HEIGHT, border=True)
+    viewer_container = st.container(height=container_h, border=True)
 
     # [수정] 세션 초기화 전에도 안전하도록 기본값 None 제공 및 명시적 체크
     pdf_path_raw = SessionManager.get("pdf_file_path", None)
@@ -367,15 +312,7 @@ def _pdf_viewer_fragment():
         with fitz.open(pdf_path) as doc:
             total_pages = len(doc)
 
-            # [추가] 딥 링크 요청 처리
-            page_to_move = SessionManager.get("pdf_page_to_move")
-            if page_to_move is not None:
-                # 유효한 범위 내에서만 이동
-                target = max(1, min(int(page_to_move), total_pages))
-                st.session_state.current_page = target
-                # 이동 후 요청 초기화
-                SessionManager.set("pdf_page_to_move", None)
-
+            # [수정] 세션 초기화 전에도 안전하도록 기본값 1 제공
             if "current_page" not in st.session_state:
                 st.session_state.current_page = 1
 
@@ -392,19 +329,22 @@ def _pdf_viewer_fragment():
 
             # 2. 세련된 버튼 그룹형 탐색 툴바
             # 비율 조정: [이전|다음 | 페이지정보 | 슬라이더]
+            # [수정] 상단 여백 제거하여 채팅창 바닥과 높이 정렬
+            st.markdown("<div style='margin-top: -10px;'></div>", unsafe_allow_html=True)
             c1, c2, c3, c4 = st.columns([4.0, 1.2, 0.4, 0.4])
 
             with c1:
                 # 우측의 넓은 공간을 차지하는 슬라이더
+                # [수정] key가 있으므로 value 인자는 제거 (중복 설정 방지)
                 new_page = st.slider(
                     "page_nav_wide",
                     min_value=1,
                     max_value=total_pages,
-                    value=st.session_state.current_page,
                     key="pdf_nav_slider_wide",
                     disabled=is_generating,
                     label_visibility="collapsed",
                 )
+                # 슬라이더 조작 시 current_page 동기화
                 if new_page != st.session_state.current_page:
                     st.session_state.current_page = new_page
                     st.rerun()
@@ -427,6 +367,8 @@ def _pdf_viewer_fragment():
                     help="이전 페이지",
                 ):
                     st.session_state.current_page -= 1
+                    # 슬라이더 상태도 함께 업데이트
+                    st.session_state.pdf_nav_slider_wide = st.session_state.current_page
                     st.rerun()
 
             with c4:
@@ -440,6 +382,8 @@ def _pdf_viewer_fragment():
                     help="다음 페이지",
                 ):
                     st.session_state.current_page += 1
+                    # 슬라이더 상태도 함께 업데이트
+                    st.session_state.pdf_nav_slider_wide = st.session_state.current_page
                     st.rerun()
 
     except Exception as e:
@@ -448,122 +392,196 @@ def _pdf_viewer_fragment():
 
 
 def inject_custom_css():
-    """앱 전반에 걸친 커스텀 CSS를 주입합니다."""
-    # Streamlit 1.34+ 에서 지원하는 st.html 사용 (안전성 향상)
-    st.html("""
+    """앱 전반에 걸친 최소한의 커스텀 CSS만 주입합니다."""
+    st.markdown(
+        """
     <style>
-    /* Streamlit 기본 상태 표시기(Running...) 숨기기 */
-    [data-testid="stStatusWidget"] {
-        visibility: hidden;
-        display: none;
+    /* 1. 전체 앱 화면 고정 및 전역 스크롤 차단 */
+    [data-testid="stAppViewContainer"] {
+        height: 100vh !important;
+        overflow: hidden !important;
+    }
+    
+    /* 2. 메인 영역 및 사이드바 패딩 및 높이 최적화 */
+    [data-testid="stMainBlockContainer"] {
+        height: 100vh !important;
+        padding-top: 2rem !important; /* 상단 여백 통일 */
+        padding-bottom: 0rem !important;
+        overflow: hidden !important;
     }
 
-    /* 툴팁 기본 스타일 */
+    [data-testid="stSidebarContent"] {
+        padding-top: 2rem !important; /* 상단 여백 통일 */
+    }
+
+    /* 3. 컨테이너 내부 스크롤 활성화 */
+    [data-testid="stVerticalBlockBorderWrapper"] > div:nth-child(1) {
+        height: 100% !important;
+        overflow-y: auto !important;
+    }
+
+    /* 4. JS 측정기 등 커스텀 컴포넌트의 유령 공간 제거 */
+    div[data-testid="stHtml"] iframe, 
+    div.element-container:has(iframe[title="streamlit_javascript.st_javascript"]) {
+        position: absolute !important;
+        top: -9999px !important;
+        width: 0 !important;
+        height: 0 !important;
+        visibility: hidden !important;
+    }
+
+    /* 5. 상단 서브헤더 및 사이드바 제목 정렬 */
+    h3 {
+        height: auto !important;
+        line-height: 1.5 !important;
+        margin-bottom: 1.2rem !important;
+        padding-top: 0.2rem !important; /* 상단 여백 소폭 조정 */
+        margin-top: 0rem !important;
+    }
+    
+    [data-testid="stSidebar"] h1 {
+        font-size: 1.8rem !important;
+        margin-top: 0rem !important;
+        padding-top: 0rem !important;
+        margin-bottom: 0.5rem !important;
+    }
+
+    [data-testid="stSidebar"] [data-testid="stVerticalBlock"] {
+        gap: 0.5rem;
+        padding-top: 0rem !important;
+    }
+    
+    /* 6. 툴팁 및 인용 배지 스타일 */
     .tooltip {
         position: relative;
         display: inline-block;
-        border-bottom: 1px dotted #888;
-        cursor: pointer;
         color: #0068c9;
-        font-weight: bold;
-        transition: all 0.2s;
-        padding: 0 2px;
-        border-radius: 4px;
+        font-weight: 600;
+        cursor: help;
+        text-decoration: underline dotted;
     }
-    .tooltip:hover {
-        background-color: rgba(0, 104, 201, 0.1);
-        color: #004a8b;
-    }
-
-    /* 인용 링크 기본 스타일 제거 */
-    .citation-link {
-        text-decoration: none !important;
-        color: inherit !important;
-    }
-
-    .tooltip .tooltip-text {
-        visibility: hidden;
-        width: 350px;
-        background-color: #333;
-        color: #fff;
-        text-align: left;
-        border-radius: 8px;
-        padding: 12px;
-        font-size: 0.85rem;
-        font-weight: normal;
-        line-height: 1.5;
-        position: absolute;
-        z-index: 1000;
-        bottom: 125%;
-        left: 50%;
-        margin-left: -175px;
-        opacity: 0;
-        transition: opacity 0.3s, transform 0.3s;
-        transform: translateY(10px);
-        max-height: 250px;
-        overflow-y: auto;
-        box-shadow: 0px 8px 16px rgba(0,0,0,0.4);
-        border: 1px solid #444;
-    }
-    .tooltip .tooltip-text::after {
-        content: "";
-        position: absolute;
-        top: 100%;
-        left: 50%;
-        margin-left: -5px;
-        border-width: 5px;
-        border-style: solid;
-        border-color: #333 transparent transparent transparent;
-    }
-    .tooltip:hover .tooltip-text {
-        visibility: visible;
-        opacity: 1;
-        transform: translateY(0);
-    }
-
-    /* 다크 모드 대응 */
-    @media (prefers-color-scheme: dark) {
-        .tooltip { color: #4fa8ff; }
-        .tooltip .tooltip-text { background-color: #262730; border-color: #444; }
-        .tooltip .tooltip-text::after { border-color: #262730 transparent transparent transparent; }
-    }
-
-    /* 채팅 메시지 내 코드 블록 스타일 개선 */
-    code {
-        background-color: rgba(128, 128, 128, 0.15);
-        padding: 0.2rem 0.4rem;
-        border-radius: 4px;
-        font-family: 'Source Code Pro', monospace;
-    }
-
-    /* PDF 컨트롤러 툴바 스타일 (더 세련된 버전) */
-    .pdf-nav-container {
-        background-color: rgba(128, 128, 128, 0.08);
-        border-radius: 12px;
-        padding: 4px 12px;
-        margin-top: -8px;
-        border: 1px solid rgba(49, 51, 63, 0.1);
-        display: flex;
+    .citation-badge {
+        display: inline-flex;
         align-items: center;
+        justify-content: center;
+        background-color: #f0f2f6;
+        color: #0068c9;
+        font-size: 0.75rem;
+        font-weight: bold;
+        padding: 0 6px;
+        margin: 0 2px;
+        border-radius: 4px;
+        border: 1px solid #d1d5db;
+        cursor: default;
+        vertical-align: middle;
+        height: 1.2rem;
+        min-width: 1.2rem;
     }
-    /* 슬라이더 높이 및 여백 조정 */
-    div[data-testid="stSlider"] {
-        padding-top: 10px;
-        padding-bottom: 0px;
+    .citation-badge:hover {
+        background-color: #0068c9;
+        color: white;
+        border-color: #0068c9;
     }
-    /* 버튼 스타일 미세 조정 */
-    .stButton > button {
-        border-radius: 8px !important;
-        border: 1px solid rgba(49, 51, 63, 0.1) !important;
-        background-color: transparent !important;
-        transition: all 0.2s ease;
+    /* 사고 과정 컨테이너 */
+    .thought-container {
+        border-left: 3px solid #ddd;
+        padding-left: 15px;
+        margin: 10px 0;
+        color: #666;
+        font-style: italic;
     }
-    .stButton > button:hover {
-        background-color: rgba(0, 104, 201, 0.1) !important;
-        border-color: #0068c9 !important;
+    /* 사이드바 요소 간격 압축 */
+    [data-testid="stSidebar"] [data-testid="stVerticalBlock"] {
+        gap: 0.5rem;
     }
     </style>
-    """)
+    """,
+    unsafe_allow_html=True,
+)
+
+
+
+def render_sidebar(
+    file_uploader_callback: Callable,
+    model_selector_callback: Callable,
+    embedding_selector_callback: Callable,
+    is_generating: bool = False,
+    current_file_name: str | None = None,
+    current_embedding_model: str | None = None,
+    available_models: list[str] | None = None,
+):
+    with st.sidebar:
+        # 1. 브랜드 헤더
+        st.title("🤖 GraphRAG")
+        st.caption("Local Inference Model")
+        st.divider()
+
+        # 2. 문서 관리
+        st.subheader("📄 Document")
+        st.file_uploader(
+            "Upload PDF",
+            type="pdf",
+            key="pdf_uploader",
+            on_change=file_uploader_callback,
+            disabled=is_generating,
+            label_visibility="collapsed",
+        )
+        if current_file_name:
+            st.success(f"Active: {current_file_name}")
+
+        st.divider()
+
+        # 3. 모델 설정
+        st.subheader("⚙️ Model Settings")
+        from common.config import DEFAULT_OLLAMA_MODEL
+
+        if available_models is None:
+            st.info("Loading...")
+        else:
+            is_ollama_error = (
+                available_models[0] == "Ollama 서버가 실행 중이지 않습니다."
+                if available_models
+                else False
+            )
+            actual_models = (
+                []
+                if is_ollama_error
+                else [m for m in available_models if "---" not in m]
+            )
+
+            last_model = SessionManager.get("last_selected_model")
+            if not last_model or (actual_models and last_model not in actual_models):
+                last_model = (
+                    DEFAULT_OLLAMA_MODEL
+                    if DEFAULT_OLLAMA_MODEL in actual_models
+                    else (actual_models[0] if actual_models else available_models[0])
+                )
+                SessionManager.set("last_selected_model", last_model)
+
+            st.selectbox(
+                "추론 모델 (Inference)",
+                available_models,
+                index=available_models.index(last_model)
+                if last_model in available_models
+                else 0,
+                key="model_selector",
+                on_change=model_selector_callback,
+                disabled=is_ollama_error or is_generating,
+                label_visibility="collapsed",
+            )
+
+        with st.expander("🛠️ Advanced Settings"):
+            last_emb = current_embedding_model or AVAILABLE_EMBEDDING_MODELS[0]
+            st.selectbox(
+                "임베딩 모델 (Embedding)",
+                AVAILABLE_EMBEDDING_MODELS,
+                index=AVAILABLE_EMBEDDING_MODELS.index(last_emb)
+                if last_emb in AVAILABLE_EMBEDDING_MODELS
+                else 0,
+                key="embedding_model_selector",
+                on_change=embedding_selector_callback,
+                disabled=is_generating or (available_models is None),
+            )
 
 
 def render_left_column():
@@ -575,12 +593,22 @@ def render_message(
     content: str,
     thought: str | None = None,
     doc_ids: list[Any] | None = None,
+    metrics: dict | None = None,
 ):
+    if role == "system":
+        with st.chat_message("system", avatar="⚙️"):
+            st.caption("시스템 작업 기록")
+            st.markdown(content)
+        return
+
     avatar_icon = "🤖" if role == "assistant" else "👤"
     with st.chat_message(role, avatar=avatar_icon):
         if thought and thought.strip():
             with st.expander("🧠 사고 완료", expanded=False):
-                st.markdown(thought)
+                st.markdown(
+                    f'<div class="thought-container">{thought}</div>',
+                    unsafe_allow_html=True,
+                )
 
         # [최적화] ID 리스트로부터 문서 풀에서 원본 문서 복원
         documents = []
@@ -605,9 +633,82 @@ def render_message(
 
         st.markdown(content, unsafe_allow_html=True)
 
+        # [추가] 성능 메트릭 및 피드백 섹션
+        if role == "assistant":
+            m_col1, m_col2 = st.columns([0.7, 0.3])
+
+            with m_col2:
+                # 고유 키 생성을 위해 내용의 해시 사용
+                import hashlib
+
+                msg_hash = hashlib.md5(content.encode()).hexdigest()[:8]
+                st.feedback("thumbs", key=f"fb_hist_{msg_hash}")
+
+            with m_col1:
+                if metrics:
+                    # 표준 캡션 사용
+                    st.caption(
+                        f"⏱️ {metrics.get('duration', 0):.1f}s | "
+                        f"🚀 {metrics.get('tps', 0):.1f} t/s | "
+                        f"📄 {metrics.get('doc_count', 0)} refs | "
+                        f"🤖 {metrics.get('model', 'Unknown')}"
+                    )
+
+        # [추가] 이력 메시지에서도 출처 칩 표시 (참고 문서가 있는 경우)
+        if role == "assistant" and documents:
+            st.divider()
+            
+            # 중복 제거 및 페이지 정렬 (이동을 위해 페이지 번호 저장)
+            unique_sources = {}
+            for doc in documents:
+                src = doc.metadata.get("source", "Unknown")
+                pg = doc.metadata.get("page", "?")
+                key = f"📄 {src} (p.{pg})"
+                if key not in unique_sources:
+                    unique_sources[key] = pg
+
+            import hashlib
+            msg_hash = hashlib.md5(content.encode()).hexdigest()[:8]
+            pill_key = f"pills_hist_{msg_hash}"
+            
+            # [수정] 위젯 생성 전 상태를 먼저 체크하고 처리하여 StreamlitAPIException 방지
+            if pill_key in st.session_state and st.session_state[pill_key]:
+                selection = st.session_state[pill_key]
+                target_pg = unique_sources.get(selection)
+                if target_pg and str(target_pg).isdigit():
+                    new_pg = int(target_pg)
+                    st.session_state.current_page = new_pg
+                    # 슬라이더 위젯 상태도 강제 업데이트하여 동기화
+                    st.session_state.pdf_nav_slider_wide = new_pg
+                    # 상태 초기화 (위젯 생성 전이므로 안전)
+                    st.session_state[pill_key] = None
+                    st.rerun()
+
+            selected_pill = st.pills(
+                "📍 참고 지식 (클릭 시 이동):",
+                options=list(unique_sources.keys()),
+                selection_mode="single",
+                key=pill_key,
+            )
+
+
+def update_window_height():
+    """JavaScript를 통해 브라우저 창의 실제 높이를 측정하고 세션 상태에 저장합니다."""
+    from streamlit_javascript import st_javascript
+    
+    # 윈도우 전체 높이 획득 (단 한 번만 호출됨)
+    win_h = st_javascript("window.innerHeight", key="height_tracker")
+    
+    if win_h and win_h > 100:
+        st.session_state.last_valid_height = int(win_h)
+
 
 def _chat_fragment():
-    chat_container = st.container(height=UI_CONTAINER_HEIGHT, border=True)
+    # 1. 이미 계산된 높이 가져오기 (폴백 700)
+    win_h = st.session_state.get("last_valid_height", 800)
+    container_h = max(400, win_h - 250) # 상하단 여백 제외
+    
+    chat_container = st.container(height=container_h, border=True)
     # [수정] 세션 초기화 전에도 안전하도록 기본값 [] 제공
     messages = SessionManager.get_messages() or []
     pdf_path = SessionManager.get("pdf_file_path")
@@ -619,21 +720,76 @@ def _chat_fragment():
 
     # 1. 채팅 이력 렌더링
     with chat_container:
+        system_buffer = []
+        insight_rendered = False
+
+        def flush_system_buffer():
+            if not system_buffer:
+                return
+
+            with st.chat_message("system", avatar="⚙️"):
+                log_items = []
+                is_ready = False
+                has_error = False
+                
+                chars_to_remove = ["✅", "⏳", "❌", "⚙️", "📄", "ℹ️", "🧠", "✨", "🔄", "⏳", "🎯"]
+                
+                for m in system_buffer:
+                    if m == "READY_FOR_QUERY":
+                        is_ready = True
+                        continue
+                    
+                    if "❌" in m or "오류" in m or "실패" in m:
+                        has_error = True
+                        
+                    clean_m = m
+                    for char in chars_to_remove:
+                        clean_m = clean_m.replace(char, "")
+                    
+                    clean_m = clean_m.strip()
+                    if clean_m:
+                        log_items.append(f"└─ {'`ERROR`' if has_error else '`SUCCESS`'} {clean_m}")
+                
+                # 결과 출력 로직 최적화
+                if is_ready and not has_error:
+                    # 모두 성공했다면 요약 메시지만 표시
+                    st.markdown("**시스템 구성 및 데이터 분석을 완료했습니다.**")
+                    st.markdown("\n**이제 문서 내용에 대해 궁금한 점을 질문해 주세요!**")
+                else:
+                    # 진행 중이거나 에러가 있다면 상세 로그 표시
+                    st.markdown("**시스템 작업 기록**\n")
+                    st.markdown("  \n".join(log_items))
+
+            system_buffer.clear()
+
         for msg in messages:
-            render_message(
-                msg["role"],
-                msg["content"],
-                thought=msg.get("thought"),
-                doc_ids=msg.get("doc_ids"),
-            )
+            if msg["role"] == "system":
+                system_buffer.append(msg["content"])
+            else:
+                # 일반 메시지가 나오기 전에 버퍼에 쌓인 시스템 메시지들을 먼저 출력
+                flush_system_buffer()
+                render_message(
+                    msg["role"],
+                    msg["content"],
+                    thought=msg.get("thought"),
+                    doc_ids=msg.get("doc_ids"),
+                    metrics=msg.get("metrics"),
+                )
+
+        # 반복문 종료 후 남아있는 시스템 메시지 처리
+        flush_system_buffer()
 
         if not messages:
-            if is_processing_pdf:
-                st.info(
-                    "📄 **문서를 분석하고 있습니다.**\n\n내용이 많을 경우 시간이 다소 소요될 수 있습니다. 완료 후 자동으로 채팅이 활성화됩니다."
-                )
-            else:
-                st.info(MSG_CHAT_WELCOME)
+            # 시스템 온보딩 가이드 (⚙️) - 더 간결하게 수정
+            with st.chat_message("system", avatar="⚙️"):
+                st.caption("🚀 RAG System Quick Start")
+                st.markdown("""
+                **지능형 문서 분석 모델이 활성화되었습니다.**
+                
+                1. **문서 업로드**: 사이드바에서 PDF 파일을 업로드하세요.
+                2. **심층 질의**: 문서 내용에 기반한 질문을 시작하세요.
+                """)
+                st.caption("💡 Tip: 답변 하단의 출처 칩을 클릭하여 원문을 확인할 수 있습니다.")
 
     # 2. 사용자 입력 처리
     # 입력창 상태 결정
@@ -648,15 +804,19 @@ def _chat_fragment():
         )
     )
 
-    if user_query := st.chat_input(
-        input_placeholder, disabled=input_disabled, key="chat_input_clean"
-    ):
+    # [추가] 추천 질문 버튼 클릭 처리 및 일반 입력 통합
+    user_query = st.chat_input(input_placeholder, disabled=input_disabled, key="chat_input_clean")
+    
+    # 버튼 클릭 등으로 대기 중인 질문이 있다면 우선 처리
+    if "pending_query" in st.session_state and st.session_state.pending_query:
+        user_query = st.session_state.pending_query
+        del st.session_state.pending_query # 처리 후 삭제
+
+    if user_query:
         SessionManager.add_message("user", user_query)
         SessionManager.add_status_log("질문 분석 중")
 
         # UI 즉시 업데이트
-        status_placeholder = SessionManager.get("status_placeholder")
-        _render_status_box(status_placeholder)
         with chat_container:
             render_message("user", user_query)
 
@@ -672,16 +832,19 @@ def _chat_fragment():
             final_answer = result.get("response", "")
             final_thought = result.get("thought", "")
             final_docs = result.get("documents", [])
+            final_metrics = result.get("metrics")
 
             if final_answer and not final_answer.startswith("❌"):
                 SessionManager.add_message(
                     "assistant",
                     final_answer,
                     thought=final_thought,
-                    documents=final_docs,  # SessionManager.add_message 내부에서 doc_ids로 변환됨
+                    documents=final_docs,
+                    metrics=final_metrics,
                 )
                 SessionManager.replace_last_status_log("답변 작성 완료")
                 SessionManager.add_status_log("질문 가능")
                 st.rerun()
         else:
-            st.toast(MSG_CHAT_NO_QA_SYSTEM, icon="⚠️")
+            with chat_container:
+                st.error(f"⚠️ {MSG_CHAT_NO_QA_SYSTEM}")
