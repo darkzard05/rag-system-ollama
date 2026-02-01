@@ -67,119 +67,121 @@ class EmbeddingBasedSemanticChunker:
     def _split_sentences(self, text: str) -> list[dict]:
         """
         문장 단위로 텍스트를 분할하고 오프셋 정보를 함께 반환합니다.
-        Returns:
-            List[dict]: [{'text': str, 'start': int, 'end': int}, ...]
+        [안전성 강화] 구분자가 없는 매우 긴 텍스트의 경우 강제 분할을 수행합니다.
         """
-        # 정규식으로 분할 (re.split과 유사하게 작동하되 오프셋 추적)
-        # 정규식: ([.!?]\s+) -> 구분자가 캡처됨
+        MAX_HARD_SPLIT_LEN = 1500  # 강제 분할 임계값 (글자 수)
+
+        # 1. 정규식으로 기본 분할
         parts = list(self._sentence_pattern.finditer(text))
-        final_sentences = []
+        raw_segments: list[dict[str, Any]] = []
 
         last_pos = 0
         for match in parts:
-            # 구분자 매치 정보
             sep_start, sep_end = match.span()
-            sep_text = match.group()
 
-            # 구분자 앞쪽 텍스트 (문장 내용)
-            content_raw = text[last_pos:sep_start]
-
-            # 내용이 있거나 구분자가 있으면 처리
-            full_span_text = content_raw + sep_text
-
-            # 공백 정리 (개행 -> 공백) 하되, 길이는 유지해야 오프셋 계산 가능?
-            # 아니오, 오프셋은 '원본 텍스트' 기준이어야 함.
-            # 따라서 text.replace("\n", " ")는 여기서 수행하면 안되고,
-            # 임베딩용 텍스트(cleaned_text)와 원본 오프셋을 따로 관리해야 함.
-
-            cleaned_text = full_span_text.replace("\n", " ").strip()
-
-            if cleaned_text:
-                # strip()으로 인해 앞쪽 공백이 제거되었을 수 있으므로 오프셋 보정
-                # replace("\n", " ")는 길이를 변화시키지 않음 (1문자->1문자).
-                # 하지만 strip()은 길이를 줄임.
-                # 정확한 매핑을 위해:
-                # start: lstrip() 후의 위치
-                # end: rstrip() 후의 위치
-
-                segment_start = last_pos
-                segment_end = sep_end
-
-                # 실제 유효 텍스트 범위 찾기
-                sub_text = text[segment_start:segment_end]
-                l_stripped = sub_text.lstrip()
-                n_leading = len(sub_text) - len(l_stripped)
-
-                stripped = l_stripped.rstrip()
-                n_trailing = len(l_stripped) - len(stripped)
-
-                final_start = segment_start + n_leading
-                final_end = segment_end - n_trailing
-
-                # 임베딩용 텍스트 (내부 개행만 치환)
-                embed_text = sub_text[n_leading : len(sub_text) - n_trailing].replace(
-                    "\n", " "
-                )
-
-                if embed_text:
-                    final_sentences.append(
-                        {"text": embed_text, "start": final_start, "end": final_end}
-                    )
-
+            # 구분자 앞쪽 텍스트 + 구분자
+            segment_text = text[last_pos:sep_end]
+            raw_segments.append({"text": segment_text, "start": last_pos, "end": sep_end})
             last_pos = sep_end
 
-        # 남은 텍스트 처리
         if last_pos < len(text):
-            remaining = text[last_pos:]
-            cleaned = remaining.replace("\n", " ").strip()
-            if cleaned:
-                sub_text = remaining
-                l_stripped = sub_text.lstrip()
-                n_leading = len(sub_text) - len(l_stripped)
-                stripped = l_stripped.rstrip()
-                n_trailing = len(l_stripped) - len(stripped)
+            raw_segments.append({"text": text[last_pos:], "start": last_pos, "end": len(text)})
 
-                final_start = last_pos + n_leading
-                final_end = len(text) - n_trailing
-                embed_text = stripped.replace("\n", " ")
+        # 2. 너무 긴 세그먼트 강제 분할 (OOM 방지)
+        final_sentences: list[dict[str, Any]] = []
+        for seg in raw_segments:
+            seg_text = str(seg["text"])
+            seg_start = int(seg["start"])
+            seg_end = int(seg["end"])
 
-                final_sentences.append(
-                    {"text": embed_text, "start": final_start, "end": final_end}
-                )
+            if len(seg_text) <= MAX_HARD_SPLIT_LEN:
+                # 정상 크기인 경우 정제 후 추가
+                self._add_cleaned_sentence(final_sentences, seg_text, seg_start, seg_end)
+            else:
+                # 강제 분할 수행 (공백 기준 또는 글자 수 기준)
+                logger.warning(f"[Chunker] 과도하게 긴 세그먼트 발견 ({len(seg_text)}자). 강제 분할을 수행합니다.")
 
+                curr_pos = 0
+                while curr_pos < len(seg_text):
+                    sub_len = MAX_HARD_SPLIT_LEN
+                    # 가급적 공백에서 자르기 시도
+                    if curr_pos + sub_len < len(seg_text):
+                        last_space = seg_text.rfind(" ", curr_pos, curr_pos + sub_len)
+                        if last_space != -1 and last_space > curr_pos + (sub_len // 2):
+                            sub_len = last_space - curr_pos + 1
+
+                    sub_text = seg_text[curr_pos : curr_pos + sub_len]
+                    self._add_cleaned_sentence(
+                        final_sentences, sub_text, seg_start + curr_pos, seg_start + curr_pos + len(sub_text)
+                    )
+                    curr_pos += sub_len
         return final_sentences
 
-    def _get_embeddings(self, texts: list[str]) -> np.ndarray:
+    def _add_cleaned_sentence(self, target_list: list[dict[str, Any]], raw_text: str, start_offset: int, end_offset: int):
+        """정제된 문장을 리스트에 추가합니다."""
+        l_stripped = raw_text.lstrip()
+        n_leading = len(raw_text) - len(l_stripped)
+
+        stripped = l_stripped.rstrip()
+        n_trailing = len(l_stripped) - len(stripped)
+
+        final_start = start_offset + n_leading
+        final_end = end_offset - n_trailing
+
+        embed_text = stripped.replace("\n", " ")
+        if embed_text:
+            target_list.append({"text": embed_text, "start": final_start, "end": final_end})
+
+        embed_text = stripped.replace("\n", " ")
+        if embed_text:
+            target_list.append({"text": embed_text, "start": final_start, "end": final_end})
+
+    def _get_embeddings(self, texts: list[str], normalize: bool = True) -> np.ndarray:
         """
         텍스트 리스트의 임베딩을 생성합니다 (배치 처리).
+        [최적화] 중복 문장을 제거하여 고유 문장만 연산한 후 다시 매핑합니다 (GPU 자원 절감).
         """
+        if not texts:
+            return np.array([]).reshape(0, 0)
+
         try:
-            embeddings = []
-            for i in range(0, len(texts), self.batch_size):
-                batch = texts[i : i + self.batch_size]
-                embeddings.extend(self.embedder.embed_documents(batch))
-            return np.array(embeddings)
+            # 1. 중복 제거 및 인덱스 매핑
+            unique_texts: list[str] = []
+            text_to_idx = {}
+            mapping = []
+            for text in texts:
+                if text not in text_to_idx:
+                    text_to_idx[text] = len(unique_texts)
+                    unique_texts.append(text)
+                mapping.append(text_to_idx[text])
+            # 2. 고유 문장에 대해서만 배치 임베딩 수행
+            logger.info(f"[MODEL] [LOAD] 중복 제거 임베딩 연산 | {len(texts)} -> {len(unique_texts)} 문장")
+            unique_embeddings_list = []
+            for i in range(0, len(unique_texts), self.batch_size):
+                batch = unique_texts[i : i + self.batch_size]
+                unique_embeddings_list.extend(self.embedder.embed_documents(batch))
+            unique_embeddings = np.array(unique_embeddings_list).astype("float32")
+            if normalize:
+                # 벡터 정규화
+                norms = np.linalg.norm(unique_embeddings, axis=1, keepdims=True)
+                norms[norms == 0] = 1e-10
+                unique_embeddings = unique_embeddings / norms
+            # 3. 원본 순서대로 결과 재구성 (Broadcasting / Mapping)
+            final_embeddings = unique_embeddings[mapping]
+            return final_embeddings
         except Exception as e:
-            logger.error(f"임베딩 생성 중 오류 발생: {e}")
+            logger.error(f"[MODEL] [LOAD] 임베딩 생성 실패 | {e}")
             raise
 
-    def _calculate_similarities(self, embeddings: np.ndarray) -> list[float]:
+    def _calculate_similarities(self, normalized_embeddings: np.ndarray) -> list[float]:
         """
-        인접 문장 간의 코사인 유사도를 효율적으로 계산합니다.
+        인접 문장 간의 코사인 유사도를 계산합니다.
+        [최적화] 이미 정규화된 벡터를 사용하여 내적(Dot Product)만 수행합니다.
         """
-        if len(embeddings) < 2:
+        if len(normalized_embeddings) < 2:
             return []
 
-        # 1. 벡터 정규화 (L2 Norm) - NumPy 최적화 방식
-        # 각 행의 노름(norm)을 계산하고 0으로 나누기 방지
-        norms = np.linalg.norm(embeddings, axis=1, keepdims=True)
-        norms[norms == 0] = 1e-10
-        
-        # 정규화된 벡터 생성
-        normalized_embeddings = embeddings / norms
-
-        # 2. 인접 벡터 간 내적 (유사도) - 슬라이싱을 이용한 벡터화 연산
-        # (N-1, D) * (N-1, D) -> sum axis=1 -> (N-1,)
+        # 정규화된 벡터 간의 내적은 코사인 유사도와 동일 (einsum으로 메모리 절약)
         similarities = np.einsum('ij,ij->i', normalized_embeddings[:-1], normalized_embeddings[1:])
 
         return similarities.tolist()
@@ -187,31 +189,43 @@ class EmbeddingBasedSemanticChunker:
     def _find_breakpoints(self, similarities: list[float]) -> list[int]:
         """
         유사도 분포를 분석하여 분할 지점(breakpoints)을 찾습니다.
+        [최적화] 전역 통계 대신 로컬 이동 평균 기반 탐지를 병행하여 정확도와 성능을 높입니다.
         """
         if not similarities:
             return []
 
         similarities_array = np.array(similarities)
 
+        # 1. 전역 임계값 계산
         if self.breakpoint_threshold_type == "percentile":
-            threshold = np.percentile(
+            global_threshold = np.percentile(
                 similarities_array, 100 - self.breakpoint_threshold_value
             )
-        elif self.breakpoint_threshold_type == "standard_deviation":
-            mean = np.mean(similarities_array)
-            std = np.std(similarities_array)
-            threshold = mean - (self.breakpoint_threshold_value * std)
-        elif self.breakpoint_threshold_type == "similarity_threshold":
-            threshold = self.breakpoint_threshold_value
         else:
-            # 기본값
-            threshold = self.similarity_threshold
+            global_threshold = self.similarity_threshold
 
-        # Threshold보다 유사도가 낮은 지점을 분할점으로 선택
-        breakpoints = [i + 1 for i, sim in enumerate(similarities) if sim < threshold]
+        # 2. [최적화] 로컬 감지 (이동 평균 기반)
+        # 단순히 전역 수치만 보는 것이 아니라, 앞뒤 문맥 대비 유사도가 급감하는 지점을 포착
+        window_size = 3
+        breakpoints = []
+
+        for i, sim in enumerate(similarities):
+            # A. 기본 전역 임계값 체크
+            is_global_break = sim < global_threshold
+
+            # B. 로컬 급감 체크 (Local Drop)
+            is_local_break = False
+            if i >= window_size:
+                local_avg = np.mean(similarities[max(0, i-window_size):i])
+                # 주변 평균보다 20% 이상 유사도가 떨어지면 경계로 의심
+                if sim < local_avg * 0.8:
+                    is_local_break = True
+
+            if is_global_break or is_local_break:
+                breakpoints.append(i + 1)
 
         logger.debug(
-            f"청킹 분석: 임계값={threshold:.3f}, 유사도 리스트={[f'{s:.3f}' for s in similarities]}, 분기점={len(breakpoints)}개"
+            f"청킹 분석 완료: 전체 분기점 {len(breakpoints)}개 선정 (전역 임계값: {global_threshold:.3f})"
         )
 
         return breakpoints
@@ -414,10 +428,10 @@ class EmbeddingBasedSemanticChunker:
 
         # 3. 메타데이터 역매핑 및 문서 객체 생성 (이진 탐색 최적화)
         import bisect
-        
+
         final_docs = []
         final_vectors = []
-        
+
         # 탐색을 위한 시작 오프셋 리스트 생성
         doc_starts = [r["start"] for r in doc_ranges]
 
@@ -429,11 +443,11 @@ class EmbeddingBasedSemanticChunker:
 
             # 청크의 중심점 계산
             c_center = (c_start + c_end) // 2
-            
+
             # 이진 탐색으로 해당 오프셋이 포함된 문서 인덱스 탐색
             # bisect_right: c_center보다 큰 첫 번째 start의 위치 - 1 이 해당 문서
             idx = bisect.bisect_right(doc_starts, c_center) - 1
-            
+
             # 인덱스 범위 보정
             idx = max(0, min(idx, len(doc_ranges) - 1))
             matched_metadata = doc_ranges[idx]["metadata"].copy() if doc_ranges[idx]["metadata"] else {}

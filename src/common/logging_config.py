@@ -69,6 +69,19 @@ def setup_logging(
         message=r".*This API is in beta and may change in the future\..*",
     )
 
+    # ---- External Libraries Noise Control ----
+    # HTTP 요청 관련 로그가 너무 많으므로 WARNING 이상만 출력하도록 제어
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("httpcore").setLevel(logging.WARNING)
+    logging.getLogger("requests").setLevel(logging.WARNING)
+    logging.getLogger("urllib3").setLevel(logging.WARNING)
+    logging.getLogger("ollama").setLevel(logging.WARNING)
+    logging.getLogger("faiss").setLevel(logging.WARNING)
+
+    # LangChain 관련 장황한 로그 제어
+    logging.getLogger("langchain").setLevel(logging.WARNING)
+    logging.getLogger("langchain_core").setLevel(logging.WARNING)
+
     # 기존 핸들러 제거 (중복 방지)
     for handler in root_logger.handlers[:]:
         root_logger.removeHandler(handler)
@@ -77,9 +90,9 @@ def setup_logging(
     log_level_int = getattr(logging, log_level.upper(), logging.INFO)
     root_logger.setLevel(log_level_int)
 
-    # 포맷터 정의
+    # 포맷터 정의 (표준화된 구분자 사용)
     detailed_formatter = logging.Formatter(
-        fmt="[%(asctime)s] %(name)s - %(levelname)-8s - %(funcName)s:%(lineno)d - %(message)s",
+        fmt="[%(asctime)s] %(levelname)-8s - [%(name)s] [%(funcName)s:%(lineno)d] %(message)s",
         datefmt="%Y-%m-%d %H:%M:%S",
     )
 

@@ -5,7 +5,6 @@ Utils Rebuild: 복잡한 데코레이터 제거 및 비동기 헬퍼 단순화.
 
 import asyncio
 import functools
-import html
 import logging
 import re
 import time
@@ -15,10 +14,13 @@ logger = logging.getLogger(__name__)
 # --- 사전 컴파일된 정규표현식 (성능 최적화) ---
 _RE_LATEX_BLOCK = re.compile(r"\\\[(.*?)\\\]", re.DOTALL)
 _RE_LATEX_INLINE = re.compile(r"\\\((.*?)\\\)", re.DOTALL)
-_RE_CITATION_TOOLTIP = re.compile(
-    r"([\[\(])(?:Document\s+\d+[,.]?\s*)?(?:[Pp](?:age)?\.?\s*)(\d+)([\]\)])",
+
+# [수정] 복합 인용 패턴 지원: [p.1, p.2] 또는 [p.1, 2, 3] 또는 [page 5] 등 지원
+_RE_CITATION_BLOCK = re.compile(
+    r"([\[\(])((?:[Pp](?:age)?\.?\s*)?\d+(?:[\s,]*)(?:(?:[Pp](?:age)?\.?\s*)?\d+(?:[\s,]*))*)([\]\)])",
     re.IGNORECASE,
 )
+_RE_EXTRACT_PAGES = re.compile(r"(\d+)")
 _RE_WHITESPACE = re.compile(r"\s+")
 _RE_CLEAN_LIST_NUM = re.compile(r"^\d+[\.\)]\s*")
 _RE_CLEAN_LIST_BULLET = re.compile(r"^[\-\*•]\s*")
@@ -92,31 +94,29 @@ def apply_tooltips_to_response(response_text: str, documents: list) -> str:
         else:
             page_content_map[page_key] = content
 
-    # 2. 정규표현식으로 인용 패턴 찾기 및 치환 (사전 컴파일된 객체 사용)
+    # 2. 정규표현식으로 인용 패턴 찾기 및 치환 (복합 인용 지원)
     def replacement(match):
-        page_num = match.group(2)
+        inner_text = match.group(2)
 
-        # 표시할 텍스트는 항상 표준화된 형식 [p.X] 으로 통일
-        display_text = f"[p.{page_num}]"
+        # 텍스트 내의 모든 숫자(페이지 번호) 추출
+        pages = _RE_EXTRACT_PAGES.findall(inner_text)
+        if not pages:
+            return match.group(0) # 매칭 실패 시 원본 유지
 
-        if page_num in page_content_map:
-            # HTML Safe 처리
-            raw_text = page_content_map[page_num]
-            if len(raw_text) > 500:
-                raw_text = raw_text[:500] + "..."
+        badges = []
+        for p in pages:
+            if p in page_content_map:
+                # 개별 페이지 배지 생성
+                badges.append(f'<span class="citation-badge">p.{p}</span>')
+            else:
+                # 매핑된 정보가 없어도 배지 형식은 유지 (일관성)
+                badges.append(f'<span class="citation-badge" style="opacity: 0.6;">p.{p}</span>')
 
-            safe_text = html.escape(raw_text).replace("\n", "<br>")
+        # 여러 배지를 쉼표나 공백으로 연결 (여기서는 자연스럽게 붙여서 표시)
+        return "".join(badges)
 
-            # 세련된 인라인 배지 스타일로 반환
-            return (
-                f'<span class="citation-badge">{page_num}</span>'
-            )
-        else:
-            return display_text
-
-    # 3. 괄호가 없는 p.123 형태도 추가로 잡기 위한 2차 패턴 (선택사항, 노이즈 주의)
-    # 여기서는 안전하게 괄호가 있는 경우만 먼저 완벽히 처리합니다.
-    new_response = _RE_CITATION_TOOLTIP.sub(replacement, response_text)
+    # 3. 변환 실행
+    new_response = _RE_CITATION_BLOCK.sub(replacement, response_text)
 
     return new_response
 
@@ -125,13 +125,13 @@ def preprocess_text(text: str) -> str:
     """텍스트 정제: 널 문자를 공백으로 치환하고 연속 공백을 정규화"""
     if not text:
         return ""
-    
+
     # 1. 물리적 정제 (널 문자를 공백으로 치환하여 단어 붙음 방지)
     text = text.replace("\x00", " ")
-    
+
     # 2. 연속된 공백 및 줄바꿈을 단일 공백으로 통합
     text = _RE_WHITESPACE.sub(" ", text).strip()
-    
+
     return text
 
 
@@ -139,13 +139,13 @@ def clean_query_text(query: str) -> str:
     """쿼리 텍스트에서 불필요한 기호, 번호, 접두사(Example:, Question: 등) 제거"""
     if not query:
         return ""
-        
+
     # 1. 문두의 숫자, 불렛, 접두사(Example:, Query: 등) 일괄 제거
     query = _RE_QUERY_CLEAN_PREFIX.sub("", query.strip())
-    
+
     # 2. 문두/문미 따옴표 제거
     query = _RE_QUERY_CLEAN_QUOTES.sub("", query.strip())
-    
+
     return query.strip()
 
 
@@ -228,6 +228,33 @@ def format_error_message(e: Exception) -> str:
     return f"❌ 알 수 없는 오류 발생 ({err_type}): {msg}"
 
 
+import hashlib
+
+
+def fast_hash(text: str, length: int = 16) -> str:
+    """
+    보안이 필요 없는 단순 식별용 고속 해시 함수.
+    SHA256보다 훨씬 빠른 MD5를 사용하고 결과 길이를 조절합니다.
+    """
+    if not text:
+        return "0" * length
+    # usedforsecurity=False: 보안 진단 도구(Bandit 등)에 이 해시가
+    # 암호화나 보안 목적으로 사용되지 않음을 알립니다.
+    return hashlib.md5(text.encode(errors="ignore"), usedforsecurity=False).hexdigest()[:length]
+
+
+def count_tokens_rough(text: str) -> int:
+    """
+    텍스트의 토큰 수를 대략적으로 계산합니다.
+    - 영어: 약 4글자당 1토큰
+    - 한글/특수문자: 약 1~2글자당 1토큰
+    보수적으로 계산하기 위해 (글자 수 / 2.5)를 사용합니다.
+    """
+    if not text:
+        return 0
+    return int(len(text) / 2.5) + 1
+
+
 def sync_run(coro):
     """
     Streamlit(동기 환경)에서 비동기 코루틴을 안전하게 실행하기 위한 헬퍼.
@@ -253,15 +280,15 @@ def log_operation(operation_name):
     def decorator(func):
         @functools.wraps(func)
         def wrapper(*args, **kwargs):
-            logger.info(f"[System] [Task] {operation_name} 시작...")
+            logger.info(f"[SYSTEM] [TASK] {operation_name} 시작")
             start = time.time()
             try:
                 res = func(*args, **kwargs)
                 dur = time.time() - start
-                logger.info(f"[System] [Task] {operation_name} 완료 ({dur:.2f}s)")
+                logger.info(f"[SYSTEM] [TASK] {operation_name} 완료 | 소요: {dur:.2f}s")
                 return res
             except Exception as e:
-                logger.error(f"[System] [Task] {operation_name} 실패: {e}")
+                logger.error(f"[SYSTEM] [TASK] {operation_name} 실패 | {e}")
                 raise
 
         return wrapper

@@ -14,6 +14,5 @@ This directory contains detailed technical documentation for the RAG System.
   - [Deployment Guide](./ops/DEPLOYMENT.md)
   - [Security Implementation](./ops/SECURITY_IMPLEMENTATION.md)
   - [Troubleshooting](./ops/TROUBLESHOOTING.md)
-- [**Tasks & Verification**](./tasks/)
-  - Optimization tasks (AsyncIO, Streaming, Caching)
-  - Testing strategies and verification protocols
+- [**Historical Reports**](../reports/archive/)
+  - Past performance audits and quality reviews.

@@ -190,7 +190,6 @@ MSG_CHAT_INPUT_PLACEHOLDER = _ui_messages.get(
     "chat_input_placeholder", "PDF 내용에 대해 질문해보세요."
 )
 MSG_CHAT_NO_QA_SYSTEM = _ui_messages.get("chat_no_qa_system", "QA 시스템 미준비")
-MSG_CHAT_WELCOME = _ui_messages.get("chat_welcome", "환영합니다!")
 MSG_CHAT_GUIDE = _ui_messages.get("chat_guide", "사용 가이드")
 MSG_STREAMING_ERROR = _ui_messages.get("streaming_error", "스트리밍 오류: {e}")
 MSG_GENERIC_ERROR = _ui_messages.get("generic_error", "오류 발생: {error_msg}")

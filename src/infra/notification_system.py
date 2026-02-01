@@ -5,8 +5,6 @@ Streamlit Toast, 상태 로그(Status Box), 로거(Logger)를 일원화하여 �
 
 import logging
 
-import streamlit as st
-
 from core.session import SessionManager
 
 logger = logging.getLogger(__name__)
@@ -47,7 +45,6 @@ class SystemNotifier:
             icon = cls.ICONS.get(level, "ℹ️")
 
         # 2. 백엔드 로깅 (콘솔/파일)
-        log_msg = f"[{level.upper()}] {message}"
         if level == "error":
             logger.error(message)
         elif level == "warning":
@@ -55,10 +52,9 @@ class SystemNotifier:
         else:
             logger.info(message)
 
-        # 3. 세션 상태 로그 추가 및 메시지 이전
         # [수정] 단순 로그가 아니라 실제 채팅 메시지로 추가하여 '메시지 이전' 실현
         SessionManager.add_status_log(message)
-        
+
         if add_to_chat:
             # 채팅창에 일반 메시지 형태로 추가 (아이콘 포함)
             prefix = icon + " " if icon else ""

@@ -6,17 +6,13 @@ Thread-Safe Session Management
 인스턴스 및 클래스 메서드 호출을 모두 지원합니다.
 """
 
-import builtins
 import contextlib
-import hashlib
 import logging
 import threading
 import time
 from collections.abc import Callable
 from contextvars import ContextVar
 from typing import Any, TypeVar
-
-import streamlit as st
 
 from common.typing_utils import SessionData, SessionKey, SessionValue
 
@@ -93,14 +89,17 @@ class ThreadSafeSessionManager:
             return cls._session_locks[session_id]
 
     @classmethod
-    def _acquire_lock(cls, instance=None):
-        """Lock 획득 context manager (세션별 격리 적용)"""
-        if instance:
+    def _acquire_lock(cls, instance=None, session_id: str | None = None):
+        """
+        Lock 획득 context manager.
+        session_id가 주어지면 해당 세션의 락을, 아니면 현재 컨텍스트의 락을 사용합니다.
+        """
+        if instance and hasattr(instance, "lock"):
             lock = instance.lock
-            timeout = instance.lock_timeout
+            timeout = getattr(instance, "lock_timeout", cls._default_lock_timeout)
             target = instance
         else:
-            sid = cls.get_session_id()
+            sid = session_id or cls.get_session_id()
             lock = cls._get_session_lock(sid)
             timeout = cls._default_lock_timeout
             target = cls
@@ -114,55 +113,45 @@ class ThreadSafeSessionManager:
 
     @classmethod
     def get_session_id(cls) -> str:
-        """현재 컨텍스트의 세션 ID를 가져옵니다."""
+        """현재 컨텍스트의 세션 ID를 가져옵니다. Streamlit 컨텍스트를 우선 확인합니다."""
+        # 1. 먼저 ContextVar 확인
         sid = _session_id_var.get()
-        if sid == "default":
-            # API 환경에서 세션 ID가 설정되지 않은 채 호출되는 경우를 추적
-            import inspect
 
-            caller = inspect.stack()[1].function
-            logger.debug(f"[Session] Warning: session_id is 'default' in {caller}")
+        # 2. ContextVar가 default면 Streamlit 컨텍스트 확인
+        if sid == "default":
+            try:
+                from streamlit.runtime.scriptrunner import get_script_run_ctx
+                ctx = get_script_run_ctx()
+                if ctx:
+                    return ctx.session_id
+            except (ImportError, Exception):
+                pass
         return sid
 
     @classmethod
     def _get_state(cls):
-        """Streamlit session_state 또는 폴백 딕셔너리를 반환합니다."""
-        try:
-            from streamlit.runtime.scriptrunner import get_script_run_ctx
+        """
+        세션 상태 저장소를 반환합니다. 
+        UI와 백그라운드 스레드 간 데이터 공유를 위해 _fallback_sessions를 주 저장소로 사용합니다.
+        """
+        sid = cls.get_session_id()
 
-            if get_script_run_ctx() is not None:
-                return st.session_state
+        # 관리 락을 사용하여 세션 저장소 접근 보호 (매우 짧은 범위)
+        with cls._global_management_lock:
+            if sid not in cls._fallback_sessions:
+                # 새로운 세션 상태 초기화
+                new_state = cls.DEFAULT_SESSION_STATE.copy()
+                # 가변 객체들은 새로 생성
+                new_state["messages"] = []
+                new_state["doc_pool"] = {}
+                new_state["status_logs"] = list(cls.DEFAULT_SESSION_STATE["status_logs"])
+                new_state["_last_activity"] = time.time()
+                new_state["_initialized"] = True
+                cls._fallback_sessions[sid] = new_state
 
-            sid = cls.get_session_id()
-            # [수정] 전역 저장소 접근 시 관리 락을 사용하여 레이스 컨디션 방지
-            with cls._global_management_lock:
-                if sid not in cls._fallback_sessions:
-                    new_state = cls.DEFAULT_SESSION_STATE.copy()
-                    new_state["messages"] = []
-                    new_state["doc_pool"] = {}
-                    new_state["status_logs"] = list(
-                        cls.DEFAULT_SESSION_STATE["status_logs"]
-                    )
-                    new_state["_last_activity"] = time.time()  # 활동 시간 기록
-                    cls._fallback_sessions[sid] = new_state
-                    cls._fallback_sessions[sid]["_initialized"] = True
-
-                # 활동 시간 업데이트
-                cls._fallback_sessions[sid]["_last_activity"] = time.time()
-                return cls._fallback_sessions[sid]
-        except (Exception, ImportError):
-            sid = cls.get_session_id()
-            with cls._global_management_lock:
-                if sid not in cls._fallback_sessions:
-                    new_state = cls.DEFAULT_SESSION_STATE.copy()
-                    new_state["messages"] = []
-                    new_state["doc_pool"] = {}
-                    new_state["_last_activity"] = time.time()
-                    cls._fallback_sessions[sid] = new_state
-                    cls._fallback_sessions[sid]["_initialized"] = True
-
-                cls._fallback_sessions[sid]["_last_activity"] = time.time()
-                return cls._fallback_sessions[sid]
+            # 활동 시간 업데이트
+            cls._fallback_sessions[sid]["_last_activity"] = time.time()
+            return cls._fallback_sessions[sid]
 
     @classmethod
     def cleanup_expired_sessions(cls, max_idle_seconds: int = 3600):
@@ -170,7 +159,6 @@ class ThreadSafeSessionManager:
         now = time.time()
         expired_ids = []
 
-        # [수정] 순회 중 크기 변경 에러를 방지하기 위해 락 범위 안에서 ID 추출
         with cls._global_management_lock:
             for sid, state in cls._fallback_sessions.items():
                 if sid == "default":
@@ -180,81 +168,51 @@ class ThreadSafeSessionManager:
                     expired_ids.append(sid)
 
         for sid in expired_ids:
+            # 락 획득 순서: Session Lock -> Global Lock (delete_session 내부에서 지킴)
             cls.delete_session(sid)
-            # 세션 락도 함께 제거
-            with cls._global_management_lock:
-                if sid in cls._session_locks:
-                    del cls._session_locks[sid]
 
         if expired_ids:
-            logger.info(
-                f"[Session] [Cleanup] 만료된 세션 {len(expired_ids)}개 및 락 삭제 완료"
-            )
+            logger.info(f"[SYSTEM] [SESSION] 만료된 세션 삭제 완료 | 개수: {len(expired_ids)}")
 
     @classmethod
     def init_session(cls, session_id: str | None = None):
         if session_id:
             cls.set_session_id(session_id)
 
-        # [최적화] 이미 초기화되었다면 락 없이 즉시 반환 (성능 향상)
-        try:
-            if cls._get_state().get("_initialized", False):
-                return
-        except Exception:
-            pass
-
+        # _get_state 내부에서 이미 초기화를 수행하므로 여기서는 락만 걸어 확인
         with cls._acquire_lock():
             state = cls._get_state()
             if not state.get("_initialized", False):
-                logger.info(
-                    f"[System] [Session] 세션 초기화 완료 (ID: {cls.get_session_id()})"
-                )
-                for key, value in cls.DEFAULT_SESSION_STATE.items():
-                    if key not in state:
-                        # [최적화] 가변 객체만 개별적으로 초기화하여 deepcopy 방지
-                        if isinstance(value, list):
-                            state[key] = list(value)
-                        elif isinstance(value, dict):
-                            state[key] = value.copy()
-                        else:
-                            state[key] = value
                 state["_initialized"] = True
 
     @classmethod
     def get(cls, key: str, default: SessionValue | None = None) -> SessionValue | None:
-        target = cls if not isinstance(cls, type) else None
-        with ThreadSafeSessionManager._acquire_lock(instance=target):
+        with cls._acquire_lock():
             return cls._get_state().get(key, default)
 
     @classmethod
     def set(cls, key: SessionKey, value: SessionValue) -> None:
-        target = cls if not isinstance(cls, type) else None
-        with ThreadSafeSessionManager._acquire_lock(instance=target):
+        with cls._acquire_lock():
             cls._get_state()[key] = value
-            # 전역 플래그 동기화
             if key == "is_generating_answer":
-                ThreadSafeSessionManager._is_generating_globally = bool(value)
+                cls._is_generating_globally = bool(value)
 
     def set_inst(self, key: str, value: Any) -> None:
-        """인스턴스 메서드용 set (테스트 호환성)"""
         with self._acquire_lock(self):
             self._get_state()[key] = value
 
     @classmethod
     def has_key(cls, key: str) -> bool:
-        target = cls if not isinstance(cls, type) else None
-        with ThreadSafeSessionManager._acquire_lock(instance=target):
+        with cls._acquire_lock():
             return key in cls._get_state()
 
     def exists(self, key: str) -> bool:
-        """인스턴스 메서드용 exists (테스트 호환성)"""
         with self._acquire_lock(self):
             return key in self._get_state()
 
     @classmethod
     def delete_key(cls, key: str) -> bool:
-        target = cls if not isinstance(cls, type) else None
-        with ThreadSafeSessionManager._acquire_lock(instance=target):
+        with cls._acquire_lock():
             state = cls._get_state()
             if key in state:
                 del state[key]
@@ -262,24 +220,19 @@ class ThreadSafeSessionManager:
             return False
 
     def delete(self, key: str) -> bool:
-        """인스턴스 메서드용 delete (테스트 호환성)"""
         return self.delete_key(key)
 
     @classmethod
     def clear_all(cls):
-        target = cls if not isinstance(cls, type) else None
-        with ThreadSafeSessionManager._acquire_lock(instance=target):
+        with cls._acquire_lock():
             cls._get_state().clear()
-            logger.debug("[Session] [Cleanup] 모든 세션 상태 삭제")
 
     def clear(self) -> None:
-        """인스턴스 메서드용 clear (테스트 호환성)"""
         self.clear_all()
 
     @classmethod
     def atomic_read(cls, keys: list[str]) -> dict[str, Any]:
-        target = cls if not isinstance(cls, type) else None
-        with ThreadSafeSessionManager._acquire_lock(instance=target):
+        with cls._acquire_lock():
             state = cls._get_state()
             return {key: state.get(key) for key in keys}
 
@@ -287,12 +240,10 @@ class ThreadSafeSessionManager:
     def atomic_update(
         cls, update_func: Callable[[dict[str, Any]], dict[str, Any]]
     ) -> bool:
-        target = cls if not isinstance(cls, type) else None
-        with ThreadSafeSessionManager._acquire_lock(instance=target):
+        with cls._acquire_lock():
             try:
                 state = cls._get_state()
-                current_state = dict(state)
-                updates = update_func(current_state)
+                updates = update_func(dict(state))
                 for key, value in updates.items():
                     state[key] = value
                 return True
@@ -303,29 +254,28 @@ class ThreadSafeSessionManager:
     @classmethod
     def delete_session(cls, session_id: str) -> bool:
         """[추가] 특정 세션을 메모리 저장소에서 완전히 삭제합니다."""
-        # 1. 먼저 해당 세션의 개별 락을 획득하여 내부 데이터(벡터 스토어 등) 정리
-        target = cls if not isinstance(cls, type) else None
-        with ThreadSafeSessionManager._acquire_lock(instance=target):
-            # 2. 전역 관리 락을 획득하여 저장소에서 제거
+        # 명시적으로 해당 세션의 락을 획득
+        with cls._acquire_lock(session_id=session_id):
             with cls._global_management_lock:
                 if session_id in cls._fallback_sessions:
-                    # 대량의 데이터를 담고 있을 수 있는 객체들 명시적 초기화 후 삭제
                     session_data = cls._fallback_sessions[session_id]
 
-                    # [최적화] 벡터 저장소 메모리 명시적 해제
+                    # 리소스 명시적 해제
                     vs = session_data.get("vector_store")
                     if vs and hasattr(vs, "index") and hasattr(vs.index, "reset"):
-                        with contextlib.suppress(builtins.BaseException):
+                        with contextlib.suppress(Exception):
                             vs.index.reset()
 
-                    if isinstance(session_data, dict):
-                        session_data.clear()
+                    session_data.clear()
                     del cls._fallback_sessions[session_id]
-                    logger.info(
-                        f"[Session] [Cleanup] 세션 데이터 삭제됨 (ID: {session_id})"
-                    )
+
+                    # 락도 제거
+                    if session_id in cls._session_locks:
+                        del cls._session_locks[session_id]
+
+                    logger.info(f"[SYSTEM] [SESSION] 세션 데이터 삭제 완료 | ID: {session_id}")
                     return True
-            return False
+        return False
 
     @classmethod
     def get_all_state(cls) -> dict[str, Any]:
@@ -390,7 +340,7 @@ class ThreadSafeSessionManager:
                 state._initialized = True
 
     @classmethod
-    def add_message(cls, role: str, content: str, **kwargs):
+    def add_message(cls, role: str, content: str, processed_content: str | None = None, **kwargs):
         target = cls if not isinstance(cls, type) else None
         with ThreadSafeSessionManager._acquire_lock(instance=target):
             state = cls._get_state()
@@ -402,20 +352,23 @@ class ThreadSafeSessionManager:
             # [최적화] 문서 객체가 있으면 풀링 처리
             documents = kwargs.get("documents")
             if documents:
+                from common.utils import fast_hash
                 doc_ids = []
                 for doc in documents:
-                    # 내용 및 출처 기반 해시 생성 (메타데이터 충돌 방지)
                     doc_key = f"{doc.page_content}_{doc.metadata.get('source', '')}_{doc.metadata.get('page', '')}"
-                    content_hash = hashlib.sha256(doc_key.encode()).hexdigest()[:16]
+                    content_hash = fast_hash(doc_key)
                     if content_hash not in state["doc_pool"]:
                         state["doc_pool"][content_hash] = doc
                     doc_ids.append(content_hash)
 
-                # 원본 documents 대신 ID 리스트 저장
                 kwargs["doc_ids"] = doc_ids
                 del kwargs["documents"]
 
-            msg = {"role": role, "content": content}
+            msg = {
+                "role": role,
+                "content": content,
+                "processed_content": processed_content  # 가공된 HTML/Markdown 저장
+            }
             msg.update(kwargs)
 
             # [최적화] Streamlit 변경 감지를 위해 리스트를 새로 할당
@@ -449,7 +402,7 @@ class ThreadSafeSessionManager:
     def reset_for_new_file(cls):
         target = cls if not isinstance(cls, type) else None
         with ThreadSafeSessionManager._acquire_lock(instance=target):
-            logger.debug("[Session] [Event] 새 파일 업로드 감지 -> RAG 상태 리셋")
+            logger.debug("[SYSTEM] [EVENT] 새 파일 업로드 감지 | RAG 상태 리셋")
             state = cls._get_state()
 
             # [최적화] 이전 벡터 저장소 메모리 명시적 해제 시도
@@ -538,15 +491,15 @@ class _LockContext:
         actual_timeout = 0.1 if is_in_loop else self.timeout
 
         self.acquired = self.lock.acquire(timeout=actual_timeout)
-        
+
         if not self.acquired:
-            # 이벤트 루프에서 0.1초 내에 획득 실패 시, 
+            # 이벤트 루프에서 0.1초 내에 획득 실패 시,
             # 일반적인 동기 스레드와 달리 루프 보호를 위해 즉시 에러 발생 또는 재시도 로직 유도
             from common.exceptions import SessionLockTimeoutError
             self.target.failed_acquisitions += 1
-            
+
             error_msg = "이벤트 루프 보호를 위해 세션 락 획득이 거부되었습니다." if is_in_loop else f"{self.timeout}초 내에 세션 락을 획득하지 못했습니다."
-            
+
             raise SessionLockTimeoutError(
                 error_msg,
                 details={

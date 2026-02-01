@@ -93,13 +93,14 @@ def _init_temp_directory():
             manager.cleanup_orphaned_artifacts(max_age_hours=1, target_dir=temp_path)
             manager.cleanup_orphaned_artifacts(max_age_hours=24)  # 기본 배포 폴더 정리
             logger.info(
-                f"[System] [Janitor] 백그라운드 자원 정리 완료 (대상: {temp_path} 및 deployments/)"
+                f"[SYSTEM] [JANITOR] 백그라운드 자원 정리 완료 | 대상: {temp_path} 및 deployments/"
             )
         except Exception as e:
-            logger.error(f"[System] [Janitor] 리소스 정리 중 실패: {e}")
+            logger.error(f"[SYSTEM] [JANITOR] 리소스 정리 실패 | {e}")
 
     # 백그라운드 스레드 시작
     threading.Thread(target=cleanup_task, daemon=True).start()
+    return str(temp_path)
     return str(temp_path)
 
 
@@ -136,10 +137,9 @@ atexit.register(_cleanup_current_file)
 
 def _ensure_models_are_loaded() -> bool:
     """
-    선택된 LLM 및 임베딩 모델을 순차적으로 로드하여 안정성을 확보합니다.
+    선택된 LLM 및 임베딩 모델을 중앙 관리자를 통해 안전하게 로드합니다.
     """
-    # [Lazy Import]
-    from core.model_loader import load_embedding_model, load_llm
+    from core.model_loader import ModelManager
 
     selected_model = SessionManager.get("last_selected_model")
     selected_embedding = SessionManager.get("last_selected_embedding_model")
@@ -149,6 +149,7 @@ def _ensure_models_are_loaded() -> bool:
         return False
 
     if not selected_embedding:
+        from common.config import AVAILABLE_EMBEDDING_MODELS
         if AVAILABLE_EMBEDDING_MODELS:
             selected_embedding = AVAILABLE_EMBEDDING_MODELS[0]
             SessionManager.set("last_selected_embedding_model", selected_embedding)
@@ -157,51 +158,26 @@ def _ensure_models_are_loaded() -> bool:
             return False
 
     try:
-        def force_sync():
-            # 상태 로그 업데이트 시 UI에 반영될 수 있도록 세션 매니저 로그만 업데이트
-            pass
+        # 1. 임베딩 모델 로드 (ModelManager 사용)
+        SystemNotifier.loading("임베딩 모델 준비 중...")
+        embedder = ModelManager.get_embedder(selected_embedding)
+        SessionManager.set("embedder", embedder)
 
-        current_llm = SessionManager.get("llm")
-        current_embedder = SessionManager.get("embedder")
+        actual_device = getattr(embedder, "model_kwargs", {}).get("device", "UNKNOWN").upper()
+        display_device = "GPU" if actual_device == "CUDA" else actual_device
+        SystemNotifier.success(f"임베딩 모델 준비 완료 ({display_device})")
 
-        # 1. 임베딩 모델 우선 로드 (분석 시작을 위해)
-        current_embedder = SessionManager.get("embedder")
-        if (
-            not current_embedder
-            or getattr(current_embedder, "model_name", None) != selected_embedding
-        ):
-            SystemNotifier.loading("임베딩 모델 로드 시작")
-            force_sync()
-            embedder = load_embedding_model(selected_embedding)
-            SessionManager.set("embedder", embedder)
-            
-            # [수정] 캐시된 경우를 대비해 객체에서 직접 디바이스 정보 추출 및 명칭 통일 (CUDA -> GPU)
-            actual_device = SessionManager.get("current_embedding_device")
-            if not actual_device or actual_device == "UNKNOWN":
-                actual_device = getattr(embedder, "model_kwargs", {}).get("device", "UNKNOWN").upper()
-            
-            if actual_device == "CUDA":
-                actual_device = "GPU"
-            
-            SystemNotifier.success(f"임베딩 모델 준비 완료 ({actual_device})")
-            force_sync()
-
-        # 2. LLM 로드 및 백그라운드 예열
-        current_llm = SessionManager.get("llm")
-        if not current_llm or getattr(current_llm, "model", None) != selected_model:
-            SystemNotifier.model_load(selected_model, device="GPU")
-            force_sync()
-            llm = load_llm(selected_model)
-            SessionManager.set("llm", llm)
-            # ...
-            SystemNotifier.success("추론 모델 준비 완료")
-            force_sync()
+        # 2. LLM 로드 (ModelManager 사용)
+        SystemNotifier.loading(f"추론 모델({selected_model}) 준비 중...")
+        llm = ModelManager.get_llm(selected_model)
+        SessionManager.set("llm", llm)
+        SystemNotifier.success("추론 모델 준비 완료")
 
         return True
 
     except Exception as e:
         logger.error(f"모델 로드 중 치명적 오류 발생: {e}", exc_info=True)
-        status_container.error(f"❌ 모델 로드 실패: {e}")
+        st.error(f"❌ 모델 로드 실패: {e}")
         return False
 
 
@@ -228,7 +204,7 @@ def _rebuild_rag_system() -> None:
             return
 
         embedder = SessionManager.get("embedder")
-        
+
         # [추가] 분석 시작 알림
         SystemNotifier.loading(f"'{file_name}' 분석 시작")
 
@@ -376,14 +352,11 @@ def _render_app_layout(
     is_skeleton_pass: bool, available_models: list[str] | None = None
 ) -> dict[str, Any]:
     """앱의 전체 레이아웃을 렌더링하고 주요 플레이스홀더를 반환합니다."""
-    # 0. 창 높이 측정 (단 1회 실행하여 중복 키 에러 방지)
-    from ui.ui import update_window_height
-    update_window_height()
-    
+    # 0. 최우선 CSS 주입 (깜박임 방지)
     inject_custom_css()
 
     # 1. 사이드바 렌더링
-    sidebar_placeholders = render_sidebar(
+    render_sidebar(
         file_uploader_callback=on_file_upload,
         model_selector_callback=on_model_change,
         embedding_selector_callback=on_embedding_change,
@@ -441,11 +414,9 @@ def main() -> None:
     """메인 애플리케이션 오케스트레이터"""
     # 1. 초기 레이아웃 및 세션 즉시 준비
     from ui.ui import inject_custom_css
-
     inject_custom_css()
 
     from core.session import SessionManager
-
     SessionManager.init_session()
 
     # 2. 모델 목록 가져오기 (이미 세션에 있으면 즉시 사용)
@@ -478,7 +449,11 @@ def main() -> None:
             st.session_state.warmup_triggered = True
             # 임베딩 모델 로드는 캐싱되므로 여기서 호출하면 나중에 즉시 사용 가능
             load_embedding_model(AVAILABLE_EMBEDDING_MODELS[0])
-            logger.info("[System] [Warmup] 임베딩 모델 예열 완료")
+            logger.info("[SYSTEM] [WARMUP] 임베딩 모델 예열 완료")
+
+    # 6. 창 높이 측정 (가장 마지막에 실행하여 레이아웃 영향 최소화)
+    from ui.ui import update_window_height
+    update_window_height()
 
 
 if __name__ == "__main__":

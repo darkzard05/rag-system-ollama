@@ -36,11 +36,22 @@ class RAGQueryOptimizer:
     @classmethod
     async def classify_intent(cls, query: str, llm: Any) -> str:
         """
-        Classifies the intent using the LLM with minimal token generation.
+        Classifies the intent using heuristics first, then the LLM.
         """
         start_time = time.time()
+        clean_q = query.strip()
 
-        # 4B 모델용 초경량 체인
+        # 1. [최적화] Heuristic Fast-Track Router
+        # 매우 짧은 인사말이나 명령어는 LLM 호출 없이 즉시 처리
+        greetings = {"안녕", "안녕하세요", "하이", "hi", "hello", "반가워", "누구니", "누구야"}
+        if len(clean_q) <= 10 and any(g in clean_q.lower() for g in greetings):
+            logger.info(f"[CHAT] [ROUTER] [Fast-Track] 인사말 감지 | {clean_q}")
+            return "GREETING"
+
+        if len(clean_q) < 2:
+            return "FACTOID"
+
+        # 2. LLM-based Router
         prompt = ChatPromptTemplate.from_template(cls.ROUTING_PROMPT)
         # stop 시퀀스를 설정하여 모델이 길게 말하는 것을 원천 차단 (지연 시간 최적화)
         chain = prompt | llm.bind(stop=["\n", " ", "."]) | StrOutputParser()
@@ -60,10 +71,10 @@ class RAGQueryOptimizer:
 
             latency = (time.time() - start_time) * 1000
             logger.info(
-                f"[Router] Intent: {result} | Latency: {latency:.2f}ms | Query: {query[:30]}"
+                f"[CHAT] [ROUTER] 의도 분석 완료 | 의도: {result} | 지연: {latency:.2f}ms | 질문: {query[:30]}..."
             )
 
             return result
         except Exception as e:
-            logger.error(f"[Router] Error: {e}")
+            logger.error(f"[CHAT] [ROUTER] 분석 실패 | {e}")
             return "FACTOID"  # 에러 시 안전한 기본값

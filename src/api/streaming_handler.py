@@ -33,6 +33,7 @@ class StreamChunk:
     metadata: dict[str, Any] | None = None  # 메타데이터 (문서 등) 추가
     node_name: str | None = None  # 현재 실행 중인 노드 이름
     status: str | None = None  # 현재 상태 메시지
+    performance: dict[str, Any] | None = None  # 통합 성능 통계 추가
 
 
 @dataclass
@@ -221,6 +222,19 @@ class StreamingResponseHandler:
                                     token_count=0,
                                     chunk_index=self.chunk_index,
                                     metadata={"documents": output["documents"]},
+                                )
+                                self.chunk_index += 1
+
+                        # [추가] 답변 생성 완료 시 통합 성능 지표 캡처
+                        elif name == "generate_response":
+                            output = data.get("output", {})
+                            if "performance" in output:
+                                yield StreamChunk(
+                                    content="",
+                                    timestamp=time.time(),
+                                    token_count=0,
+                                    chunk_index=self.chunk_index,
+                                    performance=output["performance"],
                                 )
                                 self.chunk_index += 1
         except Exception as e:
@@ -417,7 +431,7 @@ class ServerSentEventsHandler:
 
         # JSON 데이터 인코딩
         json_data = json.dumps(data, ensure_ascii=False)
-        
+
         # SSE 규격상 데이터가 여러 줄인 경우 각 줄마다 'data: ' 접두사를 붙여야 함
         for line in json_data.split("\n"):
             lines.append(f"data: {line}")

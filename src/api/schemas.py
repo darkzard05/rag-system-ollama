@@ -8,6 +8,19 @@ from langchain_core.documents import Document
 from pydantic import BaseModel, Field
 
 
+class PerformanceStats(BaseModel):
+    """통합 성능 메트릭 스키마"""
+    ttft: float = 0.0
+    thinking_time: float = 0.0
+    generation_time: float = 0.0
+    total_time: float = 0.0
+    token_count: int = 0
+    thought_token_count: int = 0
+    tps: float = 0.0
+    model_name: str = "unknown"
+    doc_count: int = 0
+
+
 class GraphState(TypedDict):
     """
     RAG 그래프의 상태를 나타냅니다.
@@ -27,6 +40,8 @@ class QueryRequest(BaseModel):
 
     query: str = Field(..., examples=["DeepSeek-R1의 성능은 어때?"])
     session_id: str = Field(default="default", examples=["user-123"])
+    model_name: str | None = Field(default=None, description="사용할 LLM 모델명 (생략 시 세션 기본값 사용)")
+    embedding_model: str | None = Field(default=None, description="사용할 임베딩 모델명")
     use_cache: bool = True
 
 

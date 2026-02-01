@@ -17,9 +17,9 @@ import streamlit as st
 from api.streaming_handler import get_adaptive_controller, get_streaming_handler
 from common.config import (
     AVAILABLE_EMBEDDING_MODELS,
+    MSG_CHAT_GUIDE,
     MSG_CHAT_INPUT_PLACEHOLDER,
     MSG_CHAT_NO_QA_SYSTEM,
-    MSG_CHAT_WELCOME,
     MSG_PDF_VIEWER_NO_FILE,
     UI_CONTAINER_HEIGHT,
 )
@@ -39,6 +39,7 @@ async def _stream_chat_response(
         "full_response": "",
         "full_thought": "",
         "retrieved_docs": [],
+        "performance": None,  # 추가된 필드
         "start_time": time.time(),
         "thinking_start_time": None,
         "thinking_end_time": None,
@@ -100,6 +101,10 @@ async def _stream_chat_response(
                         doc_count = len(state["retrieved_docs"])
                         update_pipeline_display(f"관련 지식 {doc_count}개 확보 완료")
 
+                    # [추가] 통합 성능 지표 처리
+                    if chunk.performance:
+                        state["performance"] = chunk.performance
+
                     # C. 사고 과정 처리
                     if chunk.thought:
                         # 사고 과정 시작 시 타이밍 기록
@@ -156,24 +161,14 @@ async def _stream_chat_response(
             # 2. 최종 정돈 (인용구, 피드백 등)
             _finalize_ui_rendering(thought_area, answer_area, state)
 
-            # 성능 메트릭 계산
-            total_dur = time.time() - state["start_time"]
-            token_count = len(state["full_response"].split())
-            tps = token_count / total_dur if total_dur > 0 else 0
-
-            metrics = {
-                "duration": total_dur,
-                "tps": tps,
-                "doc_count": len(state["retrieved_docs"]),
-                "model": SessionManager.get("last_selected_model", "Unknown"),
+            final_result = {
+                "response": state["full_response"],
+                "thought": state["full_thought"],
+                "documents": state["retrieved_docs"],
+                "performance": state["performance"], # None 대신 실제 데이터 반환
             }
 
-        return {
-            "response": state["full_response"],
-            "thought": state["full_thought"],
-            "documents": state["retrieved_docs"],
-            "metrics": metrics if state["full_response"] else None,
-        }
+        return final_result
 
     except Exception as e:
         logger.error(f"UI 스트리밍 오류: {e}", exc_info=True)
@@ -219,59 +214,28 @@ def _finalize_ui_rendering(thought_container, answer_display, state):
         else:
             answer_display.markdown(state["full_response"], unsafe_allow_html=True)
 
-        # 2. 지능형 출처 표시 (st.pills & st.popover)
-        if state["retrieved_docs"]:
-            st.divider()
-            c1, c2 = st.columns([0.85, 0.15])
+        # 2. 피드백 및 메트릭
+        st.divider()
+        c1, c2 = st.columns([0.85, 0.15])
 
-            with c1:
-                # 중복 제거 및 페이지 정렬 (이동을 위해 페이지 번호 저장)
-                unique_sources = {}
-                for doc in state["retrieved_docs"]:
-                    src = doc.metadata.get("source", "Unknown")
-                    pg = doc.metadata.get("page", "?")
-                    key = f"📄 {src} (p.{pg})"
-                    if key not in unique_sources:
-                        unique_sources[key] = pg
+        with c2:
+            # 피드백 위젯
+            st.feedback("thumbs", key=f"fb_{int(state['start_time'])}")
 
-            pill_key = f"pills_{int(state['start_time'])}"
-            
-            # [수정] 위젯 생성 전 상태를 먼저 체크하고 처리하여 StreamlitAPIException 방지
-            if pill_key in st.session_state and st.session_state[pill_key]:
-                selection = st.session_state[pill_key]
-                target_pg = unique_sources.get(selection)
-                if target_pg and str(target_pg).isdigit():
-                    new_pg = int(target_pg)
-                    st.session_state.current_page = new_pg
-                    # 슬라이더 위젯 상태도 강제 업데이트하여 동기화
-                    st.session_state.pdf_nav_slider_wide = new_pg
-                    # 상태 초기화 (위젯 생성 전이므로 안전)
-                    st.session_state[pill_key] = None
-                    st.rerun()
-
-            # st.pills를 활용한 칩 기반 인터페이스
-            selected_pill = st.pills(
-                "📍 참고 지식 (클릭 시 이동):",
-                options=list(unique_sources.keys()),
-                selection_mode="single",
-                key=pill_key,
-            )
-
-            with c2:
-                # 피드백 위젯
-                st.feedback("thumbs", key=f"fb_{int(state['start_time'])}")
-
-        # 3. 하단 메트릭 캡션
-        total_dur = time.time() - state["start_time"]
-        token_count = len(state["full_response"].split())
-        tps = token_count / total_dur if total_dur > 0 else 0
-        doc_count = len(state["retrieved_docs"])
-        current_model = SessionManager.get("last_selected_model", "Unknown")
-
-        # 표준 캡션 사용
-        st.caption(
-            f"⏱️ {total_dur:.1f}s | 🚀 {tps:.1f} t/s | 📄 {doc_count} refs | 🤖 {current_model}"
-        )
+        with c1:
+            # 하단 메트릭 캡션 (통합 지표 사용)
+            perf = state.get("performance")
+            if perf:
+                st.caption(
+                    f"⏱️ {perf.get('total_time', 0):.1f}s (TTFT: {perf.get('ttft', 0):.2f}s) | "
+                    f"🚀 {perf.get('tps', 0):.1f} t/s | "
+                    f"📄 {perf.get('doc_count', 0)} refs | "
+                    f"🤖 {perf.get('model_name', 'Unknown')}"
+                )
+            else:
+                # 폴백 (지표 획득 실패 시)
+                total_dur = time.time() - state["start_time"]
+                st.caption(f"⏱️ {total_dur:.1f}s | 🚀 분석 완료")
     else:
         answer_display.error("⚠️ 답변이 생성되지 않았습니다.")
 
@@ -312,11 +276,10 @@ def _pdf_viewer_fragment():
         with fitz.open(pdf_path) as doc:
             total_pages = len(doc)
 
-            # [수정] 세션 초기화 전에도 안전하도록 기본값 1 제공
-            if "current_page" not in st.session_state:
-                st.session_state.current_page = 1
+            # [수정] SessionManager의 상태를 최우선으로 반영 (네비게이션 연동)
+            current_page = SessionManager.get("current_page", 1)
+            st.session_state.current_page = current_page
 
-            # [수정] 세션 초기화 전에도 안전하도록 기본값 False 제공
             is_generating = SessionManager.get("is_generating_answer", False) or False
 
             # 1. PDF 뷰어 메인 영역
@@ -324,7 +287,7 @@ def _pdf_viewer_fragment():
                 pdf_viewer(
                     input=pdf_path,
                     height=UI_CONTAINER_HEIGHT,
-                    pages_to_render=[st.session_state.current_page],
+                    pages_to_render=[current_page],
                 )
 
             # 2. 세련된 버튼 그룹형 탐색 툴바
@@ -422,14 +385,20 @@ def inject_custom_css():
 
     /* 4. JS 측정기 등 커스텀 컴포넌트의 유령 공간 제거 */
     div[data-testid="stHtml"] iframe, 
-    div.element-container:has(iframe[title="streamlit_javascript.st_javascript"]) {
+    div.element-container:has(iframe[title="streamlit_javascript.st_javascript"]),
+    div.stMarkdown:has(iframe[title="streamlit_javascript.st_javascript"]) {
         position: absolute !important;
         top: -9999px !important;
+        left: -9999px !important;
         width: 0 !important;
         height: 0 !important;
+        margin: 0 !important;
+        padding: 0 !important;
+        overflow: hidden !important;
         visibility: hidden !important;
+        display: none !important; /* 브라우저에 따라 실행이 안될 수 있으나 먼저 시도 */
     }
-
+    
     /* 5. 상단 서브헤더 및 사이드바 제목 정렬 */
     h3 {
         height: auto !important;
@@ -460,40 +429,24 @@ def inject_custom_css():
         cursor: help;
         text-decoration: underline dotted;
     }
+    /* 6. 인용 배지 스타일 */
     .citation-badge {
-        display: inline-flex;
+        display: inline-flex !important;
         align-items: center;
         justify-content: center;
-        background-color: #f0f2f6;
-        color: #0068c9;
-        font-size: 0.75rem;
-        font-weight: bold;
-        padding: 0 6px;
-        margin: 0 2px;
-        border-radius: 4px;
-        border: 1px solid #d1d5db;
-        cursor: default;
-        vertical-align: middle;
-        height: 1.2rem;
-        min-width: 1.2rem;
+        background-color: #f0f2f6 !important;
+        color: #0068c9 !important;
+        font-size: 0.75rem !important;
+        font-weight: bold !important;
+        padding: 0 6px !important;
+        margin: 0 2px !important;
+        border-radius: 4px !important;
+        border: 1px solid #d1d5db !important;
+        vertical-align: middle !important;
+        height: 1.2rem !important;
+        user-select: none;
     }
-    .citation-badge:hover {
-        background-color: #0068c9;
-        color: white;
-        border-color: #0068c9;
-    }
-    /* 사고 과정 컨테이너 */
-    .thought-container {
-        border-left: 3px solid #ddd;
-        padding-left: 15px;
-        margin: 10px 0;
-        color: #666;
-        font-style: italic;
-    }
-    /* 사이드바 요소 간격 압축 */
-    [data-testid="stSidebar"] [data-testid="stVerticalBlock"] {
-        gap: 0.5rem;
-    }
+    </style>
     </style>
     """,
     unsafe_allow_html=True,
@@ -594,6 +547,7 @@ def render_message(
     thought: str | None = None,
     doc_ids: list[Any] | None = None,
     metrics: dict | None = None,
+    processed_content: str | None = None,
 ):
     if role == "system":
         with st.chat_message("system", avatar="⚙️"):
@@ -610,28 +564,26 @@ def render_message(
                     unsafe_allow_html=True,
                 )
 
-        # [최적화] ID 리스트로부터 문서 풀에서 원본 문서 복원
-        documents = []
-        if role == "assistant" and doc_ids:
-            # [수정] 세션 초기화 전에도 안전하도록 기본값 {} 제공
-            doc_pool = SessionManager.get("doc_pool", {}) or {}
-            documents = [doc_pool[d_id] for d_id in doc_ids if d_id in doc_pool]
+        # [최적화] 가공된 내용이 있으면 즉시 사용 (정규식 연산 생략)
+        if processed_content:
+            st.markdown(processed_content, unsafe_allow_html=True)
+        else:
+            # Fallback: 가공되지 않은 경우 (주로 유저 메시지 또는 이전 버전 데이터)
+            display_text = content
+            if role == "assistant":
+                from common.utils import (
+                    apply_tooltips_to_response,
+                    normalize_latex_delimiters,
+                )
+                display_text = normalize_latex_delimiters(display_text)
 
-        # Assistant 메시지이면서 참고 문서가 있다면 툴팁 적용
-        if role == "assistant":
-            from common.utils import (
-                apply_tooltips_to_response,
-                normalize_latex_delimiters,
-            )
+                if doc_ids:
+                    doc_pool = SessionManager.get("doc_pool", {}) or {}
+                    documents = [doc_pool[d_id] for d_id in doc_ids if d_id in doc_pool]
+                    if documents:
+                        display_text = apply_tooltips_to_response(display_text, documents)
 
-            # 1. 수식 정규화
-            content = normalize_latex_delimiters(content)
-
-            # 2. 툴팁 적용
-            if documents:
-                content = apply_tooltips_to_response(content, documents)
-
-        st.markdown(content, unsafe_allow_html=True)
+            st.markdown(display_text, unsafe_allow_html=True)
 
         # [추가] 성능 메트릭 및 피드백 섹션
         if role == "assistant":
@@ -641,64 +593,27 @@ def render_message(
                 # 고유 키 생성을 위해 내용의 해시 사용
                 import hashlib
 
-                msg_hash = hashlib.md5(content.encode()).hexdigest()[:8]
+                msg_hash = hashlib.md5(content.encode(), usedforsecurity=False).hexdigest()[:8]
                 st.feedback("thumbs", key=f"fb_hist_{msg_hash}")
 
             with m_col1:
                 if metrics:
-                    # 표준 캡션 사용
+                    # 통합 스키마 기반 캡션 (TTFT, TPS 등 모든 정보 포함)
                     st.caption(
-                        f"⏱️ {metrics.get('duration', 0):.1f}s | "
+                        f"⏱️ {metrics.get('total_time', 0):.1f}s (TTFT: {metrics.get('ttft', 0):.2f}s) | "
                         f"🚀 {metrics.get('tps', 0):.1f} t/s | "
                         f"📄 {metrics.get('doc_count', 0)} refs | "
-                        f"🤖 {metrics.get('model', 'Unknown')}"
+                        f"🤖 {metrics.get('model_name', 'Unknown')}"
                     )
-
-        # [추가] 이력 메시지에서도 출처 칩 표시 (참고 문서가 있는 경우)
-        if role == "assistant" and documents:
-            st.divider()
-            
-            # 중복 제거 및 페이지 정렬 (이동을 위해 페이지 번호 저장)
-            unique_sources = {}
-            for doc in documents:
-                src = doc.metadata.get("source", "Unknown")
-                pg = doc.metadata.get("page", "?")
-                key = f"📄 {src} (p.{pg})"
-                if key not in unique_sources:
-                    unique_sources[key] = pg
-
-            import hashlib
-            msg_hash = hashlib.md5(content.encode()).hexdigest()[:8]
-            pill_key = f"pills_hist_{msg_hash}"
-            
-            # [수정] 위젯 생성 전 상태를 먼저 체크하고 처리하여 StreamlitAPIException 방지
-            if pill_key in st.session_state and st.session_state[pill_key]:
-                selection = st.session_state[pill_key]
-                target_pg = unique_sources.get(selection)
-                if target_pg and str(target_pg).isdigit():
-                    new_pg = int(target_pg)
-                    st.session_state.current_page = new_pg
-                    # 슬라이더 위젯 상태도 강제 업데이트하여 동기화
-                    st.session_state.pdf_nav_slider_wide = new_pg
-                    # 상태 초기화 (위젯 생성 전이므로 안전)
-                    st.session_state[pill_key] = None
-                    st.rerun()
-
-            selected_pill = st.pills(
-                "📍 참고 지식 (클릭 시 이동):",
-                options=list(unique_sources.keys()),
-                selection_mode="single",
-                key=pill_key,
-            )
 
 
 def update_window_height():
     """JavaScript를 통해 브라우저 창의 실제 높이를 측정하고 세션 상태에 저장합니다."""
     from streamlit_javascript import st_javascript
-    
+
     # 윈도우 전체 높이 획득 (단 한 번만 호출됨)
     win_h = st_javascript("window.innerHeight", key="height_tracker")
-    
+
     if win_h and win_h > 100:
         st.session_state.last_valid_height = int(win_h)
 
@@ -707,7 +622,7 @@ def _chat_fragment():
     # 1. 이미 계산된 높이 가져오기 (폴백 700)
     win_h = st.session_state.get("last_valid_height", 800)
     container_h = max(400, win_h - 250) # 상하단 여백 제외
-    
+
     chat_container = st.container(height=container_h, border=True)
     # [수정] 세션 초기화 전에도 안전하도록 기본값 [] 제공
     messages = SessionManager.get_messages() or []
@@ -721,7 +636,6 @@ def _chat_fragment():
     # 1. 채팅 이력 렌더링
     with chat_container:
         system_buffer = []
-        insight_rendered = False
 
         def flush_system_buffer():
             if not system_buffer:
@@ -731,25 +645,19 @@ def _chat_fragment():
                 log_items = []
                 is_ready = False
                 has_error = False
-                
                 chars_to_remove = ["✅", "⏳", "❌", "⚙️", "📄", "ℹ️", "🧠", "✨", "🔄", "⏳", "🎯"]
-                
                 for m in system_buffer:
                     if m == "READY_FOR_QUERY":
                         is_ready = True
                         continue
-                    
                     if "❌" in m or "오류" in m or "실패" in m:
                         has_error = True
-                        
                     clean_m = m
                     for char in chars_to_remove:
                         clean_m = clean_m.replace(char, "")
-                    
                     clean_m = clean_m.strip()
                     if clean_m:
                         log_items.append(f"└─ {'`ERROR`' if has_error else '`SUCCESS`'} {clean_m}")
-                
                 # 결과 출력 로직 최적화
                 if is_ready and not has_error:
                     # 모두 성공했다면 요약 메시지만 표시
@@ -759,7 +667,6 @@ def _chat_fragment():
                     # 진행 중이거나 에러가 있다면 상세 로그 표시
                     st.markdown("**시스템 작업 기록**\n")
                     st.markdown("  \n".join(log_items))
-
             system_buffer.clear()
 
         for msg in messages:
@@ -774,22 +681,17 @@ def _chat_fragment():
                     thought=msg.get("thought"),
                     doc_ids=msg.get("doc_ids"),
                     metrics=msg.get("metrics"),
+                    processed_content=msg.get("processed_content"),
                 )
 
         # 반복문 종료 후 남아있는 시스템 메시지 처리
         flush_system_buffer()
 
         if not messages:
-            # 시스템 온보딩 가이드 (⚙️) - 더 간결하게 수정
+            # 시스템 온보딩 가이드 (⚙️) - 설정 파일에서 통합된 가이드 메시지 사용
             with st.chat_message("system", avatar="⚙️"):
                 st.caption("🚀 RAG System Quick Start")
-                st.markdown("""
-                **지능형 문서 분석 모델이 활성화되었습니다.**
-                
-                1. **문서 업로드**: 사이드바에서 PDF 파일을 업로드하세요.
-                2. **심층 질의**: 문서 내용에 기반한 질문을 시작하세요.
-                """)
-                st.caption("💡 Tip: 답변 하단의 출처 칩을 클릭하여 원문을 확인할 수 있습니다.")
+                st.markdown(MSG_CHAT_GUIDE)
 
     # 2. 사용자 입력 처리
     # 입력창 상태 결정
@@ -806,7 +708,7 @@ def _chat_fragment():
 
     # [추가] 추천 질문 버튼 클릭 처리 및 일반 입력 통합
     user_query = st.chat_input(input_placeholder, disabled=input_disabled, key="chat_input_clean")
-    
+
     # 버튼 클릭 등으로 대기 중인 질문이 있다면 우선 처리
     if "pending_query" in st.session_state and st.session_state.pending_query:
         user_query = st.session_state.pending_query
@@ -832,12 +734,22 @@ def _chat_fragment():
             final_answer = result.get("response", "")
             final_thought = result.get("thought", "")
             final_docs = result.get("documents", [])
-            final_metrics = result.get("metrics")
+            final_metrics = result.get("performance") # 백엔드에서 계산된 통합 메트릭
 
             if final_answer and not final_answer.startswith("❌"):
+                # [최적화] 세션 저장 전 미리 가공 (UI 캐싱용)
+                from common.utils import (
+                    apply_tooltips_to_response,
+                    normalize_latex_delimiters,
+                )
+                processed = normalize_latex_delimiters(final_answer)
+                if final_docs:
+                    processed = apply_tooltips_to_response(processed, final_docs)
+
                 SessionManager.add_message(
                     "assistant",
                     final_answer,
+                    processed_content=processed,
                     thought=final_thought,
                     documents=final_docs,
                     metrics=final_metrics,

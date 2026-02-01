@@ -82,6 +82,25 @@ The system now includes an **Auto-Batch Optimizer**.
 
 ---
 
+## ⚡ Concurrency & System Stability
+
+### 1. System Hangs or API Requests Time Out
+**Cause:** Deadlock in session management or lock contention during heavy I/O (e.g., indexing large PDFs).
+
+**Solution:**
+The system now uses a **Standardized Locking Order** and **Granular Model Locking**.
+- Ensure you are on version 2.1.0 or later.
+- If the API still returns `SessionLockTimeoutError`, check if a background process is stuck. You can manually delete a session via API: `DELETE /api/v1/session/{id}`.
+
+### 2. UI Logs/Status Not Updating During Analysis
+**Cause:** Streamlit UI thread and background analysis thread using different state stores (State Fragmentation).
+
+**Solution:**
+- We have unified the state store into `_fallback_sessions`. The UI now correctly observes background task logs.
+- Refresh the browser page if the UI feels stuck; the backend analysis will continue in the background and resume UI logging upon reconnection.
+
+---
+
 ## 🐛 Still Stuck?
 
 If these steps don't resolve your issue, please report it with the following info:

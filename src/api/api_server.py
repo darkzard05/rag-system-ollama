@@ -30,7 +30,6 @@ from api.streaming_handler import (
     get_streaming_handler,
 )
 from common.config import AVAILABLE_EMBEDDING_MODELS, DEFAULT_OLLAMA_MODEL
-from core.model_loader import load_embedding_model, load_llm
 from core.rag_core import build_rag_pipeline
 from core.session import SessionManager
 from security.auth_system import AuthenticationManager
@@ -80,27 +79,39 @@ async def verify_token(
     return user_id
 
 
-# --- 싱글톤 리소스 관리 (동시성 제어 강화) ---
+# --- 싱글톤 리소스 관리 (중앙 ModelManager 위임) ---
 class RAGResourceManager:
-    _llm = None
-    _embedder = None
-    _lock = asyncio.Lock()  # 모델 로드 시 레이스 컨디션 방지
+    _active_llm_name = None
+    _active_embedder_name = None
+    _llm_lock = asyncio.Lock()
+    _embedder_lock = asyncio.Lock()
 
     @classmethod
-    async def get_llm(cls):
-        if cls._llm is None:
-            async with cls._lock:
-                if cls._llm is None:  # Double-check pattern
-                    cls._llm = load_llm(DEFAULT_OLLAMA_MODEL)
-        return cls._llm
+    async def get_llm(cls, model_name: str | None = None):
+        target_model = model_name or SessionManager.get("last_selected_model") or DEFAULT_OLLAMA_MODEL
+        async with cls._llm_lock:
+            # [최적화] 모델 전환 로그 표준화
+            if cls._active_llm_name != target_model:
+                logger.info(f"[MODEL] [SWITCH] LLM 전환 | {cls._active_llm_name} -> {target_model}")
+
+            # 중앙 매니저를 통해 모델 인스턴스 획득 (블로킹 작업이므로 to_thread 사용)
+            from core.model_loader import ModelManager
+            llm = await asyncio.to_thread(ModelManager.get_llm, target_model)
+            cls._active_llm_name = target_model
+            SessionManager.set("last_selected_model", target_model)
+            return llm
 
     @classmethod
-    async def get_embedder(cls):
-        if cls._embedder is None:
-            async with cls._lock:
-                if cls._embedder is None:
-                    cls._embedder = load_embedding_model(AVAILABLE_EMBEDDING_MODELS[0])
-        return cls._embedder
+    async def get_embedder(cls, model_name: str | None = None):
+        target_model = model_name or SessionManager.get("last_selected_embedding_model") or AVAILABLE_EMBEDDING_MODELS[0]
+        async with cls._embedder_lock:
+            if cls._active_embedder_name != target_model:
+                logger.info(f"[MODEL] [SWITCH] 임베딩 모델 전환 | {cls._active_embedder_name} -> {target_model}")
+            from core.model_loader import ModelManager
+            embedder = await asyncio.to_thread(ModelManager.get_embedder, target_model)
+            cls._active_embedder_name = target_model
+            SessionManager.set("last_selected_embedding_model", target_model)
+            return embedder
 
 
 # --- 세션 격리 의존성 ---
@@ -130,6 +141,7 @@ async def health_check():
 async def upload_document(
     file: UploadFile = File(...),
     session_id: str = Form("default"),
+    embedding_model: str | None = Form(None),
     user_id: str = Depends(verify_token),
 ):
     """
@@ -151,9 +163,10 @@ async def upload_document(
             tmp_path = tmp.name
 
         try:
-            embedder = await RAGResourceManager.get_embedder()
+            # [수정] 동적으로 결정된 임베딩 모델 사용
+            embedder = await RAGResourceManager.get_embedder(embedding_model)
 
-            # [수정] 무거운 동기 파이프라인 구축 작업을 별도 스레드에서 실행하여 이벤트 루프 차단 방지
+            # 무거운 동기 파이프라인 구축 작업을 별도 스레드에서 실행하여 이벤트 루프 차단 방지
             msg, cache_used = await asyncio.to_thread(
                 build_rag_pipeline,
                 uploaded_file_name=file.filename,
@@ -195,7 +208,8 @@ async def query_rag(request: QueryRequest, user_id: str = Depends(verify_token))
 
     start_time = time.time()
     try:
-        llm = await RAGResourceManager.get_llm()
+        # [수정] 요청된 모델 또는 세션 기본 모델 사용
+        llm = await RAGResourceManager.get_llm(request.model_name)
         rag_app = SessionManager.get("rag_engine")
 
         if rag_app is None:
@@ -256,7 +270,8 @@ async def stream_query_rag(
 
         logger.debug(f"[API] Streaming started for session: {sid}")
 
-        llm = await RAGResourceManager.get_llm()
+        # [수정] 동적으로 모델 결정
+        llm = await RAGResourceManager.get_llm(request.model_name)
         # 스트리밍 시에도 명시적 세션 바인딩
         run_config = {"configurable": {"llm": llm, "session_id": sid, "thread_id": sid}}
 

@@ -121,14 +121,14 @@ class TestRAGInitialization(unittest.TestCase):
     def test_config_validation(self):
         """Test that configuration validation works."""
         from common.config import CACHE_DIR
-
+        import os
+    
         config = load_and_validate_config(self.test_config)
-
+    
         # 설정 객체가 환경 변수나 기본 설정을 올바르게 포함하는지 검증
-        # ApplicationConfig 구조에 맞춰 속성 접근 수정 (model, cache, retrieval 등)
+        # 경로 비교 시 절대 경로로 변환하여 일관성 유지
         assert config.model.default_ollama is not None
-        assert config.cache.cache_dir == CACHE_DIR
-
+        assert os.path.abspath(config.cache.cache_dir) == os.path.abspath(CACHE_DIR)
         # 테스트용 입력값이 잘 반영되었는지 확인 (중첩 구조 필드)
         assert config.chunking.chunk_size == 200
         assert config.retrieval.top_k == 3

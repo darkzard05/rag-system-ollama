@@ -1,91 +1,60 @@
-import time
-import os
 import numpy as np
-from langchain_core.documents import Document
-from src.core.semantic_chunker import EmbeddingBasedSemanticChunker
+import time
 
-def run_fair_benchmark():
-    import fitz
-    pdf_path = "tests/data/2201.07520v1.pdf"
-    
-    # 1. 테스트 데이터 준비 (대규모: 1,000페이지 분량)
-    with fitz.open(pdf_path) as doc:
-        pages_content = [page.get_text() for page in doc]
-    
-    replications = 50 
-    raw_docs = []
-    for i in range(replications):
-        for p_idx, content in enumerate(pages_content):
-            raw_docs.append(Document(
-                page_content=content, 
-                metadata={"page": p_idx + 1, "rep": i}
-            ))
-    
-    print(f"Total simulated pages: {len(raw_docs)}")
-    
-    # 미리 10,000개의 가상 청크 생성 (오프셋 포함)
-    total_len = sum(len(d.page_content) for d in raw_docs)
-    chunk_dicts = []
-    for i in range(10000):
-        start = (total_len // 10000) * i
-        end = start + 100
-        chunk_dicts.append({"text": "sample", "start": start, "end": end, "vector": None})
+def legacy_calculate_similarities(embeddings: np.ndarray) -> list[float]:
+    """현재 시스템에서 사용하는 방식 (비효율적)"""
+    if len(embeddings) < 2:
+        return []
+    norms = np.linalg.norm(embeddings, axis=1, keepdims=True)
+    normalized_embeddings = embeddings / np.where(norms == 0, 1e-10, norms)
+    similarities = np.sum(
+        normalized_embeddings[:-1] * normalized_embeddings[1:], axis=1
+    )
+    return similarities.tolist()
 
-    # --- 1. String Concatenation Benchmark ---
-    print("\n--- [1] String Concatenation Performance ---")
+def optimized_calculate_similarities(embeddings: np.ndarray) -> list[float]:
+    """np.einsum을 활용한 최적화 방식"""
+    if len(embeddings) < 2:
+        return []
+    # 1. 정규화 최적화 (가드 로직 단순화)
+    norms = np.linalg.norm(embeddings, axis=1, keepdims=True)
+    norms[norms == 0] = 1e-10
+    normalized_embeddings = embeddings / norms
     
-    # Legacy: +=
+    # 2. Einstein Summation을 사용한 내적 계산 (임시 배열 생성 없음)
+    similarities = np.einsum('ij,ij->i', normalized_embeddings[:-1], normalized_embeddings[1:])
+    return similarities.tolist()
+
+def run_benchmark():
+    # 시뮬레이션 데이터: 5,000개 문장, 384차원
+    n_sentences = 5000
+    dims = 384
+    np.random.seed(42)
+    data = np.random.randn(n_sentences, dims).astype(np.float32)
+    
+    print(f"--- 벤치마크 시작 (데이터: {n_sentences} 문장, {dims} 차원) ---")
+    
+    # Legacy 방식 측정
     start = time.time()
-    full_text_legacy = ""
-    for d in raw_docs:
-        full_text_legacy += d.page_content + " "
-    legacy_concat_time = time.time() - start
+    for _ in range(100):
+        res_legacy = legacy_calculate_similarities(data)
+    dur_legacy = (time.time() - start) / 100
+    print(f"[Legacy] 평균 소요 시간: {dur_legacy*1000:.4f} ms")
     
-    # Optimized: join()
+    # Optimized 방식 측정
     start = time.time()
-    full_text_opt = "".join([d.page_content + " " for d in raw_docs])
-    opt_concat_time = time.time() - start
+    for _ in range(100):
+        res_optimized = optimized_calculate_similarities(data)
+    dur_optimized = (time.time() - start) / 100
+    print(f"[Optimized] 평균 소요 시간: {dur_optimized*1000:.4f} ms")
     
-    print(f"Legacy (+=):   {legacy_concat_time:.4f}s")
-    print(f"Optimized (join): {opt_concat_time:.4f}s")
-    print(f"Concat Speedup: {legacy_concat_time / opt_concat_time:.2f}x")
-
-    # --- 2. Metadata Mapping Benchmark ---
-    print("\n--- [2] Metadata Mapping Performance ---")
+    # 결과 일치 확인
+    np.testing.assert_allclose(res_legacy, res_optimized, atol=1e-5)
     
-    # 전처리: doc_ranges 생성
-    doc_ranges = []
-    curr = 0
-    for d in raw_docs:
-        doc_ranges.append({"start": curr, "end": curr + len(d.page_content), "metadata": d.metadata})
-        curr += len(d.page_content) + 1
-
-    # Legacy: Full Linear Search O(N*M)
-    start = time.time()
-    for chunk in chunk_dicts:
-        c_center = (chunk["start"] + chunk["end"]) // 2
-        for r in doc_ranges:
-            if r["start"] <= c_center < r["end"]:
-                _ = r["metadata"]
-                break
-    legacy_map_time = time.time() - start
-
-    # Optimized: last_found_idx 기반 검색 O(N+M)
-    start = time.time()
-    last_found_idx = 0
-    for chunk in chunk_dicts:
-        c_center = (chunk["start"] + chunk["end"]) // 2
-        for i in range(last_found_idx, len(doc_ranges)):
-            r = doc_ranges[i]
-            if r["start"] <= c_center < r["end"]:
-                _ = r["metadata"]
-                last_found_idx = i
-                break
-    opt_map_time = time.time() - start
-
-    print(f"Legacy (Full Scan): {legacy_map_time:.4f}s")
-    print(f"Optimized (Index):  {opt_map_time:.4f}s")
-    print(f"Mapping Speedup:    {legacy_map_time / opt_map_time:.2f}x")
+    improvement = (dur_legacy - dur_optimized) / dur_legacy * 100
+    print(f"\n성능 향상: {improvement:.2f}%")
+    if improvement > 30:
+        print("결론: 최적화 효과가 매우 뚜렷합니다. 수정을 권장합니다.")
 
 if __name__ == "__main__":
-    run_fair_benchmark()
+    run_benchmark()
