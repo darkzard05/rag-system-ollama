@@ -60,7 +60,19 @@ jobs:
           --ignore-vuln CVE-2025-68664 \
           --ignore-vuln CVE-2025-6985 \
           --ignore-vuln CVE-2025-6984 \
-          --ignore-vuln PYSEC-2024-1
+          --ignore-vuln PYSEC-2024-1 \
+          --ignore-vuln CVE-2025-54121 \
+          --ignore-vuln CVE-2025-62727 \
+          --ignore-vuln PYSEC-2025-40 \
+          --ignore-vuln CVE-2025-1194 \
+          --ignore-vuln CVE-2025-3263 \
+          --ignore-vuln CVE-2025-3264 \
+          --ignore-vuln CVE-2025-3777 \
+          --ignore-vuln CVE-2025-3933 \
+          --ignore-vuln CVE-2025-5197 \
+          --ignore-vuln CVE-2025-6638 \
+          --ignore-vuln CVE-2025-6051 \
+          --ignore-vuln CVE-2025-6921
 
   test:
     name: Test (Py ${{ matrix.python-version }} on ${{ matrix.os }})

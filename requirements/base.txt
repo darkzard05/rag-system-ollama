@@ -15,9 +15,10 @@ langchain-text-splitters==0.2.4
 # Vector Store & Embeddings
 faiss-cpu==1.12.0
 sentence-transformers==2.7.0
+transformers==4.48.0
 torch==2.9.0
 rank-bm25==0.2.2
-optimum[onnxruntime]==1.23.3  # ONNX 가속용
+optimum[onnxruntime]==2.1.0    # 최신 버전으로 업데이트
 onnxruntime-gpu==1.19.2       # GPU 가속용 (CPU만 사용할 경우 onnxruntime 설치)
 
 # LLM Server
@@ -28,9 +29,9 @@ python-dotenv==1.1.1
 pyyaml==6.0.3
 
 # API Server
-fastapi==0.115.6
+fastapi==0.115.10
 uvicorn==0.30.6
-python-multipart==0.0.18
+python-multipart==0.0.22
 
 # Utilities
 nest-asyncio==1.6.0

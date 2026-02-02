@@ -131,7 +131,7 @@ class ThreadSafeSessionManager:
     @classmethod
     def _get_state(cls):
         """
-        세션 상태 저장소를 반환합니다. 
+        세션 상태 저장소를 반환합니다.
         UI와 백그라운드 스레드 간 데이터 공유를 위해 _fallback_sessions를 주 저장소로 사용합니다.
         """
         sid = cls.get_session_id()
@@ -255,27 +255,27 @@ class ThreadSafeSessionManager:
     def delete_session(cls, session_id: str) -> bool:
         """[추가] 특정 세션을 메모리 저장소에서 완전히 삭제합니다."""
         # 명시적으로 해당 세션의 락을 획득
-        with cls._acquire_lock(session_id=session_id):
-            with cls._global_management_lock:
-                if session_id in cls._fallback_sessions:
-                    session_data = cls._fallback_sessions[session_id]
+        with cls._acquire_lock(session_id=session_id), cls._global_management_lock:
+            if session_id in cls._fallback_sessions:
+                session_data = cls._fallback_sessions[session_id]
 
-                    # 리소스 명시적 해제
-                    vs = session_data.get("vector_store")
-                    if vs and hasattr(vs, "index") and hasattr(vs.index, "reset"):
-                        with contextlib.suppress(Exception):
-                            vs.index.reset()
+                # 리소스 명시적 해제
+                vs = session_data.get("vector_store")
+                if vs and hasattr(vs, "index") and hasattr(vs.index, "reset"):
+                    with contextlib.suppress(Exception):
+                        vs.index.reset()
 
-                    session_data.clear()
-                    del cls._fallback_sessions[session_id]
+                session_data.clear()
+                del cls._fallback_sessions[session_id]
 
-                    # 락도 제거
-                    if session_id in cls._session_locks:
-                        del cls._session_locks[session_id]
+                # 락도 제거
+                if session_id in cls._session_locks:
+                    del cls._session_locks[session_id]
 
-                    logger.info(f"[SYSTEM] [SESSION] 세션 데이터 삭제 완료 | ID: {session_id}")
-                    return True
-        return False
+                logger.info(f"[SYSTEM] [SESSION] 세션 데이터 삭제 완료 | ID: {session_id}")
+                return True
+
+            return False
 
     @classmethod
     def get_all_state(cls) -> dict[str, Any]:

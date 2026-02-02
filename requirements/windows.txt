@@ -30,7 +30,7 @@ rank-bm25==0.2.2
 # API Server
 fastapi==0.115.0
 uvicorn==0.30.6
-python-multipart==0.0.12
+python-multipart==0.0.22
 
 # LLM Client
 ollama==0.6.0

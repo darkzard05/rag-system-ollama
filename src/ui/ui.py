@@ -364,7 +364,7 @@ def inject_custom_css():
         height: 100vh !important;
         overflow: hidden !important;
     }
-    
+
     /* 2. 메인 영역 및 사이드바 패딩 및 높이 최적화 */
     [data-testid="stMainBlockContainer"] {
         height: 100vh !important;
@@ -384,7 +384,7 @@ def inject_custom_css():
     }
 
     /* 4. JS 측정기 등 커스텀 컴포넌트의 유령 공간 제거 */
-    div[data-testid="stHtml"] iframe, 
+    div[data-testid="stHtml"] iframe,
     div.element-container:has(iframe[title="streamlit_javascript.st_javascript"]),
     div.stMarkdown:has(iframe[title="streamlit_javascript.st_javascript"]) {
         position: absolute !important;
@@ -398,7 +398,7 @@ def inject_custom_css():
         visibility: hidden !important;
         display: none !important; /* 브라우저에 따라 실행이 안될 수 있으나 먼저 시도 */
     }
-    
+
     /* 5. 상단 서브헤더 및 사이드바 제목 정렬 */
     h3 {
         height: auto !important;
@@ -407,7 +407,7 @@ def inject_custom_css():
         padding-top: 0.2rem !important; /* 상단 여백 소폭 조정 */
         margin-top: 0rem !important;
     }
-    
+
     [data-testid="stSidebar"] h1 {
         font-size: 1.8rem !important;
         margin-top: 0rem !important;
@@ -419,7 +419,7 @@ def inject_custom_css():
         gap: 0.5rem;
         padding-top: 0rem !important;
     }
-    
+
     /* 6. 툴팁 및 인용 배지 스타일 */
     .tooltip {
         position: relative;

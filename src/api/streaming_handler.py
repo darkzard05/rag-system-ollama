@@ -412,12 +412,12 @@ class ServerSentEventsHandler:
     ) -> str:
         """
         SSE 형식으로 이벤트 포매팅 (표준 준수)
-        
+
         Args:
             event_type: 이벤트 이름 (message, status, thought 등)
             data: 전송할 데이터 (JSON 직렬화 가능해야 함)
             event_id: 선택적 이벤트 ID
-            
+
         Returns:
             SSE 규격에 맞는 문자열
         """
