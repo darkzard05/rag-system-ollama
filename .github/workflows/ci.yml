@@ -112,14 +112,13 @@ jobs:
     - name: Run Unit Tests with Coverage
       env:
         PYTHONPATH: ${{ github.workspace }}/src
+        OLLAMA_HOST: "http://localhost:11434" 
+        DEFAULT_OLLAMA_MODEL: "qwen3:4b-instruct-2507-q4_K_M"
+        TEST_API_KEY: "sk_admin_test_token_12345"
+        CUDA_VISIBLE_DEVICES: ""
       run: |
         python -m pytest --cov=src --cov-report=term --cov-report=xml --disable-warnings tests/unit/
       shell: bash
-      env:
-        OLLAMA_HOST: "http://localhost:11434" 
-        DEFAULT_OLLAMA_MODEL: "qwen3:4b-instruct-2507-q4_K_M"
-        TEST_API_KEY: "sk_admin_test_token_12345" # 테스트용 토큰 주입
-        CUDA_VISIBLE_DEVICES: ""
 
     - name: Upload Test Logs
       if: always()
