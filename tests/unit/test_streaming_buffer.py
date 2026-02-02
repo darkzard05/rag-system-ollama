@@ -1,12 +1,15 @@
 import os
 import sys
-import time
-import unittest
+from pathlib import Path
 
-# 프로젝트 루트 및 src 경로 추가
-sys.path.append(os.path.join(os.getcwd(), "src"))
+# --- 경로 설정 최적화 (절대 경로 기반) ---
+ROOT_DIR = Path(__file__).parent.parent.parent.absolute()
+SRC_DIR = ROOT_DIR / "src"
 
-from api.streaming_handler import TokenStreamBuffer
+if str(SRC_DIR) not in sys.path:
+    sys.path.insert(0, str(SRC_DIR))
+
+from core.graph_builder import GraphBuilder
 
 
 class TestTokenStreamBuffer(unittest.TestCase):

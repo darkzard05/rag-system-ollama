@@ -98,22 +98,22 @@ jobs:
         python -m pip install --upgrade pip
         pip install pytest-cov
         if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
-      shell: bash # Use bash on all OS for consistency
+      shell: bash
         
     - name: Run Core Integrity Tests
+      env:
+        PYTHONPATH: ${{ github.workspace }}/src
       run: |
-        export PYTHONPATH="${PYTHONPATH}:$(pwd)/src"
         python tests/verification/verify_integrity_fixes.py
         python tests/verification/test_cache_isolation.py
         python tests/verification/test_vector_store_persistence.py
       shell: bash
         
     - name: Run Unit Tests with Coverage
+      env:
+        PYTHONPATH: ${{ github.workspace }}/src
       run: |
-        export PYTHONPATH="${PYTHONPATH}:$(pwd)/src"
-        # 실제 LLM/Ollama가 필요한 통합 테스트는 제외하고 단위 테스트만 실행
-        python -m pytest --cov=src --cov-report=term --cov-report=xml \
-          tests/unit/
+        python -m pytest --cov=src --cov-report=term --cov-report=xml --disable-warnings tests/unit/
       shell: bash
       env:
         OLLAMA_HOST: "http://localhost:11434" 

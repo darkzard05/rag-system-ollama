@@ -4,8 +4,12 @@ import sys
 from pathlib import Path
 from unittest.mock import MagicMock
 
-# 프로젝트 루트 추가
-sys.path.append(str(Path(__file__).parent.parent.parent / "src"))
+# --- 경로 설정 최적화 (절대 경로 기반) ---
+ROOT_DIR = Path(__file__).parent.parent.parent.absolute()
+SRC_DIR = ROOT_DIR / "src"
+
+if str(SRC_DIR) not in sys.path:
+    sys.path.insert(0, str(SRC_DIR))
 
 import pytest
 from langchain_core.documents import Document
