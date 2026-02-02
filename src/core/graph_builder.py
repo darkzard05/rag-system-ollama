@@ -175,7 +175,7 @@ class ResponsePerformanceTracker:
             else 0
         )
 
-        thinking_duration = 0
+        thinking_duration: float = 0.0
         if self.thinking_started_at:
             end_time = (
                 self.thinking_finished_at
@@ -184,17 +184,17 @@ class ResponsePerformanceTracker:
             )
             thinking_duration = end_time - self.thinking_started_at
 
-        answer_duration = (
+        answer_duration: float = (
             (self.answer_finished_at - self.answer_started_at)
             if self.answer_started_at
-            else 0
+            else 0.0
         )
         resp_token_count = len(self.full_response.split())
         thought_token_count = len(self.full_thought.split())
-        tokens_per_second = (
+        tokens_per_second: float = (
             (resp_token_count / answer_duration)
             if answer_duration > 0
-            else 0
+            else 0.0
         )
 
         # 1. 성능 객체 생성 (통합 Source of Truth)

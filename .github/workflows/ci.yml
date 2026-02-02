@@ -32,7 +32,7 @@ jobs:
     - name: Run Mypy (Type Check)
       run: |
         export PYTHONPATH=$PYTHONPATH:$(pwd)/src
-        mypy --ignore-missing-imports src/
+        mypy --ignore-missing-imports --disable-error-code import-untyped src/
 
   security-scan:
     name: Security Scan

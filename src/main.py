@@ -350,7 +350,7 @@ def on_embedding_change() -> None:
 
 def _render_app_layout(
     is_skeleton_pass: bool, available_models: list[str] | None = None
-) -> dict[str, Any]:
+) -> None:
     """앱의 전체 레이아웃을 렌더링하고 주요 플레이스홀더를 반환합니다."""
     # 0. 최우선 CSS 주입 (깜박임 방지)
     inject_custom_css()
