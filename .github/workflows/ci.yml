@@ -102,21 +102,18 @@ jobs:
         
     - name: Run Core Integrity Tests
       run: |
-        export PYTHONPATH=$PYTHONPATH:$(pwd)/src
+        export PYTHONPATH="${PYTHONPATH}:$(pwd)/src"
         python tests/verification/verify_integrity_fixes.py
-        # 신규 무결성 테스트 추가
         python tests/verification/test_cache_isolation.py
         python tests/verification/test_vector_store_persistence.py
       shell: bash
         
-    - name: Run Pipeline Integration Tests with Coverage
+    - name: Run Unit Tests with Coverage
       run: |
-        export PYTHONPATH=$PYTHONPATH:$(pwd)/src
-        # 새로 정리된 주요 통합 테스트들 실행 (RAG, 세션, API)
+        export PYTHONPATH="${PYTHONPATH}:$(pwd)/src"
+        # 실제 LLM/Ollama가 필요한 통합 테스트는 제외하고 단위 테스트만 실행
         python -m pytest --cov=src --cov-report=term --cov-report=xml \
-          tests/integration/test_rag_integration.py \
-          tests/integration/test_session_management.py \
-          tests/integration/test_api_endpoints.py
+          tests/unit/
       shell: bash
       env:
         OLLAMA_HOST: "http://localhost:11434" 
