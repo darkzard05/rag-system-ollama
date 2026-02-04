@@ -315,16 +315,15 @@ def build_graph(retriever: T | None = None) -> T:
             logger.error(f"[Query] 확장 도중 오류 발생: {type(e).__name__} - {e}")
             return {"search_queries": [state["input"]]}
 
-    # 2. 문서 검색 노드 (AsyncIO 및 RRF 최적화)
+    # 2. 문서 검색 노드 (AsyncIO 및 SearchResultAggregator 최적화)
     async def retrieve_documents(state: GraphState) -> GraphOutput:
+        from core.search_aggregator import AggregationStrategy, SearchResultAggregator
         from core.session import SessionManager
 
         with monitor.track_operation(
             OperationType.DOCUMENT_RETRIEVAL,
             {"query_count": len(state.get("search_queries", [state["input"]]))},
         ):
-            from common.utils import fast_hash
-
             queries = state.get("search_queries", [state["input"]])
             logger.info(f"[RETRIEVAL] 병렬 검색 시작 | 쿼리수: {len(queries)}")
             bm25 = SessionManager.get("bm25_retriever")
@@ -334,12 +333,8 @@ def build_graph(retriever: T | None = None) -> T:
                 if not ret:
                     return []
                 try:
-                    # [최적화] FAISS 리트리버인 경우 메타데이터 필터 적용
-                    # LangChain FAISS 리트리버는 search_kwargs 내에 filter를 지원함
                     if hasattr(ret, "search_kwargs"):
-                        # 기존 설정 유지하며 필터 추가
                         ret.search_kwargs["filter"] = {"is_content": True}
-
                     if hasattr(ret, "ainvoke"):
                         return await asyncio.wait_for(
                             ret.ainvoke(q), timeout=TimeoutConstants.RETRIEVER_TIMEOUT
@@ -349,38 +344,72 @@ def build_graph(retriever: T | None = None) -> T:
                     logger.warning(f"리트리버 호출 실패: {e}")
                     return []
 
+            # 모든 쿼리에 대해 리트리버 호출 태스크 생성
+            search_results_map = {}
             tasks = []
-            for q in queries:
-                tasks.append(_invoke_retriever(bm25, q))
-                tasks.append(_invoke_retriever(faiss_ret, q))
 
-            all_results = await asyncio.gather(*tasks)
-            rrf_scores: dict[str, float] = {}
-            doc_map = {}
-            k_constant = 60
+            # 쿼리별/리트리버별 결과를 구분하여 수집
+            for i, q in enumerate(queries):
+                tasks.append((f"bm25_{i}", _invoke_retriever(bm25, q)))
+                tasks.append((f"faiss_{i}", _invoke_retriever(faiss_ret, q)))
 
-            for result_list in all_results:
-                for rank, doc in enumerate(result_list, start=1):
-                    doc_id = doc.metadata.get("doc_id")
-                    if not doc_id:
-                        key = f"{doc.metadata.get('source')}_{doc.metadata.get('page')}_{doc.metadata.get('chunk_index')}"
-                        doc_id = fast_hash(key)
-                        doc.metadata["doc_id"] = doc_id
-                    if doc_id not in doc_map:
-                        doc_map[doc_id] = doc
-                    rrf_scores[doc_id] = rrf_scores.get(doc_id, 0) + (
-                        1.0 / (k_constant + rank)
-                    )
+            # 병렬 실행
+            keys = [t[0] for t in tasks]
+            coroutines = [t[1] for t in tasks]
+            results_list = await asyncio.gather(*coroutines)
 
-            if not rrf_scores:
-                return {"documents": []}
+            # Aggregator 형식에 맞게 변환
+            for key, res in zip(keys, results_list, strict=False):
+                if res:
+                    for doc in res:
+                        # LangChain Document는 metadata에 점수를 저장하는 것이 안전함
+                        if "score" not in doc.metadata:
+                            doc.metadata["score"] = 0.5
 
-            sorted_ids = sorted(rrf_scores, key=lambda k: rrf_scores[k], reverse=True)
+                        if not doc.metadata.get("doc_id"):
+                            from common.utils import fast_hash
+
+                            key_str = f"{doc.metadata.get('source')}_{doc.metadata.get('page')}_{doc.metadata.get('chunk_index')}"
+                            doc.metadata["doc_id"] = fast_hash(key_str)
+
+                        # Aggregator가 기대하는 속성을 동적으로 연결 (Pydantic 필드 제약 우회)
+                        # r.score, r.doc_id, r.node_id 등에 대응하기 위해 dict 형태의 래퍼 사용 고려 가능하나
+                        # 여기서는 SearchResultAggregator가 metadata를 직접 보게 하거나 래퍼 클래스 생성
+                        pass
+                    search_results_map[key] = res
+
+            # [최적화] SearchResultAggregator가 Document 객체의 metadata를 인식하도록 래퍼 사용
+            class ResultWrapper:
+                def __init__(self, doc, node_id):
+                    self.doc_id = doc.metadata["doc_id"]
+                    self.content = doc.page_content
+                    self.score = doc.metadata["score"]
+                    self.node_id = node_id
+                    self.metadata = doc.metadata
+
+            wrapped_results = {
+                node_id: [ResultWrapper(doc, node_id.split("_")[0]) for doc in docs]
+                for node_id, docs in search_results_map.items()
+            }
+
+            aggregator = SearchResultAggregator()
             max_docs = RERANKER_CONFIG.get("max_rerank_docs", 15)
-            final_docs: list[Document] = [doc_map[rid] for rid in sorted_ids[:max_docs]]
+
+            aggregated, _metrics = aggregator.aggregate_results(
+                wrapped_results, strategy=AggregationStrategy.RRF_FUSION, top_k=max_docs
+            )
+
+            # AggregatedResult를 다시 Document 객체로 변환
+            final_docs = [
+                Document(
+                    page_content=r.content,
+                    metadata={**r.metadata, "score": r.aggregated_score},
+                )
+                for r in aggregated
+            ]
 
             SessionManager.replace_last_status_log(
-                f"문서 {len(final_docs)}개 지능형 선별 완료"
+                f"문서 {len(final_docs)}개 지능형 RRF 통합 완료"
             )
             SessionManager.add_status_log("핵심 문장 선별 중...")
             return {"documents": final_docs}
@@ -484,36 +513,37 @@ def build_graph(retriever: T | None = None) -> T:
             "다른 설명 없이 오직 한 단어('yes' 또는 'no')만 출력하십시오."
         )
 
-        relevant_docs = []
-
-        async def _grade_doc(doc: Document) -> tuple[Document, str]:
-            # [최적화] 판단 근거 확대를 위해 1200자 전달
+        # [최적화] 배치 처리를 위한 입력 메시지 리스트 구성
+        batch_inputs = []
+        for doc in documents:
             prompt = f"[사용자 질문]: {state['input']}\n\n[문서 내용]: {doc.page_content[:1200]}"
-            msg = [
-                {"role": "system", "content": grade_instruction},
-                {"role": "user", "content": prompt},
-            ]
-            try:
-                res = await llm.ainvoke(msg)
+            batch_inputs.append(
+                [
+                    {"role": "system", "content": grade_instruction},
+                    {"role": "user", "content": prompt},
+                ]
+            )
+
+        try:
+            # [최적화 핵심] 개별 호출 대신 abatch() 활용하여 오버헤드 최소화
+            # config 전달을 통해 동일한 세션/설정 유지
+            results = await llm.abatch(batch_inputs, config=config)
+
+            relevant_docs = []
+            for doc, res in zip(documents, results, strict=False):
                 score = res.content.strip().lower()
-                # 'yes'가 포함되어 있으면 통과
-                return doc, "yes" if "yes" in score else "no"
-            except Exception as e:
-                logger.warning(f"문서 채점 오류: {e}")
-                return doc, "yes"
+                page = doc.metadata.get("page", "?")
+                snippet = doc.page_content[:60].replace("\n", " ")
 
-        # 모든 문서에 대해 병렬 채점 수행
-        results = await asyncio.gather(*[_grade_doc(d) for d in documents])
+                if "yes" in score:
+                    relevant_docs.append(doc)
+                    logger.info(f"└─ [PASS] P{page} | {snippet}...")
+                else:
+                    logger.info(f"└─ [FAIL] P{page} | {snippet}...")
 
-        for doc, score in results:
-            page = doc.metadata.get("page", "?")
-            snippet = doc.page_content[:60].replace("\n", " ")
-
-            if score == "yes":
-                relevant_docs.append(doc)
-                logger.info(f"└─ [PASS] P{page} | {snippet}...")
-            else:
-                logger.info(f"└─ [FAIL] P{page} | {snippet}...")
+        except Exception as e:
+            logger.error(f"문서 배치 채점 오류: {e}")
+            relevant_docs = documents[:2]  # 오류 시 보수적 복구
 
         # 만약 모든 문서가 탈락하면, 아무것도 안 주는 대신 '가장 가능성 있는' 1개만 살림 (노이즈 최소화)
         if not relevant_docs and documents:
@@ -525,7 +555,8 @@ def build_graph(retriever: T | None = None) -> T:
         SessionManager.replace_last_status_log(
             f"검증 완료: {len(relevant_docs)}/{len(documents)}개 핵심 정보 선정"
         )
-        return {"relevant_docs": relevant_docs}
+        # [최적화] 메인 문서 리스트를 교정된 리스트로 업데이트하여 이후 단계 및 UI와의 일관성 보장
+        return {"relevant_docs": relevant_docs, "documents": relevant_docs}
 
     # 4. 컨텍스트 포맷팅 노드 (재정렬 포함)
     async def format_context(state: GraphState, config: RunnableConfig) -> GraphOutput:

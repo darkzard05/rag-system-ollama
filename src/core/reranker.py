@@ -98,35 +98,42 @@ class SimilarityCalculator:
 
 
 class DiversityCalculator:
-    """다양성 계산기"""
+    """다양성 계산기 (NumPy 비트셋 최적화)"""
 
     def __init__(self):
         self._lock = RLock()
+        # [최적화] 비트셋 캐시 (256비트 uint8 배열)
+        self._bitset_cache: dict[str, np.ndarray] = {}
+
+    def _get_bitset(self, doc_id: str, content: str) -> np.ndarray:
+        """텍스트의 문자 특징을 256비트 비트셋으로 변환"""
+        if doc_id not in self._bitset_cache:
+            # ASCII/UTF-8 하위 256자에 대한 출현 여부를 비트로 저장
+            bitset = np.zeros(256, dtype=np.bool_)
+            chars = np.frombuffer(
+                content.encode("utf-8", errors="ignore"), dtype=np.uint8
+            )
+            if len(chars) > 0:
+                bitset[chars] = True
+            self._bitset_cache[doc_id] = bitset
+        return self._bitset_cache[doc_id]
 
     def calculate_diversity_penalty(
         self, result: Any, selected_results: list[Any], diversity_weight: float = 0.3
     ) -> float:
         """
-        다양성 페널티 계산
-
-        Args:
-            result: 현재 결과
-            selected_results: 이미 선택된 결과들
-            diversity_weight: 다양성 가중치
-
-        Returns:
-            다양성 페널티 (0~1)
+        다양성 페널티 계산 (비트셋 연산 적용)
         """
         if not selected_results:
             return 0.0
 
-        # 메타데이터 기반 다양성
+        # 메타데이터 기반 유사도
         metadata_similarity = self._calculate_metadata_similarity(
             result, selected_results
         )
 
-        # 콘텐츠 기반 다양성
-        content_similarity = self._calculate_content_similarity(
+        # 콘텐츠 기반 유사도 (비트셋 최적화)
+        content_similarity = self._calculate_content_similarity_bitset(
             result, selected_results
         )
 
@@ -139,59 +146,48 @@ class DiversityCalculator:
     def _calculate_metadata_similarity(
         self, result: Any, selected_results: list[Any]
     ) -> float:
-        """메타데이터 유사도"""
-        if not selected_results:
+        """메타데이터 유사도 최적화"""
+        res_meta = getattr(result, "metadata", {}) or {}
+        if not res_meta:
             return 0.0
 
         similarities = []
         for selected in selected_results:
-            if hasattr(result, "metadata") and hasattr(selected, "metadata"):
-                # 메타데이터 필드 비교
-                result_meta = result.metadata if result.metadata else {}
-                selected_meta = selected.metadata if selected.metadata else {}
-
-                if not result_meta or not selected_meta:
-                    similarities.append(0.0)
-                    continue
-
-                match_count = 0
-                for key in result_meta:
-                    if key in selected_meta and result_meta[key] == selected_meta[key]:
-                        match_count += 1
-
-                total_keys = max(len(result_meta), len(selected_meta))
-                similarity = match_count / total_keys if total_keys > 0 else 0.0
-                similarities.append(similarity)
-            else:
+            sel_meta = getattr(selected, "metadata", {}) or {}
+            if not sel_meta:
                 similarities.append(0.0)
+                continue
+
+            match_count = 0
+            # 공통 키에 대해서만 비교
+            common_keys = res_meta.keys() & sel_meta.keys()
+            for key in common_keys:
+                if res_meta[key] == sel_meta[key]:
+                    match_count += 1
+
+            total_keys = max(len(res_meta), len(sel_meta))
+            similarities.append(match_count / total_keys if total_keys > 0 else 0.0)
 
         return sum(similarities) / len(similarities) if similarities else 0.0
 
-    def _calculate_content_similarity(
+    def _calculate_content_similarity_bitset(
         self, result: Any, selected_results: list[Any]
     ) -> float:
-        """콘텐츠 유사도"""
-        if not selected_results:
-            return 0.0
+        """콘텐츠 유사도 (비트셋 AND/OR 연산)"""
+        res_id = getattr(result, "doc_id", str(hash(result.content)))
+        res_bitset = self._get_bitset(res_id, result.content)
 
         similarities = []
         for selected in selected_results:
-            if hasattr(result, "content") and hasattr(selected, "content"):
-                # 단순 문자 기반 유사도
-                result_len = len(result.content)
-                selected_len = len(selected.content)
+            sel_id = getattr(selected, "doc_id", str(hash(selected.content)))
+            sel_bitset = self._get_bitset(sel_id, selected.content)
 
-                if result_len == 0 or selected_len == 0:
-                    similarities.append(0.0)
-                    continue
+            # 비트셋 유사도 (Jaccard Index)
+            intersection = np.logical_and(res_bitset, sel_bitset).sum()
+            union = np.logical_or(res_bitset, sel_bitset).sum()
 
-                # 공통 문자 수 / 최대 문자 수
-                common = len(set(result.content) & set(selected.content))
-                max_len = max(result_len, selected_len)
-                similarity = common / max_len if max_len > 0 else 0.0
-                similarities.append(similarity)
-            else:
-                similarities.append(0.0)
+            similarity = intersection / union if union > 0 else 0.0
+            similarities.append(similarity)
 
         return sum(similarities) / len(similarities) if similarities else 0.0
 

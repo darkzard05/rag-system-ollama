@@ -5,10 +5,13 @@ Utils Rebuild: 복잡한 데코레이터 제거 및 비동기 헬퍼 단순화.
 
 import asyncio
 import functools
+import hashlib
 import logging
 import os
 import re
 import time
+
+import streamlit as st
 
 logger = logging.getLogger(__name__)
 
@@ -77,19 +80,18 @@ _CLEAN_TRANS_TABLE = str.maketrans({"\x00": " ", "\r": " ", "\n": " ", "\t": " "
 
 
 def preprocess_text(text: str) -> str:
-    """텍스트 정제: 제어 문자를 공백으로 치환하고 연속 공백을 고속 정규화"""
+    """
+    텍스트 정제: 제어 문자를 공백으로 치환하고 연속 공백을 고속 정규화
+    [최적화] 정규식 엔진 대신 네이티브 split/join을 사용하여 오버헤드 최소화
+    """
     if not text:
         return ""
 
-    # 1. str.translate를 이용한 고속 문자 치환 (루프보다 수십 배 빠름)
+    # 1. str.translate를 이용한 고속 문자 치환
     text = text.translate(_CLEAN_TRANS_TABLE)
 
-    # 2. 연속된 공백을 단일 공백으로 통합
-    # [최적화] 이미 translate로 줄바꿈 등이 공백이 되었으므로 단순 공백만 처리
-    if "  " in text:
-        text = _RE_WHITESPACE.sub(" ", text)
-
-    return text.strip()
+    # 2. 연속된 공백을 단일 공백으로 통합 (split/join이 re.sub보다 훨씬 빠름)
+    return " ".join(text.split())
 
 
 def clean_query_text(query: str) -> str:
@@ -104,9 +106,6 @@ def clean_query_text(query: str) -> str:
     query = _RE_QUERY_CLEAN_QUOTES.sub("", query.strip())
 
     return query.strip()
-
-
-import streamlit as st  # noqa: E402
 
 
 @st.cache_data(ttl=5)  # 5초 동안 리소스 정보 캐싱
@@ -183,9 +182,6 @@ def format_error_message(e: Exception) -> str:
 
     # 3. 기본값
     return f"❌ 알 수 없는 오류 발생 ({err_type}): {msg}"
-
-
-import hashlib
 
 
 def fast_hash(text: str, length: int = 16) -> str:
@@ -271,31 +267,24 @@ def _merge_rects(rects: list, threshold: float = 5.0) -> list:
 
 
 def get_pdf_annotations(
-    pdf_path: str, documents: list, color: str = "red"
+    pdf_path: str, documents: list, color: str = "rgba(255, 0, 0, 0.25)"
 ) -> list[dict]:
     """
     검색된 문서 조각들의 텍스트 좌표를 추출합니다.
-    [고도화] 스레드 안전한 핸들링과 PyMuPDF 최신 기능 활용.
+    [최적화] 문장 전체를 한 줄 한 줄 독립된 박스로 표시하여 시각적 완성도를 극대화합니다.
     """
-    import re
-
     import fitz
 
     annotations = []
     if not pdf_path or not documents:
-        logger.info(f"[Utils] 하이라이트 중단: 경로({pdf_path}) 또는 문서 없음")
         return []
 
     try:
-        # [최적화] 바이트를 가져와서 개별 스레드용 문서 객체 생성 (Thread-safe)
         pdf_bytes = _get_cached_pdf_bytes(pdf_path)
         if not pdf_bytes:
-            logger.warning(f"[Utils] PDF 데이터를 읽을 수 없음: {pdf_path}")
             return []
 
-        # 각 호출마다 독립적인 doc 객체 사용
         with fitz.open(stream=pdf_bytes, filetype="pdf") as doc:
-            # 고급 검색 플래그 설정
             search_flags = (
                 fitz.TEXT_DEHYPHENATE
                 | fitz.TEXT_PRESERVE_LIGATURES
@@ -309,97 +298,80 @@ def get_pdf_annotations(
 
                 page = doc[page_num]
                 query_content = doc_obj.page_content.strip()
+                if len(query_content) < 5:
+                    continue
 
-                # [수정] 루프 시작 시 상태 초기화 (오염 방지)
-                match_score = 0.0
-                found_rects = []
+                # --- [고정밀 행 단위 추출 알고리즘] ---
+                p_words = page.get_text("words", flags=search_flags)
+                if not p_words:
+                    continue
 
-                # 1. 1차 시도: PyMuPDF 기본 검색 (고급 플래그 적용)
-                search_query = query_content[:100].replace("\n", " ")
-                found_quads = page.search_for(
-                    search_query, quads=True, flags=search_flags
-                )
+                head_txt = query_content[:20].strip()
+                tail_txt = query_content[-20:].strip()
 
-                if found_quads:
-                    found_rects = [q.rect for q in found_quads]
-                    match_score = 1.0  # 직접 매칭 성공
+                def clean(t):
+                    return re.sub(r"[^\w]", "", t).lower()
 
-                # 2. 2차 시도: 시퀀스 매칭 폴백
-                if not found_rects:
-                    q_words = [
-                        re.sub(r"[^\w]", "", w).lower()
-                        for w in query_content.split()
-                        if len(w) > 1
-                    ]
-                    if len(q_words) >= 3:
-                        p_words_raw = page.get_text("words", flags=search_flags)
-                        p_words_norm = [
-                            re.sub(r"[^\w]", "", w[4]).lower() for w in p_words_raw
-                        ]
+                head_clean = clean(head_txt)
+                tail_clean = clean(tail_txt)
 
-                        search_len = min(len(q_words), 12)
-                        key_seq = q_words[:search_len]
+                start_idx, end_idx = -1, -1
+                for i, w in enumerate(p_words):
+                    w_clean = clean(w[4])
+                    if (
+                        start_idx == -1
+                        and head_clean.startswith(w_clean)
+                        and len(w_clean) > 1
+                    ):
+                        start_idx = i
+                    if tail_clean.endswith(w_clean) and len(w_clean) > 1:
+                        end_idx = i
 
-                        best_start, max_match = -1, 0
-                        for i in range(len(p_words_norm) - search_len + 1):
-                            m_count = sum(
-                                1
-                                for j in range(search_len)
-                                if p_words_norm[i + j] == key_seq[j]
-                            )
-                            if m_count > max_match:
-                                max_match, best_start = m_count, i
-                                if max_match == search_len:
-                                    break
+                target_rects = []
+                if start_idx != -1 and end_idx != -1 and start_idx <= end_idx:
+                    current_line_rects = [fitz.Rect(p_words[start_idx][:4])]
+                    last_y = p_words[start_idx][1]
 
-                        match_score = max_match / search_len if search_len > 0 else 0
-                        if match_score >= 0.65:
-                            match_limit = min(len(q_words) + 5, 80)
-                            found_rects = [
-                                fitz.Rect(p_words_raw[best_start + k][:4])
-                                for k in range(match_limit)
-                                if best_start + k < len(p_words_raw)
-                            ]
+                    for i in range(start_idx + 1, end_idx + 1):
+                        w_rect = fitz.Rect(p_words[i][:4])
+                        curr_y = p_words[i][1]
+                        if abs(curr_y - last_y) < 3:
+                            current_line_rects.append(w_rect)
+                        else:
+                            line_union = current_line_rects[0]
+                            for r in current_line_rects[1:]:
+                                line_union |= r
+                            target_rects.append(line_union)
+                            current_line_rects = [w_rect]
+                            last_y = curr_y
 
-                # 3. 결과 정리 및 병합
-                if found_rects:
-                    p_rect = page.rect
-                    p_width, p_height = p_rect.width, p_rect.height
+                    if current_line_rects:
+                        line_union = current_line_rects[0]
+                        for r in current_line_rects[1:]:
+                            line_union |= r
+                        target_rects.append(line_union)
 
-                    merged_rects = _merge_rects(found_rects)
-                    chunk_annos_count = 0
-                    for i, rect in enumerate(merged_rects[:3]):
-                        # [최적화] 노이즈 필터링 (너무 작은 영역 무시)
-                        if rect.width < 5 or rect.height < 5:
-                            continue
+                if not target_rects:
+                    quads = page.search_for(
+                        query_content[:100], quads=True, flags=search_flags
+                    )
+                    target_rects = [q.rect for q in quads]
 
-                        x = max(0, float(rect.x0))
-                        y = max(0, float(rect.y0))
-                        w = min(p_width - x, float(rect.width))
-                        h = min(p_height - y, float(rect.height))
-
-                        anno = {
+                for i, rect in enumerate(target_rects):
+                    if rect.width < 2 or rect.height < 2:
+                        continue
+                    annotations.append(
+                        {
                             "page": int(page_num + 1),
-                            "x": x,
-                            "y": y,
-                            "width": w,
-                            "height": h,
-                            "color": color,
+                            "x": float(rect.x0),
+                            "y": float(rect.y0),
+                            "width": float(rect.width),
+                            "height": float(rect.height),
+                            "color": "rgba(255, 0, 0, 0.3)",
+                            "border": "solid",
                             "id": f"ref_{idx}_{page_num}_{i}",
                         }
-                        annotations.append(anno)
-                        chunk_annos_count += 1
-
-                    if chunk_annos_count > 0:
-                        # [최적화] 문서 조각당 1개의 통합 로그만 출력
-                        logger.info(
-                            f"[Utils] 하이라이트 생성 ({chunk_annos_count}개) | Page: {page_num + 1} | Score: {match_score:.2f} | Text: {query_content[:50]}..."
-                        )
-                else:
-                    if query_content:
-                        logger.info(
-                            f"[Utils] 매칭 최종 실패 | Page: {page_num + 1} | Score: {match_score:.2f} | Query: {query_content[:30]}..."
-                        )
+                    )
 
     except Exception as e:
         logger.error(f"[Utils] PDF 하이라이트 좌표 추출 실패: {e}", exc_info=True)

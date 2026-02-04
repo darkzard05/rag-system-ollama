@@ -212,12 +212,13 @@ class EmbeddingBasedSemanticChunker:
     def _find_breakpoints(self, similarities: list[float]) -> list[int]:
         """
         유사도 분포를 분석하여 분할 지점(breakpoints)을 찾습니다.
-        [최적화] 전역 통계 대신 로컬 이동 평균 기반 탐지를 병행하여 정확도와 성능을 높입니다.
+        [최적화] np.convolve를 이용한 벡터화 연산으로 로컬 이동 평균을 계산하여 성능을 극대화합니다.
         """
         if not similarities:
             return []
 
         similarities_array = np.array(similarities)
+        n = len(similarities_array)
 
         # 1. 전역 임계값 계산
         if self.breakpoint_threshold_type == "percentile":
@@ -227,25 +228,39 @@ class EmbeddingBasedSemanticChunker:
         else:
             global_threshold = self.similarity_threshold
 
-        # 2. [최적화] 로컬 감지 (이동 평균 기반)
-        # 단순히 전역 수치만 보는 것이 아니라, 앞뒤 문맥 대비 유사도가 급감하는 지점을 포착
+        # 2. [최적화] 로컬 감지 (벡터화된 이동 평균 기반)
         window_size = 3
         breakpoints = []
 
-        for i, sim in enumerate(similarities):
-            # A. 기본 전역 임계값 체크
-            is_global_break = sim < global_threshold
+        # 전역 임계값 미달 지점 (벡터화)
+        global_breaks = similarities_array < global_threshold
 
-            # B. 로컬 급감 체크 (Local Drop)
-            is_local_break = False
-            if i >= window_size:
-                local_avg = np.mean(similarities[max(0, i - window_size) : i])
-                # 주변 평균보다 20% 이상 유사도가 떨어지면 경계로 의심
-                if sim < local_avg * 0.8:
-                    is_local_break = True
+        # 로컬 급감 지점 계산 (벡터화)
+        # np.convolve를 사용하여 이동 평균 계산 (유효한 윈도우만)
+        if n >= window_size:
+            weights = np.ones(window_size) / window_size
+            # 'valid' 모드는 padding 없이 계산하므로 결과 길이가 n - window_size + 1
+            local_avgs = np.convolve(similarities_array, weights, mode="valid")
 
-            if is_global_break or is_local_break:
-                breakpoints.append(i + 1)
+            # 비교를 위해 인덱스 매칭: similarities[i]와 similarities[max(0, i-window_size):i]의 평균 비교
+            # 기존 로직: i번째 유사도를 그 직전 window_size개의 평균과 비교함
+            # 따라서 local_avgs[0] (0,1,2의 평균)은 similarities[3]과 비교되어야 함
+
+            for i in range(n):
+                is_global_break = global_breaks[i]
+                is_local_break = False
+
+                if i >= window_size:
+                    # i=3일 때 local_avgs[0] (indices 0,1,2의 평균) 사용
+                    avg = local_avgs[i - window_size]
+                    if similarities_array[i] < avg * 0.8:
+                        is_local_break = True
+
+                if is_global_break or is_local_break:
+                    breakpoints.append(i + 1)
+        else:
+            # 데이터가 너무 적으면 전역 임계값만 적용
+            breakpoints = [i + 1 for i, b in enumerate(global_breaks) if b]
 
         logger.debug(
             f"청킹 분석 완료: 전체 분기점 {len(breakpoints)}개 선정 (전역 임계값: {global_threshold:.3f})"

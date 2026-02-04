@@ -59,25 +59,30 @@ class RAGQueryOptimizer:
         embedder = SessionManager.get("embedder")
         if embedder:
             try:
-                # [최적화] 샘플 벡터를 최초 1회만 임베딩하여 캐시
+                # [최적화] 샘플 벡터를 행렬화하여 단 한 번의 행렬 곱으로 모든 유사도 계산
                 if not cls._sample_vectors_cache:
                     for intent, samples in cls.INTENT_SAMPLES.items():
-                        cls._sample_vectors_cache[intent] = [
-                            np.array(v) for v in embedder.embed_documents(samples)
-                        ]
+                        cls._sample_vectors_cache[intent] = np.array(
+                            embedder.embed_documents(samples)
+                        ).astype("float32")
 
-                q_vec = np.array(embedder.embed_query(query))
+                q_vec = np.array(embedder.embed_query(query)).astype("float32")
+                q_norm = np.linalg.norm(q_vec)
 
                 best_intent = "FACTOID"
                 max_sim = -1.0
 
-                for intent, s_vecs in cls._sample_vectors_cache.items():
-                    for sv in s_vecs:
-                        sim = np.dot(q_vec, sv) / (
-                            np.linalg.norm(q_vec) * np.linalg.norm(sv)
-                        )
-                        if sim > max_sim:
-                            max_sim = sim
+                if q_norm > 0:
+                    for intent, s_matrix in cls._sample_vectors_cache.items():
+                        # s_matrix: (num_samples, dim), q_vec: (dim,)
+                        # 행렬-벡터 곱으로 해당 의도의 모든 샘플과의 유사도를 한 번에 계산
+                        dot_products = s_matrix @ q_vec
+                        s_norms = np.linalg.norm(s_matrix, axis=1)
+                        sims = dot_products / (s_norms * q_norm)
+
+                        current_max = np.max(sims)
+                        if current_max > max_sim:
+                            max_sim = current_max
                             best_intent = intent
 
                 # 유사도가 임계값(0.75) 이상이면 즉시 확정

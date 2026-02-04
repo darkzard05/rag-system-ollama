@@ -222,7 +222,12 @@ def _extract_page_worker(
         # 각 스레드에서 파일을 새로 열어 독립적인 문서 객체 사용
         with fitz.open(file_path) as doc:
             page = doc[page_num]
-            text = page.get_text()
+            # [최적화] 레이아웃 인식 텍스트 추출
+            blocks = page.get_text("blocks", sort=True)
+            text = "\n\n".join(
+                [b[4].strip() for b in blocks if b[6] == 0 and b[4].strip()]
+            )
+
             if text:
                 clean_text = preprocess_text(text)
                 if clean_text and len(clean_text) > 10:
@@ -259,7 +264,14 @@ def _extract_pages_batch_worker(
         for page_num in page_range:
             try:
                 page = doc[page_num]
-                text = page.get_text()
+                # [최적화] 레이아웃 인식 텍스트 추출 (blocks=True, sort=True)
+                # blocks: (x0, y0, x1, y1, "text", block_no, block_type)
+                blocks = page.get_text("blocks", sort=True)
+                # 텍스트 블록(type 0)만 추출하고 의미적 분리를 위해 \n\n으로 병합
+                text = "\n\n".join(
+                    [b[4].strip() for b in blocks if b[6] == 0 and b[4].strip()]
+                )
+
                 if text:
                     clean_text = preprocess_text(text)
                     if clean_text and len(clean_text) > 10:
@@ -344,7 +356,12 @@ def _load_pdf_docs(
                 doc = fitz.open(file_path)
                 for i in range(total_pages):
                     page = doc[i]
-                    text = page.get_text()
+                    # [최적화] 레이아웃 인식 텍스트 추출
+                    blocks = page.get_text("blocks", sort=True)
+                    text = "\n\n".join(
+                        [b[4].strip() for b in blocks if b[6] == 0 and b[4].strip()]
+                    )
+
                     if text:
                         clean_text = preprocess_text(text)
                         if clean_text and len(clean_text) > 10:

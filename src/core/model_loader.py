@@ -230,12 +230,10 @@ def load_embedding_model(
 
         try:
             # HuggingFaceEmbeddings 초기화
-            # [최적화] ONNX를 사용하려면 별도의 래퍼가 필요할 수 있으나,
-            # 여기서는 기본적으로 optimum 설정을 model_kwargs에 전달하여 시도
+            # [최적화] GPU 사용 시 FP16(반정밀도) 적용으로 VRAM 절반 절약
             model_kwargs = {"device": target_device}
-            if use_onnx:
-                # optimum-intel 또는 onnxruntime 관련 인자 추가 가능
-                pass
+            if target_device == "cuda":
+                model_kwargs["model_kwargs"] = {"torch_dtype": torch.float16}
 
             result = HuggingFaceEmbeddings(
                 model_name=model_key,

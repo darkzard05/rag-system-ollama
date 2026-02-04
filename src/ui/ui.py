@@ -313,11 +313,6 @@ def render_message(
 
             st.divider()
             m_col1, m_col2 = st.columns([0.75, 0.25])
-            with m_col2:
-                m_hash = hashlib.md5(
-                    content.encode(), usedforsecurity=False
-                ).hexdigest()[:8]
-                st.feedback("thumbs", key=f"fb_{m_hash}")
             with m_col1:
                 if metrics:
                     st.caption(
@@ -374,25 +369,24 @@ def _pdf_viewer_fragment():
 
         raw_highlights = st.session_state.get("pdf_annotations", [])
         highlights = []
-        active_id = st.session_state.get("active_ref_id")
         if isinstance(raw_highlights, list):
             for h in raw_highlights:
                 if isinstance(h, dict) and all(
                     k in h for k in ["page", "x", "y", "width", "height"]
                 ):
                     processed_h = h.copy()
-                    if active_id and h.get("id") == active_id:
-                        processed_h["color"] = "rgba(255, 0, 0, 0.5)"
-                        processed_h["border"] = "solid"
-                    else:
-                        processed_h["color"] = "rgba(255, 0, 0, 0.2)"
+                    # [최적화] 활성/비활성 구분 없이 모든 하이라이트를 고대비 스타일로 통일
+                    processed_h["color"] = (
+                        "rgba(255, 0, 0, 0.4)"  # 강렬한 빨간색 반투명
+                    )
+                    processed_h["border"] = "solid"  # 실선 테두리 강제
                     highlights.append(processed_h)
 
         viewer_params = {
             "input": pdf_bytes,
             "pages_to_render": [st.session_state.pdf_page_index],
             "render_text": st.session_state.get("pdf_render_text", True),
-            "annotation_outline_size": 2,
+            "annotation_outline_size": 2,  # 외곽선 굵기 상향 (시인성 확보)
         }
         if highlights:
             viewer_params["annotations"] = highlights
