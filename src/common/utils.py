@@ -6,6 +6,7 @@ Utils Rebuild: 복잡한 데코레이터 제거 및 비동기 헬퍼 단순화.
 import asyncio
 import functools
 import logging
+import os
 import re
 import time
 
@@ -62,77 +63,33 @@ def normalize_latex_delimiters(text: str) -> str:
 
 def apply_tooltips_to_response(response_text: str, documents: list) -> str:
     """
-    LLM 응답 텍스트 내의 인용구([p.X])를 찾아 툴팁 HTML로 변환합니다.
-    문서의 내용을 툴팁 텍스트로 삽입합니다.
-    동시에 LaTeX 수식 구분자도 정규화합니다.
+    [최적화] LaTeX 정규화만 수행합니다. (툴팁 로직은 UI 계층으로 이동됨)
     """
     if not response_text:
         return response_text
 
-    # 0. 수식 구분자 정규화 (LaTeX 호환성 확보)
-    response_text = normalize_latex_delimiters(response_text)
+    return normalize_latex_delimiters(response_text)
 
-    if not documents:
-        return response_text
 
-    # 1. 페이지별 텍스트 매핑 생성
-    # 여러 청크가 같은 페이지일 수 있으므로 텍스트를 병합합니다.
-    page_content_map: dict[str, str] = {}
-    for doc in documents:
-        page = doc.metadata.get("page")
-        if not page:
-            continue
-
-        # 페이지 번호를 문자열로 통일
-        page_key = str(page)
-        content = doc.page_content.strip()
-
-        if page_key in page_content_map:
-            # 중복 내용은 제외하고 병합
-            if content not in page_content_map[page_key]:
-                page_content_map[page_key] += "\n\n... " + content
-        else:
-            page_content_map[page_key] = content
-
-    # 2. 정규표현식으로 인용 패턴 찾기 및 치환 (복합 인용 지원)
-    def replacement(match):
-        inner_text = match.group(2)
-
-        # 텍스트 내의 모든 숫자(페이지 번호) 추출
-        pages = _RE_EXTRACT_PAGES.findall(inner_text)
-        if not pages:
-            return match.group(0) # 매칭 실패 시 원본 유지
-
-        badges = []
-        for p in pages:
-            if p in page_content_map:
-                # 개별 페이지 배지 생성
-                badges.append(f'<span class="citation-badge">p.{p}</span>')
-            else:
-                # 매핑된 정보가 없어도 배지 형식은 유지 (일관성)
-                badges.append(f'<span class="citation-badge" style="opacity: 0.6;">p.{p}</span>')
-
-        # 여러 배지를 쉼표나 공백으로 연결 (여기서는 자연스럽게 붙여서 표시)
-        return "".join(badges)
-
-    # 3. 변환 실행
-    new_response = _RE_CITATION_BLOCK.sub(replacement, response_text)
-
-    return new_response
+# --- 전처리용 고속 테이블 ---
+# 널 문자 등 제어 문자를 공백으로 치환하는 테이블
+_CLEAN_TRANS_TABLE = str.maketrans({"\x00": " ", "\r": " ", "\n": " ", "\t": " "})
 
 
 def preprocess_text(text: str) -> str:
-    """텍스트 정제: 널 문자를 공백으로 치환하고 연속 공백을 정규화"""
+    """텍스트 정제: 제어 문자를 공백으로 치환하고 연속 공백을 고속 정규화"""
     if not text:
         return ""
 
-    # 1. 물리적 정제 (널 문자를 공백으로 치환하여 단어 붙음 방지)
-    text = text.replace("\x00", " ")
+    # 1. str.translate를 이용한 고속 문자 치환 (루프보다 수십 배 빠름)
+    text = text.translate(_CLEAN_TRANS_TABLE)
 
-    # 2. 연속된 공백 및 줄바꿈을 단일 공백으로 통합
-    text = _RE_WHITESPACE.sub(" ", text).strip()
+    # 2. 연속된 공백을 단일 공백으로 통합
+    # [최적화] 이미 translate로 줄바꿈 등이 공백이 되었으므로 단순 공백만 처리
+    if "  " in text:
+        text = _RE_WHITESPACE.sub(" ", text)
 
-    return text
+    return text.strip()
 
 
 def clean_query_text(query: str) -> str:
@@ -240,7 +197,9 @@ def fast_hash(text: str, length: int = 16) -> str:
         return "0" * length
     # usedforsecurity=False: 보안 진단 도구(Bandit 등)에 이 해시가
     # 암호화나 보안 목적으로 사용되지 않음을 알립니다.
-    return hashlib.md5(text.encode(errors="ignore"), usedforsecurity=False).hexdigest()[:length]
+    return hashlib.md5(text.encode(errors="ignore"), usedforsecurity=False).hexdigest()[
+        :length
+    ]
 
 
 def count_tokens_rough(text: str) -> int:
@@ -253,6 +212,199 @@ def count_tokens_rough(text: str) -> int:
     if not text:
         return 0
     return int(len(text) / 2.5) + 1
+
+
+@functools.lru_cache(maxsize=4)
+def _get_cached_pdf_bytes(pdf_path: str) -> bytes | None:
+    """PDF 파일 내용을 메모리에 캐싱합니다. (I/O 절감)"""
+    if os.path.exists(pdf_path):
+        with open(pdf_path, "rb") as f:
+            return f.read()
+    return None
+
+
+def _merge_rects(rects: list, threshold: float = 5.0) -> list:
+    """
+    인접하거나 겹치는 사각형들을 지능적으로 병합합니다.
+    [최적화] 다단 레이아웃 및 행 간격을 고려한 정밀 병합.
+    """
+    if not rects:
+        return []
+
+    # 1. Y 좌표 및 X 좌표 기준 정렬
+    sorted_rects = sorted(rects, key=lambda r: (r.y0, r.x0))
+    merged = []
+
+    if not sorted_rects:
+        return []
+
+    current_group = [sorted_rects[0]]
+
+    for next_rect in sorted_rects[1:]:
+        last = current_group[-1]
+
+        # 수직 겹침 정도 확인 (행 판단)
+        y_overlap = max(0, min(last.y1, next_rect.y1) - max(last.y0, next_rect.y0))
+        is_same_line = y_overlap > min(last.height, next_rect.height) * 0.6
+
+        # 수평 거리 확인 (단어 간격 판단)
+        x_gap = next_rect.x0 - last.x1
+
+        if is_same_line and x_gap < threshold * 10:  # 같은 행 & 인접
+            current_group.append(next_rect)
+        else:
+            # 그룹 병합 및 새 그룹 시작
+            union_rect = current_group[0]
+            for r in current_group[1:]:
+                union_rect = union_rect | r
+            merged.append(union_rect)
+            current_group = [next_rect]
+
+    # 마지막 그룹 처리
+    if current_group:
+        union_rect = current_group[0]
+        for r in current_group[1:]:
+            union_rect = union_rect | r
+        merged.append(union_rect)
+
+    return merged
+
+
+def get_pdf_annotations(
+    pdf_path: str, documents: list, color: str = "red"
+) -> list[dict]:
+    """
+    검색된 문서 조각들의 텍스트 좌표를 추출합니다.
+    [고도화] 스레드 안전한 핸들링과 PyMuPDF 최신 기능 활용.
+    """
+    import re
+
+    import fitz
+
+    annotations = []
+    if not pdf_path or not documents:
+        logger.info(f"[Utils] 하이라이트 중단: 경로({pdf_path}) 또는 문서 없음")
+        return []
+
+    try:
+        # [최적화] 바이트를 가져와서 개별 스레드용 문서 객체 생성 (Thread-safe)
+        pdf_bytes = _get_cached_pdf_bytes(pdf_path)
+        if not pdf_bytes:
+            logger.warning(f"[Utils] PDF 데이터를 읽을 수 없음: {pdf_path}")
+            return []
+
+        # 각 호출마다 독립적인 doc 객체 사용
+        with fitz.open(stream=pdf_bytes, filetype="pdf") as doc:
+            # 고급 검색 플래그 설정
+            search_flags = (
+                fitz.TEXT_DEHYPHENATE
+                | fitz.TEXT_PRESERVE_LIGATURES
+                | fitz.TEXT_PRESERVE_WHITESPACE
+            )
+
+            for idx, doc_obj in enumerate(documents):
+                page_num = doc_obj.metadata.get("page", 1) - 1
+                if page_num < 0 or page_num >= len(doc):
+                    continue
+
+                page = doc[page_num]
+                query_content = doc_obj.page_content.strip()
+
+                # [수정] 루프 시작 시 상태 초기화 (오염 방지)
+                match_score = 0.0
+                found_rects = []
+
+                # 1. 1차 시도: PyMuPDF 기본 검색 (고급 플래그 적용)
+                search_query = query_content[:100].replace("\n", " ")
+                found_quads = page.search_for(
+                    search_query, quads=True, flags=search_flags
+                )
+
+                if found_quads:
+                    found_rects = [q.rect for q in found_quads]
+                    match_score = 1.0  # 직접 매칭 성공
+
+                # 2. 2차 시도: 시퀀스 매칭 폴백
+                if not found_rects:
+                    q_words = [
+                        re.sub(r"[^\w]", "", w).lower()
+                        for w in query_content.split()
+                        if len(w) > 1
+                    ]
+                    if len(q_words) >= 3:
+                        p_words_raw = page.get_text("words", flags=search_flags)
+                        p_words_norm = [
+                            re.sub(r"[^\w]", "", w[4]).lower() for w in p_words_raw
+                        ]
+
+                        search_len = min(len(q_words), 12)
+                        key_seq = q_words[:search_len]
+
+                        best_start, max_match = -1, 0
+                        for i in range(len(p_words_norm) - search_len + 1):
+                            m_count = sum(
+                                1
+                                for j in range(search_len)
+                                if p_words_norm[i + j] == key_seq[j]
+                            )
+                            if m_count > max_match:
+                                max_match, best_start = m_count, i
+                                if max_match == search_len:
+                                    break
+
+                        match_score = max_match / search_len if search_len > 0 else 0
+                        if match_score >= 0.65:
+                            match_limit = min(len(q_words) + 5, 80)
+                            found_rects = [
+                                fitz.Rect(p_words_raw[best_start + k][:4])
+                                for k in range(match_limit)
+                                if best_start + k < len(p_words_raw)
+                            ]
+
+                # 3. 결과 정리 및 병합
+                if found_rects:
+                    p_rect = page.rect
+                    p_width, p_height = p_rect.width, p_rect.height
+
+                    merged_rects = _merge_rects(found_rects)
+                    chunk_annos_count = 0
+                    for i, rect in enumerate(merged_rects[:3]):
+                        # [최적화] 노이즈 필터링 (너무 작은 영역 무시)
+                        if rect.width < 5 or rect.height < 5:
+                            continue
+
+                        x = max(0, float(rect.x0))
+                        y = max(0, float(rect.y0))
+                        w = min(p_width - x, float(rect.width))
+                        h = min(p_height - y, float(rect.height))
+
+                        anno = {
+                            "page": int(page_num + 1),
+                            "x": x,
+                            "y": y,
+                            "width": w,
+                            "height": h,
+                            "color": color,
+                            "id": f"ref_{idx}_{page_num}_{i}",
+                        }
+                        annotations.append(anno)
+                        chunk_annos_count += 1
+
+                    if chunk_annos_count > 0:
+                        # [최적화] 문서 조각당 1개의 통합 로그만 출력
+                        logger.info(
+                            f"[Utils] 하이라이트 생성 ({chunk_annos_count}개) | Page: {page_num + 1} | Score: {match_score:.2f} | Text: {query_content[:50]}..."
+                        )
+                else:
+                    if query_content:
+                        logger.info(
+                            f"[Utils] 매칭 최종 실패 | Page: {page_num + 1} | Score: {match_score:.2f} | Query: {query_content[:30]}..."
+                        )
+
+    except Exception as e:
+        logger.error(f"[Utils] PDF 하이라이트 좌표 추출 실패: {e}", exc_info=True)
+
+    return annotations
 
 
 def sync_run(coro):
@@ -288,7 +440,7 @@ def log_operation(operation_name):
                 logger.info(f"[SYSTEM] [TASK] {operation_name} 완료 | 소요: {dur:.2f}s")
                 return res
             except Exception as e:
-                logger.error(f"[SYSTEM] [TASK] {operation_name} 실패 | {e}")
+                logger.info(f"[SYSTEM] [TASK] {operation_name} 실패 | {e}")
                 raise
 
         return wrapper

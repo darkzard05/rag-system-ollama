@@ -2,6 +2,7 @@
 애플리케이션 전체에서 사용되는 데이터 구조(스키마)를 정의합니다.
 """
 
+import time
 from typing import Any, TypedDict
 
 from langchain_core.documents import Document
@@ -10,6 +11,7 @@ from pydantic import BaseModel, Field
 
 class PerformanceStats(BaseModel):
     """통합 성능 메트릭 스키마"""
+
     ttft: float = 0.0
     thinking_time: float = 0.0
     generation_time: float = 0.0
@@ -21,6 +23,20 @@ class PerformanceStats(BaseModel):
     doc_count: int = 0
 
 
+class ChatMessage(BaseModel):
+    """채팅 메시지 통합 모델"""
+
+    role: str  # user, assistant, system
+    content: str
+    msg_type: str = "general"  # answer, log, greeting
+    thought: str | None = None
+    doc_ids: list[str] = []
+    annotations: list[dict[str, Any]] = []  # 하이라이트 정보 보존
+    metrics: dict[str, Any] | None = None
+    processed_content: str | None = None
+    timestamp: float = Field(default_factory=time.time)
+
+
 class GraphState(TypedDict):
     """
     RAG 그래프의 상태를 나타냅니다.
@@ -30,9 +46,10 @@ class GraphState(TypedDict):
     input: str
     search_queries: list[str]
     documents: list[Document]
+    relevant_docs: list[Document]  # [추가] 관련성 채점을 통과한 문서들
     context: str | None
     response: str | None
-    route_decision: str | None  # 추가됨
+    annotations: list[dict[str, Any]] | None  # PDF 하이라이트용
 
 
 class QueryRequest(BaseModel):
@@ -40,8 +57,12 @@ class QueryRequest(BaseModel):
 
     query: str = Field(..., examples=["DeepSeek-R1의 성능은 어때?"])
     session_id: str = Field(default="default", examples=["user-123"])
-    model_name: str | None = Field(default=None, description="사용할 LLM 모델명 (생략 시 세션 기본값 사용)")
-    embedding_model: str | None = Field(default=None, description="사용할 임베딩 모델명")
+    model_name: str | None = Field(
+        default=None, description="사용할 LLM 모델명 (생략 시 세션 기본값 사용)"
+    )
+    embedding_model: str | None = Field(
+        default=None, description="사용할 임베딩 모델명"
+    )
     use_cache: bool = True
 
 
@@ -51,6 +72,7 @@ class QueryResponse(BaseModel):
     answer: str
     sources: list[dict[str, Any]] = []
     execution_time_ms: float
+    annotations: list[dict[str, Any]] = []
 
 
 class SearchResult(BaseModel):

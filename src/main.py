@@ -39,9 +39,30 @@ MAX_FILE_SIZE_MB = StringConstants.MAX_FILE_SIZE_MB
 nest_asyncio.apply()
 
 # Streamlit 페이지 설정 (최우선 실행 - UI 즉시 표시용)
-from common.constants import StringConstants
-
 st.set_page_config(page_title=StringConstants.PAGE_TITLE, layout=StringConstants.LAYOUT)
+
+# [보안] 세션 ID 강제 초기화 및 격리 보장
+try:
+    from streamlit.runtime.scriptrunner import get_script_run_ctx
+
+    ctx = get_script_run_ctx()
+    if ctx:
+        SessionManager.init_session(session_id=ctx.session_id)
+        logger.debug(f"[SYSTEM] [SESSION] 세션 초기화 완료 | ID: {ctx.session_id}")
+except Exception as e:
+    logger.warning(f"세션 초기화 실패: {e}")
+
+# --- [추가] 필수 세션 상태 초기화 ---
+if "current_page" not in st.session_state:
+    st.session_state.current_page = 1
+if "pdf_annotations" not in st.session_state:
+    st.session_state.pdf_annotations = []
+if "scroll_target_idx" not in st.session_state:
+    st.session_state.scroll_target_idx = None
+if "last_valid_height" not in st.session_state:
+    st.session_state.last_valid_height = 800
+if "is_generating_answer" not in st.session_state:
+    st.session_state.is_generating_answer = False
 
 import atexit  # noqa: E402
 import threading  # noqa: E402
@@ -56,21 +77,54 @@ def get_logger():
     return setup_logging(log_level="INFO", log_file=Path("logs/app.log"))
 
 
-@st.cache_resource(show_spinner=False)
 def _check_windows_integrity():
-    """Windows 환경의 라이브러리 충돌을 1회만 체크합니다."""
+    """
+    [Background] Windows 환경의 라이브러리 충돌을 체크합니다.
+    무거운 import(torch 등)가 포함되므로 반드시 메인 스레드와 분리해야 합니다.
+    """
     import platform
+    import time
 
-    if platform.system() == "Windows":
-        try:
-            import torch
-            import torchvision
+    if platform.system() != "Windows":
+        return
 
-            return True
-        except ImportError as e:
-            if "0xc0000139" in str(e) or "DLL load failed" in str(e):
-                return str(e)
-    return True
+    try:
+        # UI 렌더링을 위해 잠시 양보
+        time.sleep(1.5)
+
+        # 무거운 라이브러리 로드 테스트
+        import torch
+        import torchvision
+
+        # 간단한 연산 테스트로 DLL 로드 확인
+        _ = torch.tensor([1.0])
+        logger.info("[SYSTEM] [INTEGRITY] Windows 라이브러리 무결성 점검 완료 (OK)")
+
+    except ImportError as e:
+        error_msg = str(e)
+        if "0xc0000139" in error_msg or "DLL load failed" in error_msg:
+            logger.critical(f"[SYSTEM] [INTEGRITY] 치명적 오류 감지: {error_msg}")
+            # 사용자가 인지할 수 있도록 세션에 경고 기록
+            from core.session import SessionManager
+
+            SessionManager.add_message(
+                "system",
+                f"⚠️ 시스템 무결성 경고: Windows DLL 호환성 문제가 감지되었습니다. \n({error_msg})",
+            )
+    except Exception as e:
+        logger.warning(f"[SYSTEM] [INTEGRITY] 점검 중 예외 발생: {e}")
+
+
+def _run_background_checks():
+    """백그라운드 점검 작업을 시작합니다."""
+    # [최적화] 중복 실행 방지 (이미 시작되었거나 완료된 경우 스킵)
+    if st.session_state.get("integrity_check_triggered"):
+        return
+
+    st.session_state.integrity_check_triggered = True
+    threading.Thread(target=_check_windows_integrity, daemon=True).start()
+    # 임시 디렉토리 정리도 여기서 호출하거나 기존처럼 유지
+    # _init_temp_directory()는 이미 별도 스레드를 쓰고 있음
 
 
 @st.cache_resource(show_spinner=False)
@@ -106,6 +160,7 @@ def _init_temp_directory():
 
 # 앱 시작 시 초기화 수행 (캐싱으로 인해 최초 1회만 작동)
 _init_temp_directory()
+_run_background_checks()
 
 
 def _cleanup_current_file():
@@ -150,6 +205,7 @@ def _ensure_models_are_loaded() -> bool:
 
     if not selected_embedding:
         from common.config import AVAILABLE_EMBEDDING_MODELS
+
         if AVAILABLE_EMBEDDING_MODELS:
             selected_embedding = AVAILABLE_EMBEDDING_MODELS[0]
             SessionManager.set("last_selected_embedding_model", selected_embedding)
@@ -163,7 +219,9 @@ def _ensure_models_are_loaded() -> bool:
         embedder = ModelManager.get_embedder(selected_embedding)
         SessionManager.set("embedder", embedder)
 
-        actual_device = getattr(embedder, "model_kwargs", {}).get("device", "UNKNOWN").upper()
+        actual_device = (
+            getattr(embedder, "model_kwargs", {}).get("device", "UNKNOWN").upper()
+        )
         display_device = "GPU" if actual_device == "CUDA" else actual_device
         SystemNotifier.success(f"임베딩 모델 준비 완료 ({display_device})")
 
@@ -191,7 +249,10 @@ def _rebuild_rag_system() -> None:
     if not file_name or not file_path:
         return
 
-    # [중복 실행 방지]
+    # [중복 실행 방지 강화]
+    if st.session_state.get("is_building_rag"):
+        return
+
     if (
         SessionManager.get("pdf_processed")
         and not SessionManager.get("pdf_processing_error")
@@ -199,6 +260,7 @@ def _rebuild_rag_system() -> None:
     ):
         return
 
+    st.session_state.is_building_rag = True
     try:
         if not _ensure_models_are_loaded():
             return
@@ -230,7 +292,10 @@ def _rebuild_rag_system() -> None:
         logger.error(f"RAG 빌드 실패: {e}", exc_info=True)
         error_msg = f"문서 처리 중 오류가 발생했습니다: {str(e)}"
         SessionManager.set("pdf_processing_error", error_msg)
+        SessionManager.set("pdf_processed", True)  # 분석 프로세스 종료(실패) 표시
         SessionManager.add_message("system", f"❌ {error_msg}")
+    finally:
+        st.session_state.is_building_rag = False
 
 
 def _update_qa_chain() -> None:
@@ -279,6 +344,15 @@ def on_file_upload() -> None:
 
     # 파일이 변경된 경우에만 처리
     if uploaded_file.name != SessionManager.get("last_uploaded_file_name"):
+        # [최적화] 이전 문서 상태 강제 초기화 (에러 방지)
+        st.session_state.pdf_page_index = 1
+        st.session_state.pdf_annotations = []
+        if "pdf_page_index_input" in st.session_state:
+            st.session_state.pdf_page_index_input = 1
+        if "active_ref_id" in st.session_state:
+            st.session_state.active_ref_id = None
+        SessionManager.set("current_page", 1)
+
         # [관리강화] 이전 임시 파일 즉시 삭제
         old_path = SessionManager.get("pdf_file_path")
         if old_path and os.path.exists(old_path):
@@ -360,9 +434,9 @@ def _render_app_layout(
         file_uploader_callback=on_file_upload,
         model_selector_callback=on_model_change,
         embedding_selector_callback=on_embedding_change,
-        is_generating=st.session_state.get("is_generating_answer", False),
-        current_file_name=st.session_state.get("last_uploaded_file_name"),
-        current_embedding_model=st.session_state.get("last_selected_embedding_model"),
+        is_generating=bool(SessionManager.get("is_generating_answer", False)),
+        current_file_name=SessionManager.get("last_uploaded_file_name"),
+        current_embedding_model=SessionManager.get("last_selected_embedding_model"),
         available_models=available_models,
     )
 
@@ -383,8 +457,6 @@ def _render_app_layout(
             else "📄 PDF 미리보기"
         )
         render_pdf_viewer()
-
-
 
 
 def _handle_pending_tasks() -> None:
@@ -412,28 +484,50 @@ def _handle_pending_tasks() -> None:
 
 def main() -> None:
     """메인 애플리케이션 오케스트레이터"""
+    # 0. 쿼리 파라미터 처리 (인용 태그 클릭 시 네비게이션)
+    params = st.query_params
+    if "jump_page" in params:
+        try:
+            target_p = int(params["jump_page"])
+            st.session_state.pdf_page_index = target_p
+            # 파라미터 처리 후 즉시 제거 및 리런 (단 한 번만 수행되도록 보장)
+            st.query_params.clear()
+            st.rerun()
+        except Exception:
+            pass
+
     # 1. 초기 레이아웃 및 세션 즉시 준비
     from ui.ui import inject_custom_css
+
     inject_custom_css()
 
     from core.session import SessionManager
+
     SessionManager.init_session()
 
-    # 2. 모델 목록 가져오기 (이미 세션에 있으면 즉시 사용)
+    # [추가] 세션 ID 불일치로 인한 '영구 분석 중' 상태 방지
+    if SessionManager.get("pdf_file_path") and not SessionManager.get("pdf_processed"):
+        # 만약 분석 중이라고 뜨는데 5초 동안 로그 업데이트가 없다면 분석이 중단된 것으로 간주할 수 있음
+        # 여기서는 단순하게 사용자가 페이지를 새로고침했을 때 is_generating_answer를 False로 리셋하여
+        # 입력창을 일단 열어주는 정책을 취함
+        SessionManager.set("is_generating_answer", False)
+
+    # 2. UI 즉시 렌더링 (Optimistic UI)
+    # 모델 목록이 아직 없어도 레이아웃을 먼저 그림 (Skeleton State)
     available_models = st.session_state.get("available_models_list")
 
-    # 레이아웃 렌더링 (데이터 상태를 직접 전달)
     _render_app_layout(
         is_skeleton_pass=(available_models is None), available_models=available_models
     )
 
-    # 모델 목록이 없으면 로딩 시도
+    # 3. 데이터 로딩 (UI가 그려진 후 실행)
     if not available_models:
         from core.model_loader import get_available_models
 
         available_models = get_available_models()
         st.session_state.available_models_list = available_models
-        st.rerun()  # 목록을 가져온 후 UI 업데이트를 위해 재실행
+        # 모델 로딩 완료 후 즉시 리프레시하여 UI 업데이트
+        st.rerun()
 
     # 4. 백그라운드 태스크 처리 (RAG 빌드, 모델 교체 등)
     _handle_pending_tasks()
@@ -453,6 +547,7 @@ def main() -> None:
 
     # 6. 창 높이 측정 (가장 마지막에 실행하여 레이아웃 영향 최소화)
     from ui.ui import update_window_height
+
     update_window_height()
 
 

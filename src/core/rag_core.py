@@ -9,7 +9,6 @@ import hashlib
 import json
 import logging
 import os
-import pickle
 import threading
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
@@ -23,7 +22,7 @@ from common.typing_utils import (
 )
 
 if TYPE_CHECKING:
-    from langchain.retrievers import EnsembleRetriever
+    from langchain_classic.retrievers import EnsembleRetriever
     from langchain_community.retrievers import BM25Retriever
     from langchain_community.vectorstores import FAISS
     from langchain_core.documents import Document
@@ -65,9 +64,47 @@ logger = logging.getLogger(__name__)
 monitor = get_performance_monitor()
 
 
+import re
+
+# --- 최적화된 토크나이저 ---
+_RE_KOREAN_TOKEN = re.compile(r"[가-힣]{2,}|[a-zA-Z]{2,}|[0-9]+")
+
+
 def bm25_tokenizer(text: str) -> list[str]:
-    """BM25용 경량 토크나이저 (Pickle 지원을 위해 모듈 레벨에 정의)"""
-    return text.lower().split()
+    """
+    [최적화] 한국어 검색 품질 향상을 위한 Hybrid 토크나이저.
+    기본 정규식 추출 + 어미 제거 + Bi-gram 생성을 수행합니다.
+    """
+    if not text:
+        return []
+
+    # 1. 기본 토큰 추출
+    tokens = _RE_KOREAN_TOKEN.findall(text.lower())
+    if not tokens:
+        return text.split()
+
+    final_tokens = []
+    # 자주 쓰이는 조사/어미 (간이 불용어 처리)
+    particles = ("은", "는", "이", "가", "을", "를", "의", "에", "로", "서", "들")
+
+    for token in tokens:
+        final_tokens.append(token)
+
+        # 한글인 경우 추가 처리
+        if "가" <= token[0] <= "힣":
+            # 2. 간단한 어미/조사 제거 (끝글자 체크)
+            if len(token) > 2 and token.endswith(particles):
+                stem = token[:-1]
+                if len(stem) >= 2:
+                    final_tokens.append(stem)
+
+            # 3. Bi-gram 생성 (3글자 이상인 경우)
+            # 복합명사 검색 재현율 향상 (예: 인공지능 -> 인공, 공지, 지능)
+            if len(token) >= 3:
+                for i in range(len(token) - 1):
+                    final_tokens.append(token[i : i + 2])
+
+    return final_tokens
 
 
 class RAGSystem:
@@ -171,7 +208,10 @@ def _compute_file_hash(file_path: str, data: bytes | None = None) -> str:
         return ""
 
 
-import concurrent.futures  # noqa: E402
+import concurrent.futures
+
+import fitz  # PyMuPDF
+from langchain_core.documents import Document
 
 
 def _extract_page_worker(
@@ -179,9 +219,6 @@ def _extract_page_worker(
 ) -> Document | None:
     """개별 페이지에서 텍스트를 추출하는 워커 함수 (스레드 세이프)"""
     try:
-        import fitz  # PyMuPDF
-        from langchain_core.documents import Document
-
         # 각 스레드에서 파일을 새로 열어 독립적인 문서 객체 사용
         with fitz.open(file_path) as doc:
             page = doc[page_num]
@@ -201,66 +238,94 @@ def _extract_page_worker(
 
 
 def _extract_pages_batch_worker(
-    file_bytes: bytes, page_range: list[int], total_pages: int, file_name: str
+    file_bytes: bytes | None,
+    file_path: str,
+    page_range: list[int],
+    total_pages: int,
+    file_name: str,
 ) -> list[tuple[int, Document]]:
-    """페이지 범위를 배치로 처리하는 워커 함수 (memoryview 사용으로 복사 방지)"""
+    """페이지 범위를 배치로 처리하는 워커 함수 (하이브리드 로딩 지원)"""
     results = []
+    doc = None
     try:
-        import fitz  # PyMuPDF
-        from langchain_core.documents import Document
+        # [최적화] 하이브리드 로딩 전략
+        # 작은 파일 -> 메모리뷰 (속도), 큰 파일 -> 파일 경로 (메모리 절약)
+        if file_bytes is not None:
+            mv = memoryview(file_bytes)
+            doc = fitz.open(stream=mv, filetype="pdf")
+        else:
+            doc = fitz.open(file_path)
 
-        # [최적화] memoryview를 사용하여 원본 바이트에 대한 zero-copy 접근 보장
-        mv = memoryview(file_bytes)
-        with fitz.open(stream=mv, filetype="pdf") as doc:
-            for page_num in page_range:
-                try:
-                    page = doc[page_num]
-                    text = page.get_text()
-                    if text:
-                        clean_text = preprocess_text(text)
-                        if clean_text and len(clean_text) > 10:
-                            metadata = {
-                                "source": file_name,
-                                "page": int(page_num + 1),
-                                "total_pages": int(total_pages),
-                            }
-                            results.append(
-                                (
-                                    page_num,
-                                    Document(
-                                        page_content=clean_text, metadata=metadata
-                                    ),
-                                )
+        for page_num in page_range:
+            try:
+                page = doc[page_num]
+                text = page.get_text()
+                if text:
+                    clean_text = preprocess_text(text)
+                    if clean_text and len(clean_text) > 10:
+                        metadata = {
+                            "source": file_name,
+                            "page": int(page_num + 1),
+                            "total_pages": int(total_pages),
+                        }
+                        results.append(
+                            (
+                                page_num,
+                                Document(page_content=clean_text, metadata=metadata),
                             )
-                except Exception as e:
-                    logger.warning(f"페이지 {page_num + 1} 추출 실패: {e}")
+                        )
+            except Exception as e:
+                logger.warning(f"페이지 {page_num + 1} 추출 실패: {e}")
     except Exception as e:
         logger.error(f"배치 처리 중 문서 오픈 실패: {e}")
+    finally:
+        if doc:
+            doc.close()
     return results
 
 
 def _load_pdf_docs(
-    file_path: str, file_name: str, on_progress: Callable[[], None] | None = None
+    file_path: str,
+    file_name: str,
+    on_progress: Callable[[], None] | None = None,
+    file_bytes: bytes | None = None,
+    session_id: str | None = None,
 ) -> list[Document]:
     """
     PDF 파일을 메모리에 버퍼링한 후 병렬 배치 처리를 통해 최고 속도로 추출합니다.
+    [최적화] 50MB 이상 파일은 스트리밍 방식으로 전환하여 메모리 폭증 방지.
     """
+    # 메모리 로딩 제한 설정 (50MB)
+    MEMORY_LOAD_LIMIT = 50 * 1024 * 1024
+
     with monitor.track_operation(OperationType.PDF_LOADING, {"file": file_name}) as op:
         try:
-            import fitz  # PyMuPDF
-
-            SessionManager.add_status_log("문서 분석 준비 중")
+            SessionManager.add_status_log("문서 분석 준비 중", session_id=session_id)
             if on_progress:
                 on_progress()
 
-            # 1. 파일 전체를 메모리에 한 번만 로드 (가장 빠른 방식)
-            try:
-                with open(file_path, "rb") as f:
-                    file_bytes = f.read()
+            file_size = os.path.getsize(file_path)
+            use_memory_loading = file_size <= MEMORY_LOAD_LIMIT
 
-                # 메타데이터 확인을 위해 임시 오픈
-                with fitz.open(stream=file_bytes, filetype="pdf") as doc_file:
-                    total_pages = len(doc_file)
+            # 1. 파일 로딩 전략 결정
+            # 이미 로드된 바이트가 없고, 파일이 작으면 메모리에 로드
+            try:
+                if file_bytes is None and use_memory_loading:
+                    with open(file_path, "rb") as f:
+                        file_bytes = f.read()
+
+                # 큰 파일은 file_bytes를 None으로 유지하여 워커가 직접 읽게 함
+                if not use_memory_loading:
+                    file_bytes = None
+                    logger.info(
+                        f"[PDF] 대용량 파일 감지({file_size / 1024 / 1024:.1f}MB). 직접 접근 모드 사용."
+                    )
+
+                # 메타데이터 확인용 (경량 오픈)
+                doc_chk = fitz.open(file_path)
+                total_pages = len(doc_chk)
+                doc_chk.close()
+
             except Exception as e:
                 raise PDFProcessingError(
                     filename=file_name,
@@ -275,23 +340,25 @@ def _load_pdf_docs(
             # [최적화] 페이지 수에 따라 동적으로 병렬화 결정
             if total_pages <= 3:
                 docs = []
-                with fitz.open(stream=file_bytes, filetype="pdf") as doc:
-                    for i in range(total_pages):
-                        page = doc[i]
-                        text = page.get_text()
-                        if text:
-                            clean_text = preprocess_text(text)
-                            if clean_text and len(clean_text) > 10:
-                                docs.append(
-                                    Document(
-                                        page_content=clean_text,
-                                        metadata={
-                                            "source": file_name,
-                                            "page": i + 1,
-                                            "total_pages": total_pages,
-                                        },
-                                    )
+                # 작은 문서는 메인 스레드에서 처리
+                doc = fitz.open(file_path)
+                for i in range(total_pages):
+                    page = doc[i]
+                    text = page.get_text()
+                    if text:
+                        clean_text = preprocess_text(text)
+                        if clean_text and len(clean_text) > 10:
+                            docs.append(
+                                Document(
+                                    page_content=clean_text,
+                                    metadata={
+                                        "source": file_name,
+                                        "page": i + 1,
+                                        "total_pages": total_pages,
+                                    },
                                 )
+                            )
+                doc.close()
             else:
                 # [최적화] 워커 수를 논리 코어 수에 맞추고 배치를 크게 설정하여 오버헤드 감소
                 cpu_count = os.cpu_count() or 4
@@ -313,7 +380,8 @@ def _load_pdf_docs(
                     futures = [
                         executor.submit(
                             _extract_pages_batch_worker,
-                            file_bytes,
+                            file_bytes,  # 큰 파일이면 None 전달
+                            file_path,  # 파일 경로 전달
                             batch,
                             total_pages,
                             file_name,
@@ -328,10 +396,12 @@ def _load_pdf_docs(
 
                         completed_pages += len(batch_results)
                         SessionManager.replace_last_status_log(
-                            f"텍스트 추출 중 ({min(completed_pages, total_pages)}/{total_pages}p)"
+                            f"텍스트 추출 중 ({min(completed_pages, total_pages)}/{total_pages}p)",
+                            session_id=session_id,
                         )
                         if on_progress:
                             import contextlib
+
                             with contextlib.suppress(Exception):
                                 on_progress()
 
@@ -340,12 +410,16 @@ def _load_pdf_docs(
             if not docs:
                 raise EmptyPDFError(
                     filename=file_name,
-                    details={"reason": "텍스트를 추출할 수 없습니다."}
+                    details={"reason": "텍스트를 추출할 수 없습니다."},
                 )
 
-            SessionManager.replace_last_status_log(f"추출 완료 ({len(docs)}p)")
+            SessionManager.replace_last_status_log(
+                f"추출 완료 ({len(docs)}p)", session_id=session_id
+            )
             op.tokens = sum(len(doc.page_content.split()) for doc in docs)
-            logger.info(f"[RAG] [LOAD] PDF 텍스트 추출 완료 | 파일: {file_name} | 페이지: {len(docs)}")
+            logger.info(
+                f"[RAG] [LOAD] PDF 텍스트 추출 완료 | 파일: {file_name} | 페이지: {len(docs)}"
+            )
             return docs
         except (PDFProcessingError, EmptyPDFError):
             raise
@@ -359,15 +433,16 @@ def _load_pdf_docs(
 def _split_documents(
     docs: list[Document],
     embedder: HuggingFaceEmbeddings | None = None,
+    session_id: str | None = None,
 ) -> tuple[list[Document], list[np.ndarray] | None]:
     """
     설정에 따라 의미론적 분할기 또는 RecursiveCharacterTextSplitter를 사용해 문서를 분할합니다.
     """
-    SessionManager.add_status_log("문장 분할 중...")
+    SessionManager.add_status_log("문장 분할 중...", session_id=session_id)
     with monitor.track_operation(
         OperationType.SEMANTIC_CHUNKING, {"doc_count": len(docs)}
     ) as op:
-        from langchain.text_splitter import RecursiveCharacterTextSplitter
+        from langchain_text_splitters import RecursiveCharacterTextSplitter
 
         use_semantic = SEMANTIC_CHUNKER_CONFIG.get("enabled", False)
         split_docs = []
@@ -376,11 +451,16 @@ def _split_documents(
         if use_semantic and embedder:
             # [최적화] 디바이스 및 VRAM 상황에 따라 배치 크기 동적 할당
             import torch
+
             if getattr(embedder, "model_kwargs", {}).get("device") == "cuda":
                 # GPU 환경: 가용 메모리에 따라 32~128 사이에서 결정
                 try:
-                    total_mem = torch.cuda.get_device_properties(0).total_memory / (1024**3) # GB
-                    batch_size = 128 if total_mem > 10 else (64 if total_mem > 4 else 32)
+                    total_mem = torch.cuda.get_device_properties(0).total_memory / (
+                        1024**3
+                    )  # GB
+                    batch_size = (
+                        128 if total_mem > 10 else (64 if total_mem > 4 else 32)
+                    )
                 except Exception:
                     batch_size = 32
             else:
@@ -416,20 +496,41 @@ def _split_documents(
                 chunk_overlap=TEXT_SPLITTER_CONFIG["chunk_overlap"],
             )
             split_docs = chunker.split_documents(docs)
-            logger.info(f"[RAG] [CHUNKING] 기본 분할 완료 | 원본: {len(docs)} | 청크: {len(split_docs)}")
+            logger.info(
+                f"[RAG] [CHUNKING] 기본 분할 완료 | 원본: {len(docs)} | 청크: {len(split_docs)}"
+            )
 
-        # 청크 인덱스 메타데이터 추가
+            # [최적화] 기본 분할 시에도 벡터를 즉시 계산하여 중복 요청 방지
+            if embedder and split_docs:
+                texts = [d.page_content for d in split_docs]
+                vectors_list = embedder.embed_documents(texts)
+                vectors = [np.array(v) for v in vectors_list]
+
+        # 청크 인덱스 및 본문 여부 메타데이터 추가
+        noise_keywords = ["index", "references", "bibliography", "doi:", "isbn"]
         for i, doc in enumerate(split_docs):
             doc.metadata = doc.metadata.copy()
             doc.metadata["chunk_index"] = i
+
+            # [추가] 본문 여부 판별 (사전 필터링용)
+            content_lower = doc.page_content.lower()
+            is_noise = any(kw in content_lower[:100] for kw in noise_keywords)
+            # DOI 링크가 너무 많거나 콤마/숫자가 색인처럼 많으면 노이즈로 간주
+            if not is_noise and (
+                content_lower.count("doi:") > 2 or content_lower.count(",") > 25
+            ):
+                is_noise = True
+
+            doc.metadata["is_content"] = not is_noise
 
         op.tokens = sum(len(doc.page_content.split()) for doc in split_docs)
         return split_docs, vectors
 
 
 def _serialize_docs(docs: DocumentList) -> DocumentDictList:
+    """[최적화] Pydantic의 무거운 dict() 대신 직접 필요한 필드만 추출하여 성능 향상"""
     return [
-        doc.model_dump() if hasattr(doc, "model_dump") else doc.dict() for doc in docs
+        {"page_content": doc.page_content, "metadata": doc.metadata} for doc in docs
     ]
 
 
@@ -459,7 +560,9 @@ class VectorStoreCache:
     # [추가] 프로세스 내 스레드 간 경쟁 방지를 위한 공유 락
     _global_write_lock = threading.Lock()
 
-    def __init__(self, file_path: str, embedding_model_name: str, file_hash: str | None = None):
+    def __init__(
+        self, file_path: str, embedding_model_name: str, file_hash: str | None = None
+    ):
         self._file_hash = file_hash or _compute_file_hash(file_path)
         (
             self.cache_dir,
@@ -491,7 +594,7 @@ class VectorStoreCache:
             cache_dir,
             os.path.join(cache_dir, "doc_splits.json"),  # [.pkl -> .json]
             os.path.join(cache_dir, "faiss_index"),
-            os.path.join(cache_dir, "bm25_docs.json"),   # [.pkl -> .json]
+            os.path.join(cache_dir, "bm25_docs.json"),  # [.pkl -> .json]
         )
 
     def _purge_cache(self, reason: str):
@@ -570,9 +673,11 @@ class VectorStoreCache:
                     logger.warning(f"캐시 권한 경고 ({desc}): {e}")
 
             # --- 2. 데이터 로드 (모든 검증 통과 후) ---
-            # 1. 문서 로드 (Pickle 대신 JSON 사용)
-            with open(self.doc_splits_path, encoding="utf-8") as f:
-                doc_dicts = json.load(f)
+            # 1. 문서 로드 (orjson 사용으로 속도 향상)
+            import orjson
+
+            with open(self.doc_splits_path, "rb") as f:
+                doc_dicts = orjson.loads(f.read())
             doc_splits = _deserialize_docs(doc_dicts)
 
             # 2. FAISS 로드
@@ -580,28 +685,25 @@ class VectorStoreCache:
             vector_store = FAISS.load_local(
                 self.faiss_index_path,
                 embedder,
-                allow_dangerous_deserialization=True,
+                allow_dangerous_deserialization=True,  # [Security] 위에서 무결성 검증 완료됨
             )
 
-            # 3. BM25 로드 (Pickle을 통한 상태 복원)
-            # JSON 대신 .pkl 파일이 있으면 이를 우선 사용하여 인덱싱 시간 단축
-            bm25_retriever_path_pkl = self.bm25_retriever_path.replace(".json", ".pkl")
-            if os.path.exists(bm25_retriever_path_pkl):
-                with open(bm25_retriever_path_pkl, "rb") as f:
-                    bm25_retriever = pickle.load(f)  # nosec
-            else:
-                # 폴백: JSON으로부터 재구축
-                with open(self.bm25_retriever_path, encoding="utf-8") as f:
-                    bm25_doc_dicts = json.load(f)
-                bm25_docs = _deserialize_docs(bm25_doc_dicts)
+            # 3. BM25 로드 (보안을 위해 Pickle 대신 JSON으로부터 재구축)
+            # [수정] RCE 위험이 있는 pickle.load() 제거
+            with open(self.bm25_retriever_path, "rb") as f:
+                bm25_doc_dicts = orjson.loads(f.read())
+            bm25_docs = _deserialize_docs(bm25_doc_dicts)
 
-                from langchain_community.retrievers import BM25Retriever
-                # [최적화] 모듈 레벨에 정의된 bm25_tokenizer 사용
-                bm25_retriever = BM25Retriever.from_documents(bm25_docs, preprocess_func=bm25_tokenizer)
+            from langchain_community.retrievers import BM25Retriever
+
+            # [최적화] 모듈 레벨에 정의된 bm25_tokenizer 사용
+            bm25_retriever = BM25Retriever.from_documents(
+                bm25_docs, preprocess_func=bm25_tokenizer
+            )
 
             bm25_retriever.k = RETRIEVER_CONFIG["search_kwargs"]["k"]
 
-            logger.info(f"RAG 캐시 안전 로드 완료: '{self.cache_dir}'")
+            logger.info(f"RAG 캐시 안전 로드 완료 (JSON 기반): '{self.cache_dir}'")
             return doc_splits, vector_store, bm25_retriever
 
         except Exception as e:
@@ -636,18 +738,21 @@ class VectorStoreCache:
 
         try:
             os.makedirs(staging_dir, exist_ok=True)
+            import orjson
 
             # --- A. 스테이징 디렉터리에 데이터 작성 ---
 
-            # 1. 문서 저장
+            # 1. 문서 저장 (orjson 사용)
             serialized_splits = _serialize_docs(doc_splits)
-            with open(stg_doc_splits_path, "w", encoding="utf-8") as f:
-                json.dump(serialized_splits, f, ensure_ascii=False)
+            with open(stg_doc_splits_path, "wb") as f:
+                f.write(orjson.dumps(serialized_splits))
 
             doc_meta = self.security_manager.create_metadata_for_file(
                 stg_doc_splits_path, description="Document splits cache (JSON)"
             )
-            self.security_manager.save_cache_metadata(stg_doc_splits_path + ".meta", doc_meta)
+            self.security_manager.save_cache_metadata(
+                stg_doc_splits_path + ".meta", doc_meta
+            )
 
             # 2. FAISS 저장
             vector_store.save_local(stg_faiss_index_path)
@@ -660,36 +765,37 @@ class VectorStoreCache:
                     self.security_manager.save_cache_metadata(file_p + ".meta", meta)
 
             # 3. BM25 저장
-            # JSON은 호환성 및 무결성 체크용으로 유지
             bm25_docs = getattr(bm25_retriever, "docs", doc_splits)
             serialized_bm25 = _serialize_docs(bm25_docs)
-            with open(stg_bm25_retriever_path, "w", encoding="utf-8") as f:
-                json.dump(serialized_bm25, f, ensure_ascii=False)
+            with open(stg_bm25_retriever_path, "wb") as f:
+                f.write(orjson.dumps(serialized_bm25))
 
-            # [추가] 인덱스 상태가 포함된 Pickle 저장 (초고속 로딩용)
-            stg_bm25_retriever_path_pkl = stg_bm25_retriever_path.replace(".json", ".pkl")
-            with open(stg_bm25_retriever_path_pkl, "wb") as f:
-                pickle.dump(bm25_retriever, f)
+            # [보안] RCE 위험이 있는 Pickle 저장 로직 제거됨
 
-            # 메타데이터 생성 (Pickle 파일 포함)
-            for p in [stg_bm25_retriever_path, stg_bm25_retriever_path_pkl]:
-                bm25_meta = self.security_manager.create_metadata_for_file(
-                    p, description=f"BM25 retriever data ({os.path.basename(p)})"
-                )
-                self.security_manager.save_cache_metadata(p + ".meta", bm25_meta)
+            # 메타데이터 생성 (JSON 파일에 대해)
+            bm25_meta = self.security_manager.create_metadata_for_file(
+                stg_bm25_retriever_path, description="BM25 retriever data (JSON)"
+            )
+            self.security_manager.save_cache_metadata(
+                stg_bm25_retriever_path + ".meta", bm25_meta
+            )
 
             # --- B. 원자적 교체 (Atomic Rename) ---
             with self._global_write_lock:
                 if not os.path.exists(self.cache_dir):
                     try:
                         os.rename(staging_dir, self.cache_dir)
-                        logger.info(f"RAG 캐시 원자적 저장 및 검증 완료: '{self.cache_dir}'")
+                        logger.info(
+                            f"RAG 캐시 원자적 저장 및 검증 완료: '{self.cache_dir}'"
+                        )
                     except Exception as e:
                         logger.error(f"캐시 최종 교체 실패: {e}")
                         raise
                 else:
                     # 락 획득 대기 중에 다른 스레드가 먼저 저장한 경우
-                    logger.info("[Cache] 다른 세션에 의해 캐시가 이미 생성됨. 스테이징 삭제.")
+                    logger.info(
+                        "[Cache] 다른 세션에 의해 캐시가 이미 생성됨. 스테이징 삭제."
+                    )
                     shutil.rmtree(staging_dir)
 
         except Exception as e:
@@ -706,86 +812,69 @@ def _create_vector_store(
     vectors: Any = None,
 ) -> FAISS:
     """
-    FAISS 벡터 저장소를 생성합니다.
-    [최적화] 데이터 규모에 따라 Flat 또는 HNSW 인덱스를 자동 선택하고 코사인 유사도를 적용합니다.
+    FAISS 벡터 저장소를 최적화된 방식으로 생성합니다.
+    [최적화] Index Factory를 통해 SQ8(양자화) + HNSW 구조를 적용하여 메모리 절감 및 속도 향상.
     """
+    import uuid
+
+    import faiss
+    import numpy as np
+    from langchain_community.docstore.in_memory import InMemoryDocstore
     from langchain_community.vectorstores import FAISS
     from langchain_community.vectorstores.utils import DistanceStrategy
 
-    # 1. 임베딩 데이터 준비 및 정규화 (코사인 유사도용)
+    # 1. 임베딩 데이터 준비 및 정규화
     if vectors is None:
+        logger.warning(
+            "[FAISS] 전달된 벡터가 없어 임베딩을 다시 수행합니다 (비효율적)."
+        )
         texts = [d.page_content for d in docs]
         vectors_list = embedder.embed_documents(texts)
         vectors = np.array(vectors_list).astype("float32")
-        # [최적화] 외부에서 계산된 벡터가 없을 때만 정규화 수행
-        import faiss
-        faiss.normalize_L2(vectors)
     else:
-        # [최적화] 이미 정규화된 numpy array로 변환 (추가 정규화 생략)
         vectors = np.array(vectors).astype("float32")
 
-    normalized_vectors: np.ndarray = vectors
-
-    text_embeddings = list(
-        zip([d.page_content for d in docs], normalized_vectors, strict=False)
-    )
-    metadatas = [d.metadata for d in docs]
-
-    # 2. 데이터 규모에 따른 인덱스 전략 결정
+    faiss.normalize_L2(vectors)
     chunk_count = len(docs)
+    d = vectors.shape[1]
 
-    # LangChain FAISS에서는 distance_strategy를 통해 내부 메트릭 결정
-    # METRIC_INNER_PRODUCT + Normalized Vectors = Cosine Similarity
-    distance_strategy = DistanceStrategy.MAX_INNER_PRODUCT
+    # 2. 최적화된 인덱스 팩토리 설정
+    # - Flat: 정밀도가 중요한 소규모 데이터
+    # - HNSW32,SQ8: 메모리 효율과 속도가 중요한 대규모 데이터
+    index_type = "Flat" if chunk_count < 1000 else "HNSW32,SQ8"
 
-    if chunk_count >= 1000:
-        # HNSW 적용 (대규모 고속 검색)
-        logger.info(f"[FAISS] HNSW 인덱스 구축 시작 (Chunks: {chunk_count})")
+    # Inner Product(IP)는 정규화된 벡터에서 코사인 유사도와 동일함
+    index = faiss.index_factory(d, index_type, faiss.METRIC_INNER_PRODUCT)
 
-        import uuid
+    # 3. 인덱스 학습 (양자화를 사용하는 경우 학습 단계 필요)
+    if "SQ" in index_type or "IVF" in index_type:
+        logger.info(f"[FAISS] 인덱스 학습 시작 ({index_type})")
+        index.train(vectors)
 
-        import faiss
-        from langchain_community.docstore.in_memory import InMemoryDocstore
-        from langchain_core.documents import Document
+    # 데이터 추가
+    index.add(vectors)
 
-        d = normalized_vectors.shape[1]
-        index = faiss.IndexHNSWFlat(d, 32, faiss.METRIC_INNER_PRODUCT)
-        index.hnsw.efConstruction = 128
+    # 4. HNSW 세부 튜닝 (검색 시 정밀도 향상)
+    if "HNSW" in index_type:
+        # efSearch: 검색 시 후보 탐색 범위 (값이 클수록 정확하지만 느려짐)
+        faiss.downcast_index(index).hnsw.efSearch = 128
 
-        index.add(normalized_vectors)
+    # 5. LangChain FAISS 객체로 래핑
+    doc_ids = [str(uuid.uuid4()) for _ in range(chunk_count)]
+    new_docs = {
+        doc_id: Document(page_content=doc.page_content, metadata=doc.metadata)
+        for doc_id, doc in zip(doc_ids, docs, strict=False)
+    }
+    docstore = InMemoryDocstore(new_docs)
+    index_to_docstore_id = dict(enumerate(doc_ids))
 
-        # [최적화] 루프 내 add 대신 딕셔너리 컴프리헨션으로 벌크 생성
-        doc_ids = [str(uuid.uuid4()) for _ in range(chunk_count)]
-        new_docs = {
-            doc_id: Document(page_content=content, metadata=metadata)
-            for doc_id, content, metadata in zip(
-                doc_ids, [d.page_content for d in docs], metadatas, strict=False
-            )
-        }
-        docstore = InMemoryDocstore(new_docs)
-        index_to_docstore_id = dict(enumerate(doc_ids))
-
-        vector_store = FAISS(
-            embedding_function=embedder,
-            index=index,
-            docstore=docstore,
-            index_to_docstore_id=index_to_docstore_id,
-            distance_strategy=distance_strategy
-        )
-        logger.info(f"[RAG] [INDEX] FAISS HNSW 벌크 인덱스 구축 완료 | 청크: {chunk_count}")
-
-    else:
-        # 소규모는 정확한 검색(Flat) 수행
-        logger.debug(f"[RAG] [INDEX] FAISS Flat 인덱스 사용 | 청크: {chunk_count}")
-
-        vector_store = FAISS.from_embeddings(
-            text_embeddings=text_embeddings,
-            embedding=embedder,
-            metadatas=metadatas,
-            distance_strategy=distance_strategy
-        )
-
-    return vector_store
+    return FAISS(
+        embedding_function=embedder,
+        index=index,
+        docstore=docstore,
+        index_to_docstore_id=index_to_docstore_id,
+        distance_strategy=DistanceStrategy.MAX_INNER_PRODUCT,
+    )
 
 
 def _create_bm25_retriever(docs: list[Document]) -> BM25Retriever:
@@ -801,7 +890,7 @@ def _create_ensemble_retriever(
     vector_store: FAISS,
     bm25_retriever: BM25Retriever,
 ) -> EnsembleRetriever:
-    from langchain.retrievers import EnsembleRetriever
+    from langchain_classic.retrievers import EnsembleRetriever
 
     faiss_retriever = vector_store.as_retriever(
         search_type=RETRIEVER_CONFIG["search_type"],
@@ -820,7 +909,8 @@ def _load_and_build_retrieval_components(
     _embedder: HuggingFaceEmbeddings,
     embedding_model_name: str,
     _on_progress=None,
-    _file_hash: str | None = None
+    _file_hash: str | None = None,
+    session_id: str | None = None,
 ) -> tuple[DocumentList, FAISS, BM25Retriever, bool]:
     # 1. [최적화] 파일 통합 로드 및 해시 계산
     # 해시가 주어지지 않았다면 파일을 미리 읽어 해시 계산과 로딩에 공유
@@ -840,17 +930,26 @@ def _load_and_build_retrieval_components(
     cache_used = all(x is not None for x in [doc_splits, vector_store, bm25_retriever])
 
     if not cache_used:
-        import numpy as np
         import torch
 
-        # [최적화] 이미 읽어둔 바이트가 있다면 활용
-        if file_bytes is not None:
-            # _load_pdf_docs를 직접 호출하는 대신 바이트 기반 로직 수행 가능하지만,
-            # 구조 유지를 위해 _load_pdf_docs 내부에 바이트 지원 로직 추가 필요
-            # 여기서는 일관성을 위해 _load_pdf_docs 호출 (이미 내부에서 최적화됨)
-            docs = _load_pdf_docs(file_path, file_name, on_progress=_on_progress)
-        else:
-            docs = _load_pdf_docs(file_path, file_name, on_progress=_on_progress)
+        # [최적화] 이미 읽어둔 바이트가 있다면 활용 (중복 I/O 제거)
+        docs = _load_pdf_docs(
+            file_path,
+            file_name,
+            on_progress=_on_progress,
+            file_bytes=file_bytes,
+            session_id=session_id,
+        )
+
+        # [추가] 문서 언어 감지 (첫 1000자 기준)
+        if docs:
+            sample_text = docs[0].page_content[:1000]
+            # 한글 포함 여부로 간단히 판별 (확장 가능)
+            has_korean = any("\uac00" <= char <= "\ud7a3" for char in sample_text)
+            doc_lang = "Korean" if has_korean else "English"
+            SessionManager.set("doc_language", doc_lang, session_id=session_id)
+            logger.info(f"[RAG] [LANG] 문서 언어 감지됨: {doc_lang}")
+
         # 빈 문서 처리
         if not docs:
             raise EmptyPDFError(
@@ -866,7 +965,9 @@ def _load_and_build_retrieval_components(
         is_small_doc = total_text_len < 2000
 
         # [최적화 2] 1차 분할 및 임베딩 생성 (단일 패스)
-        doc_splits, precomputed_vectors = _split_documents(docs, _embedder)
+        doc_splits, precomputed_vectors = _split_documents(
+            docs, _embedder, session_id=session_id
+        )
         if _on_progress:
             _on_progress()
 
@@ -880,15 +981,9 @@ def _load_and_build_retrieval_components(
 
         if not is_small_doc:
             try:
-                SessionManager.add_status_log("인덱스 최적화 중")
+                SessionManager.add_status_log("인덱스 최적화 중", session_id=session_id)
                 if _on_progress:
                     _on_progress()
-
-                # 벡터가 없으면(기본 분할기 사용 시) 한 번만 생성
-                if optimized_vectors is None:
-                    texts = [d.page_content for d in doc_splits]
-                    vectors = _embedder.embed_documents(texts)
-                    optimized_vectors = [np.array(v) for v in vectors]
 
                 optimizer = get_index_optimizer()
                 doc_splits, optimized_vectors, q_meta, stats = optimizer.optimize_index(
@@ -903,7 +998,7 @@ def _load_and_build_retrieval_components(
 
                 logger.info(f"인덱스 최적화 완료: 중복 {stats.pruned_documents}개 제거")
                 SessionManager.replace_last_status_log(
-                    f"중복 내용 {stats.pruned_documents}개 정리"
+                    f"중복 내용 {stats.pruned_documents}개 정리", session_id=session_id
                 )
                 if _on_progress:
                     _on_progress()
@@ -928,7 +1023,7 @@ def _load_and_build_retrieval_components(
             except Exception:
                 pass
 
-        SessionManager.add_status_log("신규 인덱싱 완료")
+        SessionManager.add_status_log("신규 인덱싱 완료", session_id=session_id)
 
     return doc_splits, vector_store, bm25_retriever, cache_used
 
@@ -939,6 +1034,7 @@ def build_rag_pipeline(
     file_path: str,
     embedder: HuggingFaceEmbeddings,
     on_progress=None,
+    session_id: str | None = None,
 ) -> tuple[str, bool]:
     """
     RAG 파이프라인을 구축하고 세션에 저장합니다.
@@ -954,12 +1050,13 @@ def build_rag_pipeline(
             _embedder=embedder,
             embedding_model_name=embedder.model_name,
             _on_progress=on_progress,
-            _file_hash=file_hash
+            _file_hash=file_hash,
+            session_id=session_id,
         )
     )
 
     if cache_used:
-        SessionManager.add_status_log("캐시 데이터 로드")
+        SessionManager.add_status_log("캐시 데이터 로드", session_id=session_id)
         if on_progress:
             on_progress()
 
@@ -969,11 +1066,11 @@ def build_rag_pipeline(
         search_kwargs=RETRIEVER_CONFIG["search_kwargs"],
     )
 
-    SessionManager.set("faiss_retriever", faiss_retriever)
-    SessionManager.set("bm25_retriever", bm25_retriever)
+    SessionManager.set("faiss_retriever", faiss_retriever, session_id=session_id)
+    SessionManager.set("bm25_retriever", bm25_retriever, session_id=session_id)
 
     # 기존 호환성 유지 (EnsembleRetriever도 생성)
-    from langchain.retrievers import EnsembleRetriever
+    from langchain_classic.retrievers import EnsembleRetriever
 
     final_retriever = EnsembleRetriever(
         retrievers=[bm25_retriever, faiss_retriever],
@@ -981,23 +1078,21 @@ def build_rag_pipeline(
     )
     rag_engine = build_graph(retriever=final_retriever)
 
-    SessionManager.set("vector_store", vector_store)
-    SessionManager.set("rag_engine", rag_engine)
-    SessionManager.set("pdf_processed", True)
-    SessionManager.add_status_log("질문 가능")
+    SessionManager.set("vector_store", vector_store, session_id=session_id)
+    SessionManager.set("rag_engine", rag_engine, session_id=session_id)
+    SessionManager.set("pdf_processed", True, session_id=session_id)
+    SessionManager.add_status_log("질문 가능", session_id=session_id)
 
     if on_progress:
         on_progress()
 
     logger.info(
-        f"RAG 파이프라인 구축 완료: '{uploaded_file_name}' (캐시 사용: {cache_used})"
+        f"RAG 파이프라인 구축 완료: '{uploaded_file_name}' (캐시 사용: {cache_used}, Session: {session_id})"
     )
 
     if cache_used:
         return f"'{uploaded_file_name}' 문서 캐시 데이터 로드 완료", True
-    return (
-        f"'{uploaded_file_name}' 신규 문서 인덱싱 완료"
-    ), False
+    return (f"'{uploaded_file_name}' 신규 문서 인덱싱 완료"), False
 
 
 @log_operation("파이프라인 LLM 업데이트")

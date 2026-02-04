@@ -299,7 +299,11 @@ class ConcurrentDocumentRetriever:
 
         for doc in documents:
             # 문서 내용 + 출처 정보를 함께 튜플로 구성 (Python set에서 효율적으로 해싱됨)
-            doc_key = (doc.page_content, doc.metadata.get("source"), doc.metadata.get("page"))
+            doc_key = (
+                doc.page_content,
+                doc.metadata.get("source"),
+                doc.metadata.get("page"),
+            )
 
             if doc_key not in seen:
                 unique_docs.append(doc)

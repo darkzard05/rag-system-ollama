@@ -33,7 +33,7 @@ class SystemNotifier:
         cls,
         message: str,
         level: str = "info",
-        show_toast: bool = False, # 하위 호환성을 위해 유지하되 무시
+        show_toast: bool = False,  # 하위 호환성을 위해 유지하되 무시
         icon: str | None = None,
         duration: int = 4000,
         add_to_chat: bool = True,

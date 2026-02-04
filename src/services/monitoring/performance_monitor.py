@@ -15,6 +15,7 @@ Features:
 import csv
 import json
 import os
+import queue
 import threading
 import time
 from collections import deque
@@ -363,7 +364,13 @@ class PerformanceMonitor:
         self.csv_path = os.path.join("logs", "performance_metrics.csv")
         self._init_csv()
 
-        logger.info("[System] [Monitor] 성능 모니터링 시스템 활성화")
+        # [최적화] 비동기 로깅을 위한 큐와 스레드 설정
+        self._log_queue: queue.Queue[list[Any]] = queue.Queue()
+        self._stop_event = threading.Event()
+        self._log_thread = threading.Thread(target=self._logging_worker, daemon=True)
+        self._log_thread.start()
+
+        logger.info("[System] [Monitor] 성능 모니터링 시스템 활성화 (비동기 I/O)")
 
     def _init_csv(self):
         """CSV 파일 초기화 및 헤더 작성"""
@@ -390,26 +397,48 @@ class PerformanceMonitor:
         except Exception as e:
             logger.error(f"Failed to initialize performance CSV: {e}")
 
+    def _logging_worker(self):
+        """백그라운드에서 CSV 기록을 처리하는 워커 스레드"""
+        while not (self._stop_event.is_set() and self._log_queue.empty()):
+            try:
+                # 최대 1초 대기하며 큐에서 데이터 가져오기
+                data = self._log_queue.get(timeout=1.0)
+                try:
+                    with open(self.csv_path, "a", newline="", encoding="utf-8") as f:
+                        writer = csv.writer(f)
+                        writer.writerow(data)
+                except Exception as e:
+                    # 파일 쓰기 실패 시 에러 로그만 남기고 계속 진행
+                    print(f"[Monitor] CSV 쓰기 오류: {e}")
+                finally:
+                    self._log_queue.task_done()
+            except Exception:  # Timeout or Empty
+                continue
+
     def log_to_csv(self, data: dict[str, Any]):
-        """성능 데이터를 CSV 파일에 기록"""
+        """성능 데이터를 큐에 삽입 (비차단 방식)"""
         try:
-            with self._lock, open(self.csv_path, "a", newline="", encoding="utf-8") as f:
-                writer = csv.writer(f)
-                writer.writerow(
-                    [
-                            datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                            data.get("model", "unknown"),
-                            round(data.get("ttft", 0), 3),
-                            round(data.get("thinking", 0), 3),
-                            round(data.get("answer", 0), 3),
-                            round(data.get("total", 0), 3),
-                            data.get("tokens", 0),
-                            round(data.get("tps", 0), 2),
-                            data.get("query", "")[:100],  # 쿼리는 앞 100자만 보관
-                        ]
-                    )
+            row = [
+                datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                data.get("model", "unknown"),
+                round(data.get("ttft", 0), 3),
+                round(data.get("thinking", 0), 3),
+                round(data.get("answer", 0), 3),
+                round(data.get("total", 0), 3),
+                data.get("tokens", 0),
+                round(data.get("tps", 0), 2),
+                data.get("query", "")[:100],
+            ]
+            # [최적화] 실제 파일 쓰기 대신 큐에 삽입하여 메인 스레드 지연 방지
+            self._log_queue.put(row)
         except Exception as e:
-            logger.error(f"Failed to write metrics to CSV: {e}")
+            logger.error(f"Failed to queue metrics for CSV: {e}")
+
+    def stop(self):
+        """모니터링 시스템 종료 및 남은 로그 플러시"""
+        self._stop_event.set()
+        if self._log_thread.is_alive():
+            self._log_thread.join(timeout=2.0)
 
     # ========================================================================
     # Context Manager Support for Tracking

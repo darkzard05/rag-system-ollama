@@ -1,0 +1,315 @@
+﻿question,ground_truth,reference_context
+CM3 모델은 어떤 종류의 모델을 사용하여 개발되었나요?,CM3는 구조화된 다모달 문서의 대규모 데이터 세트를 기반으로 학습된 인과적 마스킹 생성 모델입니다. 이 모델은 텍스트와 이미지 토큰을 모두 포함할 수 있는 문서에서 학습됩니다.,"CM3: A CAUSAL MASKED MULTIMODAL MODEL OF
+THE INTERNET
+Armen Aghajanyan, Bernie Huang∗, Candace Ross∗, Vlad Karpukhin∗, Hu Xu∗, Naman Goyal,
+Dmytro Okhonko, Mandar Joshi, Gargi Ghosh, Mike Lewis, Luke Zettlemoyer
+Facebook AI Research
+{armenag,berniehuang,ccross,vladk,huxu,naman}@fb.com
+{oxo,mandarj,gghosh,mikelewis,lsz}@fb.com
+ABSTRACT
+We introduce CM3, a family of causally masked generative models trained over a
+large corpus of structured multi-modal documents that can contain both text and
+image tokens. Our new causally masked approach generates tokens left to right
+while also masking out a small number of long token spans that are generated at
+the end of the string, instead of their original positions. The casual masking ob-
+ject provides a type of hybrid of the more common causal and masked language
+models, by enabling full generative modeling while also providing bidirectional
+context when generating the masked spans. We train causally masked language-
+image models on large-scale web and Wikipedia articles, where each document
+contains all of the text, hypertext markup, hyperlinks, and image tokens (from a
+VQVAE-GAN), provided in the order they appear in the original HTML source
+(before masking). The resulting CM3 models can generate rich structured, multi-
+modal outputs while conditioning on arbitrary masked document contexts, and
+thereby implicitly learn a wide range of text, image, and cross modal tasks. They
+can be prompted to recover, in a zero-shot fashion, the functionality of models
+such as DALL-E, GENRE, and HTLM (Ramesh et al., 2021; De Cao et al., 2020;
+Aghajanyan et al., 2021). We set the new state-of-the-art in zero-shot summa-
+rization, entity linking, and entity disambiguation while maintaining competitive
+performance in the ﬁne-tuning setting. We can generate images unconditionally,
+conditioned on text (like DALL-E) and do captioning all in a zero-shot setting
+with a single model.
+1
+INTRODUCTION
+Recent advancements in large-scale generative sequence modeling have signiﬁcantly improved zero-
+shot performance on multiple modalities, including text Brown et al. (2020); Fabbri et al. (2020);
+Aghajanyan et al. (2021) and images Ramesh et al. (2021). Recent work has also shown how to
+use document structure, e.g., as provided by HTML web markup, to enable more effective zero-shot
+prompting for text-only tasks (Aghajanyan et al., 2021). In this paper, we show it is possible to learn
+multi-modal document-structured generative models, to jointly represent formatted hypertext and
+images as they naturally co-occur within full document contexts.
+We introduce CM3, a family of causally masked generative models trained over a large corpus of
+structured multi-modal documents. Causally masked models generate tokens left to right, just like
+a causal language model, but also mask out a small number of long token spans, which are then
+generated at the end of the string instead of their original positions. This provides a new hybrid of
+causal and masked language models, enabling full generative modeling with bidirectional context.
+For example, it can also be used in our setting to inﬁll complete images or larger structured text
+sections, conditioned on the rest of the document.
+We train CM3 models on close to a terabyte of web-based data following Aghajanyan et al. (2021),
+extended to include images through VQVAE-GAN tokens (Esser et al., 2021) and additional hyper-
+text link structure. This data is in strong contrast to previous methods that were either uni-modal or
+∗Equal Contribution for Second Author
+1
+arXiv:2201.07520v1  [cs.CL]  19 Jan 2022"
+CM3 모델이 생성하는 토큰은 어떻게 이루어지나요?,"CM3 모델은 토큰을 왼쪽에서 오른쪽으로 생성하며, 문자열 끝부분에 생성되는 소수의 긴 토큰 스피언을 원래 위치에서 마스킹하는 방식으로 작동합니다.","CM3: A CAUSAL MASKED MULTIMODAL MODEL OF
+THE INTERNET
+Armen Aghajanyan, Bernie Huang∗, Candace Ross∗, Vlad Karpukhin∗, Hu Xu∗, Naman Goyal,
+Dmytro Okhonko, Mandar Joshi, Gargi Ghosh, Mike Lewis, Luke Zettlemoyer
+Facebook AI Research
+{armenag,berniehuang,ccross,vladk,huxu,naman}@fb.com
+{oxo,mandarj,gghosh,mikelewis,lsz}@fb.com
+ABSTRACT
+We introduce CM3, a family of causally masked generative models trained over a
+large corpus of structured multi-modal documents that can contain both text and
+image tokens. Our new causally masked approach generates tokens left to right
+while also masking out a small number of long token spans that are generated at
+the end of the string, instead of their original positions. The casual masking ob-
+ject provides a type of hybrid of the more common causal and masked language
+models, by enabling full generative modeling while also providing bidirectional
+context when generating the masked spans. We train causally masked language-
+image models on large-scale web and Wikipedia articles, where each document
+contains all of the text, hypertext markup, hyperlinks, and image tokens (from a
+VQVAE-GAN), provided in the order they appear in the original HTML source
+(before masking). The resulting CM3 models can generate rich structured, multi-
+modal outputs while conditioning on arbitrary masked document contexts, and
+thereby implicitly learn a wide range of text, image, and cross modal tasks. They
+can be prompted to recover, in a zero-shot fashion, the functionality of models
+such as DALL-E, GENRE, and HTLM (Ramesh et al., 2021; De Cao et al., 2020;
+Aghajanyan et al., 2021). We set the new state-of-the-art in zero-shot summa-
+rization, entity linking, and entity disambiguation while maintaining competitive
+performance in the ﬁne-tuning setting. We can generate images unconditionally,
+conditioned on text (like DALL-E) and do captioning all in a zero-shot setting
+with a single model.
+1
+INTRODUCTION
+Recent advancements in large-scale generative sequence modeling have signiﬁcantly improved zero-
+shot performance on multiple modalities, including text Brown et al. (2020); Fabbri et al. (2020);
+Aghajanyan et al. (2021) and images Ramesh et al. (2021). Recent work has also shown how to
+use document structure, e.g., as provided by HTML web markup, to enable more effective zero-shot
+prompting for text-only tasks (Aghajanyan et al., 2021). In this paper, we show it is possible to learn
+multi-modal document-structured generative models, to jointly represent formatted hypertext and
+images as they naturally co-occur within full document contexts.
+We introduce CM3, a family of causally masked generative models trained over a large corpus of
+structured multi-modal documents. Causally masked models generate tokens left to right, just like
+a causal language model, but also mask out a small number of long token spans, which are then
+generated at the end of the string instead of their original positions. This provides a new hybrid of
+causal and masked language models, enabling full generative modeling with bidirectional context.
+For example, it can also be used in our setting to inﬁll complete images or larger structured text
+sections, conditioned on the rest of the document.
+We train CM3 models on close to a terabyte of web-based data following Aghajanyan et al. (2021),
+extended to include images through VQVAE-GAN tokens (Esser et al., 2021) and additional hyper-
+text link structure. This data is in strong contrast to previous methods that were either uni-modal or
+∗Equal Contribution for Second Author
+1
+arXiv:2201.07520v1  [cs.CL]  19 Jan 2022"
+CM3 모델은 어떤 데이터를 기반으로 훈련되었나요?,CM3 모델은 공통 크롤에서 수집한 거의 테라바이트의 다중 모드 간단한 HTML 데이터를 기반으로 훈련되었습니다.,"carefully curated the image-text alignment (e.g., for image captioning Radford et al. (2021); Ramesh
+et al. (2021)). We train a 2.7 billion and 13 billion causally masked model on this data which we
+call CM3-Medium and CM3-Large respectively.
+Extensive experiments demonstrate that these models are able to perform a wide range of zero-shot
+uni- and cross-modal tasks. We show both qualitatively and quantitatively that CM3 can be prompted
+for non-trivial image generation, similar to that of DALL-E. We also show that CM3 models are ca-
+pable of improving over state-of-the-art zero-shot summarization, entity linking, entity disambigua-
+tion, highlighting the structure that comes from the hypertext during training. Finally, we show that
+by ﬁne-tuning CM3 we set the new state-of-the-art for entity linking and entity disambiguation in
+general.
+To summarize, our contributions include:
+• We present the ﬁrst hyper-text language-image model, trained on close to a Terabyte of
+multi-modal simpliﬁed HTML data from the common crawl.
+• We present the causally masked objective, a hybrid of causal and masked language models
+that allows for bidirectional context control during generative mask inﬁlling.
+• We demonstrate consistently strong transfer from CM3 to a range of uni-modal and multi-
+modal tasks at differing supervision levels, including stating state-of-the-art on entity dis-
+ambiguation and zero-shot summarization.
+• We release all code and models to support future CM3 research.
+2
+CAUSALLY MASKED OBJECTIVE
+Traditional approaches to pre-training have focused on mixing the architectural choices (i.e.,
+encoder-only, decoder-only, encoder-decoder) with objective choices (i.e., masking, causal language
+modeling). For example, masked encoder-only models such as BERT (Devlin et al., 2018) and
+RoBERTa (Liu et al., 2019) excel in non-generative ﬁne-tuning tasks. Masked encoder-decoder
+models such as BART (Lewis et al., 2019) and T5 (Raffel et al., 2019) excel in both discriminative
+and generative ﬁne-tuning. Brown et al. (2020) on the other hand, showed that causal language mod-
+els (de-facto, decoder only) are capable of non-trivial performance without the need of ﬁne-tuning
+by simply prompting with appropriate string to control the generated outputs Radford et al. (2019);
+Brown et al. (2020); Artetxe et al. (2021).
+There are pros and cons to both masked and causal language modeling in the context of prompting.
+Masking offers the critical ability to encode bi-directionality within the prompts at the cost of only
+decoding roughly 15% of the tokens of the input sequence during training (Devlin et al., 2018;
+Liu et al., 2019; Lewis et al., 2019). Conversely, decoder-only causal language models decode every
+token in the input sequence in the training but are typically limited to left-only contexts. Empirically,
+more work has also been done on scaling causal decoder-only rather than their counterparts.
+In an effort to get most of the best of both worlds, we introduce a novel objective that combines
+the beneﬁt of per-token generation with optional bi-directionality speciﬁcally tailored to prompting.
+For a document of size s we select n ∼Clamp(Poisson(1), 1, 16) masks and for each of those
+masks we select span m ∼(Uniform(0, s), Uniform(0, s)) which does not intersect with any
+other m. These values are chosen to, on average, select relatively few relatively long spans, which
+we expect will allow the model to learn to inﬁll long spans. We then order these masks by the order
+that they appear in the source document, replace the span of the mask in the source document with
+an enumerated mask token (i.e., <mask:0>, <mask:1>), and move the masked spans to the end
+of the document followed by a unique end of document token.
+Figure 1 shows the complete process.
+We also augment the standard cross-entropy loss to weigh the loss of predicting mask tokens as
+0, as they are placed at random locations which carry no information to the underlying sequence
+modeling objective.
+The complete array of beneﬁts will become more apparent when designing prompts for uni/cross-
+modal tasks in § 4. However, at the core, the causally masked objective can do causal language
+modeling while optionally allowing for bidirectionality when needed.
+2"
+CM3 모델의 훈련에 사용된 주요 목적은 무엇인가요?,"CM3 모델의 훈련에 사용된 주요 목적은 사고적으로 마스킹된 목적(causally masked objective)이며, 이는 사고적 및 마스킹 언어 모델의 하이브리드로, 생성 마스킹 채우기 과정에서 양방향 컨텍스트 제어를 가능하게 합니다.","carefully curated the image-text alignment (e.g., for image captioning Radford et al. (2021); Ramesh
+et al. (2021)). We train a 2.7 billion and 13 billion causally masked model on this data which we
+call CM3-Medium and CM3-Large respectively.
+Extensive experiments demonstrate that these models are able to perform a wide range of zero-shot
+uni- and cross-modal tasks. We show both qualitatively and quantitatively that CM3 can be prompted
+for non-trivial image generation, similar to that of DALL-E. We also show that CM3 models are ca-
+pable of improving over state-of-the-art zero-shot summarization, entity linking, entity disambigua-
+tion, highlighting the structure that comes from the hypertext during training. Finally, we show that
+by ﬁne-tuning CM3 we set the new state-of-the-art for entity linking and entity disambiguation in
+general.
+To summarize, our contributions include:
+• We present the ﬁrst hyper-text language-image model, trained on close to a Terabyte of
+multi-modal simpliﬁed HTML data from the common crawl.
+• We present the causally masked objective, a hybrid of causal and masked language models
+that allows for bidirectional context control during generative mask inﬁlling.
+• We demonstrate consistently strong transfer from CM3 to a range of uni-modal and multi-
+modal tasks at differing supervision levels, including stating state-of-the-art on entity dis-
+ambiguation and zero-shot summarization.
+• We release all code and models to support future CM3 research.
+2
+CAUSALLY MASKED OBJECTIVE
+Traditional approaches to pre-training have focused on mixing the architectural choices (i.e.,
+encoder-only, decoder-only, encoder-decoder) with objective choices (i.e., masking, causal language
+modeling). For example, masked encoder-only models such as BERT (Devlin et al., 2018) and
+RoBERTa (Liu et al., 2019) excel in non-generative ﬁne-tuning tasks. Masked encoder-decoder
+models such as BART (Lewis et al., 2019) and T5 (Raffel et al., 2019) excel in both discriminative
+and generative ﬁne-tuning. Brown et al. (2020) on the other hand, showed that causal language mod-
+els (de-facto, decoder only) are capable of non-trivial performance without the need of ﬁne-tuning
+by simply prompting with appropriate string to control the generated outputs Radford et al. (2019);
+Brown et al. (2020); Artetxe et al. (2021).
+There are pros and cons to both masked and causal language modeling in the context of prompting.
+Masking offers the critical ability to encode bi-directionality within the prompts at the cost of only
+decoding roughly 15% of the tokens of the input sequence during training (Devlin et al., 2018;
+Liu et al., 2019; Lewis et al., 2019). Conversely, decoder-only causal language models decode every
+token in the input sequence in the training but are typically limited to left-only contexts. Empirically,
+more work has also been done on scaling causal decoder-only rather than their counterparts.
+In an effort to get most of the best of both worlds, we introduce a novel objective that combines
+the beneﬁt of per-token generation with optional bi-directionality speciﬁcally tailored to prompting.
+For a document of size s we select n ∼Clamp(Poisson(1), 1, 16) masks and for each of those
+masks we select span m ∼(Uniform(0, s), Uniform(0, s)) which does not intersect with any
+other m. These values are chosen to, on average, select relatively few relatively long spans, which
+we expect will allow the model to learn to inﬁll long spans. We then order these masks by the order
+that they appear in the source document, replace the span of the mask in the source document with
+an enumerated mask token (i.e., <mask:0>, <mask:1>), and move the masked spans to the end
+of the document followed by a unique end of document token.
+Figure 1 shows the complete process.
+We also augment the standard cross-entropy loss to weigh the loss of predicting mask tokens as
+0, as they are placed at random locations which carry no information to the underlying sequence
+modeling objective.
+The complete array of beneﬁts will become more apparent when designing prompts for uni/cross-
+modal tasks in § 4. However, at the core, the causally masked objective can do causal language
+modeling while optionally allowing for bidirectionality when needed.
+2"
+Monte Melkonian의 정치적 성향과 정체성은 무엇인가요?,Monte Melkonian는 좌파이자 아르메니아 민족주의자이자 민중 운동가였습니다.,"Monte
+Melkonian
+was
+left-wing
+a
+nationalist
+militant
+.
+Masked
+Language
+Model
+<a
+href=
+Armenian
+_nationalism
+>
+<mask>
+Monte
+Melkonian
+was
+<a
+left-wing
+a
+href=
+Armenian
+_nationalism
+>
+nationalist
+militant
+.
+Language
+Model
+Monte
+Melkonian
+was
+left-wing
+a
+nationalist
+militant
+.
+Causally
+Masked
+Language
+Model
+<mask:0>
+<mask:0>
+<a
+href=
+Armenian
+_nationalism
+>
+Figure 1: A visual representation of various language modeling objectives as well as our proposed
+causal language modeling objective with a single mask (n = 1). Given the left-to-right nature of
+causal language models (bottom row) we would not be able to generate the Wikipedia entity link
+highlighted in orange.
+3
+CM3
+Aghajanyan et al. (2021) used structured documents for text-only pre-training with strong zero-shot
+performance. Causally-Masked Multimodal Modeling (CM3) extends this work by modeling full
+document structure including images and hypertext links. Furthermore, we move away from the
+BART-like objective of Aghajanyan et al. (2021) to use our new causally masked objective with
+decoder-only models.
+3.1
+DATA
+Following Aghajanyan et al. (2021) we aim to implement a transform over HTML documents to
+extract out to minimal-HTML, i.e., the minimal set of text that is semantically relevant for end tasks.
+Birhane et al. (2021) gave in-depth criticisms of Common Crawl based multi-modal datasets and
+showed the existence of highly problematic examples (i.e., explicit images and text pairs of rape,
+pornography, and ethnic slurs). Given these severe ethical concerns, we opt-out of processing all
+of Common Crawl and instead opt into using a subset of the Common Crawl News (CC-NEWS)
+dataset and all of English Wikipedia.
+Given a valid HTML DOM1 per document, we run several passes to strip down the DOM to the
+elements of maximal semantic value. We ﬁrst remove all elements which do not contain textual ele-
+ments. We also ﬁlter out all headers, footers, copyrights, forms, dialog boxes and iFrames. We fold
+consecutive <div> elements into a singular <div> element with merged attributes. Furthermore
+we strip all the attributes from every element which are not derived from structured graphs such as
+OpenGraph, Schema and Twitter.
+For every <img> tag in the document with a valid src attribute URL, we download the image,
+resize to 256x256 pixels with random cropping and then tokenize it with VQVAE-GAN from Esser
+et al. (2021). This amounts to 256 tokens for every image. We then insert the string value of the
+tokens joined with a space back into the src attribute.
+We do not place any restrictions on the number of images or their locations. We present a set of
+high-level statistics in Table 1.
+Documents (Million)
+Size (GB)
+Unique Images (Million)
+Tokens (Billion)
+CC-NEWS
+45
+460
+18
+121
+En-Wikipedia
+16
+383
+7
+102
+Total
+61
+843
+25
+223
+Table 1: High level statistics of the data used to train CM3.
+1The DOM or Document Object Model is an interface that treats an HTML document as a tree structure
+wherein each node is an object representing a part of the document.
+3"

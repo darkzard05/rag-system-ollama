@@ -33,25 +33,32 @@ class SessionManager(ThreadSafeSessionManager):
         return super().is_ready_for_chat()
 
     @classmethod
-    def get(cls, key: str, default: SessionValue | None = None) -> SessionValue | None:
+    def get(
+        cls,
+        key: str,
+        default: SessionValue | None = None,
+        session_id: str | None = None,
+    ) -> SessionValue | None:
         """
         세션 상태에서 값을 가져옵니다.
         """
-        return super().get(key, default)
+        return super().get(key, default, session_id=session_id)
 
     @classmethod
-    def get_messages(cls) -> list[dict[str, str]]:
+    def get_messages(cls, session_id: str | None = None) -> list[dict[str, str]]:
         """
         메시지 목록을 가져옵니다.
         """
-        return super().get_messages()
+        return super().get_messages(session_id=session_id)
 
     @classmethod
-    def set(cls, key: SessionKey, value: SessionValue) -> None:
+    def set(
+        cls, key: SessionKey, value: SessionValue, session_id: str | None = None
+    ) -> None:
         """
         세션 상태에 값을 설정합니다.
         """
-        super().set(key, value)
+        super().set(key, value, session_id=session_id)
 
     @classmethod
     def delete_session(cls, session_id: str) -> bool:
@@ -61,8 +68,8 @@ class SessionManager(ThreadSafeSessionManager):
         return super().delete_session(session_id)
 
     @classmethod
-    def reset_all_state(cls):
+    def reset_all_state(cls, session_id: str | None = None):
         """
         세션의 모든 상태를 기본값으로 리셋합니다.
         """
-        super().reset_all_state()
+        super().reset_all_state(session_id=session_id)

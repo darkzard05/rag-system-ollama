@@ -1,6 +1,6 @@
 """
 LLM-based Semantic Router for Intent-based RAG Pipelines.
-Optimized for 4B models to achieve < 500ms routing latency.
+Optimized for 4B models to achieve < 500ms routing latency with caching.
 """
 
 import logging
@@ -16,65 +16,124 @@ logger = logging.getLogger(__name__)
 class RAGQueryOptimizer:
     """
     LLM Intent Classifier.
-    Categorizes queries into:
-    [A] GREETING: Simple hellos or bot identity questions.
-    [B] FACTOID: Specific, clear questions that need direct retrieval.
-    [C] RESEARCH: Complex, vague, or multi-step questions that need query expansion.
+    Optimized for 4B models to achieve < 500ms routing latency with caching.
     """
 
-    ROUTING_PROMPT = """
-자 너는 이제부터 질문 분류기야. 사용자의 [질문]을 보고 아래 규칙에 따라 딱 한 글자(A, B, C)로만 대답해.
+    # [최적화] 의도 분석 결과 및 샘플 벡터 캐시 (메모리 절감 및 속도 향상)
+    _intent_cache: dict[str, str] = {}
+    _sample_vectors_cache: dict[str, Any] = {}
+    _max_cache_size = 100
 
-[규칙]
-- [A]: 인사, 자기소개, 감정 표현 등 문서 검색이 아예 필요 없는 질문.
-- [B]: "제목이 뭐야?", "저자는 누구야?" 처럼 키워드가 명확하여 바로 검색 가능한 질문.
-- [C]: "내용 요약해줘", "전체적인 특징 분석해줘" 처럼 여러 번의 검색이나 확장이 필요한 복잡한 질문.
+    ROUTING_PROMPT = """Classify as A (Greeting), B (Fact), or C (Analysis). Answer ONLY with one letter."""
 
-[질문]: "{input}"
-답변(A/B/C):"""
+    # [최적화] 의도별 시맨틱 예시 문장
+    INTENT_SAMPLES = {
+        "GREETING": ["안녕", "반가워", "누구니", "자기소개해줘"],
+        "FACTOID": ["제목이 뭐야", "저자가 누구야", "페이지 수 알려줘"],
+        "RESEARCH": ["전체 내용 요약해줘", "주요 특징 분석해줘", "결론이 뭐야"],
+    }
 
     @classmethod
     async def classify_intent(cls, query: str, llm: Any) -> str:
         """
-        Classifies the intent using heuristics first, then the LLM.
+        의도를 분석합니다. (룰 -> 캐시된 임베딩 -> LLM 3단계 하이브리드)
         """
         start_time = time.time()
-        clean_q = query.strip()
 
-        # 1. [최적화] Heuristic Fast-Track Router
-        # 매우 짧은 인사말이나 명령어는 LLM 호출 없이 즉시 처리
-        greetings = {"안녕", "안녕하세요", "하이", "hi", "hello", "반가워", "누구니", "누구야"}
-        if len(clean_q) <= 10 and any(g in clean_q.lower() for g in greetings):
-            logger.info(f"[CHAT] [ROUTER] [Fast-Track] 인사말 감지 | {clean_q}")
+        # 1. 룰 기반 고속 필터링 (Static Layer)
+        clean_q = query.strip().lower()
+        if len(clean_q) < 10 and any(
+            w in clean_q for w in ["안녕", "hi", "hello", "반가"]
+        ):
             return "GREETING"
 
-        if len(clean_q) < 2:
-            return "FACTOID"
+        # 2. 결과 캐시 확인
+        if clean_q in cls._intent_cache:
+            return cls._intent_cache[clean_q]
 
-        # 2. LLM-based Router
-        prompt = ChatPromptTemplate.from_template(cls.ROUTING_PROMPT)
-        # stop 시퀀스를 설정하여 모델이 길게 말하는 것을 원천 차단 (지연 시간 최적화)
-        chain = prompt | llm.bind(stop=["\n", " ", "."]) | StrOutputParser()
+        # 3. 임베딩 기반 시맨틱 매칭 (Cached Semantic Layer)
+        import numpy as np
+
+        from core.session import SessionManager
+
+        embedder = SessionManager.get("embedder")
+        if embedder:
+            try:
+                # [최적화] 샘플 벡터를 최초 1회만 임베딩하여 캐시
+                if not cls._sample_vectors_cache:
+                    for intent, samples in cls.INTENT_SAMPLES.items():
+                        cls._sample_vectors_cache[intent] = [
+                            np.array(v) for v in embedder.embed_documents(samples)
+                        ]
+
+                q_vec = np.array(embedder.embed_query(query))
+
+                best_intent = "FACTOID"
+                max_sim = -1.0
+
+                for intent, s_vecs in cls._sample_vectors_cache.items():
+                    for sv in s_vecs:
+                        sim = np.dot(q_vec, sv) / (
+                            np.linalg.norm(q_vec) * np.linalg.norm(sv)
+                        )
+                        if sim > max_sim:
+                            max_sim = sim
+                            best_intent = intent
+
+                # 유사도가 임계값(0.75) 이상이면 즉시 확정
+                if max_sim > 0.75:
+                    latency = (time.time() - start_time) * 1000
+                    logger.info(
+                        f"[ROUTER] 시맨틱 매칭 성공 | {best_intent} | Sim: {max_sim:.2f} | {latency:.1f}ms"
+                    )
+                    cls._intent_cache[clean_q] = best_intent
+                    return best_intent
+            except Exception as e:
+                logger.debug(f"[ROUTER] 시맨틱 매칭 건너뜀: {e}")
+
+        # 4. LLM 기반 정밀 라우팅 (Reasoning Layer - Final Fallback)
+        system_msg = "Output ONLY 'A', 'B', or 'C'. NO thinking. NO explanation."
+
+        bound_llm = llm
+        if hasattr(llm, "bind"):
+            bound_llm = llm.bind(
+                stop=["\n", " "], options={"temperature": 0.0, "num_predict": 2}
+            )
+
+        prompt = ChatPromptTemplate.from_messages(
+            [
+                ("system", system_msg),
+                (
+                    "human",
+                    f"Task: Classify Query\nRules:\nA: Greeting\nB: Simple Fact\nC: Complex Analysis\n\nQuery: {query}\nResult:",
+                ),
+            ]
+        )
+
+        chain = prompt | bound_llm | StrOutputParser()
 
         try:
             # 1-토큰 분류 실행
             response = await chain.ainvoke({"input": query})
-            intent = response.strip().upper()
+            intent_raw = response.strip().upper()
 
-            # 결과 정규화 (예외 상황 대비)
-            if "A" in intent:
+            # 첫 글자만 추출
+            intent = intent_raw[0] if intent_raw else "B"
+
+            if intent == "A":
                 result = "GREETING"
-            elif "C" in intent:
+            elif intent == "C":
                 result = "RESEARCH"
             else:
-                result = "FACTOID"  # 기본값
+                result = "FACTOID"
 
             latency = (time.time() - start_time) * 1000
-            logger.info(
-                f"[CHAT] [ROUTER] 의도 분석 완료 | 의도: {result} | 지연: {latency:.2f}ms | 질문: {query[:30]}..."
-            )
+            logger.info(f"[CHAT] [ROUTER] 의도 분석 완료 | {result} | {latency:.1f}ms")
+
+            if len(cls._intent_cache) < cls._max_cache_size:
+                cls._intent_cache[clean_q] = result
 
             return result
         except Exception as e:
             logger.error(f"[CHAT] [ROUTER] 분석 실패 | {e}")
-            return "FACTOID"  # 에러 시 안전한 기본값
+            return "FACTOID"

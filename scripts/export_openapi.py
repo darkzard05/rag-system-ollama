@@ -5,7 +5,11 @@ CI/CD 파이프라인에서 문서 자동화에 사용됩니다.
 
 import json
 import sys
+import logging
 from pathlib import Path
+
+# 모든 로깅 비활성화 (표준 출력 오염 방지)
+logging.disable(logging.CRITICAL)
 
 # src 디렉토리를 경로에 추가
 sys.path.append(str(Path(__file__).parent.parent / "src"))

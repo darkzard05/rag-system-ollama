@@ -4,7 +4,6 @@
 """
 
 import hashlib
-import json
 import logging
 import time
 from abc import ABC, abstractmethod
@@ -156,12 +155,23 @@ class MemoryCache(CacheBackend[T]):
             return entry.value
 
     async def set(self, key: str, value: T, ttl_seconds: float = 0) -> None:
-        """값 설정"""
+        """값 설정 (사이즈 추적 최적화)"""
         with self.lock:
             ttl = ttl_seconds if ttl_seconds > 0 else self.default_ttl
 
+            # [최적화] 기존 항목이 있으면 사이즈 차감
+            if key in self.cache:
+                self.stats.total_memory_bytes -= self.cache[key].metadata.get(
+                    "size_bytes", 0
+                )
+
             # 메모리 확인 및 정리
             self._cleanup_if_needed(value)
+
+            # 대략적인 사이즈 계산
+            import sys
+
+            size_bytes = sys.getsizeof(value)
 
             entry = CacheEntry(
                 key=key,
@@ -169,17 +179,21 @@ class MemoryCache(CacheBackend[T]):
                 created_at=time.time(),
                 accessed_at=time.time(),
                 ttl_seconds=ttl,
+                metadata={"size_bytes": size_bytes},
             )
 
             self.cache[key] = entry
+            self.stats.total_memory_bytes += size_bytes
             self.stats.cache_size = len(self.cache)
 
-            logger.debug(f"[Cache] 값 저장: {key} (TTL: {ttl}초)")
+            logger.debug(f"[Cache] 값 저장: {key} (TTL: {ttl}초, Size: {size_bytes}B)")
 
     async def delete(self, key: str) -> None:
-        """값 삭제"""
+        """값 삭제 (사이즈 차감 포함)"""
         with self.lock:
             if key in self.cache:
+                entry = self.cache[key]
+                self.stats.total_memory_bytes -= entry.metadata.get("size_bytes", 0)
                 del self.cache[key]
                 self.stats.cache_size = len(self.cache)
                 logger.debug(f"[Cache] 값 삭제: {key}")
@@ -192,41 +206,41 @@ class MemoryCache(CacheBackend[T]):
             logger.info("[Cache] 캐시 전체 삭제")
 
     def get_stats(self) -> CacheStatistics:
-        """통계 조회"""
+        """통계 조회 (계산 오버헤드 최적화)"""
         with self.lock:
             stats = self.stats
             stats.cache_size = len(self.cache)
 
-            # 메모리 사용량 계산
-            total_bytes = 0
-            ages = []
-
-            for entry in self.cache.values():
-                total_bytes += len(json.dumps(entry.value).encode())
-                ages.append(entry.get_age())
-
-            stats.total_memory_bytes = total_bytes
+            # [최적화] 모든 항목을 순회하며 JSON 직렬화를 반복하는 대신,
+            # 저장 시 계산된 total_size_bytes를 즉시 활용
+            ages = [entry.get_age() for entry in self.cache.values()]
             stats.avg_age_seconds = sum(ages) / len(ages) if ages else 0
 
             return stats
 
     def _cleanup_if_needed(self, new_value: T) -> None:
-        """메모리 및 크기 조건에 따라 정리"""
-        # 크기 초과 확인
+        """메모리 및 크기 조건에 따라 정리 (계산 최적화)"""
+        # 1. 크기 초과 확인 (O(1))
         if len(self.cache) >= self.max_size:
             self._evict_lru()
 
-        # 메모리 초과 확인
+        # 2. 메모리 초과 확인
+        # [최적화] 매번 전체 캐시를 순회하지 않고, 새로 추가될 값의 크기만 계산
         try:
-            estimated_bytes = len(json.dumps(new_value).encode())
-        except (TypeError, ValueError):
-            # JSON 직렬화 불가능한 객체는 크기 추정
-            estimated_bytes = len(str(new_value).encode())
+            # sys.getsizeof()는 실제 메모리 점유율을 정확히 반영하지 못하므로
+            # 직렬화된 크기를 기준으로 하되, 이미 계산된 total_size_bytes를 활용
+            import sys
 
-        stats = self.get_stats()
+            estimated_bytes = sys.getsizeof(new_value)
+            if isinstance(new_value, (str, bytes)):
+                estimated_bytes = len(new_value)
+            elif hasattr(new_value, "__len__"):
+                estimated_bytes = len(new_value) * 8  # 대략적인 포인터 크기
+        except Exception:
+            estimated_bytes = 1024  # 폴백: 1KB
 
         if (
-            stats.total_memory_bytes + estimated_bytes
+            self.stats.total_memory_bytes + estimated_bytes
             > self.max_memory_mb * 1024 * 1024
         ):
             self._evict_lru()
@@ -280,16 +294,9 @@ class SemanticCache(CacheBackend[T]):
         self, query: str, similarity_threshold: float | None = None
     ) -> T | None:
         """
-        의미적으로 유사한 항목 조회
-
-        Args:
-            query: 검색 쿼리
-            similarity_threshold: 유사도 임계값 (None이면 기본값 사용)
-
-        Returns:
-            캐시된 값 또는 None
+        의미적으로 유사한 항목 조회 (NumPy 벡터화 최적화)
         """
-        if not self.embedding_model:
+        if not self.embedding_model or not self.embeddings:
             return None
 
         with self.lock:
@@ -298,31 +305,28 @@ class SemanticCache(CacheBackend[T]):
             try:
                 # 쿼리 임베딩
                 query_embedding = await self._embed(query)
+                query_embedding = query_embedding / (
+                    np.linalg.norm(query_embedding) + 1e-10
+                )
+
+                # [최적화] 모든 캐시된 벡터를 하나의 행렬로 구성하여 한 번에 행렬 연산 수행
+                keys = list(self.embeddings.keys())
+                # 이미 정규화된 상태로 저장되어 있다고 가정 (set에서 처리)
+                cached_matrix = np.array([self.embeddings[k] for k in keys])
+
+                # 코사인 유사도 계산 (행렬-벡터 내적)
+                similarities = np.dot(cached_matrix, query_embedding)
 
                 # 가장 유사한 항목 찾기
-                best_match = None
-                best_similarity: float = 0.0
-
-                for key, cached_embedding in self.embeddings.items():
-                    entry = self.cache.get(key)
-                    if entry is None or entry.is_expired():
-                        continue
-
-                    # 코사인 유사도 계산
-                    similarity = self._cosine_similarity(
-                        query_embedding, cached_embedding
-                    )
-
-                    if similarity > best_similarity:
-                        best_similarity = similarity
-                        best_match = key
+                max_idx = np.argmax(similarities)
+                best_similarity = similarities[max_idx]
+                best_match = keys[max_idx]
 
                 # 임계값 이상인 경우 반환
-                if best_similarity >= threshold and best_match:
+                if best_similarity >= threshold:
                     entry = self.cache[best_match]
                     entry.touch()
                     self.stats.total_hits += 1
-
                     logger.debug(f"[SemanticCache] 히트: 유사도 {best_similarity:.3f}")
                     return entry.value
 
@@ -335,27 +339,24 @@ class SemanticCache(CacheBackend[T]):
                 return None
 
     async def set(self, query: str, value: T, ttl_seconds: float = 0) -> None:
-        """값 설정"""
+        """값 저장 및 벡터 정규화"""
         with self.lock:
             try:
                 ttl = ttl_seconds if ttl_seconds > 0 else self.default_ttl
 
-                # 메모리 정리
                 if len(self.cache) >= self.max_entries:
                     self._evict_oldest()
 
-                # 캐시 키 생성 (해시)
                 cache_key = hashlib.sha256(query.encode()).hexdigest()[:16]
 
-                # 쿼리 임베딩 (모델이 있으면)
                 query_embedding = None
                 if self.embedding_model:
-                    try:
-                        query_embedding = await self._embed(query)
-                    except Exception as e:
-                        logger.warning(f"[SemanticCache] 임베딩 생성 오류: {e}")
+                    query_embedding = await self._embed(query)
+                    # [최적화] 저장 시 미리 정규화하여 get 단계의 연산 감소
+                    norm = np.linalg.norm(query_embedding)
+                    if norm > 0:
+                        query_embedding = query_embedding / norm
 
-                # 항목 저장
                 entry = CacheEntry(
                     key=cache_key,
                     value=value,
@@ -369,8 +370,6 @@ class SemanticCache(CacheBackend[T]):
                 if query_embedding is not None:
                     self.embeddings[cache_key] = query_embedding
                 self.stats.cache_size = len(self.cache)
-
-                logger.debug(f"[SemanticCache] 값 저장: {cache_key}")
 
             except Exception as e:
                 logger.error(f"[SemanticCache] 저장 오류: {e}")

@@ -10,6 +10,8 @@ from enum import Enum
 from threading import RLock
 from typing import Any
 
+import numpy as np
+
 
 class RerankerStrategy(Enum):
     """재순위지정 전략"""
@@ -66,36 +68,33 @@ class RerankingMetrics:
 
 
 class SimilarityCalculator:
-    """유사도 계산기"""
+    """유사도 계산기 (Numpy 기반 최적화)"""
 
     @staticmethod
-    def cosine_similarity(vec1: list[float], vec2: list[float]) -> float:
+    def cosine_similarity(
+        vec1: list[float] | np.ndarray, vec2: list[float] | np.ndarray
+    ) -> float:
         """코사인 유사도"""
-        if not vec1 or not vec2:
-            return 0.0
-
-        dot_product = sum(a * b for a, b in zip(vec1, vec2, strict=False))
-        norm1 = sum(x**2 for x in vec1) ** 0.5
-        norm2 = sum(x**2 for x in vec2) ** 0.5
-
+        v1, v2 = np.array(vec1), np.array(vec2)
+        norm1 = np.linalg.norm(v1)
+        norm2 = np.linalg.norm(v2)
         if norm1 == 0 or norm2 == 0:
             return 0.0
-
-        return dot_product / (norm1 * norm2)
+        return float(np.dot(v1, v2) / (norm1 * norm2))
 
     @staticmethod
-    def manhattan_distance(vec1: list[float], vec2: list[float]) -> float:
+    def manhattan_distance(
+        vec1: list[float] | np.ndarray, vec2: list[float] | np.ndarray
+    ) -> float:
         """맨해튼 거리"""
-        if not vec1 or not vec2:
-            return 0.0
-        return sum(abs(a - b) for a, b in zip(vec1, vec2, strict=False))
+        return float(np.sum(np.abs(np.array(vec1) - np.array(vec2))))
 
     @staticmethod
-    def euclidean_distance(vec1: list[float], vec2: list[float]) -> float:
+    def euclidean_distance(
+        vec1: list[float] | np.ndarray, vec2: list[float] | np.ndarray
+    ) -> float:
         """유클리디안 거리"""
-        if not vec1 or not vec2:
-            return 0.0
-        return sum((a - b) ** 2 for a, b in zip(vec1, vec2, strict=False)) ** 0.5
+        return float(np.linalg.norm(np.array(vec1) - np.array(vec2)))
 
 
 class DiversityCalculator:

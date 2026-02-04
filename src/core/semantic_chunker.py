@@ -81,11 +81,15 @@ class EmbeddingBasedSemanticChunker:
 
             # 구분자 앞쪽 텍스트 + 구분자
             segment_text = text[last_pos:sep_end]
-            raw_segments.append({"text": segment_text, "start": last_pos, "end": sep_end})
+            raw_segments.append(
+                {"text": segment_text, "start": last_pos, "end": sep_end}
+            )
             last_pos = sep_end
 
         if last_pos < len(text):
-            raw_segments.append({"text": text[last_pos:], "start": last_pos, "end": len(text)})
+            raw_segments.append(
+                {"text": text[last_pos:], "start": last_pos, "end": len(text)}
+            )
 
         # 2. 너무 긴 세그먼트 강제 분할 (OOM 방지)
         final_sentences: list[dict[str, Any]] = []
@@ -96,10 +100,14 @@ class EmbeddingBasedSemanticChunker:
 
             if len(seg_text) <= MAX_HARD_SPLIT_LEN:
                 # 정상 크기인 경우 정제 후 추가
-                self._add_cleaned_sentence(final_sentences, seg_text, seg_start, seg_end)
+                self._add_cleaned_sentence(
+                    final_sentences, seg_text, seg_start, seg_end
+                )
             else:
                 # 강제 분할 수행 (공백 기준 또는 글자 수 기준)
-                logger.warning(f"[Chunker] 과도하게 긴 세그먼트 발견 ({len(seg_text)}자). 강제 분할을 수행합니다.")
+                logger.warning(
+                    f"[Chunker] 과도하게 긴 세그먼트 발견 ({len(seg_text)}자). 강제 분할을 수행합니다."
+                )
 
                 curr_pos = 0
                 while curr_pos < len(seg_text):
@@ -112,12 +120,21 @@ class EmbeddingBasedSemanticChunker:
 
                     sub_text = seg_text[curr_pos : curr_pos + sub_len]
                     self._add_cleaned_sentence(
-                        final_sentences, sub_text, seg_start + curr_pos, seg_start + curr_pos + len(sub_text)
+                        final_sentences,
+                        sub_text,
+                        seg_start + curr_pos,
+                        seg_start + curr_pos + len(sub_text),
                     )
                     curr_pos += sub_len
         return final_sentences
 
-    def _add_cleaned_sentence(self, target_list: list[dict[str, Any]], raw_text: str, start_offset: int, end_offset: int):
+    def _add_cleaned_sentence(
+        self,
+        target_list: list[dict[str, Any]],
+        raw_text: str,
+        start_offset: int,
+        end_offset: int,
+    ):
         """정제된 문장을 리스트에 추가합니다."""
         l_stripped = raw_text.lstrip()
         n_leading = len(raw_text) - len(l_stripped)
@@ -130,45 +147,49 @@ class EmbeddingBasedSemanticChunker:
 
         embed_text = stripped.replace("\n", " ")
         if embed_text:
-            target_list.append({"text": embed_text, "start": final_start, "end": final_end})
-
-        embed_text = stripped.replace("\n", " ")
-        if embed_text:
-            target_list.append({"text": embed_text, "start": final_start, "end": final_end})
+            target_list.append(
+                {"text": embed_text, "start": final_start, "end": final_end}
+            )
 
     def _get_embeddings(self, texts: list[str], normalize: bool = True) -> np.ndarray:
         """
-        텍스트 리스트의 임베딩을 생성합니다 (배치 처리).
-        [최적화] 중복 문장을 제거하여 고유 문장만 연산한 후 다시 매핑합니다 (GPU 자원 절감).
+        텍스트 리스트의 임베딩을 생성합니다.
+        [최적화] 중복 제거 및 라이브러리 내부 배치를 활용하여 최고 성능을 냅니다.
         """
         if not texts:
             return np.array([]).reshape(0, 0)
 
         try:
-            # 1. 중복 제거 및 인덱스 매핑
+            # 1. 중복 제거를 통한 연산 최소화
             unique_texts: list[str] = []
             text_to_idx = {}
             mapping = []
+
             for text in texts:
-                if text not in text_to_idx:
-                    text_to_idx[text] = len(unique_texts)
+                norm_text = " ".join(text.lower().split())
+                if norm_text not in text_to_idx:
+                    text_to_idx[norm_text] = len(unique_texts)
                     unique_texts.append(text)
-                mapping.append(text_to_idx[text])
-            # 2. 고유 문장에 대해서만 배치 임베딩 수행
-            logger.info(f"[MODEL] [LOAD] 중복 제거 임베딩 연산 | {len(texts)} -> {len(unique_texts)} 문장")
-            unique_embeddings_list = []
-            for i in range(0, len(unique_texts), self.batch_size):
-                batch = unique_texts[i : i + self.batch_size]
-                unique_embeddings_list.extend(self.embedder.embed_documents(batch))
+                mapping.append(text_to_idx[norm_text])
+
+            # 2. 배치 임베딩 (HuggingFaceEmbeddings 내부의 배칭 활용)
+            # 수동 배칭(loop)을 제거하여 라이브러리 최적화(AVX/CUDA)가 중단 없이 작동하게 함
+            unique_embeddings_list = self.embedder.embed_documents(unique_texts)
             unique_embeddings = np.array(unique_embeddings_list).astype("float32")
+
             if normalize:
-                # 벡터 정규화
+                # [최적화] NumPy 벡터화 연산으로 고속 정규화
                 norms = np.linalg.norm(unique_embeddings, axis=1, keepdims=True)
-                norms[norms == 0] = 1e-10
-                unique_embeddings = unique_embeddings / norms
-            # 3. 원본 순서대로 결과 재구성 (Broadcasting / Mapping)
-            final_embeddings = unique_embeddings[mapping]
-            return final_embeddings
+                # 0으로 나누기 방지
+                unique_embeddings = np.divide(
+                    unique_embeddings,
+                    norms,
+                    out=np.zeros_like(unique_embeddings),
+                    where=norms != 0,
+                )
+
+            # 3. 원본 순서로 복원
+            return unique_embeddings[mapping]
         except Exception as e:
             logger.error(f"[MODEL] [LOAD] 임베딩 생성 실패 | {e}")
             raise
@@ -182,7 +203,9 @@ class EmbeddingBasedSemanticChunker:
             return []
 
         # 정규화된 벡터 간의 내적은 코사인 유사도와 동일 (einsum으로 메모리 절약)
-        similarities = np.einsum('ij,ij->i', normalized_embeddings[:-1], normalized_embeddings[1:])
+        similarities = np.einsum(
+            "ij,ij->i", normalized_embeddings[:-1], normalized_embeddings[1:]
+        )
 
         return similarities.tolist()
 
@@ -216,7 +239,7 @@ class EmbeddingBasedSemanticChunker:
             # B. 로컬 급감 체크 (Local Drop)
             is_local_break = False
             if i >= window_size:
-                local_avg = np.mean(similarities[max(0, i-window_size):i])
+                local_avg = np.mean(similarities[max(0, i - window_size) : i])
                 # 주변 평균보다 20% 이상 유사도가 떨어지면 경계로 의심
                 if sim < local_avg * 0.8:
                     is_local_break = True
@@ -302,11 +325,18 @@ class EmbeddingBasedSemanticChunker:
             return []
 
         # [최적화] 너무 짧은 문장 병합 (오프셋 유지)
+        # 30자 미만의 문장은 독립적인 의미를 갖기 어려우므로 앞 문장과 병합
+        MIN_MERGE_LEN = 30
+
         sentences = []
         if raw_sentences:
             current_s = raw_sentences[0]
             for s in raw_sentences[1:]:
-                if len(s["text"]) < 3:
+                # 현재 문장이 너무 짧거나, 다음 문장이 매우 짧은 경우 병합
+                # (단, 합친 길이가 너무 길어지면 안 됨 -> 1000자 제한)
+                if (len(s["text"]) < MIN_MERGE_LEN) and (
+                    len(current_s["text"]) + len(s["text"]) < 1000
+                ):
                     # 병합
                     current_s["text"] += " " + s["text"]
                     current_s["end"] = s["end"]  # 범위 확장
@@ -450,7 +480,11 @@ class EmbeddingBasedSemanticChunker:
 
             # 인덱스 범위 보정
             idx = max(0, min(idx, len(doc_ranges) - 1))
-            matched_metadata = doc_ranges[idx]["metadata"].copy() if doc_ranges[idx]["metadata"] else {}
+            matched_metadata = (
+                doc_ranges[idx]["metadata"].copy()
+                if doc_ranges[idx]["metadata"]
+                else {}
+            )
 
             final_docs.append(Document(page_content=c_text, metadata=matched_metadata))
             final_vectors.append(c_vector)

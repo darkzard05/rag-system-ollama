@@ -173,7 +173,9 @@ class StreamingResponseHandler:
                         if adaptive_controller and self.last_chunk_time:
                             latency_ms = (current_time - self.last_chunk_time) * 1000
                             adaptive_controller.record_latency(latency_ms)
-                            self.buffer.buffer_size = adaptive_controller.get_buffer_size()
+                            self.buffer.buffer_size = (
+                                adaptive_controller.get_buffer_size()
+                            )
 
                         self.last_chunk_time = current_time
 
@@ -222,6 +224,18 @@ class StreamingResponseHandler:
                                     token_count=0,
                                     chunk_index=self.chunk_index,
                                     metadata={"documents": output["documents"]},
+                                )
+                                self.chunk_index += 1
+
+                        elif name == "format_context":
+                            output = data.get("output", {})
+                            if "annotations" in output:
+                                yield StreamChunk(
+                                    content="",
+                                    timestamp=time.time(),
+                                    token_count=0,
+                                    chunk_index=self.chunk_index,
+                                    metadata={"annotations": output["annotations"]},
                                 )
                                 self.chunk_index += 1
 
@@ -532,8 +546,10 @@ class AdaptiveStreamingController:
         avg_latency = sum(self.latency_samples) / len(self.latency_samples)
 
         # 지연이 높으면 버퍼 크기 증가 (배치 처리로 횟수 감소)
-        if avg_latency > 200:  # 200ms 이상
-            new_size = min(self.current_buffer_size + 5, self.max_buffer_size)
+        if avg_latency > 300:  # 300ms 이상으로 기준 상향 (너무 빈번한 조절 방지)
+            new_size = min(
+                self.current_buffer_size + 2, self.max_buffer_size
+            )  # 급격한 증가 방지 (+5 -> +2)
             if new_size != self.current_buffer_size:
                 logger.info(
                     f"[AdaptiveStreaming] 지연 높음 ({avg_latency:.1f}ms), "
@@ -542,8 +558,8 @@ class AdaptiveStreamingController:
                 self.current_buffer_size = new_size
 
         # 지연이 낮으면 버퍼 크기 감소 (더 빈번한 업데이트)
-        elif avg_latency < 50:  # 50ms 이하
-            new_size = max(self.current_buffer_size - 2, self.min_buffer_size)
+        elif avg_latency < 100:  # 100ms 이하로 기준 상향
+            new_size = max(self.current_buffer_size - 1, self.min_buffer_size)
             if new_size != self.current_buffer_size:
                 logger.info(
                     f"[AdaptiveStreaming] 지연 낮음 ({avg_latency:.1f}ms), "

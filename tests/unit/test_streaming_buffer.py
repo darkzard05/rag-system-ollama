@@ -1,4 +1,5 @@
-import os
+import time
+import unittest
 import sys
 from pathlib import Path
 
@@ -9,7 +10,7 @@ SRC_DIR = ROOT_DIR / "src"
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
-from core.graph_builder import GraphBuilder
+from api.streaming_handler import TokenStreamBuffer
 
 
 class TestTokenStreamBuffer(unittest.TestCase):

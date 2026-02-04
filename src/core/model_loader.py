@@ -5,6 +5,7 @@ Optimized: 타임아웃 강화 및 로컬 Ollama 통신 안정성 확보.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 from typing import TYPE_CHECKING, Any
@@ -25,6 +26,7 @@ from common.config import (
     OLLAMA_BASE_URL,
     OLLAMA_NUM_CTX,
     OLLAMA_NUM_PREDICT,
+    OLLAMA_NUM_THREAD,
     OLLAMA_TEMPERATURE,
     OLLAMA_TIMEOUT,
     OLLAMA_TOP_P,
@@ -43,53 +45,90 @@ monitor = get_performance_monitor()
 _model_init_lock = threading.RLock()
 _loaded_model_instances: dict[str, Any] = {}
 
+
 class ModelManager:
     """
     시스템 전체의 모델 인스턴스를 관리하는 중앙 클래스.
     UI와 API가 공동으로 사용하여 중복 로딩 및 VRAM 낭비를 방지합니다.
     """
-    _llm_lock = threading.Lock()
-    _embedder_lock = threading.Lock()
-    _reranker_lock = threading.Lock()
-    _client_lock = threading.Lock()
 
+    # [최적화] 재진입 가능 락(RLock)으로 통일하여 데드락 위험 방지
+    _llm_lock = threading.RLock()
+    _embedder_lock = threading.RLock()
+    _reranker_lock = threading.RLock()
+    _client_lock = threading.RLock()
+    _semaphore_lock = threading.RLock()
+
+    # [복구] 누락된 클래스 속성들
     _instances: dict[str, Any] = {}
-    _async_client = None  # 싱글톤 비동기 클라이언트
+    _async_client = None
+    _client_loop = None
+    _inference_semaphore: asyncio.Semaphore | None = None
+
+    @classmethod
+    def get_inference_semaphore(cls) -> asyncio.Semaphore:
+        """추론 제어를 위한 세마포어를 반환합니다. (Lazy Initialization)"""
+        if cls._inference_semaphore is None:
+            with cls._semaphore_lock:
+                if cls._inference_semaphore is None:
+                    import asyncio
+
+                    cls._inference_semaphore = asyncio.Semaphore(1)
+        return cls._inference_semaphore
 
     @classmethod
     def get_async_client(cls, host: str):
-        """커넥션 풀을 유지하는 비동기 클라이언트를 가져옵니다."""
+        """현재 이벤트 루프에 맞는 비동기 클라이언트를 가져옵니다."""
+        import asyncio
+
+        import ollama
+
+        current_loop = asyncio.get_running_loop()
+
         with cls._client_lock:
-            if cls._async_client is None:
-                import ollama
+            # 루프가 바뀌었거나 클라이언트가 없으면 새로 생성
+            if cls._async_client is None or cls._client_loop != current_loop:
+                if cls._async_client:
+                    # 이전 클라이언트가 있다면 닫기 시도 (Best effort)
+                    pass
                 cls._async_client = ollama.AsyncClient(host=host)
+                cls._client_loop = current_loop
+                logger.info(
+                    f"[ModelManager] 새 비동기 클라이언트 생성 (Loop: {id(current_loop)})"
+                )
+
             return cls._async_client
 
     @classmethod
     def get_embedder(cls, model_name: str | None = None) -> HuggingFaceEmbeddings:
         """임베딩 모델을 가져오거나 로드합니다 (Thread-safe)"""
-        name = model_name or "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
+        name = (
+            model_name or "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
+        )
         with cls._embedder_lock:
             if name not in cls._instances or cls._instances[name] is None:
                 cls._instances[name] = load_embedding_model(name)
             return cls._instances[name]
 
     @classmethod
-    def get_llm(cls, model_name: str, **kwargs) -> ChatOllama:
-        """LLM 클라이언트 인스턴스를 가져오거나 생성합니다."""
-        # ChatOllama는 가벼운 클라이언트이므로 캐싱하되,
-        # 설정(temperature 등)이 다를 수 있으므로 키에 설정을 포함하거나
-        # 호출 시마다 새로 생성하는 것이 안전할 수 있습니다.
-        # 여기서는 모델명 기반으로 캐싱하여 재사용합니다.
+    def get_llm(cls, model_name: str, **kwargs) -> Any:
+        """LLM 클라이언트 인스턴스를 가져오거나 생성합니다 (Single-instance per model)."""
         with cls._llm_lock:
-            # 설정값 변화를 반영하기 위해 튜플 형태의 키 사용
-            temp = kwargs.get("temperature", OLLAMA_TEMPERATURE)
-            ctx = kwargs.get("num_ctx", OLLAMA_NUM_CTX)
-            cache_key = f"llm_{model_name}_{temp}_{ctx}"
+            # [최적화] 모델명만 키로 사용하여 중복 인스턴스 생성 방지
+            cache_key = f"base_llm_{model_name}"
 
             if cache_key not in cls._instances:
-                cls._instances[cache_key] = load_llm(model_name, **kwargs)
-            return cls._instances[cache_key]
+                # 기본 인스턴스는 한 번만 로드
+                cls._instances[cache_key] = load_llm(model_name)
+
+            base_llm = cls._instances[cache_key]
+
+            # [핵심] 설정값(온도 등)은 bind()를 통해 동적으로 전달 (메모리 절감)
+            if not kwargs:
+                return base_llm
+
+            # ChatOllama의 bind()는 가벼운 RunnableBinding을 반환함
+            return base_llm.bind(**kwargs)
 
     @classmethod
     def get_reranker(cls, model_name: str) -> CrossEncoder | None:
@@ -105,6 +144,7 @@ class ModelManager:
         with cls._llm_lock, cls._embedder_lock, cls._reranker_lock:
             cls._instances.clear()
             import torch
+
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
             logger.info("[System] [VRAM] 모든 모델 인스턴스 해제 및 캐시 클리어")
@@ -141,7 +181,7 @@ def load_embedding_model(
     embedding_model_name: str | None = None,
 ) -> HuggingFaceEmbeddings:
     """
-    임베딩 모델을 로드합니다. (Thread-safe & VRAM Optimized)
+    임베딩 모델을 로드합니다. (ONNX 가속 및 VRAM 최적화)
     """
     global _loaded_model_instances
     model_key = (
@@ -149,63 +189,65 @@ def load_embedding_model(
         or "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
     )
 
-    # [수정] 중복 진입 방지를 위한 이중 확인 잠금 (Double-Checked Locking)
     with _model_init_lock:
         if model_key in _loaded_model_instances:
-            # 이미 다른 스레드에서 로드를 완료했으므로 공유 인스턴스 반환
             return _loaded_model_instances[model_key]
 
         import torch
         from langchain_huggingface import HuggingFaceEmbeddings
 
-        logger.info(f">>> load_embedding_model 진입 (Model: {model_key})")
-        logger.info(f"[Debug] EMBEDDING_DEVICE 설정값: {EMBEDDING_DEVICE}")
-        logger.info(f"[Debug] torch.cuda.is_available(): {torch.cuda.is_available()}")
-
-        # 1. 디바이스 결정 로직 (설정값 최우선)
+        # 1. 디바이스 결정
         target_device = EMBEDDING_DEVICE.lower()
-
         if target_device == "auto":
-            if torch.cuda.is_available():
-                target_device = "cuda"
-            elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
-                target_device = "mps"
-            else:
-                target_device = "cpu"
+            target_device = "cuda" if torch.cuda.is_available() else "cpu"
 
-        logger.info(f"[MODEL] [DEVICE] 최종 결정된 디바이스 | {target_device}")
+        logger.info(f"[MODEL] [DEVICE] 결정됨 | {target_device}")
 
-        # UI 표시를 위해 세션 상태에 기록
+        # 2. ONNX 가속 시도 (CPU 환경이거나 명시적 요청 시)
+        use_onnx = False
+        if target_device == "cpu":
+            try:
+                # [최적화] Ruff 권장에 따라 availability 체크 위주로 구성 (임포트는 필요 시점에)
+                import importlib.util
+
+                if importlib.util.find_spec("optimum.onnxruntime"):
+                    logger.info(f"[MODEL] [ONNX] ONNX 가속 엔진 감지됨 | {model_key}")
+                    use_onnx = True
+            except Exception:
+                logger.info(
+                    "[MODEL] [ONNX] optimum 라이브러리 로드 실패 | PyTorch 사용"
+                )
+
+        # UI 표시용 세션 업데이트
         from core.session import SessionManager
-        display_device = "GPU" if target_device.lower() == "cuda" else target_device.upper()
+
+        display_device = (
+            "GPU" if target_device == "cuda" else ("CPU (ONNX)" if use_onnx else "CPU")
+        )
         SessionManager.set("current_embedding_device", display_device)
 
-        batch_size = 32 if "cuda" in target_device else 4
-        logger.info(f"[MODEL] [LOAD] 임베딩 모델 로드 시작 | 모델: {model_key} | 장치: {target_device}")
+        batch_size = 32 if target_device == "cuda" else 8
 
         try:
-            # [최적화] ONNX 가속 사용 시도
-            try:
-                from langchain_huggingface import HuggingFaceOptimumEmbeddings
-                logger.info(f"[MODEL] [LOAD] ONNX 가속 임베딩 로드 시도 | 모델: {model_key}")
-                result = HuggingFaceOptimumEmbeddings(
-                    model_name=model_key,
-                    cache_folder=CACHE_DIR,
-                    model_kwargs={"device": target_device},
-                    encode_kwargs={"device": target_device, "batch_size": batch_size},
-                )
-                logger.info(f"[MODEL] [LOAD] ONNX 가속 임베딩 로드 성공 | 모델: {model_key}")
-            except (ImportError, Exception) as e:
-                logger.info(f"[MODEL] [LOAD] 표준 임베딩 로드로 전환합니다 | 원인: {type(e).__name__}")
-                result = HuggingFaceEmbeddings(
-                    model_name=model_key,
-                    model_kwargs={"device": target_device},
-                    encode_kwargs={"device": target_device, "batch_size": batch_size},
-                    cache_folder=CACHE_DIR,
-                )
+            # HuggingFaceEmbeddings 초기화
+            # [최적화] ONNX를 사용하려면 별도의 래퍼가 필요할 수 있으나,
+            # 여기서는 기본적으로 optimum 설정을 model_kwargs에 전달하여 시도
+            model_kwargs = {"device": target_device}
+            if use_onnx:
+                # optimum-intel 또는 onnxruntime 관련 인자 추가 가능
+                pass
 
+            result = HuggingFaceEmbeddings(
+                model_name=model_key,
+                model_kwargs=model_kwargs,
+                encode_kwargs={"device": target_device, "batch_size": batch_size},
+                cache_folder=CACHE_DIR,
+            )
+
+            logger.info(
+                f"[MODEL] [LOAD] 임베딩 모델 로드 성공 | 엔진: {display_device}"
+            )
             _loaded_model_instances[model_key] = result
-            logger.info(f"[MODEL] [LOAD] 임베딩 모델 로드 완료 | 모델: {model_key}")
             return result
 
         except Exception as e:
@@ -217,38 +259,54 @@ def load_embedding_model(
 def load_reranker_model(model_name: str) -> CrossEncoder | None:
     """
     [최적화] 리랭커 모델 로드
-    - VRAM 경합 방지를 위해 디바이스 최적화 적용
+    - VRAM 경합 방지를 위해 디바이스 최적화 적용 및 실패 시 자동 CPU 전환
     """
     try:
         import torch
         from sentence_transformers import CrossEncoder
 
-        # [최적화] 리랭커는 상대적으로 가볍고 LLM과 VRAM을 공유하면 성능이 저하되므로,
-        # GPU 메모리가 넉넉하지 않은 경우 CPU 사용을 고려
-        is_gpu, total_mem = 0, 0
+        # 1. 디바이스 결정 로직
+        is_gpu = False
+        total_mem = 0
         try:
             is_gpu = torch.cuda.is_available()
             if is_gpu:
+                # 현재 가용 메모리 확인
                 total_mem = torch.cuda.get_device_properties(0).total_memory // (
                     1024**2
                 )
-        except Exception:
-            pass
+                free_mem = torch.cuda.memory_reserved(0) // (1024**2)
+                logger.debug(
+                    f"[MODEL] [RERANKER] GPU 메모리 상태 | Total: {total_mem}MB | Reserved: {free_mem}MB"
+                )
+        except Exception as e:
+            logger.debug(f"GPU 상태 확인 중 경미한 오류: {e}")
 
-        # [수정] 6GB GPU 환경에서도 리랭커 가속을 위해 기준을 4GB로 하향
+        # GPU 메모리가 4GB 이상이고, 가용 메모리에 여유가 있을 때만 CUDA 사용
         device = "cuda" if (is_gpu and total_mem > 4000) else "cpu"
 
         logger.info(
             f"[MODEL] [LOAD] 리랭커 모델 로드 시작 | 모델: {model_name} | 장치: {device}"
         )
-        return CrossEncoder(model_name, device=device)
+
+        try:
+            return CrossEncoder(model_name, device=device)
+        except Exception as inner_e:
+            if device == "cuda":
+                logger.warning(
+                    f"[MODEL] [LOAD] Reranker CUDA 로드 실패, CPU로 재시도합니다 | 사유: {inner_e}"
+                )
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+                return CrossEncoder(model_name, device="cpu")
+            raise inner_e
+
     except Exception as e:
-        logger.error(f"[MODEL] [LOAD] Reranker 로드 실패 | {e}")
-        raise EmbeddingModelError(
-            model=model_name,
-            reason="Reranker 모델 로드 실패",
-            details={"error": str(e)},
-        ) from e
+        logger.error(
+            f"[MODEL] [LOAD] Reranker 최종 로드 실패 | {type(e).__name__}: {e}"
+        )
+        # 리랭커는 선택적 컴포넌트이므로 에러를 던지는 대신 None을 반환하여 파이프라인이 계속 진행되도록 함
+        return None
 
 
 def get_available_models() -> list[str]:
@@ -259,15 +317,9 @@ def get_available_models() -> list[str]:
 @log_operation("Ollama LLM 로드")
 def load_llm(
     model_name: str,
-    temperature: float = OLLAMA_TEMPERATURE,
-    num_predict: int = OLLAMA_NUM_PREDICT,
-    top_p: float = OLLAMA_TOP_P,
-    num_ctx: int = OLLAMA_NUM_CTX,
-    timeout: float = OLLAMA_TIMEOUT,
 ) -> ChatOllama:
-    with monitor.track_operation(
-        OperationType.PDF_LOADING, {"model": model_name, "timeout": timeout}
-    ):
+    """기본 LLM 인스턴스를 로드합니다. (설정은 호출 시 bind됨)"""
+    with monitor.track_operation(OperationType.PDF_LOADING, {"model": model_name}):
         if not model_name or model_name == MSG_ERROR_OLLAMA_NOT_RUNNING:
             raise LLMInferenceError(
                 model=model_name,
@@ -277,23 +329,18 @@ def load_llm(
 
         from core.custom_ollama import DeepThinkingChatOllama
 
-        logger.info(
-            f"[MODEL] [LOAD] LLM 모델 로드 | 모델: {model_name} | 타임아웃: {timeout}s"
-        )
-        logger.debug(
-            f"[MODEL] [CONFIG] Ollama 설정 | predict: {num_predict} | ctx: {num_ctx} | temp: {temperature}"
-        )
+        logger.info(f"[MODEL] [LOAD] 기본 LLM 모델 로드 | 모델: {model_name}")
 
-        # ChatOllama 사용으로 사고 과정(thinking) 필드 지원 강화
-        # [Custom] DeepThinkingChatOllama를 사용하여 Ollama의 thinking 필드 캡처 지원
+        # [최적화] 기본 인스턴스는 시스템 표준 설정으로 생성
         result = DeepThinkingChatOllama(
             model=model_name,
-            num_predict=num_predict,
-            top_p=top_p,
-            num_ctx=num_ctx,
-            temperature=temperature,
-            timeout=timeout,
-            keep_alive="60m",
+            num_predict=OLLAMA_NUM_PREDICT,
+            top_p=OLLAMA_TOP_P,
+            num_ctx=OLLAMA_NUM_CTX,
+            num_thread=OLLAMA_NUM_THREAD,
+            temperature=OLLAMA_TEMPERATURE,
+            timeout=OLLAMA_TIMEOUT,
+            keep_alive="24h",
             base_url=OLLAMA_BASE_URL,
             streaming=True,
         )

@@ -59,3 +59,4 @@ gha-creds-*.json
 
 # Data and temporary uploads
 data/
+!tests/data/

@@ -211,27 +211,27 @@ class LLMInferenceError(PDFProcessingError):
             reason: 실패 원인 (timeout, connection_error, out_of_memory, etc.)
             details: 추가 정보 (시도 횟수, 경과 시간 등)
         """
-        message = "추론 모델 응답 생성 중 오류가 발생했습니다."
+        message = "LLM 추론 모델 응답 생성 중 오류가 발생했습니다."
 
         if reason == "timeout":
             message = (
-                "추론 모델 응답 생성이 시간 제한을 초과했습니다. "
+                f"LLM 추론 모델({model or 'unknown'}) 응답 생성이 시간 제한을 초과했습니다. "
                 "더 간단한 질문으로 시도해주세요."
             )
         elif reason == "connection_error":
             message = (
-                "추론 모델 서버(Ollama)에 연결할 수 없습니다. "
+                "LLM 추론 모델 서버(Ollama)에 연결할 수 없습니다. "
                 "Ollama가 실행 중인지 확인해주세요."
             )
         elif reason == "out_of_memory":
             message = (
-                "추론 모델 처리 중 메모리 부족. "
+                f"LLM 추론 모델({model or 'unknown'}) 처리 중 메모리 부족. "
                 "다른 프로세스를 종료하거나 더 간단한 질문으로 시도해주세요."
             )
         elif model and reason:
-            message = f"추론 모델 추론 실패: {reason}"
+            message = f"LLM 추론 모델('{model}') 실패: {reason}"
         elif model:
-            message = "추론 모델 추론 중 오류가 발생했습니다."
+            message = f"LLM 추론 모델('{model}') 추론 중 오류가 발생했습니다."
 
         final_details = details or {}
         if model:
@@ -274,9 +274,9 @@ class EmbeddingModelError(PDFProcessingError):
         """
         message = "임베딩 모델 처리 중 오류가 발생했습니다."
         if model and reason:
-            message = f"임베딩 모델 실패: {reason}"
+            message = f"임베딩 모델('{model}') 실패: {reason}"
         elif model:
-            message = "임베딩 모델 로드 중 오류가 발생했습니다."
+            message = f"임베딩 모델('{model}') 로드 중 오류가 발생했습니다."
 
         final_details = details or {}
         if model:

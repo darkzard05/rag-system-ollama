@@ -59,39 +59,65 @@ class StreamlitStreamingUI:
         self.builder = StreamingResponseBuilder()
 
         with chat_container, st.chat_message("assistant", avatar="🤖"):
+            # [최적화] 사고 과정용 컨테이너 추가 (Thought)
+            thought_container = st.empty()
             # 응답 표시 컨테이너
             response_container = st.empty()
             metrics_container = st.empty()
 
-            # 응답 텍스트
+            # 상태 변수
             response_text = ""
+            thought_text = ""
+            last_ui_update_time = 0.0
+            ui_update_interval = 0.05  # 50ms (초당 최대 20번 업데이트로 제한)
 
             async def on_chunk(chunk: StreamChunk) -> None:
                 """청크 수신 시 콜백"""
-                nonlocal response_text
+                nonlocal response_text, thought_text, last_ui_update_time
 
-                response_text += chunk.content
-                self.builder.add_chunk(chunk)
+                # 1. 사고 과정(Thought) 처리
+                if chunk.thought:
+                    thought_text += chunk.thought
+                    with (
+                        thought_container,
+                        st.status("🤔 모델이 생각 중입니다...", expanded=True),
+                    ):
+                        st.write(thought_text)
 
-                # 메트릭 기록 (실제 지연 시간 계산)
+                # 2. 답변 본문(Content) 처리
+                if chunk.content:
+                    response_text += chunk.content
+                    self.builder.add_chunk(chunk)
+
+                # 메트릭 기록
                 latency_ms = (time.time() - chunk.timestamp) * 1000
                 if self.adaptive_controller:
                     self.adaptive_controller.record_latency(latency_ms)
 
-                # UI 업데이트
-                self._update_response_display(
-                    response_container,
-                    metrics_container,
-                    response_text,
-                    chunk.chunk_index,
-                    show_metrics,
-                    show_tokens_per_second,
-                )
+                # [최적화] 과도한 UI 업데이트 방지 (Throttle)
+                current_time = time.time()
+                if (
+                    current_time - last_ui_update_time >= ui_update_interval
+                ) or chunk.is_final:
+                    self._update_response_display(
+                        response_container,
+                        metrics_container,
+                        response_text,
+                        chunk.chunk_index,
+                        show_metrics,
+                        show_tokens_per_second,
+                    )
+                    last_ui_update_time = current_time
 
             async def on_complete() -> None:
                 """스트리밍 완료 시 콜백"""
                 if not self.streaming_handler:
                     return
+
+                # [최적화] 사고 과정 상태 업데이트
+                if thought_text:
+                    with thought_container, st.status("✅ 사고 완료", expanded=False):
+                        st.write(thought_text)
 
                 # 최종 메트릭 표시
                 metrics = self.streaming_handler.metrics
