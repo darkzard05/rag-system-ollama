@@ -106,23 +106,23 @@ jobs:
       shell: bash
         
     - name: Run Core Integrity Tests
+      run: |
+        python -m pytest tests/verification/verify_integrity_fixes.py
+        python -m pytest tests/verification/test_cache_isolation.py
+        python -m pytest tests/verification/test_vector_store_persistence.py
       env:
         PYTHONPATH: ${{ github.workspace }}/src
-      run: |
-        python tests/verification/verify_integrity_fixes.py
-        python tests/verification/test_cache_isolation.py
-        python tests/verification/test_vector_store_persistence.py
       shell: bash
         
     - name: Run Unit Tests with Coverage
+      run: |
+        python -m pytest --cov=src --cov-report=term --cov-report=xml --disable-warnings tests/unit/
       env:
         PYTHONPATH: ${{ github.workspace }}/src
         OLLAMA_HOST: "http://localhost:11434" 
         DEFAULT_OLLAMA_MODEL: "qwen3:4b-instruct-2507-q4_K_M"
         TEST_API_KEY: "sk_admin_test_token_12345"
         CUDA_VISIBLE_DEVICES: ""
-      run: |
-        python -m pytest --cov=src --cov-report=term --cov-report=xml --disable-warnings tests/unit/
       shell: bash
 
     - name: Upload Test Logs

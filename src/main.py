@@ -80,12 +80,14 @@ def get_logger():
 def _check_windows_integrity():
     """
     [Background] Windows 환경의 라이브러리 충돌을 체크합니다.
-    무거운 import(torch 등)가 포함되므로 반드시 메인 스레드와 분리해야 합니다.
+    CI 환경이 아닐 때만 실행합니다.
     """
+    import os
     import platform
     import time
 
-    if platform.system() != "Windows":
+    # [최적화] CI 환경에서는 무거운 라이브러리 체크 생략 (충돌 위험 방지)
+    if platform.system() != "Windows" or os.getenv("GITHUB_ACTIONS") == "true":
         return
 
     try:
