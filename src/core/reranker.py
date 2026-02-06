@@ -173,23 +173,33 @@ class DiversityCalculator:
     def _calculate_content_similarity_bitset(
         self, result: Any, selected_results: list[Any]
     ) -> float:
-        """콘텐츠 유사도 (비트셋 AND/OR 연산)"""
+        """콘텐츠 유사도 (비트셋 행렬 연산 최적화)"""
+        if not selected_results:
+            return 0.0
+
         res_id = getattr(result, "doc_id", str(hash(result.content)))
         res_bitset = self._get_bitset(res_id, result.content)
 
-        similarities = []
+        # [최적화] 선택된 결과들의 비트셋을 행렬로 구성하여 한 번에 연산
+        selected_bitsets = []
         for selected in selected_results:
             sel_id = getattr(selected, "doc_id", str(hash(selected.content)))
-            sel_bitset = self._get_bitset(sel_id, selected.content)
+            selected_bitsets.append(self._get_bitset(sel_id, selected.content))
 
-            # 비트셋 유사도 (Jaccard Index)
-            intersection = np.logical_and(res_bitset, sel_bitset).sum()
-            union = np.logical_or(res_bitset, sel_bitset).sum()
+        selected_matrix = np.array(selected_bitsets)
 
-            similarity = intersection / union if union > 0 else 0.0
-            similarities.append(similarity)
+        # 비트셋 유사도 (Jaccard Index) 행렬 연산
+        intersections = np.logical_and(res_bitset, selected_matrix).sum(axis=1)
+        unions = np.logical_or(res_bitset, selected_matrix).sum(axis=1)
 
-        return sum(similarities) / len(similarities) if similarities else 0.0
+        similarities = np.divide(
+            intersections,
+            unions,
+            out=np.zeros_like(intersections, dtype=float),
+            where=unions != 0,
+        )
+
+        return float(np.mean(similarities))
 
 
 class QueryRelevanceScorer:

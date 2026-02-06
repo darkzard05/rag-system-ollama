@@ -3,7 +3,6 @@
 실시간 토큰 스트리밍, SSE 지원, UI 업데이트 최적화
 """
 
-import json
 import logging
 import time
 from collections.abc import AsyncIterator, Callable, Coroutine
@@ -30,7 +29,7 @@ class StreamChunk:
     chunk_index: int
     is_final: bool = False
     thought: str | None = None  # 사고 과정 필드 추가
-    metadata: dict[str, Any] | None = None  # 메타데이터 (문서 등) 추가
+    metadata: dict[str, Any] | None = None  # 메타데이터 추가
     node_name: str | None = None  # 현재 실행 중인 노드 이름
     status: str | None = None  # 현재 상태 메시지
     performance: dict[str, Any] | None = None  # 통합 성능 통계 추가
@@ -228,16 +227,8 @@ class StreamingResponseHandler:
                                 self.chunk_index += 1
 
                         elif name == "format_context":
-                            output = data.get("output", {})
-                            if "annotations" in output:
-                                yield StreamChunk(
-                                    content="",
-                                    timestamp=time.time(),
-                                    token_count=0,
-                                    chunk_index=self.chunk_index,
-                                    metadata={"annotations": output["annotations"]},
-                                )
-                                self.chunk_index += 1
+                            # [최적화] 이제 더 이상 주석(annotations)을 처리하지 않음
+                            pass
 
                         # [추가] 답변 생성 완료 시 통합 성능 지표 캡처
                         elif name == "generate_response":
@@ -425,16 +416,10 @@ class ServerSentEventsHandler:
         event_type: str, data: dict[str, Any], event_id: int | None = None
     ) -> str:
         """
-        SSE 형식으로 이벤트 포매팅 (표준 준수)
-
-        Args:
-            event_type: 이벤트 이름 (message, status, thought 등)
-            data: 전송할 데이터 (JSON 직렬화 가능해야 함)
-            event_id: 선택적 이벤트 ID
-
-        Returns:
-            SSE 규격에 맞는 문자열
+        SSE 형식으로 이벤트 포매팅 (orjson 고속 직렬화 적용)
         """
+        import orjson
+
         lines = []
 
         if event_id is not None:
@@ -443,12 +428,12 @@ class ServerSentEventsHandler:
         if event_type:
             lines.append(f"event: {event_type}")
 
-        # JSON 데이터 인코딩
-        json_data = json.dumps(data, ensure_ascii=False)
+        # [최적화] orjson 사용으로 고속 직렬화 (ensure_ascii=False 효과 포함)
+        # orjson.dumps는 bytes를 반환하므로 decode 필요
+        json_data = orjson.dumps(data).decode("utf-8")
 
-        # SSE 규격상 데이터가 여러 줄인 경우 각 줄마다 'data: ' 접두사를 붙여야 함
-        for line in json_data.split("\n"):
-            lines.append(f"data: {line}")
+        # SSE 규격: 한 줄 데이터 전송 (orjson은 기본적으로 한 줄임)
+        lines.append(f"data: {json_data}")
 
         lines.append("")  # 빈 줄로 이벤트 종료 구분
         return "\n".join(lines) + "\n"

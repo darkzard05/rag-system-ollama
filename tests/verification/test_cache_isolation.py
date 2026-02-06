@@ -10,10 +10,12 @@ SRC_DIR = ROOT_DIR / "src"
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
+import pytest
 from cache.response_cache import ResponseCache
 from core.session import SessionManager
 
 
+@pytest.mark.asyncio
 async def test_cache_isolation_between_documents():
     """문서 변경 시 캐시가 격리되는지 테스트합니다."""
 

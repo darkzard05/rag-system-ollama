@@ -37,7 +37,7 @@ class ThreadSafeSessionManager:
 
     DEFAULT_SESSION_STATE: SessionData = {
         "messages": [],
-        "doc_pool": {},  # 🚀 문서 중앙 저장소 (메모리 절감용)
+        "doc_pool": {},  # 🚀 문서 중앙 저장소
         "last_selected_model": None,
         "last_uploaded_file_name": None,
         "last_selected_embedding_model": None,
@@ -50,22 +50,19 @@ class ThreadSafeSessionManager:
         "llm": None,
         "embedder": None,
         "is_generating_answer": False,
-        "pdf_interaction_blocked": False,
         "is_first_run": True,
         "needs_rag_rebuild": False,
         "needs_qa_chain_update": False,
         "new_file_uploaded": False,
-        "show_graph": False,
         "status_logs": ["시스템 대기 중"],
-        "doc_insight": None,  # 🚀 문서 요약 인사이트 저장용
-        "current_embedding_device": "UNKNOWN",  # 🚀 현재 사용 중인 임베딩 디바이스 (CPU/CUDA 등)
-        "current_page": 1,  # 🚀 PDF 뷰어의 현재 페이지
-        "pdf_nav_slider_wide": 1,  # 🚀 슬라이더 위젯 상태 키
+        "current_embedding_device": "UNKNOWN",
+        "current_page": 1,
     }
 
     # 클래스 레벨 속성 (공유 Lock 및 통계)
     _global_management_lock = threading.RLock()
     _session_locks: dict[str, threading.RLock] = {}
+    _token_to_session_id: dict[str, str] = {}  # 🚀 토큰 -> 세션ID 매핑 추가
     _default_lock_timeout = 5.0
     lock_count = 0
     failed_acquisitions = 0
@@ -377,6 +374,7 @@ class ThreadSafeSessionManager:
         processed_content: str | None = None,
         msg_type: str = "general",
         session_id: str | None = None,
+        status_logs: list[str] | None = None,
         **kwargs,
     ):
         """[최적화] 세션에 새로운 메시지를 추가합니다. (ChatMessage 스키마 적용)"""
@@ -403,10 +401,19 @@ class ThreadSafeSessionManager:
                         state["doc_pool"][content_hash] = doc
                     doc_ids.append(content_hash)
                 kwargs["doc_ids"] = doc_ids
-                del kwargs["documents"]
+                # documents 인자는 pydantic ChatMessage 스키마에 없으므로 제거
+                if "documents" in kwargs:
+                    del kwargs["documents"]
 
             # [핵심] ChatMessage 스키마 기반 데이터 생성
             from api.schemas import ChatMessage
+
+            # status_logs가 없으면 현재 세션의 최신 로그를 사용 (선택 사항)
+            final_logs = status_logs
+            if not final_logs and role == "assistant":
+                # 현재 세션의 로그 중 '시스템 대기 중' 이후의 것들만 캡처
+                all_logs = state.get("status_logs", [])
+                final_logs = all_logs.copy() if all_logs else None
 
             message_obj = ChatMessage(
                 role=role,
@@ -419,7 +426,12 @@ class ThreadSafeSessionManager:
                 timestamp=time.time(),
             )
 
-            state["messages"].append(message_obj.model_dump())
+            # ChatMessage 스키마에 status_logs가 없을 수 있으므로 dict 업데이트로 보완
+            msg_dict = message_obj.model_dump()
+            if final_logs:
+                msg_dict["status_logs"] = final_logs
+
+            state["messages"].append(msg_dict)
             state["_last_activity"] = time.time()
 
     @classmethod

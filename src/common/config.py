@@ -85,7 +85,14 @@ OLLAMA_NUM_THREAD: int = _get_env(
     int,  # 코어의 절반만 사용
 )
 
-AVAILABLE_EMBEDDING_MODELS: list[str] = _models_config.get("available_embeddings", [])
+# --- 임베딩 설정 ---
+DEFAULT_EMBEDDING_MODEL: str = os.getenv(
+    "DEFAULT_EMBEDDING_MODEL",
+    _models_config.get("default_embedding", "nomic-embed-text"),
+)
+# 이제 임베딩 모델 목록은 기본적으로 default_embedding 하나만 포함합니다.
+# (UI 등에서 Ollama 모델 목록을 병합하여 동적으로 확장 가능)
+AVAILABLE_EMBEDDING_MODELS: list[str] = [DEFAULT_EMBEDDING_MODEL]
 CACHE_DIR: str = str(PROJECT_ROOT / _models_config.get("cache_dir", ".model_cache"))
 EMBEDDING_BATCH_SIZE: Union[int, str] = _models_config.get(
     "embedding_batch_size",

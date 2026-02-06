@@ -16,7 +16,10 @@ from common.logging_config import setup_logging
 
 logger = setup_logging(log_level="INFO", log_file=Path("logs/app.log"))
 
-from common.config import AVAILABLE_EMBEDDING_MODELS  # noqa: E402
+from common.config import (
+    DEFAULT_EMBEDDING_MODEL,
+    DEFAULT_OLLAMA_MODEL,
+)  # noqa: E402
 from common.constants import FilePathConstants, StringConstants  # noqa: E402
 
 # [Lazy Import] 무거운 코어 모듈 임포트 제거 (함수 내부로 이동)
@@ -27,6 +30,7 @@ from ui.ui import (  # noqa: E402
     render_left_column,
     render_pdf_viewer,
     render_sidebar,
+    update_window_height,
 )
 
 # 상수 정의
@@ -55,10 +59,6 @@ except Exception as e:
 # --- [추가] 필수 세션 상태 초기화 ---
 if "current_page" not in st.session_state:
     st.session_state.current_page = 1
-if "pdf_annotations" not in st.session_state:
-    st.session_state.pdf_annotations = []
-if "scroll_target_idx" not in st.session_state:
-    st.session_state.scroll_target_idx = None
 if "last_valid_height" not in st.session_state:
     st.session_state.last_valid_height = 800
 if "is_generating_answer" not in st.session_state:
@@ -79,12 +79,19 @@ def get_logger():
 
 def _check_windows_integrity():
     """
-    [Background] Windows 환경의 라이브러리 충돌을 체크합니다.
-    CI 환경이 아닐 때만 실행합니다.
+    [Background] Windows 환경의 라이브러리 충돌을 체크하고 주기적으로 세션을 정리합니다.
     """
     import os
     import platform
     import time
+
+    # [최적화] 세션 정리 추가 (메모리 누수 방지)
+    try:
+        from core.session import SessionManager
+
+        SessionManager.cleanup_expired_sessions(max_idle_seconds=3600)
+    except Exception:
+        pass
 
     # [최적화] CI 환경에서는 무거운 라이브러리 체크 생략 (충돌 위험 방지)
     if platform.system() != "Windows" or os.getenv("GITHUB_ACTIONS") == "true":
@@ -186,8 +193,6 @@ def _cleanup_current_file():
         pass
 
 
-# 앱 시작 시 초기화 수행
-_init_temp_directory()
 # 프로세스 종료 시 핸들러 등록
 atexit.register(_cleanup_current_file)
 
@@ -202,18 +207,12 @@ def _ensure_models_are_loaded() -> bool:
     selected_embedding = SessionManager.get("last_selected_embedding_model")
 
     if not selected_model:
-        st.warning("⚠️ 추론 모델이 선택되지 않았습니다.")
-        return False
+        selected_model = DEFAULT_OLLAMA_MODEL
+        SessionManager.set("last_selected_model", selected_model)
 
     if not selected_embedding:
-        from common.config import AVAILABLE_EMBEDDING_MODELS
-
-        if AVAILABLE_EMBEDDING_MODELS:
-            selected_embedding = AVAILABLE_EMBEDDING_MODELS[0]
-            SessionManager.set("last_selected_embedding_model", selected_embedding)
-        else:
-            st.error("❌ 사용 가능한 임베딩 모델 설정이 없습니다.")
-            return False
+        selected_embedding = DEFAULT_EMBEDDING_MODEL
+        SessionManager.set("last_selected_embedding_model", selected_embedding)
 
     try:
         # 1. 임베딩 모델 로드 (ModelManager 사용)
@@ -221,9 +220,13 @@ def _ensure_models_are_loaded() -> bool:
         embedder = ModelManager.get_embedder(selected_embedding)
         SessionManager.set("embedder", embedder)
 
-        actual_device = (
-            getattr(embedder, "model_kwargs", {}).get("device", "UNKNOWN").upper()
-        )
+        # [수정] 모델 타입에 따른 디바이스 정보 추출 안전성 강화
+        if hasattr(embedder, "model_kwargs"):
+            actual_device = embedder.model_kwargs.get("device", "UNKNOWN").upper()
+        else:
+            # OllamaEmbeddings 등 원격/추상화된 백엔드인 경우
+            actual_device = "OLLAMA"
+
         display_device = "GPU" if actual_device == "CUDA" else actual_device
         SystemNotifier.success(f"임베딩 모델 준비 완료 ({display_device})")
 
@@ -486,70 +489,54 @@ def _handle_pending_tasks() -> None:
 
 def main() -> None:
     """메인 애플리케이션 오케스트레이터"""
-    # 0. 쿼리 파라미터 처리 (인용 태그 클릭 시 네비게이션)
-    params = st.query_params
-    if "jump_page" in params:
-        try:
-            target_p = int(params["jump_page"])
-            st.session_state.pdf_page_index = target_p
-            # 파라미터 처리 후 즉시 제거 및 리런 (단 한 번만 수행되도록 보장)
-            st.query_params.clear()
-            st.rerun()
-        except Exception:
-            pass
-
     # 1. 초기 레이아웃 및 세션 즉시 준비
-    from ui.ui import inject_custom_css
-
     inject_custom_css()
-
-    from core.session import SessionManager
-
     SessionManager.init_session()
 
     # [추가] 세션 ID 불일치로 인한 '영구 분석 중' 상태 방지
     if SessionManager.get("pdf_file_path") and not SessionManager.get("pdf_processed"):
-        # 만약 분석 중이라고 뜨는데 5초 동안 로그 업데이트가 없다면 분석이 중단된 것으로 간주할 수 있음
-        # 여기서는 단순하게 사용자가 페이지를 새로고침했을 때 is_generating_answer를 False로 리셋하여
-        # 입력창을 일단 열어주는 정책을 취함
+        # 분석이 중단된 것으로 간주하고 입력창 열기
         SessionManager.set("is_generating_answer", False)
 
     # 2. UI 즉시 렌더링 (Optimistic UI)
-    # 모델 목록이 아직 없어도 레이아웃을 먼저 그림 (Skeleton State)
-    available_models = st.session_state.get("available_models_list")
+    # 모델 목록 로딩 상태 확인
+    if "available_models_list" not in st.session_state:
+        st.session_state.available_models_list = None  # 아직 시도 안 함
+
+    available_models = st.session_state.available_models_list
 
     _render_app_layout(
         is_skeleton_pass=(available_models is None), available_models=available_models
     )
 
-    # 3. 데이터 로딩 (UI가 그려진 후 실행)
-    if not available_models:
+    # 3. 데이터 로딩 (UI가 그려진 후 딱 한 번만 실행되도록 유도)
+    if st.session_state.available_models_list is None:
         from core.model_loader import get_available_models
 
-        available_models = get_available_models()
-        st.session_state.available_models_list = available_models
-        # 모델 로딩 완료 후 즉시 리프레시하여 UI 업데이트
+        # 실제 Ollama 모델 목록 가져오기
+        fetched_models = get_available_models()
+
+        # 만약 에러 메시지가 포함되어 있거나 비어있다면 최소한 기본 모델은 포함시킴
+        from common.config import DEFAULT_OLLAMA_MODEL
+
+        if not fetched_models or (
+            len(fetched_models) == 1 and "서버" in fetched_models[0]
+        ):
+            st.session_state.available_models_list = [DEFAULT_OLLAMA_MODEL]
+        else:
+            st.session_state.available_models_list = fetched_models
+
         st.rerun()
 
     # 4. 백그라운드 태스크 처리 (RAG 빌드, 모델 교체 등)
     _handle_pending_tasks()
 
-    # 5. 첫 실행 플래그 해제 및 기본 모델 예열 시도
+    # 5. 첫 실행 플래그 해제 (예열 과정 삭제 - 지연 로딩 정책 채택)
     if SessionManager.get("is_first_run"):
         SessionManager.set("is_first_run", False)
-        # [최적화] 백그라운드에서 임베딩 모델 미리 로드 (첫 질문 시 지연 방지)
-        from common.config import AVAILABLE_EMBEDDING_MODELS
-        from core.model_loader import load_embedding_model
-
-        if AVAILABLE_EMBEDDING_MODELS:
-            st.session_state.warmup_triggered = True
-            # 임베딩 모델 로드는 캐싱되므로 여기서 호출하면 나중에 즉시 사용 가능
-            load_embedding_model(AVAILABLE_EMBEDDING_MODELS[0])
-            logger.info("[SYSTEM] [WARMUP] 임베딩 모델 예열 완료")
+        logger.info("[SYSTEM] 시스템 초기화 완료")
 
     # 6. 창 높이 측정 (가장 마지막에 실행하여 레이아웃 영향 최소화)
-    from ui.ui import update_window_height
-
     update_window_height()
 
 

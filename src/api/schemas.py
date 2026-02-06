@@ -31,7 +31,6 @@ class ChatMessage(BaseModel):
     msg_type: str = "general"  # answer, log, greeting
     thought: str | None = None
     doc_ids: list[str] = []
-    annotations: list[dict[str, Any]] = []  # 하이라이트 정보 보존
     metrics: dict[str, Any] | None = None
     processed_content: str | None = None
     timestamp: float = Field(default_factory=time.time)
@@ -45,11 +44,11 @@ class GraphState(TypedDict):
 
     input: str
     search_queries: list[str]
+    route_decision: str | None  # [추가] 의도 분석 결과
     documents: list[Document]
     relevant_docs: list[Document]  # [추가] 관련성 채점을 통과한 문서들
     context: str | None
     response: str | None
-    annotations: list[dict[str, Any]] | None  # PDF 하이라이트용
 
 
 class QueryRequest(BaseModel):
@@ -72,7 +71,6 @@ class QueryResponse(BaseModel):
     answer: str
     sources: list[dict[str, Any]] = []
     execution_time_ms: float
-    annotations: list[dict[str, Any]] = []
 
 
 class SearchResult(BaseModel):

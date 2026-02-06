@@ -26,7 +26,7 @@ if TYPE_CHECKING:
     from langchain_community.retrievers import BM25Retriever
     from langchain_community.vectorstores import FAISS
     from langchain_core.documents import Document
-    from langchain_huggingface import HuggingFaceEmbeddings
+    from langchain_core.embeddings import Embeddings
 
 from common.config import (
     CACHE_CHECK_PERMISSIONS,
@@ -122,7 +122,7 @@ class RAGSystem:
         SessionManager.set_session_id(self.session_id)
 
     async def load_document(
-        self, file_path: str, file_name: str, embedder: HuggingFaceEmbeddings
+        self, file_path: str, file_name: str, embedder: Embeddings
     ) -> tuple[str, bool]:
         """
         문서를 로드하고 인덱싱 파이프라인을 실행합니다.
@@ -449,7 +449,7 @@ def _load_pdf_docs(
 
 def _split_documents(
     docs: list[Document],
-    embedder: HuggingFaceEmbeddings | None = None,
+    embedder: Embeddings | None = None,
     session_id: str | None = None,
 ) -> tuple[list[Document], list[np.ndarray] | None]:
     """
@@ -599,8 +599,10 @@ class VectorStoreCache:
     def _get_cache_paths(
         self, file_hash: str, embedding_model_name: str
     ) -> tuple[str, str, str, str]:
-        # 파일 경로에 안전하지 않은 문자 제거
-        model_name_slug = embedding_model_name.replace("/", "_").replace("\\", "_")
+        # [수정] Windows 파일 시스템 호환성을 위해 콜론(':') 등 안전하지 않은 문자 제거
+        model_name_slug = (
+            embedding_model_name.replace("/", "_").replace("\\", "_").replace(":", "_")
+        )
         config_hash = _compute_config_hash()
 
         cache_dir = os.path.join(
@@ -629,7 +631,7 @@ class VectorStoreCache:
 
     def load(
         self,
-        embedder: HuggingFaceEmbeddings,
+        embedder: Embeddings,
     ) -> tuple[list[Document] | None, FAISS | None, BM25Retriever | None]:
         """
         캐시된 RAG 컴포넌트를 로드합니다.
@@ -825,7 +827,7 @@ class VectorStoreCache:
 @log_operation("FAISS 벡터 저장소 생성")
 def _create_vector_store(
     docs: list[Document],
-    embedder: HuggingFaceEmbeddings,
+    embedder: Embeddings,
     vectors: Any = None,
 ) -> FAISS:
     """
@@ -849,8 +851,10 @@ def _create_vector_store(
         vectors_list = embedder.embed_documents(texts)
         vectors = np.array(vectors_list).astype("float32")
     else:
-        vectors = np.array(vectors).astype("float32")
+        # [최적화] 이미 numpy 배열이면 타입만 확인하고 복사를 최소화
+        vectors = np.ascontiguousarray(vectors, dtype="float32")
 
+    # [최적화] FAISS 네이티브 정규화 사용
     faiss.normalize_L2(vectors)
     chunk_count = len(docs)
     d = vectors.shape[1]
@@ -923,7 +927,7 @@ def _create_ensemble_retriever(
 def _load_and_build_retrieval_components(
     file_path: str,
     file_name: str,
-    _embedder: HuggingFaceEmbeddings,
+    _embedder: Embeddings,
     embedding_model_name: str,
     _on_progress=None,
     _file_hash: str | None = None,
@@ -1049,7 +1053,7 @@ def _load_and_build_retrieval_components(
 def build_rag_pipeline(
     uploaded_file_name: str,
     file_path: str,
-    embedder: HuggingFaceEmbeddings,
+    embedder: Embeddings,
     on_progress=None,
     session_id: str | None = None,
 ) -> tuple[str, bool]:
@@ -1060,12 +1064,17 @@ def build_rag_pipeline(
     file_hash = _compute_file_hash(file_path)
 
     # [최적화] embedder 객체는 해싱에서 제외하고, 모델명과 파일 해시를 명시적 키로 전달
+    # [수정] OllamaEmbeddings(model)와 HuggingFaceEmbeddings(model_name) 호환성 지원
+    emb_model_name = getattr(
+        embedder, "model", getattr(embedder, "model_name", "unknown_model")
+    )
+
     doc_splits, vector_store, bm25_retriever, cache_used = (
         _load_and_build_retrieval_components(
             file_path,
             uploaded_file_name,
             _embedder=embedder,
-            embedding_model_name=embedder.model_name,
+            embedding_model_name=emb_model_name,
             _on_progress=on_progress,
             _file_hash=file_hash,
             session_id=session_id,

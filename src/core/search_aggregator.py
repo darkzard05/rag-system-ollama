@@ -76,18 +76,9 @@ class ContentHash:
     @staticmethod
     def similar_hash(hash1: str, hash2: str, threshold: float = 0.9) -> bool:
         """
-        두 해시의 유사도 확인
-        [최적화] NumPy 배열 연산을 통해 고속 비교 수행
+        두 해시의 동일 여부 확인 (SHA256은 유사도 측정이 불가능하므로 완전 일치만 체크)
         """
-        if hash1 == hash2:
-            return True
-        import numpy as np
-
-        arr1 = np.frombuffer(hash1.encode(), dtype=np.uint8)
-        arr2 = np.frombuffer(hash2.encode(), dtype=np.uint8)
-        if len(arr1) != len(arr2):
-            return False
-        return np.mean(arr1 == arr2) >= threshold
+        return hash1 == hash2
 
 
 class SearchResultAggregator:
@@ -508,7 +499,7 @@ class ResultDeduplicator:
         self, results: list[Any], similarity_threshold: float = 0.8
     ) -> list[tuple[int, int, float]]:
         """
-        중복 결과 찾기
+        중복 결과 찾기 (최적화 버전)
 
         Args:
             results: 검색 결과
@@ -517,25 +508,28 @@ class ResultDeduplicator:
         Returns:
             [(index1, index2, similarity), ...] 형태의 중복 쌍
         """
+        if not results:
+            return []
+
+        # [최적화] 해시 미리 계산하여 루프 내 오버헤드 제거
+        hashes = [ContentHash.calculate(r.content) for r in results]
         duplicates = []
 
         for i in range(len(results)):
             for j in range(i + 1, len(results)):
-                similarity = self._calculate_similarity(results[i], results[j])
-                if similarity >= similarity_threshold:
-                    duplicates.append((i, j, similarity))
+                # 1. ID 우선 비교
+                if results[i].doc_id == results[j].doc_id:
+                    duplicates.append((i, j, 1.0))
+                    continue
+
+                # 2. 해시 완전 일치 확인 (SHA256 특성상 유사도 의미 없음)
+                if hashes[i] == hashes[j]:
+                    duplicates.append((i, j, 1.0))
 
         return duplicates
 
     def _calculate_similarity(self, result1: Any, result2: Any) -> float:
-        """두 결과의 유사도 계산"""
-        # ID 기반 유사도
+        """기존 메서드 유지 (호환성용)"""
         if result1.doc_id == result2.doc_id:
             return 1.0
-
-        # 콘텐츠 기반 유사도 (간단한 구현)
-        hash1 = ContentHash.calculate(result1.content)
-        hash2 = ContentHash.calculate(result2.content)
-
-        matches = sum(1 for c1, c2 in zip(hash1, hash2, strict=False) if c1 == c2)
-        return matches / len(hash1)
+        return 1.0 if result1.content == result2.content else 0.0

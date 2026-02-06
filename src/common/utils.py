@@ -64,9 +64,13 @@ def normalize_latex_delimiters(text: str) -> str:
     return text
 
 
-def apply_tooltips_to_response(response_text: str, documents: list) -> str:
+def apply_tooltips_to_response(response_text: str, documents: list | None = None, msg_index: int = 0) -> str:
+
+
+
     """
-    [최적화] LaTeX 정규화만 수행합니다. (툴팁 로직은 UI 계층으로 이동됨)
+    답변 텍스트 내의 LaTeX 수식을 정규화합니다.
+    (인용구 툴팁 기능은 안정성을 위해 제거되었습니다.)
     """
     if not response_text:
         return response_text
@@ -210,173 +214,13 @@ def count_tokens_rough(text: str) -> int:
     return int(len(text) / 2.5) + 1
 
 
-@functools.lru_cache(maxsize=4)
+@st.cache_data(ttl=4)
 def _get_cached_pdf_bytes(pdf_path: str) -> bytes | None:
     """PDF 파일 내용을 메모리에 캐싱합니다. (I/O 절감)"""
     if os.path.exists(pdf_path):
         with open(pdf_path, "rb") as f:
             return f.read()
     return None
-
-
-def _merge_rects(rects: list, threshold: float = 5.0) -> list:
-    """
-    인접하거나 겹치는 사각형들을 지능적으로 병합합니다.
-    [최적화] 다단 레이아웃 및 행 간격을 고려한 정밀 병합.
-    """
-    if not rects:
-        return []
-
-    # 1. Y 좌표 및 X 좌표 기준 정렬
-    sorted_rects = sorted(rects, key=lambda r: (r.y0, r.x0))
-    merged = []
-
-    if not sorted_rects:
-        return []
-
-    current_group = [sorted_rects[0]]
-
-    for next_rect in sorted_rects[1:]:
-        last = current_group[-1]
-
-        # 수직 겹침 정도 확인 (행 판단)
-        y_overlap = max(0, min(last.y1, next_rect.y1) - max(last.y0, next_rect.y0))
-        is_same_line = y_overlap > min(last.height, next_rect.height) * 0.6
-
-        # 수평 거리 확인 (단어 간격 판단)
-        x_gap = next_rect.x0 - last.x1
-
-        if is_same_line and x_gap < threshold * 10:  # 같은 행 & 인접
-            current_group.append(next_rect)
-        else:
-            # 그룹 병합 및 새 그룹 시작
-            union_rect = current_group[0]
-            for r in current_group[1:]:
-                union_rect = union_rect | r
-            merged.append(union_rect)
-            current_group = [next_rect]
-
-    # 마지막 그룹 처리
-    if current_group:
-        union_rect = current_group[0]
-        for r in current_group[1:]:
-            union_rect = union_rect | r
-        merged.append(union_rect)
-
-    return merged
-
-
-def get_pdf_annotations(
-    pdf_path: str, documents: list, color: str = "rgba(255, 0, 0, 0.25)"
-) -> list[dict]:
-    """
-    검색된 문서 조각들의 텍스트 좌표를 추출합니다.
-    [최적화] 문장 전체를 한 줄 한 줄 독립된 박스로 표시하여 시각적 완성도를 극대화합니다.
-    """
-    import fitz
-
-    annotations = []
-    if not pdf_path or not documents:
-        return []
-
-    try:
-        pdf_bytes = _get_cached_pdf_bytes(pdf_path)
-        if not pdf_bytes:
-            return []
-
-        with fitz.open(stream=pdf_bytes, filetype="pdf") as doc:
-            search_flags = (
-                fitz.TEXT_DEHYPHENATE
-                | fitz.TEXT_PRESERVE_LIGATURES
-                | fitz.TEXT_PRESERVE_WHITESPACE
-            )
-
-            for idx, doc_obj in enumerate(documents):
-                page_num = doc_obj.metadata.get("page", 1) - 1
-                if page_num < 0 or page_num >= len(doc):
-                    continue
-
-                page = doc[page_num]
-                query_content = doc_obj.page_content.strip()
-                if len(query_content) < 5:
-                    continue
-
-                # --- [고정밀 행 단위 추출 알고리즘] ---
-                p_words = page.get_text("words", flags=search_flags)
-                if not p_words:
-                    continue
-
-                head_txt = query_content[:20].strip()
-                tail_txt = query_content[-20:].strip()
-
-                def clean(t):
-                    return re.sub(r"[^\w]", "", t).lower()
-
-                head_clean = clean(head_txt)
-                tail_clean = clean(tail_txt)
-
-                start_idx, end_idx = -1, -1
-                for i, w in enumerate(p_words):
-                    w_clean = clean(w[4])
-                    if (
-                        start_idx == -1
-                        and head_clean.startswith(w_clean)
-                        and len(w_clean) > 1
-                    ):
-                        start_idx = i
-                    if tail_clean.endswith(w_clean) and len(w_clean) > 1:
-                        end_idx = i
-
-                target_rects = []
-                if start_idx != -1 and end_idx != -1 and start_idx <= end_idx:
-                    current_line_rects = [fitz.Rect(p_words[start_idx][:4])]
-                    last_y = p_words[start_idx][1]
-
-                    for i in range(start_idx + 1, end_idx + 1):
-                        w_rect = fitz.Rect(p_words[i][:4])
-                        curr_y = p_words[i][1]
-                        if abs(curr_y - last_y) < 3:
-                            current_line_rects.append(w_rect)
-                        else:
-                            line_union = current_line_rects[0]
-                            for r in current_line_rects[1:]:
-                                line_union |= r
-                            target_rects.append(line_union)
-                            current_line_rects = [w_rect]
-                            last_y = curr_y
-
-                    if current_line_rects:
-                        line_union = current_line_rects[0]
-                        for r in current_line_rects[1:]:
-                            line_union |= r
-                        target_rects.append(line_union)
-
-                if not target_rects:
-                    quads = page.search_for(
-                        query_content[:100], quads=True, flags=search_flags
-                    )
-                    target_rects = [q.rect for q in quads]
-
-                for i, rect in enumerate(target_rects):
-                    if rect.width < 2 or rect.height < 2:
-                        continue
-                    annotations.append(
-                        {
-                            "page": int(page_num + 1),
-                            "x": float(rect.x0),
-                            "y": float(rect.y0),
-                            "width": float(rect.width),
-                            "height": float(rect.height),
-                            "color": "rgba(255, 0, 0, 0.3)",
-                            "border": "solid",
-                            "id": f"ref_{idx}_{page_num}_{i}",
-                        }
-                    )
-
-    except Exception as e:
-        logger.error(f"[Utils] PDF 하이라이트 좌표 추출 실패: {e}", exc_info=True)
-
-    return annotations
 
 
 def sync_run(coro):

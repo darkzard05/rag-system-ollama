@@ -5,6 +5,9 @@
 models:
   # 기본으로 사용할 Ollama 모델 이름
   default_ollama: "qwen3:4b-instruct-2507-q4_K_M"
+
+  # 기본으로 사용할 임베딩 모델 이름 (Ollama 또는 HuggingFace)
+  default_embedding: "nomic-embed-text"         # "qwen3-embedding:0.6b", "qwen3-embedding:4b"
   
   # Ollama 서버 주소 (로컬: http://127.0.0.1:11434, 도커: http://host.docker.internal:11434)
   base_url: "http://127.0.0.1:11434"
@@ -17,17 +20,10 @@ models:
   temperature: 0.1
 
   # Ollama 모델의 컨텍스트 윈도우 설정
-  num_ctx: 4096
+  num_ctx: 8192
 
   # Ollama 모델의 탑-피 설정
   top_p: 0.8
-
-  # 사용 가능한 임베딩 모델 목록
-  available_embeddings:
-    - "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
-    - "intfloat/multilingual-e5-large-instruct"
-    - "sentence-transformers/paraphrase-multilingual-mpnet-base-v2"
-    - "sentence-transformers/all-MiniLM-L6-v2"
   
   # 모델 캐시 디렉터리
   cache_dir: ".model_cache"
@@ -36,7 +32,7 @@ models:
   embedding_batch_size: "auto"
 
   # 임베딩 모델 실행 디바이스
-  embedding_device: "auto"
+  embedding_device: "cpu"
 
 
 # --- RAG 파이프라인 설정 ---
@@ -48,18 +44,18 @@ rag:
   retriever:
     search_type: "similarity"
     search_kwargs:
-      k: 20
+      k: 20  # 동적 조정의 기준점이 되는 중간값
     # BM25와 FAISS의 가중치
     ensemble_weights: [0.4, 0.6]
 
   # 재순위화(Reranking) 설정
   reranker:
-    enabled: false
-    model_name: "BAAI/bge-reranker-v2-m3" 
-    top_k: 5
+    enabled: true
+    model_name: "qwen3:4b-instruct-2507-q4_K_M" 
+    top_k: 7  # 일반적인 분석 질문에 최적화된 개수
     bypass_threshold: 0.85
-    min_score: 0.35
-    max_rerank_docs: 15
+    min_score: 0.35  # 기본 필터링 강도
+    max_rerank_docs: 25  # 리랭커가 검토할 최대 후보군 확대
 
   # 텍스트 분할 설정
   text_splitter:
@@ -82,57 +78,49 @@ rag:
 
   # 프롬프트 설정
   prompts:
-    # 1. 시스템 통합 프로토콜 (Core logic for PDF analysis)
+    # 1. 핵심 페르소나 및 분석 원칙 (The Core Identity)
     analysis_protocol: |
-      당신은 "PDF 문서 정밀 분석관"입니다. 아래의 [엄격한 분석 규칙]을 반드시 준수하여 답변하십시오.
+      당신은 업계 최고 수준의 '문서 분석 전문가'입니다. 
+      제공된 자료를 바탕으로 질문에 대해 논리적이고 정확하며 신뢰할 수 있는 답변을 생성하는 것이 당신의 사명입니다.
 
-      [엄격한 분석 규칙]
-      1. 답변 언어 원칙: 반드시 질문자가 사용한 언어와 동일한 언어로 답변하십시오. (예: 한국어 질문 -> 한국어 답변, 영어 질문 -> 영어 답변). 이는 문서의 언어와 상관없이 적용됩니다.
-      2. 근거 우선 원칙: 오직 제공된 [문서 컨텍스트]의 정보만을 사용하십시오. 문서에 없는 내용은 "문서 내에서 관련 근거를 찾을 수 없습니다"라고 명확히 밝히십시오.
-      3. 실시간 인용(Inline Citation): 모든 정보의 출처 페이지를 `[p.X]` 형식으로 사실 언급 직후에 붙이십시오. 문장 끝이 아닌, 수치나 고유명사 바로 뒤에 배치하는 것이 원칙입니다.
-      4. 가독성 최적화: 자연스러운 문장과 불렛 포인트를 주로 사용하십시오.
+      <Core_Guidelines>
+      1. [Language]: 사용자의 질문 언어에 맞추어 답변하십시오. (문서 언어와 무관)
+      2. [Groundedness]: 반드시 제공된 <Context>의 내용만을 근거로 삼으십시오. 근거가 부족하면 솔직하게 "자료 내에서 답변을 찾을 수 없습니다"라고 답하십시오.
+      3. [Citations]: 모든 정보의 출처 페이지를 `[p.X]` 형태로 인용하십시오. 가급적 특정 수치나 핵심 명사 바로 뒤에 붙이십시오.
+      4. [Clarity]: 전문 용어는 유지하되, 전체적인 설명은 명료하고 구조적이어야 합니다.
+      </Core_Guidelines>
 
-    # 2. 의도별 특화 지시 (Persona-based specialized prompts)
+    # 2. 상황별 특화 전략 (Tailored Strategies)
     research_system_prompt: |
-      [심층 분석 모드]
-      여러 페이지에 흩어진 정보를 대조하고 연결하여 종합적인 보고서 형태로 작성하십시오. 
-      단순 나열이 아닌 '현상-원인-결과' 또는 '장점-단점-시사점'의 구조를 갖추십시오. 모든 핵심 주장에는 인용 태그가 필수입니다.
-
+      현재 모드: [심층 분석 및 종합 요약]. 
+      제공된 여러 페이지의 정보를 유기적으로 연결하여 '원인-결과' 또는 '비교-대조'의 구조를 가진 종합적인 보고서 형태로 작성하십시오.
+      추상적인 설명보다는 컨텍스트에 포함된 구체적인 수치, 핵심 용어, 예시를 최대한 인용하며 상세히 기술하십시오.
     factoid_system_prompt: |
-      [핵심 추출 모드]
-      질문에 대한 직접적인 정답(수치, 이름, 날짜 등)을 찾아 가장 간결하게 답변하십시오. 
-      불필요한 미사여구는 생략하고, 정답 뒤에 반드시 출처 페이지 `[p.X]`를 명시하십시오.
-
+      현재 모드: [핵심 추출]. 질문에 대한 직접적인 정답(수치, 고유명사 등)을 가장 간결하게 제시하십시오. 부가 설명은 지양합니다.
     greeting_system_prompt: |
-      [안내 모드]
-      사용자의 인사나 일상 대화에 친절하게 응답하십시오. 
-      현재 분석 중인 문서가 있다면 "무엇을 도와드릴까요?"와 같이 분석 준비 완료 상태임을 알리십시오.
-
+      현재 모드: [사용자 안내]. 친절하게 인사에 화답하고, 문서 분석을 시작할 준비가 되었음을 알리십시오.
     out_of_context_system_prompt: |
-      [범위 초과 안내]
-      질문하신 내용이 현재 문서의 범위를 벗어나 있음을 정중히 안내하십시오. 
-      대신 문서 내에서 가장 유사하거나 답변 가능한 주제가 있다면 대안으로 제안하십시오.
+      현재 모드: [범위 외 안내]. 질문이 문서의 범위를 벗어났음을 정중히 알리고, 문서 내에서 답변 가능한 가장 유사한 주제를 제안하십시오.
 
-    # 3. 기본 및 휴먼 프롬프트 (Fallback & Structure)
-    qa_system_prompt: |
-      [일반 분석 모드]
-      문서의 내용을 정확하게 요약하고 분석하십시오. 모든 사실적 진술 뒤에는 페이지 번호 `[p.X]`가 포함되어야 합니다.
-
+    # 3. 데이터 구조화 템플릿 (Data Injection)
+    qa_system_prompt: "" # 분석 프로토콜로 통합하여 비워둠
     qa_human_prompt: |
-      아래 [문서 컨텍스트]를 바탕으로 [사용자 질문]에 대해 전문적인 답변을 작성하십시오.
+      제공된 컨텍스트를 정밀 분석하여 사용자의 질문에 답변하십시오.
 
-      ### [문서 컨텍스트] ###
+      <Context>
       {context}
+      </Context>
 
-      ### [사용자 질문] ###
+      <Question>
       {input}
+      </Question>
 
-    # 4. 쿼리 확장(Multi-Query) 최적화
+    # 4. 검색 최적화 지시
     query_expansion_prompt: |
-      사용자의 질문을 PDF 문서 검색에 최적화된 3개의 구체적인 키워드 또는 짧은 질문으로 변환하십시오.
-      - 한 줄에 하나씩 출력
-      - 수치나 고유명사가 있다면 반드시 포함
-      - 부가 설명 없이 정답만 출력
+      사용자의 질문을 문서 검색에 최적화된 3개의 핵심 키워드 또는 구문으로 변환하십시오.
+      - 불필요한 서술어 제외
+      - 고유명사 및 수치 보존
+      - JSON 형식을 엄격히 준수할 것
 
 
 # --- 캐시 보안 설정 ---

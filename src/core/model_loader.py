@@ -11,16 +11,17 @@ import os
 from typing import TYPE_CHECKING, Any
 
 import streamlit as st
-from langchain_ollama import ChatOllama
+from langchain_ollama import ChatOllama, OllamaEmbeddings
 
 if TYPE_CHECKING:
-    from langchain_huggingface import HuggingFaceEmbeddings
+    from langchain_core.embeddings import Embeddings
     from sentence_transformers import CrossEncoder
 
 import threading
 
 from common.config import (
     CACHE_DIR,
+    DEFAULT_EMBEDDING_MODEL,
     EMBEDDING_DEVICE,
     MSG_ERROR_OLLAMA_NOT_RUNNING,
     OLLAMA_BASE_URL,
@@ -100,11 +101,9 @@ class ModelManager:
             return cls._async_client
 
     @classmethod
-    def get_embedder(cls, model_name: str | None = None) -> HuggingFaceEmbeddings:
+    def get_embedder(cls, model_name: str | None = None) -> Embeddings:
         """임베딩 모델을 가져오거나 로드합니다 (Thread-safe)"""
-        name = (
-            model_name or "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
-        )
+        name = model_name or DEFAULT_EMBEDDING_MODEL
         with cls._embedder_lock:
             if name not in cls._instances or cls._instances[name] is None:
                 cls._instances[name] = load_embedding_model(name)
@@ -179,62 +178,74 @@ def _fetch_available_models_cached() -> list[str]:
 @st.cache_resource(show_spinner=False)
 def load_embedding_model(
     embedding_model_name: str | None = None,
-) -> HuggingFaceEmbeddings:
+) -> Embeddings:
     """
-    임베딩 모델을 로드합니다. (ONNX 가속 및 VRAM 최적화)
+    임베딩 모델을 로드합니다. (HuggingFace 및 Ollama 지원)
+    HuggingFace 모델은 VRAM 보호를 위해 기본적으로 CPU에서 작동하도록 설정합니다.
     """
     global _loaded_model_instances
-    model_key = (
-        embedding_model_name
-        or "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
-    )
+    model_key = embedding_model_name or DEFAULT_EMBEDDING_MODEL
 
     with _model_init_lock:
         if model_key in _loaded_model_instances:
             return _loaded_model_instances[model_key]
 
-        import torch
-        from langchain_huggingface import HuggingFaceEmbeddings
-
-        # 1. 디바이스 결정
-        target_device = EMBEDDING_DEVICE.lower()
-        if target_device == "auto":
-            target_device = "cuda" if torch.cuda.is_available() else "cpu"
-
-        logger.info(f"[MODEL] [DEVICE] 결정됨 | {target_device}")
-
-        # 2. ONNX 가속 시도 (CPU 환경이거나 명시적 요청 시)
-        use_onnx = False
-        if target_device == "cpu":
-            try:
-                # [최적화] Ruff 권장에 따라 availability 체크 위주로 구성 (임포트는 필요 시점에)
-                import importlib.util
-
-                if importlib.util.find_spec("optimum.onnxruntime"):
-                    logger.info(f"[MODEL] [ONNX] ONNX 가속 엔진 감지됨 | {model_key}")
-                    use_onnx = True
-            except Exception:
-                logger.info(
-                    "[MODEL] [ONNX] optimum 라이브러리 로드 실패 | PyTorch 사용"
-                )
-
-        # UI 표시용 세션 업데이트
         from core.session import SessionManager
 
-        display_device = (
-            "GPU" if target_device == "cuda" else ("CPU (ONNX)" if use_onnx else "CPU")
+        # [최적화] Ollama 임베딩 여부 판별
+        # 슬래시(/)가 없거나 명시적으로 'ollama:'로 시작하면 Ollama 모델로 간주
+        is_ollama_embedding = "/" not in model_key or model_key.startswith("ollama:")
+        clean_model_name = (
+            model_key.replace("ollama:", "") if "ollama:" in model_key else model_key
         )
-        SessionManager.set("current_embedding_device", display_device)
-
-        batch_size = 32 if target_device == "cuda" else 8
 
         try:
-            # HuggingFaceEmbeddings 초기화
-            # [최적화] GPU 사용 시 FP16(반정밀도) 적용으로 VRAM 절반 절약
-            model_kwargs = {"device": target_device}
+            if is_ollama_embedding:
+                logger.info(
+                    f"[MODEL] [LOAD] Ollama 임베딩 엔진 사용 | 모델: {clean_model_name}"
+                )
+                # OllamaEmbeddings는 내부적으로 원격 호출을 수행하므로 별도의 디바이스 설정이 필요 없음
+                result = OllamaEmbeddings(
+                    model=clean_model_name,
+                    base_url=OLLAMA_BASE_URL,
+                    # 최신 langchain-ollama는 전역 설정을 잘 따름
+                )
+
+                # 가용성 체크 (첫 호출 시도)
+                try:
+                    # 빈 텍스트로 테스트하여 모델 존재 및 임베딩 지원 여부 확인
+                    result.embed_query("test")
+                    logger.info(
+                        f"[MODEL] [LOAD] Ollama 임베딩 모델 가용성 확인 완료: {clean_model_name}"
+                    )
+                except Exception as ollama_e:
+                    logger.warning(
+                        f"Ollama 임베딩 가용성 확인 실패 (무시 가능): {ollama_e}"
+                    )
+
+                SessionManager.set("current_embedding_device", "Ollama Backend")
+                _loaded_model_instances[model_key] = result
+                return result
+
+            # --- 기존 HuggingFace 로직 ---
+            import torch
+            from langchain_huggingface import HuggingFaceEmbeddings
+
+            # [최적화] 임베딩 디바이스 결정 로직 복구
+            target_device = EMBEDDING_DEVICE.lower()
+            if target_device == "auto":
+                target_device = "cpu"
+
+            display_device = "GPU" if target_device == "cuda" else "CPU"
+            SessionManager.set("current_embedding_device", display_device)
+            batch_size = 32 if target_device == "cuda" else 16
+
+            # [최적화] ONNX 백엔드 활성화 (CPU/GPU 모두 지원)
+            model_kwargs = {"device": target_device, "backend": "onnx"}
             if target_device == "cuda":
                 model_kwargs["model_kwargs"] = {"torch_dtype": torch.float16}
 
+            # 표준 HuggingFaceEmbeddings 로드
             result = HuggingFaceEmbeddings(
                 model_name=model_key,
                 model_kwargs=model_kwargs,
@@ -243,7 +254,7 @@ def load_embedding_model(
             )
 
             logger.info(
-                f"[MODEL] [LOAD] 임베딩 모델 로드 성공 | 엔진: {display_device}"
+                f"[MODEL] [LOAD] HF 임베딩 모델 로드 성공 | 엔진: {display_device} (ONNX) | 배치: {batch_size}"
             )
             _loaded_model_instances[model_key] = result
             return result
@@ -253,41 +264,186 @@ def load_embedding_model(
             raise EmbeddingModelError(model=model_key, reason=str(e)) from e
 
 
+class OllamaReranker:
+    """
+    Ollama의 리랭킹 모델을 호출하는 래퍼 클래스.
+    sentence-transformers의 CrossEncoder.predict와 유사한 인터페이스를 제공합니다.
+    """
+
+    def __init__(self, model_name: str, base_url: str):
+        self.model_name = model_name
+        self.base_url = base_url
+
+    async def apredict(
+        self, pairs: list[list[str]], batch_size: int = 32
+    ) -> list[float]:
+        """
+        [최적화] 비동기 병렬 Ollama 리랭킹.
+        LLM 기반의 지능형 채점을 병렬로 수행하여 속도를 극대화합니다.
+        """
+        import re
+
+        if not pairs:
+            return []
+
+        query = pairs[0][0]
+        documents = [p[1] for p in pairs]
+
+        # ModelManager의 비동기 클라이언트 사용
+        client = ModelManager.get_async_client(host=self.base_url)
+
+        async def _score_batch(batch: list[str], start_idx: int) -> list[float]:
+            # LLM에게 리랭킹 점수를 요구하는 최적화된 프롬프트
+            scoring_prompt = (
+                f"Task: Evaluate document relevance to the query.\n"
+                f"Query: {query}\n\n"
+                "For each document, provide a relevance score between 0.0 and 1.0.\n"
+                "Output ONLY a list of numbers. Example: [0.9, 0.1, 0.5]\n\n"
+            )
+            for j, doc in enumerate(batch):
+                scoring_prompt += f"Document {j + 1}: {doc[:800]}\n\n"
+
+            try:
+                # Chat API 비동기 호출
+                response = await client.chat(
+                    model=self.model_name,
+                    messages=[{"role": "user", "content": scoring_prompt}],
+                    options={"temperature": 0.0, "num_predict": 50},
+                )
+                content = response["message"]["content"]
+
+                # 숫자 추출
+                found = re.findall(r"0\.\d+|1\.0|\d\.\d+", content)
+                batch_scores = [float(s) for s in found][: len(batch)]
+
+                # 안전장치: 숫자를 못 찾았을 경우 기본 순차 점수 부여
+                while len(batch_scores) < len(batch):
+                    batch_scores.append(0.5 - ((start_idx + len(batch_scores)) * 0.02))
+
+                return batch_scores
+            except Exception as batch_e:
+                logger.error(f"[Reranker] 배치 채점 실패: {batch_e}")
+                return [0.5] * len(batch)
+
+        # 5개씩 배치화하여 병렬 실행
+        batch_tasks = []
+        for i in range(0, len(documents), 5):
+            batch_tasks.append(_score_batch(documents[i : i + 5], i))
+
+        all_batch_results = await asyncio.gather(*batch_tasks)
+        all_scores = []
+        for batch_res in all_batch_results:
+            all_scores.extend(batch_res)
+
+        return all_scores
+
+    def predict(self, pairs: list[list[str]], batch_size: int = 32) -> list[float]:
+        """
+        동기 방식의 리랭킹 호출 (호환성 유지).
+        """
+        try:
+            # 현재 루프가 있는지 확인
+            try:
+                loop = asyncio.get_running_loop()
+                if loop.is_running():
+                    return self._predict_sync(pairs, batch_size)
+                # 루프는 있으나 작동 중이 아니면 run 호출
+                return asyncio.run(self.apredict(pairs, batch_size))
+            except RuntimeError:
+                # 루프가 없는 경우
+                return asyncio.run(self.apredict(pairs, batch_size))
+        except Exception as e:
+            logger.error(f"[Reranker] predict 오류: {e}")
+            return [0.5] * len(pairs)
+
+    def _predict_sync(
+        self, pairs: list[list[str]], batch_size: int = 32
+    ) -> list[float]:
+        """기존 동기 처리 로직 (Fallback)"""
+        import re
+
+        import ollama
+
+        query = pairs[0][0]
+        documents = [p[1] for p in pairs]
+        client = ollama.Client(host=self.base_url)
+
+        try:
+            all_scores = []
+            for i in range(0, len(documents), 5):
+                batch = documents[i : i + 5]
+                scoring_prompt = (
+                    f"Task: Evaluate document relevance to the query.\n"
+                    f"Query: {query}\n\n"
+                    "For each document, provide a relevance score between 0.0 and 1.0.\n"
+                    "Output ONLY a list of numbers. Example: [0.9, 0.1, 0.5]\n\n"
+                )
+                for j, doc in enumerate(batch):
+                    scoring_prompt += f"Document {j + 1}: {doc[:800]}\n\n"
+
+                response = client.chat(
+                    model=self.model_name,
+                    messages=[{"role": "user", "content": scoring_prompt}],
+                    options={"temperature": 0.0, "num_predict": 50},
+                )
+                content = response["message"]["content"]
+                found = re.findall(r"0\.\d+|1\.0|\d\.\d+", content)
+                batch_scores = [float(s) for s in found][: len(batch)]
+                while len(batch_scores) < len(batch):
+                    batch_scores.append(0.5 - (i * 0.02))
+                all_scores.extend(batch_scores)
+            return all_scores
+        except Exception as e:
+            logger.error(f"[Reranker] LLM 채점 실패: {e}")
+            return [1.0 - (idx * 0.01) for idx in range(len(documents))]
+
+
 @st.cache_resource(show_spinner=False)
-def load_reranker_model(model_name: str) -> CrossEncoder | None:
+def load_reranker_model(model_name: str) -> Any:
     """
     [최적화] 리랭커 모델 로드
-    - VRAM 경합 방지를 위해 디바이스 최적화 적용 및 실패 시 자동 CPU 전환
+    - Ollama 모델인 경우 OllamaReranker 반환
+    - HF 모델인 경우 CrossEncoder 반환
     """
+    if not model_name:
+        return None
+
+    # Ollama 리랭커 감지 (슬래시가 없거나 명시적 접두사)
+    is_ollama_reranker = "/" not in model_name or "reranker" in model_name.lower()
+
+    if is_ollama_reranker:
+        logger.info(f"[MODEL] [LOAD] Ollama 리랭킹 엔진 사용 | 모델: {model_name}")
+        return OllamaReranker(model_name=model_name, base_url=OLLAMA_BASE_URL)
+
     try:
         import torch
         from sentence_transformers import CrossEncoder
 
-        # 1. 디바이스 결정 로직
-        is_gpu = False
-        total_mem = 0
-        try:
-            is_gpu = torch.cuda.is_available()
-            if is_gpu:
-                # 현재 가용 메모리 확인
-                total_mem = torch.cuda.get_device_properties(0).total_memory // (
-                    1024**2
-                )
-                free_mem = torch.cuda.memory_reserved(0) // (1024**2)
-                logger.debug(
-                    f"[MODEL] [RERANKER] GPU 메모리 상태 | Total: {total_mem}MB | Reserved: {free_mem}MB"
-                )
-        except Exception as e:
-            logger.debug(f"GPU 상태 확인 중 경미한 오류: {e}")
+        # 1. 디바이스 결정 로직 (EMBEDDING_DEVICE 설정 준수)
+        target_device = EMBEDDING_DEVICE.lower()
 
-        # GPU 메모리가 4GB 이상이고, 가용 메모리에 여유가 있을 때만 CUDA 사용
-        device = "cuda" if (is_gpu and total_mem > 4000) else "cpu"
+        is_gpu = torch.cuda.is_available()
+        if target_device == "auto":
+            # auto일 때만 메모리 상황에 따라 결정
+            total_mem = 0
+            try:
+                if is_gpu:
+                    total_mem = torch.cuda.get_device_properties(0).total_memory // (
+                        1024**2
+                    )
+            except Exception:
+                pass
+            device = "cuda" if (is_gpu and total_mem > 4000) else "cpu"
+        else:
+            # 명시적 설정이 있으면 그에 따름 (예: cpu)
+            device = target_device
 
         logger.info(
-            f"[MODEL] [LOAD] 리랭커 모델 로드 시작 | 모델: {model_name} | 장치: {device}"
+            f"[MODEL] [LOAD] 리랭커 모델 로드 시도 | 모델: {model_name} | 장치: {device}"
         )
 
         try:
+            # [수정] device 인자를 명시적으로 전달
             return CrossEncoder(model_name, device=device)
         except Exception as inner_e:
             if device == "cuda":
@@ -303,13 +459,19 @@ def load_reranker_model(model_name: str) -> CrossEncoder | None:
         logger.error(
             f"[MODEL] [LOAD] Reranker 최종 로드 실패 | {type(e).__name__}: {e}"
         )
-        # 리랭커는 선택적 컴포넌트이므로 에러를 던지는 대신 None을 반환하여 파이프라인이 계속 진행되도록 함
         return None
 
 
 def get_available_models() -> list[str]:
+    """사용 가능한 Ollama 모델 목록을 반환합니다. 실패 시 기본 모델 포함."""
     models = _fetch_available_models_cached()
-    return models if models else [MSG_ERROR_OLLAMA_NOT_RUNNING]
+    from common.config import DEFAULT_OLLAMA_MODEL
+
+    # 서버가 꺼져 있거나 목록이 비어있으면 기본 모델이라도 반환
+    if not models or (len(models) == 1 and MSG_ERROR_OLLAMA_NOT_RUNNING in models):
+        return [DEFAULT_OLLAMA_MODEL, MSG_ERROR_OLLAMA_NOT_RUNNING]
+
+    return models
 
 
 @log_operation("Ollama LLM 로드")

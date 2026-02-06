@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Any
 
 import numpy as np
 from langchain_core.documents import Document
+from langchain_core.embeddings import Embeddings
 
 # 순환 참조 방지 및 타입 힌트용
 if TYPE_CHECKING:
@@ -30,7 +31,7 @@ class EmbeddingBasedSemanticChunker:
 
     def __init__(
         self,
-        embedder: Any,
+        embedder: Embeddings,
         breakpoint_threshold_type: str = "percentile",
         breakpoint_threshold_value: float = 95.0,
         sentence_split_regex: str = r"([.!?]\s+)",  # 기본값을 split 친화적으로 변경 (캡처 그룹 포함 권장)
@@ -198,11 +199,13 @@ class EmbeddingBasedSemanticChunker:
         """
         인접 문장 간의 코사인 유사도를 계산합니다.
         [최적화] 이미 정규화된 벡터를 사용하여 내적(Dot Product)만 수행합니다.
+        einsum을 사용하여 루프 없이 벡터화된 연산을 수행합니다.
         """
         if len(normalized_embeddings) < 2:
             return []
 
-        # 정규화된 벡터 간의 내적은 코사인 유사도와 동일 (einsum으로 메모리 절약)
+        # [최적화] einsum을 사용하여 인접 행 간의 내적을 한 번에 계산
+        # (n-1, d) 와 (n-1, d) 의 각 행끼리 곱하고 합산
         similarities = np.einsum(
             "ij,ij->i", normalized_embeddings[:-1], normalized_embeddings[1:]
         )
@@ -230,34 +233,25 @@ class EmbeddingBasedSemanticChunker:
 
         # 2. [최적화] 로컬 감지 (벡터화된 이동 평균 기반)
         window_size = 3
-        breakpoints = []
 
         # 전역 임계값 미달 지점 (벡터화)
         global_breaks = similarities_array < global_threshold
+        local_breaks = np.zeros_like(global_breaks)
 
-        # 로컬 급감 지점 계산 (벡터화)
         # np.convolve를 사용하여 이동 평균 계산 (유효한 윈도우만)
         if n >= window_size:
             weights = np.ones(window_size) / window_size
-            # 'valid' 모드는 padding 없이 계산하므로 결과 길이가 n - window_size + 1
             local_avgs = np.convolve(similarities_array, weights, mode="valid")
 
-            # 비교를 위해 인덱스 매칭: similarities[i]와 similarities[max(0, i-window_size):i]의 평균 비교
-            # 기존 로직: i번째 유사도를 그 직전 window_size개의 평균과 비교함
-            # 따라서 local_avgs[0] (0,1,2의 평균)은 similarities[3]과 비교되어야 함
+            # [최적화] 벡터화된 비교를 통해 루프 제거
+            # similarities[i]와 local_avgs[i-window_size]를 비교 (i >= window_size)
+            local_breaks[window_size:] = similarities_array[window_size:] < (
+                local_avgs[:-1] * 0.8
+            )
 
-            for i in range(n):
-                is_global_break = global_breaks[i]
-                is_local_break = False
-
-                if i >= window_size:
-                    # i=3일 때 local_avgs[0] (indices 0,1,2의 평균) 사용
-                    avg = local_avgs[i - window_size]
-                    if similarities_array[i] < avg * 0.8:
-                        is_local_break = True
-
-                if is_global_break or is_local_break:
-                    breakpoints.append(i + 1)
+            # 최종 분기점 인덱스 추출
+            indices = np.where(global_breaks | local_breaks)[0] + 1
+            breakpoints = indices.tolist()
         else:
             # 데이터가 너무 적으면 전역 임계값만 적용
             breakpoints = [i + 1 for i, b in enumerate(global_breaks) if b]
