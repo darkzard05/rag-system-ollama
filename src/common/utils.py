@@ -64,10 +64,9 @@ def normalize_latex_delimiters(text: str) -> str:
     return text
 
 
-def apply_tooltips_to_response(response_text: str, documents: list | None = None, msg_index: int = 0) -> str:
-
-
-
+def apply_tooltips_to_response(
+    response_text: str, documents: list | None = None, msg_index: int = 0
+) -> str:
     """
     답변 텍스트 내의 LaTeX 수식을 정규화합니다.
     (인용구 툴팁 기능은 안정성을 위해 제거되었습니다.)

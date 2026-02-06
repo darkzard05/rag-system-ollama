@@ -7,7 +7,6 @@ from __future__ import annotations
 import streamlit as st
 
 from ui.components.chat import render_chat_interface
-from ui.components.sidebar import render_sidebar
 from ui.components.viewer import render_pdf_viewer
 
 
