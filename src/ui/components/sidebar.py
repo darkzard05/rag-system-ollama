@@ -68,8 +68,8 @@ def render_sidebar(
                 actual_llms.append(DEFAULT_OLLAMA_MODEL)
             actual_llms.sort()
 
-            # --- A. 답변 생성 모델 (LLM) ---
-            st.write("**💬 답변 생성 모델 (LLM)**")
+            # --- A. sLLM ---
+            st.write("**💬 sLLM**")
 
             last_model = (
                 SessionManager.get("last_selected_model") or DEFAULT_OLLAMA_MODEL
@@ -94,8 +94,8 @@ def render_sidebar(
 
             st.markdown("<div style='margin-top: 15px;'></div>", unsafe_allow_html=True)
 
-            # --- B. 지식 분석 모델 (Embedding) ---
-            st.write("**🔍 지식 분석 모델 (Embedding)**")
+            # --- B. 임베딩 모델 ---
+            st.write("**🔍 임베딩 모델**")
 
             current_emb = (
                 SessionManager.get("last_selected_embedding_model")

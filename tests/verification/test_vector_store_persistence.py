@@ -14,7 +14,7 @@ if str(SRC_DIR) not in sys.path:
 import pytest
 from langchain_core.documents import Document
 
-from core.rag_core import VectorStoreCache
+from core.retriever_manager import VectorStoreCache
 
 
 def test_vector_store_save_verification():

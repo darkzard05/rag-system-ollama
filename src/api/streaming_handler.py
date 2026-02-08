@@ -123,6 +123,11 @@ class StreamingResponseHandler:
     ) -> AsyncIterator[StreamChunk]:
         """
         LangGraph 이벤트를 소비하여 가공된 스트리밍 청크를 생성 (리소스 안전 관리 최적화)
+
+        [중요: FastAPI 0.128.0 리소스 수명 주기]
+        - 이 생성기가 완료되면 FastAPI의 'yield' 기반 의존성(예: DB 세션)이 즉시 닫힙니다.
+        - 따라서 BackgroundTasks에서 이 스트림의 결과나 리소스를 공유하는 것은 위험합니다.
+        - 스트리밍 종료 후의 정리 작업은 이 메서드의 'finally' 블록 내에서 직접 수행하십시오.
         """
         from contextlib import aclosing
 
@@ -133,15 +138,26 @@ class StreamingResponseHandler:
         self.first_token_time = None
         self.buffer.reset()
 
-        # 노드 이름 매핑 (UI 피드백용)
-        node_status_map = {
-            "router": "질문 의도 분석 중...",
-            "generate_queries": "검색어 확장 중...",
-            "retrieve": "관련 문서 검색 중...",
-            "rerank_documents": "문서 순위 재조정 중...",
-            "format_context": "컨텍스트 구성 중...",
-            "generate_response": "답변 생성 중...",
-        }
+        # 노드 이름 매핑 (UI 피드백용) - [최적화] 설정에 따라 표시 여부 결정
+        from common.config import INTENT_ANALYSIS_ENABLED, QUERY_EXPANSION_CONFIG
+
+        node_status_map = {}
+        if INTENT_ANALYSIS_ENABLED:
+            node_status_map["router"] = "질문 의도 분석 중..."
+
+        if QUERY_EXPANSION_CONFIG.get("enabled", True):
+            node_status_map["generate_queries"] = "검색어 확장 중..."
+
+        # 상시 활성 노드
+        node_status_map.update(
+            {
+                "retrieve": "관련 문서 검색 중...",
+                "rerank_documents": "문서 순위 재조정 중...",
+                "grade_documents": "핵심 문장 선정 중...",
+                "format_context": "컨텍스트 구성 중...",
+                "generate_response": "답변 생성 중...",
+            }
+        )
 
         try:
             async with aclosing(event_stream) as stream:  # type: ignore[type-var]
@@ -162,10 +178,21 @@ class StreamingResponseHandler:
                         )
                         self.chunk_index += 1
 
-                    # 2. 커스텀 응답 청크 이벤트 처리
-                    elif kind == "on_custom_event" and name == "response_chunk":
-                        content = data.get("chunk", "")
-                        thought = data.get("thought", "")
+                    # 2. 커스텀 응답 청크 이벤트 처리 (astream_events v2 기준)
+                    # [업데이트] get_stream_writer를 통해 전달된 custom 데이터 포함
+                    elif (kind == "on_custom_event" and name == "response_chunk") or (
+                        kind == "on_chain_stream" and "chunk" in data.get("chunk", {})
+                        if isinstance(data.get("chunk"), dict)
+                        else False
+                    ):
+                        # 데이터 정규화 (직접 전송 vs writer 전송 대응)
+                        chunk_data = (
+                            data.get("chunk")
+                            if isinstance(data.get("chunk"), dict)
+                            else data
+                        )
+                        content = chunk_data.get("chunk", "")
+                        thought = chunk_data.get("thought", "")
                         current_time = time.time()
 
                         # 지연 시간 기록 및 적응형 제어

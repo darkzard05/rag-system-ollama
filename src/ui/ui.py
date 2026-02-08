@@ -7,6 +7,7 @@ from __future__ import annotations
 import streamlit as st
 
 from ui.components.chat import render_chat_interface
+from ui.components.sidebar import render_sidebar as _render_sidebar
 from ui.components.viewer import render_pdf_viewer
 
 
@@ -18,6 +19,11 @@ def render_left_column():
 def render_right_column():
     """오른쪽 컬럼 (PDF 뷰어) 렌더링"""
     render_pdf_viewer()
+
+
+def render_sidebar(**kwargs):
+    """사이드바 렌더링 위임"""
+    return _render_sidebar(**kwargs)
 
 
 @st.cache_resource
@@ -32,11 +38,10 @@ def inject_custom_css():
         overflow: hidden !important;
     }
 
-    /* 2. 메인 영역 패딩 최적화 */
+    /* 2. 메인 영역 패딩 최적화 (사이드바와 균형 조정) */
     [data-testid="stMainBlockContainer"] {
-        padding-top: 2rem !important;
+        padding-top: 5rem !important;
         padding-bottom: 1rem !important;
-        height: 100vh !important;
     }
 
     /* 3. 사이드바 상단 정렬 */
@@ -56,7 +61,15 @@ def inject_custom_css():
         display: none !important;
     }
 
-    /* 6. 사고 과정(Thought) 컨테이너 디자인 */
+    /* 6. 헤더 크기 통일 (사이드바 & 메인 영역) */
+    [data-testid="stSidebar"] h2,
+    [data-testid="stMainBlockContainer"] h2 {
+        font-size: 1.25rem !important;
+        font-weight: 700 !important;
+        margin-bottom: 1rem !important;
+    }
+
+    /* 7. 사고 과정(Thought) 컨테이너 디자인 */
     .thought-container {
         font-style: italic;
         color: #555;

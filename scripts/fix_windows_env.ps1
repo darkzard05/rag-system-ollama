@@ -16,7 +16,7 @@ if (-not (Test-Path $vcrPath)) {
 
 # 2. Cleanup conflicting packages
 Write-Host "[*] Cleaning up conflicting packages (torch, torchvision)..." -ForegroundColor Yellow
-pip uninstall -y torch torchvision torchaudio 2>$null
+pip uninstall -y torch torchvision 2>$null
 
 # 3. Install stable Windows build
 Write-Host "[*] Installing stable torch (CPU version by default)..." -ForegroundColor Yellow

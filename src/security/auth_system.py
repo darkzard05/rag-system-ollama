@@ -178,7 +178,7 @@ class AuthenticationManager:
         ] = {}  # user_id -> {password_hash, salt, ...}
         self._tokens: dict[str, Token] = {}
         self._sessions: dict[str, Session] = {}
-        self._api_keys: dict[str, str] = {}  # api_key -> user_id
+        self._api_keys: dict[str, Token] = {}  # api_key_string -> Token object
         self._failed_logins: dict[str, list[float]] = {}  # user_id -> [timestamps]
         self._lock = RLock()
         self._max_failed_attempts = 5
@@ -300,21 +300,57 @@ class AuthenticationManager:
 
             return user_id
 
-    def create_api_key(self, user_id: str) -> str:
+    def create_api_key(self, user_id: str, expires_in: int | None = None) -> str:
         """API 키 생성"""
         with self._lock:
             if user_id not in self._users:
                 return ""
 
-            api_key = f"sk_{secrets.token_urlsafe(32)}"
-            self._api_keys[api_key] = user_id
+            api_key_str = f"sk_{secrets.token_urlsafe(32)}"
+            expires_at = (time.time() + expires_in) if expires_in else None
 
-            return api_key
+            api_key_token = Token(
+                token_type=TokenType.API_KEY,
+                user_id=user_id,
+                token_string=api_key_str,
+                expires_at=expires_at,
+            )
+            self._api_keys[api_key_str] = api_key_token
+
+            return api_key_str
+
+    def register_fixed_api_key(
+        self, user_id: str, api_key_str: str, expires_in: int | None = None
+    ) -> bool:
+        """[보안] 고정된 API 키 등록 (CI/Test 용)"""
+        with self._lock:
+            if user_id not in self._users:
+                return False
+
+            expires_at = (time.time() + expires_in) if expires_in else None
+            api_key_token = Token(
+                token_type=TokenType.API_KEY,
+                user_id=user_id,
+                token_string=api_key_str,
+                expires_at=expires_at,
+            )
+            self._api_keys[api_key_str] = api_key_token
+            return True
 
     def verify_api_key(self, api_key: str) -> str | None:  # user_id
-        """API 키 검증"""
+        """API 키 검증 (만료 확인 포함)"""
         with self._lock:
-            return self._api_keys.get(api_key)
+            token_obj = self._api_keys.get(api_key)
+            if not token_obj:
+                return None
+
+            if token_obj.is_expired() or not token_obj.is_valid:
+                # 만료되거나 무효화된 키 자동 삭제
+                del self._api_keys[api_key]
+                return None
+
+            token_obj.last_used = time.time()
+            return token_obj.user_id
 
     def revoke_api_key(self, api_key: str) -> bool:
         """API 키 취소"""

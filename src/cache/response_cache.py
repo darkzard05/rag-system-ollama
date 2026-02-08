@@ -80,14 +80,12 @@ class ResponseCache:
     ) -> ResponseCacheEntry | None:
         """
         응답 조회
-
-        Args:
-            query: 쿼리
-            use_semantic: 의미적 유사성 사용 여부
-
-        Returns:
-            캐시 항목 또는 None
         """
+        from common.config import ENABLE_RESPONSE_CACHE
+
+        if not ENABLE_RESPONSE_CACHE:
+            return None
+
         try:
             cache_key = self._generate_key(query)
 
@@ -120,13 +118,12 @@ class ResponseCache:
     ) -> None:
         """
         응답 저장
-
-        Args:
-            query: 쿼리
-            response: 응답
-            metadata: 메타데이터
-            ttl_hours: TTL (시간 단위)
         """
+        from common.config import ENABLE_RESPONSE_CACHE
+
+        if not ENABLE_RESPONSE_CACHE:
+            return
+
         try:
             cache_key = self._generate_key(query)
             ttl_seconds = (ttl_hours or 3) * 3600
@@ -188,11 +185,9 @@ class ResponseCache:
         """캐시 키 생성 (문서 식별자 포함으로 캐시 오염 방지)"""
         from core.session import SessionManager
 
-        # 현재 세션의 문서 식별자 가져오기
-        doc_path = SessionManager.get("pdf_file_path", "")
-        doc_id = (
-            hashlib.sha256(doc_path.encode()).hexdigest()[:8] if doc_path else "no_doc"
-        )
+        # 현재 세션의 문서 식별자(콘텐츠 해시) 가져오기
+        file_hash = SessionManager.get("file_hash", "")
+        doc_id = file_hash[:8] if file_hash else "no_doc"
 
         combined_key = f"{doc_id}:{query}"
         return hashlib.sha256(combined_key.encode()).hexdigest()[:16]
@@ -309,10 +304,8 @@ class QueryCache:
         """캐시 키 생성 (문서 식별자 포함)"""
         from core.session import SessionManager
 
-        doc_path = SessionManager.get("pdf_file_path", "")
-        doc_id = (
-            hashlib.sha256(doc_path.encode()).hexdigest()[:8] if doc_path else "no_doc"
-        )
+        file_hash = SessionManager.get("file_hash", "")
+        doc_id = file_hash[:8] if file_hash else "no_doc"
 
         combined_key = f"{doc_id}:{query}"
         return hashlib.sha256(combined_key.encode()).hexdigest()[:12]

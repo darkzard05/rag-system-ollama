@@ -8,6 +8,7 @@ import logging
 import os
 import tempfile
 import time
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import (
@@ -30,17 +31,48 @@ from api.streaming_handler import (
     get_streaming_handler,
 )
 from common.config import AVAILABLE_EMBEDDING_MODELS, DEFAULT_OLLAMA_MODEL
-from core.rag_core import build_rag_pipeline
+from core.rag_core import RAGSystem
 from core.session import SessionManager
 from security.auth_system import AuthenticationManager
 
 # 로깅 설정
 logger = logging.getLogger(__name__)
 
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """서버 생애주기 관리 (Startup/Shutdown)"""
+
+    # Startup: 세션 자동 정리 태스크 시작
+    async def session_cleaner():
+        try:
+            while True:
+                await asyncio.sleep(600)  # 10분마다 실행
+                # 세션 정리 및 보안 감사 수행
+                await asyncio.to_thread(SessionManager.cleanup_expired_sessions, 3600)
+                await asyncio.to_thread(SessionManager.perform_security_audit)
+        except asyncio.CancelledError:
+            logger.info("[API] 세션 정리 태스크 종료 중...")
+
+    cleaner_task = asyncio.create_task(session_cleaner())
+    logger.info("[API] 세션 자동 정리 태스크 시작됨 (주기: 10분)")
+
+    yield
+
+    # Shutdown: 태스크 정리
+    cleaner_task.cancel()
+    import contextlib
+
+    with contextlib.suppress(asyncio.CancelledError):
+        await cleaner_task
+    logger.info("[API] 서버 종료 및 리소스 정리 완료")
+
+
 app = FastAPI(
     title="RAG System API",
     description="Ollama와 LangGraph 기반의 고도화된 RAG 시스템 API",
     version="2.0.0",
+    lifespan=lifespan,
 )
 
 # --- 보안 및 인증 설정 ---
@@ -53,14 +85,16 @@ TEST_API_KEY = os.getenv("TEST_API_KEY")
 
 auth_manager.register_user(TEST_USER, "admin_user", "admin123")
 if TEST_API_KEY:
-    # 지정된 키로 등록 (CI용)
-    auth_manager._api_keys[TEST_API_KEY] = TEST_USER
-    logger.info("[Security] 고정 API 키 활성화 (CI/Test 모드)")
+    # 지정된 키로 등록 (CI용, 30일 만료)
+    auth_manager.register_fixed_api_key(TEST_USER, TEST_API_KEY, expires_in=2592000)
+    logger.info("[Security] 고정 API 키 활성화 (CI/Test 모드, 30일 유효)")
 else:
-    # 무작위 키 생성 (일반 실행 모드)
-    TEST_API_KEY = auth_manager.create_api_key(TEST_USER)
+    # 무작위 키 생성 (일반 실행 모드, 24시간 만료)
+    TEST_API_KEY = auth_manager.create_api_key(TEST_USER, expires_in=86400)
     # [보안] API 키를 로그에 직접 노출하지 않음
-    logger.info("[Security] 시스템 보호 활성화. API Key가 생성되었습니다.")
+    logger.info(
+        "[Security] 시스템 보호 활성화. 24시간 유효한 API Key가 생성되었습니다."
+    )
 
 
 async def verify_token(
@@ -82,29 +116,21 @@ async def verify_token(
 
 # --- 싱글톤 리소스 관리 (중앙 ModelManager 위임) ---
 class RAGResourceManager:
-    _active_llm_name = None
-    _active_embedder_name = None
-    # [최적화] 비동기 락 제거 (ModelManager의 RLock으로 통합 관리됨)
-
     @classmethod
     async def get_llm(cls, model_name: str | None = None, session_id: str = "default"):
-        target_model = (
-            model_name
-            or SessionManager.get("last_selected_model", session_id=session_id)
-            or DEFAULT_OLLAMA_MODEL
-        )
+        current_model = SessionManager.get("last_selected_model", session_id=session_id)
+        target_model = model_name or current_model or DEFAULT_OLLAMA_MODEL
 
-        # [최적화] 모델 전환 로그 표준화
-        if cls._active_llm_name != target_model:
+        # [최적화] 세션별 모델 전환 로그
+        if current_model and current_model != target_model:
             logger.info(
-                f"[MODEL] [SWITCH] LLM 전환 | {cls._active_llm_name} -> {target_model}"
+                f"[MODEL] [SWITCH] LLM 전환 (Session: {session_id}) | {current_model} -> {target_model}"
             )
 
-        # 중앙 매니저를 통해 모델 인스턴스 획득 (블로킹 작업이므로 to_thread 사용)
+        # 중앙 매니저를 통해 모델 인스턴스 획득
         from core.model_loader import ModelManager
 
         llm = await asyncio.to_thread(ModelManager.get_llm, target_model)
-        cls._active_llm_name = target_model
         SessionManager.set("last_selected_model", target_model, session_id=session_id)
         return llm
 
@@ -112,22 +138,18 @@ class RAGResourceManager:
     async def get_embedder(
         cls, model_name: str | None = None, session_id: str = "default"
     ):
-        target_model = (
-            model_name
-            or SessionManager.get(
-                "last_selected_embedding_model", session_id=session_id
-            )
-            or AVAILABLE_EMBEDDING_MODELS[0]
+        current_embedder = SessionManager.get(
+            "last_selected_embedding_model", session_id=session_id
         )
+        target_model = model_name or current_embedder or AVAILABLE_EMBEDDING_MODELS[0]
 
-        if cls._active_embedder_name != target_model:
+        if current_embedder and current_embedder != target_model:
             logger.info(
-                f"[MODEL] [SWITCH] 임베딩 모델 전환 | {cls._active_embedder_name} -> {target_model}"
+                f"[MODEL] [SWITCH] 임베딩 모델 전환 (Session: {session_id}) | {current_embedder} -> {target_model}"
             )
         from core.model_loader import ModelManager
 
         embedder = await asyncio.to_thread(ModelManager.get_embedder, target_model)
-        cls._active_embedder_name = target_model
         SessionManager.set(
             "last_selected_embedding_model", target_model, session_id=session_id
         )
@@ -143,8 +165,8 @@ async def get_session_context(x_session_id: str | None = Header(None)) -> str:
 
     SessionManager.set_session_id(sid)
 
-    # 세션 데이터 초기화 (필요시)
-    await asyncio.to_thread(SessionManager.init_session, session_id=sid)
+    # [최적화] 가벼운 세션 초기화는 직접 호출
+    SessionManager.init_session(session_id=sid)
     return sid
 
 
@@ -174,8 +196,8 @@ async def upload_document(
     if not file.filename.endswith(".pdf"):
         raise HTTPException(status_code=400, detail="PDF 파일만 업로드 가능합니다.")
 
-    # 명시적으로 세션 초기화
-    await asyncio.to_thread(SessionManager.init_session, session_id=session_id)
+    # 명시적으로 세션 초기화 (최적화: 직접 호출)
+    SessionManager.init_session(session_id=session_id)
 
     try:
         # 임시 파일 저장
@@ -186,19 +208,17 @@ async def upload_document(
             tmp_path = tmp.name
 
         try:
-            # [수정] 동적으로 결정된 임베딩 모델 사용
+            # [수정] 동적으로 결정된 임베딩 모델 사용 (모델 로딩은 무거우므로 스레드 유지)
             embedder = await RAGResourceManager.get_embedder(
                 embedding_model, session_id=session_id
             )
 
-            # 무거운 동기 파이프라인 구축 작업을 별도 스레드에서 실행하여 이벤트 루프 차단 방지
-            # [중요] 세션 ID를 명시적으로 전달
-            msg, cache_used = await asyncio.to_thread(
-                build_rag_pipeline,
-                uploaded_file_name=file.filename,
+            # [중요] RAGSystem 클래스를 통해 세션 격리 보장
+            rag_sys = RAGSystem(session_id=session_id)
+            msg, cache_used = await rag_sys.load_document(
                 file_path=tmp_path,
+                file_name=file.filename,
                 embedder=embedder,
-                session_id=session_id,
             )
 
             SessionManager.set(
@@ -229,7 +249,7 @@ async def query_rag(request: QueryRequest, user_id: str = Depends(verify_token))
     인증된 세션 컨텍스트에서 질의를 수행합니다.
     """
     sid = request.session_id or "default"
-    await asyncio.to_thread(SessionManager.init_session, session_id=sid)
+    SessionManager.init_session(session_id=sid)
 
     if SessionManager.get("last_uploaded_file_name", session_id=sid) is None:
         raise HTTPException(status_code=400, detail="먼저 문서를 업로드해주세요.")
@@ -245,8 +265,18 @@ async def query_rag(request: QueryRequest, user_id: str = Depends(verify_token))
                 status_code=500, detail="QA 시스템이 초기화되지 않았습니다."
             )
 
-        # LangGraph 실행 설정에 세션 ID 명시적 바인딩
-        config = {"configurable": {"llm": llm, "session_id": sid, "thread_id": sid}}
+        # LangGraph 실행 설정에 세션 ID 및 리트리버 명시적 바인딩
+        config = {
+            "configurable": {
+                "llm": llm,
+                "session_id": sid,
+                "thread_id": sid,
+                "faiss_retriever": SessionManager.get(
+                    "faiss_retriever", session_id=sid
+                ),
+                "bm25_retriever": SessionManager.get("bm25_retriever", session_id=sid),
+            }
+        }
 
         result = await rag_app.ainvoke({"input": request.query}, config=config)
         execution_time = (time.time() - start_time) * 1000
@@ -279,7 +309,7 @@ async def stream_query_rag(
     인증된 세션에 대해 실시간 스트리밍(SSE) 응답을 제공합니다.
     """
     sid = request.session_id or "default"
-    await asyncio.to_thread(SessionManager.init_session, session_id=sid)
+    SessionManager.init_session(session_id=sid)
 
     if SessionManager.get("last_uploaded_file_name", session_id=sid) is None:
         raise HTTPException(status_code=400, detail="먼저 문서를 업로드해주세요.")
@@ -295,8 +325,18 @@ async def stream_query_rag(
 
         # [수정] 동적으로 모델 결정
         llm = await RAGResourceManager.get_llm(request.model_name, session_id=sid)
-        # 스트리밍 시에도 명시적 세션 바인딩
-        run_config = {"configurable": {"llm": llm, "session_id": sid, "thread_id": sid}}
+        # 스트리밍 시에도 명시적 세션 및 리트리버 바인딩
+        run_config = {
+            "configurable": {
+                "llm": llm,
+                "session_id": sid,
+                "thread_id": sid,
+                "faiss_retriever": SessionManager.get(
+                    "faiss_retriever", session_id=sid
+                ),
+                "bm25_retriever": SessionManager.get("bm25_retriever", session_id=sid),
+            }
+        }
 
         handler = get_streaming_handler()
         controller = get_adaptive_controller()
@@ -319,10 +359,8 @@ async def stream_query_rag(
                     yield sse_handler.format_sse_event(
                         "status", {"message": chunk.status, "node": chunk.node_name}
                     )
-                    # 비동기 제너레이터 내에서도 명시적 세션 ID 사용
-                    await asyncio.to_thread(
-                        SessionManager.add_status_log, chunk.status, session_id=sid
-                    )
+                    # 비동기 제너레이터 내에서도 명시적 세션 ID 사용 (최적화: 직접 호출)
+                    SessionManager.add_status_log(chunk.status, session_id=sid)
 
                 # 2. 메시지(답변 및 사고 과정) 처리
                 if chunk.content:
@@ -360,20 +398,6 @@ async def stream_query_rag(
             "X-Accel-Buffering": "no",  # Nginx 버퍼링 방지
         },
     )
-
-
-@app.on_event("startup")
-async def startup_event():
-    """서버 시작 시 백그라운드 태스크 설정"""
-
-    async def session_cleaner():
-        while True:
-            await asyncio.sleep(600)  # 10분마다 실행
-            # [개선] 대규모 세션 정리 시 루프 차단 방지를 위해 별도 스레드에서 실행
-            await asyncio.to_thread(SessionManager.cleanup_expired_sessions, 3600)
-
-    asyncio.create_task(session_cleaner())
-    logger.info("[API] 세션 자동 정리 태스크 시작됨 (주기: 10분)")
 
 
 @app.delete("/api/v1/session/{session_id}")

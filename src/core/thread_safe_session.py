@@ -6,8 +6,10 @@ Thread-Safe Session Management
 인스턴스 및 클래스 메서드 호출을 모두 지원합니다.
 """
 
+import asyncio
 import contextlib
 import logging
+import os
 import threading
 import time
 from collections.abc import Callable
@@ -152,6 +154,34 @@ class ThreadSafeSessionManager:
             # 활동 시간 업데이트
             cls._fallback_sessions[sid]["_last_activity"] = time.time()
             return cls._fallback_sessions[sid]
+
+    @classmethod
+    def perform_security_audit(cls):
+        """[추가] 캐시 디렉터리의 보안 상태를 점검하고 부적절한 권한을 가진 파일을 정리합니다."""
+        from common.config import CACHE_DIR, VECTOR_STORE_CACHE_DIR
+        from security.cache_security import CacheSecurityManager
+
+        security_mgr = CacheSecurityManager()
+        audit_paths = [VECTOR_STORE_CACHE_DIR, CACHE_DIR]
+
+        for base_path in audit_paths:
+            if not os.path.exists(base_path):
+                continue
+
+            for root, dirs, files in os.walk(base_path):
+                # 1. 디렉터리 권한 점검
+                for d in dirs:
+                    d_path = os.path.join(root, d)
+                    security_mgr.enforce_directory_permissions(d_path)
+
+                # 2. 파일 권한 점검 및 감사
+                for f in files:
+                    f_path = os.path.join(root, f)
+                    # 권한 강제 적용
+                    security_mgr.enforce_file_permissions(f_path)
+
+                    # [추가] 보안 수준이 high일 경우 메타데이터가 없는 캐시 파일은 삭제 검토 가능
+                    # 여기서는 우선 권한 강제에 집중함
 
     @classmethod
     def cleanup_expired_sessions(cls, max_idle_seconds: int = 3600):
@@ -555,15 +585,12 @@ class _LockContext:
 
     def __enter__(self):
         # [개선] 현재 실행 중인 스레드가 이벤트 루프 스레드인지 확인 (FastAPI 대응)
+        is_in_loop = False
         try:
-            import asyncio
-
-            is_in_loop = False
-            with contextlib.suppress(RuntimeError):
-                asyncio.get_running_loop()
-                is_in_loop = True
-        except ImportError:
-            is_in_loop = False
+            asyncio.get_running_loop()
+            is_in_loop = True
+        except RuntimeError:
+            pass
 
         # 이벤트 루프 스레드라면 아주 짧은 타임아웃으로 시도하고, 실패 시 즉시 양보하도록 설계
         # (실제 완벽한 비동기 락은 아니지만 루프 프리징을 최소화함)

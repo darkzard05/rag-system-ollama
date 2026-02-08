@@ -44,6 +44,37 @@ class ChunkingConstants(IntEnum):
     # 청크 오버랩
     DEFAULT_OVERLAP_SIZE = 100
 
+    # 의미론적 분할 (Semantic Chunking)
+    MAX_HARD_SPLIT_LEN = 1500
+    MIN_MERGE_LEN = 30
+    SEMANTIC_WINDOW_SIZE = 3
+    SIMILARITY_MERGE_THRESHOLD = 92  # 0.92 * 100 (IntEnum이므로 정수로 관리)
+
+
+class RAGGraphConstants:
+    """RAG 그래프 워크플로우 관련 상수"""
+
+    # 컨텍스트 예산 (토큰 기준 비율)
+    CONTEXT_SAFE_BUDGET_RATIO = 0.6
+
+    # 리랭킹 및 필터링
+    RERANK_MIN_DOCS_GUARANTEE = 3
+    RERANK_DYNAMIC_THRESHOLD_RATIO = 0.6
+
+    # 검색 통합 가중치
+    DEFAULT_BM25_WEIGHT = 0.4
+    DEFAULT_FAISS_WEIGHT = 0.6
+
+
+class RAGScoreConstants:
+    """유사도 및 채점 관련 상수"""
+
+    # 기본 유사도 하한선
+    DEFAULT_MIN_SIMILARITY = 0.35
+
+    # 매우 높은 유사도 (중복 처리용)
+    EXTREME_SIMILARITY_THRESHOLD = 0.95
+
 
 class TimeoutConstants(IntEnum):
     """타임아웃 관련 상수 (초 단위)"""

@@ -7,7 +7,7 @@ models:
   default_ollama: "qwen3:4b-instruct-2507-q4_K_M"
 
   # 기본으로 사용할 임베딩 모델 이름 (Ollama 또는 HuggingFace)
-  default_embedding: "nomic-embed-text"         # "qwen3-embedding:0.6b", "qwen3-embedding:4b"
+  default_embedding: "qwen3-embedding:0.6b"         # "qwen3-embedding:0.6b", "qwen3-embedding:4b"
   
   # Ollama 서버 주소 (로컬: http://127.0.0.1:11434, 도커: http://host.docker.internal:11434)
   base_url: "http://127.0.0.1:11434"
@@ -67,14 +67,45 @@ rag:
     enabled: true
     breakpoint_threshold_type: "similarity_threshold"
     breakpoint_threshold_value: 0.6
-    sentence_split_regex: "(?<=[.!?])\\s+" # Corrected escape for backslash
+    # 문장 분할 정규식 (표준 정규식으로 복구, 로직은 코드에서 보완)
+    sentence_split_regex: "([.!?]\\s+)" 
     min_chunk_size: 200
     max_chunk_size: 1000
     similarity_threshold: 0.6
 
   # 쿼리 확장 설정
   query_expansion:
-    enabled: true
+    enabled: false
+
+  # 의도 분석(Router) 활성화 여부
+  intent_analysis_enabled: false
+
+  # 의도별 파이프라인 파라미터 설정
+  intent_parameters:
+    FACTOID:
+      retrieval_k: 7
+      rerank_top_k: 3
+      rerank_threshold: 0.5
+      sort_by_page: false
+      use_strict_grading: true
+    SUMMARY:
+      retrieval_k: 60
+      rerank_top_k: 25
+      rerank_threshold: 0.1
+      sort_by_page: true
+      use_strict_grading: false
+    RESEARCH:
+      retrieval_k: 25
+      rerank_top_k: 10
+      rerank_threshold: 0.25
+      sort_by_page: false
+      use_strict_grading: false
+    DEFAULT:
+      retrieval_k: 20
+      rerank_top_k: 7
+      rerank_threshold: 0.35
+      sort_by_page: false
+      use_strict_grading: false
 
   # 프롬프트 설정
   prompts:
@@ -133,6 +164,13 @@ cache_security:
   check_permissions: true
   expected_file_mode: 0o644
   expected_dir_mode: 0o755
+
+# --- 전역 캐시 활성화 설정 ---
+global_cache:
+  # 벡터 저장소(인덱싱 결과) 캐시 사용 여부
+  enable_vector_cache: false
+  # LLM 답변(Response) 캐시 사용 여부
+  enable_response_cache: false
 
 # --- 채팅 UI 설정 ---
 ui:

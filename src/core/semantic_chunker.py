@@ -14,6 +14,8 @@ import numpy as np
 from langchain_core.documents import Document
 from langchain_core.embeddings import Embeddings
 
+from common.constants import ChunkingConstants
+
 # 순환 참조 방지 및 타입 힌트용
 if TYPE_CHECKING:
     pass
@@ -34,7 +36,7 @@ class EmbeddingBasedSemanticChunker:
         embedder: Embeddings,
         breakpoint_threshold_type: str = "percentile",
         breakpoint_threshold_value: float = 95.0,
-        sentence_split_regex: str = r"([.!?]\s+)",  # 기본값을 split 친화적으로 변경 (캡처 그룹 포함 권장)
+        sentence_split_regex: str = r"([.!?]\s+)",
         min_chunk_size: int = 100,
         max_chunk_size: int = 800,
         similarity_threshold: float = 0.5,
@@ -70,27 +72,103 @@ class EmbeddingBasedSemanticChunker:
         문장 단위로 텍스트를 분할하고 오프셋 정보를 함께 반환합니다.
         [안전성 강화] 구분자가 없는 매우 긴 텍스트의 경우 강제 분할을 수행합니다.
         """
-        MAX_HARD_SPLIT_LEN = 1500  # 강제 분할 임계값 (글자 수)
 
-        # 1. 정규식으로 기본 분할
+        # 1. 정규식으로 기본 분할 (finditer를 사용하여 구분자 위치 파악)
         parts = list(self._sentence_pattern.finditer(text))
         raw_segments: list[dict[str, Any]] = []
 
         last_pos = 0
         for match in parts:
-            sep_start, sep_end = match.span()
-
-            # 구분자 앞쪽 텍스트 + 구분자
+            sep_end = match.end()
+            # 구분자 포함하여 분할
             segment_text = text[last_pos:sep_end]
-            raw_segments.append(
-                {"text": segment_text, "start": last_pos, "end": sep_end}
-            )
+            if segment_text.strip():
+                raw_segments.append(
+                    {"text": segment_text, "start": last_pos, "end": sep_end}
+                )
             last_pos = sep_end
 
+        # 남은 텍스트 처리
         if last_pos < len(text):
-            raw_segments.append(
-                {"text": text[last_pos:], "start": last_pos, "end": len(text)}
-            )
+            remaining_text = text[last_pos:]
+            if remaining_text.strip():
+                raw_segments.append(
+                    {"text": remaining_text, "start": last_pos, "end": len(text)}
+                )
+
+        # 1-2. [추가] 약어 기반 분할 오류 수정 (예: Mr. 에서 잘린 경우 다음 문장과 병합)
+        abbreviations = {
+            "Mr.",
+            "Mrs.",
+            "Ms.",
+            "Dr.",
+            "Jr.",
+            "Sr.",
+            "vs.",
+            "Prof.",
+            "St.",
+            "U.S.",
+            "U.K.",
+            "Co.",
+            "Corp.",
+            "Inc.",
+            "Ltd.",
+            "Jan.",
+            "Feb.",
+            "Mar.",
+            "Apr.",
+            "Jun.",
+            "Jul.",
+            "Aug.",
+            "Sep.",
+            "Oct.",
+            "Nov.",
+            "Dec.",
+            "No.",
+            "Vol.",
+            "Fig.",
+            "p.",
+            "pp.",
+            "eq.",
+            "approx.",
+            "est.",
+        }
+
+        if raw_segments:
+            refined_segments = []
+            current_seg = raw_segments[0]
+
+            for i in range(1, len(raw_segments)):
+                next_seg = raw_segments[i]
+                # 현재 세그먼트의 끝부분이 약어인지 확인
+                text_to_check = current_seg["text"].strip()
+                should_merge = False
+
+                # 1) 리스트 기반 체크
+                for abbr in abbreviations:
+                    if text_to_check.endswith(abbr):
+                        should_merge = True
+                        break
+
+                # 2) 패턴 기반 체크 (예: 단일 대문자 마침표 A. B.)
+                if (
+                    not should_merge
+                    and len(text_to_check) >= 2
+                    and text_to_check.endswith(".")
+                    and text_to_check[-2].isupper()
+                    and (len(text_to_check) == 2 or not text_to_check[-3].isalpha())
+                ):
+                    should_merge = True
+
+                if should_merge:
+                    current_seg["text"] += next_seg["text"]
+                    current_seg["end"] = next_seg["end"]
+                else:
+                    refined_segments.append(current_seg)
+                    current_seg = next_seg
+
+            refined_segments.append(current_seg)
+            raw_segments = refined_segments
 
         # 2. 너무 긴 세그먼트 강제 분할 (OOM 방지)
         final_sentences: list[dict[str, Any]] = []
@@ -99,7 +177,7 @@ class EmbeddingBasedSemanticChunker:
             seg_start = int(seg["start"])
             seg_end = int(seg["end"])
 
-            if len(seg_text) <= MAX_HARD_SPLIT_LEN:
+            if len(seg_text) <= ChunkingConstants.MAX_HARD_SPLIT_LEN:
                 # 정상 크기인 경우 정제 후 추가
                 self._add_cleaned_sentence(
                     final_sentences, seg_text, seg_start, seg_end
@@ -112,7 +190,7 @@ class EmbeddingBasedSemanticChunker:
 
                 curr_pos = 0
                 while curr_pos < len(seg_text):
-                    sub_len = MAX_HARD_SPLIT_LEN
+                    sub_len = ChunkingConstants.MAX_HARD_SPLIT_LEN
                     # 가급적 공백에서 자르기 시도
                     if curr_pos + sub_len < len(seg_text):
                         last_space = seg_text.rfind(" ", curr_pos, curr_pos + sub_len)
@@ -167,26 +245,28 @@ class EmbeddingBasedSemanticChunker:
             mapping = []
 
             for text in texts:
-                norm_text = " ".join(text.lower().split())
+                # 불필요한 공백 제거로 매칭 확률 향상
+                norm_text = " ".join(text.split())
                 if norm_text not in text_to_idx:
                     text_to_idx[norm_text] = len(unique_texts)
                     unique_texts.append(text)
                 mapping.append(text_to_idx[norm_text])
 
-            # 2. 배치 임베딩 (HuggingFaceEmbeddings 내부의 배칭 활용)
-            # 수동 배칭(loop)을 제거하여 라이브러리 최적화(AVX/CUDA)가 중단 없이 작동하게 함
+            # 2. 배치 임베딩
+            # 텍스트가 너무 많을 경우(예: 2000개 이상)를 대비하여 모델의 batch_size 활용
+            # LangChain의 HuggingFaceEmbeddings 등은 내부적으로 멀티스레딩/GPU 배칭을 수행함
             unique_embeddings_list = self.embedder.embed_documents(unique_texts)
             unique_embeddings = np.array(unique_embeddings_list).astype("float32")
 
             if normalize:
                 # [최적화] NumPy 벡터화 연산으로 고속 정규화
                 norms = np.linalg.norm(unique_embeddings, axis=1, keepdims=True)
-                # 0으로 나누기 방지
+                # 0으로 나누기 방지 (Safe Division)
                 unique_embeddings = np.divide(
                     unique_embeddings,
                     norms,
                     out=np.zeros_like(unique_embeddings),
-                    where=norms != 0,
+                    where=norms > 1e-9,
                 )
 
             # 3. 원본 순서로 복원
@@ -223,16 +303,21 @@ class EmbeddingBasedSemanticChunker:
         similarities_array = np.array(similarities)
         n = len(similarities_array)
 
-        # 1. 전역 임계값 계산
+        # 1. 전역 임계값 계산 (동적 전략 지원)
         if self.breakpoint_threshold_type == "percentile":
             global_threshold = np.percentile(
                 similarities_array, 100 - self.breakpoint_threshold_value
             )
+        elif self.breakpoint_threshold_type == "standard_deviation":
+            # 평균 - (N * 표준편차) 미달인 지점을 경계로 선택
+            mean = np.mean(similarities_array)
+            std = np.std(similarities_array)
+            global_threshold = mean - (self.breakpoint_threshold_value * std)
         else:
             global_threshold = self.similarity_threshold
 
         # 2. [최적화] 로컬 감지 (벡터화된 이동 평균 기반)
-        window_size = 3
+        window_size = ChunkingConstants.SEMANTIC_WINDOW_SIZE
 
         # 전역 임계값 미달 지점 (벡터화)
         global_breaks = similarities_array < global_threshold
@@ -265,6 +350,7 @@ class EmbeddingBasedSemanticChunker:
     def _optimize_chunk_sizes(self, chunks: list[dict]) -> list[dict]:
         """
         생성된 청크들의 크기를 검사하여 병합하며, 벡터도 가중 평균으로 계산합니다.
+        [최적화] 크기뿐만 아니라 의미적 유사도(0.92 이상)를 고려하여 지능적으로 병합합니다.
         """
         if not chunks:
             return chunks
@@ -281,20 +367,24 @@ class EmbeddingBasedSemanticChunker:
             merged_text = current_chunk["text"] + " " + chunk["text"]
             merged_len = len(merged_text)
 
-            # [수정] 의미론적 경계 보존을 위한 조건
-            # 현재 청크가 이미 최소 크기(min_chunk_size)를 만족한다면,
-            # 굳이 다음 청크(의미적으로 분리된)와 합치지 않고 독립된 청크로 유지합니다.
+            # [수정] 의미론적 경계 보존 및 지능적 병합 조건
             should_merge = False
+
+            # 1. 크기 기반 강제 병합 (너무 작으면 병합 시도)
             if len(current_chunk["text"]) < self.min_chunk_size:
-                # 현재 청크가 너무 작으면 무조건 병합 시도
                 should_merge = merged_len <= self.max_chunk_size
-            else:
-                # 현재 청크가 이미 최소 크기 이상이라면, 다음 청크와의 병합은 신중해야 함.
-                # 여기서는 기본적으로 병합하지 않음 (의미 단위 보존)
-                should_merge = False
+
+            # 2. [추가] 유사도 기반 지능적 병합 (크기가 적당해도 의미적으로 매우 가까우면 병합)
+            if not should_merge and merged_len <= self.max_chunk_size:
+                # 이미 정규화된 벡터이므로 내적으로 유사도 계산
+                sim = float(np.dot(current_chunk["vector"], chunk["vector"]))
+                if sim > (
+                    ChunkingConstants.SIMILARITY_MERGE_THRESHOLD / 100.0
+                ):  # 극도로 높은 유사도 (거의 같은 맥락)
+                    should_merge = True
 
             if should_merge:
-                # 벡터 병합: 각 청크의 길이를 고려한 가중 평균 (단순 평균보다 정확함)
+                # 벡터 병합: 각 청크의 길이를 고려한 가중 평균
                 len_a = len(current_chunk["text"])
                 len_b = len(chunk["text"])
                 total_len = len_a + len_b
@@ -303,14 +393,17 @@ class EmbeddingBasedSemanticChunker:
                     merged_vector = (
                         current_chunk["vector"] * len_a + chunk["vector"] * len_b
                     ) / total_len
+                    # 병합 후 재정규화 (정밀도 유지)
+                    norm = np.linalg.norm(merged_vector)
+                    if norm > 0:
+                        merged_vector /= norm
                 else:
                     merged_vector = current_chunk["vector"]
 
                 current_chunk["text"] = merged_text
-                current_chunk["end"] = chunk["end"]  # 끝 위치 업데이트
+                current_chunk["end"] = chunk["end"]
                 current_chunk["vector"] = merged_vector
             else:
-                # 현재 청크 저장 후 새로 시작
                 optimized.append(current_chunk)
                 current_chunk = chunk
 
@@ -334,8 +427,8 @@ class EmbeddingBasedSemanticChunker:
             return []
 
         # [최적화] 너무 짧은 문장 병합 (오프셋 유지)
-        # 30자 미만의 문장은 독립적인 의미를 갖기 어려우므로 앞 문장과 병합
-        MIN_MERGE_LEN = 30
+        # 설정된 최소 길이 미만의 문장은 독립적인 의미를 갖기 어려우므로 앞 문장과 병합
+        min_merge_len = ChunkingConstants.MIN_MERGE_LEN
 
         sentences = []
         if raw_sentences:
@@ -343,7 +436,7 @@ class EmbeddingBasedSemanticChunker:
             for s in raw_sentences[1:]:
                 # 현재 문장이 너무 짧거나, 다음 문장이 매우 짧은 경우 병합
                 # (단, 합친 길이가 너무 길어지면 안 됨 -> 1000자 제한)
-                if (len(s["text"]) < MIN_MERGE_LEN) and (
+                if (len(s["text"]) < min_merge_len) and (
                     len(current_s["text"]) + len(s["text"]) < 1000
                 ):
                     # 병합

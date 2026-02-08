@@ -49,6 +49,9 @@ class GraphState(TypedDict):
     relevant_docs: list[Document]  # [추가] 관련성 채점을 통과한 문서들
     context: str | None
     response: str | None
+    thought: str | None  # [추가] 사고 과정
+    performance: dict[str, Any] | None  # [추가] 성능 지표
+    is_cached: bool  # [추가] 캐시 히트 여부
 
 
 class QueryRequest(BaseModel):
@@ -79,6 +82,16 @@ class SearchResult(BaseModel):
     content: str
     metadata: dict[str, Any]
     score: float
+
+
+class AggregatedSearchResult(BaseModel):
+    """통합 검색 결과 스키마 (Graph 내부용)"""
+
+    doc_id: str
+    content: str
+    score: float
+    node_id: str
+    metadata: dict[str, Any]
 
 
 class SearchResponse(BaseModel):

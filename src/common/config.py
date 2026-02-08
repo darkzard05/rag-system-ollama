@@ -111,6 +111,8 @@ VECTOR_STORE_CACHE_DIR: str = str(
     / _rag_config.get("vector_store_cache_dir", ".model_cache/vector_store_cache")
 )
 QUERY_EXPANSION_CONFIG: dict = _rag_config.get("query_expansion", {"enabled": True})
+INTENT_ANALYSIS_ENABLED: bool = _rag_config.get("intent_analysis_enabled", False)
+INTENT_PARAMETERS: dict = _rag_config.get("intent_parameters", {})
 _prompts_config = _rag_config.get("prompts") or {}
 ANALYSIS_PROTOCOL: str = _prompts_config.get("analysis_protocol", "")
 RESEARCH_SYSTEM_PROMPT: str = _prompts_config.get("research_system_prompt", "")
@@ -171,6 +173,21 @@ CACHE_EXPECTED_DIR_MODE: int = (
     int(_expected_dir_mode, 0)
     if isinstance(_expected_dir_mode, str)
     else _expected_dir_mode
+)
+
+# --- 전역 캐시 활성화 설정 ---
+_cache_toggle_config = _config.get("global_cache", {})
+
+ENABLE_VECTOR_CACHE: bool = _get_env(
+    "ENABLE_VECTOR_CACHE",
+    _cache_toggle_config.get("enable_vector_cache", True),
+    lambda x: x.lower() == "true" if isinstance(x, str) else x,
+)
+
+ENABLE_RESPONSE_CACHE: bool = _get_env(
+    "ENABLE_RESPONSE_CACHE",
+    _cache_toggle_config.get("enable_response_cache", True),
+    lambda x: x.lower() == "true" if isinstance(x, str) else x,
 )
 
 

@@ -20,6 +20,10 @@ class AggregationStrategy(Enum):
     WEIGHTED_SCORE = "weighted_score"  # 가중 스코어 재계산
     TOP_K_PER_NODE = "top_k_per_node"  # 노드당 top-k
     RRF_FUSION = "rrf_fusion"  # [최적화] Reciprocal Rank Fusion (NumPy 벡터화)
+    WEIGHTED_RRF = "weighted_rrf"  # [최신] 가중치가 적용된 RRF
+    RELATIVE_SCORE_FUSION = (
+        "relative_score_fusion"  # [최신] 상대 점수 기반 융합 (Min-Max Scaling)
+    )
 
 
 class DuplicateStrategy(Enum):
@@ -101,6 +105,7 @@ class SearchResultAggregator:
         search_results: dict[str, list[Any]],
         strategy: AggregationStrategy = AggregationStrategy.DEDUP_CONTENT,
         top_k: int | None = None,
+        weights: dict[str, float] | None = None,
     ) -> tuple[list[AggregatedResult], AggregationMetrics]:
         """
         다중 노드의 검색 결과 통합
@@ -109,6 +114,7 @@ class SearchResultAggregator:
             search_results: {node_id: [results]} 형태의 검색 결과
             strategy: 통합 전략
             top_k: 상위 k개 결과 (None이면 모두)
+            weights: 노드별 가중치 (전략에 따라 사용됨)
 
         Returns:
             (통합된 결과, 메트릭)
@@ -142,6 +148,16 @@ class SearchResultAggregator:
 
         elif strategy == AggregationStrategy.RRF_FUSION:
             aggregated = self._rrf_fusion_aggregation(search_results, metrics)
+
+        elif strategy == AggregationStrategy.WEIGHTED_RRF:
+            aggregated = self._weighted_rrf_aggregation(
+                search_results, metrics, weights=weights
+            )
+
+        elif strategy == AggregationStrategy.RELATIVE_SCORE_FUSION:
+            aggregated = self._relative_score_fusion_aggregation(
+                search_results, metrics, weights=weights
+            )
 
         else:
             aggregated = self._merge_all(search_results, metrics)
@@ -392,6 +408,164 @@ class SearchResultAggregator:
             aggregated.append(agg_result)
 
         metrics.score_adjustments = num_docs
+        return aggregated
+
+    def _weighted_rrf_aggregation(
+        self,
+        search_results: dict[str, list[Any]],
+        metrics: AggregationMetrics,
+        k: int = 60,
+        weights: dict[str, float] | None = None,
+    ) -> list[AggregatedResult]:
+        """
+        [최신] 가중치가 적용된 Reciprocal Rank Fusion (Weighted RRF)
+        각 리트리버 노드별 가중치를 적용하여 순위 점수를 계산합니다.
+        """
+        import numpy as np
+
+        if not search_results:
+            return []
+
+        # 기본 가중치는 1.0으로 설정
+        if weights is None:
+            weights = dict.fromkeys(search_results.keys(), 1.0)
+
+        all_doc_map = {}
+        node_ranks = {}
+        node_ids = list(search_results.keys())
+
+        for node_id, results in search_results.items():
+            metrics.total_input_results += len(results)
+            sorted_results = sorted(results, key=lambda x: x.score, reverse=True)
+            node_ranks[node_id] = {
+                res.doc_id: i + 1 for i, res in enumerate(sorted_results)
+            }
+
+            for res in sorted_results:
+                if res.doc_id not in all_doc_map:
+                    all_doc_map[res.doc_id] = {
+                        "content": res.content,
+                        "metadata": res.metadata,
+                        "original_scores": [],
+                        "source_nodes": [],
+                    }
+                all_doc_map[res.doc_id]["original_scores"].append(res.score)
+                all_doc_map[res.doc_id]["source_nodes"].append(node_id)
+
+        doc_ids = list(all_doc_map.keys())
+        num_docs = len(doc_ids)
+        num_nodes = len(node_ids)
+
+        if num_docs == 0:
+            return []
+
+        # (num_docs, num_nodes) 랭크 행렬
+        rank_matrix = np.full((num_docs, num_nodes), np.inf)
+        weight_vector = np.array([weights.get(nid, 1.0) for nid in node_ids])
+
+        node_id_to_idx = {node_id: i for i, node_id in enumerate(node_ids)}
+
+        for i, doc_id in enumerate(doc_ids):
+            for node_id, ranks in node_ranks.items():
+                if doc_id in ranks:
+                    rank_matrix[i, node_id_to_idx[node_id]] = ranks[doc_id]
+
+        # RRF Score = Sum( weight / (k + rank) )
+        rrf_scores = np.sum(weight_vector / (k + rank_matrix), axis=1)
+
+        aggregated = []
+        for i, doc_id in enumerate(doc_ids):
+            data = all_doc_map[doc_id]
+            aggregated.append(
+                AggregatedResult(
+                    doc_id=doc_id,
+                    content=data["content"],
+                    aggregated_score=float(rrf_scores[i]),
+                    source_nodes=data["source_nodes"],
+                    original_scores=data["original_scores"],
+                    metadata=data["metadata"],
+                )
+            )
+
+        metrics.score_adjustments = num_docs
+        return aggregated
+
+    def _relative_score_fusion_aggregation(
+        self,
+        search_results: dict[str, list[Any]],
+        metrics: AggregationMetrics,
+        weights: dict[str, float] | None = None,
+    ) -> list[AggregatedResult]:
+        """
+        [최신] 상대 점수 기반 융합 (Relative Score Fusion / Hybrid Score Fusion)
+        각 결과셋의 점수를 Min-Max Scaling으로 정규화한 뒤 가중 합산합니다.
+        """
+        import numpy as np
+
+        if not search_results:
+            return []
+
+        if weights is None:
+            weights = dict.fromkeys(search_results.keys(), 1.0)
+
+        all_doc_map = {}
+        node_normalized_scores = {}
+        node_ids = list(search_results.keys())
+
+        for node_id, results in search_results.items():
+            metrics.total_input_results += len(results)
+            if not results:
+                continue
+
+            scores = np.array([r.score for r in results])
+            min_s, max_s = scores.min(), scores.max()
+
+            # 정규화: (score - min) / (max - min)
+            denom = (max_s - min_s) if max_s > min_s else 1.0
+            norm_scores = (scores - min_s) / denom
+
+            node_normalized_scores[node_id] = {
+                res.doc_id: norm_scores[i] for i, res in enumerate(results)
+            }
+
+            for res in results:
+                if res.doc_id not in all_doc_map:
+                    all_doc_map[res.doc_id] = {
+                        "content": res.content,
+                        "metadata": res.metadata,
+                        "original_scores": [],
+                        "source_nodes": [],
+                    }
+                all_doc_map[res.doc_id]["original_scores"].append(res.score)
+                all_doc_map[res.doc_id]["source_nodes"].append(node_id)
+
+        doc_ids = list(all_doc_map.keys())
+        aggregated = []
+
+        for doc_id in doc_ids:
+            total_score = 0.0
+            for node_id in node_ids:
+                if (
+                    node_id in node_normalized_scores
+                    and doc_id in node_normalized_scores[node_id]
+                ):
+                    total_score += node_normalized_scores[node_id][
+                        doc_id
+                    ] * weights.get(node_id, 1.0)
+
+            data = all_doc_map[doc_id]
+            aggregated.append(
+                AggregatedResult(
+                    doc_id=doc_id,
+                    content=data["content"],
+                    aggregated_score=total_score,
+                    source_nodes=data["source_nodes"],
+                    original_scores=data["original_scores"],
+                    metadata=data["metadata"],
+                )
+            )
+
+        metrics.score_adjustments = len(aggregated)
         return aggregated
 
     def _merge_duplicate(

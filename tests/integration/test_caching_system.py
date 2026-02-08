@@ -18,20 +18,10 @@ from threading import Thread
 import numpy as np
 import pytest
 
-from cache.caching_layer import DiskCache  # 추가 검증을 위해 임포트
-from cache.response_cache import (
-    CacheWarmup,
-    DocumentCache,
-    QueryCache,
-    ResponseCache,
-    get_document_cache,
-    get_query_cache,
-    get_response_cache,
-    reset_caches,
-)
 from services.optimization.caching_optimizer import (
     CacheEntry,
     CacheManager,
+    DiskCache,
     MemoryCache,
     SemanticCache,
 )

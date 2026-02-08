@@ -10,8 +10,12 @@ sys.path.append(str(ROOT_DIR / "src"))
 from core.rag_core import RAGSystem
 from core.model_loader import load_llm, load_embedding_model
 from common.config import DEFAULT_OLLAMA_MODEL
+from common.logging_config import setup_logging
 
 async def run_full_pipeline_test():
+    # 로깅 설정 초기화 (콘솔 및 파일 출력)
+    setup_logging(log_level="INFO", log_file=ROOT_DIR / "logs" / "test_e2e.log")
+    
     print("[E2E] RAG Pipeline Integration Test Started")
     
     session_id = "test-session-final"
@@ -33,8 +37,8 @@ async def run_full_pipeline_test():
     load_time = asyncio.get_event_loop().time() - start_time
     print(f"   Result: {msg} (Cache: {cache_used}) | Time: {load_time:.2f}s")
 
-    test_query = "What is the core idea of CM3 model?"
-    print(f"\n3. Querying: '{test_query}'")
+    test_query = "CM3 모델이 이미지를 학습할 때 사용하는 구체적인 원리와 토큰화 방식은 뭐야? 기존 DALL-E와는 어떤 차이가 있어?"
+    print(f"\n3. Querying (TECHNICAL): '{test_query}'")
     
     start_time = asyncio.get_event_loop().time()
     result = await rag.aquery(test_query, llm=llm)

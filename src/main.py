@@ -101,9 +101,8 @@ def _check_windows_integrity():
         # UI 렌더링을 위해 잠시 양보
         time.sleep(1.5)
 
-        # 무거운 라이브러리 로드 테스트
+        # 무거운 라이브러리 로드 테스트 (핵심 RAG용)
         import torch
-        import torchvision
 
         # 간단한 연산 테스트로 DLL 로드 확인
         _ = torch.tensor([1.0])
@@ -163,7 +162,6 @@ def _init_temp_directory():
 
     # 백그라운드 스레드 시작
     threading.Thread(target=cleanup_task, daemon=True).start()
-    return str(temp_path)
     return str(temp_path)
 
 
@@ -427,13 +425,8 @@ def on_embedding_change() -> None:
         SessionManager.set("needs_rag_rebuild", True)
 
 
-def _render_app_layout(
-    is_skeleton_pass: bool, available_models: list[str] | None = None
-) -> None:
+def _render_app_layout(available_models: list[str] | None = None) -> None:
     """앱의 전체 레이아웃을 렌더링하고 주요 플레이스홀더를 반환합니다."""
-    # 0. 최우선 CSS 주입 (깜박임 방지)
-    inject_custom_css()
-
     # 1. 사이드바 렌더링
     render_sidebar(
         file_uploader_callback=on_file_upload,
@@ -448,7 +441,7 @@ def _render_app_layout(
     # 2. 메인 영역 레이아웃
     col_left, col_right = st.columns([1, 1])
     with col_left:
-        st.subheader(
+        st.header(
             StringConstants.MSG_CHAT_TITLE
             if hasattr(StringConstants, "MSG_CHAT_TITLE")
             else "💬 채팅"
@@ -456,7 +449,7 @@ def _render_app_layout(
         render_left_column()
 
     with col_right:
-        st.subheader(
+        st.header(
             StringConstants.MSG_PDF_VIEWER_TITLE
             if hasattr(StringConstants, "MSG_PDF_VIEWER_TITLE")
             else "📄 PDF 미리보기"
@@ -490,6 +483,7 @@ def _handle_pending_tasks() -> None:
 def main() -> None:
     """메인 애플리케이션 오케스트레이터"""
     # 1. 초기 레이아웃 및 세션 즉시 준비
+    # CSS 주입은 여기서 딱 한 번만 수행하여 렌더링 충돌 및 잔상 방지
     inject_custom_css()
     SessionManager.init_session()
 
@@ -498,45 +492,40 @@ def main() -> None:
         # 분석이 중단된 것으로 간주하고 입력창 열기
         SessionManager.set("is_generating_answer", False)
 
-    # 2. UI 즉시 렌더링 (Optimistic UI)
-    # 모델 목록 로딩 상태 확인
+    # 2. 모델 목록 로딩 (Ghosting 방지를 위해 UI 렌더링 전 수행)
     if "available_models_list" not in st.session_state:
-        st.session_state.available_models_list = None  # 아직 시도 안 함
+        with st.spinner("시스템 초기화 중..."):
+            from core.model_loader import get_available_models
 
-    available_models = st.session_state.available_models_list
+            # 실제 Ollama 모델 목록 가져오기
+            fetched_models = get_available_models()
 
-    _render_app_layout(
-        is_skeleton_pass=(available_models is None), available_models=available_models
-    )
+            # 만약 에러 메시지가 포함되어 있거나 비어있다면 최소한 기본 모델은 포함시킴
+            from common.config import DEFAULT_OLLAMA_MODEL
 
-    # 3. 데이터 로딩 (UI가 그려진 후 딱 한 번만 실행되도록 유도)
-    if st.session_state.available_models_list is None:
-        from core.model_loader import get_available_models
+            if not fetched_models or (
+                len(fetched_models) == 1 and "서버" in fetched_models[0]
+            ):
+                st.session_state.available_models_list = [DEFAULT_OLLAMA_MODEL]
+            else:
+                st.session_state.available_models_list = fetched_models
 
-        # 실제 Ollama 모델 목록 가져오기
-        fetched_models = get_available_models()
-
-        # 만약 에러 메시지가 포함되어 있거나 비어있다면 최소한 기본 모델은 포함시킴
-        from common.config import DEFAULT_OLLAMA_MODEL
-
-        if not fetched_models or (
-            len(fetched_models) == 1 and "서버" in fetched_models[0]
-        ):
-            st.session_state.available_models_list = [DEFAULT_OLLAMA_MODEL]
-        else:
-            st.session_state.available_models_list = fetched_models
-
+        # 목록 확보 후 즉시 리런하여 전체 UI 구성
         st.rerun()
+
+    # 3. 실제 UI 렌더링 (모델이 준비된 상태)
+    available_models = st.session_state.available_models_list
+    _render_app_layout(available_models=available_models)
 
     # 4. 백그라운드 태스크 처리 (RAG 빌드, 모델 교체 등)
     _handle_pending_tasks()
 
-    # 5. 첫 실행 플래그 해제 (예열 과정 삭제 - 지연 로딩 정책 채택)
+    # 5. 첫 실행 플래그 해제
     if SessionManager.get("is_first_run"):
         SessionManager.set("is_first_run", False)
         logger.info("[SYSTEM] 시스템 초기화 완료")
 
-    # 6. 창 높이 측정 (가장 마지막에 실행하여 레이아웃 영향 최소화)
+    # 6. 창 높이 측정
     update_window_height()
 
 

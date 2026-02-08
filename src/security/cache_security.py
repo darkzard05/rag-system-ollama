@@ -20,6 +20,8 @@ from pathlib import Path
 
 from pydantic import BaseModel, Field, field_validator
 
+from common.config import CACHE_EXPECTED_DIR_MODE, CACHE_EXPECTED_FILE_MODE
+
 logger = logging.getLogger(__name__)
 
 
@@ -252,10 +254,9 @@ class CacheSecurityManager:
             logger.warning(f"메타데이터 로드 실패: {metadata_path} - {e}")
             return None
 
-    @staticmethod
-    def save_cache_metadata(metadata_path: str, metadata: CacheMetadata) -> None:
+    def save_cache_metadata(self, metadata_path: str, metadata: CacheMetadata) -> None:
         """
-        메타데이터 파일을 저장합니다.
+        메타데이터 파일을 저장하고 권한을 강제합니다.
 
         Args:
             metadata_path: 메타데이터 JSON 파일 경로
@@ -265,10 +266,17 @@ class CacheSecurityManager:
             IOError: 파일 쓰기 실패
         """
         try:
-            os.makedirs(os.path.dirname(metadata_path), exist_ok=True)
+            metadata_dir = os.path.dirname(metadata_path)
+            if metadata_dir and not os.path.exists(metadata_dir):
+                os.makedirs(metadata_dir, exist_ok=True)
+                self.enforce_directory_permissions(metadata_dir)
+
             with open(metadata_path, "w", encoding="utf-8") as f:
                 json.dump(metadata.model_dump(), f, ensure_ascii=False, indent=2)
-            logger.debug(f"메타데이터 저장 완료: {metadata_path}")
+
+            # 파일 권한 강제
+            self.enforce_file_permissions(metadata_path)
+            logger.debug(f"메타데이터 저장 및 보안 설정 완료: {metadata_path}")
         except OSError as e:
             logger.error(f"메타데이터 저장 실패: {metadata_path} - {e}")
             raise
@@ -339,13 +347,19 @@ class CacheSecurityManager:
                     raise
                 except Exception as e:
                     logger.warning(f"HMAC 검증 중 오류: {e}")
-            elif self.security_level == "high":
-                # high 레벨에서는 HMAC 필드가 반드시 있어야 함
-                raise CacheIntegrityError(
-                    f"보안 수준 'high'에서는 HMAC 서명이 필수입니다: {file_path}"
-                )
+            elif self.security_level in ("high", "medium"):
+                # high 및 medium 레벨에서는 HMAC 필드가 있는 것이 권장됨 (high는 필수)
+                msg = f"HMAC 서명이 누락되었습니다: {file_path}"
+                if self.security_level == "high":
+                    raise CacheIntegrityError(
+                        f"보안 수준 'high'에서는 HMAC 서명이 필수입니다: {file_path}"
+                    )
+                else:
+                    logger.warning(f"[Security] {msg}")
         elif self.security_level == "high":
-            logger.warning("보안 수준은 'high'이나 HMAC 비밀키가 설정되지 않았습니다.")
+            raise CacheIntegrityError(
+                "보안 수준 'high'에서는 HMAC 비밀키가 필수입니다. CACHE_HMAC_SECRET을 설정하세요."
+            )
 
         logger.debug(f"캐시 무결성 검증 통과: {file_path}")
         return True
@@ -457,6 +471,30 @@ class CacheSecurityManager:
 
         return False
 
+    def enforce_file_permissions(
+        self, file_path: str, mode: int = CACHE_EXPECTED_FILE_MODE
+    ) -> None:
+        """
+        파일의 권한을 보안 정책에 맞춰 강제 설정합니다.
+        """
+        try:
+            os.chmod(file_path, mode)
+            logger.debug(f"파일 권한 강제 설정 완료: {file_path} ({oct(mode)})")
+        except Exception as e:
+            logger.warning(f"파일 권한 설정 실패: {file_path} - {e}")
+
+    def enforce_directory_permissions(
+        self, dir_path: str, mode: int = CACHE_EXPECTED_DIR_MODE
+    ) -> None:
+        """
+        디렉터리의 권한을 보안 정책에 맞춰 강제 설정합니다.
+        """
+        try:
+            os.chmod(dir_path, mode)
+            logger.debug(f"디렉터리 권한 강제 설정 완료: {dir_path} ({oct(mode)})")
+        except Exception as e:
+            logger.warning(f"디렉터리 권한 설정 실패: {dir_path} - {e}")
+
     def verify_cache_trust(self, file_path: str) -> bool:
         """
         캐시 파일을 신뢰할 수 있는지 종합적으로 검증합니다.
@@ -528,13 +566,13 @@ class CacheSecurityManager:
 
         return True, None
 
-    @staticmethod
     def create_metadata_for_file(
+        self,
         file_path: str,
         description: str | None = None,
     ) -> CacheMetadata:
         """
-        파일을 위한 새로운 메타데이터를 생성합니다.
+        파일을 위한 새로운 메타데이터를 생성합니다. (HMAC 서명 포함 가능)
 
         Args:
             file_path: 캐시 파일 경로
@@ -559,10 +597,21 @@ class CacheSecurityManager:
         except (ImportError, AttributeError):
             faiss_version = None
 
-        file_hash = CacheSecurityManager.compute_file_hash(file_path)
+        file_hash = self.compute_file_hash(file_path)
+
+        # HMAC 서명 생성 (비밀키가 있는 경우)
+        integrity_hmac = None
+        if self.hmac_secret:
+            try:
+                with open(file_path, "rb") as f:
+                    file_data = f.read()
+                integrity_hmac = self.compute_integrity_hmac(file_data)
+            except Exception as e:
+                logger.warning(f"HMAC 생성 실패: {e}")
 
         return CacheMetadata(
             file_hash=file_hash,
+            integrity_hmac=integrity_hmac,
             created_at=datetime.now(timezone.utc).isoformat(),
             cache_version=2,
             python_version=f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}",
