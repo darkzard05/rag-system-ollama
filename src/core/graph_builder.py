@@ -427,9 +427,11 @@ def build_graph(retriever: Any = None) -> Any:
 
     workflow.add_conditional_edges(
         "check_cache",
-        lambda s: "END"
-        if s.get("is_cached")
-        else ("generate_response" if s.get("intent") == "general" else "retrieve"),
+        lambda s: (
+            "END"
+            if s.get("is_cached")
+            else ("generate_response" if s.get("intent") == "general" else "retrieve")
+        ),
         {"END": END, "generate_response": "generate_response", "retrieve": "retrieve"},
     )
     workflow.add_edge("retrieve", "rerank_documents")
