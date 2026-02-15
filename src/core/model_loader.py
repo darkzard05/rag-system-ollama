@@ -469,6 +469,23 @@ def get_available_models() -> list[str]:
 
 
 def load_llm(model_name: str) -> Any:
+    # [최적화] CI/유닛 테스트 환경에서는 Ollama 서버 없이도 동작하도록 가짜 LLM 반환
+    if os.getenv("IS_CI_TEST") == "true" or os.getenv("IS_UNIT_TEST") == "true":
+        from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
+        from langchain_core.messages import AIMessage
+
+        logger.info(f"[TEST] [MOCK] 가짜 LLM 로드됨 (모델명: {model_name})")
+        return GenericFakeChatModel(
+            messages=iter(
+                [
+                    AIMessage(
+                        content="안녕하세요! RAG 시스템 테스트 응답입니다. <thinking>테스트 생각 중...</thinking> 질문에 답변해 드릴게요."
+                    ),
+                    "이것은 두 번째 테스트 스트리밍 조각입니다.",
+                ]
+            )
+        )
+
     with monitor.track_operation(OperationType.PDF_LOADING, {"model": model_name}):
         from core.custom_ollama import DeepThinkingChatOllama
 

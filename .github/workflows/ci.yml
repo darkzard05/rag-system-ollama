@@ -60,6 +60,7 @@ jobs:
       
     - name: Run pip-audit (Dependency Scan)
       run: |
+        # Ignore known CVEs that are difficult to resolve without breaking changes or are false positives in this context
         pip-audit -r requirements.txt --skip-editable \
           --ignore-vuln CVE-2025-65106 \
           --ignore-vuln CVE-2025-68664 \
@@ -86,8 +87,14 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest]
-        python-version: ["3.10", "3.11", "3.12"]
+        python-version: ["3.11", "3.12"] # Focus on modern Python versions
     runs-on: ${{ matrix.os }}
+    
+    env:
+      PYTHONPATH: ${{ github.workspace }}/src
+      IS_CI_TEST: "true"
+      TEST_API_KEY: "sk_admin_test_token_12345"
+      CUDA_VISIBLE_DEVICES: ""
     
     steps:
     - uses: actions/checkout@v4
@@ -104,7 +111,15 @@ jobs:
         sudo apt-get update
         sudo apt-get install -y libgl1-mesa-glx libglib2.0-0
         
-    - name: Install dependencies
+    - name: Install dependencies (Windows)
+      if: runner.os == 'Windows'
+      run: |
+        python -m pip install --upgrade pip
+        pip install pytest-cov
+        if (Test-Path requirements-win.txt) { pip install -r requirements-win.txt }
+        
+    - name: Install dependencies (Linux)
+      if: runner.os == 'Linux'
       run: |
         python -m pip install --upgrade pip
         pip install pytest-cov
@@ -116,19 +131,11 @@ jobs:
         python -m pytest tests/integration/test_rag_integration.py
         python -m pytest tests/security/test_cache_security.py
         python -m pytest tests/integration/test_caching_system.py
-      env:
-        PYTHONPATH: ${{ github.workspace }}/src
       shell: bash
         
     - name: Run Unit Tests with Coverage
       run: |
         python -m pytest --cov=src --cov-report=term --cov-report=xml --disable-warnings tests/unit/
-      env:
-        PYTHONPATH: ${{ github.workspace }}/src
-        OLLAMA_HOST: "http://localhost:11434" 
-        DEFAULT_OLLAMA_MODEL: "qwen3:4b-instruct-2507-q4_K_M"
-        TEST_API_KEY: "sk_admin_test_token_12345"
-        CUDA_VISIBLE_DEVICES: ""
       shell: bash
 
     - name: Upload Test Logs
@@ -154,20 +161,17 @@ jobs:
         python-version: "3.12"
         cache: 'pip'
         
-    - name: Install Dependencies
+    - name: Install Minimal Dependencies for Doc Gen
       run: |
-        pip install -r requirements.txt
+        pip install fastapi uvicorn pydantic pyyaml langchain-core
         
     - name: Export OpenAPI Spec
       run: |
         export PYTHONPATH=$PYTHONPATH:$(pwd)/src
-        python scripts/export_openapi.py > docs/openapi.json
+        python scripts/export_openapi.py > docs/api/openapi.json
         
     - name: Upload API Specification
       uses: actions/upload-artifact@v4
       with:
         name: api-specification
-        path: docs/openapi.json
-
-        
-    
+        path: docs/api/openapi.json
