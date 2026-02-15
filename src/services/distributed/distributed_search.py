@@ -92,9 +92,7 @@ class DistributedRetriever(BaseRetriever):
         self, query: str, *, run_manager: CallbackManagerForRetrieverRun
     ) -> list[Document]:
         """동기 호출 시 비동기 루프 실행 (LangChain 표준)"""
-        return asyncio.run(
-            self._aget_relevant_documents(query, run_manager=None)
-        )
+        return asyncio.run(self._aget_relevant_documents(query, run_manager=None))
 
     async def _aget_relevant_documents(
         self,
