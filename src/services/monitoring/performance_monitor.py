@@ -229,14 +229,17 @@ class MemoryMonitor:
         try:
             with self._lock:
                 mem_info = self._process.memory_info()
+                rss_mb = float(mem_info.rss / (1024 * 1024))
+                vms_mb = float(mem_info.vms / (1024 * 1024))
+                
                 sample = {
                     "timestamp": datetime.now(),
-                    "rss_mb": mem_info.rss / (1024 * 1024),
-                    "vms_mb": mem_info.vms / (1024 * 1024),
+                    "rss_mb": rss_mb,
+                    "vms_mb": vms_mb,
                 }
                 self._memory_samples.append(sample)
 
-                return {"rss_mb": sample["rss_mb"], "vms_mb": sample["vms_mb"]}
+                return {"rss_mb": rss_mb, "vms_mb": vms_mb}
         except Exception as e:
             logger.error(f"Error reading memory usage: {e}")
             return {"rss_mb": 0.0, "vms_mb": 0.0}
