@@ -263,6 +263,7 @@ def load_embedding_model(
         )
 
         try:
+            result: Embeddings
             if is_ollama_embedding:
                 # [지연 로딩] 무거운 라이브러리는 실제 사용 시점에 임포트
                 from langchain_ollama import OllamaEmbeddings
@@ -278,53 +279,52 @@ def load_embedding_model(
                 )
 
                 SessionManager.set("current_embedding_device", "Ollama Backend")
-                _loaded_model_instances[model_key] = result
-                return result
+            else:
+                # --- HuggingFace 로직 (지연 로딩) ---
+                import torch
+                from langchain_huggingface import HuggingFaceEmbeddings
 
-            # --- HuggingFace 로직 (지연 로딩) ---
-            import torch
-            from langchain_huggingface import HuggingFaceEmbeddings
+                from core.session import SessionManager
 
-            from core.session import SessionManager
+                target_device = EMBEDDING_DEVICE.lower()
+                if target_device == "auto":
+                    target_device = "cpu"
 
-            target_device = EMBEDDING_DEVICE.lower()
-            if target_device == "auto":
-                target_device = "cpu"
+                display_device = "GPU" if target_device == "cuda" else "CPU"
+                SessionManager.set("current_embedding_device", display_device)
+                batch_size = 32 if target_device == "cuda" else 16
 
-            display_device = "GPU" if target_device == "cuda" else "CPU"
-            SessionManager.set("current_embedding_device", display_device)
-            batch_size = 32 if target_device == "cuda" else 16
+                # [최적화] ONNX 백엔드 활성화 (CPU/GPU 모두 지원)
+                backend = "default"
+                try:
+                    import importlib.util
 
-            # [최적화] ONNX 백엔드 활성화 (CPU/GPU 모두 지원)
-            backend = "default"
-            try:
-                import importlib.util
+                    if importlib.util.find_spec("optimum") and importlib.util.find_spec(
+                        "onnxruntime"
+                    ):
+                        backend = "onnx"
+                        logger.info("[MODEL] [LOAD] Optimum/ONNX 백엔드 가용 확인")
+                except ImportError:
+                    pass
 
-                if importlib.util.find_spec("optimum") and importlib.util.find_spec(
-                    "onnxruntime"
-                ):
-                    backend = "onnx"
-                    logger.info("[MODEL] [LOAD] Optimum/ONNX 백엔드 가용 확인")
-            except ImportError:
-                pass
+                model_kwargs = {"device": target_device}
+                if backend == "onnx":
+                    model_kwargs["backend"] = "onnx"
 
-            model_kwargs = {"device": target_device}
-            if backend == "onnx":
-                model_kwargs["backend"] = "onnx"
+                if target_device == "cuda":
+                    model_kwargs["torch_dtype"] = torch.float16
 
-            if target_device == "cuda":
-                model_kwargs["torch_dtype"] = torch.float16
+                result = HuggingFaceEmbeddings(
+                    model_name=model_key,
+                    model_kwargs=model_kwargs,
+                    encode_kwargs={"device": target_device, "batch_size": batch_size},
+                    cache_folder=CACHE_DIR,
+                )
 
-            result = HuggingFaceEmbeddings(
-                model_name=model_key,
-                model_kwargs=model_kwargs,
-                encode_kwargs={"device": target_device, "batch_size": batch_size},
-                cache_folder=CACHE_DIR,
-            )
+                logger.info(
+                    f"[MODEL] [LOAD] HF 임베딩 모델 로드 성공 | 엔진: {display_device} (Backend: {backend})"
+                )
 
-            logger.info(
-                f"[MODEL] [LOAD] HF 임베딩 모델 로드 성공 | 엔진: {display_device} (Backend: {backend})"
-            )
             _loaded_model_instances[model_key] = result
             return result
 

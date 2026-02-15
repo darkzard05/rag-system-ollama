@@ -5,14 +5,11 @@ This directory contains detailed technical documentation for the RAG System.
 ## 📂 Structure
 
 - [**Architecture**](./architecture/)
-  - [System Architecture](./architecture/ARCHITECTURE.md)
-  - [Streaming Integrity Protocol](./architecture/STREAMING_INTEGRITY_PROTOCOL.md)
-- [**API Reference**](./api/)
-  - [API Specification](./api/API.md)
-  - [OpenAPI JSON](./api/openapi.json)
+  - [Streaming Integrity Protocol](./architecture/STREAMING_INTEGRITY_PROTOCOL.md): Protocol for zero-duplicate, high-performance streaming.
 - [**Operations**](./ops/)
-  - [Deployment Guide](./ops/DEPLOYMENT.md)
-  - [Security Implementation](./ops/SECURITY_IMPLEMENTATION.md)
-  - [Troubleshooting](./ops/TROUBLESHOOTING.md)
-- [**Historical Reports**](../reports/archive/)
-  - Past performance audits and quality reviews.
+  - [Security Implementation](./ops/SECURITY_IMPLEMENTATION.md): Cache integrity and security layers.
+  - [Troubleshooting](./ops/TROUBLESHOOTING.md): Common issues and solutions.
+- [**API Reference**](./api/)
+  - [OpenAPI JSON](./api/openapi.json): Raw API schema.
+- [**Historical Reports**](../reports/)
+  - Performance audits, Ragas evaluations, and quality reviews.

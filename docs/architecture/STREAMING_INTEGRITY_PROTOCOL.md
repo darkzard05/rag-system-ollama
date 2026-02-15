@@ -34,15 +34,18 @@
 
 ### Core (발생부: `src/core/graph_builder.py`)
 ```python
-# 반드시 이 형식을 유지하여 실시간으로 토큰을 밖으로 던져야 함
-if (current_time - last_emit_time > 0.05) or len(buffer) >= 5:
-    await adispatch_custom_event(
-        "response_chunk",
-        {"chunk": buffer},
-        config=config,
-    )
-    buffer = ""
-    last_emit_time = current_time
+# llm.astream 루프 내에서 조각이 생성될 때마다 즉시 발송
+async for chunk in llm.astream(messages, config=config):
+    msg = getattr(chunk, "message", chunk)
+    content = msg.content
+    thinking = msg.additional_kwargs.get("thinking", "")
+    
+    if content or thinking:
+        await adispatch_custom_event(
+            "response_chunk",
+            {"chunk": content, "thought": thinking},
+            config=config,
+        )
 ```
 
 ### UI (수신부: `src/ui/ui.py`)

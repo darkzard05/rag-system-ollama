@@ -21,20 +21,21 @@
 ## ⚡ Key Highlights
 
 ### 🚀 **Performance & Stability**
-- **Vector-Reuse Semantic Chunking:** Achieves ~38% faster processing by reusing embeddings from the semantic split phase directly for FAISS indexing, eliminating redundant model calls.
-- **Hardware-Aware UI:** Automatically detects and displays the active compute device (CUDA, MPS, or CPU) in real-time via toast notifications and system logs.
-- **Deadlock-Free Session Management:** Implements timeout-based lock acquisition and custom exception handling to prevent system hangs during high-concurrency requests.
-- **Integrity-First Streaming:** Utilizes a custom `response_chunk` protocol to ensure zero-duplicate output and immediate first-token delivery (TTFT).
+- **IBM Docling Integration:** Delivers high-quality structured Markdown extraction with AI-powered layout analysis, ensuring superior context quality compared to traditional PDF parsers.
+- **Ultra-Fast CPU Reranking:** Powered by `FlashRank` (ms-marco-MiniLM-L-12-v2), providing industrial-grade reranking performance directly on CPU with minimal latency.
+- **Linear Pipeline Optimization:** Simplified, high-performance RAG path eliminates complex routing overhead, significantly improving Time To First Token (TTFT).
+- **Weighted RRF Aggregation:** Advanced hybrid search aggregation (FAISS + BM25) using Weighted Reciprocal Rank Fusion for maximum retrieval precision.
+- **Hardware-Aware UI:** Automatically detects and displays active compute devices (CUDA, CPU) and manages VRAM cleanup on system shutdown.
 
 ### 🧠 **Intelligent RAG Pipeline**
-- **Semantic Boundary Preservation:** Advanced logic ensures meaningful context by maintaining semantic units within user-defined size constraints.
-- **LangGraph Orchestration:** Precise control over the retrieval-augmented generation flow for consistent and grounded responses.
-- **Hybrid Search:** Combines the strengths of FAISS (Dense) and BM25 (Sparse) retrieval for superior context relevance.
+- **LangGraph Orchestration:** Precise linear control over retrieval, reranking, and generation for consistent and grounded responses.
+- **Persistent QA History:** Automatically logs comprehensive conversation history and performance metrics in JSONL format for downstream evaluation and Ragas-based auditing.
+- **Integrity-First Streaming:** Utilizes a unified `response_chunk` protocol to ensure zero-duplicate output and immediate delivery of both thoughts and final answers.
 
 ### 🎨 **Refined User Experience**
-- **Professional PDF Viewer:** Features a grouped navigation toolbar with precision page sliders and instant rendering.
-- **Contextual Status Logging:** Provides detailed, real-time visual feedback for every stage of the document analysis and model loading process.
-- **Native Mathematical Support:** Full LaTeX rendering using standardized delimiters for technical and scientific documents.
+- **Docling-Aware Chunker:** Intelligently splits documents based on Markdown structure (headers, sections) preserved by the Docling engine.
+- **Professional PDF Viewer:** Features a grouped navigation toolbar with precision page controls and instant rendering.
+- **Real-time Performance Tracker:** Displays detailed metrics including TTFT, TPS, and thinking duration for every interaction.
 
 ---
 
@@ -46,8 +47,9 @@
 
 ### 2️⃣ Model Setup
 ```powershell
-# Pull the recommended high-performance model
+# Pull the recommended high-performance models
 ollama pull qwen3:4b-instruct-2507-q4_K_M
+ollama pull nomic-embed-text
 ```
 
 ### 3️⃣ Installation
@@ -94,9 +96,9 @@ If you are using Docker, you can access built-in monitoring and API documentatio
 
 The system can be customized via `config.yml` or environmental variables in `.env`.
 
-- **Model Selection**: Change default LLM or Embedding models.
-- **RAG Parameters**: Adjust chunk size, overlap, and retrieval weights.
-- **Security**: Configure RBAC and cache encryption.
+- **Parsing Engine**: Switch between `docling` (default) and `pymupdf` for document extraction.
+- **Reranker**: Enable/disable FlashRank and adjust `top_k` and `min_score` parameters.
+- **Search Weights**: Tune FAISS and BM25 weights for ensemble retrieval.
 
 ---
 
@@ -120,14 +122,14 @@ pytest --cov=src
 rag-system-ollama/
 ├── src/
 │   ├── main.py             # 🏁 Application Entry Point
-│   ├── core/               # 🧠 RAG Engine (LangGraph, Chunker, Session)
+│   ├── core/               # 🧠 RAG Engine (LangGraph, Docling, Chunker)
 │   ├── ui/                 # 🎨 Streamlit UI & Components
 │   ├── api/                # 🌐 Backend API & Streaming
 │   └── common/             # 🛠️ Config, Exceptions & Utils
 ├── docs/                   # 📚 Technical Documentation (Architecture, Ops, API)
-├── reports/                # 📊 Performance & Optimization Audits
-├── scripts/                # 🛠️ Maintenance & Debugging Scripts
-├── requirements/           # 📦 Dependency management
+├── logs/                   # 📝 Persistent QA History & System Logs
+├── reports/                # 📊 Performance & Ragas Evaluation Reports
+├── scripts/                # 🛠️ Maintenance & Benchmarking Scripts
 └── tests/                  # 🧪 Integrity & Verification Tests
 ```
 
@@ -136,12 +138,12 @@ rag-system-ollama/
 ## 📚 Internal Documentation
 
 For more detailed information, please refer to the [Documentation Index](./docs/README.md):
-- [Architecture & Protocols](./docs/architecture/ARCHITECTURE.md)
-- [Deployment & Security](./docs/ops/DEPLOYMENT.md)
-- [API Specifications](./docs/api/API.md)
+- [Architecture & Protocols](./docs/architecture/STREAMING_INTEGRITY_PROTOCOL.md)
+- [Security Implementation](./docs/ops/SECURITY_IMPLEMENTATION.md)
+- [Troubleshooting](./docs/ops/TROUBLESHOOTING.md)
 
 ---
 
 ## 📄 License
 MIT License - Developed by **darkzard05**.
-**Status:** v2.3.0 | **Last Updated:** 2026-01-30
+**Status:** v3.0.0 | **Last Updated:** 2026-02-15

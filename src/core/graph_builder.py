@@ -308,7 +308,7 @@ def build_graph(retriever: Any = None) -> Any:
                 results = await asyncio.to_thread(ranker.rerank, rank_request)
 
             # 4. 필터링 및 복원
-            final_docs = []
+            final_docs: list[Document] = []
             min_score = RERANKER_CONFIG.get("min_score", 0.1)
             top_k = RERANKER_CONFIG.get("top_k", 10)  # [최적화] 컨텍스트 풍부화
 

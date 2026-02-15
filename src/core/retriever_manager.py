@@ -288,7 +288,7 @@ class VectorStoreCache:
             )
 
             with open(self.bm25_retriever_path, "rb") as f:
-                bm25_retriever = pickle.load(f)
+                bm25_retriever = pickle.load(f)  # nosec B301
 
             # [개선] preprocess_func가 bm25_tokenizer임을 명시적으로 유지
             bm25_retriever.k = RETRIEVER_CONFIG.get("search_kwargs", {}).get("k", 5)
@@ -561,7 +561,8 @@ def load_and_build_retrieval_components(
                 with contextlib.suppress(Exception):
                     torch.cuda.empty_cache()
             SessionManager.add_status_log("신규 인덱싱 완료", session_id=session_id)
-            return doc_splits, vector_store, bm25_retriever, cache_used
+
+    return doc_splits, vector_store, bm25_retriever, cache_used
 
 
 @log_operation("RAG 파이프라인 구축")

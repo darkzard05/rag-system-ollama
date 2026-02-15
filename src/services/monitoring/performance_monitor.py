@@ -369,7 +369,7 @@ class PerformanceMonitor:
         self._init_jsonl()
 
         # [최적화] 비동기 로깅을 위한 큐와 스레드 설정
-        self._log_queue: queue.Queue[list[Any]] = queue.Queue()
+        self._log_queue: queue.Queue[Any] = queue.Queue()
         self._stop_event = threading.Event()
         self._log_thread = threading.Thread(target=self._logging_worker, daemon=True)
         self._log_thread.start()

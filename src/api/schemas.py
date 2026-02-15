@@ -22,7 +22,7 @@ class PerformanceStats(BaseModel):
     model_name: str = "unknown"
     doc_count: int = 0
 
-    @computed_field
+    @computed_field  # type: ignore[prop-decorator]
     @property
     def tps(self) -> float:
         """Tokens Per Second (계산된 필드)"""
@@ -43,7 +43,7 @@ class ChatMessage(BaseModel):
     processed_content: str | None = None
     timestamp: float = Field(default_factory=time.time)
 
-    @computed_field
+    @computed_field  # type: ignore[prop-decorator]
     @property
     def formatted_time(self) -> str:
         """읽기 쉬운 형식의 시간 (계산된 필드)"""

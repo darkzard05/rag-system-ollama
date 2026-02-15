@@ -12,7 +12,10 @@ import time
 from dataclasses import dataclass, field
 from enum import Enum
 
-from langchain_core.callbacks import CallbackManagerForRetrieverRun
+from langchain_core.callbacks import (
+    AsyncCallbackManagerForRetrieverRun,
+    CallbackManagerForRetrieverRun,
+)
 from langchain_core.documents import Document
 from langchain_core.retrievers import BaseRetriever
 
@@ -90,14 +93,14 @@ class DistributedRetriever(BaseRetriever):
     ) -> list[Document]:
         """동기 호출 시 비동기 루프 실행 (LangChain 표준)"""
         return asyncio.run(
-            self._aget_relevant_documents(query, run_manager=run_manager)
+            self._aget_relevant_documents(query, run_manager=None)
         )
 
     async def _aget_relevant_documents(
         self,
         query: str,
         *,
-        run_manager: CallbackManagerForRetrieverRun | None = None,
+        run_manager: AsyncCallbackManagerForRetrieverRun | None = None,
     ) -> list[Document]:
         """모든 노드에서 병렬 검색 후 결과 병합"""
         start_time = time.time()

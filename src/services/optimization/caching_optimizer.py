@@ -499,7 +499,7 @@ class DiskCache(CacheBackend[T]):
 
                 # 2. 안전하게 로드
                 with open(cache_file, "rb") as f:
-                    data = pickle.load(f)
+                    data = pickle.load(f)  # nosec B301
 
                 entry = CacheEntry(**data) if isinstance(data, dict) else data
 

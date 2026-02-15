@@ -36,7 +36,7 @@ jobs:
     - name: Run Mypy (Type Check)
       run: |
         export PYTHONPATH="${PYTHONPATH}:$(pwd)/src"
-        mypy --ignore-missing-imports --disable-error-code import-untyped --non-interactive --install-types src/ || echo "Mypy found some issues, but continuing..."
+        mypy --ignore-missing-imports --disable-error-code import-untyped --non-interactive --install-types src/
 
   security-scan:
     name: Security Scan
@@ -60,7 +60,7 @@ jobs:
       
     - name: Run pip-audit (Dependency Scan)
       run: |
-        pip-audit -r requirements.txt \
+        pip-audit -r requirements.txt --skip-editable \
           --ignore-vuln CVE-2025-65106 \
           --ignore-vuln CVE-2025-68664 \
           --ignore-vuln CVE-2025-6985 \

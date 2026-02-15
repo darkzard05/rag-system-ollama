@@ -199,7 +199,7 @@ async def upload_document(
     """
     인증된 사용자의 PDF 문서를 업로드하고 해당 세션에 인덱싱합니다.
     """
-    if not file.filename.endswith(".pdf"):
+    if not file.filename or not file.filename.endswith(".pdf"):
         raise HTTPException(status_code=400, detail="PDF 파일만 업로드 가능합니다.")
 
     # 명시적으로 세션 초기화 (최적화: 직접 호출)
@@ -207,7 +207,7 @@ async def upload_document(
 
     try:
         # 임시 파일 저장
-        suffix = Path(file.filename).suffix
+        suffix = Path(file.filename).suffix if file.filename else ".pdf"
         with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
             content = await file.read()
             tmp.write(content)

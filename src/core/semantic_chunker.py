@@ -577,10 +577,9 @@ class EmbeddingBasedSemanticChunker:
 
             # 인덱스 범위 보정
             idx = max(0, min(idx, len(doc_ranges) - 1))
+            raw_meta = doc_ranges[idx]["metadata"]
             matched_metadata = (
-                doc_ranges[idx]["metadata"].copy()
-                if doc_ranges[idx]["metadata"]
-                else {}
+                raw_meta.copy() if isinstance(raw_meta, dict) else {}
             )
 
             final_docs.append(Document(page_content=c_text, metadata=matched_metadata))
