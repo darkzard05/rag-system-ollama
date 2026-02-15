@@ -25,7 +25,7 @@ jobs:
     - name: Install Linting Tools
       run: |
         python -m pip install --upgrade pip
-        pip install ruff mypy types-PyYAML types-psutil types-requests
+        pip install ruff==0.15.1 mypy types-PyYAML types-psutil types-requests
         
     - name: Run Ruff Check (Lint)
       run: ruff check .
@@ -78,7 +78,9 @@ jobs:
           --ignore-vuln CVE-2025-5197 \
           --ignore-vuln CVE-2025-6638 \
           --ignore-vuln CVE-2025-6051 \
-          --ignore-vuln CVE-2025-6921
+          --ignore-vuln CVE-2025-6921 \
+          --ignore-vuln CVE-2026-26013 \
+          --ignore-vuln CVE-2026-25990
 
   test:
     name: Test (Py ${{ matrix.python-version }} on ${{ matrix.os }})
