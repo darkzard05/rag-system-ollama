@@ -45,6 +45,7 @@ class DeepThinkingChatOllama(ChatOllama):
             "model": self.model,
             "messages": formatted_messages,
             "options": {k: v for k, v in options.items() if v is not None},
+            "keep_alive": getattr(self, "keep_alive", None),
         }
 
         # [최적화] Ollama v0.6.0+ 공식 'think' 파라미터 우선 처리

@@ -139,12 +139,9 @@ class StreamingResponseHandler:
         self.buffer.reset()
 
         # 노드 이름 매핑 (UI 피드백용) - [최적화] 설정에 따라 표시 여부 결정
-        from common.config import INTENT_ANALYSIS_ENABLED, QUERY_EXPANSION_CONFIG
+        from common.config import QUERY_EXPANSION_CONFIG
 
         node_status_map = {}
-        if INTENT_ANALYSIS_ENABLED:
-            node_status_map["router"] = "질문 의도 분석 중..."
-
         if QUERY_EXPANSION_CONFIG.get("enabled", True):
             node_status_map["generate_queries"] = "검색어 확장 중..."
 

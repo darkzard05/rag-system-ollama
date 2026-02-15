@@ -7,7 +7,7 @@ models:
   default_ollama: "qwen3:4b-instruct-2507-q4_K_M"
 
   # 기본으로 사용할 임베딩 모델 이름 (Ollama 또는 HuggingFace)
-  default_embedding: "qwen3-embedding:0.6b"         # "qwen3-embedding:0.6b", "qwen3-embedding:4b"
+  default_embedding: "nomic-embed-text"
   
   # Ollama 서버 주소 (로컬: http://127.0.0.1:11434, 도커: http://host.docker.internal:11434)
   base_url: "http://127.0.0.1:11434"
@@ -44,30 +44,45 @@ rag:
   retriever:
     search_type: "similarity"
     search_kwargs:
-      k: 20  # 동적 조정의 기준점이 되는 중간값
+      k: 25  # 충분한 후보군 확보를 위해 상향
     # BM25와 FAISS의 가중치
     ensemble_weights: [0.4, 0.6]
 
   # 재순위화(Reranking) 설정
   reranker:
     enabled: true
-    model_name: "qwen3:4b-instruct-2507-q4_K_M" 
-    top_k: 7  # 일반적인 분석 질문에 최적화된 개수
-    bypass_threshold: 0.85
-    min_score: 0.35  # 기본 필터링 강도
-    max_rerank_docs: 25  # 리랭커가 검토할 최대 후보군 확대
+    # 더 정확한 MiniLM 모델로 업그레이드
+    model_name: "ms-marco-MiniLM-L-12-v2" 
+    top_k: 10 # 컨텍스트 풍부화
+    bypass_threshold: 0.95
+    min_score: 0.0001 # 매우 낮은 점수도 일단 수용 (순위 우선)
+    max_rerank_docs: 25
+
+  # 통합 RAG 파라미터 (기존의 의도별 파라미터를 하나로 통합)
+  parameters:
+    retrieval_k: 25
+    rerank_top_k: 8
+    rerank_threshold: 0.3
+    sort_by_page: false
+    use_strict_grading: false
 
   # 텍스트 분할 설정
   text_splitter:
     chunk_size: 500
     chunk_overlap: 100
   
+  # 추출 엔진 설정 (IBM Docling)
+  parsing:
+    engine: "docling"
+    do_ocr: false
+    do_table_structure: true
+
   # 의미론적 분할 설정
   semantic_chunker:
     enabled: true
     breakpoint_threshold_type: "similarity_threshold"
     breakpoint_threshold_value: 0.6
-    # 문장 분할 정규식 (표준 정규식으로 복구, 로직은 코드에서 보완)
+    # 문장 분할 정규식
     sentence_split_regex: "([.!?]\\s+)" 
     min_chunk_size: 200
     max_chunk_size: 1000
@@ -77,38 +92,7 @@ rag:
   query_expansion:
     enabled: false
 
-  # 의도 분석(Router) 활성화 여부
-  intent_analysis_enabled: false
-
-  # 의도별 파이프라인 파라미터 설정
-  intent_parameters:
-    FACTOID:
-      retrieval_k: 7
-      rerank_top_k: 3
-      rerank_threshold: 0.5
-      sort_by_page: false
-      use_strict_grading: true
-    SUMMARY:
-      retrieval_k: 60
-      rerank_top_k: 25
-      rerank_threshold: 0.1
-      sort_by_page: true
-      use_strict_grading: false
-    RESEARCH:
-      retrieval_k: 25
-      rerank_top_k: 10
-      rerank_threshold: 0.25
-      sort_by_page: false
-      use_strict_grading: false
-    DEFAULT:
-      retrieval_k: 20
-      rerank_top_k: 7
-      rerank_threshold: 0.35
-      sort_by_page: false
-      use_strict_grading: false
-
   # 프롬프트 설정
-  prompts:
     # 1. 핵심 페르소나 및 분석 원칙 (The Core Identity)
     analysis_protocol: |
       당신은 업계 최고 수준의 '문서 분석 전문가'입니다. 
@@ -116,9 +100,9 @@ rag:
 
       <Core_Guidelines>
       1. [Language]: 사용자의 질문 언어에 맞추어 답변하십시오. (문서 언어와 무관)
-      2. [Groundedness]: 반드시 제공된 <Context>의 내용만을 근거로 삼으십시오. 근거가 부족하면 솔직하게 "자료 내에서 답변을 찾을 수 없습니다"라고 답하십시오.
+      2. [Groundedness]: 제공된 <Context>를 철저히 분석하십시오. 직접적인 정답이 없더라도 관련 기술 용어, 수치, 부분적 원리를 최대한 추출하여 '가용 정보 기반 분석'을 제공하십시오. 단, 없는 내용을 지어내지는 마십시오.
       3. [Citations]: 모든 정보의 출처 페이지를 `[p.X]` 형태로 인용하십시오. 가급적 특정 수치나 핵심 명사 바로 뒤에 붙이십시오.
-      4. [Clarity]: 전문 용어는 유지하되, 전체적인 설명은 명료하고 구조적이어야 합니다.
+      4. [Synthesis]: 흩어져 있는 정보들을 유기적으로 연결하여 질문에 대한 다각도 분석을 수행하십시오.
       </Core_Guidelines>
 
     # 2. 상황별 특화 전략 (Tailored Strategies)

@@ -1,6 +1,6 @@
 """
 LangGraph를 사용하여 RAG 파이프라인을 구성하고 실행하는 로직을 담당합니다.
-Core Logic Rebuild: 데코레이터 제거 및 순수 함수 구조로 변경하여 config 전달 보장.
+Strict Linear Pipeline: 의도 분류 없이 모든 입력을 동일한 고성능 경로로 처리합니다.
 """
 
 import asyncio
@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Any
 
 from langchain_core.callbacks.manager import adispatch_custom_event
 from langchain_core.documents import Document
+from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.runnables import RunnableConfig
 from langgraph.graph import END, START, StateGraph
@@ -18,22 +19,15 @@ from api.schemas import AggregatedSearchResult, GraphState
 from cache.response_cache import get_response_cache
 from common.config import (
     ANALYSIS_PROTOCOL,
-    FACTOID_SYSTEM_PROMPT,
-    GREETING_SYSTEM_PROMPT,
-    INTENT_PARAMETERS,
-    OUT_OF_CONTEXT_SYSTEM_PROMPT,
-    QA_HUMAN_PROMPT,
     QUERY_EXPANSION_CONFIG,
     QUERY_EXPANSION_PROMPT,
     RERANKER_CONFIG,
-    RESEARCH_SYSTEM_PROMPT,
 )
 from common.typing_utils import (
     DocumentList,
     GraphOutput,
 )
-from common.utils import count_tokens_rough, fast_hash
-from core.model_loader import load_reranker_model
+from common.utils import fast_hash
 from core.session import SessionManager
 from services.monitoring.llm_tracker import ResponsePerformanceTracker
 from services.monitoring.performance_monitor import (
@@ -58,51 +52,55 @@ class QueryExpansionOutput(BaseModel):
 
 def _merge_consecutive_chunks(docs: DocumentList) -> DocumentList:
     """
-    같은 출처의 연속된 인덱스를 가진 청크들을 하나로 병합합니다.
+    검색된 청크들 사이의 겹치는 내용을 제거하고, 동일 섹션/페이지 내의 내용을 지능적으로 병합합니다.
     """
     if not docs:
         return []
 
-    sorted_docs = sorted(
-        docs,
-        key=lambda d: (
-            d.metadata.get("source", ""),
-            d.metadata.get("page", 0),
-            d.metadata.get("chunk_index", -1),
-        ),
-    )
-
+    # 1. 문서 순서 유지하며 병합
     merged: DocumentList = []
-    if not sorted_docs:
-        return merged
-
     current_doc = Document(
-        page_content=sorted_docs[0].page_content,
-        metadata=sorted_docs[0].metadata.copy(),
+        page_content=docs[0].page_content, metadata=docs[0].metadata.copy()
     )
 
-    for next_doc in sorted_docs[1:]:
-        curr_src = current_doc.metadata.get("source")
-        next_src = next_doc.metadata.get("source")
-        curr_page = current_doc.metadata.get("page")
-        next_page = next_doc.metadata.get("page")
+    for i in range(1, len(docs)):
+        next_doc = docs[i]
 
-        curr_idx = current_doc.metadata.get("chunk_index", -1)
-        next_idx = next_doc.metadata.get("chunk_index", -1)
+        # [최적화] 동일 섹션(last_section)이거나 동일 페이지인 경우 병합 우선순위 부여
+        is_same_section = (
+            next_doc.metadata.get("last_section")
+            == current_doc.metadata.get("last_section")
+            and next_doc.metadata.get("last_section") != "General"
+        )
+        is_same_page = next_doc.metadata.get("source") == current_doc.metadata.get(
+            "source"
+        ) and next_doc.metadata.get("page") == current_doc.metadata.get("page")
 
-        if (
-            curr_src == next_src
-            and curr_page == next_page
-            and curr_idx != -1
-            and next_idx == curr_idx + 1
-        ):
-            current_doc.page_content += " " + next_doc.page_content
-            current_doc.metadata["chunk_index"] = next_idx
+        if is_same_section or is_same_page:
+            text_a = current_doc.page_content
+            text_b = next_doc.page_content
+
+            # 오버랩 제거 로직
+            overlap_len = 0
+            max_check = min(len(text_a), len(text_b), 350)
+
+            for length in range(max_check, 5, -1):
+                if text_a.endswith(text_b[:length]):
+                    overlap_len = length
+                    break
+
+            if overlap_len > 0:
+                current_doc.page_content += text_b[overlap_len:]
+            else:
+                # 섹션이 같으면 줄바꿈으로 연결, 다르면 구분자 사용
+                separator = "\n" if is_same_section else "\n[...]\n"
+                current_doc.page_content += separator + text_b
         else:
             merged.append(current_doc)
             current_doc = Document(
                 page_content=next_doc.page_content, metadata=next_doc.metadata.copy()
             )
+
     merged.append(current_doc)
     return merged
 
@@ -115,127 +113,58 @@ def build_graph(retriever: Any = None) -> Any:
     RAG 워크플로우를 구성하고 컴파일합니다.
     """
 
+    # 0. 의도 분류 노드 (최적화: 검색 필요 여부 판단)
+    async def classify_intent(state: GraphState, config: RunnableConfig) -> GraphOutput:
+        query = state["input"].strip()
+
+        # 가벼운 규칙 기반 분류 (속도 우선)
+        greetings = [
+            "안녕",
+            "hi",
+            "hello",
+            "반가워",
+            "누구야",
+            "도움말",
+            "고마워",
+            "thanks",
+        ]
+        if any(g in query.lower() for g in greetings) or len(query) < 2:
+            logger.info("[Router] 일상 대화 또는 짧은 쿼리 감지 -> 검색 건너뜀")
+            return {"intent": "general", "is_cached": False}
+
+        return {"intent": "rag"}
+
     # 0-1. 캐시 확인 노드
     async def check_cache(state: GraphState) -> GraphOutput:
+        if state.get("intent") == "general":
+            return {"is_cached": False}
+
         cache = get_response_cache()
         cached_res = await cache.get(state["input"], use_semantic=True)
 
         if cached_res:
             logger.info(f"[Cache] 히트! 캐시된 응답 사용: {state['input'][:50]}")
-            SessionManager.replace_last_status_log(
-                "유사한 질문에 대한 캐시된 답변을 발견했습니다."
-            )
+            SessionManager.replace_last_status_log("캐시된 답변을 발견했습니다.")
             return {
                 "response": cached_res.response,
                 "thought": cached_res.metadata.get("thought", ""),
-                "route_decision": cached_res.metadata.get("route_decision", "CACHE"),
                 "performance": cached_res.metadata.get("performance", {}),
                 "is_cached": True,
             }
         return {"is_cached": False}
 
-    # 0-2. 의도 분석 노드
-    async def router(state: GraphState, config: RunnableConfig) -> GraphOutput:
-        from common.config import INTENT_ANALYSIS_ENABLED
-        from core.query_optimizer import RAGQueryOptimizer
-
-        # Config에서 LLM 추출
-        configurable = config.get("configurable", {})
-        llm = configurable.get("llm") or SessionManager.get("llm")
-
-        # [최적화] 의도 분석 비활성화 시 기본값 반환
-        if not INTENT_ANALYSIS_ENABLED:
-            logger.info(
-                "[CHAT] [ROUTER] 의도 분석 비활성화됨 -> 기본값 'RESEARCH' 사용"
-            )
-            return {"route_decision": "RESEARCH"}
-
-        if not llm:
-            return {"route_decision": "FACTOID"}
-
-        intent = await RAGQueryOptimizer.classify_intent(state["input"], llm)
-        SessionManager.replace_last_status_log(
-            f"의도 분석 완료: {intent}", session_id=configurable.get("session_id")
-        )
-        return {"route_decision": intent}
-
-    # 1. 쿼리 확장 노드
-    async def generate_queries(
-        state: GraphState, config: RunnableConfig
-    ) -> GraphOutput:
-        route = state.get("route_decision", "FACTOID")
-        configurable = config.get("configurable", {})
-
-        # [최적화] 쿼리 확장 비활성화 시 즉시 반환
-        if not QUERY_EXPANSION_CONFIG.get("enabled", True) or route == "GREETING":
-            return {"search_queries": [state["input"]]}
-
-        llm = configurable.get("llm") or SessionManager.get("llm")
-        if not llm:
-            return {"search_queries": [state["input"]]}
-
-        # [고도화] 의도에 따른 검색 전략 차별화
-        if route == "SUMMARY":
-            instruction = (
-                f"사용자가 다음 문서에 대한 전체 요약 또는 재구성을 요청했습니다: '{state['input']}'\n"
-                "문서의 핵심 골격을 파악하기 위해 다음 3가지 관점의 고유명사를 포함한 검색어를 생성하십시오:\n"
-                "1. 해당 주제의 서론(Introduction) 및 초록(Abstract)\n"
-                "2. 해당 주제의 주요 결론(Conclusion) 및 핵심 결과\n"
-                "3. 이 문서만의 독창적인 기여도(Contributions) 및 핵심 아키텍처"
-            )
-        else:
-            doc_lang = (
-                configurable.get("doc_language")
-                or SessionManager.get("doc_language")
-                or "English"
-            )
-            instruction = f"{QUERY_EXPANSION_PROMPT}"
-            if doc_lang == "English":
-                instruction += "\n주의: 대상 문서가 영어이므로 검색 효율을 위해 확장 쿼리 중 2개 이상은 반드시 영어로 작성하십시오."
-
-        try:
-            if hasattr(llm, "with_structured_output"):
-                structured_llm = llm.with_structured_output(QueryExpansionOutput)
-                prompt = ChatPromptTemplate.from_messages(
-                    [("system", instruction), ("human", "{input}")]
-                )
-                chain = prompt | structured_llm
-                result = await chain.ainvoke({"input": state["input"]}, config=config)
-                raw_queries = result.queries
-            else:
-                raw_queries = [state["input"]]
-
-            clean_queries = [state["input"]]
-            for q in raw_queries:
-                q = q.strip().replace('"', "").replace("'", "")
-                if q and len(q) > 2 and q not in clean_queries:
-                    clean_queries.append(q)
-
-            final_queries = clean_queries[:4]
-            logger.info(f"[Query] 의도({route}) 기반 확장 완료: {final_queries}")
-            SessionManager.replace_last_status_log(
-                f"의도({route}) 기반 검색 전략 수립 완료",
-                session_id=configurable.get("session_id"),
-            )
-            return {"search_queries": final_queries}
-        except Exception as e:
-            logger.error(f"[Query] 확장 오류: {e}")
-            return {"search_queries": [state["input"]]}
-
-    # 2. 문서 검색 노드
+    # 2. 문서 검색 및 확장 노드 (병렬 최적화)
     async def retrieve_documents(
         state: GraphState, config: RunnableConfig
     ) -> GraphOutput:
+        from common.config import RAG_PARAMETERS
         from core.search_aggregator import AggregationStrategy, SearchResultAggregator
 
-        route = state.get("route_decision", "FACTOID")
-        params = INTENT_PARAMETERS.get(route, INTENT_PARAMETERS.get("DEFAULT"))
-        k_val = params["retrieval_k"]
-
+        query = state["input"].strip()
         configurable = config.get("configurable", {})
         session_id = configurable.get("session_id")
+        k_val = RAG_PARAMETERS.get("retrieval_k", 25)
 
-        queries = state.get("search_queries", [state["input"]])
         bm25 = configurable.get("bm25_retriever") or SessionManager.get(
             "bm25_retriever", session_id=session_id
         )
@@ -255,27 +184,69 @@ def build_graph(retriever: Any = None) -> Any:
             except Exception:
                 return []
 
-        tasks = []
-        for i, q in enumerate(queries):
-            tasks.append((f"bm25_{i}", _invoke_retriever(bm25, q, k_val)))
-            tasks.append((f"faiss_{i}", _invoke_retriever(faiss_ret, q, k_val)))
+        # [최적화] 1. 원본 쿼리 검색 즉시 시작 (백그라운드 태스크)
+        initial_tasks = [
+            ("bm25_0", _invoke_retriever(bm25, query, k_val)),
+            ("faiss_0", _invoke_retriever(faiss_ret, query, k_val)),
+        ]
 
-        keys = [t[0] for t in tasks]
-        coroutines = [t[1] for t in tasks]
-        results_list = await asyncio.gather(*coroutines)
+        # [최적화] 2. 동시에 쿼리 확장 수행 (인텐트가 RAG인 경우에만)
+        async def _expand_query():
+            if state.get("intent") == "general" or not QUERY_EXPANSION_CONFIG.get(
+                "enabled", True
+            ):
+                return []
+            llm = configurable.get("llm") or SessionManager.get("llm")
+            if not llm:
+                return []
+            try:
+                if hasattr(llm, "with_structured_output"):
+                    structured_llm = llm.with_structured_output(QueryExpansionOutput)
+                    prompt = ChatPromptTemplate.from_messages(
+                        [("system", QUERY_EXPANSION_PROMPT), ("human", "{input}")]
+                    )
+                    res = await (prompt | structured_llm).ainvoke(
+                        {"input": query}, config=config
+                    )
+                    return [q.strip() for q in res.queries if len(q.strip()) > 2][
+                        :2
+                    ]  # 최대 2개만 추가
+                return []
+            except Exception:
+                return []
 
+        # 3. 병렬 실행: (원본 검색) + (쿼리 확장)
+        expansion_task = asyncio.create_task(_expand_query())
+        initial_results_list = await asyncio.gather(*[t[1] for t in initial_tasks])
+        expanded_queries = await expansion_task
+
+        # 4. 확장 쿼리에 대한 추가 검색 수행
+        secondary_tasks = []
+        for i, q in enumerate(expanded_queries):
+            secondary_tasks.append((f"bm25_ext_{i}", _invoke_retriever(bm25, q, k_val)))
+            secondary_tasks.append(
+                (f"faiss_ext_{i}", _invoke_retriever(faiss_ret, q, k_val))
+            )
+
+        secondary_results_list = (
+            await asyncio.gather(*[t[1] for t in secondary_tasks])
+            if secondary_tasks
+            else []
+        )
+
+        # 5. 모든 결과 수집 및 집계
         search_results_map = {}
-        for key, res in zip(keys, results_list, strict=False):
+        for i, res in enumerate(initial_results_list):
             if res:
-                for doc in res:
-                    if not doc.metadata.get("doc_id"):
-                        doc.metadata["doc_id"] = fast_hash(doc.page_content)
-                search_results_map[key] = res
+                search_results_map[initial_tasks[i][0]] = res
+        for i, res in enumerate(secondary_results_list):
+            if res:
+                search_results_map[secondary_tasks[i][0]] = res
 
         wrapped_results = {
             node_id: [
                 AggregatedSearchResult(
-                    doc_id=doc.metadata["doc_id"],
+                    doc_id=doc.metadata.get("doc_id", fast_hash(doc.page_content)),
                     content=doc.page_content,
                     score=doc.metadata.get("score", 0.5),
                     node_id=node_id.split("_")[0],
@@ -287,142 +258,95 @@ def build_graph(retriever: Any = None) -> Any:
         }
 
         aggregator = SearchResultAggregator()
+        from common.config import RETRIEVER_CONFIG
+
+        weights = {
+            "bm25": RETRIEVER_CONFIG.get("ensemble_weights", [0.4, 0.6])[0],
+            "faiss": RETRIEVER_CONFIG.get("ensemble_weights", [0.4, 0.6])[1],
+        }
+
         aggregated, _ = aggregator.aggregate_results(
             wrapped_results,
-            strategy=AggregationStrategy.RELATIVE_SCORE_FUSION,
-            top_k=RERANKER_CONFIG.get("max_rerank_docs", 15),
+            strategy=AggregationStrategy.WEIGHTED_RRF,
+            top_k=30,
+            weights=weights,
         )
 
         final_docs = [
             Document(page_content=r.content, metadata=r.metadata) for r in aggregated
         ]
-        SessionManager.replace_last_status_log(
-            f"문서 {len(final_docs)}개 지능형 RRF 통합 완료"
-        )
+        logger.info(f"[Retrieve] {len(final_docs)}개 문서 수집 (병렬 검색 완료)")
         return {"documents": final_docs}
 
-    # 3. 재순위화 노드
+    # 3. 재순위화 노드 (FlashRank 고속화 적용)
     async def rerank_documents(state: GraphState) -> GraphOutput:
+        from core.model_loader import ModelManager
+
         documents = state.get("documents", [])
-        if not RERANKER_CONFIG.get("enabled", True) or not documents:
-            return {"documents": documents}
-        if len(documents) <= 1:
+        if not RERANKER_CONFIG.get("enabled", True) or len(documents) <= 1:
             return {"documents": documents}
 
-        route = state.get("route_decision", "FACTOID")
-        params = INTENT_PARAMETERS.get(route, INTENT_PARAMETERS.get("DEFAULT"))
+        semaphore = ModelManager.get_inference_semaphore()
 
         try:
-            reranker_model = load_reranker_model(RERANKER_CONFIG.get("model_name"))
-            if not reranker_model:
-                return {"documents": documents[: params["rerank_top_k"]]}
+            # 1. FlashRank 모델 로드 (캐시됨)
+            model_name = RERANKER_CONFIG.get("model_name", "ms-marco-MiniLM-L-12-v2")
+            ranker = ModelManager.get_flashranker(model_name)
 
-            target_docs = documents[:15]
-            pairs = [[state["input"], doc.page_content] for doc in target_docs]
+            # 2. FlashRank 포맷 변환
+            passages = [
+                {"id": i, "text": doc.page_content, "meta": doc.metadata}
+                for i, doc in enumerate(documents)
+            ]
 
-            if hasattr(reranker_model, "apredict"):
-                scores = await reranker_model.apredict(pairs)
-            else:
-                scores = await asyncio.to_thread(reranker_model.predict, pairs)
+            # 3. 리랭킹 수행 (CPU 스레드) - 세마포어 적용
+            from flashrank import RerankRequest
 
-            scored_docs = sorted(
-                zip(target_docs, scores, strict=False), key=lambda x: x[1], reverse=True
-            )
+            rank_request = RerankRequest(query=state["input"], passages=passages)
 
+            async with semaphore:
+                results = await asyncio.to_thread(ranker.rerank, rank_request)
+
+            # 4. 필터링 및 복원
             final_docs = []
-            min_score = params["rerank_threshold"]
-            for doc, score in scored_docs:
-                if score >= min_score or len(final_docs) < 2:
-                    final_docs.append(doc)
+            min_score = RERANKER_CONFIG.get("min_score", 0.1)
+            top_k = RERANKER_CONFIG.get("top_k", 10)  # [최적화] 컨텍스트 풍부화
 
-            final_docs = final_docs[: params["rerank_top_k"]]
-            SessionManager.replace_last_status_log(
-                f"핵심 정보 {len(final_docs)}개 의도({route}) 맞춤 선별 완료"
+            for res in results:
+                if res["score"] >= min_score or len(final_docs) < 3:
+                    final_docs.append(
+                        Document(page_content=res["text"], metadata=res["meta"])
+                    )
+                if len(final_docs) >= top_k:
+                    break
+
+            logger.info(
+                f"[FlashRank] {len(documents)} -> {len(final_docs)}개 선별 (최고점: {results[0]['score']:.3f})"
             )
             return {"documents": final_docs}
         except Exception as e:
-            logger.error(f"[RERANK] 실패: {e}")
-            return {"documents": documents[:5]}
+            logger.error(f"[FlashRank] 오류: {e}")
+            return {"documents": documents[:10]}
 
-    # 4. 문서 채점 노드 (Self-Correction)
-    async def grade_documents(state: GraphState, config: RunnableConfig) -> GraphOutput:
-        configurable = config.get("configurable", {})
-        llm = configurable.get("llm") or SessionManager.get("llm")
-        documents = state.get("documents", [])
+    # 4. 문서 채점 노드 (통과)
+    async def grade_documents(state: GraphState) -> GraphOutput:
+        return {"relevant_docs": state.get("documents", [])}
 
-        if not llm or not documents:
-            return {"relevant_docs": documents}
-
-        # [고도화] 채점용 프롬프트 보강
-        grade_instruction = (
-            "당신은 검색 결과의 관련성을 평가하는 지능적인 분석관입니다.\n"
-            "제공된 [문서]가 [사용자 질문]에 답변하는 데 직접적 또는 간접적으로 도움이 되는 정보라면 'yes'라고 하십시오.\n"
-            "핵심 주제와 연관된 기술적 설명이 포함되어 있다면 가급적 'yes'를 선택하십시오.\n"
-            "오직 한 단어('yes' 또는 'no')만 출력하십시오."
-        )
-
-        batch_inputs = [
-            [
-                {"role": "system", "content": grade_instruction},
-                {
-                    "role": "user",
-                    "content": f"[질문]: {state['input']}\n\n[문서]: {doc.page_content[:1200]}",
-                },
-            ]
-            for doc in documents
-        ]
-
-        try:
-            results = await llm.abatch(batch_inputs, config=config)
-            relevant_docs = [
-                doc
-                for doc, res in zip(documents, results, strict=False)
-                if "yes" in res.content.lower()
-            ]
-            final = relevant_docs or documents[:1]
-            SessionManager.replace_last_status_log(
-                f"검증 완료: {len(final)}/{len(documents)}개 핵심 정보 선정"
-            )
-            return {"relevant_docs": final, "documents": final}
-        except Exception:
-            return {"relevant_docs": documents, "documents": documents}
-
-    # 5. 컨텍스트 포맷팅 노드 (Reorder 전략 복원)
+    # 5. 컨텍스트 포맷팅 노드
     async def format_context(state: GraphState) -> GraphOutput:
         documents = state.get("relevant_docs", [])
         if not documents:
             return {"context": ""}
 
-        # Long Context Reorder 전략
-        docs_copy = documents.copy()
-        reordered_docs = []
-        left = True
-        while docs_copy:
-            if left:
-                reordered_docs.append(docs_copy.pop(0))
-            else:
-                reordered_docs.insert(0, docs_copy.pop(0))
-            left = not left
-
-        merged_docs = _merge_consecutive_chunks(reordered_docs)
-
-        # [고도화] 토큰 예산 적용
+        merged_docs = _merge_consecutive_chunks(documents)
         formatted = []
-        current_tokens = 0
-        safe_budget = 4000  # 보수적 예산
-
         for i, doc in enumerate(merged_docs):
             page = doc.metadata.get("page", "?")
-            text = f"-- DOC {i + 1} (P{page}) --\n{doc.page_content}"
-            toks = count_tokens_rough(text)
-            if current_tokens + toks > safe_budget:
-                break
-            formatted.append(text)
-            current_tokens += toks
+            formatted.append(f"### [자료 {i + 1}] (P{page})\n{doc.page_content}")
 
         return {"context": "\n\n".join(formatted)}
 
-    # 6. 답변 생성 노드 (의도 기반 프롬프트 복원)
+    # 6. 답변 생성 노드
     async def generate_response(
         state: GraphState, config: RunnableConfig
     ) -> GraphOutput:
@@ -431,82 +355,83 @@ def build_graph(retriever: Any = None) -> Any:
         llm = configurable.get("llm") or SessionManager.get("llm", session_id=sid)
 
         try:
-            route = state.get("route_decision", "FACTOID")
+            context = state.get("context", "").strip()
+            user_input = state.get("input", "").strip()
 
-            # [복구] 의도에 따른 특화 프롬프트 선택
-            intent_prompt = {
-                "RESEARCH": RESEARCH_SYSTEM_PROMPT,
-                "SUMMARY": RESEARCH_SYSTEM_PROMPT,
-                "GREETING": GREETING_SYSTEM_PROMPT,
-                "OUT_OF_CONTEXT": OUT_OF_CONTEXT_SYSTEM_PROMPT,
-            }.get(route, FACTOID_SYSTEM_PROMPT)
+            # [최적화] ANALYSIS_PROTOCOL의 가이드라인과 중복되는 내용 제거 및 명확화
+            system_instruction = (
+                f"{ANALYSIS_PROTOCOL}\n\n"
+                "[Special Instructions]\n"
+                "- 인사말인 경우 전문가로서 짧게 화답하십시오.\n"
+                "- 분석 요청인 경우 반드시 한국어로 답변하며, <Context> 내의 구체적 근거(수치, 용어)를 활용하십시오.\n"
+                "- 가독성을 위해 불렛 포인트와 구조화된 형식을 사용하십시오."
+            )
 
-            sys_prompt = f"{ANALYSIS_PROTOCOL}\n\n{intent_prompt}"
-            human_content = QA_HUMAN_PROMPT.format(
-                context=state.get("context", "근거를 찾을 수 없습니다."),
-                input=state["input"],
+            final_human_prompt = (
+                f"[지시사항]\n{system_instruction}\n\n"
+                f"[참고 문헌 컨텍스트]\n{context or '(제공된 자료 없음)'}\n\n"
+                f"[사용자 질문]\n{user_input}"
             )
 
             messages = [
-                {"role": "system", "content": sys_prompt},
-                {"role": "user", "content": human_content},
+                SystemMessage(
+                    content="You are a professional document analysis expert. Always respond in Korean."
+                ),
+                HumanMessage(content=final_human_prompt),
             ]
 
-            SessionManager.add_status_log(f"답변 생성 중 ({route})...", session_id=sid)
-            tracker = ResponsePerformanceTracker(state["input"], llm)
+            logger.info(f"[Response-Node] 생성 시작 (Context: {len(context)} chars)")
 
-            async for chunk in llm.astream(messages, config=config):
-                msg = getattr(chunk, "message", chunk)
-                content = msg.content
-                thinking = msg.additional_kwargs.get("thinking", "")
+            tracker = ResponsePerformanceTracker(user_input, llm)
+            tracker.set_context(context)
 
-                tracker.record_chunk(content, thinking)
-                if content or thinking:
-                    await adispatch_custom_event(
-                        "response_chunk",
-                        {"chunk": content, "thought": thinking},
-                        config=config,
-                    )
+            from core.model_loader import ModelManager
+
+            semaphore = ModelManager.get_inference_semaphore()
+
+            async with semaphore:
+                async for chunk in llm.astream(messages, config=config):
+                    msg = getattr(chunk, "message", chunk)
+                    content = msg.content
+                    thinking = msg.additional_kwargs.get("thinking", "")
+                    tracker.record_chunk(content, thinking)
+                    if content or thinking:
+                        await adispatch_custom_event(
+                            "response_chunk",
+                            {"chunk": content, "thought": thinking},
+                            config=config,
+                        )
 
             stats = tracker.finalize_and_log()
             return {
                 "response": tracker.full_response,
                 "thought": tracker.full_thought,
                 "performance": stats.model_dump(),
-                "route_decision": route,
             }
         except Exception as e:
-            logger.error(f"Generation error: {e}")
+            logger.error(f"[Generate] 오류: {e}")
             raise
 
     # Workflow Definition
     workflow = StateGraph(GraphState)
+    workflow.add_node("classify_intent", classify_intent)
     workflow.add_node("check_cache", check_cache)
-    workflow.add_node("router", router)
-    workflow.add_node("generate_queries", generate_queries)
     workflow.add_node("retrieve", retrieve_documents)
     workflow.add_node("rerank_documents", rerank_documents)
     workflow.add_node("grade_documents", grade_documents)
     workflow.add_node("format_context", format_context)
     workflow.add_node("generate_response", generate_response)
 
-    workflow.add_edge(START, "check_cache")
+    workflow.add_edge(START, "classify_intent")
+    workflow.add_edge("classify_intent", "check_cache")
+
     workflow.add_conditional_edges(
         "check_cache",
-        lambda s: END if s.get("is_cached") else "router",
-        {END: END, "router": "router"},
+        lambda s: "END"
+        if s.get("is_cached")
+        else ("generate_response" if s.get("intent") == "general" else "retrieve"),
+        {"END": END, "generate_response": "generate_response", "retrieve": "retrieve"},
     )
-    workflow.add_conditional_edges(
-        "router",
-        lambda s: "generate_response"
-        if s.get("route_decision") == "GREETING"
-        else "generate_queries",
-        {
-            "generate_response": "generate_response",
-            "generate_queries": "generate_queries",
-        },
-    )
-    workflow.add_edge("generate_queries", "retrieve")
     workflow.add_edge("retrieve", "rerank_documents")
     workflow.add_edge("rerank_documents", "grade_documents")
     workflow.add_edge("grade_documents", "format_context")

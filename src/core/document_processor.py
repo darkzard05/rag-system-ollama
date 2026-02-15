@@ -1,11 +1,12 @@
 """
 PDF 문서 로딩 및 텍스트 추출을 담당하는 모듈.
-최적화: pymupdf-layout 패키지와 graphics_limit=100 설정을 통해 추출 속도를 극대화합니다.
+최신 Docling 라이브러리를 사용하여 고품질 구조적 마크다운을 추출하며, 실패 시 PyMuPDF4LLM으로 폴백합니다.
 """
 
 import hashlib
 import logging
 from collections.abc import Callable
+from pathlib import Path
 
 from langchain_core.documents import Document
 
@@ -13,7 +14,6 @@ from common.exceptions import (
     EmptyPDFError,
     PDFProcessingError,
 )
-from common.utils import preprocess_text
 from core.session import SessionManager
 from services.monitoring.performance_monitor import (
     OperationType,
@@ -40,6 +40,25 @@ def compute_file_hash(file_path: str, data: bytes | None = None) -> str:
         return ""
 
 
+def _load_with_pymupdf(file_path: str) -> list[Document]:
+    """PyMuPDF4LLM을 사용한 폴백 로딩"""
+    import pymupdf4llm
+
+    logger.info("[Fallback] PyMuPDF4LLM을 사용하여 문서 변환 시도")
+    md_text = pymupdf4llm.to_markdown(file_path)
+
+    return [
+        Document(
+            page_content=md_text,
+            metadata={
+                "source": Path(file_path).name,
+                "format": "markdown",
+                "engine": "pymupdf4llm",
+            },
+        )
+    ]
+
+
 def load_pdf_docs(
     file_path: str,
     file_name: str,
@@ -48,78 +67,60 @@ def load_pdf_docs(
     session_id: str | None = None,
 ) -> list[Document]:
     """
-    PyMuPDF4LLM을 사용하여 고품질 마크다운을 최적화된 속도로 추출합니다.
-    최적화: ignore_graphics=True 설정을 통해 속도를 10배 이상 향상시키고, table_strategy를 통해 품질을 보강합니다.
+    DoclingLoader를 사용하여 고품질 구조적 마크다운을 추출합니다.
     """
     with monitor.track_operation(OperationType.PDF_LOADING, {"file": file_name}) as op:
         try:
             SessionManager.add_status_log(
-                "초고속 구조적 분석 중", session_id=session_id
+                "AI 기반 정밀 구조 분석 중 (Docling)", session_id=session_id
             )
             if on_progress:
                 on_progress()
 
+            # Docling 시도
             try:
-                import gc
+                from langchain_docling import DoclingLoader
 
-                import pymupdf4llm
+                from core.model_loader import ModelManager
 
-                # [고도화 적용] 최신 pymupdf4llm 옵션 반영
-                # table_strategy: 'lines_strict'는 선이 명확한 표를 더 정확하게 인식합니다.
-                # graphics_limit: 너무 많은 벡터 패스가 있는 페이지는 속도 저하를 방지하기 위해 처리를 제한합니다.
-                pages_data = pymupdf4llm.to_markdown(
-                    file_path,
-                    page_chunks=True,
-                    write_images=False,
-                    ignore_graphics=True,
-                    graphics_limit=500,  # 500개 이상의 벡터 패스가 있는 경우 그래픽 무시
-                    table_strategy="lines_strict",
-                    fontsize_limit=3,
-                    show_progress=False,
+                # [최적화] 전역 관리되는 DocumentConverter 인스턴스를 사용하여 설정(OCR 등)을 일관되게 적용
+                converter = ModelManager.get_docling_converter()
+
+                # [최적화] DoclingLoader는 내부적으로 Docling의 강력한 분석 엔진을 사용하여
+                # 표와 레이아웃을 마크다운으로 완벽하게 보존합니다.
+                loader = DoclingLoader(
+                    file_path=file_path,
+                    converter=converter,
+                    export_type="markdown",
                 )
 
-                if not pages_data:
-                    raise EmptyPDFError(
-                        filename=file_name,
-                        details={"reason": "추출 데이터가 없습니다."},
+                docs = loader.load()
+
+                # 메타데이터 보강
+                for doc in docs:
+                    doc.metadata.update(
+                        {"source": file_name, "engine": "docling", "format": "markdown"}
                     )
 
-                total_pages = len(pages_data)
-                docs = []
+                SessionManager.replace_last_status_log(
+                    f"Docling 분석 완료 ({len(docs)} 청크)",
+                    session_id=session_id,
+                )
 
-                for i, chunk in enumerate(pages_data):
-                    text = chunk.get("text", "")
-                    if text:
-                        clean_text = preprocess_text(text)
-                        if clean_text and len(clean_text) > 10:
-                            meta = chunk.get("metadata", {})
-                            docs.append(
-                                Document(
-                                    page_content=clean_text,
-                                    metadata={
-                                        "source": file_name,
-                                        "page": meta.get("page", i + 1),
-                                        "total_pages": total_pages,
-                                        "format": "markdown",
-                                    },
-                                )
-                            )
-
-                    if (i + 1) % 10 == 0 or (i + 1) == total_pages:
-                        SessionManager.replace_last_status_log(
-                            f"구조 분석 중 ({i + 1}/{total_pages}p)",
-                            session_id=session_id,
-                        )
-
-                # 추출 완료 후 즉시 메모리 정리 유도
-                del pages_data
-                gc.collect()
-
+            except ImportError:
+                logger.warning(
+                    "Docling 라이브러리가 없습니다. PyMuPDF4LLM으로 전환합니다."
+                )
+                docs = _load_with_pymupdf(file_path)
+                SessionManager.replace_last_status_log(
+                    "PyMuPDF 분석 완료 (Docling 미설치)", session_id=session_id
+                )
             except Exception as e:
-                logger.error(f"추출 실패: {e}")
-                raise PDFProcessingError(
-                    filename=file_name, details={"reason": str(e)}
-                ) from e
+                logger.error(f"Docling 처리 실패: {e}. PyMuPDF4LLM으로 전환합니다.")
+                docs = _load_with_pymupdf(file_path)
+                SessionManager.replace_last_status_log(
+                    "PyMuPDF 분석 완료 (Docling 실패)", session_id=session_id
+                )
 
             if not docs:
                 raise EmptyPDFError(
@@ -130,7 +131,7 @@ def load_pdf_docs(
             return docs
 
         except Exception as e:
-            logger.error(f"[RAG] [LOAD] 최종 오류: {e}")
+            logger.error(f"[RAG] [PDF] 최종 오류: {e}")
             raise PDFProcessingError(
                 filename=file_name, details={"reason": str(e)}
             ) from e

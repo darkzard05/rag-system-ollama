@@ -78,6 +78,9 @@ OLLAMA_TOP_P: float = _get_env("OLLAMA_TOP_P", _models_config.get("top_p", 0.9),
 OLLAMA_TIMEOUT: float = _get_env(
     "OLLAMA_TIMEOUT", _models_config.get("timeout", 900.0), float
 )
+OLLAMA_KEEP_ALIVE: str = _get_env(
+    "OLLAMA_KEEP_ALIVE", _models_config.get("keep_alive", "30m"), str
+)
 # [최적화] 시스템 코어 수를 활용한 쓰레드 설정 (과부하 방지를 위해 보수적 할당)
 OLLAMA_NUM_THREAD: int = _get_env(
     "OLLAMA_NUM_THREAD",
@@ -104,15 +107,19 @@ EMBEDDING_DEVICE: str = _models_config.get("embedding_device", "auto")
 _rag_config = _config.get("rag", {})
 RETRIEVER_CONFIG: dict = _rag_config.get("retriever", {})
 RERANKER_CONFIG: dict = _rag_config.get("reranker", {})
-TEXT_SPLITTER_CONFIG: dict = _rag_config.get("text_splitter", {})
-SEMANTIC_CHUNKER_CONFIG: dict = _rag_config.get("semantic_chunker", {})
+TEXT_SPLITTER_CONFIG: dict = _rag_config.get(
+    "text_splitter", {"chunk_size": 500, "chunk_overlap": 100}
+)
+SEMANTIC_CHUNKER_CONFIG: dict = _rag_config.get("semantic_chunker", {"enabled": False})
+PARSING_CONFIG: dict = _rag_config.get(
+    "parsing", {"engine": "docling", "do_ocr": False, "do_table_structure": True}
+)
 VECTOR_STORE_CACHE_DIR: str = str(
     PROJECT_ROOT
     / _rag_config.get("vector_store_cache_dir", ".model_cache/vector_store_cache")
 )
 QUERY_EXPANSION_CONFIG: dict = _rag_config.get("query_expansion", {"enabled": True})
-INTENT_ANALYSIS_ENABLED: bool = _rag_config.get("intent_analysis_enabled", False)
-INTENT_PARAMETERS: dict = _rag_config.get("intent_parameters", {})
+RAG_PARAMETERS: dict = _rag_config.get("parameters", {})
 _prompts_config = _rag_config.get("prompts") or {}
 ANALYSIS_PROTOCOL: str = _prompts_config.get("analysis_protocol", "")
 RESEARCH_SYSTEM_PROMPT: str = _prompts_config.get("research_system_prompt", "")

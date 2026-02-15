@@ -30,7 +30,6 @@ from ui.ui import (  # noqa: E402
     render_left_column,
     render_pdf_viewer,
     render_sidebar,
-    update_window_height,
 )
 
 # 상수 정의
@@ -350,8 +349,6 @@ def on_file_upload() -> None:
         # [최적화] 이전 문서 상태 강제 초기화 (에러 방지)
         st.session_state.pdf_page_index = 1
         st.session_state.pdf_annotations = []
-        if "pdf_page_index_input" in st.session_state:
-            st.session_state.pdf_page_index_input = 1
         if "active_ref_id" in st.session_state:
             st.session_state.active_ref_id = None
         SessionManager.set("current_page", 1)
@@ -524,9 +521,6 @@ def main() -> None:
     if SessionManager.get("is_first_run"):
         SessionManager.set("is_first_run", False)
         logger.info("[SYSTEM] 시스템 초기화 완료")
-
-    # 6. 창 높이 측정
-    update_window_height()
 
 
 if __name__ == "__main__":

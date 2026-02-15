@@ -92,18 +92,3 @@ def inject_custom_css():
     """,
         unsafe_allow_html=True,
     )
-
-
-def update_window_height():
-    """[최적화] 창 높이 추적 시 불필요한 반복 호출을 방지합니다."""
-    from streamlit_javascript import st_javascript
-
-    if (
-        "last_valid_height" in st.session_state
-        and st.session_state.last_valid_height > 0
-    ):
-        return
-
-    win_h = st_javascript("window.innerHeight", key="height_tracker")
-    if win_h and win_h > 100:
-        st.session_state.last_valid_height = int(win_h)

@@ -1,0 +1,206 @@
+[
+  {
+    "metadata": {
+      "format": "PDF 1.5",
+      "title": "",
+      "author": "",
+      "subject": "",
+      "keywords": "",
+      "creator": "LaTeX with hyperref",
+      "producer": "pdfTeX-1.40.21",
+      "creationDate": "D:20220120014007Z",
+      "modDate": "D:20220120014007Z",
+      "trapped": "",
+      "encryption": null,
+      "file_path": "C:\\Users\\darkzard05\\hy\\rag-system-ollama\\tests\\data\\2201.07520v1.pdf",
+      "page_count": 20,
+      "page": 1
+    },
+    "toc_items": [
+      [
+        1,
+        "1 Introduction",
+        1
+      ]
+    ],
+    "tables": [],
+    "images": [],
+    "graphics": [],
+    "text": "## CM3: A CAUSAL MASKED MULTIMODAL MODEL OF\n### THE INTERNET\n\n**Armen Aghajanyan, Bernie Huang** _[∗]_ **, Candace Ross** _[∗]_ **, Vlad Karpukhin** _[∗]_ **, Hu Xu** _[∗]_ **, Naman Goyal,**\n**Dmytro Okhonko, Mandar Joshi, Gargi Ghosh, Mike Lewis, Luke Zettlemoyer**\nFacebook AI Research\n_{_ armenag,berniehuang,ccross,vladk,huxu,naman _}_ @fb.com\n_{_ oxo,mandarj,gghosh,mikelewis,lsz _}_ @fb.com\n\n\nABSTRACT\n\n\nWe introduce CM3, a family of causally masked generative models trained over a\nlarge corpus of structured multi-modal documents that can contain both text and\nimage tokens. Our new causally masked approach generates tokens left to right\nwhile also masking out a small number of long token spans that are generated at\nthe end of the string, instead of their original positions. The casual masking object provides a type of hybrid of the more common causal and masked language\nmodels, by enabling full generative modeling while also providing bidirectional\ncontext when generating the masked spans. We train causally masked languageimage models on large-scale web and Wikipedia articles, where each document\ncontains all of the text, hypertext markup, hyperlinks, and image tokens (from a\nVQVAE-GAN), provided in the order they appear in the original HTML source\n(before masking). The resulting CM3 models can generate rich structured, multimodal outputs while conditioning on arbitrary masked document contexts, and\nthereby implicitly learn a wide range of text, image, and cross modal tasks. They\ncan be prompted to recover, in a zero-shot fashion, the functionality of models\nsuch as DALL-E, GENRE, and HTLM (Ramesh et al., 2021; De Cao et al., 2020;\nAghajanyan et al., 2021). We set the new state-of-the-art in zero-shot summarization, entity linking, and entity disambiguation while maintaining competitive\nperformance in the fine-tuning setting. We can generate images unconditionally,\nconditioned on text (like DALL-E) and do captioning all in a zero-shot setting\nwith a single model.\n\n\n1 INTRODUCTION\n\n\nRecent advancements in large-scale generative sequence modeling have significantly improved zeroshot performance on multiple modalities, including text Brown et al. (2020); Fabbri et al. (2020);\nAghajanyan et al. (2021) and images Ramesh et al. (2021). Recent work has also shown how to\nuse document structure, e.g., as provided by HTML web markup, to enable more effective zero-shot\nprompting for text-only tasks (Aghajanyan et al., 2021). In this paper, we show it is possible to learn\nmulti-modal document-structured generative models, to jointly represent formatted hypertext and\nimages as they naturally co-occur within full document contexts.\n\n\nWe introduce CM3, a family of causally masked generative models trained over a large corpus of\nstructured multi-modal documents. Causally masked models generate tokens left to right, just like\na causal language model, but also mask out a small number of long token spans, which are then\ngenerated at the end of the string instead of their original positions. This provides a new hybrid of\ncausal and masked language models, enabling full generative modeling with bidirectional context.\nFor example, it can also be used in our setting to infill complete images or larger structured text\nsections, conditioned on the rest of the document.\n\n\nWe train CM3 models on close to a terabyte of web-based data following Aghajanyan et al. (2021),\nextended to include images through VQVAE-GAN tokens (Esser et al., 2021) and additional hypertext link structure. This data is in strong contrast to previous methods that were either uni-modal or\n\n\n_∗_ Equal Contribution for Second Author\n\n\n1\n\n\n",
+    "words": []
+  },
+  {
+    "metadata": {
+      "format": "PDF 1.5",
+      "title": "",
+      "author": "",
+      "subject": "",
+      "keywords": "",
+      "creator": "LaTeX with hyperref",
+      "producer": "pdfTeX-1.40.21",
+      "creationDate": "D:20220120014007Z",
+      "modDate": "D:20220120014007Z",
+      "trapped": "",
+      "encryption": null,
+      "file_path": "C:\\Users\\darkzard05\\hy\\rag-system-ollama\\tests\\data\\2201.07520v1.pdf",
+      "page_count": 20,
+      "page": 2
+    },
+    "toc_items": [
+      [
+        1,
+        "2 Causally Masked Objective",
+        2
+      ]
+    ],
+    "tables": [],
+    "images": [],
+    "graphics": [],
+    "text": "carefully curated the image-text alignment (e.g., for image captioning Radford et al. (2021); Ramesh\net al. (2021)). We train a 2.7 billion and 13 billion causally masked model on this data which we\ncall CM3-Medium and CM3-Large respectively.\n\n\nExtensive experiments demonstrate that these models are able to perform a wide range of zero-shot\nuni- and cross-modal tasks. We show both qualitatively and quantitatively that CM3 can be prompted\nfor non-trivial image generation, similar to that of DALL-E. We also show that CM3 models are capable of improving over state-of-the-art zero-shot summarization, entity linking, entity disambiguation, highlighting the structure that comes from the hypertext during training. Finally, we show that\nby fine-tuning CM3 we set the new state-of-the-art for entity linking and entity disambiguation in\ngeneral.\n\n\nTo summarize, our contributions include:\n\n\n    - We present the first hyper-text language-image model, trained on close to a Terabyte of\nmulti-modal simplified HTML data from the common crawl.\n\n    - We present the causally masked objective, a hybrid of causal and masked language models\nthat allows for bidirectional context control during generative mask infilling.\n\n    - We demonstrate consistently strong transfer from CM3 to a range of uni-modal and multimodal tasks at differing supervision levels, including stating state-of-the-art on entity disambiguation and zero-shot summarization.\n\n    - We release all code and models to support future CM3 research.\n\n\n2 CAUSALLY MASKED OBJECTIVE\n\n\nTraditional approaches to pre-training have focused on mixing the architectural choices (i.e.,\nencoder-only, decoder-only, encoder-decoder) with objective choices (i.e., masking, causal language\nmodeling). For example, masked encoder-only models such as BERT (Devlin et al., 2018) and\nRoBERTa (Liu et al., 2019) excel in non-generative fine-tuning tasks. Masked encoder-decoder\nmodels such as BART (Lewis et al., 2019) and T5 (Raffel et al., 2019) excel in both discriminative\nand generative fine-tuning. Brown et al. (2020) on the other hand, showed that causal language models (de-facto, decoder only) are capable of non-trivial performance without the need of fine-tuning\nby simply prompting with appropriate string to control the generated outputs Radford et al. (2019);\nBrown et al. (2020); Artetxe et al. (2021).\n\n\nThere are pros and cons to both masked and causal language modeling in the context of prompting.\nMasking offers the critical ability to encode bi-directionality within the prompts at the cost of only\ndecoding roughly 15% of the tokens of the input sequence during training (Devlin et al., 2018;\nLiu et al., 2019; Lewis et al., 2019). Conversely, decoder-only causal language models decode every\ntoken in the input sequence in the training but are typically limited to left-only contexts. Empirically,\nmore work has also been done on scaling causal decoder-only rather than their counterparts.\n\n\nIn an effort to get most of the best of both worlds, we introduce a novel objective that combines\nthe benefit of per-token generation with optional bi-directionality specifically tailored to prompting.\nFor a document of size _s_ we select _n ∼_ Clamp(Poisson(1) _,_ 1 _,_ 16) masks and for each of those\nmasks we select span _m ∼_ ( _Uniform_ (0 _, s_ ) _, Uniform_ (0 _, s_ )) which does not intersect with any\nother _m_ . These values are chosen to, on average, select relatively few relatively long spans, which\nwe expect will allow the model to learn to infill long spans. We then order these masks by the order\nthat they appear in the source document, replace the span of the mask in the source document with\nan enumerated mask token (i.e., <mask:0>, <mask:1>), and move the masked spans to the end\nof the document followed by a unique end of document token.\n\n\nFigure 1 shows the complete process.\n\n\nWe also augment the standard cross-entropy loss to weigh the loss of predicting mask tokens as\n0, as they are placed at random locations which carry no information to the underlying sequence\nmodeling objective.\n\n\nThe complete array of benefits will become more apparent when designing prompts for uni/crossmodal tasks in § 4. However, at the core, the causally masked objective can do causal language\nmodeling while optionally allowing for bidirectionality when needed.\n\n\n2\n\n\n",
+    "words": []
+  },
+  {
+    "metadata": {
+      "format": "PDF 1.5",
+      "title": "",
+      "author": "",
+      "subject": "",
+      "keywords": "",
+      "creator": "LaTeX with hyperref",
+      "producer": "pdfTeX-1.40.21",
+      "creationDate": "D:20220120014007Z",
+      "modDate": "D:20220120014007Z",
+      "trapped": "",
+      "encryption": null,
+      "file_path": "C:\\Users\\darkzard05\\hy\\rag-system-ollama\\tests\\data\\2201.07520v1.pdf",
+      "page_count": 20,
+      "page": 3
+    },
+    "toc_items": [
+      [
+        1,
+        "3 CM3",
+        3
+      ],
+      [
+        2,
+        "3.1 Data",
+        3
+      ]
+    ],
+    "tables": [
+      {
+        "bbox": [
+          145.53689575195312,
+          84.70423889160156,
+          499.951904296875,
+          101.42192840576172
+        ],
+        "rows": 2,
+        "columns": 3
+      },
+      {
+        "bbox": [
+          145.53689575195312,
+          168.29269409179688,
+          453.14239501953125,
+          185.0103759765625
+        ],
+        "rows": 2,
+        "columns": 3
+      },
+      {
+        "bbox": [
+          262.56072998046875,
+          118.13961791992188,
+          382.9281005859375,
+          134.8572998046875
+        ],
+        "rows": 2,
+        "columns": 3
+      }
+    ],
+    "images": [],
+    "graphics": [],
+    "text": "**Causally**\n\n**Masked**\n**Language**\n\n**Model**\n\n\n\n\n|Monte Melkonian was a left-wing <mask:0> nationalist militant . <mask:0> <a href= Armenian _nationalism >|Col2|Col3|\n|---|---|---|\n|Monte|>|>|\n\n\n\nMasked\n\n|<a href= Armenian _nationalism >|Col2|Col3|\n|---|---|---|\n|<a|>|>|\n\nLanguage Monte Melkonian was a left-wing <mask> nationalist militant .\n\nModel\n\n|Monte Melkonian was a left-wing <a href= Armenian _nationalism > nationalist militant .|Col2|Col3|\n|---|---|---|\n|Monte|.|.|\n\n\n\nFigure 1: A visual representation of various language modeling objectives as well as our proposed\ncausal language modeling objective with a single mask ( _n_ = 1). Given the left-to-right nature of\ncausal language models (bottom row) we would not be able to generate the Wikipedia entity link\nhighlighted in orange.\n\n\n3 CM3\n\n\nAghajanyan et al. (2021) used structured documents for text-only pre-training with strong zero-shot\nperformance. **C** ausally- **M** asked **M** ultimodal **M** odeling (CM3) extends this work by modeling full\ndocument structure including images and hypertext links. Furthermore, we move away from the\nBART-like objective of Aghajanyan et al. (2021) to use our new causally masked objective with\ndecoder-only models.\n\n\n3.1 DATA\n\n\nFollowing Aghajanyan et al. (2021) we aim to implement a transform over HTML documents to\nextract out to minimal-HTML, i.e., the minimal set of text that is semantically relevant for end tasks.\n\n\nBirhane et al. (2021) gave in-depth criticisms of Common Crawl based multi-modal datasets and\nshowed the existence of highly problematic examples (i.e., explicit images and text pairs of rape,\npornography, and ethnic slurs). Given these severe ethical concerns, we opt-out of processing all\nof Common Crawl and instead opt into using a subset of the Common Crawl News (CC-NEWS)\ndataset and all of English Wikipedia.\n\n\nGiven a valid HTML DOM [1] per document, we run several passes to strip down the DOM to the\nelements of maximal semantic value. We first remove all elements which do not contain textual elements. We also filter out all _headers_, _footers_, _copyrights_, _forms_, _dialog boxes_ and _iFrames_ . We fold\nconsecutive <div> elements into a singular <div> element with merged attributes. Furthermore\nwe strip all the attributes from every element which are not derived from structured graphs such as\nOpenGraph, Schema and Twitter.\n\n\nFor every <img> tag in the document with a valid src attribute URL, we download the image,\nresize to 256x256 pixels with random cropping and then tokenize it with VQVAE-GAN from Esser\net al. (2021). This amounts to 256 tokens for every image. We then insert the string value of the\ntokens joined with a space back into the src attribute.\n\n\nWe do not place any restrictions on the number of images or their locations. We present a set of\nhigh-level statistics in Table 1.\n\n\nDocuments (Million) Size (GB) Unique Images (Million) Tokens (Billion)\n\n\nCC-NEWS 45 460 18 121\nEn-Wikipedia 16 383 7 102\n\n\nTotal 61 843 25 223\n\n\nTable 1: High level statistics of the data used to train CM3.\n\n\n1The DOM or Document Object Model is an interface that treats an HTML document as a tree structure\nwherein each node is an object representing a part of the document.\n\n\n3\n\n\n",
+    "words": []
+  },
+  {
+    "metadata": {
+      "format": "PDF 1.5",
+      "title": "",
+      "author": "",
+      "subject": "",
+      "keywords": "",
+      "creator": "LaTeX with hyperref",
+      "producer": "pdfTeX-1.40.21",
+      "creationDate": "D:20220120014007Z",
+      "modDate": "D:20220120014007Z",
+      "trapped": "",
+      "encryption": null,
+      "file_path": "C:\\Users\\darkzard05\\hy\\rag-system-ollama\\tests\\data\\2201.07520v1.pdf",
+      "page_count": 20,
+      "page": 4
+    },
+    "toc_items": [
+      [
+        2,
+        "3.2 Size Hints",
+        4
+      ],
+      [
+        2,
+        "3.3 Training",
+        4
+      ],
+      [
+        2,
+        "3.4 Scaling Laws",
+        4
+      ]
+    ],
+    "tables": [],
+    "images": [],
+    "graphics": [],
+    "text": "For experimentation, we create two test sets from each data source with 10,000 unique documents\nfor each. We de-duplicated our test sets to ensure no overlap between test and train sets to the best\nof our abilities.\n\n\n3.2 SIZE HINTS\n\n\nAghajanyan et al. (2021) introduced the concept of size hints which allows the user to guide the\nmodel during sample generation through token conditioning. Specifically, HTLM inserts a probabilistic estimate of the size of the mask as a token post the mask token (e.g., <mask>12 for a\nprobabilistic size of 12). For CM3, we noticed that size-hints degraded not only end-perplexity but\nalso the zero-shot performance on a significant set of evaluation tests.\n\n\nWe also note that we can implicitly give a size hint during mask generation for a single mask by\nasking the model to generate causally max ~~s~~ equence ~~l~~ ength - size ~~h~~ int tokens before\nplacing the secondary <mask:0> token.\n\n\n3.3 TRAINING\n\n\nWe train 4 models; 125M, 800M, 2.7B, and 13B parameters. The purpose of the two smaller models\nwas to establish basic hyper-parameters that are viable for the causally masked language modeling\nobjective and therefore were under-trained. However, all downstream tasks will be evaluated with\nour 2.7B model (CM3-Medium) and our 13B model (CM3-Large). HTLM-Medium was trained on\n240 V100 GPU for 28 days, while HTLM-Large was trained on 384 A100 GPU for 24 days. Our\nimplementation was in PyTorch (Paszke et al., 2019) using fairseq (Ott et al., 2019) and fairscale\n(Baines et al., 2021). For every model, our per GPU batch size was 8, with a maximum token\nsequence length of 2048. We use the polynomial decay learning rate scheduler available in Paszke\net al. (2019) with 1500 warmup updates. We clipped the gradient norms to 1.0 and used the Adam\noptimizer with _β_ 1 = 0 _._ 9, _β_ 2 = 0 _._ 98 (Kingma & Ba, 2014). We defer our model architecture\ndescription to § A.1.\n\n\n3.4 SCALING LAWS\n\n\nOur training setting has a couple of new parameters that can impact the traditional scaling laws\nof causal language models. The multi-modal nature of our proposed model breaks the standard\nassumptions of token distributionality. Traditionally language tokens are said to follow a Zipfian\ndistribution (Piantadosi, 2014), while image tokens are strictly uniform (see § A.2). Furthermore, the\nunrestricted locations of the images and text introduce unpredictable complexity. Lastly, although\nwe are still computing the joint probability of the document, we do so in a roundabout way through\nshuffling of the document via the causally masked objective. These fundamental differences warrant\na quick look into the scaling laws of CM3.\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\nFigure 2: Basic perplexity based scaling laws for the proposed CM3 objective and training set-up.\n\n\nWe present the various perplexity curves for the four models of varying sizes we trained. Given that\nour models were trained on various hardware set-ups, we normalize the training time by linearly\nscaling each experiment timing to 256 GPU. Most importantly, we see healthy scaling, similar to\n\n\n4\n\n\n",
+    "words": []
+  },
+  {
+    "metadata": {
+      "format": "PDF 1.5",
+      "title": "",
+      "author": "",
+      "subject": "",
+      "keywords": "",
+      "creator": "LaTeX with hyperref",
+      "producer": "pdfTeX-1.40.21",
+      "creationDate": "D:20220120014007Z",
+      "modDate": "D:20220120014007Z",
+      "trapped": "",
+      "encryption": null,
+      "file_path": "C:\\Users\\darkzard05\\hy\\rag-system-ollama\\tests\\data\\2201.07520v1.pdf",
+      "page_count": 20,
+      "page": 5
+    },
+    "toc_items": [
+      [
+        1,
+        "4 Zero/Few-Shot Prompting",
+        5
+      ],
+      [
+        2,
+        "4.1 Image Modality",
+        5
+      ],
+      [
+        3,
+        "4.1.1 Unconditional Image Generation",
+        5
+      ]
+    ],
+    "tables": [],
+    "images": [
+      {
+        "number": 9,
+        "bbox": 

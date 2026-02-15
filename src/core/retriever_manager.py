@@ -77,19 +77,7 @@ def split_documents(
         vectors = None
 
         if use_semantic and embedder:
-            if getattr(embedder, "model_kwargs", {}).get("device") == "cuda":
-                try:
-                    total_mem = torch.cuda.get_device_properties(0).total_memory / (
-                        1024**3
-                    )  # GB
-                    batch_size = (
-                        128 if total_mem > 10 else (64 if total_mem > 4 else 32)
-                    )
-                except Exception:
-                    batch_size = 32
-            else:
-                batch_size = min(max(4, os.cpu_count() or 4), 16)
-
+            # [최적화] 마크다운 구조를 고려한 의미론적 분할기 설정
             semantic_chunker = EmbeddingBasedSemanticChunker(
                 embedder=embedder,
                 breakpoint_threshold_type=SEMANTIC_CHUNKER_CONFIG.get(
@@ -98,29 +86,53 @@ def split_documents(
                 breakpoint_threshold_value=float(
                     SEMANTIC_CHUNKER_CONFIG.get("breakpoint_threshold_value", 95.0)
                 ),
-                sentence_split_regex=SEMANTIC_CHUNKER_CONFIG.get(
-                    "sentence_split_regex", r"[.!?]\s+"
-                ),
+                # 마크다운 섹션과 문장을 모두 고려
+                sentence_split_regex=r"(?<=[.!?])\s+|(?=\n#)|(?=\n---)",
                 min_chunk_size=int(SEMANTIC_CHUNKER_CONFIG.get("min_chunk_size", 100)),
-                max_chunk_size=int(SEMANTIC_CHUNKER_CONFIG.get("max_chunk_size", 800)),
+                max_chunk_size=int(SEMANTIC_CHUNKER_CONFIG.get("max_chunk_size", 1000)),
                 similarity_threshold=float(
                     SEMANTIC_CHUNKER_CONFIG.get("similarity_threshold", 0.5)
                 ),
-                batch_size=batch_size,
             )
 
             split_docs, vectors = semantic_chunker.split_documents(docs)
             logger.info(
-                f"[RAG] [CHUNKING] 의미론적 분할 완료 | 원본: {len(docs)} | 청크: {len(split_docs)}"
+                f"[RAG] [CHUNKING] 의미론적 분할 완료 | 엔진: Docling-Aware | 청크: {len(split_docs)}"
             )
         else:
-            chunker = RecursiveCharacterTextSplitter(
+            # [최적화] 마크다운 헤더를 기준으로 분할하는 가벼운 스플리터 사용
+            from langchain_text_splitters import (
+                MarkdownHeaderTextSplitter,
+                RecursiveCharacterTextSplitter,
+            )
+
+            headers_to_split_on = [
+                ("#", "Header 1"),
+                ("##", "Header 2"),
+                ("###", "Header 3"),
+            ]
+
+            markdown_splitter = MarkdownHeaderTextSplitter(
+                headers_to_split_on=headers_to_split_on
+            )
+
+            temp_split_docs = []
+            for doc in docs:
+                if doc.metadata.get("format") == "markdown":
+                    header_splits = markdown_splitter.split_text(doc.page_content)
+                    for hs in header_splits:
+                        hs.metadata.update(doc.metadata)
+                        temp_split_docs.append(hs)
+                else:
+                    temp_split_docs.append(doc)
+
+            recursive_splitter = RecursiveCharacterTextSplitter(
                 chunk_size=TEXT_SPLITTER_CONFIG["chunk_size"],
                 chunk_overlap=TEXT_SPLITTER_CONFIG["chunk_overlap"],
             )
-            split_docs = chunker.split_documents(docs)
+            split_docs = recursive_splitter.split_documents(temp_split_docs)
             logger.info(
-                f"[RAG] [CHUNKING] 기본 분할 완료 | 원본: {len(docs)} | 청크: {len(split_docs)}"
+                f"[RAG] [CHUNKING] 마크다운 구조 기반 분할 완료 | 청크: {len(split_docs)}"
             )
 
             if embedder and split_docs:
@@ -205,7 +217,7 @@ class VectorStoreCache:
             cache_dir,
             os.path.join(cache_dir, "doc_splits.json"),
             os.path.join(cache_dir, "faiss_index"),
-            os.path.join(cache_dir, "bm25_docs.json"),
+            os.path.join(cache_dir, "bm25_retriever.pkl"),
         )
 
     def _purge_cache(self, reason: str):
@@ -235,8 +247,9 @@ class VectorStoreCache:
             return None, None, None
 
         try:
+            import pickle
+
             import orjson
-            from langchain_community.retrievers import BM25Retriever
             from langchain_community.vectorstores import FAISS
 
             paths_to_verify = [
@@ -275,16 +288,12 @@ class VectorStoreCache:
             )
 
             with open(self.bm25_retriever_path, "rb") as f:
-                bm25_doc_dicts = orjson.loads(f.read())
-            bm25_docs = _deserialize_docs(bm25_doc_dicts)
+                bm25_retriever = pickle.load(f)
 
-            # [개선] preprocess_func가 bm25_tokenizer임을 명시적으로 보장
-            bm25_retriever = BM25Retriever.from_documents(
-                bm25_docs, preprocess_func=bm25_tokenizer
-            )
+            # [개선] preprocess_func가 bm25_tokenizer임을 명시적으로 유지
             bm25_retriever.k = RETRIEVER_CONFIG.get("search_kwargs", {}).get("k", 5)
 
-            logger.info(f"RAG 캐시 안전 로드 완료 (JSON 기반): '{self.cache_dir}'")
+            logger.info(f"RAG 캐시 안전 로드 완료 (Pickle/JSON): '{self.cache_dir}'")
             return doc_splits, vector_store, bm25_retriever
 
         except Exception as e:
@@ -340,14 +349,14 @@ class VectorStoreCache:
                     )
                     self.security_manager.save_cache_metadata(file_p + ".meta", meta)
 
-            bm25_docs = getattr(bm25_retriever, "docs", doc_splits)
-            serialized_bm25 = _serialize_docs(bm25_docs)
+            import pickle
+
             with open(stg_bm25_retriever_path, "wb") as f:
-                f.write(orjson.dumps(serialized_bm25))
+                pickle.dump(bm25_retriever, f)
             self.security_manager.enforce_file_permissions(stg_bm25_retriever_path)
 
             bm25_meta = self.security_manager.create_metadata_for_file(
-                stg_bm25_retriever_path, description="BM25 retriever data (JSON)"
+                stg_bm25_retriever_path, description="BM25 retriever object (Pickle)"
             )
             self.security_manager.save_cache_metadata(
                 stg_bm25_retriever_path + ".meta", bm25_meta
@@ -399,10 +408,24 @@ def create_vector_store(
     chunk_count = len(docs)
     d = vectors.shape[1]
 
-    index_type = "Flat" if chunk_count < 1000 else "HNSW32,SQ8"
-    index = faiss.index_factory(d, index_type, faiss.METRIC_INNER_PRODUCT)
+    # [최적화] 호환성을 고려한 양자화 인덱스 생성
+    index_type = "Flat"
+    try:
+        if chunk_count < 1000:
+            # 소량 문서는 정확도와 속도를 위해 기본 Flat 인덱스 사용
+            index = faiss.IndexFlatIP(d)
+        else:
+            # 대량 문서는 속도와 메모리를 위해 HNSW + SQ8 사용
+            index_type = "HNSW32,SQ8"
+            index = faiss.index_factory(d, index_type, faiss.METRIC_INNER_PRODUCT)
+    except Exception as e:
+        logger.warning(
+            f"고급 FAISS 인덱스 생성 실패({e}), 기본 Flat 인덱스로 전환합니다."
+        )
+        index_type = "Flat"
+        index = faiss.IndexFlatIP(d)
 
-    if "SQ" in index_type or "IVF" in index_type:
+    if hasattr(index, "train") and not index.is_trained:
         index.train(vectors)
 
     index.add(vectors)

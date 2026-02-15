@@ -96,37 +96,37 @@ class EmbeddingBasedSemanticChunker:
                     {"text": remaining_text, "start": last_pos, "end": len(text)}
                 )
 
-        # 1-2. [추가] 약어 기반 분할 오류 수정 (예: Mr. 에서 잘린 경우 다음 문장과 병합)
+        # 1-2. [추가] 약어 기반 분할 오류 수정 (세트 기반 고속 조회)
         abbreviations = {
-            "Mr.",
-            "Mrs.",
-            "Ms.",
-            "Dr.",
-            "Jr.",
-            "Sr.",
+            "mr.",
+            "mrs.",
+            "ms.",
+            "dr.",
+            "jr.",
+            "sr.",
             "vs.",
-            "Prof.",
-            "St.",
-            "U.S.",
-            "U.K.",
-            "Co.",
-            "Corp.",
-            "Inc.",
-            "Ltd.",
-            "Jan.",
-            "Feb.",
-            "Mar.",
-            "Apr.",
-            "Jun.",
-            "Jul.",
-            "Aug.",
-            "Sep.",
-            "Oct.",
-            "Nov.",
-            "Dec.",
-            "No.",
-            "Vol.",
-            "Fig.",
+            "prof.",
+            "st.",
+            "u.s.",
+            "u.k.",
+            "co.",
+            "corp.",
+            "inc.",
+            "ltd.",
+            "jan.",
+            "feb.",
+            "mar.",
+            "apr.",
+            "jun.",
+            "jul.",
+            "aug.",
+            "sep.",
+            "oct.",
+            "nov.",
+            "dec.",
+            "no.",
+            "vol.",
+            "fig.",
             "p.",
             "pp.",
             "eq.",
@@ -140,23 +140,18 @@ class EmbeddingBasedSemanticChunker:
 
             for i in range(1, len(raw_segments)):
                 next_seg = raw_segments[i]
-                # 현재 세그먼트의 끝부분이 약어인지 확인
-                text_to_check = current_seg["text"].strip()
-                should_merge = False
+                text_to_check = current_seg["text"].strip().lower()
 
-                # 1) 리스트 기반 체크
-                for abbr in abbreviations:
-                    if text_to_check.endswith(abbr):
-                        should_merge = True
-                        break
+                # 끝 단어 추출 (마지막 마침표 포함)
+                last_word = text_to_check.split()[-1] if text_to_check.split() else ""
 
-                # 2) 패턴 기반 체크 (예: 단일 대문자 마침표 A. B.)
+                should_merge = last_word in abbreviations
+
                 if (
                     not should_merge
-                    and len(text_to_check) >= 2
-                    and text_to_check.endswith(".")
-                    and text_to_check[-2].isupper()
-                    and (len(text_to_check) == 2 or not text_to_check[-3].isalpha())
+                    and len(last_word) == 2
+                    and last_word[0].isalpha()
+                    and last_word[1] == "."
                 ):
                     should_merge = True
 

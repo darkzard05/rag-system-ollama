@@ -65,6 +65,12 @@ async def lifespan(app: FastAPI):
 
     with contextlib.suppress(asyncio.CancelledError):
         await cleaner_task
+
+    # [추가] 서버 종료 시 VRAM 명시적 해제
+    from core.model_loader import ModelManager
+
+    ModelManager.clear_vram()
+
     logger.info("[API] 서버 종료 및 리소스 정리 완료")
 
 

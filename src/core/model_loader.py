@@ -21,6 +21,7 @@ from common.config import (
     EMBEDDING_DEVICE,
     MSG_ERROR_OLLAMA_NOT_RUNNING,
     OLLAMA_BASE_URL,
+    OLLAMA_KEEP_ALIVE,
     OLLAMA_NUM_CTX,
     OLLAMA_NUM_PREDICT,
     OLLAMA_NUM_THREAD,
@@ -52,6 +53,8 @@ class ModelManager:
     _llm_lock = threading.RLock()
     _embedder_lock = threading.RLock()
     _reranker_lock = threading.RLock()
+    _flashrank_lock = threading.RLock()
+    _docling_lock = threading.RLock()
     _client_lock = threading.RLock()
     _semaphore_lock = threading.RLock()
 
@@ -61,6 +64,50 @@ class ModelManager:
     _async_client = None
     _client_loop = None
     _inference_semaphore: asyncio.Semaphore | None = None
+
+    @classmethod
+    def get_docling_converter(cls) -> Any:
+        """Docling DocumentConverter 인스턴스를 가져오거나 생성합니다."""
+        with cls._docling_lock:
+            if "docling_converter" not in cls._instances:
+                from docling.datamodel.base_models import InputFormat
+                from docling.datamodel.pipeline_options import PdfPipelineOptions
+                from docling.document_converter import (
+                    DocumentConverter,
+                    PdfFormatOption,
+                )
+
+                from common.config import PARSING_CONFIG
+
+                logger.info("[MODEL] [LOAD] Docling DocumentConverter 초기화 중...")
+                pipeline_options = PdfPipelineOptions()
+                pipeline_options.do_ocr = PARSING_CONFIG.get("do_ocr", False)
+                pipeline_options.do_table_structure = PARSING_CONFIG.get(
+                    "do_table_structure", True
+                )
+
+                cls._instances["docling_converter"] = DocumentConverter(
+                    format_options={
+                        InputFormat.PDF: PdfFormatOption(
+                            pipeline_options=pipeline_options
+                        )
+                    }
+                )
+            return cls._instances["docling_converter"]
+
+    @classmethod
+    def get_flashranker(cls, model_name: str = "ms-marco-TinyBERT-L-2-v2") -> Any:
+        """FlashRank 리랭커 모델을 가져오거나 로드합니다 (고속 CPU 리랭킹)"""
+        with cls._flashrank_lock:
+            cache_key = f"flashrank_{model_name}"
+            if cache_key not in cls._instances:
+                from flashrank import Ranker
+
+                logger.info(f"[MODEL] [LOAD] FlashRank 리랭커 로드 중: {model_name}")
+                cls._instances[cache_key] = Ranker(
+                    model_name=model_name, cache_dir=CACHE_DIR
+                )
+            return cls._instances[cache_key]
 
     @classmethod
     def get_inference_semaphore(cls) -> asyncio.Semaphore:
@@ -434,6 +481,7 @@ def load_llm(model_name: str) -> Any:
             temperature=OLLAMA_TEMPERATURE,
             timeout=OLLAMA_TIMEOUT,
             base_url=OLLAMA_BASE_URL,
+            keep_alive=OLLAMA_KEEP_ALIVE,
             streaming=True,
         )
 

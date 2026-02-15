@@ -32,8 +32,13 @@ class ResponsePerformanceTracker:
         self._thought_parts: list[str] = []
         self.full_response: str = ""
         self.full_thought: str = ""
+        self.context: str = ""
         self._log_thinking_start: bool = False
         self._log_answer_start: bool = False
+
+    def set_context(self, context_text: str):
+        """평가를 위해 사용된 컨텍스트를 기록합니다."""
+        self.context = context_text
 
     def record_chunk(self, content: str, thought: str):
         now = time.time()
@@ -120,6 +125,7 @@ class ResponsePerformanceTracker:
         )
 
         with contextlib.suppress(Exception):
+            # 1. 성능 메트릭 (CSV)
             monitor.log_to_csv(
                 {
                     "model": stats.model_name,
@@ -130,6 +136,18 @@ class ResponsePerformanceTracker:
                     "tokens": stats.token_count,
                     "thought_tokens": stats.thought_token_count,
                     "tps": stats.tps,
+                    "query": self.query,
+                }
+            )
+            # 2. 통합 히스토리 (JSONL)
+            monitor.log_qa_history(
+                {
+                    "session_id": self.SessionManager.get_session_id(),
+                    "query": self.query,
+                    "context": self.context,
+                    "thought": self.full_thought,
+                    "response": self.full_response,
+                    "metrics": stats.model_dump(),
                 }
             )
         return stats

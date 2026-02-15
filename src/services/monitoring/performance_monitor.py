@@ -362,7 +362,11 @@ class PerformanceMonitor:
         self._max_operations = 10000
 
         self.csv_path = os.path.join("logs", "performance_metrics.csv")
+        self.jsonl_path = os.path.join(
+            "logs", "eval", f"qa_history_{datetime.now().strftime('%Y%m')}.jsonl"
+        )
         self._init_csv()
+        self._init_jsonl()
 
         # [최적화] 비동기 로깅을 위한 큐와 스레드 설정
         self._log_queue: queue.Queue[list[Any]] = queue.Queue()
@@ -397,26 +401,40 @@ class PerformanceMonitor:
         except Exception as e:
             logger.error(f"Failed to initialize performance CSV: {e}")
 
+    def _init_jsonl(self):
+        """JSONL 폴더 초기화"""
+        try:
+            os.makedirs(os.path.dirname(self.jsonl_path), exist_ok=True)
+        except Exception as e:
+            logger.error(f"Failed to initialize JSONL directory: {e}")
+
     def _logging_worker(self):
-        """백그라운드에서 CSV 기록을 처리하는 워커 스레드"""
+        """백그라운드에서 CSV 및 JSONL 기록을 처리하는 워커 스레드"""
+        import json
+
         while not (self._stop_event.is_set() and self._log_queue.empty()):
             try:
-                # 최대 1초 대기하며 큐에서 데이터 가져오기
-                data = self._log_queue.get(timeout=1.0)
+                data_entry = self._log_queue.get(timeout=1.0)
                 try:
-                    with open(self.csv_path, "a", newline="", encoding="utf-8") as f:
-                        writer = csv.writer(f)
-                        writer.writerow(data)
+                    # 데이터 타입에 따라 처리 (리스트면 CSV, 딕셔너리면 JSONL)
+                    if isinstance(data_entry, list):
+                        with open(
+                            self.csv_path, "a", newline="", encoding="utf-8"
+                        ) as f:
+                            writer = csv.writer(f)
+                            writer.writerow(data_entry)
+                    elif isinstance(data_entry, dict):
+                        with open(self.jsonl_path, "a", encoding="utf-8") as f:
+                            f.write(json.dumps(data_entry, ensure_ascii=False) + "\n")
                 except Exception as e:
-                    # 파일 쓰기 실패 시 에러 로그만 남기고 계속 진행
-                    print(f"[Monitor] CSV 쓰기 오류: {e}")
+                    print(f"[Monitor] 로깅 쓰기 오류: {e}")
                 finally:
                     self._log_queue.task_done()
-            except Exception:  # Timeout or Empty
+            except Exception:
                 continue
 
     def log_to_csv(self, data: dict[str, Any]):
-        """성능 데이터를 큐에 삽입 (비차단 방식)"""
+        """성능 데이터를 큐에 삽입 (CSV용)"""
         try:
             row = [
                 datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
@@ -429,10 +447,18 @@ class PerformanceMonitor:
                 round(data.get("tps", 0), 2),
                 data.get("query", "")[:100],
             ]
-            # [최적화] 실제 파일 쓰기 대신 큐에 삽입하여 메인 스레드 지연 방지
             self._log_queue.put(row)
         except Exception as e:
             logger.error(f"Failed to queue metrics for CSV: {e}")
+
+    def log_qa_history(self, entry: dict[str, Any]):
+        """QA 히스토리를 큐에 삽입 (JSONL용)"""
+        try:
+            if "timestamp" not in entry:
+                entry["timestamp"] = datetime.now().isoformat()
+            self._log_queue.put(entry)
+        except Exception as e:
+            logger.error(f"Failed to queue QA history for JSONL: {e}")
 
     def stop(self):
         """모니터링 시스템 종료 및 남은 로그 플러시"""

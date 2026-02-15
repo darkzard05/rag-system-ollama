@@ -12,6 +12,7 @@ langchain-core>=0.3.0
 langchain-huggingface>=0.1.0
 langchain-ollama==0.2.2
 langchain-text-splitters>=0.3.0
+langchain-docling>=0.2.0
 
 # Vector Store & Embeddings
 faiss-cpu>=1.9.0
@@ -19,6 +20,7 @@ sentence-transformers>=3.0.0
 transformers>=4.45.0
 torch>=2.4.0
 rank-bm25>=0.2.2
+flashrank>=0.2.0
 optimum[onnxruntime]==2.1.0    # 최신 버전으로 업데이트
 onnxruntime-gpu==1.19.2       # GPU 가속용 (CPU만 사용할 경우 onnxruntime 설치)
 
@@ -39,6 +41,7 @@ nest-asyncio==1.6.0
 numpy>=1.26.4
 psutil
 streamlit-javascript==0.1.5
+docling>=2.0.0
 
 # Testing
 pytest==8.3.2

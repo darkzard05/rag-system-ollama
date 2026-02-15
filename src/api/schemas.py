@@ -3,14 +3,15 @@
 """
 
 import time
+from datetime import datetime
 from typing import Any, TypedDict
 
 from langchain_core.documents import Document
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, computed_field
 
 
 class PerformanceStats(BaseModel):
-    """통합 성능 메트릭 스키마"""
+    """통합 성능 메트릭 스키마 (Pydantic v2 최적화)"""
 
     ttft: float = 0.0
     thinking_time: float = 0.0
@@ -18,13 +19,20 @@ class PerformanceStats(BaseModel):
     total_time: float = 0.0
     token_count: int = 0
     thought_token_count: int = 0
-    tps: float = 0.0
     model_name: str = "unknown"
     doc_count: int = 0
 
+    @computed_field
+    @property
+    def tps(self) -> float:
+        """Tokens Per Second (계산된 필드)"""
+        return (
+            self.token_count / self.generation_time if self.generation_time > 0 else 0.0
+        )
+
 
 class ChatMessage(BaseModel):
-    """채팅 메시지 통합 모델"""
+    """채팅 메시지 통합 모델 (Pydantic v2 최적화)"""
 
     role: str  # user, assistant, system
     content: str
@@ -35,6 +43,12 @@ class ChatMessage(BaseModel):
     processed_content: str | None = None
     timestamp: float = Field(default_factory=time.time)
 
+    @computed_field
+    @property
+    def formatted_time(self) -> str:
+        """읽기 쉬운 형식의 시간 (계산된 필드)"""
+        return datetime.fromtimestamp(self.timestamp).strftime("%H:%M:%S")
+
 
 class GraphState(TypedDict):
     """
@@ -44,7 +58,6 @@ class GraphState(TypedDict):
 
     input: str
     search_queries: list[str]
-    route_decision: str | None  # [추가] 의도 분석 결과
     documents: list[Document]
     relevant_docs: list[Document]  # [추가] 관련성 채점을 통과한 문서들
     context: str | None
