@@ -6,15 +6,17 @@
 일관성 있는 청크를 생성합니다.
 """
 
+import hashlib
 import logging
 import re
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Optional
 
 import numpy as np
 from langchain_core.documents import Document
 from langchain_core.embeddings import Embeddings
 
 from common.constants import ChunkingConstants
+from services.optimization.caching_optimizer import CacheManager, get_cache_manager
 
 # 순환 참조 방지 및 타입 힌트용
 if TYPE_CHECKING:
@@ -41,6 +43,7 @@ class EmbeddingBasedSemanticChunker:
         max_chunk_size: int = 800,
         similarity_threshold: float = 0.5,
         batch_size: int = 64,
+        cache_manager: CacheManager | None = None,
     ):
         """
         의미론적 청킹 분할기를 초기화합니다.
@@ -54,6 +57,7 @@ class EmbeddingBasedSemanticChunker:
             max_chunk_size: 최대 청크 크기 (문자)
             similarity_threshold: 유사도 threshold (0-1)
             batch_size: 임베딩 생성 시 배치 크기
+            cache_manager: 임베딩 캐시 관리자
         """
         self.embedder = embedder
         self.breakpoint_threshold_type = breakpoint_threshold_type
@@ -63,6 +67,12 @@ class EmbeddingBasedSemanticChunker:
         self.max_chunk_size = max_chunk_size
         self.similarity_threshold = similarity_threshold
         self.batch_size = batch_size
+
+        # [최적화] 전역 캐시 관리자 설정
+        self.cache_manager = cache_manager or get_cache_manager()
+
+        # [최적화] 모델 식별을 위한 이름 추출 (HuggingFaceEmbeddings 등 지원)
+        self.model_name = getattr(embedder, "model_name", "default_model")
 
         # ✅ 정규식 사전 컴파일 (성능 최적화)
         self._sentence_pattern = re.compile(self.sentence_split_regex)
@@ -225,47 +235,76 @@ class EmbeddingBasedSemanticChunker:
                 {"text": embed_text, "start": final_start, "end": final_end}
             )
 
-    def _get_embeddings(self, texts: list[str], normalize: bool = True) -> np.ndarray:
+    async def _get_embeddings(self, texts: list[str], normalize: bool = True) -> np.ndarray:
         """
         텍스트 리스트의 임베딩을 생성합니다.
-        [최적화] 중복 제거 및 라이브러리 내부 배치를 활용하여 최고 성능을 냅니다.
+        [최적화] 전역 캐시 확인 -> 누락분만 배치 임베딩 -> 결과 병합 및 캐시 저장
         """
         if not texts:
             return np.array([]).reshape(0, 0)
 
         try:
-            # 1. 중복 제거를 통한 연산 최소화
+            # 1. 고유 텍스트 및 캐시 키 생성
             unique_texts: list[str] = []
-            text_to_idx = {}
-            mapping = []
+            text_to_unique_idx = {}
+            original_to_unique_mapping = []
 
             for text in texts:
-                # 불필요한 공백 제거로 매칭 확률 향상
                 norm_text = " ".join(text.split())
-                if norm_text not in text_to_idx:
-                    text_to_idx[norm_text] = len(unique_texts)
-                    unique_texts.append(text)
-                mapping.append(text_to_idx[norm_text])
+                if norm_text not in text_to_unique_idx:
+                    text_to_unique_idx[norm_text] = len(unique_texts)
+                    unique_texts.append(norm_text)
+                original_to_unique_mapping.append(text_to_unique_idx[norm_text])
 
-            # 2. 배치 임베딩
-            # 텍스트가 너무 많을 경우(예: 2000개 이상)를 대비하여 모델의 batch_size 활용
-            # LangChain의 HuggingFaceEmbeddings 등은 내부적으로 멀티스레딩/GPU 배칭을 수행함
-            unique_embeddings_list = self.embedder.embed_documents(unique_texts)
-            unique_embeddings = np.array(unique_embeddings_list).astype("float32")
+            # 2. 캐시 조회
+            unique_embeddings: list[Optional[np.ndarray]] = [None] * len(unique_texts)
+            missing_indices = []
+            missing_texts = []
+
+            for i, text in enumerate(unique_texts):
+                # 캐시 키: 모델명 + 텍스트 해시
+                cache_key = f"emb:{self.model_name}:{hashlib.sha256(text.encode()).hexdigest()[:16]}"
+
+                # 비동기 캐시 조회 (L1/L2/L3 통합)
+                cached_vec = await self.cache_manager.get(cache_key)
+
+                if cached_vec is not None:
+                    unique_embeddings[i] = np.array(cached_vec)
+                else:
+                    missing_indices.append(i)
+                    missing_texts.append(text)
+
+            # 3. 누락된 문장들만 배치 임베딩 수행
+            if missing_texts:
+                logger.debug(f"[Chunker] {len(missing_texts)}개 문장 신규 임베딩 계산 중...")
+                new_embeddings = self.embedder.embed_documents(missing_texts)
+
+                for idx, text, vec in zip(missing_indices, missing_texts, new_embeddings, strict=False):
+                    vec_np = np.array(vec).astype("float32")
+                    unique_embeddings[idx] = vec_np
+
+                    # 캐시에 저장 (비동기)
+                    cache_key = f"emb:{self.model_name}:{hashlib.sha256(text.encode()).hexdigest()[:16]}"
+                    await self.cache_manager.set(cache_key, vec_np.tolist())
+
+            # 4. 결과 조립 (리스트 -> NumPy 행렬)
+            # Mypy 대응: 모든 요소가 np.ndarray임을 보장
+            unique_embeddings_matrix = np.stack(
+                [v for v in unique_embeddings if v is not None]
+            ).astype("float32")
 
             if normalize:
                 # [최적화] NumPy 벡터화 연산으로 고속 정규화
-                norms = np.linalg.norm(unique_embeddings, axis=1, keepdims=True)
-                # 0으로 나누기 방지 (Safe Division)
-                unique_embeddings = np.divide(
-                    unique_embeddings,
+                norms = np.linalg.norm(unique_embeddings_matrix, axis=1, keepdims=True)
+                unique_embeddings_matrix = np.divide(
+                    unique_embeddings_matrix,
                     norms,
-                    out=np.zeros_like(unique_embeddings),
+                    out=np.zeros_like(unique_embeddings_matrix),
                     where=norms > 1e-9,
                 )
 
-            # 3. 원본 순서로 복원
-            return unique_embeddings[mapping]
+            # 5. 원본 순서로 복원
+            return unique_embeddings_matrix[original_to_unique_mapping]
         except Exception as e:
             logger.error(f"[MODEL] [LOAD] 임베딩 생성 실패 | {e}")
             raise
@@ -407,7 +446,7 @@ class EmbeddingBasedSemanticChunker:
 
         return optimized
 
-    def split_text(self, text: str) -> list[dict]:
+    async def split_text(self, text: str) -> list[dict]:
         """
         텍스트를 의미론적으로 분할합니다.
         Returns:
@@ -446,14 +485,14 @@ class EmbeddingBasedSemanticChunker:
             # 벡터가 없으므로 계산 필요
             if sentences:
                 sentence_texts = [s["text"] for s in sentences]
-                embeddings = self._get_embeddings(sentence_texts)
+                embeddings = await self._get_embeddings(sentence_texts)
                 for s, v in zip(sentences, embeddings, strict=False):
                     s["vector"] = v
             return sentences
 
         # 2. 임베딩 및 유사도 계산 (텍스트만 추출해서 사용)
         sentence_texts = [s["text"] for s in sentences]
-        embeddings = self._get_embeddings(sentence_texts)
+        embeddings = await self._get_embeddings(sentence_texts)
         similarities = self._calculate_similarities(embeddings)
 
         # 3. 분기점 탐색
@@ -508,7 +547,7 @@ class EmbeddingBasedSemanticChunker:
         # 5. 크기 최적화 (오프셋 및 벡터 인식)
         return self._optimize_chunk_sizes(chunks)
 
-    def split_documents(
+    async def split_documents(
         self, docs: list["Document"]
     ) -> tuple[list["Document"], list[np.ndarray]]:
         """
@@ -551,7 +590,7 @@ class EmbeddingBasedSemanticChunker:
             return [], []
 
         # 2. 청킹 수행 (오프셋 및 벡터 정보 포함)
-        chunk_dicts = self.split_text(full_text)
+        chunk_dicts = await self.split_text(full_text)
 
         # 3. 메타데이터 역매핑 및 문서 객체 생성 (이진 탐색 최적화)
         import bisect

@@ -5,7 +5,6 @@ RAG 시스템의 통합 엔트리포인트.
 
 from __future__ import annotations
 
-import asyncio
 import logging
 from typing import Any
 
@@ -42,8 +41,7 @@ class RAGSystem:
         문서를 로드하고 인덱싱 파이프라인을 실행합니다.
         """
         self._ensure_session_context()
-        return await asyncio.to_thread(
-            build_rag_pipeline,
+        return await build_rag_pipeline(
             uploaded_file_name=file_name,
             file_path=file_path,
             embedder=embedder,

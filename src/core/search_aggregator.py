@@ -208,7 +208,10 @@ class SearchResultAggregator:
             metrics.total_input_results += len(results)
 
             for result in results:
-                content_hash = ContentHash.calculate(result.content)
+                # [최적화] 메타데이터에 미리 계산된 해시가 있으면 사용, 없으면 실시간 계산 (Fallback)
+                content_hash = result.metadata.get("content_hash")
+                if not content_hash:
+                    content_hash = ContentHash.calculate(result.content)
 
                 # [최적화] 딕셔너리 룩업으로 중복 확인 (O(1))
                 existing_id = content_hash_to_id.get(content_hash)
@@ -686,7 +689,10 @@ class ResultDeduplicator:
             return []
 
         # [최적화] 해시 미리 계산하여 루프 내 오버헤드 제거
-        hashes = [ContentHash.calculate(r.content) for r in results]
+        hashes = [
+            r.metadata.get("content_hash") or ContentHash.calculate(r.content)
+            for r in results
+        ]
         duplicates = []
 
         for i in range(len(results)):

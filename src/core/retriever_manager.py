@@ -58,7 +58,7 @@ logger = logging.getLogger(__name__)
 monitor = get_performance_monitor()
 
 
-def split_documents(
+async def split_documents(
     docs: list[Document],
     embedder: Embeddings | None = None,
     session_id: str | None = None,
@@ -95,7 +95,7 @@ def split_documents(
                 ),
             )
 
-            split_docs, vectors = semantic_chunker.split_documents(docs)
+            split_docs, vectors = await semantic_chunker.split_documents(docs)
             logger.info(
                 f"[RAG] [CHUNKING] 의미론적 분할 완료 | 엔진: Docling-Aware | 청크: {len(split_docs)}"
             )
@@ -144,6 +144,11 @@ def split_documents(
         for i, doc in enumerate(split_docs):
             doc.metadata = doc.metadata.copy()
             doc.metadata["chunk_index"] = i
+
+            # [최적화] 인덱싱 시점에 콘텐츠 해시를 미리 계산하여 저장 (검색 통합 시 중복 제거 가속)
+            doc.metadata["content_hash"] = hashlib.sha256(
+                doc.page_content.encode()
+            ).hexdigest()
 
             content_lower = doc.page_content.lower()
             is_noise = any(kw in content_lower[:100] for kw in noise_keywords)
@@ -459,7 +464,7 @@ def create_bm25_retriever(docs: list[Document]) -> Any:
 
 
 @log_operation("검색 컴포넌트 로드/생성")
-def load_and_build_retrieval_components(
+async def load_and_build_retrieval_components(
     file_path: str,
     file_name: str,
     embedder: Embeddings,
@@ -518,7 +523,7 @@ def load_and_build_retrieval_components(
         total_text_len = sum(len(d.page_content) for d in docs)
         is_small_doc = total_text_len < 2000
 
-        doc_splits, precomputed_vectors = split_documents(
+        doc_splits, precomputed_vectors = await split_documents(
             docs, embedder, session_id=session_id
         )
         if _on_progress:
@@ -566,7 +571,7 @@ def load_and_build_retrieval_components(
 
 
 @log_operation("RAG 파이프라인 구축")
-def build_rag_pipeline(
+async def build_rag_pipeline(
     uploaded_file_name: str,
     file_path: str,
     embedder: Embeddings,
@@ -580,7 +585,7 @@ def build_rag_pipeline(
     )
 
     doc_splits, vector_store, bm25_retriever, cache_used = (
-        load_and_build_retrieval_components(
+        await load_and_build_retrieval_components(
             file_path,
             uploaded_file_name,
             embedder=embedder,
