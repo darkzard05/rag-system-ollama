@@ -16,7 +16,7 @@ def get_gpu_memory_info() -> tuple[bool, float]:
     GPU 가용 여부와 총 메모리(MB)를 반환합니다.
     """
     if not torch.cuda.is_available():
-        return False, 0.0
+        return False, 0
 
     try:
         device = torch.cuda.current_device()
