@@ -231,7 +231,7 @@ class MemoryMonitor:
                 mem_info = self._process.memory_info()
                 rss_mb = float(mem_info.rss / (1024 * 1024))
                 vms_mb = float(mem_info.vms / (1024 * 1024))
-                
+
                 sample = {
                     "timestamp": datetime.now(),
                     "rss_mb": rss_mb,
