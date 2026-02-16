@@ -42,9 +42,19 @@ ignore = [
 [tool.ruff.lint.per-file-ignores]
 "src/main.py" = ["E402", "F401"] # Streamlit 초기화 및 조건부 임포트 허용
 "src/core/rag_core.py" = ["E402"] # 지연 임포트 허용
-"src/common/utils.py" = ["E402"] # 지연 임포트 허용
+    "src/common/utils.py" = ["E402"] # 지연 임포트 허용
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+pythonpath = ["src"]
+filterwarnings = [
+    "ignore::DeprecationWarning",
+    "ignore::pytest.PytestDeprecationWarning",
+]
 
 [tool.ruff.lint.isort]
+
 known-first-party = ["api", "common", "core", "infra", "security", "services", "ui"]
 
 [tool.ruff.format]

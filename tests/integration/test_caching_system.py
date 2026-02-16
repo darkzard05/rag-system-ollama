@@ -25,6 +25,16 @@ from services.optimization.caching_optimizer import (
     MemoryCache,
     SemanticCache,
 )
+from cache.response_cache import (
+    ResponseCache,
+    QueryCache,
+    DocumentCache,
+    CacheWarmup,
+    get_response_cache,
+    get_query_cache,
+    get_document_cache,
+    reset_caches,
+)
 
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
@@ -537,48 +547,57 @@ class TestCacheWarmup:
 class TestDiskCacheSecurity:
     """DiskCache 보안 기능 테스트"""
 
-    def test_disk_cache_integrity(self, tmp_path):
+    @pytest.mark.asyncio
+    async def test_disk_cache_integrity(self):
         """무결성 검증 및 변조 감지 테스트"""
-        cache_dir = tmp_path / "cache"
-        cache = DiskCache(cache_dir=str(cache_dir))
+        import tempfile
+        import shutil
+        
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            cache_dir = Path(tmp_dir) / "cache"
+            cache = DiskCache(cache_dir=str(cache_dir))
 
-        key = "secure_key"
-        value = {"data": "sensitive_info"}
+            key = "secure_key"
+            value = {"data": "sensitive_info"}
 
-        # 1. 정상 저장
-        cache.put(key, value)
+            # 1. 정상 저장
+            await cache.set(key, value)
 
-        # 2. 정상 로드 확인
-        assert cache.get(key) == value
+            # 2. 정상 로드 확인
+            assert await cache.get(key) == value
 
-        # 3. 파일 강제 변조 (공격 시뮬레이션)
-        cache_file = list(cache_dir.glob("*.cache"))[0]
-        with open(cache_file, "ab") as f:
-            f.write(b"malicious_code")
+            # 3. 파일 강제 변조 (공격 시뮬레이션)
+            cache_file = list(cache_dir.glob("*.cache"))[0]
+            with open(cache_file, "ab") as f:
+                f.write(b"malicious_code")
 
-        # 4. 변조 감지 및 차단 확인
-        # 보안 강화 로직에 의해 None이 반환되어야 함
-        assert cache.get(key) is None
+            # 4. 변조 감지 및 차단 확인
+            # 보안 강화 로직에 의해 None이 반환되어야 함
+            assert await cache.get(key) is None
 
-        # 5. 오염된 파일이 자동 삭제되었는지 확인
-        assert not cache_file.exists()
+            # 5. 오염된 파일이 자동 삭제되었는지 확인
+            assert not cache_file.exists()
 
-    def test_disk_cache_metadata_cleanup(self, tmp_path):
+    @pytest.mark.asyncio
+    async def test_disk_cache_metadata_cleanup(self):
         """삭제 시 메타데이터 함께 삭제되는지 확인"""
-        cache = DiskCache(cache_dir=str(tmp_path))
-        key = "cleanup_test"
-        cache.put(key, "value")
+        import tempfile
+        
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            cache = DiskCache(cache_dir=str(tmp_dir))
+            key = "cleanup_test"
+            await cache.set(key, "value")
 
-        cache_file = list(tmp_path.glob("*.cache"))[0]
-        meta_file = Path(str(cache_file) + ".meta")
+            cache_file = list(Path(tmp_dir).glob("*.cache"))[0]
+            meta_file = Path(str(cache_file) + ".meta")
 
-        assert cache_file.exists()
-        assert meta_file.exists()
+            assert cache_file.exists()
+            assert meta_file.exists()
 
-        cache.delete(key)
+            await cache.delete(key)
 
-        assert not cache_file.exists()
-        assert not meta_file.exists()
+            assert not cache_file.exists()
+            assert not meta_file.exists()
 
 
 class TestThreadSafety:

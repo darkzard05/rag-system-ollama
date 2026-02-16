@@ -133,5 +133,5 @@ def load_pdf_docs(
         except Exception as e:
             logger.error(f"[RAG] [PDF] 최종 오류: {e}")
             raise PDFProcessingError(
-                filename=file_name, details={"reason": str(e)}
+                message=str(e), details={"filename": file_name}
             ) from e

@@ -22,7 +22,8 @@ torch>=2.4.0
 rank-bm25>=0.2.2
 flashrank>=0.2.0
 optimum[onnxruntime]==2.1.0    # 최신 버전으로 업데이트
-onnxruntime-gpu==1.19.2       # GPU 가속용 (CPU만 사용할 경우 onnxruntime 설치)
+onnxruntime==1.19.2           # 기본 CPU (GPU 가속용은 onnxruntime-gpu 설치)
+# onnxruntime-gpu==1.19.2       # GPU 가속용
 
 # LLM Server
 ollama==0.6.0
@@ -47,3 +48,4 @@ docling>=2.0.0
 pytest==8.3.2
 pytest-mock==3.14.0
 pytest-cov==5.0.0
+pytest-asyncio==0.24.0
