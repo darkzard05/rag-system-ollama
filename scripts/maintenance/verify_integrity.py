@@ -105,7 +105,7 @@ def main():
     results["Static: Mypy Typing"] = run_command(
         ["mypy", "src"], 
         "Mypy Type Checker",
-        timeout=120  # 외부 라이브러리를 skip하므로 2분이면 충분함
+        timeout=120  # 속도 최적화(skip) 적용으로 2분이면 충분함
     )
     
     # 2. 단위 및 통합 테스트 (Pytest)
@@ -116,6 +116,9 @@ def main():
     results["Test: UI Flow"] = run_command(["pytest", "tests/integration/test_streamlit_app.py"], "Streamlit UI Test")
     # 스트리밍 프로토콜 테스트
     results["Test: Streaming"] = run_command(["pytest", "tests/integration/test_streaming_response.py"], "Streaming Protocol Test")
+    # 보안 및 캐시 시스템 테스트 (CI 동기화)
+    results["Test: Security"] = run_command(["pytest", "tests/security/test_cache_security.py"], "Cache Security Test")
+    results["Test: Caching"] = run_command(["pytest", "tests/integration/test_caching_system.py"], "Caching System Test")
     # RAG 시스템 통합 테스트
     results["Test: RAG Core"] = run_command(["pytest", "tests/integration/test_rag_integration.py"], "RAG Core Integration")
     
@@ -127,7 +130,11 @@ def main():
         print(f"{Colors.WARNING}[SKIPPED]{Colors.ENDC} Quick Verify skipped due to Ollama status")
         results["E2E: Quick Verify"] = False
 
-    # 4. 결과 요약 리포트
+    # 4. 문서 자동 업데이트 (Documentation)
+    print_header("Step 4: Documentation Update")
+    results["Docs: README Update"] = run_command(["python", "scripts/maintenance/update_readme.py"], "README Auto-update")
+
+    # 5. 결과 요약 리포트
     print_header("Verification Summary")
     all_passed = True
     for task, passed in results.items():

@@ -45,7 +45,7 @@ class NodeMetrics:
             self.cpu_percent = psutil.cpu_percent(interval=0.1)
             self.memory_percent = psutil.virtual_memory().percent
             self.memory_mb = psutil.virtual_memory().used / (1024 * 1024)
-            self.cpu_count = psutil.cpu_count()
+            self.cpu_count = psutil.cpu_count() or 0
         except Exception as e:
             logger.error(f"메트릭 수집 실패: {e}")
 

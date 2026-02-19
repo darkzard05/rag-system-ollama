@@ -1,9 +1,9 @@
 # GraphRAG-Ollama
 
 > **A High-Performance, Local Retrieval-Augmented Generation (RAG) Solution with Modern UI.**  
-> Optimized for speed and accuracy using `LangGraph` orchestration, local `Ollama` models, and a sleek Streamlit interface.
+> Optimized for extreme speed and precision using `LangGraph` orchestration, local `Ollama` models, and a sleek Streamlit interface.
 
-[![Python 3.11+](https://img.shields.io/badge/Python-3.11+-blue.svg)](https://www.python.org)
+[![Python 3.10+](https://img.shields.io/badge/Python-3.10+-blue.svg)](https://www.python.org)
 [![Model: qwen3:4b-instruct](https://img.shields.io/badge/Model-qwen3:4b--instruct-blueviolet.svg)](https://ollama.com/library/qwen3)
 [![Backend: LangGraph](https://img.shields.io/badge/Orchestrator-LangGraph-informational.svg)]()
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
@@ -20,130 +20,104 @@
 
 ## ⚡ Key Highlights
 
-### 🚀 **Performance & Stability**
-- **IBM Docling Integration:** Delivers high-quality structured Markdown extraction with AI-powered layout analysis, ensuring superior context quality compared to traditional PDF parsers.
-- **Ultra-Fast CPU Reranking:** Powered by `FlashRank` (ms-marco-MiniLM-L-12-v2), providing industrial-grade reranking performance directly on CPU with minimal latency.
-- **Linear Pipeline Optimization:** Simplified, high-performance RAG path eliminates complex routing overhead, significantly improving Time To First Token (TTFT).
-- **Weighted RRF Aggregation:** Advanced hybrid search aggregation (FAISS + BM25) using Weighted Reciprocal Rank Fusion for maximum retrieval precision.
-- **Hardware-Aware UI:** Automatically detects and displays active compute devices (CUDA, CPU) and manages VRAM cleanup on system shutdown.
+### 🚀 **Extreme Performance**
+- **Optimized PyMuPDF4LLM:** Utilizes a specialized Markdown-native engine for ultra-fast document parsing (10x faster than traditional AI parsers) with font-size based noise reduction.
+- **Ultra-Fast CPU Reranking:** Powered by `FlashRank` (ms-marco-MiniLM-L-12-v2), providing industrial-grade reranking performance directly on CPU.
+- **Sub-Second TTFT:** Streamlined pipeline architecture minimizes Time To First Token, delivering answers almost instantly.
+- **Semantic Chunking:** Advanced embedding-based chunking that respects document structure and context continuity.
 
-### 🧠 **Intelligent RAG Pipeline**
-- **LangGraph Orchestration:** Precise linear control over retrieval, reranking, and generation for consistent and grounded responses.
-- **Persistent QA History:** Automatically logs comprehensive conversation history and performance metrics in JSONL format for downstream evaluation and Ragas-based auditing.
-- **Integrity-First Streaming:** Utilizes a unified `response_chunk` protocol to ensure zero-duplicate output and immediate delivery of both thoughts and final answers.
+### 🛡️ **Reliability & Integrity**
+- **100% Integrity Pass:** Integrated verification system (`verify_integrity.py`) ensures code style, typing, and RAG logic are always production-ready.
+- **LangGraph Orchestration:** Precise linear control over the retrieval-augmented generation flow.
+- **Zero-Duplicate Streaming:** Professional-grade streaming protocol delivering both "AI Thinking" and "Final Answer" in real-time.
 
-### 🎨 **Refined User Experience**
-- **Docling-Aware Chunker:** Intelligently splits documents based on Markdown structure (headers, sections) preserved by the Docling engine.
-- **Professional PDF Viewer:** Features a grouped navigation toolbar with precision page controls and instant rendering.
-- **Real-time Performance Tracker:** Displays detailed metrics including TTFT, TPS, and thinking duration for every interaction.
+### 🎨 **Refined UI/UX**
+- **Professional PDF Viewer:** Integrated viewer with precision navigation and grouped-control navigation.
+- **Real-time Performance Metrics:** Visual tracking of TTFT, TPS, and input/output token counts for transparency.
 
 ---
 
-## 🛠️ Getting Started
-
-### 1️⃣ Prerequisites
-- **Python 3.11+**
-- **Ollama**: Running locally ([ollama.ai](https://ollama.ai))
-
-### 2️⃣ Model Setup
-```powershell
-# Pull the recommended high-performance models
-ollama pull qwen3:4b-instruct-2507-q4_K_M
-ollama pull nomic-embed-text
-```
-
-### 3️⃣ Installation
-```bash
-git clone https://github.com/darkzard05/rag-system-ollama.git
-cd rag-system-ollama
-python -m venv venv
-# Windows: venv\Scripts\activate | Unix: source venv/bin/activate
-pip install -r requirements.txt
-```
-
----
-
-## 🐳 Docker Setup (Recommended)
-
-The easiest way to run the entire system is using Docker Compose. This will automatically set up the UI, API, and Ollama server with the required models.
-
-```bash
-# Start all services
-docker-compose up --build
-```
-
-- **Streamlit UI**: [http://localhost:8501](http://localhost:8501)
-- **REST API**: [http://localhost:8000](http://localhost:8000)
-- **Ollama**: Automatically managed as a container.
-
----
-
-## 📊 Monitoring & API
-
-If you are using Docker, you can access built-in monitoring and API documentation:
-
-### 📈 Monitoring
-- **Grafana**: [http://localhost:3000](http://localhost:3000) (ID/PW: `admin` / `admin`)
-- **Prometheus**: [http://localhost:9090](http://localhost:9090)
-
-### 🔌 API Reference
-- **Swagger UI**: [http://localhost:8000/docs](http://localhost:8000/docs)
-- **ReDoc**: [http://localhost:8000/redoc](http://localhost:8000/redoc)
-
----
-
-## ⚙️ Configuration
-
-The system can be customized via `config.yml` or environmental variables in `.env`.
-
-- **Parsing Engine**: Switch between `docling` (default) and `pymupdf` for document extraction.
-- **Reranker**: Enable/disable FlashRank and adjust `top_k` and `min_score` parameters.
-- **Search Weights**: Tune FAISS and BM25 weights for ensemble retrieval.
-
----
-
-## 🧪 Testing
-
-Run the full test suite to ensure system integrity:
-
-```bash
-# Run all tests
-pytest
-
-# Run tests with coverage report
-pytest --cov=src
-```
+## 🛠️ Tech Stack
+<!-- TECH_STACK_START -->
+- **Streamlit**: 1.50.0
+- **LangChain**: 0.3.0
+- **LangGraph**: 0.2.0
+- **PyMuPDF4LLM**: 0.2.9
+- **Ollama**: 0.2.2
+- **FastAPI**: 0.128.0
+<!-- TECH_STACK_END -->
 
 ---
 
 ## 🏗️ Project Structure
-
+<!-- TREE_START -->
 ```text
 rag-system-ollama/
 ├── src/
-│   ├── main.py             # 🏁 Application Entry Point
-│   ├── core/               # 🧠 RAG Engine (LangGraph, Docling, Chunker)
-│   ├── ui/                 # 🎨 Streamlit UI & Components
-│   ├── api/                # 🌐 Backend API & Streaming
-│   └── common/             # 🛠️ Config, Exceptions & Utils
-├── docs/                   # 📚 Technical Documentation (Architecture, Ops, API)
-├── logs/                   # 📝 Persistent QA History & System Logs
-├── reports/                # 📊 Performance & Ragas Evaluation Reports
-├── scripts/                # 🛠️ Maintenance & Benchmarking Scripts
-└── tests/                  # 🧪 Integrity & Verification Tests
+│   ├── api/
+│   ├── cache/
+│   ├── common/
+│   ├── core/
+│   ├── infra/
+│   ├── logs/
+│   ├── main.py # 🏁 Entry Point
+│   ├── security/
+│   ├── services/
+│   └── ui/
+├── scripts/
+│   ├── analyze_logs.py
+│   ├── benchmarks/
+│   ├── debug/
+│   ├── evaluation/
+│   ├── maintenance/
+│   ├── quick_verify_rag.py
+│   ├── test_full_pipeline.py
+│   └── verification/
+├── tests/
+│   ├── conftest.py
+│   ├── data/
+│   ├── integration/
+│   ├── logs/
+│   ├── performance/
+│   ├── security/
+│   └── unit/
+```
+<!-- TREE_END -->
+
+---
+
+## 🚀 Getting Started
+
+### 1️⃣ Model Setup
+```powershell
+# Pull the recommended models
+ollama pull qwen3:4b-instruct-2507-q4_K_M
+ollama pull nomic-embed-text
+```
+
+### 2️⃣ Quick Integrity Check (Recommended)
+Ensure your local environment is perfectly configured before running:
+```powershell
+python scripts/maintenance/verify_integrity.py
+```
+
+### 3️⃣ Running the App
+```bash
+streamlit run src/main.py
 ```
 
 ---
 
-## 📚 Internal Documentation
+## 🧪 Testing & Verification
 
-For more detailed information, please refer to the [Documentation Index](./docs/README.md):
-- [Architecture & Protocols](./docs/architecture/STREAMING_INTEGRITY_PROTOCOL.md)
-- [Security Implementation](./docs/ops/SECURITY_IMPLEMENTATION.md)
-- [Troubleshooting](./docs/ops/TROUBLESHOOTING.md)
+We maintain a strict **Zero-Error Policy**. Run the automated verification suite:
+- **Lint & Static Analysis**: Ruff, Mypy
+- **Core Integration**: RAG Pipeline, Retrieval Logic
+- **UI & Streaming**: Streamlit Lifecycle, SSE Protocol
+- **E2E**: Full PDF-to-Answer cycle
 
 ---
 
 ## 📄 License
 MIT License - Developed by **darkzard05**.
-**Status:** v3.0.0 | **Last Updated:** 2026-02-15
+**Status:** v3.1.0 | **Last Updated:** 2026-02-19

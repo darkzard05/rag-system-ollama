@@ -5,7 +5,6 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from langchain_core.messages import BaseMessage
     from langchain_core.outputs import ChatGenerationChunk, ChatResult
-    from langchain_ollama import ChatOllama
 
 logger = logging.getLogger(__name__)
 
@@ -80,7 +79,8 @@ class DeepThinkingChatOllama(ChatOllama):
             request_kwargs = self._prepare_ollama_request(messages, stop, **kwargs)
             request_kwargs["stream"] = True
 
-            sync_client = ModelManager.get_client(host=self.base_url)
+            host_url = str(self.base_url) if self.base_url else "http://localhost:11434"
+            sync_client = ModelManager.get_client(host=host_url)
             response_gen = sync_client.chat(**request_kwargs)
 
             for part in response_gen:
