@@ -69,6 +69,8 @@ def load_pdf_docs(
                 fontsize_limit = PARSING_CONFIG.get("fontsize_limit", 3)
                 ignore_code = PARSING_CONFIG.get("ignore_code", False)
                 extract_words = PARSING_CONFIG.get("extract_words", True)
+                ignore_graphics = PARSING_CONFIG.get("ignore_graphics", True)
+                table_strategy = PARSING_CONFIG.get("table_strategy", "fast")
 
                 # 마크다운 변환 실행
                 chunks = pymupdf4llm.to_markdown(
@@ -78,6 +80,8 @@ def load_pdf_docs(
                     fontsize_limit=fontsize_limit,
                     ignore_code=ignore_code,
                     extract_words=extract_words,
+                    ignore_graphics=ignore_graphics,
+                    table_strategy=table_strategy,
                 )
 
                 docs = []

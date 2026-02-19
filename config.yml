@@ -77,11 +77,13 @@ rag:
     do_ocr: false
     do_table_structure: true
     write_images: false
-    # --- 추가된 최적화 파라미터 ---
-    fontsize_limit: 3        # 3pt 이하 텍스트(주석 등) 무시
+    # --- 최적화된 추출 파라미터 (Balanced-Fast) ---
+    fontsize_limit: 3        # 3pt 이하 텍스트 무시
     ignore_code: false       # 코드 블록 보존
-    extract_words: true      # 정밀 인용을 위한 단어 좌표 추출
-    force_text: false        # 텍스트 레이어 강제 추출 여부
+    extract_words: true      # 정밀 인용을 위한 좌표 유지
+    ignore_graphics: true    # 무거운 벡터 그래픽 처리 제외 (속도 2배 향상)
+    table_strategy: "fast"   # 고속 표 탐지 알고리즘 사용
+    force_text: false
 
   # 의미론적 분할 설정
   semantic_chunker:
