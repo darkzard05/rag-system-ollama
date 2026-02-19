@@ -180,7 +180,7 @@ jobs:
     - name: Export OpenAPI Spec
       run: |
         export PYTHONPATH=$PYTHONPATH:$(pwd)/src
-        python scripts/export_openapi.py > docs/api/openapi.json
+        python scripts/maintenance/export_openapi.py > docs/api/openapi.json
         
     - name: Upload API Specification
       uses: actions/upload-artifact@v4
