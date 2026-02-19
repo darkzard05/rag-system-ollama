@@ -11,9 +11,11 @@ import threading
 from typing import TYPE_CHECKING, Any
 
 import numpy as np
-import torch
 from langchain_core.documents import Document
 from langchain_core.embeddings import Embeddings
+
+if TYPE_CHECKING:
+    import torch
 
 from common.config import (
     CACHE_CHECK_PERMISSIONS,
@@ -65,102 +67,125 @@ async def split_documents(
 ) -> tuple[list[Document], list[np.ndarray] | None]:
     """
     설정에 따라 의미론적 분할기 또는 RecursiveCharacterTextSplitter를 사용해 문서를 분할합니다.
+    이미 분할된 문서(Docling 등)는 분할 과정을 건너뜁니다.
     """
-    SessionManager.add_status_log("문장 분할 중...", session_id=session_id)
-    with monitor.track_operation(
-        OperationType.SEMANTIC_CHUNKING, {"doc_count": len(docs)}
-    ) as op:
-        from langchain_text_splitters import RecursiveCharacterTextSplitter
+    import torch
 
-        use_semantic = SEMANTIC_CHUNKER_CONFIG.get("enabled", False)
-        split_docs = []
+    is_already_chunked = (
+        docs[0].metadata.get("is_already_chunked", False) if docs else False
+    )
+
+    if is_already_chunked:
+        SessionManager.add_status_log(
+            "이미 구조적으로 분할된 문서를 사용합니다.", session_id=session_id
+        )
+        logger.info(f"[RAG] [CHUNKING] 분할 건너뜀 (이미 분할됨) | 청크: {len(docs)}")
+        split_docs = docs
         vectors = None
+        if embedder and split_docs:
+            texts = [d.page_content for d in split_docs]
+            vectors_list = embedder.embed_documents(texts)
+            vectors = [np.array(v) for v in vectors_list]
+    else:
+        SessionManager.add_status_log("문장 분할 중...", session_id=session_id)
+        with monitor.track_operation(
+            OperationType.SEMANTIC_CHUNKING, {"doc_count": len(docs)}
+        ) as _:
+            from langchain_text_splitters import RecursiveCharacterTextSplitter
 
-        if use_semantic and embedder:
-            # [최적화] 마크다운 구조를 고려한 의미론적 분할기 설정
-            semantic_chunker = EmbeddingBasedSemanticChunker(
-                embedder=embedder,
-                breakpoint_threshold_type=SEMANTIC_CHUNKER_CONFIG.get(
-                    "breakpoint_threshold_type", "percentile"
-                ),
-                breakpoint_threshold_value=float(
-                    SEMANTIC_CHUNKER_CONFIG.get("breakpoint_threshold_value", 95.0)
-                ),
-                # 마크다운 섹션과 문장을 모두 고려
-                sentence_split_regex=r"(?<=[.!?])\s+|(?=\n#)|(?=\n---)",
-                min_chunk_size=int(SEMANTIC_CHUNKER_CONFIG.get("min_chunk_size", 100)),
-                max_chunk_size=int(SEMANTIC_CHUNKER_CONFIG.get("max_chunk_size", 1000)),
-                similarity_threshold=float(
-                    SEMANTIC_CHUNKER_CONFIG.get("similarity_threshold", 0.5)
-                ),
-            )
+            use_semantic = SEMANTIC_CHUNKER_CONFIG.get("enabled", False)
+            split_docs = []
+            vectors = None
 
-            split_docs, vectors = await semantic_chunker.split_documents(docs)
-            logger.info(
-                f"[RAG] [CHUNKING] 의미론적 분할 완료 | 엔진: Docling-Aware | 청크: {len(split_docs)}"
-            )
-        else:
-            # [최적화] 마크다운 헤더를 기준으로 분할하는 가벼운 스플리터 사용
-            from langchain_text_splitters import (
-                MarkdownHeaderTextSplitter,
-                RecursiveCharacterTextSplitter,
-            )
-
-            headers_to_split_on = [
-                ("#", "Header 1"),
-                ("##", "Header 2"),
-                ("###", "Header 3"),
-            ]
-
-            markdown_splitter = MarkdownHeaderTextSplitter(
-                headers_to_split_on=headers_to_split_on
-            )
-
-            temp_split_docs = []
-            for doc in docs:
-                if doc.metadata.get("format") == "markdown":
-                    header_splits = markdown_splitter.split_text(doc.page_content)
-                    for hs in header_splits:
-                        hs.metadata.update(doc.metadata)
-                        temp_split_docs.append(hs)
+            if use_semantic and embedder:
+                if getattr(embedder, "model_kwargs", {}).get("device") == "cuda":
+                    try:
+                        total_mem = torch.cuda.get_device_properties(0).total_memory / (
+                            1024**3
+                        )  # GB
+                        batch_size = (
+                            128 if total_mem > 10 else (64 if total_mem > 4 else 32)
+                        )
+                    except Exception:
+                        batch_size = 32
                 else:
-                    temp_split_docs.append(doc)
+                    batch_size = min(max(4, os.cpu_count() or 4), 16)
 
-            recursive_splitter = RecursiveCharacterTextSplitter(
-                chunk_size=TEXT_SPLITTER_CONFIG["chunk_size"],
-                chunk_overlap=TEXT_SPLITTER_CONFIG["chunk_overlap"],
-            )
-            split_docs = recursive_splitter.split_documents(temp_split_docs)
-            logger.info(
-                f"[RAG] [CHUNKING] 마크다운 구조 기반 분할 완료 | 청크: {len(split_docs)}"
-            )
+                semantic_chunker = EmbeddingBasedSemanticChunker(
+                    embedder=embedder,
+                    breakpoint_threshold_type=SEMANTIC_CHUNKER_CONFIG.get(
+                        "breakpoint_threshold_type", "percentile"
+                    ),
+                    breakpoint_threshold_value=float(
+                        SEMANTIC_CHUNKER_CONFIG.get("breakpoint_threshold_value", 95.0)
+                    ),
+                    sentence_split_regex=SEMANTIC_CHUNKER_CONFIG.get(
+                        "sentence_split_regex", r"[.!?]\s+"
+                    ),
+                    min_chunk_size=int(
+                        SEMANTIC_CHUNKER_CONFIG.get("min_chunk_size", 100)
+                    ),
+                    max_chunk_size=int(
+                        SEMANTIC_CHUNKER_CONFIG.get("max_chunk_size", 800)
+                    ),
+                    similarity_threshold=float(
+                        SEMANTIC_CHUNKER_CONFIG.get("similarity_threshold", 0.5)
+                    ),
+                    batch_size=batch_size,
+                )
 
-            if embedder and split_docs:
-                texts = [d.page_content for d in split_docs]
-                vectors_list = embedder.embed_documents(texts)
-                vectors = [np.array(v) for v in vectors_list]
+                split_docs, vectors = await semantic_chunker.split_documents(docs)
+                logger.info(
+                    f"[RAG] [CHUNKING] 의미론적 분할 완료 | 원본: {len(docs)} | 청크: {len(split_docs)}"
+                )
+            else:
+                chunker = RecursiveCharacterTextSplitter(
+                    chunk_size=TEXT_SPLITTER_CONFIG["chunk_size"],
+                    chunk_overlap=TEXT_SPLITTER_CONFIG["chunk_overlap"],
+                )
+                split_docs = chunker.split_documents(docs)
+                logger.info(
+                    f"[RAG] [CHUNKING] 기본 분할 완료 | 원본: {len(docs)} | 청크: {len(split_docs)}"
+                )
 
-        noise_keywords = ["index", "references", "bibliography", "doi:", "isbn"]
-        for i, doc in enumerate(split_docs):
-            doc.metadata = doc.metadata.copy()
-            doc.metadata["chunk_index"] = i
+                if embedder and split_docs:
+                    texts = [d.page_content for d in split_docs]
+                    vectors_list = embedder.embed_documents(texts)
+                    vectors = [np.array(v) for v in vectors_list]
 
-            # [최적화] 인덱싱 시점에 콘텐츠 해시를 미리 계산하여 저장 (검색 통합 시 중복 제거 가속)
-            doc.metadata["content_hash"] = hashlib.sha256(
-                doc.page_content.encode()
-            ).hexdigest()
+    noise_keywords = ["index", "references", "bibliography", "doi:", "isbn"]
+    found_ref_start = False
+    for i, doc in enumerate(split_docs):
+        doc.metadata = doc.metadata.copy()
+        doc.metadata["chunk_index"] = i
 
-            content_lower = doc.page_content.lower()
-            is_noise = any(kw in content_lower[:100] for kw in noise_keywords)
-            if not is_noise and (
-                content_lower.count("doi:") > 2 or content_lower.count(",") > 25
-            ):
-                is_noise = True
+        content_lower = doc.page_content.lower()
 
-            doc.metadata["is_content"] = not is_noise
+        # [추가] 참고문헌 섹션 전파 로직
+        if doc.metadata.get("is_reference_start") or any(
+            kw in content_lower[:50] for kw in ["## references", "references\n---"]
+        ):
+            found_ref_start = True
 
-        op.tokens = sum(len(doc.page_content.split()) for doc in split_docs)
-        return split_docs, vectors
+        is_noise = any(kw in content_lower[:100] for kw in noise_keywords)
+        if not is_noise and (
+            content_lower.count("doi:") > 2 or content_lower.count(",") > 25
+        ):
+            is_noise = True
+
+        doc.metadata["is_content"] = not (is_noise or found_ref_start)
+        doc.metadata["is_reference"] = found_ref_start
+
+        # [최적화] 첫 페이지 상단만 앵커로 유지 (나머지는 제거)
+        if doc.metadata.get("is_anchor") and i > 0:
+            doc.metadata["is_anchor"] = False
+
+        # [최적화] 첫 페이지 헤더 명시 (FACTOID 답변율 향상)
+        if doc.metadata.get("page") == 1 and i < 3:
+            doc.metadata["is_header"] = True
+
+    # track_operation op.tokens는 is_already_chunked일 때 context를 벗어날 수 있으므로 안전하게 처리
+    return split_docs, vectors
 
 
 def _serialize_docs(docs: DocumentList) -> DocumentDictList:
@@ -222,7 +247,7 @@ class VectorStoreCache:
             cache_dir,
             os.path.join(cache_dir, "doc_splits.json"),
             os.path.join(cache_dir, "faiss_index"),
-            os.path.join(cache_dir, "bm25_retriever.pkl"),
+            os.path.join(cache_dir, "bm25_docs.json"),
         )
 
     def _purge_cache(self, reason: str):
@@ -252,9 +277,8 @@ class VectorStoreCache:
             return None, None, None
 
         try:
-            import pickle
-
             import orjson
+            from langchain_community.retrievers import BM25Retriever
             from langchain_community.vectorstores import FAISS
 
             paths_to_verify = [
@@ -293,12 +317,16 @@ class VectorStoreCache:
             )
 
             with open(self.bm25_retriever_path, "rb") as f:
-                bm25_retriever = pickle.load(f)  # nosec B301
+                bm25_doc_dicts = orjson.loads(f.read())
+            bm25_docs = _deserialize_docs(bm25_doc_dicts)
 
-            # [개선] preprocess_func가 bm25_tokenizer임을 명시적으로 유지
+            # [개선] preprocess_func가 bm25_tokenizer임을 명시적으로 보장
+            bm25_retriever = BM25Retriever.from_documents(
+                bm25_docs, preprocess_func=bm25_tokenizer
+            )
             bm25_retriever.k = RETRIEVER_CONFIG.get("search_kwargs", {}).get("k", 5)
 
-            logger.info(f"RAG 캐시 안전 로드 완료 (Pickle/JSON): '{self.cache_dir}'")
+            logger.info(f"RAG 캐시 안전 로드 완료 (JSON 기반): '{self.cache_dir}'")
             return doc_splits, vector_store, bm25_retriever
 
         except Exception as e:
@@ -354,14 +382,14 @@ class VectorStoreCache:
                     )
                     self.security_manager.save_cache_metadata(file_p + ".meta", meta)
 
-            import pickle
-
+            bm25_docs = getattr(bm25_retriever, "docs", doc_splits)
+            serialized_bm25 = _serialize_docs(bm25_docs)
             with open(stg_bm25_retriever_path, "wb") as f:
-                pickle.dump(bm25_retriever, f)
+                f.write(orjson.dumps(serialized_bm25))
             self.security_manager.enforce_file_permissions(stg_bm25_retriever_path)
 
             bm25_meta = self.security_manager.create_metadata_for_file(
-                stg_bm25_retriever_path, description="BM25 retriever object (Pickle)"
+                stg_bm25_retriever_path, description="BM25 retriever data (JSON)"
             )
             self.security_manager.save_cache_metadata(
                 stg_bm25_retriever_path + ".meta", bm25_meta
@@ -403,40 +431,79 @@ def create_vector_store(
         vectors_list = embedder.embed_documents(texts)
         vectors = np.array(vectors_list).astype("float32")
     else:
-        # [수정] 리스트 형태인 경우 vstack으로 2D 배열 변환 보장
         if isinstance(vectors, list):
             vectors = np.vstack(vectors).astype("float32")
         else:
             vectors = np.ascontiguousarray(vectors, dtype="float32")
 
-    faiss.normalize_L2(vectors)
+    # ✅ [최적화] GPU 자동 감지 및 설정 (Phase 5 고급 최적화)
+    use_gpu = False
+    gpu_device = 0
+    try:
+        # GPU 가용성 확인
+        if torch.cuda.is_available():
+            ngpus = faiss.get_num_gpus()
+            if ngpus > 0:
+                use_gpu = True
+                gpu_device = torch.cuda.current_device()
+                logger.info(
+                    f"[FAISS GPU] 활성화 (Device: {gpu_device}, Count: {ngpus})"
+                )
+    except Exception as e:
+        logger.debug(f"[FAISS GPU] 자동 감지 실패: {e}. CPU 모드로 진행합니다.")
+        use_gpu = False
+
+    # L2 정규화 (대규모 벡터는 필수)
+    if len(vectors) > 1000:
+        faiss.normalize_L2(vectors)
+        logger.debug("[FAISS] L2 정규화 완료")
+
     chunk_count = len(docs)
     d = vectors.shape[1]
 
-    # [최적화] 호환성을 고려한 양자화 인덱스 생성
-    index_type = "Flat"
-    try:
-        if chunk_count < 1000:
-            # 소량 문서는 정확도와 속도를 위해 기본 Flat 인덱스 사용
-            index = faiss.IndexFlatIP(d)
-        else:
-            # 대량 문서는 속도와 메모리를 위해 HNSW + SQ8 사용
-            index_type = "HNSW32,SQ8"
-            index = faiss.index_factory(d, index_type, faiss.METRIC_INNER_PRODUCT)
-    except Exception as e:
-        logger.warning(
-            f"고급 FAISS 인덱스 생성 실패({e}), 기본 Flat 인덱스로 전환합니다."
-        )
+    # [계층형 인덱스 전략] 벤치마크 결과 기반 최적화
+    # 1. 소규모 (5,000개 미만): 정확도 100% 보장 (Flat)
+    if chunk_count < 5000:
         index_type = "Flat"
-        index = faiss.IndexFlatIP(d)
+        ef_search = 0
+    # 2. 중규모 (50,000개 미만): 고성능 검색 및 높은 정확도 (HNSW + No Quantization)
+    elif chunk_count < 50000:
+        index_type = "HNSW32,Flat"
+        ef_search = 128
+    # 3. 대규모: 메모리 효율 중시 (HNSW + Scalar Quantization)
+    else:
+        index_type = "HNSW32,SQ8"
+        ef_search = 256
 
-    if hasattr(index, "train") and not index.is_trained:
+    logger.info(f"[FAISS] 인덱스 타입 결정: {index_type} (Chunks: {chunk_count})")
+    index = faiss.index_factory(d, index_type, faiss.METRIC_INNER_PRODUCT)
+
+    # ✅ [최적화] GPU 인덱스로 전환 (대규모 문서 시)
+    if use_gpu and chunk_count > 5000:
+        try:
+            co = faiss.GpuMultipleClonerOptions()
+            co.shard = True  # 다중 GPU 샤딩
+            co.usePrecomputed = False
+            gpu_index = faiss.index_cpu_to_gpu_multiple(
+                faiss.StandardGpuResources(), index, co
+            )
+            logger.info("[FAISS GPU] CPU 인덱스를 GPU로 복사 완료")
+            index = gpu_index
+        except Exception as e:
+            logger.warning(f"[FAISS GPU] 전환 실패, CPU 사용: {e}")
+            use_gpu = False
+
+    if "SQ" in index_type or "IVF" in index_type:
+        logger.info(f"[FAISS] 인덱스 훈련 중: {index_type}")
         index.train(vectors)
 
     index.add(vectors)
 
-    if "HNSW" in index_type:
-        faiss.downcast_index(index).hnsw.efSearch = 128
+    # HNSW 파라미터 동적 설정
+    if "HNSW" in index_type and not use_gpu:
+        hnsw_index = faiss.downcast_index(index)
+        hnsw_index.hnsw.efSearch = ef_search
+        logger.debug(f"[FAISS] HNSW efSearch 설정: {ef_search}")
 
     doc_ids = [str(uuid.uuid4()) for _ in range(chunk_count)]
     new_docs = {
@@ -473,6 +540,8 @@ async def load_and_build_retrieval_components(
     _file_hash: str | None = None,
     session_id: str | None = None,
 ) -> tuple[DocumentList, Any, Any, bool]:
+    import torch
+
     file_bytes = None
     if _file_hash is None:
         try:
@@ -487,87 +556,97 @@ async def load_and_build_retrieval_components(
     # [최적화] 전역 캐시 활성화 여부 확인
     from common.config import ENABLE_VECTOR_CACHE
 
-    doc_splits, vector_store, bm25_retriever = (None, None, None)
     if ENABLE_VECTOR_CACHE:
-        doc_splits, vector_store, bm25_retriever = cache.load(embedder)
+        cache_data = cache.load(embedder)
+        if all(x is not None for x in cache_data):
+            doc_splits, vector_store, bm25_retriever = cache_data
+            if (
+                doc_splits is not None
+                and vector_store is not None
+                and bm25_retriever is not None
+            ):
+                logger.info(f"[Cache] 벡터 캐시 히트: {file_name}")
+                return doc_splits, vector_store, bm25_retriever, True
     else:
         logger.info("[Cache] 벡터 캐시 비활성화됨 (config.yml)")
 
-    cache_used = all(x is not None for x in [doc_splits, vector_store, bm25_retriever])
+    # 캐시 미스 시 신규 생성 로직 시작
+    docs = load_pdf_docs(
+        file_path,
+        file_name,
+        on_progress=_on_progress,
+        file_bytes=file_bytes,
+        session_id=session_id,
+    )
 
-    if not cache_used:
-        docs = load_pdf_docs(
-            file_path,
-            file_name,
-            on_progress=_on_progress,
-            file_bytes=file_bytes,
-            session_id=session_id,
+    if docs:
+        sample_text = docs[0].page_content[:1000]
+        has_korean = any("\uac00" <= char <= "\ud7a3" for char in sample_text)
+        doc_lang = "Korean" if has_korean else "English"
+        SessionManager.set("doc_language", doc_lang, session_id=session_id)
+        logger.info(f"[RAG] [LANG] 문서 언어 감지됨: {doc_lang}")
+
+    if not docs:
+        raise EmptyPDFError(
+            filename=file_name,
+            details={"reason": "PDF에서 텍스트를 추출할 수 없습니다."},
         )
 
-        if docs:
-            sample_text = docs[0].page_content[:1000]
-            has_korean = any("\uac00" <= char <= "\ud7a3" for char in sample_text)
-            doc_lang = "Korean" if has_korean else "English"
-            SessionManager.set("doc_language", doc_lang, session_id=session_id)
-            logger.info(f"[RAG] [LANG] 문서 언어 감지됨: {doc_lang}")
+    if _on_progress:
+        _on_progress()
 
-        if not docs:
-            raise EmptyPDFError(
-                filename=file_name,
-                details={"reason": "PDF에서 텍스트를 추출할 수 없습니다."},
+    total_text_len = sum(len(d.page_content) for d in docs)
+    is_small_doc = total_text_len < 2000
+
+    doc_splits, precomputed_vectors = await split_documents(
+        docs, embedder, session_id=session_id
+    )
+    if _on_progress:
+        _on_progress()
+
+    if not doc_splits:
+        raise InsufficientChunksError(chunk_count=0, min_required=1)
+
+    optimized_vectors: Any = precomputed_vectors
+    if not is_small_doc:
+        try:
+            SessionManager.add_status_log("인덱스 최적화 중", session_id=session_id)
+            optimizer = get_index_optimizer()
+            doc_splits, optimized_vectors, q_meta, stats = optimizer.optimize_index(
+                doc_splits, optimized_vectors
             )
-
-        if _on_progress:
-            _on_progress()
-
-        total_text_len = sum(len(d.page_content) for d in docs)
-        is_small_doc = total_text_len < 2000
-
-        doc_splits, precomputed_vectors = await split_documents(
-            docs, embedder, session_id=session_id
-        )
-        if _on_progress:
-            _on_progress()
-
-        if not doc_splits:
-            raise InsufficientChunksError(chunk_count=0, min_required=1)
-
-        optimized_vectors: Any = precomputed_vectors
-        if not is_small_doc:
-            try:
-                SessionManager.add_status_log("인덱스 최적화 중", session_id=session_id)
-                optimizer = get_index_optimizer()
-                doc_splits, optimized_vectors, q_meta, stats = optimizer.optimize_index(
-                    doc_splits, optimized_vectors
+            if optimizer and q_meta and q_meta.get("method") != "none":
+                optimized_vectors = optimizer.quantizer.dequantize_vectors(
+                    optimized_vectors, q_meta
                 )
-                if optimizer and q_meta and q_meta.get("method") != "none":
-                    optimized_vectors = optimizer.quantizer.dequantize_vectors(
-                        optimized_vectors, q_meta
-                    )
-                SessionManager.replace_last_status_log(
-                    f"중복 내용 {stats.pruned_documents}개 정리", session_id=session_id
-                )
-            except Exception as e:
-                logger.warning(f"인덱스 최적화 단계 건너뜀: {e}")
+            SessionManager.replace_last_status_log(
+                f"중복 내용 {stats.pruned_documents}개 정리", session_id=session_id
+            )
+        except Exception as e:
+            logger.warning(f"인덱스 최적화 단계 건너뜀: {e}")
 
-        vector_store = create_vector_store(
-            doc_splits, embedder, vectors=optimized_vectors
-        )
-        bm25_retriever = create_bm25_retriever(doc_splits or [])
+    vector_store = create_vector_store(doc_splits, embedder, vectors=optimized_vectors)
+    bm25_retriever = create_bm25_retriever(doc_splits or [])
 
-        if ENABLE_VECTOR_CACHE:
-            cache.save(doc_splits, vector_store, bm25_retriever)
-        else:
-            logger.debug("[Cache] 벡터 캐시 저장 스킵 (비활성화)")
+    if ENABLE_VECTOR_CACHE:
+        cache.save(doc_splits, vector_store, bm25_retriever)
 
-            if torch.cuda.is_available():
-                import contextlib
+    if torch.cuda.is_available():
+        import contextlib
 
-                with contextlib.suppress(Exception):
-                    torch.cuda.empty_cache()
-            SessionManager.add_status_log("신규 인덱싱 완료", session_id=session_id)
+        with contextlib.suppress(Exception):
+            torch.cuda.empty_cache()
 
-    return doc_splits, vector_store, bm25_retriever, cache_used
+    # [최적화] 메모리 즉시 회수 강제
+    import gc
+
+    gc.collect()
+
+    SessionManager.add_status_log("신규 인덱싱 완료", session_id=session_id)
+    return doc_splits, vector_store, bm25_retriever, False
+
+    # [최종 방어] 어떤 경로로든 여기에 도달하면 현재 상태 반환
+    return doc_splits, vector_store, bm25_retriever, False
 
 
 @log_operation("RAG 파이프라인 구축")
@@ -594,7 +673,11 @@ async def build_rag_pipeline(
             _file_hash=file_hash,
             session_id=session_id,
         )
+        or (None, None, None, False)  # ✅ Null 방지 폴백 추가
     )
+
+    if not vector_store or not bm25_retriever:
+        raise RuntimeError("검색 컴포넌트(FAISS/BM25) 생성에 실패했습니다.")
 
     if cache_used:
         SessionManager.add_status_log("캐시 데이터 로드", session_id=session_id)

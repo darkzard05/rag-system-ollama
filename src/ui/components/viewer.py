@@ -7,10 +7,11 @@ import os
 import streamlit as st
 
 from common.config import MSG_PDF_VIEWER_NO_FILE
+from common.utils import safe_cache_resource
 from core.session import SessionManager
 
 
-@st.cache_resource(show_spinner=False)
+@safe_cache_resource(show_spinner=False)
 def _get_pdf_info(pdf_path: str) -> tuple[int, bytes]:
     import fitz
 

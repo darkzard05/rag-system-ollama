@@ -384,7 +384,11 @@ class CacheSecurityManager:
         st = os.stat(file_path)
         file_mode = stat.S_IMODE(st.st_mode)
 
-        # 다른 사용자가 읽을 수 있는 권한 확인
+        # [최적화] Windows 환경에서는 Unix 스타일 권한 검사가 부정확하므로 건너뜁니다.
+        if os.name == "nt":
+            return True
+
+        # 다른 사용자가 읽을 수 있는 권한 확인 (Unix 환경 전용)
         others_readable = bool(file_mode & stat.S_IROTH)
         others_writable = bool(file_mode & stat.S_IWOTH)
         group_writable = bool(file_mode & stat.S_IWGRP)

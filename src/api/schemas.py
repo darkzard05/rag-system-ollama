@@ -19,6 +19,7 @@ class PerformanceStats(BaseModel):
     total_time: float = 0.0
     token_count: int = 0
     thought_token_count: int = 0
+    input_token_count: int = 0
     model_name: str = "unknown"
     doc_count: int = 0
 

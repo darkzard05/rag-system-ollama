@@ -79,7 +79,7 @@ async def _stream_chat_response(
                 {"input": user_query}, config=run_config, version="v2"
             )
 
-            async with aclosing(
+            async with aclosing(  # type: ignore[type-var]
                 handler.stream_graph_events(
                     event_generator, adaptive_controller=controller
                 )
@@ -242,22 +242,30 @@ def render_message(
         if role == "assistant":
             st.divider()
             if metrics:
-                # [리팩토링] 지표를 3개의 컬럼으로 나누어 시각적으로 명확하게 배치
-                m_col1, m_col2, m_col3 = st.columns([1, 1, 1.5])
+                # [리팩토링] 지표를 4개의 컬럼으로 확장하여 상세 정보 표시
+                m_col1, m_col2, m_col3, m_col4 = st.columns([1, 1, 1, 1.5])
 
                 with m_col1:
-                    tokens = metrics.get("token_count", 0)
+                    in_tokens = metrics.get("input_token_count", 0)
                     st.markdown(
-                        f"📏 **{tokens}** <small>tokens</small>", unsafe_allow_html=True
+                        f"📥 **{in_tokens}** <small>In</small>", unsafe_allow_html=True
                     )
 
                 with m_col2:
-                    tps = metrics.get("tps", 0)
+                    out_tokens = metrics.get("token_count", 0)
                     st.markdown(
-                        f"🚀 **{tps:.1f}** <small>t/s</small>", unsafe_allow_html=True
+                        f"📤 **{out_tokens}** <small>Out</small>",
+                        unsafe_allow_html=True,
                     )
 
                 with m_col3:
+                    doc_count = metrics.get("doc_count", 0)
+                    st.markdown(
+                        f"📄 **{doc_count}** <small>Docs</small>",
+                        unsafe_allow_html=True,
+                    )
+
+                with m_col4:
                     total = metrics.get("total_time", 0)
                     ttft = metrics.get("ttft", 0)
                     st.markdown(
@@ -290,7 +298,7 @@ def _chat_fragment():
         if not messages:
             st.chat_message("system", avatar="⚙️").markdown(MSG_CHAT_GUIDE)
 
-        system_buffer = []
+        system_buffer: list[str] = []
 
         def flush_system_buffer():
             if not system_buffer:
@@ -318,18 +326,23 @@ def _chat_fragment():
             is_latest = i == msg_count - 1
 
             if msg.get("role") == "system" or msg.get("msg_type") == "log":
-                system_buffer.append(msg["content"])
+                system_buffer.append(str(msg.get("content", "")))
             else:
                 flush_system_buffer()
+
+                # 타입 안전성을 위해 명시적 추출
+                msg_metrics = msg.get("metrics")
+                msg_logs = msg.get("status_logs")
+
                 render_message(
-                    role=msg.get("role", "user"),
-                    content=msg.get("content", ""),
+                    role=str(msg.get("role", "user")),
+                    content=str(msg.get("content", "")),
                     thought=msg.get("thought"),
-                    metrics=msg.get("metrics"),
+                    metrics=msg_metrics if isinstance(msg_metrics, dict) else None,
                     processed_content=msg.get("processed_content"),
-                    msg_type=msg.get("msg_type", "general"),
-                    status_logs=msg.get("status_logs"),
-                    is_latest=is_latest,  # [추가] 최신 메시지 여부 전달
+                    msg_type=str(msg.get("msg_type", "general")),
+                    status_logs=msg_logs if isinstance(msg_logs, list) else None,
+                    is_latest=is_latest,
                 )
         flush_system_buffer()
 

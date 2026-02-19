@@ -113,20 +113,22 @@ class VectorQuantizer:
                 norm = np.linalg.norm(vec)
 
             # Min-max 정규화
-            vec_min = np.min(vec)
-            vec_max = np.max(vec)
-            scale = (vec_max - vec_min) / 255.0 if (vec_max - vec_min) > 0 else 1.0
-            offset = vec_min
+            vec_min: float = float(np.min(vec))
+            vec_max: float = float(np.max(vec))
+            scale: float = (
+                (vec_max - vec_min) / 255.0 if (vec_max - vec_min) > 0 else 1.0
+            )
+            offset: float = vec_min
 
             # 양자화
             quantized_vec = np.round((vec - offset) / scale).astype(np.uint8)
             quantized.append(quantized_vec)
 
-            scales.append(scale)
-            offsets.append(offset)
+            scales.append(float(scale))
+            offsets.append(float(offset))
 
             if self.config.preserve_norm:
-                scales[-1] *= norm
+                scales[-1] = float(scales[-1] * norm)
 
         metadata = {
             "method": "quantization_int8",
@@ -147,10 +149,12 @@ class VectorQuantizer:
 
         for vec in vectors:
             # Min-max 정규화
-            vec_min = np.min(vec)
-            vec_max = np.max(vec)
-            scale = (vec_max - vec_min) / 15.0 if (vec_max - vec_min) > 0 else 1.0
-            offset = vec_min
+            vec_min: float = float(np.min(vec))
+            vec_max: float = float(np.max(vec))
+            scale: float = (
+                (vec_max - vec_min) / 15.0 if (vec_max - vec_min) > 0 else 1.0
+            )
+            offset: float = vec_min
 
             # 양자화 (4-bit는 uint8로 표현, 실제로는 두 개의 4-bit 값)
             quantized_vec = np.round((vec - offset) / scale).astype(np.uint8)

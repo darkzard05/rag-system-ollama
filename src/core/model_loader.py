@@ -13,7 +13,6 @@ from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from langchain_core.embeddings import Embeddings
-    from sentence_transformers import CrossEncoder
 
 from common.config import (
     CACHE_DIR,
@@ -54,7 +53,6 @@ class ModelManager:
     _embedder_lock = threading.RLock()
     _reranker_lock = threading.RLock()
     _flashrank_lock = threading.RLock()
-    _docling_lock = threading.RLock()
     _client_lock = threading.RLock()
     _semaphore_lock = threading.RLock()
 
@@ -64,36 +62,6 @@ class ModelManager:
     _async_client = None
     _client_loop = None
     _inference_semaphore: asyncio.Semaphore | None = None
-
-    @classmethod
-    def get_docling_converter(cls) -> Any:
-        """Docling DocumentConverter 인스턴스를 가져오거나 생성합니다."""
-        with cls._docling_lock:
-            if "docling_converter" not in cls._instances:
-                from docling.datamodel.base_models import InputFormat
-                from docling.datamodel.pipeline_options import PdfPipelineOptions
-                from docling.document_converter import (
-                    DocumentConverter,
-                    PdfFormatOption,
-                )
-
-                from common.config import PARSING_CONFIG
-
-                logger.info("[MODEL] [LOAD] Docling DocumentConverter 초기화 중...")
-                pipeline_options = PdfPipelineOptions()
-                pipeline_options.do_ocr = PARSING_CONFIG.get("do_ocr", False)
-                pipeline_options.do_table_structure = PARSING_CONFIG.get(
-                    "do_table_structure", True
-                )
-
-                cls._instances["docling_converter"] = DocumentConverter(
-                    format_options={
-                        InputFormat.PDF: PdfFormatOption(
-                            pipeline_options=pipeline_options
-                        )
-                    }
-                )
-            return cls._instances["docling_converter"]
 
     @classmethod
     def get_flashranker(cls, model_name: str = "ms-marco-TinyBERT-L-2-v2") -> Any:
@@ -195,14 +163,6 @@ class ModelManager:
 
             # ChatOllama의 bind()는 가벼운 RunnableBinding을 반환함
             return base_llm.bind(**kwargs)
-
-    @classmethod
-    def get_reranker(cls, model_name: str) -> CrossEncoder | None:
-        """리랭커 모델을 가져오거나 로드합니다."""
-        with cls._reranker_lock:
-            if model_name not in cls._instances:
-                cls._instances[model_name] = load_reranker_model(model_name)
-            return cls._instances[model_name]
 
     @classmethod
     def clear_vram(cls):
@@ -331,134 +291,6 @@ def load_embedding_model(
         except Exception as e:
             logger.error(f"임베딩 모델 로드 실패: {e}")
             raise EmbeddingModelError(model=model_key, reason=str(e)) from e
-
-
-class OllamaReranker:
-    """
-    Ollama의 리랭킹 모델을 호출하는 래퍼 클래스.
-    """
-
-    def __init__(self, model_name: str, base_url: str):
-        self.model_name = model_name
-        self.base_url = base_url
-
-    async def apredict(
-        self, pairs: list[list[str]], batch_size: int = 32
-    ) -> list[float]:
-        """비동기 병렬 Ollama 리랭킹."""
-        import json
-        import re
-
-        if not pairs:
-            return []
-
-        query = pairs[0][0]
-        documents = [p[1] for p in pairs]
-        client = ModelManager.get_async_client(host=self.base_url)
-
-        async def _score_batch(batch: list[str], start_idx: int) -> list[float]:
-            scoring_prompt = (
-                f"Task: Evaluate document relevance to the query.\n"
-                f"Query: {query}\n\n"
-                "For each document below, output a relevance score between 0.0 and 1.0.\n"
-                "Output strictly as a JSON list. Example: [0.95, 0.12]\n\n"
-            )
-            for j, doc in enumerate(batch):
-                scoring_prompt += f"Document {j + 1}: {doc[:1000]}\n\n"
-
-            try:
-                response = await client.chat(
-                    model=self.model_name,
-                    messages=[
-                        {
-                            "role": "system",
-                            "content": "You are a professional ranking assistant.",
-                        },
-                        {"role": "user", "content": scoring_prompt},
-                    ],
-                    options={"temperature": 0.0, "num_predict": 128},
-                )
-
-                content = getattr(response.message, "content", "")
-
-                # JSON 파싱 시도
-                json_match = re.search(
-                    r"\[\s*([0-9.]+\s*,\s*)*[0-9.]+\s*\]", content.strip(), re.DOTALL
-                )
-                if json_match:
-                    return [
-                        float(s) for s in json.loads(json_match.group())[: len(batch)]
-                    ]
-
-                # Fallback: 숫자 추출
-                found = re.findall(r"0\.\d+|1\.0", content)
-                return [float(s) for s in found[: len(batch)]] or [0.4] * len(batch)
-            except Exception:
-                return [0.4] * len(batch)
-
-        batch_tasks = [
-            _score_batch(documents[i : i + 5], i) for i in range(0, len(documents), 5)
-        ]
-        all_batch_results = await asyncio.gather(*batch_tasks)
-        return [score for res in all_batch_results for score in res]
-
-    def predict(self, pairs: list[list[str]], batch_size: int = 32) -> list[float]:
-        try:
-            asyncio.get_running_loop()
-            return self._predict_sync(pairs, batch_size)
-        except RuntimeError:
-            return asyncio.run(self.apredict(pairs, batch_size))
-
-    def _predict_sync(
-        self, pairs: list[list[str]], batch_size: int = 32
-    ) -> list[float]:
-        import re
-
-        query = pairs[0][0]
-        documents = [p[1] for p in pairs]
-        client = ModelManager.get_client(host=self.base_url)
-        all_scores = []
-        for i in range(0, len(documents), 5):
-            batch = documents[i : i + 5]
-            prompt = f"Query: {query}\nScores (0.0-1.0) for {len(batch)} docs: "
-            response = client.chat(
-                model=self.model_name, messages=[{"role": "user", "content": prompt}]
-            )
-            content = response.message.content
-            found = re.findall(r"0\.\d+|1\.0", content)
-            all_scores.extend(
-                [float(s) for s in found][: len(batch)] or [0.5] * len(batch)
-            )
-        return all_scores
-
-
-def load_reranker_model(model_name: str) -> Any:
-    if not model_name:
-        return None
-    is_ollama = "/" not in model_name or "reranker" in model_name.lower()
-    if is_ollama:
-        return OllamaReranker(model_name=model_name, base_url=OLLAMA_BASE_URL)
-
-    try:
-        import torch
-        from sentence_transformers import CrossEncoder
-
-        device = (
-            EMBEDDING_DEVICE.lower()
-            if EMBEDDING_DEVICE.lower() != "auto"
-            else ("cuda" if torch.cuda.is_available() else "cpu")
-        )
-
-        backend = "default"
-        import importlib.util
-
-        if importlib.util.find_spec("optimum"):
-            backend = "onnx"
-
-        return CrossEncoder(model_name, device=device, backend=backend)
-    except Exception as e:
-        logger.error(f"Reranker 로드 실패: {e}")
-        return None
 
 
 def get_available_models() -> list[str]:

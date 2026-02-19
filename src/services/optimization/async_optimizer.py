@@ -351,7 +351,7 @@ class ConcurrentDocumentReranker:
             (정렬된 문서 리스트, 통계 딕셔너리)
         """
         with monitor.track_operation(
-            OperationType.DOCUMENT_RERANKING,
+            OperationType.RERANKING,
             {"doc_count": len(documents), "query": query, **(metadata or {})},
         ) as op:
             logger.info(f"[Optimizer] [Rerank] 병렬 리랭킹 시작: {len(documents)} 문서")

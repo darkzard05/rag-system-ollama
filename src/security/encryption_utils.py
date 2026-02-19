@@ -282,6 +282,7 @@ class SecureDataStorage:
         """데이터 저장"""
         try:
             if sensitive:
+                encrypted_value: Any
                 if isinstance(value, dict):
                     encrypted_value = self._encryption_manager.encrypt_sensitive_data(
                         value
@@ -295,9 +296,15 @@ class SecureDataStorage:
                 else:
                     encrypted_value = value
 
-                self._data_store[key] = {"encrypted": True, "value": encrypted_value}
+                self._data_store[key] = {
+                    "encrypted": True,
+                    "value": encrypted_value,
+                }
             else:
-                self._data_store[key] = {"encrypted": False, "value": value}
+                self._data_store[key] = {
+                    "encrypted": False,
+                    "value": value,
+                }
 
             return True
         except Exception:

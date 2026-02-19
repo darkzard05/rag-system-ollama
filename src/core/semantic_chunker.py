@@ -9,7 +9,7 @@
 import hashlib
 import logging
 import re
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 from langchain_core.documents import Document
@@ -195,12 +195,12 @@ class EmbeddingBasedSemanticChunker:
 
                 curr_pos = 0
                 while curr_pos < len(seg_text):
-                    sub_len = ChunkingConstants.MAX_HARD_SPLIT_LEN
+                    sub_len: int = int(ChunkingConstants.MAX_HARD_SPLIT_LEN)
                     # 가급적 공백에서 자르기 시도
                     if curr_pos + sub_len < len(seg_text):
                         last_space = seg_text.rfind(" ", curr_pos, curr_pos + sub_len)
                         if last_space != -1 and last_space > curr_pos + (sub_len // 2):
-                            sub_len = last_space - curr_pos + 1
+                            sub_len = int(last_space - curr_pos + 1)
 
                     sub_text = seg_text[curr_pos : curr_pos + sub_len]
                     self._add_cleaned_sentence(
@@ -235,7 +235,9 @@ class EmbeddingBasedSemanticChunker:
                 {"text": embed_text, "start": final_start, "end": final_end}
             )
 
-    async def _get_embeddings(self, texts: list[str], normalize: bool = True) -> np.ndarray:
+    async def _get_embeddings(
+        self, texts: list[str], normalize: bool = True
+    ) -> np.ndarray:
         """
         텍스트 리스트의 임베딩을 생성합니다.
         [최적화] 전역 캐시 확인 -> 누락분만 배치 임베딩 -> 결과 병합 및 캐시 저장
@@ -257,7 +259,7 @@ class EmbeddingBasedSemanticChunker:
                 original_to_unique_mapping.append(text_to_unique_idx[norm_text])
 
             # 2. 캐시 조회
-            unique_embeddings: list[Optional[np.ndarray]] = [None] * len(unique_texts)
+            unique_embeddings: list[np.ndarray | None] = [None] * len(unique_texts)
             missing_indices = []
             missing_texts = []
 
@@ -276,10 +278,14 @@ class EmbeddingBasedSemanticChunker:
 
             # 3. 누락된 문장들만 배치 임베딩 수행
             if missing_texts:
-                logger.debug(f"[Chunker] {len(missing_texts)}개 문장 신규 임베딩 계산 중...")
+                logger.debug(
+                    f"[Chunker] {len(missing_texts)}개 문장 신규 임베딩 계산 중..."
+                )
                 new_embeddings = self.embedder.embed_documents(missing_texts)
 
-                for idx, text, vec in zip(missing_indices, missing_texts, new_embeddings, strict=False):
+                for idx, text, vec in zip(
+                    missing_indices, missing_texts, new_embeddings, strict=False
+                ):
                     vec_np = np.array(vec).astype("float32")
                     unique_embeddings[idx] = vec_np
 
@@ -339,16 +345,16 @@ class EmbeddingBasedSemanticChunker:
 
         # 1. 전역 임계값 계산 (동적 전략 지원)
         if self.breakpoint_threshold_type == "percentile":
-            global_threshold = np.percentile(
-                similarities_array, 100 - self.breakpoint_threshold_value
+            global_threshold: float = float(
+                np.percentile(similarities_array, 100 - self.breakpoint_threshold_value)
             )
         elif self.breakpoint_threshold_type == "standard_deviation":
             # 평균 - (N * 표준편차) 미달인 지점을 경계로 선택
-            mean = np.mean(similarities_array)
-            std = np.std(similarities_array)
-            global_threshold = mean - (self.breakpoint_threshold_value * std)
+            mean = float(np.mean(similarities_array))
+            std = float(np.std(similarities_array))
+            global_threshold = float(mean - (self.breakpoint_threshold_value * std))
         else:
-            global_threshold = self.similarity_threshold
+            global_threshold = float(self.similarity_threshold)
 
         # 2. [최적화] 로컬 감지 (벡터화된 이동 평균 기반)
         window_size = ChunkingConstants.SEMANTIC_WINDOW_SIZE

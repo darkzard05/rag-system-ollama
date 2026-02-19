@@ -111,7 +111,33 @@ def clean_query_text(query: str) -> str:
     return query.strip()
 
 
-@st.cache_data(ttl=5)  # 5초 동안 리소스 정보 캐싱
+def safe_cache_data(func=None, **kwargs):
+    """Streamlit 런타임이 있을 때만 cache_data를 적용하고, 없으면 원본 함수를 반환합니다."""
+    if func is None:
+        return lambda f: safe_cache_data(f, **kwargs)
+
+    try:
+        if st.runtime.exists():
+            return st.cache_data(**kwargs)(func)
+    except Exception:
+        pass
+    return func
+
+
+def safe_cache_resource(func=None, **kwargs):
+    """Streamlit 런타임이 있을 때만 cache_resource를 적용하고, 없으면 원본 함수를 반환합니다."""
+    if func is None:
+        return lambda f: safe_cache_resource(f, **kwargs)
+
+    try:
+        if st.runtime.exists():
+            return st.cache_resource(**kwargs)(func)
+    except Exception:
+        pass
+    return func
+
+
+@safe_cache_data(ttl=5)  # 5초 동안 리소스 정보 캐싱
 def get_ollama_resource_usage(model_name: str) -> str:
     """
     Ollama API를 통해 특정 모델의 리소스 사용 상태(GPU/CPU)를 조회합니다.
@@ -213,7 +239,7 @@ def count_tokens_rough(text: str) -> int:
     return int(len(text) / 2.5) + 1
 
 
-@st.cache_data(ttl=4)
+@safe_cache_data(ttl=4)
 def _get_cached_pdf_bytes(pdf_path: str) -> bytes | None:
     """PDF 파일 내용을 메모리에 캐싱합니다. (I/O 절감)"""
     if os.path.exists(pdf_path):
@@ -240,24 +266,46 @@ def sync_run(coro):
 
 def log_operation(operation_name):
     """
-    단순 동기 함수용 로깅 데코레이터.
+    동기 및 비동기 함수를 모두 지원하는 로깅 데코레이터.
     GraphBuilder의 Node 함수에는 사용하지 마세요! (config 전달 문제 발생 가능)
     """
 
     def decorator(func):
-        @functools.wraps(func)
-        def wrapper(*args, **kwargs):
-            logger.info(f"[SYSTEM] [TASK] {operation_name} 시작")
-            start = time.time()
-            try:
-                res = func(*args, **kwargs)
-                dur = time.time() - start
-                logger.info(f"[SYSTEM] [TASK] {operation_name} 완료 | 소요: {dur:.2f}s")
-                return res
-            except Exception as e:
-                logger.info(f"[SYSTEM] [TASK] {operation_name} 실패 | {e}")
-                raise
+        if asyncio.iscoroutinefunction(func):
 
-        return wrapper
+            @functools.wraps(func)
+            async def async_wrapper(*args, **kwargs):
+                logger.info(f"[SYSTEM] [TASK] {operation_name} 시작")
+                start = time.time()
+                try:
+                    res = await func(*args, **kwargs)
+                    dur = time.time() - start
+                    logger.info(
+                        f"[SYSTEM] [TASK] {operation_name} 완료 | 소요: {dur:.2f}s"
+                    )
+                    return res
+                except Exception as e:
+                    logger.info(f"[SYSTEM] [TASK] {operation_name} 실패 | {e}")
+                    raise
+
+            return async_wrapper
+        else:
+
+            @functools.wraps(func)
+            def sync_wrapper(*args, **kwargs):
+                logger.info(f"[SYSTEM] [TASK] {operation_name} 시작")
+                start = time.time()
+                try:
+                    res = func(*args, **kwargs)
+                    dur = time.time() - start
+                    logger.info(
+                        f"[SYSTEM] [TASK] {operation_name} 완료 | 소요: {dur:.2f}s"
+                    )
+                    return res
+                except Exception as e:
+                    logger.info(f"[SYSTEM] [TASK] {operation_name} 실패 | {e}")
+                    raise
+
+            return sync_wrapper
 
     return decorator

@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import streamlit as st
 
+from common.utils import safe_cache_resource
 from ui.components.chat import render_chat_interface
 from ui.components.sidebar import render_sidebar as _render_sidebar
 from ui.components.viewer import render_pdf_viewer
@@ -26,7 +27,7 @@ def render_sidebar(**kwargs):
     return _render_sidebar(**kwargs)
 
 
-@st.cache_resource
+@safe_cache_resource
 def inject_custom_css():
     """앱 전반에 걸친 최소한의 커스텀 CSS 및 JS 주입 (캐시됨)."""
     st.markdown(

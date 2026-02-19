@@ -159,7 +159,7 @@ class TestRAGInitialization(unittest.TestCase):
         is_available, total_memory = get_gpu_memory_info()
 
         assert isinstance(is_available, bool)
-        assert isinstance(total_memory, int)
+        assert isinstance(total_memory, (int, float))
 
         if is_available:
             assert total_memory > 0

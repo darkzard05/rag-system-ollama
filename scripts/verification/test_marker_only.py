@@ -3,7 +3,7 @@ import time
 import sys
 from pathlib import Path
 
-ROOT_DIR = Path(__file__).parent.parent.absolute()
+ROOT_DIR = Path(__file__).parent.parent.parent.absolute()
 TEST_PDF = str(ROOT_DIR / "tests" / "data" / "2201.07520v1.pdf")
 
 def test_marker():
@@ -35,3 +35,4 @@ if __name__ == "__main__":
         print("Marker Success! Time: " + str(round(t, 2)) + "s")
         print("Chars: " + str(len(md)))
         print("Table Check: " + str("|" in md[2000:15000]))
+

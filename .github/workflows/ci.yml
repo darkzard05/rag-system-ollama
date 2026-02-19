@@ -36,7 +36,7 @@ jobs:
     - name: Run Mypy (Type Check)
       run: |
         export PYTHONPATH="${PYTHONPATH}:$(pwd)/src"
-        mypy --ignore-missing-imports --disable-error-code import-untyped --non-interactive --install-types src/
+        mypy src
 
   security-scan:
     name: Security Scan
@@ -111,7 +111,8 @@ jobs:
       if: runner.os == 'Linux'
       run: |
         sudo apt-get update
-        sudo apt-get install -y libgl1 libglib2.0-0
+        # libglib2.0-0 is still useful for some utility libraries
+        sudo apt-get install -y libglib2.0-0
         
     - name: Install dependencies (Windows)
       if: runner.os == 'Windows'
@@ -131,6 +132,8 @@ jobs:
     - name: Run Core Integrity Tests
       run: |
         python -m pytest tests/integration/test_rag_integration.py
+        python -m pytest tests/integration/test_streamlit_app.py
+        python -m pytest tests/integration/test_streaming_response.py
         python -m pytest tests/security/test_cache_security.py
         python -m pytest tests/integration/test_caching_system.py
       shell: bash

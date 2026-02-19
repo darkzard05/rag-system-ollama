@@ -23,14 +23,14 @@ class SessionManager(ThreadSafeSessionManager):
     """
 
     @classmethod
-    def is_ready_for_chat(cls) -> bool:
+    def is_ready_for_chat(cls, session_id: str | None = None) -> bool:
         """
         채팅 준비 상태를 확인합니다 (캐시됨).
 
         Returns:
             bool: PDF 처리 완료, 에러 없음, QA 체인 준비 시 True.
         """
-        return super().is_ready_for_chat()
+        return super().is_ready_for_chat(session_id=session_id)
 
     @classmethod
     def get(

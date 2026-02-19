@@ -12,7 +12,7 @@ from datetime import datetime
 from typing import List
 
 # src 디렉토리를 경로에 추가
-sys.path.append(os.path.join(os.path.dirname(__file__), "..", "src"))
+sys.path.append(os.path.join(os.path.dirname(__file__), \"..\", \"..\", \"src\"))
 
 from langchain_ollama import ChatOllama, OllamaEmbeddings
 from ragas import EvaluationDataset, evaluate
@@ -61,40 +61,25 @@ async def run_benchmark(file_path: str, file_name: str, questions: List[str], gr
         })
     
     # 3. Ragas 평가 데이터셋 생성
-    dataset = EvaluationDataset.from_list(results)
+    # EvaluationService는 {"query": ..., "response": ..., "context": ...} 형식을 기대함
+    eval_data = []
+    for r in results:
+        eval_data.append({
+            "query": r["user_input"],
+            "response": r["response"],
+            "context": r["retrieved_contexts"]
+        })
     
-    # 4. 평가 모델(Judge) 설정 (Ollama 기반)
-    # 평가에는 조금 더 파라미터가 큰 모델(예: llama3.1:8b)을 권장하지만, 일단 기본 모델 사용
-    judge_llm = LangchainLLMWrapper(ChatOllama(model=DEFAULT_OLLAMA_MODEL, base_url=OLLAMA_BASE_URL))
-    judge_embeddings = LangchainEmbeddingsWrapper(OllamaEmbeddings(model="nomic-embed-text", base_url=OLLAMA_BASE_URL))
+    # 4. EvaluationService를 통한 평가 실행
+    logger.info("EvaluationService를 통한 Ragas 평가 시작...")
+    eval_service = EvaluationService()
+    summary, report_path = await eval_service.run_evaluation(eval_data, report_prefix="benchmark_report")
     
-    # 5. 평가 실행
-    logger.info("Ragas 평가 지표 계산 중...")
-    eval_result = evaluate(
-        dataset=dataset,
-        metrics=[
-            faithfulness,
-            answer_relevancy,
-            context_precision,
-            context_recall,
-        ],
-        llm=judge_llm,
-        embeddings=judge_embeddings,
-    )
-    
-    # 6. 결과 저장 및 출력
-    df = eval_result.to_pandas()
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    output_path = f"reports/benchmark_result_{timestamp}.csv"
-    
-    os.makedirs("reports", exist_ok=True)
-    df.to_csv(output_path, index=False, encoding="utf-8-sig")
-    
-    logger.info(f"벤치마크 완료! 결과 저장됨: {output_path}")
+    logger.info(f"벤치마크 완료! 결과 저장됨: {report_path}")
     print("\n=== 벤치마크 결과 요약 ===")
-    print(eval_result)
+    print(summary)
     
-    return eval_result
+    return summary
 
 if __name__ == "__main__":
     # 생성된 테스트셋 로드
@@ -109,3 +94,4 @@ if __name__ == "__main__":
         ground_truths = df["ground_truth"].tolist()
         
         asyncio.run(run_benchmark(pdf_path, "2201.07520v1.pdf", questions, ground_truths))
+

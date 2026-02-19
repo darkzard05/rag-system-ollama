@@ -19,8 +19,11 @@ logger = setup_logging(log_level="INFO", log_file=Path("logs/app.log"))
 from common.config import (
     DEFAULT_EMBEDDING_MODEL,
     DEFAULT_OLLAMA_MODEL,
-)  # noqa: E402
+)
+
+# noqa: E402
 from common.constants import FilePathConstants, StringConstants  # noqa: E402
+from common.utils import safe_cache_resource, sync_run
 
 # [Lazy Import] 무거운 코어 모듈 임포트 제거 (함수 내부로 이동)
 from core.session import SessionManager  # noqa: E402
@@ -134,7 +137,7 @@ def _run_background_checks():
     # _init_temp_directory()는 이미 별도 스레드를 쓰고 있음
 
 
-@st.cache_resource(show_spinner=False)
+@safe_cache_resource(show_spinner=False)
 def _init_temp_directory():
     """임시 디렉토리를 초기화하고 잔해를 백그라운드에서 제거합니다."""
     from common.constants import FilePathConstants
@@ -280,11 +283,13 @@ def _rebuild_rag_system() -> None:
         from core.rag_core import build_rag_pipeline
 
         # RAG 파이프라인 빌드 (내부에서 상세 로그 기록 및 UI 동기화)
-        success_message, cache_used = build_rag_pipeline(
-            uploaded_file_name=file_name,
-            file_path=file_path,
-            embedder=embedder,
-            on_progress=sync_ui,
+        success_message, cache_used = sync_run(
+            build_rag_pipeline(
+                uploaded_file_name=file_name,
+                file_path=file_path,
+                embedder=embedder,
+                on_progress=sync_ui,
+            )
         )
 
         SessionManager.add_message("system", success_message)
@@ -311,7 +316,8 @@ def _update_qa_chain() -> None:
         # [Lazy Import]
         from core.model_loader import load_llm
 
-        llm = load_llm(selected_model)
+        model_name = str(selected_model or DEFAULT_OLLAMA_MODEL)
+        llm = load_llm(model_name)
         SessionManager.set("llm", llm)
         SessionManager.replace_last_status_log("✅ 추론 모델 교체 완료")
 

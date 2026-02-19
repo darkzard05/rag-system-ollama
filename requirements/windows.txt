@@ -5,6 +5,7 @@
 streamlit==1.50.0
 streamlit-pdf-viewer==0.0.26
 pymupdf==1.26.5
+pymupdf4llm==0.2.9
 python-dotenv==1.1.1
 pyyaml==6.0.3
 psutil

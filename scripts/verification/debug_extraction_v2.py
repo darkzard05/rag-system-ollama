@@ -2,7 +2,7 @@ import os
 import sys
 from pathlib import Path
 
-ROOT_DIR = Path(__file__).parent.parent.absolute()
+ROOT_DIR = Path(__file__).parent.parent.parent.absolute()
 
 def evaluate_new_extraction():
     import pymupdf4llm

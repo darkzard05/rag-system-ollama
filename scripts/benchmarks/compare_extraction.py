@@ -4,7 +4,7 @@ import fitz
 import pymupdf4llm
 from pathlib import Path
 
-ROOT_DIR = Path(__file__).parent.parent.absolute()
+ROOT_DIR = Path(__file__).parent.parent.parent.absolute()
 TEST_PDF = str(ROOT_DIR / "tests" / "data" / "2201.07520v1.pdf")
 
 def old_extraction_logic(file_path):

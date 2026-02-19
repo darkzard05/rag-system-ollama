@@ -9,7 +9,7 @@ from pathlib import Path
 from datetime import datetime
 
 # 프로젝트 루트 경로 추가
-ROOT_DIR = Path(__file__).parent.parent.absolute()
+ROOT_DIR = Path(__file__).parent.parent.parent.absolute()
 sys.path.append(str(ROOT_DIR / "src"))
 
 from core.rag_core import RAGSystem
@@ -145,3 +145,4 @@ async def run_benchmark():
 
 if __name__ == "__main__":
     asyncio.run(run_benchmark())
+

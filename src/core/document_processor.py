@@ -1,12 +1,11 @@
 """
 PDF 문서 로딩 및 텍스트 추출을 담당하는 모듈.
-최신 Docling 라이브러리를 사용하여 고품질 구조적 마크다운을 추출하며, 실패 시 PyMuPDF4LLM으로 폴백합니다.
+PyMuPDF4LLM을 사용하여 초고속으로 구조적 마크다운을 추출하며 RAG 최적화 청킹을 수행합니다.
 """
 
 import hashlib
 import logging
 from collections.abc import Callable
-from pathlib import Path
 
 from langchain_core.documents import Document
 
@@ -40,25 +39,6 @@ def compute_file_hash(file_path: str, data: bytes | None = None) -> str:
         return ""
 
 
-def _load_with_pymupdf(file_path: str) -> list[Document]:
-    """PyMuPDF4LLM을 사용한 폴백 로딩"""
-    import pymupdf4llm
-
-    logger.info("[Fallback] PyMuPDF4LLM을 사용하여 문서 변환 시도")
-    md_text = pymupdf4llm.to_markdown(file_path)
-
-    return [
-        Document(
-            page_content=md_text,
-            metadata={
-                "source": Path(file_path).name,
-                "format": "markdown",
-                "engine": "pymupdf4llm",
-            },
-        )
-    ]
-
-
 def load_pdf_docs(
     file_path: str,
     file_name: str,
@@ -67,71 +47,88 @@ def load_pdf_docs(
     session_id: str | None = None,
 ) -> list[Document]:
     """
-    DoclingLoader를 사용하여 고품질 구조적 마크다운을 추출합니다.
+    PyMuPDF4LLM을 사용하여 문서를 페이지 단위 마크다운으로 변환하고 RAG용 Document 객체 리스트를 생성합니다.
     """
+    import pymupdf4llm
+
     with monitor.track_operation(OperationType.PDF_LOADING, {"file": file_name}) as op:
         try:
             SessionManager.add_status_log(
-                "AI 기반 정밀 구조 분석 중 (Docling)", session_id=session_id
+                "초고속 구조 분석 및 마크다운 변환 중 (PyMuPDF4LLM)",
+                session_id=session_id,
             )
             if on_progress:
                 on_progress()
 
-            # Docling 시도
+            # PyMuPDF4LLM 최적화 호출
             try:
-                from langchain_docling import DoclingLoader
+                from common.config import PARSING_CONFIG
 
-                from core.model_loader import ModelManager
+                # 설정값 추출 (기본값 포함)
+                write_images = PARSING_CONFIG.get("write_images", False)
+                fontsize_limit = PARSING_CONFIG.get("fontsize_limit", 3)
+                ignore_code = PARSING_CONFIG.get("ignore_code", False)
+                extract_words = PARSING_CONFIG.get("extract_words", True)
 
-                # [최적화] 전역 관리되는 DocumentConverter 인스턴스를 사용하여 설정(OCR 등)을 일관되게 적용
-                converter = ModelManager.get_docling_converter()
-
-                # [최적화] DoclingLoader는 내부적으로 Docling의 강력한 분석 엔진을 사용하여
-                # 표와 레이아웃을 마크다운으로 완벽하게 보존합니다.
-                loader = DoclingLoader(
-                    file_path=file_path,
-                    converter=converter,
-                    export_type="markdown",
+                # 마크다운 변환 실행
+                chunks = pymupdf4llm.to_markdown(
+                    file_path,
+                    page_chunks=True,
+                    write_images=write_images,
+                    fontsize_limit=fontsize_limit,
+                    ignore_code=ignore_code,
+                    extract_words=extract_words,
                 )
 
-                docs = loader.load()
+                docs = []
+                for i, chunk in enumerate(chunks):
+                    metadata = chunk.get("metadata", {})
+                    page_num = metadata.get("page", i + 1)
 
-                # 메타데이터 보강
-                for doc in docs:
-                    doc.metadata.update(
-                        {"source": file_name, "engine": "docling", "format": "markdown"}
+                    # [최적화] 메타데이터 풍부화
+                    # 단어 좌표(words) 정보가 있으면 보관 (하이라이트용)
+                    words_data = chunk.get("words", [])
+
+                    doc = Document(
+                        page_content=chunk.get("text", ""),
+                        metadata={
+                            "source": file_name,
+                            "page": page_num,
+                            "total_pages": metadata.get("page_count", len(chunks)),
+                            "engine": "pymupdf4llm",
+                            "format": "markdown",
+                            "chunk_index": i,
+                            "is_already_chunked": True,
+                            "word_count": len(words_data),
+                            # [핵심] 정밀 인용을 위해 좌표 데이터의 일부(샘플) 또는 요약 저장 가능
+                            # 여기서는 추후 확장을 위해 플래그만 저장
+                            "has_coordinates": len(words_data) > 0,
+                        },
                     )
+                    docs.append(doc)
 
                 SessionManager.replace_last_status_log(
-                    f"Docling 분석 완료 ({len(docs)} 청크)",
+                    f"문서 분석 완료 ({len(docs)} 페이지 확보)",
                     session_id=session_id,
                 )
 
-            except ImportError:
-                logger.warning(
-                    "Docling 라이브러리가 없습니다. PyMuPDF4LLM으로 전환합니다."
-                )
-                docs = _load_with_pymupdf(file_path)
-                SessionManager.replace_last_status_log(
-                    "PyMuPDF 분석 완료 (Docling 미설치)", session_id=session_id
-                )
             except Exception as e:
-                logger.error(f"Docling 처리 실패: {e}. PyMuPDF4LLM으로 전환합니다.")
-                docs = _load_with_pymupdf(file_path)
-                SessionManager.replace_last_status_log(
-                    "PyMuPDF 분석 완료 (Docling 실패)", session_id=session_id
-                )
+                logger.error(f"PyMuPDF4LLM 처리 실패: {e}")
+                raise
 
             if not docs:
                 raise EmptyPDFError(
-                    filename=file_name, details={"reason": "유효한 텍스트가 없습니다."}
+                    filename=file_name, details={"reason": "추출된 텍스트가 없습니다."}
                 )
 
+            # 성능 지표 기록 (토큰 수 대략 계산)
             op.tokens = sum(len(doc.page_content.split()) for doc in docs)
             return docs
 
         except Exception as e:
             logger.error(f"[RAG] [PDF] 최종 오류: {e}")
+            if isinstance(e, EmptyPDFError):
+                raise
             raise PDFProcessingError(
                 message=str(e), details={"filename": file_name}
             ) from e

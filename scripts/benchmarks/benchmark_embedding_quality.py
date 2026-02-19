@@ -6,7 +6,7 @@ import numpy as np
 from pathlib import Path
 
 # 프로젝트 루트 경로 추가
-ROOT_DIR = Path(__file__).parent.parent.absolute()
+ROOT_DIR = Path(__file__).parent.parent.parent.absolute()
 sys.path.append(str(ROOT_DIR / "src"))
 
 from common.config import OLLAMA_BASE_URL
@@ -95,3 +95,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

@@ -3,7 +3,7 @@ import time
 import subprocess
 from pathlib import Path
 
-ROOT_DIR = Path(__file__).parent.parent.absolute()
+ROOT_DIR = Path(__file__).parent.parent.parent.absolute()
 TEST_PDF = str(ROOT_DIR / "tests" / "data" / "2201.07520v1.pdf")
 MARKER_PATH = r"C:\ProgramData\anaconda3\envs\rag-ollama\Scripts\marker_single.exe"
 
@@ -69,3 +69,4 @@ def compare():
 
 if __name__ == "__main__":
     compare()
+

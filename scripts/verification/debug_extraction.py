@@ -2,7 +2,7 @@ import os
 import sys
 from pathlib import Path
 
-ROOT_DIR = Path(__file__).parent.parent.absolute()
+ROOT_DIR = Path(__file__).parent.parent.parent.absolute()
 sys.path.append(str(ROOT_DIR / "src"))
 
 from core.document_processor import load_pdf_docs

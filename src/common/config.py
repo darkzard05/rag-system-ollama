@@ -112,7 +112,14 @@ TEXT_SPLITTER_CONFIG: dict = _rag_config.get(
 )
 SEMANTIC_CHUNKER_CONFIG: dict = _rag_config.get("semantic_chunker", {"enabled": False})
 PARSING_CONFIG: dict = _rag_config.get(
-    "parsing", {"engine": "docling", "do_ocr": False, "do_table_structure": True}
+    "parsing",
+    {
+        "engine": "docling",
+        "do_ocr": False,
+        "do_table_structure": True,
+        "table_mode": "fast",
+        "timeout": 300.0,
+    },
 )
 VECTOR_STORE_CACHE_DIR: str = str(
     PROJECT_ROOT
@@ -235,6 +242,21 @@ MSG_CHAT_GUIDE = _ui_messages.get("chat_guide", "사용 가이드")
 MSG_STREAMING_ERROR = _ui_messages.get("streaming_error", "스트리밍 오류: {e}")
 MSG_GENERIC_ERROR = _ui_messages.get("generic_error", "오류 발생: {error_msg}")
 MSG_RETRY_BUTTON = _ui_messages.get("retry_button", "재시도")
+
+# --- 평가 설정 ---
+_eval_config = _config.get("evaluation", {})
+EVAL_JUDGE_MODEL: str = _get_env(
+    "EVAL_JUDGE_MODEL", _eval_config.get("judge_model", DEFAULT_OLLAMA_MODEL)
+)
+EVAL_TIMEOUT: int = _get_env("EVAL_TIMEOUT", _eval_config.get("timeout", 1800), int)
+EVAL_MAX_WORKERS: int = _get_env(
+    "EVAL_MAX_WORKERS", _eval_config.get("max_workers", 1), int
+)
+
+_eval_prompts = _eval_config.get("prompts", {})
+EVAL_PROMPT_ST_GEN: str = _eval_prompts.get("statement_generator", "")
+EVAL_PROMPT_NLI: str = _eval_prompts.get("nli_statement", "")
+EVAL_PROMPT_ANSWER_RELEVANCY: str = _eval_prompts.get("answer_relevancy", "")
 
 _ui_errors = _ui_messages.get("errors", {})
 MSG_ERROR_OLLAMA_NOT_RUNNING = _ui_errors.get(

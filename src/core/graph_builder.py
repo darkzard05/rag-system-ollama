@@ -80,12 +80,19 @@ def _merge_consecutive_chunks(docs: DocumentList) -> DocumentList:
             text_a = current_doc.page_content
             text_b = next_doc.page_content
 
-            # 오버랩 제거 로직
+            # [최적화] 오버랩 제거 로직 (루프 최소화 및 고속 매칭)
             overlap_len = 0
+            # 최소 10자 이상 겹치는 경우만 탐색 (노이즈 방지 및 속도 개선)
             max_check = min(len(text_a), len(text_b), 350)
 
-            for length in range(max_check, 5, -1):
-                if text_a.endswith(text_b[:length]):
+            # text_b의 시작 부분이 text_a의 끝부분에 포함되는지 역순으로 확인
+            # find()를 사용하여 루프 없이 후보 지점을 빠르게 탐색
+            search_start_pos = len(text_a) - max_check
+            potential_overlap_text = text_a[search_start_pos:]
+
+            # 후보군 중 가장 긴 매칭 지점 탐색 (간결하고 빠른 로직)
+            for length in range(max_check, 9, -1):
+                if potential_overlap_text.endswith(text_b[:length]):
                     overlap_len = length
                     break
 
@@ -354,9 +361,20 @@ def build_graph(retriever: Any = None) -> Any:
         sid = configurable.get("session_id")
         llm = configurable.get("llm") or SessionManager.get("llm", session_id=sid)
 
+        if not llm:
+            logger.error("[Generate-Node] 모델(LLM)이 로드되지 않았습니다.")
+            return {
+                "response": "❌ 오류: 추론 모델이 로드되지 않았습니다.",
+                "thought": "",
+            }
+
         try:
-            context = state.get("context", "").strip()
-            user_input = state.get("input", "").strip()
+            # state.get()이 None을 반환할 수 있으므로 안전하게 처리
+            raw_context = state.get("context")
+            context = (raw_context or "").strip()
+
+            raw_input = state.get("input")
+            user_input = (raw_input or "").strip()
 
             # [최적화] ANALYSIS_PROTOCOL의 가이드라인과 중복되는 내용 제거 및 명확화
             system_instruction = (
@@ -383,7 +401,8 @@ def build_graph(retriever: Any = None) -> Any:
             logger.info(f"[Response-Node] 생성 시작 (Context: {len(context)} chars)")
 
             tracker = ResponsePerformanceTracker(user_input, llm)
-            tracker.set_context(context)
+            relevant_docs = state.get("relevant_docs", [])
+            tracker.set_context(context, doc_count=len(relevant_docs))
 
             from core.model_loader import ModelManager
 

@@ -32,7 +32,7 @@ models:
   embedding_batch_size: "auto"
 
   # 임베딩 모델 실행 디바이스
-  embedding_device: "cpu"
+  embedding_device: "cuda"
 
 
 # --- RAG 파이프라인 설정 ---
@@ -71,11 +71,17 @@ rag:
     chunk_size: 500
     chunk_overlap: 100
   
-  # 추출 엔진 설정 (IBM Docling)
+  # 추출 엔진 설정 (PyMuPDF4LLM 최적화)
   parsing:
-    engine: "docling"
+    engine: "pymupdf4llm"
     do_ocr: false
     do_table_structure: true
+    write_images: false
+    # --- 추가된 최적화 파라미터 ---
+    fontsize_limit: 3        # 3pt 이하 텍스트(주석 등) 무시
+    ignore_code: false       # 코드 블록 보존
+    extract_words: true      # 정밀 인용을 위한 단어 좌표 추출
+    force_text: false        # 텍스트 레이어 강제 추출 여부
 
   # 의미론적 분할 설정
   semantic_chunker:
@@ -136,6 +142,28 @@ rag:
       - 불필요한 서술어 제외
       - 고유명사 및 수치 보존
       - JSON 형식을 엄격히 준수할 것
+
+
+# --- 평가(Evaluation) 설정 ---
+evaluation:
+  # 평가에 사용할 Ollama 모델 (Judge)
+  judge_model: "qwen3:4b-instruct-2507-q4_K_M"
+  # 평가 타임아웃 (초) - 로컬 모델 속도를 고려하여 넉넉히 설정
+  timeout: 1200
+  # 병렬 처리 수 (로컬 자원 보호를 위해 1 권장, 성능 향상을 위해 2 시도)
+  max_workers: 2
+  # 한국어 맞춤형 평가 프롬프트
+  prompts:
+    statement_generator: |
+      분석 전문가로서, 주어진 답변의 각 문장을 독립적인 'statements'로 분해하세요.
+      반드시 아래 JSON 형식으로만 답변하고, 다른 설명은 하지 마세요:
+      {"statements": ["문장1", "문장2"]}
+    nli_statement: |
+      영문 컨텍스트를 근거로 한국어 문장의 진위 여부를 판단하세요.
+      논리적으로 유추 가능하면 verdict를 1, 아니면 0을 부여하세요.
+      반드시 JSON 형식으로 'verdict'와 'reason'을 포함하세요.
+    answer_relevancy: |
+      답변에 대한 적절한 한국어 질문을 생성하고, 회피 여부(noncommittal)를 0 또는 1로 표시하세요.
 
 
 # --- 캐시 보안 설정 ---

@@ -33,12 +33,19 @@ class ResponsePerformanceTracker:
         self.full_response: str = ""
         self.full_thought: str = ""
         self.context: str = ""
+        self.input_token_count: int = 0
+        self.doc_count: int = 0
         self._log_thinking_start: bool = False
         self._log_answer_start: bool = False
 
-    def set_context(self, context_text: str):
-        """평가를 위해 사용된 컨텍스트를 기록합니다."""
+    def set_context(self, context_text: str, doc_count: int = 0):
+        """평가를 위해 사용된 컨텍스트와 문서 개수를 기록합니다."""
+        from common.utils import count_tokens_rough
+
         self.context = context_text
+        self.doc_count = doc_count
+        # 질문 + 컨텍스트 합산 입력 토큰 계산
+        self.input_token_count = count_tokens_rough(self.query + context_text)
 
     def record_chunk(self, content: str, thought: str):
         now = time.time()
@@ -99,10 +106,6 @@ class ResponsePerformanceTracker:
         resp_token_count = count_tokens_rough(self.full_response)
         thought_token_count = count_tokens_rough(self.full_thought)
 
-        tokens_per_second: float = (
-            (resp_token_count / answer_duration) if answer_duration > 0 else 0.0
-        )
-
         stats = PerformanceStats(
             ttft=time_to_first_token,
             thinking_time=thinking_duration,
@@ -110,18 +113,23 @@ class ResponsePerformanceTracker:
             total_time=total_duration,
             token_count=resp_token_count,
             thought_token_count=thought_token_count,
-            tps=tokens_per_second,
+            input_token_count=self.input_token_count,
+            doc_count=self.doc_count,
             model_name=getattr(self.model, "model", "unknown"),
         )
 
+        # [로그 개선] 모든 지표를 한 줄에 가독성 있게 출력
         logger.info(
-            f"[LLM] 완료 | TTFT: {stats.ttft:.2f}s | "
-            f"사고: {stats.thinking_time:.2f}s | 답변: {stats.generation_time:.2f}s | "
-            f"속도: {stats.tps:.1f} tok/s"
+            f"[LLM] 완료 | "
+            f"TTFT: {stats.ttft:.2f}s | "
+            f"Tokens: {stats.input_token_count} (In) / {stats.token_count} (Out) / {stats.thought_token_count} (Thought) | "
+            f"Speed: {stats.tps:.1f} tok/s | "
+            f"Docs: {stats.doc_count} chunks | "
+            f"Total: {stats.total_time:.2f}s"
         )
 
         self.SessionManager.replace_last_status_log(
-            f"완료 (사고 {stats.thought_token_count} / 답변 {stats.token_count})"
+            f"완료 (In {stats.input_token_count} / Out {stats.token_count} / Thought {stats.thought_token_count})"
         )
 
         with contextlib.suppress(Exception):
@@ -133,8 +141,10 @@ class ResponsePerformanceTracker:
                     "thinking": stats.thinking_time,
                     "answer": stats.generation_time,
                     "total": stats.total_time,
-                    "tokens": stats.token_count,
-                    "thought_tokens": stats.thought_token_count,
+                    "tokens_in": stats.input_token_count,
+                    "tokens_out": stats.token_count,
+                    "tokens_thought": stats.thought_token_count,
+                    "doc_count": stats.doc_count,
                     "tps": stats.tps,
                     "query": self.query,
                 }
