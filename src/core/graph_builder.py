@@ -220,9 +220,11 @@ def build_graph() -> Any:
     # 조건부 에지: 캐시가 있으면 바로 종료, 일상 대화면 바로 생성, 아니면 검색
     workflow.add_conditional_edges(
         "preprocess",
-        lambda s: "END"
-        if s.get("is_cached")
-        else ("generate" if s.get("intent") == "general" else "retrieve"),
+        lambda s: (
+            "END"
+            if s.get("is_cached")
+            else ("generate" if s.get("intent") == "general" else "retrieve")
+        ),
         {"END": END, "generate": "generate", "retrieve": "retrieve"},
     )
 
