@@ -103,6 +103,16 @@ EMBEDDING_BATCH_SIZE: Union[int, str] = _models_config.get(
 )
 EMBEDDING_DEVICE: str = _models_config.get("embedding_device", "auto")
 
+# 최대 동시 추론 수 (VRAM 보호를 위한 전역 세마포어 값)
+MAX_CONCURRENT_INFERENCE: int = _get_env(
+    "MAX_CONCURRENT_INFERENCE", _models_config.get("max_concurrent_inference", 1), int
+)
+
+# 모델 캐시에서 유지할 모델의 최대 개수 (LRU 정책 적용)
+MAX_CACHED_MODELS: int = _get_env(
+    "MAX_CACHED_MODELS", _models_config.get("max_cached_models", 5), int
+)
+
 # --- RAG 파이프라인 설정 ---
 _rag_config = _config.get("rag", {})
 RETRIEVER_CONFIG: dict = _rag_config.get("retriever", {})

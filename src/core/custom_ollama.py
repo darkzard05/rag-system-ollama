@@ -159,7 +159,8 @@ class DeepThinkingChatOllama(ChatOllama):
             request_kwargs = self._prepare_ollama_request(messages, stop, **kwargs)
             request_kwargs["stream"] = True
 
-            async_client = ModelManager.get_async_client(host=self.base_url)
+            # [최적화] 비동기 네이티브 클라이언트 획득
+            async_client = await ModelManager.get_async_client(host=self.base_url)
 
             # Ollama API 호출 (비동기 제너레이터 획득)
             response_gen = await async_client.chat(**request_kwargs)

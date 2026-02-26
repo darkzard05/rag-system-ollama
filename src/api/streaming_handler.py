@@ -148,11 +148,11 @@ class StreamingResponseHandler:
         # 상시 활성 노드
         node_status_map.update(
             {
-                "retrieve": "관련 문서 검색 중...",
-                "rerank_documents": "문서 순위 재조정 중...",
-                "grade_documents": "핵심 문장 선정 중...",
-                "format_context": "컨텍스트 구성 중...",
-                "generate_response": "답변 생성 중...",
+                "retrieve": "🔍 질문 의도 분석 및 하이브리드 지식 검색 중",
+                "rerank_documents": "⚖️ 검색 결과 리랭킹 및 문서 적합도 검증 중",
+                "grade_documents": "🎯 핵심 답변 근거 선정 및 컨텍스트 정제",
+                "format_context": "🧩 답변 구성을 위한 지식 컨텍스트 병합 중",
+                "generate": "✍️ 지식 기반으로 최적의 답변 작성 시작",
             }
         )
 
@@ -240,13 +240,14 @@ class StreamingResponseHandler:
                     elif kind == "on_chain_end":
                         if name == "retrieve":
                             output = data.get("output", {})
-                            if "documents" in output:
+                            docs = output.get("relevant_docs", [])
+                            if docs:
                                 yield StreamChunk(
                                     content="",
                                     timestamp=time.time(),
                                     token_count=0,
                                     chunk_index=self.chunk_index,
-                                    metadata={"documents": output["documents"]},
+                                    metadata={"documents": docs},
                                 )
                                 self.chunk_index += 1
 
@@ -255,7 +256,7 @@ class StreamingResponseHandler:
                             pass
 
                         # [추가] 답변 생성 완료 시 통합 성능 지표 캡처
-                        elif name == "generate_response":
+                        elif name == "generate":
                             output = data.get("output", {})
                             if "performance" in output:
                                 yield StreamChunk(

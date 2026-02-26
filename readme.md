@@ -66,13 +66,15 @@ rag-system-ollama/
 │   └── ui/
 ├── scripts/
 │   ├── analyze_logs.py
+│   ├── archive/
 │   ├── benchmarks/
 │   ├── debug/
 │   ├── evaluation/
 │   ├── maintenance/
 │   ├── quick_verify_rag.py
 │   ├── test_full_pipeline.py
-│   └── verification/
+│   ├── verification/
+│   └── verify_refactoring.py
 ├── tests/
 │   ├── conftest.py
 │   ├── data/
@@ -120,4 +122,4 @@ We maintain a strict **Zero-Error Policy**. Run the automated verification suite
 
 ## 📄 License
 MIT License - Developed by **darkzard05**.
-**Status:** v3.1.0 | **Last Updated:** 2026-02-19
+**Status:** v3.1.0 | **Last Updated:** 2026-02-26

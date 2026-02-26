@@ -54,7 +54,7 @@ class ResponsePerformanceTracker:
 
         if thought:
             if not self._log_thinking_start:
-                self.SessionManager.replace_last_status_log("사고 과정 기록 중...")
+                self.SessionManager.add_status_log("사고 과정 기록 중...")
                 self.thinking_started_at = now
                 self._log_thinking_start = True
             self._thought_parts.append(thought)
@@ -67,7 +67,7 @@ class ResponsePerformanceTracker:
                 if self.thinking_started_at and self.thinking_finished_at is None:
                     self.thinking_finished_at = now
 
-                self.SessionManager.replace_last_status_log("답변 스트리밍 중...")
+                self.SessionManager.add_status_log("답변 스트리밍 중...")
                 self.answer_started_at = now
                 self._log_answer_start = True
 
@@ -128,7 +128,7 @@ class ResponsePerformanceTracker:
             f"Total: {stats.total_time:.2f}s"
         )
 
-        self.SessionManager.replace_last_status_log(
+        self.SessionManager.add_status_log(
             f"완료 (In {stats.input_token_count} / Out {stats.token_count} / Thought {stats.thought_token_count})"
         )
 

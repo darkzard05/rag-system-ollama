@@ -14,7 +14,7 @@ from streamlit.delta_generator import DeltaGenerator
 # 로깅 설정 (최상단)
 from common.logging_config import setup_logging
 
-logger = setup_logging(log_level="INFO", log_file=Path("logs/app.log"))
+logger = setup_logging(log_level="DEBUG", log_file=Path("logs/app.log"))
 
 from common.config import (
     DEFAULT_EMBEDDING_MODEL,
@@ -31,7 +31,6 @@ from infra.notification_system import SystemNotifier  # noqa: E402
 from ui.ui import (  # noqa: E402
     inject_custom_css,
     render_left_column,
-    render_pdf_viewer,
     render_sidebar,
 )
 
@@ -53,14 +52,27 @@ try:
 
     ctx = get_script_run_ctx()
     if ctx:
-        SessionManager.init_session(session_id=ctx.session_id)
-        logger.debug(f"[SYSTEM] [SESSION] 세션 초기화 완료 | ID: {ctx.session_id}")
+        # [수정] 세션이 이미 초기화되어 있다면 건너뜀 (데이터 유실 방지)
+        if not SessionManager.get_session_id():
+            SessionManager.init_session(session_id=ctx.session_id)
+            logger.debug(
+                f"[SYSTEM] [SESSION] 세션 최초 초기화 완료 | ID: {ctx.session_id}"
+            )
+        else:
+            # 기존 세션 유지
+            logger.debug(
+                f"[SYSTEM] [SESSION] 기존 세션 활성 유지 | ID: {ctx.session_id}"
+            )
 except Exception as e:
     logger.warning(f"세션 초기화 실패: {e}")
 
 # --- [추가] 필수 세션 상태 초기화 ---
 if "current_page" not in st.session_state:
     st.session_state.current_page = 1
+if "pdf_window_start" not in st.session_state:
+    st.session_state.pdf_window_start = 1
+if "pdf_target_page" not in st.session_state:
+    st.session_state.pdf_target_page = None
 if "last_valid_height" not in st.session_state:
     st.session_state.last_valid_height = 800
 if "is_generating_answer" not in st.session_state:
@@ -217,7 +229,7 @@ def _ensure_models_are_loaded() -> bool:
     try:
         # 1. 임베딩 모델 로드 (ModelManager 사용)
         SystemNotifier.loading("임베딩 모델 준비 중...")
-        embedder = ModelManager.get_embedder(selected_embedding)
+        embedder = sync_run(ModelManager.get_embedder(selected_embedding))
         SessionManager.set("embedder", embedder)
 
         # [수정] 모델 타입에 따른 디바이스 정보 추출 안전성 강화
@@ -232,7 +244,7 @@ def _ensure_models_are_loaded() -> bool:
 
         # 2. LLM 로드 (ModelManager 사용)
         SystemNotifier.loading(f"추론 모델({selected_model}) 준비 중...")
-        llm = ModelManager.get_llm(selected_model)
+        llm = sync_run(ModelManager.get_llm(selected_model))
         SessionManager.set("llm", llm)
         SystemNotifier.success("추론 모델 준비 완료")
 
@@ -261,7 +273,7 @@ def _rebuild_rag_system() -> None:
     if (
         SessionManager.get("pdf_processed")
         and not SessionManager.get("pdf_processing_error")
-        and SessionManager.get("vector_store") is not None
+        and SessionManager.get("file_hash") is not None
     ):
         return
 
@@ -271,35 +283,33 @@ def _rebuild_rag_system() -> None:
             return
 
         embedder = SessionManager.get("embedder")
-
-        # [추가] 분석 시작 알림
-        SystemNotifier.loading(f"'{file_name}' 분석 시작")
-
-        # 실시간 상태 박스 업데이트를 위한 콜백 정의 (이제 내부 로그만 사용)
-        def sync_ui():
-            pass
+        SystemNotifier.loading(f"'{file_name}' 분석 중...")
 
         # [Lazy Import]
-        from core.rag_core import build_rag_pipeline
+        from core.rag_core import RAGSystem
 
-        # RAG 파이프라인 빌드 (내부에서 상세 로그 기록 및 UI 동기화)
+        rag_sys = RAGSystem(session_id=SessionManager.get_session_id())
+
+        # RAG 파이프라인 빌드 (내부에서 상세 로그 기록)
         success_message, cache_used = sync_run(
-            build_rag_pipeline(
-                uploaded_file_name=file_name,
-                file_path=file_path,
-                embedder=embedder,
-                on_progress=sync_ui,
+            rag_sys.build_pipeline(
+                file_path=file_path, file_name=file_name, embedder=embedder
             )
         )
 
+        # 상태 명시적 업데이트
+        SessionManager.set("pdf_processed", True)
+        SessionManager.add_status_log(f"✅ {success_message}")
         SessionManager.add_message("system", success_message)
         SessionManager.add_message("system", "READY_FOR_QUERY")
+
+        logger.info(f"[SYSTEM] RAG 빌드 완료: {file_name}")
 
     except Exception as e:
         logger.error(f"RAG 빌드 실패: {e}", exc_info=True)
         error_msg = f"문서 처리 중 오류가 발생했습니다: {str(e)}"
         SessionManager.set("pdf_processing_error", error_msg)
-        SessionManager.set("pdf_processed", True)  # 분석 프로세스 종료(실패) 표시
+        SessionManager.set("pdf_processed", True)
         SessionManager.add_message("system", f"❌ {error_msg}")
     finally:
         st.session_state.is_building_rag = False
@@ -319,7 +329,7 @@ def _update_qa_chain() -> None:
         model_name = str(selected_model or DEFAULT_OLLAMA_MODEL)
         llm = load_llm(model_name)
         SessionManager.set("llm", llm)
-        SessionManager.replace_last_status_log("✅ 추론 모델 교체 완료")
+        SessionManager.add_status_log("✅ 추론 모델 교체 완료")
 
         logger.info(f"LLM updated to: {selected_model}")
         msg = "✅ 추론 모델이 업데이트되었습니다."
@@ -429,8 +439,8 @@ def on_embedding_change() -> None:
 
 
 def _render_app_layout(available_models: list[str] | None = None) -> None:
-    """앱의 전체 레이아웃을 렌더링하고 주요 플레이스홀더를 반환합니다."""
-    # 1. 사이드바 렌더링
+    """앱의 전체 레이아웃을 렌더링합니다. (사이드바 PDF + 메인 채팅)"""
+    # 1. 사이드바 렌더링 (내부에 설정 및 PDF 뷰어 포함)
     render_sidebar(
         file_uploader_callback=on_file_upload,
         model_selector_callback=on_model_change,
@@ -441,43 +451,43 @@ def _render_app_layout(available_models: list[str] | None = None) -> None:
         available_models=available_models,
     )
 
-    # 2. 메인 영역 레이아웃
-    col_left, col_right = st.columns([1, 1])
-    with col_left:
-        st.header(
-            StringConstants.MSG_CHAT_TITLE
-            if hasattr(StringConstants, "MSG_CHAT_TITLE")
-            else "💬 채팅"
-        )
-        render_left_column()
-
-    with col_right:
-        st.header(
-            StringConstants.MSG_PDF_VIEWER_TITLE
-            if hasattr(StringConstants, "MSG_PDF_VIEWER_TITLE")
-            else "📄 PDF 미리보기"
-        )
-        render_pdf_viewer()
+    # 2. 메인 영역 (전체 너비 채팅창)
+    st.subheader("💬 문서 분석 채팅")
+    render_left_column()
 
 
 def _handle_pending_tasks() -> None:
     """지연된 무거운 작업(RAG 빌드, 모델 교체 등)을 순차적으로 처리합니다."""
+    # 1. 새 파일 업로드 처리
     if SessionManager.get("new_file_uploaded"):
+        logger.info("[SYSTEM] 새 파일 업로드 감지 -> 처리 시작")
+        # 즉시 플래그 해제 (중복 실행 방지)
+        SessionManager.set("new_file_uploaded", False)
+
         current_file_path = SessionManager.get("pdf_file_path")
         current_file_name = SessionManager.get("last_uploaded_file_name")
+
+        # 기본 상태 초기화 (필요한 경로 정보는 유지)
         SessionManager.reset_for_new_file()
         SessionManager.set("pdf_file_path", current_file_path)
         SessionManager.set("last_uploaded_file_name", current_file_name)
-        SessionManager.set("new_file_uploaded", False)
+
+        # RAG 구축 실행
         _rebuild_rag_system()
+
+        logger.info("[SYSTEM] RAG 구축 완료 -> 화면 갱신")
         st.rerun()
 
+    # 2. 모델 재빌드 요청 처리
     elif SessionManager.get("needs_rag_rebuild"):
+        logger.info("[SYSTEM] RAG 재빌드 요청 수락")
         SessionManager.set("needs_rag_rebuild", False)
         _rebuild_rag_system()
         st.rerun()
 
+    # 3. QA 체인 업데이트 처리
     elif SessionManager.get("needs_qa_chain_update"):
+        logger.info("[SYSTEM] QA 체인 업데이트 시작")
         SessionManager.set("needs_qa_chain_update", False)
         _update_qa_chain()
         st.rerun()

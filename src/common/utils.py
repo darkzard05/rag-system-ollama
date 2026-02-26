@@ -64,17 +64,173 @@ def normalize_latex_delimiters(text: str) -> str:
     return text
 
 
+def extract_annotations_from_docs(documents: list) -> list[dict]:
+    """
+    검색된 문서들의 메타데이터에서 좌표 정보를 추출하여
+    현재 청크의 텍스트와 일치하는 영역만 줄(Line) 단위로 하이라이트합니다.
+    """
+    annotations: list[dict] = []
+    if not documents:
+        return annotations
+
+    logger.info(f"[HIGHLIGHT] Processing {len(documents)} docs for annotations")
+
+    for _i, doc in enumerate(documents):
+        meta = (
+            getattr(doc, "metadata", {})
+            if hasattr(doc, "metadata")
+            else doc.get("metadata", {})
+        )
+        page_val = int(meta.get("page", 1))
+        all_coords = meta.get("word_coords", [])
+        content = doc.page_content.lower()
+
+        if not all_coords:
+            continue
+
+        # [고도화] 연속성 기반 텍스트 매칭 (Sequence Matching)
+        # 1. 청크 텍스트와 PDF 텍스트를 순수 단어 토큰으로 정규화
+        content_tokens = re.findall(r"[\w\d]+", content)
+        if not content_tokens:
+            continue
+
+        pdf_tokens = [re.sub(r"[^\w\d]", "", str(c[4]).lower()) for c in all_coords]
+
+        # 2. PDF 단어 리스트에서 현재 청크가 시작되는 최적의 지점 검색 (Sliding Window)
+        best_start = -1
+        max_match = 0
+        window_size = min(20, len(content_tokens))  # 시작 부분 20단어로 지점 탐색
+
+        for j in range(len(pdf_tokens) - len(content_tokens) + 1):
+            current_match = 0
+            for k in range(window_size):
+                if pdf_tokens[j + k] == content_tokens[k]:
+                    current_match += 1
+
+            if current_match > max_match:
+                max_match = current_match
+                best_start = j
+
+            # 80% 이상 일치하면 즉시 시작점으로 확정 (성능 최적화)
+            if current_match >= window_size * 0.8:
+                best_start = j
+                break
+
+        # 3. 매칭된 지점부터 청크 길이만큼의 좌표만 추출
+        if best_start != -1:
+            # 청크 텍스트 내의 실제 단어 개수만큼 좌표를 가져옴
+            filtered_coords = all_coords[best_start : best_start + len(content_tokens)]
+        else:
+            # 매칭 실패 시에만 기존의 루즈한 필터링으로 폴백 (최소 가시성)
+            filtered_coords = [
+                c
+                for c in all_coords
+                if re.sub(r"[^\w\d]", "", str(c[4]).lower()) in content_tokens[:50]
+            ]
+
+        if not filtered_coords:
+            continue
+
+        # 4. 줄 단위 그룹화 및 박스 생성
+        lines: dict[int, list] = {}
+        for c in filtered_coords:
+            y_key = round(c[1] / 8) * 8
+            if y_key not in lines:
+                lines[y_key] = []
+            lines[y_key].append(c)
+
+        doc_anno_count = 0
+        for y_key in sorted(lines.keys()):
+            line_coords = lines[y_key]
+            x_min = min(c[0] for c in line_coords)
+            y_min = min(c[1] for c in line_coords)
+            x_max = max(c[2] for c in line_coords)
+            y_max = max(c[3] for c in line_coords)
+
+            if x_max > x_min and y_max > y_min:
+                annotations.append(
+                    {
+                        "page": page_val,
+                        "x": x_min,
+                        "y": y_min,
+                        "width": x_max - x_min,
+                        "height": y_max - y_min,
+                        "color": "red",
+                        "thickness": 2,
+                    }
+                )
+                doc_anno_count += 1
+
+        logger.info(
+            f"[HIGHLIGHT] Page {page_val}: Found chunk sequence at index {best_start}, created {doc_anno_count} line boxes"
+        )
+
+    return annotations
+
+
 def apply_tooltips_to_response(
     response_text: str, documents: list | None = None, msg_index: int = 0
 ) -> str:
     """
-    답변 텍스트 내의 LaTeX 수식을 정규화합니다.
-    (인용구 툴팁 기능은 안정성을 위해 제거되었습니다.)
+    답변 내의 인용구([1], [p.5] 등)를 찾아 문서 정보 툴팁을 입힙니다.
     """
     if not response_text:
         return response_text
 
-    return normalize_latex_delimiters(response_text)
+    # 1. LaTeX 정규화 먼저 수행
+    text = normalize_latex_delimiters(response_text)
+
+    # 2. 문서 정보가 없으면 정규화된 텍스트만 반환
+    if not documents:
+        return text
+
+    def replace_citation(match):
+        full_match = match.group(0)
+        inner_text = match.group(2)
+
+        # 페이지 번호 추출
+        page_matches = _RE_EXTRACT_PAGES.findall(inner_text)
+        if not page_matches:
+            return full_match
+
+        target_page = int(page_matches[0])
+
+        # 해당 페이지와 일치하는 문서 청크 찾기
+        matching_doc = None
+        for doc in documents:
+            meta = (
+                getattr(doc, "metadata", {})
+                if hasattr(doc, "metadata")
+                else doc.get("metadata", {})
+            )
+            doc_page = int(meta.get("page", -1))
+            if doc_page == target_page:  # [수정] 둘 다 1-indexed이므로 직접 비교
+                matching_doc = doc
+                break
+
+        if matching_doc:
+            content = (
+                getattr(matching_doc, "page_content", "")
+                if hasattr(matching_doc, "page_content")
+                else matching_doc.get("page_content", "")
+            )
+            # 툴팁용 텍스트 정제 (HTML 태그 및 따옴표 처리)
+            clean_content = (
+                content.replace('"', "&quot;").replace("'", "&apos;")[:200] + "..."
+            )
+
+            # 하이라이트 스타일 적용된 HTML 반환
+            return f'<span class="citation-tooltip" title="{clean_content}" style="color: #1e88e5; font-weight: bold; cursor: help; border-bottom: 1px dotted #1e88e5;">{full_match}</span>'
+
+        return full_match
+
+    # 인용구 패턴 매칭 및 치환
+    try:
+        text = _RE_CITATION_BLOCK.sub(replace_citation, text)
+    except Exception as e:
+        logger.error(f"[Utils] 인용구 처리 오류: {e}")
+
+    return text
 
 
 # --- 전처리용 고속 테이블 ---

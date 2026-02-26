@@ -54,7 +54,7 @@ def load_pdf_docs(
     with monitor.track_operation(OperationType.PDF_LOADING, {"file": file_name}) as op:
         try:
             SessionManager.add_status_log(
-                "초고속 구조 분석 및 마크다운 변환 중 (PyMuPDF4LLM)",
+                "📑 문서 구조 분석 및 마크다운 변환 중",
                 session_id=session_id,
             )
             if on_progress:
@@ -89,9 +89,12 @@ def load_pdf_docs(
                     metadata = chunk.get("metadata", {})
                     page_num = metadata.get("page", i + 1)
 
-                    # [최적화] 메타데이터 풍부화
-                    # 단어 좌표(words) 정보가 있으면 보관 (하이라이트용)
-                    words_data = chunk.get("words", [])
+                    # [수정] 단어 좌표(words) 정보를 추출하여 메타데이터에 보관
+                    # 형식: (x0, y0, x1, y1, "text") 리스트
+                    raw_words = chunk.get("words", [])
+                    formatted_words = [
+                        (w[0], w[1], w[2], w[3], w[4]) for w in raw_words
+                    ]
 
                     doc = Document(
                         page_content=chunk.get("text", ""),
@@ -103,16 +106,15 @@ def load_pdf_docs(
                             "format": "markdown",
                             "chunk_index": i,
                             "is_already_chunked": True,
-                            "word_count": len(words_data),
-                            # [핵심] 정밀 인용을 위해 좌표 데이터의 일부(샘플) 또는 요약 저장 가능
-                            # 여기서는 추후 확장을 위해 플래그만 저장
-                            "has_coordinates": len(words_data) > 0,
+                            "word_coords": formatted_words,  # 좌표 데이터 직접 저장
+                            "has_coordinates": len(formatted_words) > 0,
                         },
                     )
                     docs.append(doc)
 
-                SessionManager.replace_last_status_log(
-                    f"문서 분석 완료 ({len(docs)} 페이지 확보)",
+                total_chars = sum(len(doc.page_content) for doc in docs)
+                SessionManager.add_status_log(
+                    f"문서 분석 완료 ({len(docs)} 페이지, 약 {total_chars:,}자)",
                     session_id=session_id,
                 )
 

@@ -34,6 +34,12 @@ models:
   # 임베딩 모델 실행 디바이스
   embedding_device: "cuda"
 
+  # 모델 캐시에서 유지할 모델의 최대 개수 (LRU 정책 적용)
+  max_cached_models: 5
+
+  # 최대 동시 추론 수 (VRAM 보호를 위한 전역 세마포어 값)
+  max_concurrent_inference: 1
+
 
 # --- RAG 파이프라인 설정 ---
 rag:

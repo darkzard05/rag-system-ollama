@@ -6,20 +6,13 @@ from __future__ import annotations
 
 import streamlit as st
 
-from common.utils import safe_cache_resource
 from ui.components.chat import render_chat_interface
 from ui.components.sidebar import render_sidebar as _render_sidebar
-from ui.components.viewer import render_pdf_viewer
 
 
 def render_left_column():
-    """왼쪽 컬럼 (채팅) 렌더링"""
+    """메인 채팅 영역 렌더링"""
     render_chat_interface()
-
-
-def render_right_column():
-    """오른쪽 컬럼 (PDF 뷰어) 렌더링"""
-    render_pdf_viewer()
 
 
 def render_sidebar(**kwargs):
@@ -27,68 +20,125 @@ def render_sidebar(**kwargs):
     return _render_sidebar(**kwargs)
 
 
-@safe_cache_resource
-def inject_custom_css():
-    """앱 전반에 걸친 최소한의 커스텀 CSS 및 JS 주입 (캐시됨)."""
+def inject_custom_css(is_expanded: bool = False):
+    """
+    사이드바 너비를 동적으로 제어하고 2열 레이아웃을 최적화합니다.
+    """
+    # 문서가 있으면 1040px (300 + 40(gap) + 700), 없으면 300px 고정
+    sidebar_width = "1040px" if is_expanded else "300px"
+
     st.markdown(
-        """
+        f"""
     <style>
-    /* 1. 전체 앱 컨테이너 고정 및 스크롤 방지 */
-    [data-testid="stAppViewContainer"] {
-        height: 100vh !important;
-        overflow: hidden !important;
-    }
+    /* 1. 사이드바 전체 너비 강제 고정 및 애니메이션 */
+    [data-testid="stSidebar"] {{
+        width: {sidebar_width} !important;
+        min-width: {sidebar_width} !important;
+        max-width: {sidebar_width} !important;
+        transition: width 0.3s ease-in-out;
+    }}
 
-    /* 2. 메인 영역 패딩 최적화 (사이드바와 균형 조정) */
-    [data-testid="stMainBlockContainer"] {
-        padding-top: 5rem !important;
-        padding-bottom: 1rem !important;
-    }
+    [data-testid="stSidebarContent"] {{
+        width: {sidebar_width} !important;
+        overflow-x: hidden !important;
+    }}
 
-    /* 3. 사이드바 상단 정렬 */
-    [data-testid="stSidebarContent"] {
-        padding-top: 2rem !important;
-    }
+    /* 2. 내부 2열 레이아웃 및 간격(Gap) 제어 */
+    [data-testid="stSidebar"] div[data-testid="stHorizontalBlock"] {{
+        display: flex !important;
+        flex-direction: row !important;
+        flex-wrap: nowrap !important;
+        gap: {"40px" if is_expanded else "0px"} !important; /* 확장 시 40px 간격 적용 */
+    }}
 
-    /* 4. 고정 높이 컨테이너 내부 스크롤바 스타일링 */
-    [data-testid="stVerticalBlockBorderWrapper"] > div:nth-child(1) {
-        height: 100% !important;
-        overflow-y: auto !important;
-        scrollbar-width: thin;
-    }
+    /* 제1열: 설정 영역 (300px 절대 고정) */
+    [data-testid="stSidebar"] div[data-testid="stHorizontalBlock"] > div[data-testid="column"]:nth-of-type(1) {{
+        flex: 0 0 300px !important;
+        width: 300px !important;
+        min-width: 300px !important;
+        max-width: 300px !important;
+        border-right: 1px solid rgba(128, 128, 128, 0.15);
+    }}
 
-    /* 5. 불필요한 JS 실행 요소 숨김 */
-    div.element-container:has(iframe[title="streamlit_javascript.st_javascript"]) {
-        display: none !important;
-    }
+    /* 제2열: 미리보기 영역 */
+    [data-testid="stSidebar"] div[data-testid="stHorizontalBlock"] > div[data-testid="column"]:nth-of-type(2) {{
+        display: {"block" if is_expanded else "none"} !important;
+        flex: {"0 0 700px" if is_expanded else "0 0 0px"} !important;
+        width: {"700px" if is_expanded else "0px"} !important;
+        min-width: {"700px" if is_expanded else "0px"} !important;
+        overflow-x: hidden !important;
+    }}
 
-    /* 6. 헤더 크기 통일 (사이드바 & 메인 영역) */
-    [data-testid="stSidebar"] h2,
-    [data-testid="stMainBlockContainer"] h2 {
-        font-size: 1.25rem !important;
+    /* 3. 잔상 제거 */
+    [data-testid="stSidebarContent"] {{
+        background-color: var(--secondary-background-color) !important;
+    }}
+
+    /* 4. 메인 컨텐츠 영역 */
+    [data-testid="stMainBlockContainer"] {{
+        max-width: 100% !important;
+        padding-top: 1.5rem !important;
+        padding-bottom: 6rem !important; /* 하단 입력창 공간 확보 */
+    }}
+
+    /* 5. 기타 컴포넌트 스타일 및 헤더 정렬 */
+    .sidebar-header {{
+        margin-top: 0px !important;
+        margin-bottom: 20px !important;
+        padding-top: 0px !important;
+        font-size: 1.5rem !important;
         font-weight: 700 !important;
-        margin-bottom: 1rem !important;
-    }
+        line-height: 1.2 !important;
+        display: flex;
+        align-items: center;
+        height: 40px; /* 고정 높이로 수직 정렬 보장 */
+    }}
 
-    /* 7. 사고 과정(Thought) 컨테이너 디자인 */
-    .thought-container {
+    /* 사이드바 익스팬더(고급 설정 등)는 기본 스타일 존중 */
+    [data-testid="stSidebar"] [data-testid="stExpander"] summary,
+    [data-testid="stSidebar"] [data-testid="stExpander"] summary * {{
+        color: inherit !important;
+        font-weight: normal !important;
+    }}
+
+    .thought-container {{
         font-style: italic;
-        color: #555;
-        background-color: #f8f9fa;
-        border-left: 4px solid #dee2e6;
-        padding: 12px;
-        margin: 10px 0;
-        border-radius: 4px;
-        font-size: 0.95rem;
-    }
+        color: var(--text-color) !important;
+        background-color: rgba(128, 128, 128, 0.1) !important;
+        border-left: 4px solid #1e88e5 !important;
+        padding: 15px !important;
+        margin: 10px 0 !important;
+        border-radius: 4px !important;
+        line-height: 1.6 !important;
+    }}
+    .timeline-container {{
+        border: 1px solid rgba(128, 128, 128, 0.3) !important;
+        border-radius: 8px !important;
+        padding: 12px !important;
+        background: transparent !important;
+        color: var(--text-color) !important;
+    }}
+    /* 타임라인 로그 글씨 색상 보정 */
+    .timeline-container div {{
+        color: var(--text-color) !important;
+    }}
 
-    /* 7. 반응형 헬퍼: 화면 높이에 따른 자동 조절 */
-    @media (min-height: 800px) {
-        .fixed-height-container { height: 70vh !important; }
-    }
-    @media (max-height: 799px) {
-        .fixed-height-container { height: 60vh !important; }
-    }
+    /* 6. 인용구 하이라이트 및 툴팁 스타일 */
+    .citation-tooltip {{
+        color: #1e88e5 !important;
+        font-weight: bold !important;
+        cursor: help !important;
+        border-bottom: 2px solid rgba(30, 136, 229, 0.3) !important;
+        padding: 0 2px !important;
+        transition: all 0.2s ease !important;
+        position: relative;
+        display: inline-block;
+    }}
+
+    .citation-tooltip:hover {{
+        background-color: rgba(30, 136, 229, 0.1) !important;
+        border-bottom: 2px solid #1e88e5 !important;
+    }}
     </style>
     """,
         unsafe_allow_html=True,

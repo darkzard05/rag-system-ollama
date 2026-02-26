@@ -94,7 +94,7 @@ def test_api_session_isolation():
     api_key = "sk_admin_test_token_12345"
     from src.api.api_server import TEST_USER, auth_manager
 
-    auth_manager._api_keys[api_key] = TEST_USER
+    auth_manager.register_fixed_api_key(TEST_USER, api_key)
     headers = {"Authorization": f"Bearer {api_key}"}
 
     # User A tries to upload (ignoring actual processing for isolation check)

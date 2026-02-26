@@ -133,10 +133,10 @@ class RAGResourceManager:
                 f"[MODEL] [SWITCH] LLM 전환 (Session: {session_id}) | {current_model} -> {target_model}"
             )
 
-        # 중앙 매니저를 통해 모델 인스턴스 획득
+        # [최적화] ModelManager의 비동기 메서드 직접 호출 (스레드 전환 오버헤드 제거)
         from core.model_loader import ModelManager
 
-        llm = await asyncio.to_thread(ModelManager.get_llm, target_model)
+        llm = await ModelManager.get_llm(target_model)
         SessionManager.set("last_selected_model", target_model, session_id=session_id)
         return llm
 
@@ -153,9 +153,11 @@ class RAGResourceManager:
             logger.info(
                 f"[MODEL] [SWITCH] 임베딩 모델 전환 (Session: {session_id}) | {current_embedder} -> {target_model}"
             )
+
         from core.model_loader import ModelManager
 
-        embedder = await asyncio.to_thread(ModelManager.get_embedder, target_model)
+        embedder = await ModelManager.get_embedder(target_model)
+
         SessionManager.set(
             "last_selected_embedding_model", target_model, session_id=session_id
         )

@@ -17,8 +17,11 @@ class TestRAGStreamlitUI(unittest.TestCase):
         """앱 시작 시 초기 UI 요소들이 존재하는지 검증"""
         self.at.run()
 
-        # 사이드바 헤더 확인 (sidebar.py: st.header("🤖 GraphRAG-Ollama"))
-        assert any("GraphRAG" in str(h.value) for h in self.at.sidebar.header)
+        # 사이드바 헤더 확인 (sidebar.py: st.markdown("<div class='sidebar-header'>🤖 RAG System</div>", ...))
+        # st.markdown은 markdown 요소로 렌더링됨
+        assert any(
+            "RAG System" in str(m.value) for m in self.at.sidebar.markdown
+        ) or any("GraphRAG" in str(h.value) for h in self.at.sidebar.header)
         
         # 채팅 환영 메시지 존재 여부 (chat.py: MSG_CHAT_GUIDE 출력)
         # config.yml의 chat_guide에 "환영합니다"가 포함되어 있음

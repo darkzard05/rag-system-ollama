@@ -52,13 +52,10 @@ class SystemNotifier:
         else:
             logger.info(message)
 
-        # [수정] 단순 로그가 아니라 실제 채팅 메시지로 추가하여 '메시지 이전' 실현
-        SessionManager.add_status_log(message)
-
-        if add_to_chat:
-            # 채팅창에 일반 메시지 형태로 추가 (아이콘 포함)
-            prefix = icon + " " if icon else ""
-            SessionManager.add_message("system", f"{prefix}{message}")
+        # [수정] 이제 add_status_log 내부에서 add_message를 호출하므로 중복 방지를 위해 로직 통합
+        # 아이콘을 메시지 앞에 붙여서 전달하면 상태 박스와 채팅창 모두에 아이콘이 표시됩니다.
+        full_message = f"{icon} {message}" if icon else message
+        SessionManager.add_status_log(full_message)
 
         # 4. [제거됨] Streamlit Toast 알림은 더 이상 사용하지 않음
         # 모든 알림은 채팅창이나 사이드바의 캡션 등을 통해 전달됨

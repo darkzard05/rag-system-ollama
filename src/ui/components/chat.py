@@ -52,7 +52,11 @@ async def _stream_chat_response(
             "documents": [],
         }
 
-    run_config = {"configurable": {"llm": current_llm}}
+    # [Lazy Import]
+    from core.rag_core import RAGSystem
+
+    rag_sys = RAGSystem(session_id=SessionManager.get_session_id())
+
     SessionManager.set("is_generating_answer", True)
 
     handler = get_streaming_handler()
@@ -63,21 +67,48 @@ async def _stream_chat_response(
 
     try:
         with chat_container, st.chat_message("assistant", avatar="🤖"):
-            status_box = st.status("🚀 파이프라인 가동 중...", expanded=True)
+            # [수정] 문서 분석 타임라인과 동일한 스타일의 실시간 상태 박스
+            status_placeholder = st.empty()
+            live_logs = []
 
-            def update_status(msg: str, state="running"):
-                status_box.write(f"└─ {msg}")
-                if state == "complete":
-                    status_box.update(
-                        label="✅ 분석 완료", state="complete", expanded=False
-                    )
+            def update_status(msg: str, is_complete=False):
+                if msg not in live_logs:
+                    live_logs.append(msg)
+
+                status_icon = "✅" if is_complete else "🚀"
+                # 상태 메시지에서 '파이프라인 가동 중:' 접두사를 제거하여 더 깔끔하게 표시
+                current_label = msg.split(": ", 1)[-1] if ": " in msg else msg
+                expander_title = f"{status_icon} {current_label}"
+
+                lines = "".join(
+                    [
+                        f"<div style='font-size: 0.85rem; color: var(--text-color); margin-bottom: 8px; display: flex; align-items: flex-start; line-height: 1.5; opacity: 0.9;'>"
+                        f"<span style='color: #1e88e5; margin-right: 10px; font-weight: bold;'>▹</span>"
+                        f"<span>{item}</span></div>"
+                        for item in live_logs
+                    ]
+                )
+
+                timeline_html = (
+                    f"<div style='margin-bottom: 15px;'>"
+                    f"<details {'open' if not is_complete else ''} class='timeline-container' style='border: 1px solid rgba(128,128,128,0.2); border-radius: 8px; padding: 10px;'>"
+                    f"<summary class='timeline-summary' style='font-weight: 600; color: var(--text-color); cursor: pointer; list-style: none; display: flex; align-items: center; padding: 5px 0;'>"
+                    f"{expander_title}</summary>"
+                    f"<div style='margin-top: 12px; padding: 15px; background-color: rgba(128,128,128,0.05); border-radius: 8px; border-left: 3px solid #1e88e5;'>"
+                    f"<div style='font-size: 0.75rem; color: var(--text-color); opacity: 0.6; margin-bottom: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px;'>"
+                    f"⏱️ Live Pipeline Execution"
+                    f"</div>{lines}</div></details></div>"
+                )
+                status_placeholder.markdown(timeline_html, unsafe_allow_html=True)
 
             thought_area = st.container()
             answer_area = st.empty()
 
-            event_generator = rag_engine.astream_events(
-                {"input": user_query}, config=run_config, version="v2"
-            )
+            # [핵심] 루프 진입 전 초기 상태 즉시 표시
+            update_status("🚀 질문 분석 및 파이프라인 가동 중...")
+
+            # RAGSystem 인터페이스를 통해 이벤트 스트림 획득
+            event_generator = await rag_sys.astream_events(user_query, llm=current_llm)
 
             async with aclosing(  # type: ignore[type-var]
                 handler.stream_graph_events(
@@ -86,14 +117,15 @@ async def _stream_chat_response(
             ) as stream:
                 async for chunk in stream:
                     if chunk.status:
+                        # [개선] 스트리밍 핸들러가 제공하는 상세 상태를 그대로 활용
                         update_status(chunk.status)
                         SessionManager.add_status_log(chunk.status)
 
                     if chunk.metadata and "documents" in chunk.metadata:
                         state["retrieved_docs"] = chunk.metadata["documents"]
-                        update_status(
-                            f"관련 지식 {len(state['retrieved_docs'])}개 확보"
-                        )
+                        doc_msg = f"📚 관련 지식 {len(state['retrieved_docs'])}개 확보 및 검증 완료"
+                        SessionManager.add_status_log(doc_msg)
+                        update_status(doc_msg)
 
                     if chunk.performance:
                         state["performance"] = chunk.performance
@@ -101,8 +133,11 @@ async def _stream_chat_response(
                     if chunk.thought:
                         if not state["full_thought"]:
                             state["thinking_start_time"] = time.time()
+                            thought_msg = "🧠 AI가 최적의 답변 논리를 설계 중..."
+                            SessionManager.add_status_log(thought_msg)
+                            update_status(thought_msg)
                             with thought_area:
-                                st.caption("AI의 사고 흐름:")
+                                st.caption("AI of Thought:")
                                 thought_display = st.empty()
                         state["full_thought"] += chunk.thought
                         if time.time() - last_render_time > render_interval:
@@ -111,7 +146,9 @@ async def _stream_chat_response(
 
                     if chunk.content:
                         if not state["full_response"]:
-                            update_status("답변 생성 중...", state="complete")
+                            gen_msg = "✍️ 지식 기반으로 최적의 답변 작성 시작"
+                            SessionManager.add_status_log(gen_msg)
+                            update_status(gen_msg, is_complete=True)
                             state["thinking_end_time"] = time.time()
                             if state["full_thought"]:
                                 with thought_area:
@@ -144,10 +181,30 @@ async def _stream_chat_response(
                             last_render_time = time.time()
 
             # [최적화] 스트리밍 종료 후 즉시 결과 반환 (중복 렌더링 제거로 지연 최소화)
+            SessionManager.add_status_log("✨ 답변 생성 완료")
             cleaned_final = _clean_response_redundancy(state["full_response"])
             processed_final = apply_tooltips_to_response(
                 cleaned_final, state["retrieved_docs"]
             )
+
+            # --- [추가] 자동 점프 트리거 설정 ---
+            if state["retrieved_docs"]:
+                try:
+                    # 가장 관련성 높은 첫 번째 문서의 페이지 추출
+                    first_doc = state["retrieved_docs"][0]
+                    # Document 객체 또는 dict 형태 모두 대응
+                    if hasattr(first_doc, "metadata"):
+                        metadata = first_doc.metadata
+                    else:
+                        metadata = first_doc.get("metadata", {})
+
+                    target_p = metadata.get("page")
+                    if target_p is not None:
+                        # 0-indexed일 경우를 대비해 1-indexed로 보정 (라이브러리에 따라 다름)
+                        # 보통 LangChain/PyMuPDF는 0부터 시작하는 경우가 많음
+                        st.session_state.pdf_target_page = int(target_p) + 1
+                except Exception as e:
+                    logger.warning(f"자동 점프 페이지 추출 실패: {e}")
 
             return {
                 "response": state["full_response"],
@@ -188,14 +245,20 @@ def render_message(
     msg_type: str = "general",
     wrap_in_container: bool = True,
     status_logs: list[str] | None = None,
-    is_latest: bool = True,  # [추가] 최신 메시지 여부
+    is_latest: bool = True,
+    msg_index: int = 0,
     **kwargs,
 ):
     """메시지를 렌더링하는 통합 엔진. msg_type에 따라 레이아웃 자동 결정."""
 
     if role == "system" or msg_type == "log":
         with st.chat_message("system", avatar="⚙️"):
-            if "완료" in content or "성공" in content:
+            if msg_type == "log":
+                st.markdown(
+                    f"<div style='font-size: 0.85rem; color: var(--text-color); opacity: 0.7;'>└─ {content}</div>",
+                    unsafe_allow_html=True,
+                )
+            elif "완료" in content or "성공" in content:
                 st.success(content, icon="✅")
             elif "실패" in content or "오류" in content:
                 st.error(content, icon="❌")
@@ -216,18 +279,13 @@ def render_message(
         msg_container = nullcontext()
 
     with msg_container:
-        # 0. 파이프라인 상태 로그 (Status Logs)
-        # [최적화] 최신 메시지가 아니면 무거운 st.status 위젯 생성을 생략하여 성능 향상
-        if role == "assistant" and status_logs and is_latest:
-            with st.status("✅ 분석 완료", state="complete", expanded=False):
-                for log in status_logs:
-                    if log not in ["시스템 대기 중", "새 문서 분석 시작"]:
-                        st.write(f"└─ {log}")
+        # 0. [중복 제거] 기존 assistant 내 status_logs(st.status) 위젯 제거
+        # 모든 로그는 상단 시스템 타임라인에서 통합 관리함
 
         if thought and thought.strip():
             with st.expander("🧠 사고 완료", expanded=False):
                 st.markdown(
-                    f'<div class="thought-container">{thought}</div>',
+                    f'<div class="thought-container" style="font-size: 0.85rem;">{thought}</div>',
                     unsafe_allow_html=True,
                 )
 
@@ -260,10 +318,49 @@ def render_message(
 
                 with m_col3:
                     doc_count = metrics.get("doc_count", 0)
-                    st.markdown(
-                        f"📄 **{doc_count}** <small>Docs</small>",
-                        unsafe_allow_html=True,
-                    )
+                    if documents and len(documents) > 0:
+                        # 페이지 번호 추출 및 중복 제거
+                        pages = []
+                        for d in documents:
+                            # Document 객체 또는 dict 대응
+                            if hasattr(d, "metadata"):
+                                m = d.metadata
+                            else:
+                                m = d.get("metadata", {})
+
+                            p = m.get("page")
+                            if p is not None:
+                                # [수정] 이미 1-indexed이므로 그대로 사용
+                                pages.append(int(p))
+
+                        unique_pages = sorted(set(pages))
+
+                        if unique_pages:
+                            # 팝오버를 사용하여 깔끔하게 표시
+                            with st.popover(
+                                f"📄 {doc_count} Docs", use_container_width=True
+                            ):
+                                st.caption("근거 페이지로 이동:")
+                                cols = st.columns(min(len(unique_pages), 3))
+                                for idx, p in enumerate(unique_pages):
+                                    # [수정] 고정된 키 사용 (time.time() 제거) 및 확실한 이벤트 캡처
+                                    button_key = f"jump_btn_{msg_index}_{p}_{idx}"
+                                    if cols[idx % 3].button(f"{p}p", key=button_key):
+                                        logger.info(
+                                            f"[DEBUG] 페이지 점프 실행: {p}p (Key: {button_key})"
+                                        )
+                                        SessionManager.set("pdf_target_page", p)
+                                        st.rerun()
+                        else:
+                            st.markdown(
+                                f"📄 **{doc_count}** <small>Docs</small>",
+                                unsafe_allow_html=True,
+                            )
+                    else:
+                        st.markdown(
+                            f"📄 **{doc_count}** <small>Docs</small>",
+                            unsafe_allow_html=True,
+                        )
 
                 with m_col4:
                     total = metrics.get("total_time", 0)
@@ -281,10 +378,9 @@ def render_chat_interface():
 
 
 def _chat_fragment():
-    # [최적화] 고정된 Viewport Height 기반의 높이 설정 (JS 의존성 감소)
-    win_h = st.session_state.get("last_valid_height", 800)
-    container_h = max(400, win_h - 250)
-    chat_container = st.container(height=container_h, border=True)
+    # [수정] 자동 스크롤과 하단 고정을 위해 고정 높이 컨테이너 사용
+    # height를 지정하면 내용이 늘어날 때 자동으로 하단을 추적합니다.
+    chat_container = st.container(height=700, border=False)
 
     messages = SessionManager.get_messages() or []
     pdf_path = SessionManager.get("pdf_file_path")
@@ -303,21 +399,100 @@ def _chat_fragment():
         def flush_system_buffer():
             if not system_buffer:
                 return
-            with st.chat_message("system", avatar="⚙️"):
-                is_ready, has_error = False, False
-                log_items = []
-                for m in system_buffer:
-                    if m == "READY_FOR_QUERY":
-                        is_ready = True
-                        continue
-                    if any(x in m for x in ["❌", "오류", "실패"]):
-                        has_error = True
-                    log_items.append(f"└─ {m}")
-                if is_ready and not has_error:
-                    st.markdown("**시스템 구성 및 데이터 분석 완료**")
-                    st.markdown("문서 내용에 대해 질문해 주세요!")
+
+            # [수정] 주요 과정 선별 기준 최적화
+            MAJOR_STEPS = {
+                "📑": "문서 구조 분석 및 마크다운 변환",
+                "✂️": "문서 분할 및 지식 청킹",
+                "🧠": "지식 벡터화 및 인덱싱",
+                "🔍": "질문 의도 분석 및 하이브리드 검색",
+                "📚": "관련 지식 확보 및 문서 검증",
+                "⚖️": "문서 순위 재조정 및 적합도 검증",
+                "🎯": "핵심 답변 근거 선정 및 컨텍스트 정제",
+                "🧩": "답변용 지식 컨텍스트 병합",
+                "✍️": "지식 기반으로 최적의 답변 작성 시작",
+            }
+
+            is_doc_analysis = False
+            is_complete = False
+            has_error = False
+            log_items: list[str] = []
+
+            for m in system_buffer:
+                # 1. 완료 및 오류 상태 확인
+                if m == "READY_FOR_QUERY" or "완료" in m or "성공" in m:
+                    is_complete = True
+                if any(x in m for x in ["❌", "오류", "실패"]):
+                    has_error = True
+
+                # 2. 주요 단계 매칭 (아이콘 우선 매칭)
+                matched = False
+                for icon, label in MAJOR_STEPS.items():
+                    if icon in m:
+                        # 같은 아이콘이 이미 있으면 내용을 보고 결정 (아이콘은 같은데 내용이 다르면 추가)
+                        if not any(icon in li for li in log_items):
+                            log_items.append(f"{icon} {label}")
+                            if icon in ["📑", "✂️", "🧠"]:
+                                is_doc_analysis = True
+                            if icon in ["🔍", "📚", "⚖️", "🎯", "🧩", "✍️"]:
+                                pass
+                        matched = True
+                        break
+
+                # 3. 아이콘 매칭 안 된 경우 키워드 매칭
+                if not matched:
+                    if any(x in m for x in ["분석", "마크다운", "구조"]) and not any(
+                        "📑" in li for li in log_items
+                    ):
+                        log_items.append(f"📑 {MAJOR_STEPS['📑']}")
+                        is_doc_analysis = True
+                    elif ("벡터화" in m or "인덱싱" in m) and not any(
+                        "🧠" in li for li in log_items
+                    ):
+                        log_items.append(f"🧠 {MAJOR_STEPS['🧠']}")
+                        is_doc_analysis = True
+
+            if log_items:
+                # [개선] 마지막 단계를 제목으로 사용 (동적 제목 시스템)
+                current_step_label = log_items[-1]
+                is_expanded = not is_complete and not has_error
+
+                # 상태에 따른 아이콘 및 접두사 결정
+                if has_error:
+                    status_prefix = "❌ 오류: "
+                elif is_complete:
+                    status_prefix = "✅ 완료: "
                 else:
-                    st.markdown("  \n".join(log_items))
+                    status_prefix = "⚙️ 처리 중: "
+
+                # 최종 제목 구성 (아이콘 제외 텍스트만 추출하여 조합)
+                clean_label = current_step_label.split(" ", 1)[-1]
+                expander_title = f"{status_prefix}{clean_label}"
+
+                with st.chat_message("system", avatar="⚙️"):
+                    # [수정] 다크모드 시인성을 위해 하드코딩된 색상 제거 및 테마 변수 활용
+                    # [수정] 다크모드 시인성을 위해 하드코딩된 색상 제거 및 테마 변수 활용
+                    lines = "".join(
+                        [
+                            f"<div style='font-size: 0.85rem; color: var(--text-color); margin-bottom: 8px; display: flex; align-items: flex-start; line-height: 1.5; opacity: 0.9;'>"
+                            f"<span style='color: #1e88e5; margin-right: 10px; font-weight: bold;'>▹</span>"
+                            f"<span>{item}</span></div>"
+                            for item in log_items
+                        ]
+                    )
+
+                    timeline_html = (
+                        f"<details {'open' if is_expanded else ''} class='timeline-container' style='border: 1px solid rgba(128,128,128,0.2); border-radius: 8px; padding: 10px; margin-bottom: 10px;'>"
+                        f"<summary class='timeline-summary' style='font-weight: 600; color: var(--text-color); cursor: pointer; list-style: none; display: flex; align-items: center; padding: 5px 0;'>"
+                        f"<span style='color: #1e88e5; margin-right: 10px;'>{'✅' if is_complete else '⚙️'}</span> {expander_title.split(': ', 1)[-1] if ': ' in expander_title else expander_title}"
+                        f"</summary>"
+                        f"<div style='margin-top: 12px; padding: 15px; background-color: rgba(128,128,128,0.05); border-radius: 8px; border-left: 3px solid #1e88e5;'>"
+                        f"<div style='font-size: 0.75rem; color: var(--text-color); opacity: 0.6; margin-bottom: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px;'>"
+                        f"⏱️ {'Document Analysis' if is_doc_analysis else 'Answer Generation'} Sequence"
+                        f"</div>{lines}</div></details>"
+                    )
+                    st.markdown(timeline_html, unsafe_allow_html=True)
+
             system_buffer.clear()
 
         # [최적화] 대화 이력 렌더링 고속화
@@ -338,11 +513,13 @@ def _chat_fragment():
                     role=str(msg.get("role", "user")),
                     content=str(msg.get("content", "")),
                     thought=msg.get("thought"),
+                    documents=msg.get("documents"),
                     metrics=msg_metrics if isinstance(msg_metrics, dict) else None,
                     processed_content=msg.get("processed_content"),
                     msg_type=str(msg.get("msg_type", "general")),
                     status_logs=msg_logs if isinstance(msg_logs, list) else None,
                     is_latest=is_latest,
+                    msg_index=i,  # 인덱스 전달
                 )
         flush_system_buffer()
 
@@ -375,6 +552,18 @@ def _chat_fragment():
             processed_final = result.get("processed_content", "")
 
             if final_answer and not final_answer.startswith("❌"):
+                # [추가] 답변 생성에 사용된 문서들을 기반으로 PDF 하이라이트 생성
+                from common.utils import extract_annotations_from_docs
+
+                annotations = extract_annotations_from_docs(final_docs)
+                SessionManager.set("pdf_annotations", annotations)
+
+                # 상세 로깅 (디버깅 용도)
+                pages = sorted({a["page"] + 1 for a in annotations})
+                logger.info(
+                    f"[UI] PDF 하이라이트 적용 완료: {len(annotations)}개 영역 (Pages: {pages})"
+                )
+
                 SessionManager.add_message(
                     role="assistant",
                     content=final_answer,
@@ -382,9 +571,9 @@ def _chat_fragment():
                     thought=final_thought,
                     metrics=final_metrics,
                     msg_type="answer",
+                    documents=final_docs,
                     status_logs=SessionManager.get("status_logs"),
                     source_file=SessionManager.get("last_uploaded_file_name"),
-                    documents=final_docs,
                 )
                 # [최적화] 프래그먼트 범위 내에서만 리런하여 성능 향상
                 st.rerun(scope="fragment")

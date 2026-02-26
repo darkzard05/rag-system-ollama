@@ -23,7 +23,7 @@ def auth_headers():
     api_key = "sk_admin_test_token_12345"
     from src.api.api_server import TEST_USER, auth_manager
 
-    auth_manager._api_keys[api_key] = TEST_USER
+    auth_manager.register_fixed_api_key(TEST_USER, api_key)
     return {"Authorization": f"Bearer {api_key}"}
 
 

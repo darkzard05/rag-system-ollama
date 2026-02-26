@@ -7,9 +7,8 @@ from ragas import EvaluationDataset, RunConfig, evaluate
 from ragas.embeddings import LangchainEmbeddingsWrapper
 from ragas.llms import LangchainLLMWrapper
 
-# [주의] FaithfulnesswithHHEM은 v0.4.3 기준 collections에 누락되어 있어 직접 임포트
-from ragas.metrics import FaithfulnesswithHHEM
-from ragas.metrics.collections import AnswerRelevancy
+# [수정] LangchainLLMWrapper와의 호환성 문제를 해결하기 위해 legacy 경로에서 임포트
+from ragas.metrics import AnswerRelevancy, FaithfulnesswithHHEM
 
 from common.config import (
     EVAL_JUDGE_MODEL,
