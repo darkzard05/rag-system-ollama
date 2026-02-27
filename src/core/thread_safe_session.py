@@ -49,7 +49,17 @@ class ThreadSafeSessionManager:
     }
 
     _fallback_sessions: dict[str, dict[str, Any]] = {}
+    _session_locks: dict[str, threading.Lock] = {}
     _global_lock = threading.RLock()
+
+    @classmethod
+    def _acquire_lock(cls, session_id: str | None = None) -> threading.Lock:
+        """세션별 전용 락을 반환합니다."""
+        sid = session_id or cls.get_session_id()
+        with cls._global_lock:
+            if sid not in cls._session_locks:
+                cls._session_locks[sid] = threading.Lock()
+            return cls._session_locks[sid]
 
     @classmethod
     def get_session_id(cls) -> str:

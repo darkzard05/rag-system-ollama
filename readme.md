@@ -40,11 +40,11 @@
 ## 🛠️ Tech Stack
 <!-- TECH_STACK_START -->
 - **Streamlit**: 1.50.0
-- **LangChain**: 0.3.0
-- **LangGraph**: 0.2.0
+- **LangChain**: latest
+- **LangGraph**: latest
 - **PyMuPDF4LLM**: 0.2.9
 - **Ollama**: 0.2.2
-- **FastAPI**: 0.128.0
+- **FastAPI**: 0.115.10
 <!-- TECH_STACK_END -->
 
 ---

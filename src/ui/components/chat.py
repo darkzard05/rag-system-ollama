@@ -541,40 +541,49 @@ def _chat_fragment():
 
         rag_engine = SessionManager.get("rag_engine")
         if rag_engine:
-            result = sync_run(
-                _stream_chat_response(rag_engine, user_query, chat_container)
-            )
-
-            final_answer = result.get("response", "")
-            final_thought = result.get("thought", "")
-            final_docs = result.get("documents", [])
-            final_metrics = result.get("performance")
-            processed_final = result.get("processed_content", "")
-
-            if final_answer and not final_answer.startswith("❌"):
-                # [추가] 답변 생성에 사용된 문서들을 기반으로 PDF 하이라이트 생성
-                from common.utils import extract_annotations_from_docs
-
-                annotations = extract_annotations_from_docs(final_docs)
-                SessionManager.set("pdf_annotations", annotations)
-
-                # 상세 로깅 (디버깅 용도)
-                pages = sorted({a["page"] + 1 for a in annotations})
-                logger.info(
-                    f"[UI] PDF 하이라이트 적용 완료: {len(annotations)}개 영역 (Pages: {pages})"
+            # [안전 장치] 답변 생성 시작 시 플래그 설정 및 오류 발생 시 복구 보장
+            SessionManager.set("is_generating_answer", True)
+            try:
+                result = sync_run(
+                    _stream_chat_response(rag_engine, user_query, chat_container)
                 )
 
-                SessionManager.add_message(
-                    role="assistant",
-                    content=final_answer,
-                    processed_content=processed_final,
-                    thought=final_thought,
-                    metrics=final_metrics,
-                    msg_type="answer",
-                    documents=final_docs,
-                    status_logs=SessionManager.get("status_logs"),
-                    source_file=SessionManager.get("last_uploaded_file_name"),
-                )
+                final_answer = result.get("response", "")
+                final_thought = result.get("thought", "")
+                final_docs = result.get("documents", [])
+                final_metrics = result.get("performance")
+                processed_final = result.get("processed_content", "")
+
+                if final_answer and not final_answer.startswith("❌"):
+                    # [추가] 답변 생성에 사용된 문서들을 기반으로 PDF 하이라이트 생성
+                    from common.utils import extract_annotations_from_docs
+
+                    annotations = extract_annotations_from_docs(final_docs)
+                    SessionManager.set("pdf_annotations", annotations)
+
+                    # 상세 로깅 (디버깅 용도)
+                    pages = sorted({a["page"] + 1 for a in annotations})
+                    logger.info(
+                        f"[UI] PDF 하이라이트 적용 완료: {len(annotations)}개 영역 (Pages: {pages})"
+                    )
+
+                    SessionManager.add_message(
+                        role="assistant",
+                        content=final_answer,
+                        processed_content=processed_final,
+                        thought=final_thought,
+                        metrics=final_metrics,
+                        msg_type="answer",
+                        documents=final_docs,
+                        status_logs=SessionManager.get("status_logs"),
+                        source_file=SessionManager.get("last_uploaded_file_name"),
+                    )
+            except Exception as e:
+                logger.error(f"채팅 처리 중 예외 발생: {e}", exc_info=True)
+                st.error(f"시스템 오류가 발생했습니다: {e}")
+            finally:
+                # [핵심] 어떤 경우에도 생성 중 플래그 해제
+                SessionManager.set("is_generating_answer", False)
                 # [최적화] 프래그먼트 범위 내에서만 리런하여 성능 향상
                 st.rerun(scope="fragment")
         else:

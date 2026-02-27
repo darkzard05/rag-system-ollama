@@ -1,5 +1,5 @@
 ﻿question,ground_truth,reference_context
-CM3 모델은 어떤 종류의 모델을 사용하여 개발되었나요?,CM3는 구조화된 다모달 문서의 대규모 데이터 세트를 기반으로 학습된 인과적 마스킹 생성 모델입니다. 이 모델은 텍스트와 이미지 토큰을 모두 포함할 수 있는 문서에서 학습됩니다.,"CM3: A CAUSAL MASKED MULTIMODAL MODEL OF
+"CM3 모델은 어떤 종류의 모델을 기반으로 하고 있으며, 그 핵심 특징은 무엇인가요?","CM3는 구조화된 다중 모달 문서의 대규모 데이터 세트를 기반으로 훈련된 원인 마스킹 생성 모델입니다. 핵심 특징은 왼쪽에서 오른쪽으로 토큰을 생성하면서, 문자열 끝부분에 생성되는 소수의 긴 토큰 스피언을 원래 위치에서 마스킹하지 않고, 그 위치를 제외한 방식으로 처리하는 것입니다.","CM3: A CAUSAL MASKED MULTIMODAL MODEL OF
 THE INTERNET
 Armen Aghajanyan, Bernie Huang∗, Candace Ross∗, Vlad Karpukhin∗, Hu Xu∗, Naman Goyal,
 Dmytro Okhonko, Mandar Joshi, Gargi Ghosh, Mike Lewis, Luke Zettlemoyer
@@ -50,7 +50,7 @@ text link structure. This data is in strong contrast to previous methods that we
 ∗Equal Contribution for Second Author
 1
 arXiv:2201.07520v1  [cs.CL]  19 Jan 2022"
-CM3 모델이 생성하는 토큰은 어떻게 이루어지나요?,"CM3 모델은 토큰을 왼쪽에서 오른쪽으로 생성하며, 문자열 끝부분에 생성되는 소수의 긴 토큰 스피언을 원래 위치에서 마스킹하는 방식으로 작동합니다.","CM3: A CAUSAL MASKED MULTIMODAL MODEL OF
+"CM3 모델이 훈련된 데이터 세트는 어떤 내용을 포함하며, 그 데이터의 순서는 어떻게 되나요?","CM3 모델은 대규모 웹 및 위키백과 기사에서 훈련되며, 각 문서는 원래 HTML 소스에서 나타나는 순서대로 텍스트, 하이퍼텍스트 마크업, 하이퍼링크, 그리고 이미지 토큰(비디오-변형-GAN 기반)을 모두 포함합니다.","CM3: A CAUSAL MASKED MULTIMODAL MODEL OF
 THE INTERNET
 Armen Aghajanyan, Bernie Huang∗, Candace Ross∗, Vlad Karpukhin∗, Hu Xu∗, Naman Goyal,
 Dmytro Okhonko, Mandar Joshi, Gargi Ghosh, Mike Lewis, Luke Zettlemoyer
@@ -101,7 +101,7 @@ text link structure. This data is in strong contrast to previous methods that we
 ∗Equal Contribution for Second Author
 1
 arXiv:2201.07520v1  [cs.CL]  19 Jan 2022"
-CM3 모델은 어떤 데이터를 기반으로 훈련되었나요?,CM3 모델은 공통 크롤에서 수집한 거의 테라바이트의 다중 모드 간단한 HTML 데이터를 기반으로 훈련되었습니다.,"carefully curated the image-text alignment (e.g., for image captioning Radford et al. (2021); Ramesh
+CM3 모델은 어떤 데이터를 기반으로 훈련되었나요?,CM3 모델은 공통 크롤링에서 수집한 거의 테라바이트의 다중 모달 단순화된 HTML 데이터를 기반으로 훈련되었습니다.,"carefully curated the image-text alignment (e.g., for image captioning Radford et al. (2021); Ramesh
 et al. (2021)). We train a 2.7 billion and 13 billion causally masked model on this data which we
 call CM3-Medium and CM3-Large respectively.
 Extensive experiments demonstrate that these models are able to perform a wide range of zero-shot
@@ -154,7 +154,7 @@ The complete array of beneﬁts will become more apparent when designing prompts
 modal tasks in § 4. However, at the core, the causally masked objective can do causal language
 modeling while optionally allowing for bidirectionality when needed.
 2"
-CM3 모델의 훈련에 사용된 주요 목적은 무엇인가요?,"CM3 모델의 훈련에 사용된 주요 목적은 사고적으로 마스킹된 목적(causally masked objective)이며, 이는 사고적 및 마스킹 언어 모델의 하이브리드로, 생성 마스킹 채우기 과정에서 양방향 컨텍스트 제어를 가능하게 합니다.","carefully curated the image-text alignment (e.g., for image captioning Radford et al. (2021); Ramesh
+CM3 모델의 훈련에 사용된 목적 함수는 무엇인가요?,"CM3 모델의 훈련에 사용된 목적 함수는 인과적 마스킹(causeally masked objective)으로, 인과적 언어 모델과 마스킹 언어 모델의 하이브리드입니다. 이는 생성 마스킹 채우기 동안 양방향 컨텍스트 제어를 가능하게 합니다.","carefully curated the image-text alignment (e.g., for image captioning Radford et al. (2021); Ramesh
 et al. (2021)). We train a 2.7 billion and 13 billion causally masked model on this data which we
 call CM3-Medium and CM3-Large respectively.
 Extensive experiments demonstrate that these models are able to perform a wide range of zero-shot
@@ -207,7 +207,7 @@ The complete array of beneﬁts will become more apparent when designing prompts
 modal tasks in § 4. However, at the core, the causally masked objective can do causal language
 modeling while optionally allowing for bidirectionality when needed.
 2"
-Monte Melkonian의 정치적 성향과 정체성은 무엇인가요?,Monte Melkonian는 좌파이자 아르메니아 민족주의자이자 민중 운동가였습니다.,"Monte
+Monte Melkonian의 정치적 성향과 정체성은 무엇인가요?,"Monte Melkonian는 좌파이며, 민족주의적 군사적 인물이었습니다.","Monte
 Melkonian
 was
 left-wing
@@ -313,3 +313,377 @@ Table 1: High level statistics of the data used to train CM3.
 1The DOM or Document Object Model is an interface that treats an HTML document as a tree structure
 wherein each node is an object representing a part of the document.
 3"
+CM3 모델이 Aghajanyan et al. (2021)의 작업에서 어떻게 발전했나요?,"CM3는 Aghajının et al. (2021)이 텍스트만을 대상으로 한 구조화된 문서를 사용한 작업을 확장하여, 이미지와 하이퍼텍스트 링크를 포함한 전체 문서 구조를 모델링합니다. 또한 BART와 유사한 목적을 벗어나, 디코더만 모델을 사용하는 새로운 원인적으로 마스킹된 목적을 도입합니다.","Monte
+Melkonian
+was
+left-wing
+a
+nationalist
+militant
+.
+Masked
+Language
+Model
+<a
+href=
+Armenian
+_nationalism
+>
+<mask>
+Monte
+Melkonian
+was
+<a
+left-wing
+a
+href=
+Armenian
+_nationalism
+>
+nationalist
+militant
+.
+Language
+Model
+Monte
+Melkonian
+was
+left-wing
+a
+nationalist
+militant
+.
+Causally
+Masked
+Language
+Model
+<mask:0>
+<mask:0>
+<a
+href=
+Armenian
+_nationalism
+>
+Figure 1: A visual representation of various language modeling objectives as well as our proposed
+causal language modeling objective with a single mask (n = 1). Given the left-to-right nature of
+causal language models (bottom row) we would not be able to generate the Wikipedia entity link
+highlighted in orange.
+3
+CM3
+Aghajanyan et al. (2021) used structured documents for text-only pre-training with strong zero-shot
+performance. Causally-Masked Multimodal Modeling (CM3) extends this work by modeling full
+document structure including images and hypertext links. Furthermore, we move away from the
+BART-like objective of Aghajanyan et al. (2021) to use our new causally masked objective with
+decoder-only models.
+3.1
+DATA
+Following Aghajanyan et al. (2021) we aim to implement a transform over HTML documents to
+extract out to minimal-HTML, i.e., the minimal set of text that is semantically relevant for end tasks.
+Birhane et al. (2021) gave in-depth criticisms of Common Crawl based multi-modal datasets and
+showed the existence of highly problematic examples (i.e., explicit images and text pairs of rape,
+pornography, and ethnic slurs). Given these severe ethical concerns, we opt-out of processing all
+of Common Crawl and instead opt into using a subset of the Common Crawl News (CC-NEWS)
+dataset and all of English Wikipedia.
+Given a valid HTML DOM1 per document, we run several passes to strip down the DOM to the
+elements of maximal semantic value. We ﬁrst remove all elements which do not contain textual ele-
+ments. We also ﬁlter out all headers, footers, copyrights, forms, dialog boxes and iFrames. We fold
+consecutive <div> elements into a singular <div> element with merged attributes. Furthermore
+we strip all the attributes from every element which are not derived from structured graphs such as
+OpenGraph, Schema and Twitter.
+For every <img> tag in the document with a valid src attribute URL, we download the image,
+resize to 256x256 pixels with random cropping and then tokenize it with VQVAE-GAN from Esser
+et al. (2021). This amounts to 256 tokens for every image. We then insert the string value of the
+tokens joined with a space back into the src attribute.
+We do not place any restrictions on the number of images or their locations. We present a set of
+high-level statistics in Table 1.
+Documents (Million)
+Size (GB)
+Unique Images (Million)
+Tokens (Billion)
+CC-NEWS
+45
+460
+18
+121
+En-Wikipedia
+16
+383
+7
+102
+Total
+61
+843
+25
+223
+Table 1: High level statistics of the data used to train CM3.
+1The DOM or Document Object Model is an interface that treats an HTML document as a tree structure
+wherein each node is an object representing a part of the document.
+3"
+실험을 위해 각 데이터 소스에서 테스트 세트를 어떻게 생성했나요?,"실험을 위해 각 데이터 소스에서 각각 10,000개의 고유 문서를 가진 두 개의 테스트 세트를 생성했습니다.","For experimentation, we create two test sets from each data source with 10,000 unique documents
+for each. We de-duplicated our test sets to ensure no overlap between test and train sets to the best
+of our abilities.
+3.2
+SIZE HINTS
+Aghajanyan et al. (2021) introduced the concept of size hints which allows the user to guide the
+model during sample generation through token conditioning. Speciﬁcally, HTLM inserts a prob-
+abilistic estimate of the size of the mask as a token post the mask token (e.g., <mask>12 for a
+probabilistic size of 12). For CM3, we noticed that size-hints degraded not only end-perplexity but
+also the zero-shot performance on a signiﬁcant set of evaluation tests.
+We also note that we can implicitly give a size hint during mask generation for a single mask by
+asking the model to generate causally max sequence length - size hint tokens before
+placing the secondary <mask:0> token.
+3.3
+TRAINING
+We train 4 models; 125M, 800M, 2.7B, and 13B parameters. The purpose of the two smaller models
+was to establish basic hyper-parameters that are viable for the causally masked language modeling
+objective and therefore were under-trained. However, all downstream tasks will be evaluated with
+our 2.7B model (CM3-Medium) and our 13B model (CM3-Large). HTLM-Medium was trained on
+240 V100 GPU for 28 days, while HTLM-Large was trained on 384 A100 GPU for 24 days. Our
+implementation was in PyTorch (Paszke et al., 2019) using fairseq (Ott et al., 2019) and fairscale
+(Baines et al., 2021). For every model, our per GPU batch size was 8, with a maximum token
+sequence length of 2048. We use the polynomial decay learning rate scheduler available in Paszke
+et al. (2019) with 1500 warmup updates. We clipped the gradient norms to 1.0 and used the Adam
+optimizer with β1 = 0.9, β2 = 0.98 (Kingma & Ba, 2014). We defer our model architecture
+description to § A.1.
+3.4
+SCALING LAWS
+Our training setting has a couple of new parameters that can impact the traditional scaling laws
+of causal language models. The multi-modal nature of our proposed model breaks the standard
+assumptions of token distributionality. Traditionally language tokens are said to follow a Zipﬁan
+distribution (Piantadosi, 2014), while image tokens are strictly uniform (see § A.2). Furthermore, the
+unrestricted locations of the images and text introduce unpredictable complexity. Lastly, although
+we are still computing the joint probability of the document, we do so in a roundabout way through
+shufﬂing of the document via the causally masked objective. These fundamental differences warrant
+a quick look into the scaling laws of CM3.
+0
+1
+2
+3
+4
+Number of Documents
+1e8
+100
+Validation Perplexity
+0
+50000 100000 150000 200000
+Number of Updates
+100
+0
+1
+2
+3
+Training Time (Seconds)
+1e6
+100
+Model
+CM3-XSmall
+CM3-Small
+CM3-Medium
+CM3-Large
+Perplexity Based Scaling Laws for CM3
+Figure 2: Basic perplexity based scaling laws for the proposed CM3 objective and training set-up.
+We present the various perplexity curves for the four models of varying sizes we trained. Given that
+our models were trained on various hardware set-ups, we normalize the training time by linearly
+scaling each experiment timing to 256 GPU. Most importantly, we see healthy scaling, similar to
+4"
+"사이즈 힌트란 무엇이며, CM3에서 이 힌트의 사용이 어떤 영향을 미쳤나요?",사이즈 힌트는 사용자가 샘플 생성 중 토큰 조건을 통해 모델에 크기를 지시하는 개념입니다. HTLM에서는 마스크 토큰 이후에 마스크 크기의 확률적 추정치를 토큰으로 삽입합니다. CM3에서는 사이즈 힌트가 종결 퍼플렉시티뿐만 아니라 많은 평가 테스트에서 제로샷 성능을 저하시켰습니다.,"For experimentation, we create two test sets from each data source with 10,000 unique documents
+for each. We de-duplicated our test sets to ensure no overlap between test and train sets to the best
+of our abilities.
+3.2
+SIZE HINTS
+Aghajanyan et al. (2021) introduced the concept of size hints which allows the user to guide the
+model during sample generation through token conditioning. Speciﬁcally, HTLM inserts a prob-
+abilistic estimate of the size of the mask as a token post the mask token (e.g., <mask>12 for a
+probabilistic size of 12). For CM3, we noticed that size-hints degraded not only end-perplexity but
+also the zero-shot performance on a signiﬁcant set of evaluation tests.
+We also note that we can implicitly give a size hint during mask generation for a single mask by
+asking the model to generate causally max sequence length - size hint tokens before
+placing the secondary <mask:0> token.
+3.3
+TRAINING
+We train 4 models; 125M, 800M, 2.7B, and 13B parameters. The purpose of the two smaller models
+was to establish basic hyper-parameters that are viable for the causally masked language modeling
+objective and therefore were under-trained. However, all downstream tasks will be evaluated with
+our 2.7B model (CM3-Medium) and our 13B model (CM3-Large). HTLM-Medium was trained on
+240 V100 GPU for 28 days, while HTLM-Large was trained on 384 A100 GPU for 24 days. Our
+implementation was in PyTorch (Paszke et al., 2019) using fairseq (Ott et al., 2019) and fairscale
+(Baines et al., 2021). For every model, our per GPU batch size was 8, with a maximum token
+sequence length of 2048. We use the polynomial decay learning rate scheduler available in Paszke
+et al. (2019) with 1500 warmup updates. We clipped the gradient norms to 1.0 and used the Adam
+optimizer with β1 = 0.9, β2 = 0.98 (Kingma & Ba, 2014). We defer our model architecture
+description to § A.1.
+3.4
+SCALING LAWS
+Our training setting has a couple of new parameters that can impact the traditional scaling laws
+of causal language models. The multi-modal nature of our proposed model breaks the standard
+assumptions of token distributionality. Traditionally language tokens are said to follow a Zipﬁan
+distribution (Piantadosi, 2014), while image tokens are strictly uniform (see § A.2). Furthermore, the
+unrestricted locations of the images and text introduce unpredictable complexity. Lastly, although
+we are still computing the joint probability of the document, we do so in a roundabout way through
+shufﬂing of the document via the causally masked objective. These fundamental differences warrant
+a quick look into the scaling laws of CM3.
+0
+1
+2
+3
+4
+Number of Documents
+1e8
+100
+Validation Perplexity
+0
+50000 100000 150000 200000
+Number of Updates
+100
+0
+1
+2
+3
+Training Time (Seconds)
+1e6
+100
+Model
+CM3-XSmall
+CM3-Small
+CM3-Medium
+CM3-Large
+Perplexity Based Scaling Laws for CM3
+Figure 2: Basic perplexity based scaling laws for the proposed CM3 objective and training set-up.
+We present the various perplexity curves for the four models of varying sizes we trained. Given that
+our models were trained on various hardware set-ups, we normalize the training time by linearly
+scaling each experiment timing to 256 GPU. Most importantly, we see healthy scaling, similar to
+4"
+모델 훈련에 사용된 모델의 크기는 무엇인가요?,"모델 훈련에 125M, 800M, 2.7B, 그리고 13B 파라미터를 가진 4개의 모델을 사용했습니다.","For experimentation, we create two test sets from each data source with 10,000 unique documents
+for each. We de-duplicated our test sets to ensure no overlap between test and train sets to the best
+of our abilities.
+3.2
+SIZE HINTS
+Aghajanyan et al. (2021) introduced the concept of size hints which allows the user to guide the
+model during sample generation through token conditioning. Speciﬁcally, HTLM inserts a prob-
+abilistic estimate of the size of the mask as a token post the mask token (e.g., <mask>12 for a
+probabilistic size of 12). For CM3, we noticed that size-hints degraded not only end-perplexity but
+also the zero-shot performance on a signiﬁcant set of evaluation tests.
+We also note that we can implicitly give a size hint during mask generation for a single mask by
+asking the model to generate causally max sequence length - size hint tokens before
+placing the secondary <mask:0> token.
+3.3
+TRAINING
+We train 4 models; 125M, 800M, 2.7B, and 13B parameters. The purpose of the two smaller models
+was to establish basic hyper-parameters that are viable for the causally masked language modeling
+objective and therefore were under-trained. However, all downstream tasks will be evaluated with
+our 2.7B model (CM3-Medium) and our 13B model (CM3-Large). HTLM-Medium was trained on
+240 V100 GPU for 28 days, while HTLM-Large was trained on 384 A100 GPU for 24 days. Our
+implementation was in PyTorch (Paszke et al., 2019) using fairseq (Ott et al., 2019) and fairscale
+(Baines et al., 2021). For every model, our per GPU batch size was 8, with a maximum token
+sequence length of 2048. We use the polynomial decay learning rate scheduler available in Paszke
+et al. (2019) with 1500 warmup updates. We clipped the gradient norms to 1.0 and used the Adam
+optimizer with β1 = 0.9, β2 = 0.98 (Kingma & Ba, 2014). We defer our model architecture
+description to § A.1.
+3.4
+SCALING LAWS
+Our training setting has a couple of new parameters that can impact the traditional scaling laws
+of causal language models. The multi-modal nature of our proposed model breaks the standard
+assumptions of token distributionality. Traditionally language tokens are said to follow a Zipﬁan
+distribution (Piantadosi, 2014), while image tokens are strictly uniform (see § A.2). Furthermore, the
+unrestricted locations of the images and text introduce unpredictable complexity. Lastly, although
+we are still computing the joint probability of the document, we do so in a roundabout way through
+shufﬂing of the document via the causally masked objective. These fundamental differences warrant
+a quick look into the scaling laws of CM3.
+0
+1
+2
+3
+4
+Number of Documents
+1e8
+100
+Validation Perplexity
+0
+50000 100000 150000 200000
+Number of Updates
+100
+0
+1
+2
+3
+Training Time (Seconds)
+1e6
+100
+Model
+CM3-XSmall
+CM3-Small
+CM3-Medium
+CM3-Large
+Perplexity Based Scaling Laws for CM3
+Figure 2: Basic perplexity based scaling laws for the proposed CM3 objective and training set-up.
+We present the various perplexity curves for the four models of varying sizes we trained. Given that
+our models were trained on various hardware set-ups, we normalize the training time by linearly
+scaling each experiment timing to 256 GPU. Most importantly, we see healthy scaling, similar to
+4"
+모델 훈련에 사용된 하이퍼파라미터와 최적화 방법은 무엇인가요?,"모든 모델에 대해 GPU당 배치 크기는 8이며, 최대 토큰 시퀀스 길이는 2048입니다. 학습률은 패스케의 다항 감소 스케줄러를 사용하며, 1500번의 워밍업 후 적용됩니다. 기울기 노름을 1.0으로 클리핑하고, Adam 최적화기(β1=0.9, β2=0.98)를 사용했습니다.","For experimentation, we create two test sets from each data source with 10,000 unique documents
+for each. We de-duplicated our test sets to ensure no overlap between test and train sets to the best
+of our abilities.
+3.2
+SIZE HINTS
+Aghajanyan et al. (2021) introduced the concept of size hints which allows the user to guide the
+model during sample generation through token conditioning. Speciﬁcally, HTLM inserts a prob-
+abilistic estimate of the size of the mask as a token post the mask token (e.g., <mask>12 for a
+probabilistic size of 12). For CM3, we noticed that size-hints degraded not only end-perplexity but
+also the zero-shot performance on a signiﬁcant set of evaluation tests.
+We also note that we can implicitly give a size hint during mask generation for a single mask by
+asking the model to generate causally max sequence length - size hint tokens before
+placing the secondary <mask:0> token.
+3.3
+TRAINING
+We train 4 models; 125M, 800M, 2.7B, and 13B parameters. The purpose of the two smaller models
+was to establish basic hyper-parameters that are viable for the causally masked language modeling
+objective and therefore were under-trained. However, all downstream tasks will be evaluated with
+our 2.7B model (CM3-Medium) and our 13B model (CM3-Large). HTLM-Medium was trained on
+240 V100 GPU for 28 days, while HTLM-Large was trained on 384 A100 GPU for 24 days. Our
+implementation was in PyTorch (Paszke et al., 2019) using fairseq (Ott et al., 2019) and fairscale
+(Baines et al., 2021). For every model, our per GPU batch size was 8, with a maximum token
+sequence length of 2048. We use the polynomial decay learning rate scheduler available in Paszke
+et al. (2019) with 1500 warmup updates. We clipped the gradient norms to 1.0 and used the Adam
+optimizer with β1 = 0.9, β2 = 0.98 (Kingma & Ba, 2014). We defer our model architecture
+description to § A.1.
+3.4
+SCALING LAWS
+Our training setting has a couple of new parameters that can impact the traditional scaling laws
+of causal language models. The multi-modal nature of our proposed model breaks the standard
+assumptions of token distributionality. Traditionally language tokens are said to follow a Zipﬁan
+distribution (Piantadosi, 2014), while image tokens are strictly uniform (see § A.2). Furthermore, the
+unrestricted locations of the images and text introduce unpredictable complexity. Lastly, although
+we are still computing the joint probability of the document, we do so in a roundabout way through
+shufﬂing of the document via the causally masked objective. These fundamental differences warrant
+a quick look into the scaling laws of CM3.
+0
+1
+2
+3
+4
+Number of Documents
+1e8
+100
+Validation Perplexity
+0
+50000 100000 150000 200000
+Number of Updates
+100
+0
+1
+2
+3
+Training Time (Seconds)
+1e6
+100
+Model
+CM3-XSmall
+CM3-Small
+CM3-Medium
+CM3-Large
+Perplexity Based Scaling Laws for CM3
+Figure 2: Basic perplexity based scaling laws for the proposed CM3 objective and training set-up.
+We present the various perplexity curves for the four models of varying sizes we trained. Given that
+our models were trained on various hardware set-ups, we normalize the training time by linearly
+scaling each experiment timing to 256 GPU. Most importantly, we see healthy scaling, similar to
+4"

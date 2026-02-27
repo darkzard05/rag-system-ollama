@@ -301,6 +301,13 @@ def load_embedding_model(
         model_key.replace("ollama:", "") if "ollama:" in model_key else model_key
     )
 
+    # [최적화] CI/유닛 테스트 환경에서는 실제 모델 로드 없이 가짜 임베딩 모델 반환
+    if os.getenv("IS_CI_TEST") == "true" or os.getenv("IS_UNIT_TEST") == "true":
+        from langchain_core.embeddings import FakeEmbeddings
+
+        logger.info(f"[TEST] [MOCK] 가짜 임베딩 모델 로드됨 (모델명: {model_key})")
+        return FakeEmbeddings(size=1536)  # nomic-embed-text 등 주요 모델 크기에 맞춤
+
     try:
         result: Embeddings
         if is_ollama_embedding:

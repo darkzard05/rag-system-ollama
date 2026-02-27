@@ -99,17 +99,27 @@ class RAGSystem:
         if not doc_splits:
             raise InsufficientChunksError(chunk_count=0, min_required=1)
 
-        # 5. 인덱스 최적화 (선택적)
+        # 5. 인덱스 최적화 (선택적: 중복 제거 및 메타데이터 인덱싱)
         if sum(len(d.page_content) for d in docs) >= 2000 and vectors is not None:
             with contextlib.suppress(Exception):
-                optimizer = get_index_optimizer()
-                doc_splits, vectors, q_meta, stats = optimizer.optimize_index(
+                from services.optimization.index_optimizer import (
+                    CompressionMethod,
+                    IndexOptimizationConfig,
+                    VectorQuantizationConfig,
+                )
+
+                # [최적화] 수동 양자화는 오버헤드가 크고 FAISS 내장 기능보다 비효율적이므로 NONE으로 설정
+                opt_config = IndexOptimizationConfig(
+                    quantization_config=VectorQuantizationConfig(
+                        compression_method=CompressionMethod.NONE
+                    )
+                )
+                optimizer = get_index_optimizer(opt_config)
+                doc_splits, vectors, _, stats = optimizer.optimize_index(
                     doc_splits, vectors
                 )
-                if q_meta and q_meta.get("method") != "none":
-                    vectors = optimizer.quantizer.dequantize_vectors(vectors, q_meta)
                 SessionManager.add_status_log(
-                    f"🧹 데이터 최적화 완료 ({stats.pruned_documents}개 제거)",
+                    f"🧹 데이터 최적화 완료 ({stats.pruned_documents}개 중복 제거)",
                     session_id=self.session_id,
                 )
 

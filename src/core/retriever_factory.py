@@ -57,23 +57,32 @@ def create_vector_store(
         logger.debug(f"[FAISS GPU] 자동 감지 실패: {e}. CPU 모드로 진행합니다.")
         use_gpu = False
 
-    # L2 정규화
-    if len(vectors) > 1000:
+    from common.config import VECTOR_STORE_CONFIG
+
+    index_params = VECTOR_STORE_CONFIG.get("index_params", {})
+    quant_threshold = index_params.get("quantization_threshold", 5000)
+    use_l2 = index_params.get("use_l2_norm", True)
+    hnsw_m = index_params.get("hnsw_m", 32)
+
+    # GPU 인덱스 및 정규화 전략 최적화
+    # [일관성] 설정에 따라 L2 정규화 수행 (Cosine Similarity 보장)
+    if use_l2:
         faiss.normalize_L2(vectors)
-        logger.debug("[FAISS] L2 정규화 완료")
+        logger.debug("[FAISS] 모든 벡터에 대한 L2 정규화 완료 (Cosine Similarity 보장)")
 
     chunk_count = len(docs)
     d = vectors.shape[1]
 
-    # 계층형 인덱스 전략
-    if chunk_count < 5000:
+    # 계층형 인덱스 전략 (메모리 및 속도 균형)
+    if chunk_count < 1000:
         index_type = "Flat"
         ef_search = 0
-    elif chunk_count < 50000:
-        index_type = "HNSW32,Flat"
+    elif chunk_count < quant_threshold:
+        index_type = f"HNSW{hnsw_m},Flat"
         ef_search = 128
     else:
-        index_type = "HNSW32,SQ8"
+        # [최적화] 설정된 임계값 이상부터 SQ8 양자화를 적용하여 메모리 절감
+        index_type = f"HNSW{hnsw_m},SQ8"
         ef_search = 256
 
     logger.info(f"[FAISS] 인덱스 타입 결정: {index_type} (Chunks: {chunk_count})")

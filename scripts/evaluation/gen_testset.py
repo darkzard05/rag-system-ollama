@@ -101,6 +101,6 @@ async def generate_simple_testset(file_path: str, test_size: int = 5):
 if __name__ == "__main__":
     target_pdf = "tests/data/2201.07520v1.pdf"
     if os.path.exists(target_pdf):
-        asyncio.run(generate_simple_testset(target_pdf, test_size=5))
+        asyncio.run(generate_simple_testset(target_pdf, test_size=10))
     else:
         logger.error(f"대상 파일이 없습니다: {target_pdf}")

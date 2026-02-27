@@ -58,6 +58,8 @@ DEFAULT_OLLAMA_MODEL: str = os.getenv(
     "DEFAULT_OLLAMA_MODEL",
     _models_config.get("default_ollama", "qwen3:4b-instruct-2507-q4_K_M"),
 )
+# 하위 호환성을 위한 에일리어스
+OLLAMA_MODEL_NAME = DEFAULT_OLLAMA_MODEL
 
 # Ollama 서버 주소 설정 (환경 변수 우선)
 OLLAMA_BASE_URL: str = _get_env(
@@ -115,7 +117,22 @@ MAX_CACHED_MODELS: int = _get_env(
 
 # --- RAG 파이프라인 설정 ---
 _rag_config = _config.get("rag", {})
+VECTOR_STORE_CONFIG: dict = _rag_config.get(
+    "vector_store",
+    {
+        "engine": "faiss",
+        "index_params": {
+            "hnsw_m": 32,
+            "quantization_threshold": 5000,
+            "use_l2_norm": True,
+            "distance_strategy": "MAX_INNER_PRODUCT",
+        },
+    },
+)
 RETRIEVER_CONFIG: dict = _rag_config.get("retriever", {})
+# 앙상블 가중치 추출 (리트리버 설정 내에 존재)
+ENSEMBLE_WEIGHTS: list[float] = RETRIEVER_CONFIG.get("ensemble_weights", [0.4, 0.6])
+
 RERANKER_CONFIG: dict = _rag_config.get("reranker", {})
 TEXT_SPLITTER_CONFIG: dict = _rag_config.get(
     "text_splitter", {"chunk_size": 500, "chunk_overlap": 100}

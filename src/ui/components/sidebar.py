@@ -162,6 +162,11 @@ def _render_settings_internal(
             sync_run(ModelManager.clear_vram())
             st.toast("VRAM 정리 완료")
 
-        if st.button("🗑️ 대화 초기화", use_container_width=True, type="secondary"):
+        if st.button(
+            "🔄 시스템 전체 초기화",
+            use_container_width=True,
+            type="primary",
+            help="UI가 멈추거나 오류가 발생했을 때 클릭하세요. 모든 대화와 문서가 초기화됩니다.",
+        ):
             SessionManager.reset_all_state()
             st.rerun()

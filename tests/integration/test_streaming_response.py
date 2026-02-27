@@ -10,6 +10,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 import asyncio
 import time
+import pytest
 import unittest
 
 from api.streaming_handler import (
@@ -92,10 +93,12 @@ class TestStreamChunk(unittest.TestCase):
         assert chunk.is_final
 
 
-class TestStreamingResponseHandler(unittest.TestCase):
-    """StreamingResponseHandler 테스트 (8개)"""
+@pytest.mark.asyncio
+class TestStreamingResponseHandlerAsync:
+    """StreamingResponseHandler 비동기 테스트"""
 
-    def setUp(self):
+    @pytest.fixture(autouse=True)
+    def setup(self):
         self.handler = StreamingResponseHandler()
 
     async def _mock_token_generator(self, tokens: list[str]):
@@ -104,139 +107,111 @@ class TestStreamingResponseHandler(unittest.TestCase):
             await asyncio.sleep(0.01)
             yield token
 
-    def test_basic_streaming(self):
+    async def test_basic_streaming(self):
         """기본 스트리밍"""
+        chunks_received = []
 
-        async def _test():
-            chunks_received = []
+        async def on_chunk(chunk: StreamChunk):
+            chunks_received.append(chunk)
 
-            async def on_chunk(chunk: StreamChunk):
-                chunks_received.append(chunk)
+        metrics = await self.handler.stream_response(
+            self._mock_token_generator(["hello", " ", "world"]), on_chunk
+        )
 
-            metrics = await self.handler.stream_response(
-                self._mock_token_generator(["hello", " ", "world"]), on_chunk
-            )
+        assert len(chunks_received) > 0
+        assert metrics.total_tokens > 0
 
-            assert len(chunks_received) > 0
-            assert (
-                metrics.total_tokens > 0
-            )  # 토큰 개수 확인 (정확히 3개가 아닐 수 있음)
-
-        asyncio.run(_test())
-
-    def test_streaming_metrics(self):
+    async def test_streaming_metrics(self):
         """스트리밍 메트릭"""
+        chunks = []
 
-        async def _test():
-            chunks = []
+        async def on_chunk(chunk: StreamChunk):
+            chunks.append(chunk)
 
-            async def on_chunk(chunk: StreamChunk):
-                chunks.append(chunk)
+        metrics = await self.handler.stream_response(
+            self._mock_token_generator(["a", "b", "c", "d", "e"]), on_chunk
+        )
 
-            metrics = await self.handler.stream_response(
-                self._mock_token_generator(["a", "b", "c", "d", "e"]), on_chunk
-            )
+        assert metrics.total_tokens > 0
+        assert metrics.total_time > 0
+        assert metrics.tokens_per_second > 0
+        assert metrics.first_token_latency > 0
 
-            assert metrics.total_tokens > 0  # 5개 이상
-            assert metrics.total_time > 0
-            assert metrics.tokens_per_second > 0
-            assert metrics.first_token_latency > 0
-
-        asyncio.run(_test())
-
-    def test_streaming_with_completion_callback(self):
+    async def test_streaming_with_completion_callback(self):
         """완료 콜백"""
+        completion_called = False
 
-        async def _test():
-            completion_called = False
+        async def on_chunk(chunk: StreamChunk):
+            pass
 
-            async def on_chunk(chunk: StreamChunk):
-                pass
+        async def on_complete():
+            nonlocal completion_called
+            completion_called = True
 
-            async def on_complete():
-                nonlocal completion_called
-                completion_called = True
+        await self.handler.stream_response(
+            self._mock_token_generator(["test"]), on_chunk, on_complete
+        )
 
-            await self.handler.stream_response(
-                self._mock_token_generator(["test"]), on_chunk, on_complete
-            )
+        assert completion_called
 
-            assert completion_called
-
-        asyncio.run(_test())
-
-    def test_streaming_with_error_callback(self):
+    async def test_streaming_with_error_callback(self):
         """에러 콜백"""
+        error_caught = False
 
-        async def _test():
-            error_caught = False
+        async def _error_generator():
+            yield "ok"
+            raise ValueError("Test error")
 
-            async def _error_generator():
-                yield "ok"
-                raise ValueError("Test error")
+        async def on_chunk(chunk: StreamChunk):
+            pass
 
-            async def on_chunk(chunk: StreamChunk):
-                pass
+        async def on_error(error: Exception):
+            nonlocal error_caught
+            error_caught = True
 
-            async def on_error(error: Exception):
-                nonlocal error_caught
-                error_caught = True
+        await self.handler.stream_response(
+            _error_generator(), on_chunk, on_error=on_error
+        )
 
-            await self.handler.stream_response(
-                _error_generator(), on_chunk, on_error=on_error
-            )
+        assert error_caught
 
-            assert error_caught
-
-        asyncio.run(_test())
-
-    def test_first_token_latency(self):
+    async def test_first_token_latency(self):
         """첫 토큰 지연"""
 
-        async def _test():
-            async def on_chunk(chunk: StreamChunk):
-                pass
+        async def on_chunk(chunk: StreamChunk):
+            pass
 
-            metrics = await self.handler.stream_response(
-                self._mock_token_generator(["first", "second"]), on_chunk
-            )
+        metrics = await self.handler.stream_response(
+            self._mock_token_generator(["first", "second"]), on_chunk
+        )
 
-            assert metrics.first_token_latency > 0
+        assert metrics.first_token_latency > 0
 
-        asyncio.run(_test())
-
-    def test_avg_chunk_size_calculation(self):
+    async def test_avg_chunk_size_calculation(self):
         """평균 청크 크기 계산"""
 
-        async def _test():
-            async def on_chunk(chunk: StreamChunk):
-                pass
+        async def on_chunk(chunk: StreamChunk):
+            pass
 
-            metrics = await self.handler.stream_response(
-                self._mock_token_generator(["a", "bb", "ccc"]), on_chunk
-            )
+        metrics = await self.handler.stream_response(
+            self._mock_token_generator(["a", "bb", "ccc"]), on_chunk
+        )
 
-            assert metrics.avg_chunk_size > 0
+        assert metrics.avg_chunk_size > 0
 
-        asyncio.run(_test())
-
-    def test_streaming_with_large_tokens(self):
+    async def test_streaming_with_large_tokens(self):
         """대용량 토큰 처리"""
+        large_token = "x" * 1000
+        chunks = []
 
-        async def _test():
-            large_token = "x" * 1000
-            chunks = []
+        async def on_chunk(chunk: StreamChunk):
+            chunks.append(chunk)
 
-            async def on_chunk(chunk: StreamChunk):
-                chunks.append(chunk)
+        await self.handler.stream_response(
+            self._mock_token_generator([large_token, large_token]), on_chunk
+        )
 
-            await self.handler.stream_response(
-                self._mock_token_generator([large_token, large_token]), on_chunk
-            )
-
-            assert len(chunks) > 0
-
-        asyncio.run(_test())
+        assert len(chunks) > 0
 
 
 class TestServerSentEventsHandler(unittest.TestCase):
@@ -340,7 +315,6 @@ class TestAdaptiveStreamingController(unittest.TestCase):
     def test_initial_buffer_size(self):
         """초기 버퍼 크기"""
         size = self.controller.get_buffer_size()
-        # 실제 구현(streaming_handler.py)에서 초기값은 1입니다.
         assert size == 1
 
     def test_record_latency(self):
@@ -352,28 +326,23 @@ class TestAdaptiveStreamingController(unittest.TestCase):
 
     def test_buffer_increase_on_high_latency(self):
         """높은 지연 시 버퍼 증가"""
-        # 높은 지연(300ms 이상) 반복
         for _ in range(20):
             self.controller.record_latency(400.0)
 
         size = self.controller.get_buffer_size()
-        # 1에서 시작하여 400ms 지연 시 증가하므로 1보다 커야 함
         assert size > 1
 
     def test_buffer_decrease_on_low_latency(self):
         """낮은 지연 시 버퍼 감소 또는 유지"""
-        # 높은 지연으로 버퍼 증가
         for _ in range(20):
             self.controller.record_latency(400.0)
 
         initial_size = self.controller.get_buffer_size()
 
-        # 낮은 지연(100ms 미만)으로 버퍼 조정
         for _ in range(20):
             self.controller.record_latency(30.0)
 
         final_size = self.controller.get_buffer_size()
-        # 버퍼 크기가 감소하거나 초기 수준으로 유지되어야 함
         assert final_size <= initial_size
 
     def test_get_metrics(self):
@@ -423,55 +392,52 @@ class TestGlobalInstances(unittest.TestCase):
         assert controller is not None
 
 
-class TestIntegration(unittest.TestCase):
-    """통합 테스트 (3개)"""
+@pytest.mark.asyncio
+class TestIntegrationAsync:
+    """통합 테스트 비동기"""
 
-    def test_full_streaming_pipeline(self):
+    async def test_full_streaming_pipeline(self):
         """전체 스트리밍 파이프라인"""
+        handler = StreamingResponseHandler()
+        builder = StreamingResponseBuilder()
 
-        async def _test():
-            handler = StreamingResponseHandler()
-            builder = StreamingResponseBuilder()
+        async def token_gen():
+            for token in ["hello", " ", "world"]:
+                await asyncio.sleep(0.01)
+                yield token
 
-            async def token_gen():
-                for token in ["hello", " ", "world"]:
-                    await asyncio.sleep(0.01)
-                    yield token
+        chunks = []
 
-            chunks = []
+        async def on_chunk(chunk: StreamChunk):
+            chunks.append(chunk)
+            builder.add_chunk(chunk)
 
-            async def on_chunk(chunk: StreamChunk):
-                chunks.append(chunk)
-                builder.add_chunk(chunk)
+        await handler.stream_response(token_gen(), on_chunk)
 
-            await handler.stream_response(token_gen(), on_chunk)
+        assert builder.get_content() == "hello world"
+        assert len(chunks) > 0
 
-            assert builder.get_content() == "hello world"
-            assert len(chunks) > 0
-
-        asyncio.run(_test())
-
-    def test_streaming_with_adaptive_control(self):
+    async def test_streaming_with_adaptive_control(self):
         """적응형 제어를 포함한 스트리밍"""
+        handler = StreamingResponseHandler()
+        controller = AdaptiveStreamingController()
 
-        async def _test():
-            handler = StreamingResponseHandler()
-            controller = AdaptiveStreamingController()
+        async def token_gen():
+            for i in range(10):
+                await asyncio.sleep(0.01)
+                yield f"t{i}"
 
-            async def token_gen():
-                for i in range(10):
-                    await asyncio.sleep(0.01)
-                    yield f"t{i}"
+        async def on_chunk(chunk: StreamChunk):
+            controller.record_latency(chunk.timestamp * 1000)
 
-            async def on_chunk(chunk: StreamChunk):
-                controller.record_latency(chunk.timestamp * 1000)
+        await handler.stream_response(token_gen(), on_chunk)
 
-            await handler.stream_response(token_gen(), on_chunk)
+        metrics = controller.get_metrics()
+        assert len(metrics) > 0
 
-            metrics = controller.get_metrics()
-            assert len(metrics) > 0
 
-        asyncio.run(_test())
+class TestIntegration(unittest.TestCase):
+    """통합 테스트 (동기)"""
 
     def test_sse_format_integration(self):
         """SSE 포매팅 통합"""
@@ -488,15 +454,7 @@ class TestIntegration(unittest.TestCase):
 
 
 if __name__ == "__main__":
-    suite = unittest.TestLoader().loadTestsFromModule(__import__(__name__))
-    runner = unittest.TextTestRunner(verbosity=2)
-    result = runner.run(suite)
+    # pytest로 실행 권장
+    import pytest
 
-    print(f"\n{'=' * 60}")
-    print("스트리밍 응답 처리 테스트 완료")
-    print(f"{'=' * 60}")
-    print(f"총 테스트: {result.testsRun}")
-    print(f"성공: {result.testsRun - len(result.failures) - len(result.errors)}")
-    print(f"실패: {len(result.failures)}")
-    print(f"에러: {len(result.errors)}")
-    print(f"{'=' * 60}")
+    pytest.main([__file__])

@@ -18,26 +18,27 @@ torch==2.5.1 --index-url https://download.pytorch.org/whl/cpu
 # torch==2.5.1 --index-url https://download.pytorch.org/whl/cu121
 
 # RAG & Embeddings
-langchain>=0.3.0
-langgraph>=0.2.0
-langchain-community>=0.3.0
-langchain-core>=0.3.0
-langchain-huggingface>=0.1.0
-langchain-ollama>=0.2.0
-langchain-text-splitters>=0.3.0
-sentence-transformers>=3.0.0
-faiss-cpu>=1.9.0
-rank-bm25>=0.2.2
+langchain==0.3.18
+langgraph==0.2.74
+langchain-community==0.3.18
+langchain-core>=0.3.40,<1.0.0
+langchain-huggingface==0.1.2
+langchain-ollama==0.2.2
+langchain-text-splitters==0.3.6
+sentence-transformers==3.4.1
+faiss-cpu==1.9.0.post1
+numpy>=1.26.4,<2.0.0
+rank-bm25==0.2.2
 optimum[onnxruntime]==2.1.0
 onnxruntime==1.19.2
 
 # API Server
 fastapi==0.115.10
-uvicorn==0.30.6
+uvicorn==0.34.0
 python-multipart==0.0.22
 
 # LLM Client
-ollama==0.6.0
+ollama==0.6.1
 
 # Testing
 pytest==8.3.2

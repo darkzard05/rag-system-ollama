@@ -46,6 +46,15 @@ rag:
   # 벡터 저장소 캐시 디렉터리
   vector_store_cache_dir: ".model_cache/vector_store_cache"
   
+  # 벡터 저장소 엔진 설정 (FAISS 최적화)
+  vector_store:
+    engine: "faiss"
+    index_params:
+      hnsw_m: 32                  # HNSW 그래프 연결 수 (기본 32)
+      quantization_threshold: 5000 # 5000개 이상 문서 시 SQ8 양자화 적용 (메모리 75% 절감)
+      use_l2_norm: true           # 코사인 유사도 보장을 위한 L2 정규화 사용 여부
+      distance_strategy: "MAX_INNER_PRODUCT"
+
   # 리트리버 설정
   retriever:
     search_type: "similarity"

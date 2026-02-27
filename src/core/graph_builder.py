@@ -97,8 +97,13 @@ async def retrieve_and_rerank(
                 )
             )
 
+    from common.config import ENSEMBLE_WEIGHTS
+
     aggregator = SearchResultAggregator()
-    weights = {"bm25": 0.4, "faiss": 0.6}
+    weights = {
+        "bm25": ENSEMBLE_WEIGHTS[0],
+        "faiss": ENSEMBLE_WEIGHTS[1],
+    }
     aggregated, _ = aggregator.aggregate_results(
         {"all": all_docs},
         strategy=AggregationStrategy.WEIGHTED_RRF,
@@ -149,6 +154,15 @@ async def retrieve_and_rerank(
     return {"relevant_docs": final_docs}
 
 
+def format_context(docs: list[Document]) -> str:
+    """검색된 문서들을 LLM이 읽기 좋은 형식의 문자열로 변환합니다."""
+    context = ""
+    for i, d in enumerate(docs):
+        page = d.metadata.get("page", "?")
+        context += f"### [자료 {i + 1}] (P{page})\n{d.page_content}\n\n"
+    return context
+
+
 async def generate(state: GraphState, config: RunnableConfig) -> dict[str, Any]:
     """최종 답변을 생성합니다."""
     if state.get("is_cached"):
@@ -166,11 +180,7 @@ async def generate(state: GraphState, config: RunnableConfig) -> dict[str, Any]:
 
     # 컨텍스트 포맷팅
     docs = state.get("relevant_docs", [])
-    context = ""
-    for i, d in enumerate(docs):
-        context += (
-            f"### [자료 {i + 1}] (P{d.metadata.get('page', '?')})\n{d.page_content}\n\n"
-        )
+    context = format_context(docs)
 
     # 프롬프트 구성
     sys_msg = SystemMessage(content="전문 문서 분석가로서 한국어로 답변하세요.")
@@ -205,6 +215,48 @@ async def generate(state: GraphState, config: RunnableConfig) -> dict[str, Any]:
         "thought": tracker.full_thought,
         "performance": stats.model_dump() if hasattr(stats, "model_dump") else stats,
     }
+
+
+def _merge_consecutive_chunks(docs: list[Document]) -> list[Document]:
+    """
+    같은 페이지의 연속된 청크들을 하나로 합쳐 풍부한 문맥을 제공합니다.
+    """
+    if not docs:
+        return []
+
+    merged_docs: list[Document] = []
+    if not docs:
+        return merged_docs
+
+    # 원본 리스트 보호를 위한 복사
+    import copy
+
+    working_docs = [copy.deepcopy(d) for d in docs]
+    current_doc = working_docs[0]
+
+    for next_doc in working_docs[1:]:
+        curr_m = current_doc.metadata
+        next_m = next_doc.metadata
+
+        # 같은 소스, 같은 페이지 확인
+        is_same_context = curr_m.get("source") == next_m.get("source") and curr_m.get(
+            "page"
+        ) == next_m.get("page")
+
+        # 인덱스 연속성 확인 (있는 경우에만)
+        is_consecutive = True
+        if "chunk_index" in curr_m and "chunk_index" in next_m:
+            is_consecutive = next_m["chunk_index"] == curr_m["chunk_index"] + 1
+
+        if is_same_context and is_consecutive:
+            current_doc.page_content += " " + next_doc.page_content
+            current_doc.metadata.update(next_m)
+        else:
+            merged_docs.append(current_doc)
+            current_doc = next_doc
+
+    merged_docs.append(current_doc)
+    return merged_docs
 
 
 def build_graph() -> Any:

@@ -34,9 +34,9 @@ class IndexOptimizationStrategy(Enum):
 
 @dataclass
 class VectorQuantizationConfig:
-    """벡터 양자화 설정."""
+    """벡터 양자화 설정 (수동 방식)."""
 
-    compression_method: CompressionMethod = CompressionMethod.QUANTIZATION_INT8
+    compression_method: CompressionMethod = CompressionMethod.NONE
     target_bits: int = 8  # 4 또는 8
     preserve_norm: bool = True
     enable_scaling: bool = True

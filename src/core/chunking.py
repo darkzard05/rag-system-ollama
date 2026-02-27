@@ -100,7 +100,13 @@ async def split_documents(
     split_docs: list[Document] = []
     vectors: list[np.ndarray] | None = None
 
-    if is_already_chunked:
+    # [최적화] 페이지 단위로 이미 분할되었더라도 너무 긴 경우(오버플로우) 재분할 수행
+    max_chunk_size = TEXT_SPLITTER_CONFIG.get("chunk_size", 500)
+    needs_sub_chunking = is_already_chunked and any(
+        len(d.page_content) > max_chunk_size * 1.5 for d in docs
+    )
+
+    if is_already_chunked and not needs_sub_chunking:
         SessionManager.add_status_log(
             f"📑 기존 분할 구조 활용 ({len(docs)}개 섹션)", session_id=session_id
         )
@@ -112,9 +118,16 @@ async def split_documents(
                 for v in embedder.embed_documents([d.page_content for d in split_docs])
             ]
     else:
-        SessionManager.add_status_log(
-            "✂️ 문서 분할 및 문맥 추출 중...", session_id=session_id
-        )
+        if needs_sub_chunking:
+            SessionManager.add_status_log(
+                "✂️ 대형 섹션 감지: 정밀 검색을 위한 하위 분할 시작",
+                session_id=session_id,
+            )
+        else:
+            SessionManager.add_status_log(
+                "✂️ 문서 분할 및 문맥 추출 중...", session_id=session_id
+            )
+
         use_semantic = SEMANTIC_CHUNKER_CONFIG.get("enabled", False)
 
         if use_semantic and embedder:
