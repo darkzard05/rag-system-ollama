@@ -58,34 +58,13 @@ jobs:
     - name: Run Bandit (SAST)
       run: bandit -r src/ -ll # -ll: Report medium and high severity issues
       
-    - name: Run pip-audit (Dependency Scan)
-      run: |
-        # Ignore known CVEs that are difficult to resolve without breaking changes or are false positives in this context
-        pip-audit -r requirements.txt --skip-editable \
-          --ignore-vuln CVE-2025-65106 \
-          --ignore-vuln CVE-2025-68664 \
-          --ignore-vuln CVE-2025-6985 \
-          --ignore-vuln CVE-2025-6984 \
-          --ignore-vuln PYSEC-2024-1 \
-          --ignore-vuln CVE-2025-54121 \
-          --ignore-vuln CVE-2025-62727 \
-          --ignore-vuln PYSEC-2025-40 \
-          --ignore-vuln CVE-2025-1194 \
-          --ignore-vuln CVE-2025-3263 \
-          --ignore-vuln CVE-2025-3264 \
-          --ignore-vuln CVE-2025-3777 \
-          --ignore-vuln CVE-2025-3933 \
-          --ignore-vuln CVE-2025-5197 \
-          --ignore-vuln CVE-2025-6638 \
-          --ignore-vuln CVE-2025-6051 \
-          --ignore-vuln CVE-2025-6921 \
-          --ignore-vuln CVE-2026-26013 \
-          --ignore-vuln CVE-2026-25990 \
-          --ignore-vuln CVE-2026-27794 \
-          --ignore-vuln CVE-2025-2953 \
-          --ignore-vuln CVE-2025-3730
-
-  test:
+          - name: Run pip-audit (Dependency Scan)
+            run: |
+              # Ignore only unresolved/stable-less CVEs or known false positives
+              pip-audit -r requirements.txt --skip-editable \
+                --ignore-vuln CVE-2025-2953 \
+                --ignore-vuln CVE-2025-3730
+      test:
     name: Test (Py ${{ matrix.python-version }} on ${{ matrix.os }})
     needs: [lint-and-static-analysis, security-scan]
     strategy:
