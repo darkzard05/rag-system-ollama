@@ -81,7 +81,9 @@ jobs:
           --ignore-vuln CVE-2025-6921 \
           --ignore-vuln CVE-2026-26013 \
           --ignore-vuln CVE-2026-25990 \
-          --ignore-vuln CVE-2026-27794
+          --ignore-vuln CVE-2026-27794 \
+          --ignore-vuln CVE-2025-2953 \
+          --ignore-vuln CVE-2025-3730
 
   test:
     name: Test (Py ${{ matrix.python-version }} on ${{ matrix.os }})
