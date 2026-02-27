@@ -80,6 +80,8 @@ jobs:
       IS_CI_TEST: "true"
       TEST_API_KEY: "sk_admin_test_token_12345"
       CUDA_VISIBLE_DEVICES: ""
+      KMP_DUPLICATE_LIB_OK: "TRUE"
+      OMP_NUM_THREADS: "1"
     
     steps:
     - uses: actions/checkout@v4
