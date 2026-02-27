@@ -2,8 +2,8 @@
 # Use: pip install -r requirements-win.txt
 
 # Core UI & Utils
-streamlit==1.50.0
-streamlit-pdf-viewer==0.0.26
+streamlit==1.54.0
+streamlit-pdf-viewer==0.0.27
 pymupdf==1.26.7
 pymupdf4llm==0.2.9
 python-dotenv==1.1.1
