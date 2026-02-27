@@ -5,13 +5,13 @@ pymupdf==1.26.7
 pymupdf4llm==0.2.9
 
 # LangChain & RAG Core
-langchain==0.3.18
-langgraph==0.2.74
-langchain-community==0.3.18
-langchain-core>=0.3.40,<1.0.0
-langchain-huggingface==0.1.2
-langchain-ollama==0.2.2
-langchain-text-splitters==0.3.6
+langchain>=0.3.18
+langgraph>=0.2.74
+langchain-community>=0.3.18
+langchain-core>=0.3.34,<0.4.0
+langchain-huggingface>=0.1.2
+langchain-ollama>=0.2.2
+langchain-text-splitters>=0.3.6
 
 # Vector Store & Embeddings
 faiss-cpu==1.9.0.post1
