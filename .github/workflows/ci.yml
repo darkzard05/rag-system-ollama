@@ -58,13 +58,14 @@ jobs:
     - name: Run Bandit (SAST)
       run: bandit -r src/ -ll # -ll: Report medium and high severity issues
       
-          - name: Run pip-audit (Dependency Scan)
-            run: |
-              # Ignore only unresolved/stable-less CVEs or known false positives
-              pip-audit -r requirements.txt --skip-editable \
-                --ignore-vuln CVE-2025-2953 \
-                --ignore-vuln CVE-2025-3730
-      test:
+    - name: Run pip-audit (Dependency Scan)
+      run: |
+        # Ignore only unresolved/stable-less CVEs or known false positives
+        pip-audit -r requirements.txt --skip-editable \
+          --ignore-vuln CVE-2025-2953 \
+          --ignore-vuln CVE-2025-3730
+
+  test:
     name: Test (Py ${{ matrix.python-version }} on ${{ matrix.os }})
     needs: [lint-and-static-analysis, security-scan]
     strategy:
