@@ -10,6 +10,7 @@ python-dotenv==1.1.1
 pyyaml==6.0.3
 psutil
 nest-asyncio==1.6.0
+orjson==3.10.15
 
 # PyTorch - Explicitly targeting stable CPU/CUDA builds
 # Note: torchvision is EXCLUDED to prevent 0xc0000139 DLL conflicts
