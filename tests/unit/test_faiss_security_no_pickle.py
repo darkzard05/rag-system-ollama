@@ -48,7 +48,8 @@ def test_faiss_reconstruction_without_pickle(temp_cache_dir):
 
     # FAISS 인덱스 바이너리만 저장
     d = 128
-    index = faiss.IndexFlatL2(d)
+    # VectorStoreCache는 MAX_INNER_PRODUCT를 기대하므로 IndexFlatIP 사용
+    index = faiss.IndexFlatIP(d)
     index.add(np.array([[0.1] * d], dtype="float32"))
     faiss.write_index(index, os.path.join(cache.faiss_index_path, "index.faiss"))
 
