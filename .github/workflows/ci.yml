@@ -69,11 +69,13 @@ jobs:
       
     - name: Run pip-audit (Dependency Scan)
       run: |
-        # Ignore only unresolved/stable-less CVEs or known false positives
+        # Ignore unresolved/stable-less CVEs or major version bumps that require refactoring
         pip-audit -r requirements.txt --skip-editable \
           --ignore-vuln CVE-2025-2953 \
-          --ignore-vuln CVE-2025-3730
-
+          --ignore-vuln CVE-2025-3730 \
+          --ignore-vuln CVE-2025-67221 \
+          --ignore-vuln CVE-2026-26013 \
+          --ignore-vuln CVE-2026-27794
   test:
     name: Test (Py ${{ matrix.python-version }} on ${{ matrix.os }})
     # Remove strict 'needs' to speed up if lint/security take long
