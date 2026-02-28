@@ -161,8 +161,15 @@ def extract_annotations_from_docs(documents: list) -> list[dict]:
                 )
                 doc_anno_count += 1
 
+        if doc_anno_count > 0:
+            logger.debug(
+                f"[HIGHLIGHT] Page {page_val}: Found chunk sequence at index {best_start}, created {doc_anno_count} line boxes"
+            )
+
+    if annotations:
+        pages = sorted({a["page"] for a in annotations})
         logger.info(
-            f"[HIGHLIGHT] Page {page_val}: Found chunk sequence at index {best_start}, created {doc_anno_count} line boxes"
+            f"[HIGHLIGHT] PDF 하이라이트 생성 완료: {len(annotations)}개 영역 (대상 페이지: {pages})"
         )
 
     return annotations

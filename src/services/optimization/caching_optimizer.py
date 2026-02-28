@@ -490,9 +490,16 @@ class DiskCache(CacheBackend[T]):
                     str(cache_file)
                 )
                 if not success:
-                    logger.critical(
-                        f"[DiskCache] 보안 위협 감지: {error}. 캐시를 삭제합니다."
-                    )
+                    # [개선] 오류 성격에 따라 로그 레벨 조정
+                    if "HMAC" in str(error) or "신뢰" in str(error):
+                        logger.warning(
+                            f"[DiskCache] 잠재적 보안 이슈로 캐시 무효화: {error}"
+                        )
+                    else:
+                        logger.info(
+                            f"[DiskCache] 유효하지 않은 캐시 항목 정리 (사유: {error})"
+                        )
+
                     self._delete_file(cache_file)
                     self.stats.total_misses += 1
                     return None
@@ -646,7 +653,6 @@ class CacheManager:
             if self.memory_cache and not use_semantic:
                 result = await self.memory_cache.get(key)
                 if result is not None:
-                    logger.debug(f"[CacheManager] L1 히트: {key}")
                     op.metadata = {"cache_level": "L1"}
                     return result
 
@@ -654,7 +660,6 @@ class CacheManager:
             if self.semantic_cache and use_semantic:
                 result = await self.semantic_cache.get(key)
                 if result is not None:
-                    logger.debug(f"[CacheManager] L2 히트: {key}")
                     op.metadata = {"cache_level": "L2"}
 
                     # L1으로 승격 (Promotion)
@@ -667,7 +672,6 @@ class CacheManager:
             if self.disk_cache and not use_semantic:
                 result = await self.disk_cache.get(key)
                 if result is not None:
-                    logger.debug(f"[CacheManager] L3 히트: {key}")
                     op.metadata = {"cache_level": "L3"}
 
                     # L1으로 승격
@@ -676,10 +680,6 @@ class CacheManager:
 
                     return result
 
-            logger.debug(f"[CacheManager] 캐시 미스: {key}")
-            return None
-
-            logger.debug(f"[CacheManager] 캐시 미스: {key}")
             return None
 
     async def set(

@@ -136,8 +136,7 @@ async def retrieve_and_rerank(
             for i, d in enumerate(final_docs)
         ]
 
-        await ModelManager.acquire_inference_lock()
-        try:
+        async with ModelManager.inference_session():
             results = await asyncio.to_thread(
                 ranker.rerank, RerankRequest(query=query, passages=passages)
             )
@@ -148,8 +147,6 @@ async def retrieve_and_rerank(
             SessionManager.add_status_log(
                 f"✅ 최적의 지식 10개 선별 완료 (신뢰도: {results[0]['score']:.2f})"
             )
-        finally:
-            ModelManager.release_inference_lock()
 
     return {"relevant_docs": final_docs}
 
@@ -193,8 +190,7 @@ async def generate(state: GraphState, config: RunnableConfig) -> dict[str, Any]:
 
     from core.model_loader import ModelManager
 
-    await ModelManager.acquire_inference_lock()
-    try:
+    async with ModelManager.inference_session():
         async for chunk in llm.astream([sys_msg, human_msg], config=config):
             msg = getattr(chunk, "message", chunk)
             content, thought = msg.content, msg.additional_kwargs.get("thinking", "")
@@ -205,8 +201,6 @@ async def generate(state: GraphState, config: RunnableConfig) -> dict[str, Any]:
                     {"chunk": content, "thought": thought},
                     config=config,
                 )
-    finally:
-        ModelManager.release_inference_lock()
 
     # 성능 지표 확정 및 반환 데이터 구성
     stats = tracker.finalize_and_log()

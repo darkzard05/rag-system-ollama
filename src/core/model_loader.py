@@ -89,6 +89,17 @@ class ModelManager:
         return cls._faiss_gpu_resources
 
     @classmethod
+    @contextlib.asynccontextmanager
+    async def inference_session(cls):
+        """추론 세마포어를 안전하게 관리하는 비동기 컨텍스트 매니저."""
+        semaphore = cls._get_semaphore()
+        await semaphore.acquire()
+        try:
+            yield
+        finally:
+            semaphore.release()
+
+    @classmethod
     async def acquire_inference_lock(cls):
         """비동기 세마포어를 획득합니다."""
         await cls._get_semaphore().acquire()

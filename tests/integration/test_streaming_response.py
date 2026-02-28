@@ -30,32 +30,38 @@ class TestTokenStreamBuffer(unittest.TestCase):
     """TokenStreamBuffer 테스트 (4개)"""
 
     def test_buffer_add_single_token(self):
-        """단일 토큰 추가"""
+        """단일 토큰 추가 (TTFT 최적화: 첫 토큰은 즉시 플러시됨)"""
         buffer = TokenStreamBuffer(buffer_size=10)
         result = buffer.add_token("hello")
-        assert result is None  # 버퍼 미만이므로 None
+        assert result == "hello"  # 첫 토큰은 즉시 반환되어야 함
 
     def test_buffer_flush_on_full(self):
         """버퍼 풀 시 플러시"""
         buffer = TokenStreamBuffer(buffer_size=3)
-        result1 = buffer.add_token("a")
-        result2 = buffer.add_token("b")
-        result3 = buffer.add_token("c")
+        result1 = buffer.add_token("a")  # 첫 토큰: 즉시 반환
+        result2 = buffer.add_token("b")  # 두 번째: 버퍼링
+        result3 = buffer.add_token("c")  # 세 번째: 버퍼링
+        result4 = buffer.add_token("d")  # 네 번째: 버퍼가 꽉 차서 플러시 (b+c+d)
 
-        assert result1 is None
+        assert result1 == "a"
         assert result2 is None
-        assert result3 is not None  # 3개 도달 시 플러시
-        assert result3 == "abc"
+        assert result3 is None
+        assert result4 == "bcd"
 
     def test_buffer_manual_flush(self):
         """수동 플러시"""
         buffer = TokenStreamBuffer()
-        buffer.add_token("hello")
+        # 첫 토큰은 즉시 반환됨
+        first = buffer.add_token("hello")
+        assert first == "hello"
+        
+        # 이후 토큰은 버퍼링됨
         buffer.add_token(" ")
         buffer.add_token("world")
 
+        # 수동 플러시 시 버퍼에 남은 것만 반환됨
         result = buffer.flush()
-        assert result == "hello world"
+        assert result == " world"
         assert len(buffer.buffer) == 0
 
     def test_buffer_reset(self):

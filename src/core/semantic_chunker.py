@@ -94,12 +94,13 @@ class EmbeddingBasedSemanticChunker:
                 )
 
         # 2. 너무 긴 세그먼트 강제 분할 (OOM 방지 및 병합 방지 플래그 추가)
-        # max_chunk_size가 지정되어 있으면 이를 기준으로 더 엄격하게 쪼갬
-        hard_split_limit = min(
-            ChunkingConstants.MAX_HARD_SPLIT_LEN, self.max_chunk_size * 2
-        )
+        # [최적화] max_chunk_size의 1.5배까지 여유를 주어 기계적 분할 빈도를 줄임
+        hard_split_limit: int = ChunkingConstants.MAX_HARD_SPLIT_LEN.value
         if self.max_chunk_size > 0:
-            hard_split_limit = self.max_chunk_size
+            hard_split_limit = min(
+                ChunkingConstants.MAX_HARD_SPLIT_LEN.value,
+                int(self.max_chunk_size * 1.5),
+            )
 
         final_sentences: list[dict[str, Any]] = []
         for seg in raw_segments:
@@ -112,8 +113,9 @@ class EmbeddingBasedSemanticChunker:
                     final_sentences, seg_text, seg_start, seg_end
                 )
             else:
-                logger.warning(
-                    f"[Chunker] 과도하게 긴 세그먼트 발견 ({len(seg_text)}자). 강제 분할을 수행합니다."
+                # [최적화] 강제 분할은 정상적인 복구 프로세스이므로 레벨을 INFO로 낮춤
+                logger.info(
+                    f"[Chunker] 긴 세그먼트 발견 ({len(seg_text)}자). 설정된 한계치({hard_split_limit})에 맞춰 강제 분할을 수행합니다."
                 )
 
                 curr_pos = 0

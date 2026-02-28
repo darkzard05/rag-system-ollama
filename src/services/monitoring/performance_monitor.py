@@ -147,9 +147,6 @@ class ResponseTimeTracker:
                 self._timings[operation_type] = deque(maxlen=self._max_history)
 
             self._timings[operation_type].append(duration_seconds)
-            logger.debug(
-                f"[{operation_type.value}] Duration recorded: {duration_seconds:.3f}s"
-            )
 
     def get_stats(self, operation_type: OperationType) -> dict[str, float]:
         """
@@ -512,13 +509,6 @@ class PerformanceMonitor:
                 self._response_tracker.record_duration(
                     metrics.operation_type, metrics.duration_seconds
                 )
-
-            logger.debug(
-                f"[{metrics.operation_type.value}] Operation recorded: "
-                f"duration={metrics.duration_seconds:.3f}s, "
-                f"tokens={metrics.tokens}, "
-                f"error={metrics.error}"
-            )
 
     # ========================================================================
     # Manual Recording

@@ -5,20 +5,20 @@ pymupdf==1.26.7
 pymupdf4llm==0.2.9
 
 # LangChain & RAG Core
-langchain>=1.2.7
-langgraph>=0.3.0
-langchain-community>=0.4.1
-langchain-core>=1.2.7,<2.0.0
-langchain-huggingface>=1.2.0
-langchain-ollama>=1.0.1
-langchain-text-splitters>=1.1.0
+langchain>=0.3.18
+langgraph>=0.2.74
+langchain-community>=0.3.18
+langchain-core>=0.3.34,<0.4.0
+langchain-huggingface>=0.1.2
+langchain-ollama>=0.2.2
+langchain-text-splitters>=0.3.6
 
 # Vector Store & Embeddings
-faiss-cpu>=1.9.0
-sentence-transformers>=3.4.1
+faiss-cpu==1.9.0.post1
+sentence-transformers==3.4.1
 transformers>=4.48.3
 torch>=2.5.1,<2.7.0
-numpy>=2.0.0
+numpy==1.26.4
 rank-bm25==0.2.2
 flashrank==0.2.0
 optimum[onnxruntime]==2.1.0
@@ -30,7 +30,7 @@ ollama==0.6.1
 # Configuration
 python-dotenv==1.1.1
 pyyaml==6.0.3
-orjson>=3.11.5
+orjson==3.10.15
 pydantic>=2.10.0
 
 # API Server
@@ -55,3 +55,6 @@ pytest-cov==5.0.0
 pytest-asyncio==0.24.0
 httpx>=0.28.1
 pre-commit==3.5.0
+pip-audit>=2.8.0
+mypy==1.11.0
+bandit==1.8.3

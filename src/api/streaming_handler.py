@@ -54,9 +54,9 @@ class TokenStreamBuffer:
     토큰 버퍼 - 효율적인 버퍼링 및 배치 처리
 
     특징:
+    - 첫 토큰 즉시 플러시 (TTFT 최적화)
     - 동적 버퍼 크기 조정
     - 타임아웃 기반 플러시
-    - 토큰 카운팅
     """
 
     def __init__(self, buffer_size: int = 10, timeout_ms: float = 100.0):
@@ -64,6 +64,7 @@ class TokenStreamBuffer:
         self.timeout_ms = timeout_ms
         self.buffer: list[str] = []
         self.last_flush_time: float = time.time()
+        self.is_first_token: bool = True  # 첫 토큰 추적용
 
     def add_token(self, token: str) -> str | None:
         """
@@ -71,6 +72,11 @@ class TokenStreamBuffer:
         """
         self.buffer.append(token)
         current_time = time.time()
+
+        # [최적화] 첫 토큰은 버퍼링 없이 즉시 플러시하여 TTFT 극대화
+        if self.is_first_token:
+            self.is_first_token = False
+            return self.flush()
 
         # 1. 버퍼가 설정된 크기에 도달했거나
         # 2. 마지막 플러시 이후 지정된 타임아웃(ms)이 지났으면 즉시 플러시
@@ -95,6 +101,7 @@ class TokenStreamBuffer:
         """버퍼 초기화"""
         self.buffer.clear()
         self.last_flush_time = time.time()
+        self.is_first_token = True
 
 
 class StreamingResponseHandler:
@@ -217,12 +224,11 @@ class StreamingResponseHandler:
                         if content:
                             if self.first_token_time is None:
                                 self.first_token_time = current_time
-                                # 첫 토큰은 버퍼링 없이 즉시 플러시하여 TTFT 최적화
-                                if self.buffer.buffer:
-                                    flushed = self.buffer.flush()
-                                    if flushed:
-                                        content = flushed + content
+                                logger.info(
+                                    "[Streaming] 첫 토큰 발생 (TTFT 최적화 플러시)"
+                                )
 
+                            # 버퍼에 추가 (내부적으로 첫 토큰은 즉시 플러시됨)
                             buffered_content = self.buffer.add_token(content)
                             if buffered_content:
                                 chunk = StreamChunk(
@@ -561,7 +567,7 @@ class AdaptiveStreamingController:
                 self.current_buffer_size + 2, self.max_buffer_size
             )  # 급격한 증가 방지 (+5 -> +2)
             if new_size != self.current_buffer_size:
-                logger.info(
+                logger.debug(
                     f"[AdaptiveStreaming] 지연 높음 ({avg_latency:.1f}ms), "
                     f"버퍼 증가: {self.current_buffer_size} → {new_size}"
                 )
@@ -571,7 +577,7 @@ class AdaptiveStreamingController:
         elif avg_latency < 100:  # 100ms 이하로 기준 상향
             new_size = max(self.current_buffer_size - 1, self.min_buffer_size)
             if new_size != self.current_buffer_size:
-                logger.info(
+                logger.debug(
                     f"[AdaptiveStreaming] 지연 낮음 ({avg_latency:.1f}ms), "
                     f"버퍼 감소: {self.current_buffer_size} → {new_size}"
                 )

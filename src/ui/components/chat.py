@@ -44,13 +44,8 @@ async def _stream_chat_response(
         "thinking_end_time": None,
     }
 
-    current_llm = SessionManager.get("llm")
-    if not current_llm:
-        return {
-            "response": "❌ 오류: 추론 모델이 로드되지 않았습니다.",
-            "thought": "",
-            "documents": [],
-        }
+    # [개선] LLM 객체 대신 모델 이름만 세션에서 가져옴 (실제 로딩은 RAGSystem 내부에서 처리)
+    model_name = SessionManager.get("last_selected_model")
 
     # [Lazy Import]
     from core.rag_core import RAGSystem
@@ -107,8 +102,10 @@ async def _stream_chat_response(
             # [핵심] 루프 진입 전 초기 상태 즉시 표시
             update_status("🚀 질문 분석 및 파이프라인 가동 중...")
 
-            # RAGSystem 인터페이스를 통해 이벤트 스트림 획득
-            event_generator = await rag_sys.astream_events(user_query, llm=current_llm)
+            # [개선] RAGSystem 인터페이스를 통해 이벤트 스트림 획득 (모델 이름만 전달)
+            event_generator = await rag_sys.astream_events(
+                user_query, model_name=model_name
+            )
 
             async with aclosing(  # type: ignore[type-var]
                 handler.stream_graph_events(

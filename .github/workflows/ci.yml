@@ -3,8 +3,17 @@ name: RAG System CI
 on:
   push:
     branches: [ "main", "master" ]
+    paths:
+      - 'src/**'
+      - 'requirements/**'
+      - 'tests/**'
+      - '.github/workflows/ci.yml'
   pull_request:
     branches: [ "main", "master" ]
+    paths:
+      - 'src/**'
+      - 'requirements/**'
+      - 'tests/**'
 
 permissions:
   contents: read
@@ -67,6 +76,9 @@ jobs:
 
   test:
     name: Test (Py ${{ matrix.python-version }} on ${{ matrix.os }})
+    # Remove strict 'needs' to speed up if lint/security take long
+    # or keep them if you want to avoid wasting CI time on broken code.
+    # Here we keep them for reliability but the paths filter will help more.
     needs: [lint-and-static-analysis, security-scan]
     strategy:
       fail-fast: false

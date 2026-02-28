@@ -82,6 +82,15 @@ def setup_logging(
     logging.getLogger("langchain").setLevel(logging.WARNING)
     logging.getLogger("langchain_core").setLevel(logging.WARNING)
 
+    # [추가] 캐시 보안 로그 폭사 차단 (가장 심각한 병목 해결)
+    logging.getLogger("security").setLevel(logging.WARNING)
+    logging.getLogger("security.cache_security").setLevel(logging.WARNING)
+
+    # [추가] 최적화 및 모니터링 관련 반복 로그 차단 (인덱싱 성능 향상)
+    logging.getLogger("services.optimization").setLevel(logging.WARNING)
+    logging.getLogger("services.monitoring").setLevel(logging.WARNING)
+    logging.getLogger("core.resource_pool").setLevel(logging.WARNING)
+
     # 기존 핸들러 제거 (중복 방지)
     for handler in root_logger.handlers[:]:
         root_logger.removeHandler(handler)

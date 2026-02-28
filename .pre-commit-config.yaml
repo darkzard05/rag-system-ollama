@@ -15,17 +15,24 @@ repos:
 
 -   repo: local
     hooks:
+    -   id: verify-requirements
+        name: verify-requirements
+        entry: python scripts/maintenance/verify_requirements.py
+        language: system
+        files: ^requirements/.*\.txt$
+        pass_filenames: false
+
     -   id: mypy
         name: mypy
-        entry: mypy
+        entry: powershell -NoProfile -Command "$env:PYTHONPATH='src'; mypy src"
         language: system
         types: [python]
-        args: ["src"]
         pass_filenames: false
 
     -   id: pytest-unit
         name: pytest-unit
-        entry: pytest tests/unit
+        entry: pytest --disable-warnings tests/unit
         language: system
         pass_filenames: false
-        always_run: true
+        files: ^src/|^tests/unit/
+        always_run: false

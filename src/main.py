@@ -51,18 +51,11 @@ try:
     from streamlit.runtime.scriptrunner import get_script_run_ctx
 
     ctx = get_script_run_ctx()
-    if ctx:
-        # [수정] 세션이 이미 초기화되어 있다면 건너뜀 (데이터 유실 방지)
-        if not SessionManager.get_session_id():
-            SessionManager.init_session(session_id=ctx.session_id)
-            logger.debug(
-                f"[SYSTEM] [SESSION] 세션 최초 초기화 완료 | ID: {ctx.session_id}"
-            )
-        else:
-            # 기존 세션 유지
-            logger.debug(
-                f"[SYSTEM] [SESSION] 기존 세션 활성 유지 | ID: {ctx.session_id}"
-            )
+    if ctx and not SessionManager.get_session_id():
+        # [수정] 세션이 이미 초기화되어 있다면 건너뜀 (로그 중복 방지)
+        SessionManager.init_session(session_id=ctx.session_id)
+        logger.info(f"[SYSTEM] [SESSION] 신규 세션 초기화 완료 | ID: {ctx.session_id}")
+    # [최적화] 기존 세션 유지 시에는 로깅 생략 (콘솔 정제 완료)
 except Exception as e:
     logger.warning(f"세션 초기화 실패: {e}")
 

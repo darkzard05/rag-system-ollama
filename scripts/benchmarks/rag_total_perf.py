@@ -28,6 +28,7 @@ from ragas.embeddings import LangchainEmbeddingsWrapper
 from core.rag_core import RAGSystem
 from core.model_loader import ModelManager
 from common.config import DEFAULT_OLLAMA_MODEL, OLLAMA_BASE_URL
+from services.evaluation_service import EvaluationService
 
 # 로깅 설정
 logging.basicConfig(level=logging.INFO)
@@ -41,8 +42,7 @@ async def run_benchmark(file_path: str, file_name: str, questions: List[str], gr
     
     # 1. RAG 시스템 준비
     rag = RAGSystem(session_id="benchmark_session")
-    embedder = ModelManager.get_embedder()
-    llm = ModelManager.get_llm(DEFAULT_OLLAMA_MODEL)
+    embedder = await ModelManager.get_embedder()
     
     # 문서 로드 및 인덱싱
     await rag.load_document(file_path, file_name, embedder)
@@ -51,12 +51,13 @@ async def run_benchmark(file_path: str, file_name: str, questions: List[str], gr
     results = []
     for q, gt in zip(questions, ground_truths):
         logger.info(f"질문 처리 중: {q}")
-        response = await rag.aquery(q, llm=llm)
+        # [리팩토링 반영] 모델 이름만 전달
+        response = await rag.aquery(q, model_name=DEFAULT_OLLAMA_MODEL)
         
         results.append({
             "user_input": q,
             "response": response["response"],
-            "retrieved_contexts": [doc.page_content for doc in response.get("documents", [])],
+            "retrieved_contexts": [doc.page_content for doc in response.get("relevant_docs", response.get("documents", []))],
             "reference": gt
         })
     

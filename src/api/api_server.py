@@ -264,33 +264,14 @@ async def query_rag(request: QueryRequest, user_id: str = Depends(verify_token))
 
     start_time = time.time()
     try:
-        # [수정] 요청된 모델 또는 세션 기본 모델 사용
-        llm = await RAGResourceManager.get_llm(request.model_name, session_id=sid)
-        rag_app = SessionManager.get("rag_engine", session_id=sid)
+        # [개선] RAGSystem 클래스를 통해 통합된 인터페이스 호출 (설정 및 리소스 관리 자동화)
+        rag_sys = RAGSystem(session_id=sid)
+        result = await rag_sys.aquery(request.query, model_name=request.model_name)
 
-        if rag_app is None:
-            raise HTTPException(
-                status_code=500, detail="QA 시스템이 초기화되지 않았습니다."
-            )
-
-        # LangGraph 실행 설정에 세션 ID 및 리트리버 명시적 바인딩
-        config = {
-            "configurable": {
-                "llm": llm,
-                "session_id": sid,
-                "thread_id": sid,
-                "faiss_retriever": SessionManager.get(
-                    "faiss_retriever", session_id=sid
-                ),
-                "bm25_retriever": SessionManager.get("bm25_retriever", session_id=sid),
-            }
-        }
-
-        result = await rag_app.ainvoke({"input": request.query}, config=config)
         execution_time = (time.time() - start_time) * 1000
 
         sources = []
-        for doc in result.get("documents", []):
+        for doc in result.get("relevant_docs", result.get("documents", [])):
             sources.append(
                 {
                     "page": doc.metadata.get("page"),
@@ -331,29 +312,18 @@ async def stream_query_rag(
     async def event_generator():
         logger.debug(f"[API] Streaming started for session: {sid}")
 
-        # [수정] 동적으로 모델 결정
-        llm = await RAGResourceManager.get_llm(request.model_name, session_id=sid)
-        # 스트리밍 시에도 명시적 세션 및 리트리버 바인딩
-        run_config = {
-            "configurable": {
-                "llm": llm,
-                "session_id": sid,
-                "thread_id": sid,
-                "faiss_retriever": SessionManager.get(
-                    "faiss_retriever", session_id=sid
-                ),
-                "bm25_retriever": SessionManager.get("bm25_retriever", session_id=sid),
-            }
-        }
+        # [개선] RAGSystem 클래스를 통해 통합된 인터페이스 호출 (설정 및 리소스 관리 자동화)
+        rag_sys = RAGSystem(session_id=sid)
 
         handler = get_streaming_handler()
         controller = get_adaptive_controller()
         sse_handler = ServerSentEventsHandler()
 
         try:
+            # RAGSystem이 직접 생성한 스트림 이벤트를 핸들러에 전달
             async for chunk in handler.stream_graph_events(
-                rag_app.astream_events(
-                    {"input": request.query}, config=run_config, version="v2"
+                await rag_sys.astream_events(
+                    request.query, model_name=request.model_name
                 ),
                 adaptive_controller=controller,
             ):

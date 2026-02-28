@@ -35,7 +35,8 @@ async def quick_verify():
     
     print(f"""
 3. Querying: '{test_query}'""")
-    result = await rag.aquery(test_query, llm=llm)
+    # [리팩토링 반영] 모델 이름만 전달
+    result = await rag.aquery(test_query, model_name=DEFAULT_OLLAMA_MODEL)
     
     print("""
 """ + "="*50)

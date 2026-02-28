@@ -21,7 +21,6 @@ from common.exceptions import (
     InsufficientChunksError,
     VectorStoreError,
 )
-from common.typing_utils import T
 from core.chunking import split_documents
 from core.document_processor import compute_file_hash, load_pdf_docs
 from core.graph_builder import build_graph
@@ -157,21 +156,36 @@ class RAGSystem:
         if on_progress:
             on_progress()
 
-    async def aquery(self, query: str, llm: T | None = None) -> dict[str, Any]:
+    async def aquery(self, query: str, model_name: str | None = None) -> dict[str, Any]:
         """[기본] 질문에 대한 답변을 비동기로 생성합니다 (Full Response)."""
         self._ensure_session_context()
-        config = await self._prepare_config(llm)
+        config = await self._prepare_config(model_name)
         rag_engine = SessionManager.get("rag_engine", session_id=self.session_id)
         if not rag_engine:
             raise VectorStoreError(
                 details={"reason": "파이프라인이 준비되지 않았습니다."}
             )
-        return await rag_engine.ainvoke({"input": query}, config=config)
 
-    async def astream_events(self, query: str, llm: T | None = None):
+        # LangGraph 실행
+        result = await rag_engine.ainvoke({"input": query}, config=config)
+
+        # [추가] 반환 데이터 표준화 (테스트 및 API 호환성)
+        from core.graph_builder import format_context
+
+        docs = result.get("relevant_docs", [])
+
+        return {
+            "response": result.get("response", ""),
+            "thought": result.get("thought", ""),
+            "context": format_context(docs),  # 포맷팅된 문자열 추가
+            "documents": docs,  # 원본 리스트 추가
+            "performance": result.get("performance", {}),
+        }
+
+    async def astream_events(self, query: str, model_name: str | None = None):
         """[스트리밍] 질문에 대한 이벤트를 발생시킵니다."""
         self._ensure_session_context()
-        config = await self._prepare_config(llm)
+        config = await self._prepare_config(model_name)
         rag_engine = SessionManager.get("rag_engine", session_id=self.session_id)
         if not rag_engine:
             raise VectorStoreError(
@@ -185,29 +199,43 @@ class RAGSystem:
         """build_pipeline의 하위 호환성 에일리어스"""
         return await self.build_pipeline(file_path, file_name, embedder, on_progress)
 
-    async def _prepare_config(self, llm: T | None = None) -> dict:
+    async def _prepare_config(self, model_name: str | None = None) -> dict:
         """검색기 및 모델 설정을 포함한 실행 Config를 준비합니다."""
-        if llm:
-            SessionManager.set("llm", llm, session_id=self.session_id)
+        from common.config import DEFAULT_OLLAMA_MODEL
+        from core.model_loader import ModelManager
 
+        # 1. LLM 확보 (타입 안정성을 위해 기본값 명시)
+        target_model = model_name or DEFAULT_OLLAMA_MODEL
+        llm = await ModelManager.get_llm(target_model)
+        SessionManager.set("llm", llm, session_id=self.session_id)
+
+        # 2. 리소스 풀에서 리트리버 확보
         file_hash = SessionManager.get("file_hash", session_id=self.session_id)
         vector_store, bm25_shared = await get_resource_pool().get(file_hash)
 
-        # 리소스 복구 로직
-        if not vector_store:
-            await self.build_pipeline(
-                SessionManager.get("pdf_file_path", session_id=self.session_id),
-                SessionManager.get(
-                    "last_uploaded_file_name", session_id=self.session_id
-                ),
-                SessionManager.get("embedder", session_id=self.session_id),
+        # 리소스 부재 시 복구 시도 (세션에 정보가 있는 경우)
+        if not vector_store and SessionManager.get(
+            "pdf_file_path", session_id=self.session_id
+        ):
+            logger.info(
+                f"[RAG] 리소스 부재로 파이프라인 재구축 시도 (Hash: {file_hash[:8]})"
             )
-            vector_store, bm25_shared = await get_resource_pool().get(file_hash)
+            embedder = SessionManager.get("embedder", session_id=self.session_id)
+            if embedder:
+                await self.build_pipeline(
+                    SessionManager.get("pdf_file_path", session_id=self.session_id),
+                    SessionManager.get(
+                        "last_uploaded_file_name", session_id=self.session_id
+                    ),
+                    embedder,
+                )
+                vector_store, bm25_shared = await get_resource_pool().get(file_hash)
 
+        # 3. 개별 리트리버 인스턴스 구성
         faiss_ret = (
             vector_store.as_retriever(
-                search_type=RETRIEVER_CONFIG["search_type"],
-                search_kwargs=RETRIEVER_CONFIG["search_kwargs"],
+                search_type=RETRIEVER_CONFIG.get("search_type", "similarity"),
+                search_kwargs=RETRIEVER_CONFIG.get("search_kwargs", {"k": 5}),
             )
             if vector_store
             else None
@@ -219,8 +247,9 @@ class RAGSystem:
 
         return {
             "configurable": {
-                "llm": SessionManager.get("llm", session_id=self.session_id),
+                "llm": llm,
                 "session_id": self.session_id,
+                "thread_id": self.session_id,
                 "faiss_retriever": faiss_ret,
                 "bm25_retriever": bm25_ret,
                 "doc_language": SessionManager.get(

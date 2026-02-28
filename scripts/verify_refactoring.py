@@ -10,7 +10,7 @@ sys.path.append(str(ROOT_DIR / "src"))
 
 from core.rag_core import RAGSystem
 from core.model_loader import ModelManager
-from common.config import DEFAULT_OLLAMA_MODEL
+from common.config import DEFAULT_OLLAMA_MODEL, DEFAULT_EMBEDDING_MODEL
 from common.logging_config import setup_logging
 
 async def verify_system():
@@ -18,83 +18,66 @@ async def verify_system():
     setup_logging(log_level="INFO")
     
     print("\n" + "="*60)
-    print("🚀 RAG System Refactoring Verification")
+    print("🚀 RAG System Refactoring Verification (Integrated Interface)")
     print("="*60)
 
     session_id = f"verify-{int(datetime.now().timestamp())}"
+    # 세션 ID를 지정하여 RAGSystem 인스턴스 생성
     rag = RAGSystem(session_id=session_id)
     
-    # 1. 비동기 모델 로딩 테스트
-    print("\n[STEP 1] Testing Async Model Loading...")
-    start = asyncio.get_event_loop().time()
-    
-    # 병렬 로딩 시도 (락 작동 확인)
-    embedder_task = ModelManager.get_embedder()
-    llm_task = ModelManager.get_llm(DEFAULT_OLLAMA_MODEL)
-    
-    embedder, llm = await asyncio.gather(embedder_task, llm_task)
-    
-    elapsed = asyncio.get_event_loop().time() - start
-    print(f"✅ Models loaded successfully in {elapsed:.2f}s")
+    # 1. 모델 로딩 (임베더는 문서 로드를 위해 필요)
+    print("\n[STEP 1] Preparing Embedding Model...")
+    embedder = await ModelManager.get_embedder(DEFAULT_EMBEDDING_MODEL)
+    print(f"✅ Embedding model '{DEFAULT_EMBEDDING_MODEL}' ready.")
 
-    # 2. 문서 인덱싱 (Semantic Chunking & ResourcePool)
+    # 2. 문서 인덱싱
     test_pdf = str(ROOT_DIR / "tests" / "data" / "2201.07520v1.pdf")
     if not os.path.exists(test_pdf):
-        print(f"❌ Test PDF not found at {test_pdf}. Skipping indexing test.")
-        # 대체용 파일 찾기
-        pdf_files = list(ROOT_DIR.glob("**/*.pdf"))
-        if pdf_files:
-            test_pdf = str(pdf_files[0])
-            print(f"💡 Using alternative PDF: {test_pdf}")
-        else:
-            return
+        print(f"❌ Test PDF not found at {test_pdf}.")
+        return
 
-    print(f"\n[STEP 2] Testing Document Indexing (Semantic & Page-Aware)...")
-    start = asyncio.get_event_loop().time()
+    print(f"\n[STEP 2] Testing Document Indexing...")
+    # build_pipeline 내부에서 ResourcePool에 리소스를 등록함
+    msg, cache_used = await rag.build_pipeline(test_pdf, os.path.basename(test_pdf), embedder)
     
-    msg, cache_used = await rag.load_document(test_pdf, os.path.basename(test_pdf), embedder)
-    
-    elapsed = asyncio.get_event_loop().time() - start
-    print(f"✅ {msg}")
-    print(f"✅ Indexing completed in {elapsed:.2f}s (Cache used: {cache_used})")
+    print(f"✅ {msg} (Cache used: {cache_used})")
 
-    # 3. 비동기 질의 응답 (Async Semaphore)
-    print("\n[STEP 3] Testing Async Querying...")
-    query = "What is this document about?"
+    # 3. 통합 인터페이스 질의 테스트 (aquery)
+    # 이제 aquery 내부에서 ModelManager를 통해 LLM을 가져오고 ResourcePool에서 리트리버를 가져옴
+    print("\n[STEP 3] Testing Integrated Query Interface (aquery)...")
+    query = "What is the main topic of this paper?"
     
     start = asyncio.get_event_loop().time()
-    result = await rag.aquery(query, llm=llm)
+    # [핵심] llm 객체 대신 model_name만 전달
+    result = await rag.aquery(query, model_name=DEFAULT_OLLAMA_MODEL)
     elapsed = asyncio.get_event_loop().time() - start
     
     response = result.get("response", "")
     thought = result.get("thought", "")
     
     print(f"✅ Query finished in {elapsed:.2f}s")
-    print(f"✅ Response length: {len(response)} chars")
+    print(f"✅ Response (first 100 chars): {response[:100]}...")
     if thought:
-        print(f"✅ Thought captured: {len(thought)} chars")
+        print(f"✅ Thought captured (first 100 chars): {thought[:100]}...")
 
-    # 4. 메타데이터 검증 (Page-Aware Chunking 결과 확인)
-    print("\n[STEP 4] Verifying Metadata (Pages/Cross-page)...")
+    # 4. 리소스 풀 및 세션 연동 확인
+    print("\n[STEP 4] Verifying ResourcePool & Session Linkage...")
     from core.resource_pool import get_resource_pool
     from core.session import SessionManager
     
     file_hash = SessionManager.get("file_hash", session_id=session_id)
-    vector_store, _ = await get_resource_pool().get(file_hash)
+    print(f"📊 Session File Hash: {file_hash[:8]}...")
     
-    if vector_store:
-        # 무작위 청크 하나 꺼내서 메타데이터 확인
-        # FAISS.similarity_search 대신 직접 docstore에서 추출 시도
-        sample_doc = vector_store.similarity_search("context", k=1)[0]
-        meta = sample_doc.metadata
-        print(f"✅ Sample Chunk Metadata: {meta}")
-        if "pages" in meta:
-            print(f"🎯 SUCCESS: Page-aware metadata 'pages' found: {meta['pages']}")
-        else:
-            print("⚠️ WARNING: 'pages' key not found in metadata.")
-    
+    vector_store, bm25 = await get_resource_pool().get(file_hash)
+    if vector_store and bm25:
+        print("✅ SUCCESS: ResourcePool correctly holds both VectorStore and BM25 for this session.")
+    else:
+        print("❌ FAILURE: ResourcePool is missing resources for this session.")
+        if not vector_store: print("   - VectorStore is None")
+        if not bm25: print("   - BM25 is None")
+
     print("\n" + "="*60)
-    print("🏁 All Verification Steps Completed!")
+    print("🏁 Refactoring Verification Completed!")
     print("="*60 + "\n")
 
 if __name__ == "__main__":

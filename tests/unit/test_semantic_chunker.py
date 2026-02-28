@@ -105,6 +105,5 @@ async def test_semantic_chunker_sentence_splitting_safety():
     assert len(chunks) > 1
     # 2. 모든 청크가 합리적인 크기인지 확인 (병합 허용 범위 내)
     for c in chunks:
-        # 강제 분할 지점은 500자였으므로, 병합되더라도 max_chunk_size를 크게 넘지 않아야 함
-        # 현재 로직상 1001자(500+500+공백)까지는 병합될 수 있음 (유사도가 1.0이므로)
-        assert len(c["text"]) <= 1200 
+        # [최적화] hard_split_limit가 1.5배로 늘어났으므로 임계값을 1600으로 상향 (500*1.5=750이지만, 병합 로직 고려)
+        assert len(c["text"]) <= 1600

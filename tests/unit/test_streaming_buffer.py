@@ -18,21 +18,29 @@ class TestTokenStreamBuffer(unittest.TestCase):
         # buffer_size=3, timeout=1000ms
         buffer = TokenStreamBuffer(buffer_size=3, timeout_ms=1000.0)
 
-        assert buffer.add_token("a") is None
+        # 첫 토큰은 TTFT 최적화로 인해 즉시 플러시됨
+        assert buffer.add_token("a") == "a"
+        # 두 번째, 세 번째는 버퍼링됨
         assert buffer.add_token("b") is None
-        result = buffer.add_token("c")
-        assert result == "abc"
+        assert buffer.add_token("c") is None
+        # 네 번째 추가 시 버퍼가 꽉 차서(b, c, d) 플러시됨
+        result = buffer.add_token("d")
+        assert result == "bcd"
         assert len(buffer.buffer) == 0
 
     def test_timeout_flush(self):
         # buffer_size=10, timeout=100ms
         buffer = TokenStreamBuffer(buffer_size=10, timeout_ms=100.0)
 
-        assert buffer.add_token("a") is None
+        # 첫 토큰은 즉시 플러시
+        assert buffer.add_token("a") == "a"
+        # 두 번째 토큰 추가 후 대기
+        assert buffer.add_token("b") is None
         time.sleep(0.15)  # Wait for > 100ms
 
-        result = buffer.add_token("b")
-        assert result == "ab"
+        # 세 번째 토큰 추가 시 타임아웃 플러시 발생 (b + c)
+        result = buffer.add_token("c")
+        assert result == "bc"
         assert len(buffer.buffer) == 0
 
     def test_reset(self):

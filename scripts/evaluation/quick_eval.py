@@ -39,7 +39,6 @@ async def run_quick_evaluation(pdf_path: str, testset_csv: str):
     session_id = "eval_" + str(int(datetime.now().timestamp()))
     rag_sys = RAGSystem(session_id=session_id)
     embedder = await ModelManager.get_embedder(DEFAULT_EMBEDDING_MODEL)
-    llm = await ModelManager.get_llm(DEFAULT_OLLAMA_MODEL)
     
     print("1. RAG 파이프라인 구축 중...")
     await rag_sys.build_pipeline(pdf_path, os.path.basename(pdf_path), embedder)
@@ -60,8 +59,8 @@ async def run_quick_evaluation(pdf_path: str, testset_csv: str):
         query = row['question']
         gt = row['ground_truth']
         
-        # 추론
-        resp = await rag_sys.aquery(query, llm=llm)
+        # [리팩토링 반영] 모델 이름만 전달
+        resp = await rag_sys.aquery(query, model_name=DEFAULT_OLLAMA_MODEL)
         answer = resp.get("output", resp.get("response", ""))
         
         # 채점
