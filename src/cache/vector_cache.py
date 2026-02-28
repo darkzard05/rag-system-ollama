@@ -12,11 +12,10 @@ import orjson
 from langchain_core.documents import Document
 from langchain_core.embeddings import Embeddings
 
-from common.config import CACHE_HMAC_SECRET, RETRIEVER_CONFIG, VECTOR_STORE_CACHE_DIR
+from common.config import RETRIEVER_CONFIG, VECTOR_STORE_CACHE_DIR
 from common.text_utils import bm25_tokenizer
 from security.cache_security import (
     CacheIntegrityError,
-    CacheSecurityManager,
     CacheTrustError,
 )
 
@@ -60,7 +59,9 @@ class VectorStoreCache:
         self.doc_splits_path = os.path.join(self.cache_dir, "doc_splits.json")
         self.faiss_index_path = os.path.join(self.cache_dir, "faiss_index")
         self.bm25_retriever_path = os.path.join(self.cache_dir, "bm25_docs.json")
-        self.security_manager = CacheSecurityManager(hmac_secret=CACHE_HMAC_SECRET)
+        from security.cache_security import get_security_manager
+
+        self.security_manager = get_security_manager()
 
     def _get_cache_paths(self):
         cache_dir = self.cache_dir

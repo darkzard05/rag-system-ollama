@@ -15,13 +15,6 @@ from typing import Any, Generic, TypeVar
 
 import numpy as np
 
-from common.config import (
-    CACHE_CHECK_PERMISSIONS,
-    CACHE_HMAC_SECRET,
-    CACHE_SECURITY_LEVEL,
-    CACHE_TRUSTED_PATHS,
-)
-from security.cache_security import CacheSecurityManager
 from services.monitoring.performance_monitor import (
     OperationType,
     get_performance_monitor,
@@ -463,13 +456,10 @@ class DiskCache(CacheBackend[T]):
         self.lock = RLock()
         self.stats = CacheStatistics()
 
-        # 보안 관리자 초기화
-        self.security_manager = CacheSecurityManager(
-            security_level=CACHE_SECURITY_LEVEL,
-            hmac_secret=CACHE_HMAC_SECRET,
-            trusted_paths=CACHE_TRUSTED_PATHS + [str(self.cache_dir)],
-            check_permissions=CACHE_CHECK_PERMISSIONS,
-        )
+        # 보안 관리자 초기화 (공유 인스턴스 사용으로 중복 로그 방지)
+        from security.cache_security import get_security_manager
+
+        self.security_manager = get_security_manager()
 
     def _get_cache_path(self, key: str) -> Path:
         """키에 대한 파일 경로 생성"""

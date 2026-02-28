@@ -99,22 +99,14 @@ class CacheMetadata(BaseModel):
 
 
 # ============================================================================
-# 캐시 보안 관리자 (싱글톤)
+# 캐시 보안 관리자
 # ============================================================================
 
 
 class CacheSecurityManager:
     """
-    캐시 파일의 보안을 관리하는 클래스 (싱글톤).
+    캐시 파일의 보안을 관리하는 클래스.
     """
-
-    _instance: "CacheSecurityManager | None" = None
-    _initialized: bool = False
-
-    def __new__(cls, *args, **kwargs):
-        if cls._instance is None:
-            cls._instance = super().__new__(cls)
-        return cls._instance
 
     def __init__(
         self,
@@ -123,18 +115,18 @@ class CacheSecurityManager:
         trusted_paths: list[str] | None = None,
         check_permissions: bool = True,
     ):
-        if self._initialized:
-            return
+        if security_level not in ("low", "medium", "high"):
+            raise ValueError(f"유효하지 않은 보안 수준: {security_level}")
+
+        if hmac_secret and len(hmac_secret) < 32:
+            raise ValueError("HMAC 비밀은 최소 32자 이상이어야 합니다")
 
         self.security_level = security_level
         self.hmac_secret = hmac_secret
         self.trusted_paths = [Path(p).resolve() for p in (trusted_paths or [])]
         self.check_permissions = check_permissions
-        self._initialized = True
 
-        logger.debug(
-            f"CacheSecurityManager 싱글톤 초기화 완료 (Level: {security_level})"
-        )
+        logger.debug(f"CacheSecurityManager 초기화 완료 (Level: {security_level})")
 
     @staticmethod
     def compute_file_hash(file_path: str, algorithm: str = "sha256") -> str:
@@ -291,3 +283,30 @@ class CacheSecurityManager:
             python_version=f"{sys.version_info.major}.{sys.version_info.minor}",
             description=description,
         )
+
+
+# ============================================================================
+# 전역 인스턴스 (공유용)
+# ============================================================================
+
+_global_security_manager = None
+
+
+def get_security_manager() -> CacheSecurityManager:
+    """애플리케이션 전역에서 공유할 보안 관리자 인스턴스를 반환합니다."""
+    global _global_security_manager
+    if _global_security_manager is None:
+        from common.config import (
+            CACHE_CHECK_PERMISSIONS,
+            CACHE_HMAC_SECRET,
+            CACHE_SECURITY_LEVEL,
+            CACHE_TRUSTED_PATHS,
+        )
+
+        _global_security_manager = CacheSecurityManager(
+            security_level=CACHE_SECURITY_LEVEL,
+            hmac_secret=CACHE_HMAC_SECRET,
+            trusted_paths=CACHE_TRUSTED_PATHS,
+            check_permissions=CACHE_CHECK_PERMISSIONS,
+        )
+    return _global_security_manager
