@@ -40,6 +40,7 @@ class ChatMessage(BaseModel):
     msg_type: str = "general"  # answer, log, greeting
     thought: str | None = None
     doc_ids: list[str] = []
+    annotations: list[dict] = []  # [추가] 해당 메시지에 귀속된 PDF 하이라이트 좌표
     metrics: dict[str, Any] | None = None
     processed_content: str | None = None
     timestamp: float = Field(default_factory=time.time)

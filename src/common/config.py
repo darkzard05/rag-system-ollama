@@ -146,6 +146,7 @@ PARSING_CONFIG: dict = _rag_config.get(
         "do_table_structure": True,
         "table_mode": "fast",
         "timeout": 300.0,
+        "extract_words": False,  # [병목 해결] 인덱싱 시 좌표 추출 비활성화
     },
 )
 VECTOR_STORE_CACHE_DIR: str = str(

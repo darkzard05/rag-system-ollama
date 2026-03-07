@@ -108,11 +108,11 @@ async def split_documents(
 
     if is_already_chunked and not needs_sub_chunking:
         SessionManager.add_status_log(
-            f"📑 기존 분할 구조 활용 ({len(docs)}개 섹션)", session_id=session_id
+            f"기존 분할 구조 활용 ({len(docs)}개 섹션)", session_id=session_id
         )
         split_docs = docs
         if embedder:
-            SessionManager.add_status_log("🧠 지식 벡터화 중...", session_id=session_id)
+            SessionManager.add_status_log("지식 벡터화 중...", session_id=session_id)
             vectors = [
                 np.array(v)
                 for v in embedder.embed_documents([d.page_content for d in split_docs])
@@ -120,12 +120,12 @@ async def split_documents(
     else:
         if needs_sub_chunking:
             SessionManager.add_status_log(
-                "✂️ 대형 섹션 감지: 정밀 검색을 위한 하위 분할 시작",
+                "대형 섹션 감지: 정밀 검색을 위한 하위 분할 시작",
                 session_id=session_id,
             )
         else:
             SessionManager.add_status_log(
-                "✂️ 문서 분할 및 문맥 추출 중...", session_id=session_id
+                "문서 분할 및 문맥 추출 중...", session_id=session_id
             )
 
         use_semantic = SEMANTIC_CHUNKER_CONFIG.get("enabled", False)
@@ -136,7 +136,7 @@ async def split_documents(
             ):
                 semantic_chunker = _init_semantic_chunker(embedder)
                 split_docs, vectors = await semantic_chunker.split_documents(docs)
-                msg = f"✂️ 의미론적 분할 완료 ({len(split_docs)}개 조각)"
+                msg = f"의미론적 분할 완료 ({len(split_docs)}개 조각)"
         else:
             recursive_chunker = RecursiveCharacterTextSplitter(
                 chunk_size=TEXT_SPLITTER_CONFIG["chunk_size"],
@@ -150,7 +150,7 @@ async def split_documents(
                         [d.page_content for d in split_docs]
                     )
                 ]
-            msg = f"✂️ 표준 분할 완료 ({len(split_docs)}개 조각)"
+            msg = f"표준 분할 완료 ({len(split_docs)}개 조각)"
 
         SessionManager.add_status_log(msg, session_id=session_id)
         logger.info(

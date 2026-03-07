@@ -43,8 +43,13 @@ class EvaluationService:
         embedder = load_embedding_model()
         evaluator_embeddings = LangchainEmbeddingsWrapper(embedder)
 
-        # [최적화] FaithfulnesswithHHEM: LLM 호출을 최소화하는 단일 지표
-        faithfulness = FaithfulnesswithHHEM(llm=evaluator_llm)
+        # [최적화] FaithfulnesswithHHEM: GPU 가속 및 배치 처리 적용
+        import torch
+
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        faithfulness = FaithfulnesswithHHEM(
+            llm=evaluator_llm, device=device, batch_size=16
+        )
 
         # [최적화] AnswerRelevancy: strictness=1로 자원 효율적 관련성 평가
         answer_relevancy = AnswerRelevancy(
@@ -52,7 +57,7 @@ class EvaluationService:
         )
 
         logger.info(
-            "Successfully initialized balanced evaluation metrics (HHEM + Relevancy)."
+            f"Successfully initialized balanced evaluation metrics (HHEM on {device} + Relevancy)."
         )
         return [faithfulness, answer_relevancy]
 
@@ -62,7 +67,11 @@ class EvaluationService:
         """
         데이터셋에 대해 균형 잡힌 평가를 수행합니다.
         """
-        logger.info(f"Starting balanced evaluation for {len(data_points)} cases...")
+        from common.config import EVAL_MAX_WORKERS
+
+        logger.info(
+            f"Starting balanced evaluation for {len(data_points)} cases with {EVAL_MAX_WORKERS} workers..."
+        )
 
         # 1. 데이터셋 구성
         eval_data = []
@@ -93,8 +102,8 @@ class EvaluationService:
 
         # 2. 평가 실행
         start_time = time.time()
-        # [안정성] max_workers=1로 순차 실행 유지하여 시스템 멈춤 방지
-        run_config = RunConfig(timeout=EVAL_TIMEOUT, max_workers=1)
+        # [최적화] 설정된 EVAL_MAX_WORKERS 적용 (기본값 1에서 확장 가능)
+        run_config = RunConfig(timeout=EVAL_TIMEOUT, max_workers=EVAL_MAX_WORKERS)
 
         results = evaluate(dataset=dataset, metrics=metrics, run_config=run_config)
 

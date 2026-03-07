@@ -65,9 +65,9 @@ async def retrieve_and_rerank(
 
     # [핵심] UI 핸들러를 위한 상태 이벤트 발생
     await adispatch_custom_event(
-        "status_update", {"message": "🔍 관련 지식 탐색 중..."}, config=config
+        "status_update", {"message": "관련 지식 탐색 중..."}, config=config
     )
-    SessionManager.add_status_log("🔍 문서 저장소에서 관련 지식 탐색 시작")
+    SessionManager.add_status_log("문서 저장소에서 관련 지식 탐색 시작")
 
     # 리트리버 획득
     bm25 = cfg.get("bm25_retriever")
@@ -115,17 +115,17 @@ async def retrieve_and_rerank(
         Document(page_content=r.content, metadata=r.metadata) for r in aggregated
     ]
     SessionManager.add_status_log(
-        f"📚 하이브리드 검색 완료 ({len(final_docs)}개 후보 확보)"
+        f"하이브리드 검색 완료 ({len(final_docs)}개 후보 확보)"
     )
 
     # FlashRank 리랭킹 (선택적)
     if RERANKER_CONFIG.get("enabled", True) and len(final_docs) > 1:
         await adispatch_custom_event(
             "status_update",
-            {"message": "⚖️ 지식 우선순위 정제 중 (FlashRank)"},
+            {"message": "지식 우선순위 정제 중 (FlashRank)"},
             config=config,
         )
-        SessionManager.add_status_log("⚖️ 지식의 우선순위 재조정 및 정제 중 (FlashRank)")
+        SessionManager.add_status_log("지식의 우선순위 재조정 및 정제 중 (FlashRank)")
         from flashrank import RerankRequest
 
         from core.model_loader import ModelManager
@@ -144,8 +144,12 @@ async def retrieve_and_rerank(
                 Document(page_content=r["text"], metadata=r["meta"])
                 for r in results[:10]
             ]
+
+            # [추가] 연속된 청크 병합 (같은 페이지의 인접 청크 통합)
+            final_docs = _merge_consecutive_chunks(final_docs)
+
             SessionManager.add_status_log(
-                f"✅ 최적의 지식 10개 선별 완료 (신뢰도: {results[0]['score']:.2f})"
+                f"최적의 지식 {len(final_docs)}개 선별 및 문맥 병합 완료"
             )
 
     return {"relevant_docs": final_docs}
@@ -168,12 +172,12 @@ async def generate(state: GraphState, config: RunnableConfig) -> dict[str, Any]:
     cfg = config.get("configurable", {})
     llm = cfg.get("llm")
     if not llm:
-        return {"response": "❌ LLM 미로드"}
+        return {"response": "LLM 미로드"}
 
     await adispatch_custom_event(
-        "status_update", {"message": "✍️ 답변 작성 중..."}, config=config
+        "status_update", {"message": "답변 작성 중..."}, config=config
     )
-    SessionManager.add_status_log("🧠 답변 논리 설계 및 생성 시작")
+    SessionManager.add_status_log("답변 논리 설계 및 생성 시작")
 
     # 컨텍스트 포맷팅
     docs = state.get("relevant_docs", [])

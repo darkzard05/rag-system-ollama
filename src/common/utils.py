@@ -19,9 +19,9 @@ logger = logging.getLogger(__name__)
 _RE_LATEX_BLOCK = re.compile(r"\\\[(.*?)\\\]", re.DOTALL)
 _RE_LATEX_INLINE = re.compile(r"\\\((.*?)\\\)", re.DOTALL)
 
-# [수정] 복합 인용 패턴 지원: [p.1, p.2] 또는 [p.1, 2, 3] 또는 [page 5] 등 지원
+# [수정] 복합 인용 패턴 지원: [1], [p.5], (page 10) 등 광범위한 패턴 지원
 _RE_CITATION_BLOCK = re.compile(
-    r"([\[\(])((?:[Pp](?:age)?\.?\s*)?\d+(?:[\s,]*)(?:(?:[Pp](?:age)?\.?\s*)?\d+(?:[\s,]*))*)([\]\)])",
+    r"(\[|(?:\s|^)\()((?:[Pp](?:age)?\.?\s*)?\d+(?:[\s,]*)(?:(?:[Pp](?:age)?\.?\s*)?\d+(?:[\s,]*))*)([\]\)]|(?:\s|$))",
     re.IGNORECASE,
 )
 _RE_EXTRACT_PAGES = re.compile(r"(\d+)")
@@ -83,7 +83,86 @@ def extract_annotations_from_docs(documents: list) -> list[dict]:
         )
         page_val = int(meta.get("page", 1))
         all_coords = meta.get("word_coords", [])
-        content = doc.page_content.lower()
+        content = (
+            getattr(doc, "page_content", "")
+            if hasattr(doc, "page_content")
+            else doc.get("page_content", "")
+        ).lower()
+        file_path = meta.get("file_path") or meta.get("source")
+
+        logger.debug(
+            f"[HIGHLIGHT] Checking doc on page {page_val}, file_path: {file_path}"
+        )
+
+        # [고도화] On-demand 좌표 추출 (Strategy C)
+        # 메타데이터에 좌표가 없으면 PDF 파일에서 실시간으로 검색합니다.
+        if not all_coords and file_path and os.path.exists(file_path):
+            try:
+                import fitz
+
+                with fitz.open(file_path) as pdf:
+                    page = pdf[page_val - 1]
+
+                    # [최적화] TextPage 객체를 미리 생성하여 반복 검색 성능 향상 (Context7 권장사항)
+                    textpage = page.get_textpage()
+
+                    # [개선] 청크 전체를 하이라이트하기 위해 모든 문장을 검색 대상으로 설정
+                    sentences = [
+                        s.strip()
+                        for s in re.split(r"[.!?\n]", content)
+                        if len(s.strip()) > 5
+                    ]
+                    if not sentences:
+                        sentences = [content[:150].strip()]
+
+                    doc_quads = []
+                    # [최적화] TextPage를 사용하여 고속 검색
+                    for search_query in sentences:
+                        if not search_query:
+                            continue
+                        # 50자씩 끊어서 검색 (긴 문장 검색 실패 방지)
+                        for i in range(0, len(search_query), 50):
+                            part = search_query[i : i + 50]
+                            if len(part) < 10:
+                                continue
+                            quads = page.search_for(part, textpage=textpage)
+                            if quads:
+                                doc_quads.extend(quads)
+
+                    if doc_quads:
+                        # [핵심 개선] 줄 단위 병합 로직 (Line Merging)
+                        on_demand_lines: dict[float, list] = {}
+                        for q in doc_quads:
+                            y_key = round(q.y0 / 5) * 5
+                            if y_key not in on_demand_lines:
+                                on_demand_lines[y_key] = []
+                            on_demand_lines[y_key].append(q)
+
+                        for y_key in sorted(on_demand_lines.keys()):
+                            group = on_demand_lines[y_key]
+                            x_min = min(r.x0 for r in group)
+                            y_min = min(r.y0 for r in group)
+                            x_max = max(r.x1 for r in group)
+                            y_max = max(r.y1 for r in group)
+
+                            annotations.append(
+                                {
+                                    "page": page_val,
+                                    "x": x_min,
+                                    "y": y_min,
+                                    "width": x_max - x_min,
+                                    "height": y_max - y_min,
+                                    "color": "red",
+                                    "thickness": 2,
+                                }
+                            )
+                        continue
+            except Exception as e:
+                logger.error(f"[HIGHLIGHT] On-demand search failed: {e}")
+        else:
+            logger.debug(
+                f"[HIGHLIGHT] Conditions not met: coords={len(all_coords)}, path_exists={os.path.exists(file_path) if file_path else 'N/A'}"
+            )
 
         if not all_coords:
             continue
@@ -175,11 +254,51 @@ def extract_annotations_from_docs(documents: list) -> list[dict]:
     return annotations
 
 
+def parse_reference_section(text: str) -> dict[str, str]:
+    """
+    참고문헌 섹션 텍스트에서 [1] 또는 Author (Year) 형태의 인용 정보를 추출하여 맵으로 반환합니다.
+    """
+    if not text:
+        return {}
+
+    ref_map = {}
+
+    # 1. 숫자형 패턴: [1] Author... 또는 1. Author...
+    num_pattern = re.compile(r"^[\s]*[\[\(]?(\d+)[\]\)]?[\s\.]+(.*)", re.MULTILINE)
+    num_matches = num_pattern.findall(text)
+    for num, content in num_matches:
+        ref_map[num] = content.strip()
+
+    # 2. 이름-연도형 패턴: Author et al. (Year) 또는 Author (Year) 또는 (Author, Year)
+    # 문단 단위로 나누어 첫 부분에서 저자와 연도를 추출
+    paragraphs = text.split("\n\n")
+    # 좀 더 유연한 패턴: 문장 시작 또는 괄호 안에 저자와 연도가 포함된 경우
+    name_year_pattern = re.compile(
+        r"([A-Z][a-z]+(?:\s+et\s+al\.)?)\s*[\(,]?\s*(\d{4})[\s\)]?"
+    )
+
+    for para in paragraphs:
+        para = para.strip()
+        if not para:
+            continue
+
+        match = name_year_pattern.search(para)
+        if match:
+            author = match.group(1).replace(" et al.", "").strip()
+            year = match.group(2).strip()
+            # 저자 성(Last Name)과 연도 조합을 키로 사용 (소문자화)
+            key = f"{author}_{year}".lower()
+            ref_map[key] = para
+
+    return ref_map
+
+
 def apply_tooltips_to_response(
     response_text: str, documents: list | None = None, msg_index: int = 0
 ) -> str:
     """
-    답변 내의 인용구([1], [p.5] 등)를 찾아 문서 정보 툴팁을 입힙니다.
+    답변 내의 인용구([1], [p.5] 등)를 찾아 문서 정보 툴팁을 입히고
+    클릭 시 해당 PDF 페이지로 이동 및 하이라이트 기능을 활성화합니다.
     """
     if not response_text:
         return response_text
@@ -187,12 +306,11 @@ def apply_tooltips_to_response(
     # 1. LaTeX 정규화 먼저 수행
     text = normalize_latex_delimiters(response_text)
 
-    # 2. 문서 정보가 없으면 정규화된 텍스트만 반환
     if not documents:
         return text
 
     def replace_citation(match):
-        full_match = match.group(0)
+        full_match = match.group(0).strip()
         inner_text = match.group(2)
 
         # 페이지 번호 추출
@@ -202,37 +320,30 @@ def apply_tooltips_to_response(
 
         target_page = int(page_matches[0])
 
-        # 해당 페이지와 일치하는 문서 청크 찾기
-        matching_doc = None
+        # 툴팁에 표시할 문서 내용 찾기
+        clean_content = "인용된 원문 정보를 불러올 수 없습니다."
         for doc in documents:
             meta = (
                 getattr(doc, "metadata", {})
                 if hasattr(doc, "metadata")
                 else doc.get("metadata", {})
             )
-            doc_page = int(meta.get("page", -1))
-            if doc_page == target_page:  # [수정] 둘 다 1-indexed이므로 직접 비교
-                matching_doc = doc
+            if int(meta.get("page", -1)) == target_page:
+                content = (
+                    getattr(doc, "page_content", "")
+                    if hasattr(doc, "page_content")
+                    else doc.get("page_content", "")
+                )
+                clean_content = (
+                    content.replace('"', "&quot;").replace("'", "&apos;")[:300] + "..."
+                )
                 break
 
-        if matching_doc:
-            content = (
-                getattr(matching_doc, "page_content", "")
-                if hasattr(matching_doc, "page_content")
-                else matching_doc.get("page_content", "")
-            )
-            # 툴팁용 텍스트 정제 (HTML 태그 및 따옴표 처리)
-            clean_content = (
-                content.replace('"', "&quot;").replace("'", "&apos;")[:200] + "..."
-            )
+        # [HIGHLIGHT] 인터랙티브 하이라이트 스타일 적용
+        return f'<span class="citation-highlight" title="{clean_content}" style="color: #007bff; font-weight: 600; cursor: pointer; text-decoration: underline; text-underline-offset: 3px;">{full_match}</span>'
 
-            # 하이라이트 스타일 적용된 HTML 반환
-            return f'<span class="citation-tooltip" title="{clean_content}" style="color: #1e88e5; font-weight: bold; cursor: help; border-bottom: 1px dotted #1e88e5;">{full_match}</span>'
-
-        return full_match
-
-    # 인용구 패턴 매칭 및 치환
     try:
+        # 인용구 패턴 매칭 및 치환
         text = _RE_CITATION_BLOCK.sub(replace_citation, text)
     except Exception as e:
         logger.error(f"[Utils] 인용구 처리 오류: {e}")
@@ -400,15 +511,6 @@ def count_tokens_rough(text: str) -> int:
     if not text:
         return 0
     return int(len(text) / 2.5) + 1
-
-
-@safe_cache_data(ttl=4)
-def _get_cached_pdf_bytes(pdf_path: str) -> bytes | None:
-    """PDF 파일 내용을 메모리에 캐싱합니다. (I/O 절감)"""
-    if os.path.exists(pdf_path):
-        with open(pdf_path, "rb") as f:
-            return f.read()
-    return None
 
 
 def sync_run(coro):

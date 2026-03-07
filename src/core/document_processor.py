@@ -56,7 +56,7 @@ def load_pdf_docs(
     with monitor.track_operation(OperationType.PDF_LOADING, {"file": file_name}) as op:
         try:
             SessionManager.add_status_log(
-                "📑 문서 구조 분석 및 마크다운 변환 중",
+                "문서 구조 분석 및 마크다운 변환 중",
                 session_id=session_id,
             )
 
@@ -64,6 +64,7 @@ def load_pdf_docs(
             ref_start_page = 999999
             try:
                 with fitz.open(file_path) as pdf:
+                    # A. TOC 검색
                     toc = pdf.get_toc()
                     for entry in toc:
                         title = str(entry[1]).lower()
@@ -72,13 +73,26 @@ def load_pdf_docs(
                             for kw in ["references", "bibliography", "참고문헌"]
                         ):
                             ref_start_page = entry[2]
-                            SessionManager.add_status_log(
-                                f"📂 문서 구조 분석: {ref_start_page}페이지부터 참고문헌 섹션을 식별했습니다.",
-                                session_id=session_id,
-                            )
                             break
+
+                    # B. TOC 실패 시 텍스트 검색 (뒤에서부터)
+                    if ref_start_page == 999999:
+                        for p_idx in range(len(pdf) - 1, max(0, len(pdf) - 5), -1):
+                            page_text = pdf[p_idx].get_text().lower()
+                            if any(
+                                kw in page_text[:500]
+                                for kw in ["references", "bibliography", "참고문헌"]
+                            ):
+                                ref_start_page = p_idx + 1
+                                break
+
+                if ref_start_page != 999999:
+                    SessionManager.add_status_log(
+                        f"문서 구조 분석: {ref_start_page}페이지부터 참고문헌 섹션을 식별했습니다.",
+                        session_id=session_id,
+                    )
             except Exception as e:
-                logger.debug(f"TOC 분석 실패: {e}")
+                logger.debug(f"TOC/섹션 분석 실패: {e}")
 
             if on_progress:
                 on_progress()
@@ -92,13 +106,16 @@ def load_pdf_docs(
                 write_images=PARSING_CONFIG.get("write_images", False),
                 fontsize_limit=PARSING_CONFIG.get("fontsize_limit", 3),
                 ignore_code=PARSING_CONFIG.get("ignore_code", False),
-                extract_words=PARSING_CONFIG.get("extract_words", True),
+                extract_words=PARSING_CONFIG.get(
+                    "extract_words", False
+                ),  # 기본값 False로 변경
                 ignore_graphics=PARSING_CONFIG.get("ignore_graphics", True),
                 table_strategy=PARSING_CONFIG.get("table_strategy", "fast"),
             )
 
             docs: list[Document] = []
             reference_started = False
+            reference_text_buffer = []  # 레퍼런스 섹션 텍스트 보관용
 
             TOC_PATTERNS = ["table of contents", "contents", "목차"]
             REF_PATTERNS = ["references", "bibliography", "참고문헌"]
@@ -115,19 +132,20 @@ def load_pdf_docs(
                     p in lower_text[:100] for p in TOC_PATTERNS
                 ):
                     SessionManager.add_status_log(
-                        f"🧹 불필요한 목차 페이지({page_num}p)를 제외합니다.",
+                        f"불필요한 목차 페이지({page_num}p)를 제외합니다.",
                         session_id=session_id,
                     )
                     continue
 
-                # B. 참고문헌(References) 필터링
+                # B. 참고문헌(References) 식별 및 추출
                 if page_num >= ref_start_page:
                     if not reference_started:
                         SessionManager.add_status_log(
-                            f"🚫 지식 정제: {page_num}페이지 이후의 참고문헌 섹션을 제외합니다.",
+                            f"지식 정제: {page_num}페이지 이후의 참고문헌 섹션을 식별했습니다.",
                             session_id=session_id,
                         )
                         reference_started = True
+                    reference_text_buffer.append(text)
 
                 elif (
                     not reference_started
@@ -140,12 +158,14 @@ def load_pdf_docs(
                     )
                 ):
                     SessionManager.add_status_log(
-                        f"🚫 지식 정제: 텍스트 패턴 기반으로 참고문헌 섹션을 감지하여 제외합니다 ({page_num}p~)",
+                        f"지식 정제: 패턴 기반으로 참고문헌 섹션을 감지했습니다 ({page_num}p~)",
                         session_id=session_id,
                     )
                     reference_started = True
+                    reference_text_buffer.append(text)
 
                 if reference_started:
+                    # 참고문헌 시작된 이후의 페이지는 텍스트만 버퍼에 넣고 본문(docs)에는 추가하지 않음
                     continue
 
                 # C. 데이터 보관 (좌표 정보 포함)
@@ -157,6 +177,7 @@ def load_pdf_docs(
                         page_content=text,
                         metadata={
                             "source": file_name,
+                            "file_path": file_path,  # 절대 경로 추가
                             "page": page_num,
                             "total_pages": total_pages,
                             "engine": "pymupdf4llm",
@@ -168,9 +189,51 @@ def load_pdf_docs(
                     )
                 )
 
+            # D. [핵심] 레퍼런스 맵 생성 및 본문 링크 연결
+            from common.utils import parse_reference_section
+
+            all_ref_text = "\n".join(reference_text_buffer)
+            ref_map = parse_reference_section(all_ref_text)
+
+            if ref_map:
+                import re
+
+                # 1. 숫자형 [1], (1) 감지
+                num_pattern = re.compile(r"[\[\(](\d+)[\]\)]")
+                # 2. 이름-연도형 Author et al. (2024) 또는 Author (2024) 또는 (Author, 2024) 감지
+                name_year_pattern = re.compile(
+                    r"([A-Z][a-z]+(?:\s+et\s+al\.)?)\s*[\(,]?\s*(\d{4})[\s\)]?"
+                )
+
+                for doc in docs:
+                    linked_refs = {}
+
+                    # 숫자형 인용 매칭
+                    found_nums = num_pattern.findall(doc.page_content)
+                    for num in found_nums:
+                        if num in ref_map:
+                            linked_refs[num] = ref_map[num]
+
+                    # 이름-연도형 인용 매칭
+                    found_authors = name_year_pattern.findall(doc.page_content)
+                    for author, year in found_authors:
+                        clean_author = author.replace(" et al.", "").strip().lower()
+                        key = f"{clean_author}_{year}"
+                        if key in ref_map:
+                            linked_refs[f"{author} ({year})"] = ref_map[key]
+
+                    # 메타데이터에 주입
+                    if linked_refs:
+                        doc.metadata["linked_references"] = linked_refs
+
+                SessionManager.add_status_log(
+                    f"인용 분석 완료: 총 {len(ref_map)}개의 참고문헌을 식별하여 본문에 연결했습니다.",
+                    session_id=session_id,
+                )
+
             filtered_count = len(chunks) - len(docs)
             SessionManager.add_status_log(
-                f"✅ 문서 분석 완료: 총 {len(docs)}페이지의 유효 지식을 확보했습니다. ({filtered_count}페이지 정제됨)",
+                f"문서 분석 완료: 총 {len(docs)}페이지의 유효 지식을 확보했습니다. ({filtered_count}페이지 정제됨)",
                 session_id=session_id,
             )
             op.tokens = sum(len(doc.page_content.split()) for doc in docs)

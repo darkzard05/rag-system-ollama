@@ -28,10 +28,11 @@ class StreamChunk:
     token_count: int
     chunk_index: int
     is_final: bool = False
+    is_status_update: bool = False  # 상태 업데이트 여부 명시
+    status: str | None = None  # 현재 상태 메시지
+    node_name: str | None = None  # 노드 이름 추가
     thought: str | None = None  # 사고 과정 필드 추가
     metadata: dict[str, Any] | None = None  # 메타데이터 추가
-    node_name: str | None = None  # 현재 실행 중인 노드 이름
-    status: str | None = None  # 현재 상태 메시지
     performance: dict[str, Any] | None = None  # 통합 성능 통계 추가
 
 
@@ -155,11 +156,11 @@ class StreamingResponseHandler:
         # 상시 활성 노드
         node_status_map.update(
             {
-                "retrieve": "🔍 질문 의도 분석 및 하이브리드 지식 검색 중",
-                "rerank_documents": "⚖️ 검색 결과 리랭킹 및 문서 적합도 검증 중",
-                "grade_documents": "🎯 핵심 답변 근거 선정 및 컨텍스트 정제",
-                "format_context": "🧩 답변 구성을 위한 지식 컨텍스트 병합 중",
-                "generate": "✍️ 지식 기반으로 최적의 답변 작성 시작",
+                "retrieve": "질문 의도 분석 및 하이브리드 지식 검색 중",
+                "rerank_documents": "검색 결과 리랭킹 및 문서 적합도 검증 중",
+                "grade_documents": "핵심 답변 근거 선정 및 컨텍스트 정제",
+                "format_context": "답변 구성을 위한 지식 컨텍스트 병합 중",
+                "generate": "지식 기반으로 최적의 답변 작성 시작",
             }
         )
 
@@ -242,9 +243,35 @@ class StreamingResponseHandler:
                                 yield chunk
                                 self.chunk_index += 1
 
-                    # 2. 메타데이터 처리
+                    # 2. 메타데이터 처리 및 상세 상태 보고
                     elif kind == "on_chain_end":
                         if name == "retrieve":
+                            output = data.get("output", {})
+                            docs = output.get("relevant_docs", [])
+                            if docs:
+                                # [추가] 상세 상태 보고 (is_status_update=True)
+                                yield StreamChunk(
+                                    content="",
+                                    timestamp=time.time(),
+                                    token_count=0,
+                                    chunk_index=self.chunk_index,
+                                    is_status_update=True,
+                                    status=f"지식 저장소에서 관련 문서 {len(docs)}개를 성공적으로 찾았습니다.",
+                                    metadata={"documents": docs},
+                                )
+                                self.chunk_index += 1
+                            else:
+                                yield StreamChunk(
+                                    content="",
+                                    timestamp=time.time(),
+                                    token_count=0,
+                                    chunk_index=self.chunk_index,
+                                    is_status_update=True,
+                                    status="관련 문서를 찾지 못했습니다. 일반 지식으로 답변을 구성합니다.",
+                                )
+                                self.chunk_index += 1
+
+                        elif name == "rerank_documents":
                             output = data.get("output", {})
                             docs = output.get("relevant_docs", [])
                             if docs:
@@ -253,7 +280,8 @@ class StreamingResponseHandler:
                                     timestamp=time.time(),
                                     token_count=0,
                                     chunk_index=self.chunk_index,
-                                    metadata={"documents": docs},
+                                    is_status_update=True,
+                                    status=f"리랭킹을 통해 가장 적합한 {len(docs)}개의 지식 조각을 선별했습니다.",
                                 )
                                 self.chunk_index += 1
 

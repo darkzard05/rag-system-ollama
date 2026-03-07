@@ -163,11 +163,6 @@ class ModelManager:
             return instance
 
     @classmethod
-    def get_inference_semaphore(cls) -> Any:
-        """[DEPRECATED] 하위 호환성을 위해 유지하되 사용을 지양합니다."""
-        return cls._get_semaphore()
-
-    @classmethod
     def get_client(cls, host: str):
         """캐싱된 동기 Ollama 클라이언트를 가져옵니다."""
         import ollama
@@ -338,7 +333,6 @@ def load_embedding_model(
             SessionManager.set("current_embedding_device", "Ollama Backend")
         else:
             # --- HuggingFace 로직 (지연 로딩) ---
-            import torch
             from langchain_huggingface import HuggingFaceEmbeddings
 
             from core.session import SessionManager
@@ -365,16 +359,26 @@ def load_embedding_model(
                 pass
 
             model_kwargs: dict[str, Any] = {"device": target_device}
+            encode_kwargs: dict[str, Any] = {
+                "device": target_device,
+                "batch_size": batch_size,
+            }
+
             if backend == "onnx":
                 model_kwargs["backend"] = "onnx"
+                # [추가] ONNX 가속 시 최적화 설정 주입
+                if target_device == "cpu":
+                    encode_kwargs["normalize_embeddings"] = True  # 정규화 가속 활용
 
             if target_device == "cuda":
-                model_kwargs["torch_dtype"] = torch.float16
+                # [수정] SentenceTransformer 직접 생성 시 torch_dtype 관련 오류 방지를 위해 일단 제외
+                # 필요한 경우 model_kwargs 대신 별도 최적화 경로 사용
+                pass
 
             result = HuggingFaceEmbeddings(
                 model_name=model_key,
                 model_kwargs=model_kwargs,
-                encode_kwargs={"device": target_device, "batch_size": batch_size},
+                encode_kwargs=encode_kwargs,
                 cache_folder=CACHE_DIR,
             )
 

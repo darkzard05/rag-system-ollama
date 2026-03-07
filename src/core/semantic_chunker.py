@@ -9,7 +9,7 @@
 import hashlib
 import logging
 import re
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 import numpy as np
 from langchain_core.documents import Document
@@ -36,9 +36,10 @@ class EmbeddingBasedSemanticChunker:
     def __init__(
         self,
         embedder: Embeddings,
+        buffer_size: int = 1,  # [추가] 문맥 윈도우 크기
         breakpoint_threshold_type: str = "percentile",
         breakpoint_threshold_value: float = 95.0,
-        sentence_split_regex: str = r"([.!?]\s+)",
+        sentence_split_regex: str = r"(?<=[.?!])\s+",  # [개선] Lookbehind 적용
         min_chunk_size: int = 100,
         max_chunk_size: int = 800,
         chunk_overlap: int = 1,  # [추가] 겹칠 문장 수 (Context preservation)
@@ -50,6 +51,7 @@ class EmbeddingBasedSemanticChunker:
         의미론적 청킹 분할기를 초기화합니다.
         """
         self.embedder = embedder
+        self.buffer_size = buffer_size  # [추가]
         self.breakpoint_threshold_type = breakpoint_threshold_type
         self.breakpoint_threshold_value = breakpoint_threshold_value
         self.sentence_split_regex = sentence_split_regex
@@ -172,81 +174,65 @@ class EmbeddingBasedSemanticChunker:
         self, texts: list[str], normalize: bool = True
     ) -> np.ndarray:
         """
-        텍스트 리스트의 임베딩을 생성합니다.
-        [최적화] 전역 캐시 확인 -> 누락분만 배치 임베딩 -> 결과 병합 및 캐시 저장
+        텍스트 리스트의 임베딩을 생성합니다 (배치 처리 및 캐싱 강화).
         """
         if not texts:
             return np.array([]).reshape(0, 0)
 
-        try:
-            # 1. 고유 텍스트 및 캐시 키 생성
-            unique_texts: list[str] = []
-            text_to_unique_idx = {}
-            original_to_unique_mapping = []
+        all_results = [None] * len(texts)
+        missing_indices = []
+        missing_texts = []
 
-            for text in texts:
-                norm_text = " ".join(text.split())
-                if norm_text not in text_to_unique_idx:
-                    text_to_unique_idx[norm_text] = len(unique_texts)
-                    unique_texts.append(norm_text)
-                original_to_unique_mapping.append(text_to_unique_idx[norm_text])
+        # 1. 정제 및 캐시 확인
+        for i, text in enumerate(texts):
+            norm_text = " ".join(text.split())
+            cache_key = f"emb:{self.model_name}:{hashlib.sha256(norm_text.encode()).hexdigest()[:16]}"
 
-            # 2. 캐시 조회
-            unique_embeddings: list[np.ndarray | None] = [None] * len(unique_texts)
-            missing_indices = []
-            missing_texts = []
+            cached_vec = await self.cache_manager.get(cache_key)
+            if cached_vec is not None:
+                all_results[i] = np.array(cached_vec, dtype="float32")
+            else:
+                missing_indices.append(i)
+                missing_texts.append(norm_text)
 
-            for i, text in enumerate(unique_texts):
-                # 캐시 키: 모델명 + 텍스트 해시
-                cache_key = f"emb:{self.model_name}:{hashlib.sha256(text.encode()).hexdigest()[:16]}"
+        # 2. 누락분 배치 임베딩 수행
+        if missing_texts:
+            logger.debug(
+                f"[Chunker] {len(missing_texts)}개 문장 신규 임베딩 생성 중 (Batch Size: {self.batch_size})..."
+            )
 
-                # 비동기 캐시 조회 (L1/L2/L3 통합)
-                cached_vec = await self.cache_manager.get(cache_key)
+            for b_idx in range(0, len(missing_texts), self.batch_size):
+                batch = missing_texts[b_idx : b_idx + self.batch_size]
+                batch_indices = missing_indices[b_idx : b_idx + self.batch_size]
 
-                if cached_vec is not None:
-                    unique_embeddings[i] = np.array(cached_vec)
-                else:
-                    missing_indices.append(i)
-                    missing_texts.append(text)
+                try:
+                    # [최적화] embed_documents 호출
+                    batch_vecs = self.embedder.embed_documents(batch)
 
-            # 3. 누락된 문장들만 배치 임베딩 수행
-            if missing_texts:
-                logger.debug(
-                    f"[Chunker] {len(missing_texts)}개 문장 신규 임베딩 계산 중..."
-                )
-                new_embeddings = self.embedder.embed_documents(missing_texts)
+                    for idx, vec in zip(batch_indices, batch_vecs, strict=False):
+                        vec_np = np.array(vec, dtype="float32")
+                        all_results[idx] = vec_np
 
-                for idx, text, vec in zip(
-                    missing_indices, missing_texts, new_embeddings, strict=False
-                ):
-                    vec_np = np.array(vec).astype("float32")
-                    unique_embeddings[idx] = vec_np
+                        # 캐시 저장
+                        norm_text = texts[idx]
+                        cache_key = f"emb:{self.model_name}:{hashlib.sha256(norm_text.encode()).hexdigest()[:16]}"
+                        await self.cache_manager.set(cache_key, vec_np.tolist())
 
-                    # 캐시에 저장 (비동기)
-                    cache_key = f"emb:{self.model_name}:{hashlib.sha256(text.encode()).hexdigest()[:16]}"
-                    await self.cache_manager.set(cache_key, vec_np.tolist())
+                except Exception as e:
+                    logger.error(f"[MODEL] [BATCH] 임베딩 생성 중 오류 발생: {e}")
+                    raise
 
-            # 4. 결과 조립 (리스트 -> NumPy 행렬)
-            # Mypy 대응: 모든 요소가 np.ndarray임을 보장
-            unique_embeddings_matrix = np.stack(
-                [v for v in unique_embeddings if v is not None]
-            ).astype("float32")
-
-            if normalize:
-                # [최적화] NumPy 벡터화 연산으로 고속 정규화
-                norms = np.linalg.norm(unique_embeddings_matrix, axis=1, keepdims=True)
-                unique_embeddings_matrix = np.divide(
-                    unique_embeddings_matrix,
-                    norms,
-                    out=np.zeros_like(unique_embeddings_matrix),
-                    where=norms > 1e-9,
-                )
-
-            # 5. 원본 순서로 복원
-            return unique_embeddings_matrix[original_to_unique_mapping]
-        except Exception as e:
-            logger.error(f"[MODEL] [LOAD] 임베딩 생성 실패 | {e}")
-            raise
+        # 3. 결과 행렬 조립 및 정규화
+        embeddings_matrix = np.stack(all_results).astype("float32")
+        if normalize:
+            norms = np.linalg.norm(embeddings_matrix, axis=1, keepdims=True)
+            embeddings_matrix = np.divide(
+                embeddings_matrix,
+                norms,
+                out=np.zeros_like(embeddings_matrix),
+                where=norms > 1e-9,
+            )
+        return embeddings_matrix
 
     def _calculate_similarities(self, normalized_embeddings: np.ndarray) -> list[float]:
         """
@@ -266,66 +252,57 @@ class EmbeddingBasedSemanticChunker:
         return similarities.tolist()
 
     def _find_breakpoints(
-        self, similarities: list[float], sentences: list[dict] | None = None
+        self, distances: list[float], sentences: list[dict] | None = None
     ) -> list[int]:
         """
-        유사도 분포를 분석하여 분할 지점(breakpoints)을 찾습니다.
-        [최적화] np.convolve를 이용한 벡터화 연산으로 로컬 이동 평균을 계산하여 성능을 극대화합니다.
-        [안전] 의미론적 분할이 발생하지 않더라도 max_chunk_size를 기준으로 강제 분할 지점을 제안합니다.
+        유사도 거리(1-cos_sim) 분포를 분석하여 분할 지점을 찾습니다.
+        LangChain의 최신 구현 전략(Standard Deviation, Interquartile, Gradient)을 도입합니다.
         """
-        if not similarities:
+        if not distances:
             return []
 
-        similarities_array = np.array(similarities)
-        n = len(similarities_array)
-        breakpoints = []
+        dist_array = np.array(distances)
+        threshold = 0.0
 
-        # 1. 전역 임계값 계산
         if self.breakpoint_threshold_type == "percentile":
-            global_threshold = float(
-                np.percentile(similarities_array, 100 - self.breakpoint_threshold_value)
+            threshold = float(
+                np.percentile(dist_array, self.breakpoint_threshold_value)
             )
         elif self.breakpoint_threshold_type == "standard_deviation":
-            mean = float(np.mean(similarities_array))
-            std = float(np.std(similarities_array))
-            global_threshold = float(mean - (self.breakpoint_threshold_value * std))
-        else:
-            global_threshold = float(self.similarity_threshold)
-
-        # 2. 로컬 및 전역 임계값 기반 분할
-        window_size = ChunkingConstants.SEMANTIC_WINDOW_SIZE
-        global_breaks = similarities_array < global_threshold
-        local_breaks = np.zeros_like(global_breaks)
-
-        if n >= window_size:
-            weights = np.ones(window_size) / window_size
-            local_avgs = np.convolve(similarities_array, weights, mode="valid")
-            local_breaks[window_size:] = similarities_array[window_size:] < (
-                local_avgs[:-1] * 0.8
+            threshold = float(
+                np.mean(dist_array)
+                + self.breakpoint_threshold_value * np.std(dist_array)
             )
-            indices = np.where(global_breaks | local_breaks)[0] + 1
-            breakpoints = indices.tolist()
+        elif self.breakpoint_threshold_type == "interquartile":
+            # [수정] Mypy 타입 추론 지원을 위해 리스트 형태의 인덱스 전달 시 반환값을 명시적으로 처리
+            percentiles = cast(np.ndarray, np.percentile(dist_array, [25, 75]))
+            q1, q3 = float(percentiles[0]), float(percentiles[1])
+            iqr = q3 - q1
+            threshold = float(
+                np.mean(dist_array) + self.breakpoint_threshold_value * iqr
+            )
+        elif self.breakpoint_threshold_type == "gradient":
+            # 거리가 급격히 변하는 지점 감지
+            threshold = float(
+                np.percentile(np.gradient(dist_array), self.breakpoint_threshold_value)
+            )
         else:
-            breakpoints = [i + 1 for i, b in enumerate(global_breaks) if b]
+            threshold = float(self.similarity_threshold)  # 폴백
 
-        # 3. [추가] 안전 장치 분할 (Safety Split)
-        # 의미론적 분할이 없거나 청크가 너무 길어질 것으로 예상되는 경우 강제 지점 추가
+        # 임계값을 넘는 인덱스 추출 (거리가 클수록 의미가 다름)
+        breakpoints = (np.where(dist_array > threshold)[0] + 1).tolist()
+
+        # [안전 장치] 너무 긴 청크 방지
         if sentences:
             current_len = 0
             safety_bps = []
-
             for i, s in enumerate(sentences):
-                # 문장 길이 누적
                 current_len += len(s["text"])
-
-                # max_chunk_size의 80%를 넘으면 분할 고려
-                if current_len > (self.max_chunk_size * 0.8):
+                if current_len > (self.max_chunk_size * 0.9):
                     # 이미 breakpoints에 이 근처 지점이 있는지 확인
-                    has_near_bp = any(abs(bp - (i + 1)) <= 1 for bp in breakpoints)
-                    if not has_near_bp:
+                    if not any(abs(bp - (i + 1)) <= 1 for bp in breakpoints):
                         safety_bps.append(i + 1)
                     current_len = 0
-
             if safety_bps:
                 breakpoints = sorted(set(breakpoints + safety_bps))
 
@@ -412,9 +389,7 @@ class EmbeddingBasedSemanticChunker:
 
     async def split_text(self, text: str) -> list[dict]:
         """
-        텍스트를 의미론적으로 분할합니다.
-        Returns:
-            List[dict]: [{'text': str, 'start': int, 'end': int, 'vector': np.ndarray}, ...]
+        텍스트를 의미론적으로 분할합니다 (Buffer-based context window 적용).
         """
         if not text or not text.strip():
             return []
@@ -425,8 +400,7 @@ class EmbeddingBasedSemanticChunker:
             return []
 
         # [최적화] 너무 짧은 문장 병합 (오프셋 유지)
-        # 설정된 최소 길이 미만의 문장은 독립적인 의미를 갖기 어려우므로 앞 문장과 병합
-        min_merge_len = ChunkingConstants.MIN_MERGE_LEN
+        min_merge_len = ChunkingConstants.MIN_MERGE_LEN.value
 
         sentences = []
         if raw_sentences:
@@ -448,7 +422,7 @@ class EmbeddingBasedSemanticChunker:
                     current_s = s
             sentences.append(current_s)
 
-        if len(sentences) <= 1:
+        if len(sentences) <= self.buffer_size:
             # 벡터가 없으므로 계산 필요
             if sentences:
                 sentence_texts = [s["text"] for s in sentences]
@@ -457,15 +431,46 @@ class EmbeddingBasedSemanticChunker:
                     s["vector"] = v
             return sentences
 
-        # 2. 임베딩 및 유사도 계산 (텍스트만 추출해서 사용)
-        sentence_texts = [s["text"] for s in sentences]
-        embeddings = await self._get_embeddings(sentence_texts)
-        similarities = self._calculate_similarities(embeddings)
+        # 2. 개별 문장 임베딩 생성 (캐싱 활용)
+        # [최적화] 중복 호출 방지를 위해 개별 문장 임베딩을 먼저 구하고 이를 조합하여 문맥 임베딩 생성
+        indiv_embeddings = await self._get_embeddings([s["text"] for s in sentences])
+        for s, v in zip(sentences, indiv_embeddings, strict=False):
+            s["vector"] = v
 
-        # 3. 분기점 탐색 (안전 장치를 위해 sentences 전달)
-        breakpoints = self._find_breakpoints(similarities, sentences=sentences)
+        if len(sentences) <= self.buffer_size:
+            return sentences
 
-        # 4. 1차 그룹화 (오프셋 및 벡터 포함, [추가] Overlap 반영)
+        # 3. Buffer 기반 Combined Embeddings 생성 (임베딩 호출 없이 벡터 연산으로 처리)
+        # [핵심 개선] 인접한 단일 문장이 아니라 앞뒤 문맥을 합쳐서 비교 (Gregory Kamradt 방식)
+        # 텍스트를 합쳐서 다시 임베딩하는 대신, 개별 임베딩의 평균을 사용하여 획기적 속도 향상
+        combined_embeddings = []
+        for i in range(len(sentences)):
+            start = max(0, i - self.buffer_size)
+            end = min(len(sentences), i + self.buffer_size + 1)
+
+            # 윈도우 내 문장들의 벡터 평균 계산
+            window_vectors = indiv_embeddings[start:end]
+            combined_vec = np.mean(window_vectors, axis=0)
+
+            # 정규화
+            norm = np.linalg.norm(combined_vec)
+            if norm > 1e-9:
+                combined_vec /= norm
+            combined_embeddings.append(combined_vec)
+
+        combined_embeddings = np.array(combined_embeddings)
+
+        # 4. 거리 계산 (1 - 코사인 유사도)
+        # combined_embeddings[i]와 combined_embeddings[i+1] 간의 거리 측정
+        distances = []
+        for i in range(len(combined_embeddings) - 1):
+            similarity = np.dot(combined_embeddings[i], combined_embeddings[i + 1])
+            distances.append(1.0 - float(similarity))
+
+        # 5. 분기점 탐색
+        breakpoints = self._find_breakpoints(distances, sentences=sentences)
+
+        # 6. 1차 그룹화 (오프셋 및 벡터 포함, [추가] Overlap 반영)
         chunks = []
         start_idx = 0
         all_bps = breakpoints + [len(sentences)]
@@ -484,12 +489,10 @@ class EmbeddingBasedSemanticChunker:
             )
 
             group_sentences = sentences[actual_start:group_end]
-            group_embeddings = embeddings[actual_start:group_end]
+            group_embeddings = indiv_embeddings[actual_start:group_end]
 
             # 병합된 텍스트 및 범위 계산
             merged_text = " ".join([s["text"] for s in group_sentences])
-            # 오프셋은 실제 현재 청크의 경계만 표시 (Overlap 문장은 오프셋에서 제외하거나 포함 결정)
-            # 여기서는 검색 결과 하이라이트를 위해 전체 범위를 표시합니다.
             c_start = group_sentences[0]["start"]
             c_end = group_sentences[-1]["end"]
 
@@ -506,7 +509,7 @@ class EmbeddingBasedSemanticChunker:
             )
             start_idx = bp
 
-        # 5. 크기 최적화 (오프셋 및 벡터 인식)
+        # 6. 크기 최적화 (오프셋 및 벡터 인식)
         return self._optimize_chunk_sizes(chunks)
 
     async def split_documents(

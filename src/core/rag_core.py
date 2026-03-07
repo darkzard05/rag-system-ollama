@@ -66,7 +66,7 @@ class RAGSystem:
             if all(x is not None for x in cache_data):
                 doc_splits, vector_store, bm25_retriever = cache_data
                 SessionManager.add_status_log(
-                    "⚡ 기존 분석 데이터 발견 (캐시 활용)", session_id=self.session_id
+                    "기존 분석 데이터 발견 (캐시 활용)", session_id=self.session_id
                 )
                 await self._register_and_finalize(
                     file_hash, vector_store, bm25_retriever, on_progress
@@ -118,7 +118,7 @@ class RAGSystem:
                     doc_splits, vectors
                 )
                 SessionManager.add_status_log(
-                    f"🧹 데이터 최적화 완료 ({stats.pruned_documents}개 중복 제거)",
+                    f"데이터 최적화 완료 ({stats.pruned_documents}개 중복 제거)",
                     session_id=self.session_id,
                 )
 
@@ -150,9 +150,7 @@ class RAGSystem:
         await get_resource_pool().register(file_hash, vector_store, bm25_retriever)
         SessionManager.set("rag_engine", build_graph(), session_id=self.session_id)
         SessionManager.set("pdf_processed", True, session_id=self.session_id)
-        SessionManager.add_status_log(
-            "✨ 검색 엔진 구축 완료", session_id=self.session_id
-        )
+        SessionManager.add_status_log("검색 엔진 구축 완료", session_id=self.session_id)
         if on_progress:
             on_progress()
 

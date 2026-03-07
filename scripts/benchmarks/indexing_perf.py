@@ -54,8 +54,7 @@ async def run_indexing_benchmark(n_docs: int = 5000):
     mem_mb = measure_index_memory(vstore) / (1024 * 1024)
     raw_size_mb = (n_docs * dimension * 4) / (1024 * 1024)
     
-    print("
---- 성능 결과 ---")
+    print("\n--- 성능 결과 ---")
     print("중복 제거 시간: " + str(round(opt_dur, 4)) + "s")
     print("인덱스 구축 시간: " + str(round(vstore_dur, 4)) + "s")
     print("최종 인덱스 크기: " + str(round(mem_mb, 2)) + " MB (원본 대비 " + str(round(mem_mb/raw_size_mb*100, 1)) + "%)")
