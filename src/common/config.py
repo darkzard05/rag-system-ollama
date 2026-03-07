@@ -141,12 +141,13 @@ SEMANTIC_CHUNKER_CONFIG: dict = _rag_config.get("semantic_chunker", {"enabled": 
 PARSING_CONFIG: dict = _rag_config.get(
     "parsing",
     {
-        "engine": "docling",
+        "engine": "pymupdf4llm",
         "do_ocr": False,
         "do_table_structure": True,
-        "table_mode": "fast",
+        "table_strategy": "lines_strict",
         "timeout": 300.0,
-        "extract_words": False,  # [병목 해결] 인덱싱 시 좌표 추출 비활성화
+        "extract_words": True,  # [수정] PDF 하이라이트 기능을 위해 좌표 추출 활성화
+        "margins": (0, 72, 0, 72),  # 상하 1인치 마진 기본값
     },
 )
 VECTOR_STORE_CACHE_DIR: str = str(

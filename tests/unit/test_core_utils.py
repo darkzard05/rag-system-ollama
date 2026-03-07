@@ -119,9 +119,15 @@ def test_clean_query_text_with_prefixes():
 
 
 # --- Test load_pdf_docs (src/core/document_processor.py) ---
+@patch("fitz.open")
 @patch("pymupdf4llm.to_markdown")
 @patch("core.session.SessionManager")
-def test_load_pdf_docs_success(mock_session_manager, mock_to_markdown):
+def test_load_pdf_docs_success(mock_session_manager, mock_to_markdown, mock_fitz_open):
+    # Mock fitz.open
+    mock_doc = mock_fitz_open.return_value.__enter__.return_value
+    mock_doc.get_toc.return_value = []
+    mock_doc.__len__.return_value = 2
+
     # Mock pymupdf4llm output
     mock_to_markdown.return_value = [
         {"text": "Page 1 text", "metadata": {"page": 1, "page_count": 2}, "words": []},

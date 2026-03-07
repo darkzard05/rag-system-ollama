@@ -148,8 +148,11 @@ class ThreadSafeSessionManager:
         session_id: str | None = None,
         **kwargs,
     ):
+        import uuid
+
         state = cls._get_state(session_id)
         msg = {
+            "msg_id": str(uuid.uuid4()),
             "role": role,
             "content": content,
             "msg_type": msg_type,

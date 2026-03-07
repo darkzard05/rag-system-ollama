@@ -105,16 +105,18 @@ async def _stream_chat_response(rag_sys, user_query: str, chat_container):
                             if not state["full_thought"]:
                                 state["thinking_start_time"] = time.time()
                                 with thought_area:
+                                    # [최적화] 잔상 방지를 위한 empty 영역 확보
                                     st.caption("AI Thinking...")
                                     thought_display = st.empty()
                             state["full_thought"] += chunk.thought
                             if time.time() - last_render_time > render_interval:
+                                # [수정] empty() 내부에서 markdown 업데이트로 잔상 최소화
                                 thought_display.markdown(f"*{state['full_thought']}*")
                                 last_render_time = time.time()
 
                         if chunk.content:
                             if not state["full_response"]:
-                                # 답변 시작 시 상태창을 접음
+                                # 답변 시작 시 상태창을 접고 사고 과정 영역을 정리
                                 status_container.update(
                                     label="✅ 분석 완료 및 답변 작성 중",
                                     state="complete",
@@ -123,6 +125,10 @@ async def _stream_chat_response(rag_sys, user_query: str, chat_container):
                                 state["thinking_end_time"] = time.time()
                                 if state["full_thought"]:
                                     with thought_area:
+                                        # [최적화] 기존 사고 과정 표시용 empty를 비움
+                                        if "thought_display" in locals():
+                                            thought_display.empty()
+
                                         dur = (
                                             state["thinking_end_time"]
                                             - state["thinking_start_time"]
@@ -135,8 +141,6 @@ async def _stream_chat_response(rag_sys, user_query: str, chat_container):
                                                 f'<div class="thought-container">{state["full_thought"]}</div>',
                                                 unsafe_allow_html=True,
                                             )
-                                        if "thought_display" in locals():
-                                            thought_display.empty()
 
                             state["full_response"] += chunk.content
                             if (
@@ -236,6 +240,8 @@ def render_message(
     """메시지를 렌더링하는 통합 엔진."""
     avatar_icon = "🤖" if role == "assistant" else "👤"
 
+    msg_id = kwargs.get("msg_id", f"msg_{msg_index}")
+
     with (
         st.chat_message(role, avatar=avatar_icon)
         if wrap_in_container
@@ -294,15 +300,19 @@ def render_message(
                                 cols = st.columns(min(len(pages), 3))
                                 for idx, p in enumerate(pages):
                                     if cols[idx % 3].button(
-                                        f"{p}p", key=f"jump_{msg_index}_{p}_{idx}"
+                                        f"{p}p", key=f"jump_{msg_id}_{p}_{idx}"
                                     ):
+                                        # [최적화] 부모 리런 없이 상태만 변경
+                                        # 사이드바의 pdf_viewer_fragment가 run_every=1.0으로 이를 감지하거나,
+                                        # 다음 채팅 입력 시 자연스럽게 반영됨
                                         SessionManager.set("pdf_target_page", p)
-                                        st.rerun()
+                                        st.toast(f"{p}페이지로 이동 중...", icon="📄")
                         else:
                             st.markdown(
                                 f"📄 **{doc_count}** <small>Docs</small>",
                                 unsafe_allow_html=True,
                             )
+
                     else:
                         st.markdown(
                             "📄 **0** <small>Docs</small>", unsafe_allow_html=True
@@ -345,6 +355,11 @@ def _render_system_logs(logs: list[str]):
     else:
         icon = "📄" if is_doc_analysis else "⏳"
         title = f"{icon} {latest_log}"
+
+    from common.utils import fast_hash
+
+    # [수정] log_hash는 현재 시각 로그 해시 생성용이나 사용되지 않으므로 제거
+    _ = fast_hash("".join(logs))
 
     with (
         st.chat_message("system", avatar="⚙️"),
@@ -393,6 +408,7 @@ def render_chat_interface():
                     processed_content=msg.get("processed_content"),
                     msg_type=msg_type,
                     msg_index=i,
+                    msg_id=msg.get("msg_id"),
                 )
 
         if current_log_group:

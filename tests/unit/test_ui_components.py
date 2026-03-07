@@ -63,7 +63,7 @@ render_message(
             self.assertIn("12p", button_labels, "12p 버튼이 없습니다.")            
             # 2. 버튼 키 접두사 확인 (12p 버튼)
             jump_button_12 = next(b for b in at.button if b.label == "12p")
-            self.assertTrue(jump_button_12.key.startswith("jump_0_12_"), f"버튼 키 오류: {jump_button_12.key}")
+            self.assertTrue(jump_button_12.key.startswith("jump_msg_0_12_"), f"버튼 키 오류: {jump_button_12.key}")
             
             # 3. CSS 제거 확인 (기존 스타일 코드가 없는지)
             style_markdowns = [m for m in at.markdown if "white-space: nowrap !important" in m.value]

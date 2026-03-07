@@ -40,6 +40,13 @@ class DeepThinkingChatOllama(ChatOllama):
         if "options" in kwargs:
             options.update(kwargs.pop("options"))
 
+        # [최적화] Ollama v0.6.0+ 공식 'think' 파라미터 처리
+        think_param = kwargs.pop("think", None)
+        if think_param is None and any(
+            r in self.model.lower() for r in ["deepseek-r1", "thought", "reasoning"]
+        ):
+            think_param = True
+
         request_kwargs = {
             "model": self.model,
             "messages": formatted_messages,
@@ -47,13 +54,8 @@ class DeepThinkingChatOllama(ChatOllama):
             "keep_alive": getattr(self, "keep_alive", None),
         }
 
-        # [최적화] Ollama v0.6.0+ 공식 'think' 파라미터 우선 처리
-        if "think" in kwargs:
-            request_kwargs["think"] = kwargs.pop("think")
-        elif any(
-            r in self.model.lower() for r in ["deepseek-r1", "thought", "reasoning"]
-        ):
-            request_kwargs["think"] = True
+        if think_param is not None:
+            request_kwargs["think"] = think_param
 
         # 나머지 추가 인자 전달
         for k, v in kwargs.items():

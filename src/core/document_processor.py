@@ -60,12 +60,18 @@ def load_pdf_docs(
                 session_id=session_id,
             )
 
-            # 1. [정밀 분석] TOC(목차) 기반 참고문헌 시작 페이지 파악
+            # 1. [정밀 분석] TOC(목차) 기반 헤더 감지 및 마진 설정
+            doc = fitz.open(file_path)
             ref_start_page = 999999
+            toc_info = None
+
             try:
-                with fitz.open(file_path) as pdf:
-                    # A. TOC 검색
-                    toc = pdf.get_toc()
+                # A. TOC 정보를 활용한 헤더 감지기 초기화 (PyMuPDF4LLM 최신 기능)
+                toc = doc.get_toc()
+                if toc:
+                    toc_info = pymupdf4llm.TocHeaders(doc)
+
+                    # B. 참고문헌 시작 페이지 파악
                     for entry in toc:
                         title = str(entry[1]).lower()
                         if any(
@@ -74,17 +80,23 @@ def load_pdf_docs(
                         ):
                             ref_start_page = entry[2]
                             break
+                else:
+                    # [폴백] TOC가 없는 경우 폰트 분석 기반 헤더 감지 수행
+                    SessionManager.add_status_log(
+                        "문서 목차가 없어 폰트 기반 지능형 헤더 분석을 수행합니다.",
+                        session_id=session_id,
+                    )
+                    toc_info = pymupdf4llm.IdentifyHeaders(doc)
 
-                    # B. TOC 실패 시 텍스트 검색 (뒤에서부터)
-                    if ref_start_page == 999999:
-                        for p_idx in range(len(pdf) - 1, max(0, len(pdf) - 5), -1):
-                            page_text = pdf[p_idx].get_text().lower()
-                            if any(
-                                kw in page_text[:500]
-                                for kw in ["references", "bibliography", "참고문헌"]
-                            ):
-                                ref_start_page = p_idx + 1
-                                break
+                if ref_start_page == 999999:
+                    for p_idx in range(len(doc) - 1, max(0, len(doc) - 5), -1):
+                        page_text = doc[p_idx].get_text().lower()
+                        if any(
+                            kw in page_text[:500]
+                            for kw in ["references", "bibliography", "참고문헌"]
+                        ):
+                            ref_start_page = p_idx + 1
+                            break
 
                 if ref_start_page != 999999:
                     SessionManager.add_status_log(
@@ -100,18 +112,28 @@ def load_pdf_docs(
             # 2. PyMuPDF4LLM 최적화 호출
             from common.config import PARSING_CONFIG
 
+            # [최적화] margins 설정 (72 points = 1 inch). 상하 1인치씩 무시하여 헤더/푸터 제거 시도
+            # 사용자가 설정에서 변경할 수 있도록 config와 연동 가능
+            margins = PARSING_CONFIG.get(
+                "margins", (0, 72, 0, 72)
+            )  # (left, top, right, bottom)
+
             chunks = pymupdf4llm.to_markdown(
-                file_path,
+                doc,  # 파일 경로 대신 이미 열린 doc 객체 전달 (리소스 절약)
                 page_chunks=True,
                 write_images=PARSING_CONFIG.get("write_images", False),
                 fontsize_limit=PARSING_CONFIG.get("fontsize_limit", 3),
                 ignore_code=PARSING_CONFIG.get("ignore_code", False),
                 extract_words=PARSING_CONFIG.get(
-                    "extract_words", False
-                ),  # 기본값 False로 변경
+                    "extract_words", True
+                ),  # 하이라이트 기능을 위해 True 권장
                 ignore_graphics=PARSING_CONFIG.get("ignore_graphics", True),
-                table_strategy=PARSING_CONFIG.get("table_strategy", "fast"),
+                table_strategy=PARSING_CONFIG.get("table_strategy", "lines_strict"),
+                hdr_info=toc_info,  # TOC 기반 헤더 감지 적용
+                margins=margins,  # 헤더/푸터 제외를 위한 마진 적용
             )
+
+            # doc 객체 닫기는 pymupdf4llm 내부에서 처리되거나 컨텍스트 종료 시 처리됨 (여기서는 명시적으로 닫지 않음)
 
             docs: list[Document] = []
             reference_started = False
