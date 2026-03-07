@@ -74,8 +74,9 @@ async def _stream_chat_response(rag_sys, user_query: str, chat_container):
 
                 # 테스트 환경을 위해 handler를 거치지 않는 경로 지원
                 stream = cast(Any, event_generator)
-                
+
                 # 만약 event_generator가 dict를 반환한다면 handler가 필요함
+
                 # 하지만 테스트에서는 직접 StreamChunk를 주입할 수 있음
                 if handler:
                     event_stream = handler.stream_graph_events(

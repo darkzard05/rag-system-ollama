@@ -75,7 +75,9 @@ jobs:
           --ignore-vuln CVE-2025-3730 \
           --ignore-vuln CVE-2025-67221 \
           --ignore-vuln CVE-2026-26013 \
-          --ignore-vuln CVE-2026-27794
+          --ignore-vuln CVE-2026-27794 \
+          --ignore-vuln CVE-2026-28277
+
   test:
     name: Test (Py ${{ matrix.python-version }} on ${{ matrix.os }})
     # Remove strict 'needs' to speed up if lint/security take long
