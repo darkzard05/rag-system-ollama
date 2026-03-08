@@ -68,8 +68,8 @@ class TokenStreamBuffer:
         self.token_count += 1
         current_time = time.time()
 
-        # [최적화] 첫 5개 토큰은 버퍼링 없이 즉시 전송 (TTFT 우선)
-        if self.token_count <= 5 or self.is_first_token:
+        # [최적화] 첫 토큰은 버퍼링 없이 즉시 전송 (TTFT 우선)
+        if self.is_first_token:
             self.is_first_token = False
             return self.flush()
 

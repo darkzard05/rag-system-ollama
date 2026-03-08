@@ -18,37 +18,32 @@ class TestTokenStreamBuffer(unittest.TestCase):
         # buffer_size=3, timeout=1000ms
         buffer = TokenStreamBuffer(buffer_size=3, timeout_ms=1000.0)
 
-        # [변경점] 첫 5개 토큰은 TTFT 최적화로 인해 즉시 플러시됨
+        # [변경점] 첫 번째 토큰만 TTFT 최적화로 인해 즉시 플러시됨
         assert buffer.add_token("1") == "1"
-        assert buffer.add_token("2") == "2"
-        assert buffer.add_token("3") == "3"
-        assert buffer.add_token("4") == "4"
-        assert buffer.add_token("5") == "5"
         
-        # 6번째부터 버퍼링 시작 (3개 찰 때까지)
-        assert buffer.add_token("6") is None
-        assert buffer.add_token("7") is None
+        # 두 번째부터 버퍼링 시작 (3개 찰 때까지)
+        assert buffer.add_token("2") is None
+        assert buffer.add_token("3") is None
         
-        # 8번째 추가 시 버퍼가 꽉 차서(6, 7, 8) 플러시됨
-        result = buffer.add_token("8")
-        assert result == "678"
+        # 네 번째 추가 시 버퍼가 꽉 차서(2, 3, 4) 플러시됨
+        result = buffer.add_token("4")
+        assert result == "234"
         assert len(buffer.buffer) == 0
 
     def test_timeout_flush(self):
         # buffer_size=10, timeout=100ms
         buffer = TokenStreamBuffer(buffer_size=10, timeout_ms=100.0)
 
-        # 첫 5개는 즉시 플러시
-        for i in range(1, 6):
-            assert buffer.add_token(str(i)) == str(i)
+        # 첫 번째만 즉시 플러시
+        assert buffer.add_token("1") == "1"
             
-        # 6번째 토큰 추가 후 대기
-        assert buffer.add_token("6") is None
+        # 두 번째 토큰 추가 후 대기
+        assert buffer.add_token("2") is None
         time.sleep(0.15)  # Wait for > 100ms
 
-        # 7번째 토큰 추가 시 타임아웃 플러시 발생 (6 + 7)
-        result = buffer.add_token("7")
-        assert result == "67"
+        # 세 번째 토큰 추가 시 타임아웃 플러시 발생 (2 + 3)
+        result = buffer.add_token("3")
+        assert result == "23"
         assert len(buffer.buffer) == 0
 
     def test_reset(self):
