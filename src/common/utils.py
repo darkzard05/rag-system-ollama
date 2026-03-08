@@ -102,28 +102,32 @@ def extract_annotations_from_docs(documents: list) -> list[dict]:
 
                 with fitz.open(file_path) as pdf:
                     page = pdf[page_val - 1]
-
-                    # [최적화] TextPage 객체를 미리 생성하여 반복 검색 성능 향상 (Context7 권장사항)
                     textpage = page.get_textpage()
 
-                    # [개선] 청크 전체를 하이라이트하기 위해 모든 문장을 검색 대상으로 설정
+                    # [개선] 마크다운 특수문자(#, *, ` 등)를 제거하여 실제 PDF 텍스트와 매칭율 향상
+                    clean_content = re.sub(r"[#*`_~\[\]()]", "", content).lower()
+
+                    # [최적화] 청크 전체를 하이라이트하기 위해 모든 문장을 검색 대상으로 설정
                     sentences = [
                         s.strip()
-                        for s in re.split(r"[.!?\n]", content)
-                        if len(s.strip()) > 5
+                        for s in re.split(r"[.!?\n]", clean_content)
+                        if len(s.strip()) > 8  # 너무 짧은 검색어는 무시
                     ]
+
                     if not sentences:
-                        sentences = [content[:150].strip()]
+                        sentences = [clean_content[:150].strip()]
 
                     doc_quads = []
                     # [최적화] TextPage를 사용하여 고속 검색
                     for search_query in sentences:
                         if not search_query:
                             continue
-                        # 50자씩 끊어서 검색 (긴 문장 검색 실패 방지)
-                        for i in range(0, len(search_query), 50):
-                            part = search_query[i : i + 50]
-                            if len(part) < 10:
+                        # [개선] 긴 문장 검색은 실패 확률이 높으므로 40자씩 끊어서 검색 (Overlapping Search)
+                        chunk_len = 40
+                        overlap = 10
+                        for i in range(0, len(search_query), chunk_len - overlap):
+                            part = search_query[i : i + chunk_len].strip()
+                            if len(part) < 12:
                                 continue
                             quads = page.search_for(part, textpage=textpage)
                             if quads:
@@ -503,14 +507,29 @@ def fast_hash(text: str, length: int = 16) -> str:
 
 def count_tokens_rough(text: str) -> int:
     """
-    텍스트의 토큰 수를 대략적으로 계산합니다.
-    - 영어: 약 4글자당 1토큰
-    - 한글/특수문자: 약 1~2글자당 1토큰
-    보수적으로 계산하기 위해 (글자 수 / 2.5)를 사용합니다.
+    텍스트의 토큰 수를 대략적으로 계산합니다. (보수적 추정)
+    - 영어/숫자/공백(ASCII): 약 3~4글자당 1토큰
+    - 한글/특수문자(비ASCII): 약 1글자당 2~3토큰 (멀티바이트 특성 반영)
+
+    최신 LLM(Llama 3, DeepSeek 등)의 토크나이저 특성을 반영하여
+    한국어 문서를 처리할 때 컨텍스트 초과를 방지하기 위해 보수적으로 산출합니다.
     """
+
     if not text:
         return 0
-    return int(len(text) / 2.5) + 1
+
+    # 1. ASCII 문자(영어, 숫자, 기본 기호, 공백) 개수 파악
+    ascii_pattern = r"[a-zA-Z0-9\s.,!?;:()\[\]{}<>\-_=+\x00-\x7F]"
+    ascii_chars = len(re.findall(ascii_pattern, text))
+
+    # 2. 비ASCII(한글, 한자 등) 문자 개수 파악
+    non_ascii_chars = len(text) - ascii_chars
+
+    # 3. 보수적 가중치 적용 (ASCII는 3글자당 1토큰, 비ASCII는 1글자당 2.5토큰)
+    rough_count = (ascii_chars / 3.0) + (non_ascii_chars * 2.5)
+
+    # 최소 1개 이상 반환 및 정수 올림 처리 효과
+    return int(rough_count) + 1
 
 
 def sync_run(coro):

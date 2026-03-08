@@ -364,6 +364,14 @@ def load_embedding_model(
                 "batch_size": batch_size,
             }
 
+            if target_device == "cuda":
+                # [최적화] GPU 사용 시 fp16 정밀도 적용하여 VRAM 절약 및 가속
+                import torch
+
+                model_kwargs["torch_dtype"] = torch.float16
+                model_kwargs["trust_remote_code"] = True
+                logger.info(f"[MODEL] [VRAM] {model_key} 로드 시 fp16 정밀도 적용")
+
             if backend == "onnx":
                 model_kwargs["backend"] = "onnx"
                 # [추가] ONNX 가속 시 최적화 설정 주입
