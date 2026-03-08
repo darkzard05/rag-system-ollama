@@ -41,11 +41,11 @@ class DeepThinkingChatOllama(ChatOllama):
 
                 b_type = block.get("type")
                 if b_type == "reasoning":
-                    thought += block.get("reasoning") or ""
+                    thought += str(block.get("reasoning") or "")
                 elif b_type == "thought":  # 일부 모델 변종 대응
-                    thought += block.get("thought") or ""
+                    thought += str(block.get("thought") or "")
                 elif b_type == "text":
-                    content += block.get("text") or ""
+                    content += str(block.get("text") or "")
 
         # B. [복합 콘텐츠] chunk.content가 리스트인 경우 (Anthropic 스타일 등)
         if not content and not thought and isinstance(chunk.content, list):
@@ -53,9 +53,11 @@ class DeepThinkingChatOllama(ChatOllama):
                 if isinstance(item, dict):
                     i_type = item.get("type")
                     if i_type == "text":
-                        content += item.get("text", "")
+                        content += str(item.get("text") or "")
                     elif i_type in ["reasoning", "thought", "thinking"]:
-                        thought += item.get(i_type, item.get("text", ""))
+                        # i_type에 해당하는 값과 'text' 필드 중 있는 것을 추출
+                        val = item.get(i_type) or item.get("text")
+                        thought += str(val or "")
                 elif isinstance(item, str):
                     content += item
 
