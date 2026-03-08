@@ -2,7 +2,7 @@
 streamlit==1.54.0
 streamlit-pdf-viewer==0.0.27
 pymupdf==1.25.3
-pymupdf4llm>=0.4.1
+pymupdf4llm>=0.3.4
 
 # LangChain & RAG Core
 langchain>=0.3.18

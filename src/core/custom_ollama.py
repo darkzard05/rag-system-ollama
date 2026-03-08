@@ -41,11 +41,11 @@ class DeepThinkingChatOllama(ChatOllama):
 
                 b_type = block.get("type")
                 if b_type == "reasoning":
-                    thought += block.get("reasoning", "")
+                    thought += block.get("reasoning") or ""
                 elif b_type == "thought":  # 일부 모델 변종 대응
-                    thought += block.get("thought", "")
+                    thought += block.get("thought") or ""
                 elif b_type == "text":
-                    content += block.get("text", "")
+                    content += block.get("text") or ""
 
         # B. [복합 콘텐츠] chunk.content가 리스트인 경우 (Anthropic 스타일 등)
         if not content and not thought and isinstance(chunk.content, list):
