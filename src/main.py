@@ -489,9 +489,11 @@ def _handle_pending_tasks() -> None:
 def main() -> None:
     """메인 애플리케이션 오케스트레이터"""
     # 1. 초기 레이아웃 및 세션 즉시 준비
-    # CSS 주입은 여기서 딱 한 번만 수행하여 렌더링 충돌 및 잔상 방지
-    inject_custom_css()
     SessionManager.init_session()
+
+    # [수정] PDF 업로드 상태에 따른 사이드바 확장 상태 결정 후 CSS 주입 (단 1회 수행)
+    is_expanded = bool(SessionManager.get("pdf_file_path"))
+    inject_custom_css(is_expanded=is_expanded)
 
     # [추가] 세션 ID 불일치로 인한 '영구 분석 중' 상태 방지
     if SessionManager.get("pdf_file_path") and not SessionManager.get("pdf_processed"):

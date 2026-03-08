@@ -68,34 +68,38 @@ def load_pdf_docs(
                 session_id=session_id,
             )
 
-            # 1. [정밀 분석] TOC(목차) 기반 섹션 식별
+            # 1. [정밀 분석] TOC(목차) 및 폰트 기반 헤더 식별
             doc = fitz.open(file_path)
             ref_start_page = 999999
-            toc_info = None
+
+            # [고도화] 폰트 분석 기반 지능형 헤더 감지 (Layout Mode 보조)
+            from common.config import PARSING_CONFIG
+
+            body_limit = PARSING_CONFIG.get("body_limit", 11)
+            max_levels = PARSING_CONFIG.get("max_levels", 4)
 
             try:
-                # [안전] 속성 존재 여부 확인 후 호출
-                toc = doc.get_toc()
-                if toc and hasattr(pymupdf4llm, "TocHeaders"):
-                    toc_info = pymupdf4llm.TocHeaders(doc)
-
-                    # 참고문헌 시작 페이지 파악
-                    for entry in toc:
-                        title = str(entry[1]).lower()
-                        if any(
-                            kw in title
-                            for kw in ["references", "bibliography", "참고문헌"]
-                        ):
-                            ref_start_page = entry[2]
-                            break
-                else:
-                    # [폴백] TOC가 없는 경우 폰트 분석 기반 헤더 감지 수행
-                    SessionManager.add_status_log(
-                        "문서 목차가 없어 폰트 기반 지능형 헤더 분석을 수행합니다.",
-                        session_id=session_id,
+                # [고도화] 폰트 기반 헤더 정보 생성 (최신 버전 지원 여부 확인)
+                if hasattr(pymupdf4llm, "IdentifyHeaders"):
+                    hdr_info = pymupdf4llm.IdentifyHeaders(
+                        doc, body_limit=body_limit, max_levels=max_levels
                     )
-                    if hasattr(pymupdf4llm, "IdentifyHeaders"):
-                        toc_info = pymupdf4llm.IdentifyHeaders(doc)
+                elif hasattr(pymupdf4llm, "TocHeaders"):
+                    # 구버전 폴백
+                    hdr_info = pymupdf4llm.TocHeaders(doc)
+                else:
+                    hdr_info = None
+
+                # TOC 정보와 결합 (TOC가 있으면 우선 활용)
+                toc = doc.get_toc()
+                # 참고문헌 시작 페이지 파악
+                for entry in toc:
+                    title = str(entry[1]).lower()
+                    if any(
+                        kw in title for kw in ["references", "bibliography", "참고문헌"]
+                    ):
+                        ref_start_page = entry[2]
+                        break
 
                 if ref_start_page == 999999:
                     # 목차에 없으면 마지막 5페이지에서 패턴 검색
@@ -110,34 +114,35 @@ def load_pdf_docs(
 
                 if ref_start_page != 999999:
                     SessionManager.add_status_log(
-                        f"문서 구조 분석: {ref_start_page}페이지부터 참고문헌 섹션을 식별했습니다.",
+                        f"문서 구조 분석: {ref_start_page}페이지부터 참고문헌 섹션 식별",
                         session_id=session_id,
                     )
             except Exception as e:
-                logger.debug(f"섹션 분석 실패: {e}")
+                logger.debug(f"헤더/섹션 분석 실패: {e}")
+                hdr_info = None
 
             if on_progress:
                 on_progress()
 
-            # 2. PyMuPDF4LLM 최적화 호출 (Layout Mode)
-            from common.config import PARSING_CONFIG
+            # 2. PyMuPDF4LLM 고도화 호출
+            # [최적화] margins 파라미터를 사용하여 헤더/푸터 영역(상하 60pt) 무시
+            target_margins = PARSING_CONFIG.get("margins", (0, 60, 0, 60))
 
-            # [핵심] 파일 경로를 직접 전달하고 header=False, footer=False 설정
             chunks = pymupdf4llm.to_markdown(
-                file_path,
+                doc,  # 열려있는 doc 객체 재사용 (성능 향상)
                 page_chunks=True,
                 write_images=PARSING_CONFIG.get("write_images", False),
                 fontsize_limit=PARSING_CONFIG.get("fontsize_limit", 3),
                 ignore_code=PARSING_CONFIG.get("ignore_code", False),
-                # [최적화] 인덱싱 시에는 단어 좌표를 추출하지 않음 (용량 및 메모리 절약)
-                # 하이라이트가 필요한 시점에만 utils.py의 On-demand 로직으로 추출
-                extract_words=False,
+                extract_words=PARSING_CONFIG.get("extract_words", True),
                 ignore_graphics=PARSING_CONFIG.get("ignore_graphics", True),
-                table_strategy="fast",  # 레이아웃 모드 최적화 전략
-                hdr_info=toc_info,  # 식별된 헤더 정보 적용
-                header=False,  # AI 기반 헤더 자동 제거
-                footer=False,  # AI 기반 푸터 자동 제거
-                margins=0,  # 수동 마진 무시 (AI 판단 우선)
+                table_strategy=PARSING_CONFIG.get(
+                    "table_strategy", "lines"
+                ),  # lines_strict에서 lines로 변경하여 유연성 확보
+                hdr_info=hdr_info,
+                header=False,
+                footer=False,
+                margins=target_margins,
             )
 
             # 열린 doc 객체 정리

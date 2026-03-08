@@ -74,25 +74,26 @@ def inject_custom_css(is_expanded: bool = False):
         background-color: var(--secondary-background-color) !important;
     }}
 
-    /* 4. 메인 컨텐츠 영역 */
+    /* 4. 메인 컨텐츠 영역 (상단 여백 확대) */
     [data-testid="stMainBlockContainer"] {{
         max-width: 100% !important;
-        padding-top: 1.5rem !important;
-        padding-bottom: 6rem !important; /* 하단 입력창 공간 확보 */
+        padding-top: 3rem !important; /* 1.5rem -> 3rem으로 확대 */
+        padding-bottom: 6rem !important;
     }}
 
     /* 5. 기타 컴포넌트 스타일 및 헤더 정렬 */
     .sidebar-header {{
-        margin-top: 0px !important;
+        margin-top: 10px !important; /* 0px -> 10px로 상단 여백 추가 */
         margin-bottom: 20px !important;
-        padding-top: 0px !important;
+        padding-top: 5px !important;
         font-size: 1.5rem !important;
         font-weight: 700 !important;
-        line-height: 1.2 !important;
+        line-height: 1.4 !important; /* 1.2 -> 1.4로 행간 확대하여 잘림 방지 */
         display: flex;
         align-items: center;
-        height: 40px; /* 고정 높이로 수직 정렬 보장 */
+        min-height: 40px; /* height -> min-height로 변경하여 유연성 확보 */
     }}
+
 
     /* 사이드바 익스팬더(고급 설정 등)는 기본 스타일 존중 */
     [data-testid="stSidebar"] [data-testid="stExpander"] summary,

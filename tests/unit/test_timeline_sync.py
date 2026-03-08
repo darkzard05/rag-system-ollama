@@ -1,17 +1,17 @@
-import unittest
-import asyncio
 import os
 import sys
-from unittest.mock import AsyncMock, MagicMock, patch
+import unittest
+
 from streamlit.testing.v1 import AppTest
 
 # 프로젝트 루트를 경로에 추가
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
 
+
 class TestTimelineSync(unittest.TestCase):
     def test_timeline_status_update_flow(self):
         """
-        백엔드 상태 메시지(is_status_update)가 UI 타임라인에 
+        백엔드 상태 메시지(is_status_update)가 UI 타임라인에
         정상적으로 반영되는지 전체 흐름을 검증합니다.
         """
         # 임시 테스트 스크립트 작성
@@ -70,9 +70,10 @@ async def run_test_ui():
     with patch("core.session.SessionManager.get_session_id", return_value="test_session"):
         with patch("core.session.SessionManager.get", return_value=None):
             with patch("ui.components.chat.get_streaming_handler", return_value=None):
-                # RAGSystem 모킹
+                # RAGSystem 및 astream 모킹
                 mock_rag = MagicMock()
-                mock_rag.astream_events = AsyncMock(return_value=mock_event_generator())
+                # AsyncMock을 사용하여 await 가능하게 만들고, 리턴값으로 비동기 제너레이터 설정
+                mock_rag.astream = AsyncMock(return_value=mock_event_generator())
                 
                 # 스트리밍 실행
                 await _stream_chat_response(mock_rag, "질문", chat_container)
@@ -82,24 +83,28 @@ if __name__ == "__main__":
 """
         with open("temp_test_timeline.py", "w", encoding="utf-8") as f:
             f.write(script_content)
-            
+
         try:
             # AppTest 실행 (충분한 타임아웃 부여)
             at = AppTest.from_file("temp_test_timeline.py").run(timeout=10)
-            
+
             # 1. 상태창 및 로그 확인 (st.status 및 st.caption)
             # st.status 내부의 caption들을 확인하여 상태 메시지가 출력되었는지 검증
             status_logs = [c.value for c in at.caption]
             print(f"발견된 상태 로그: {status_logs}")
-            
+
             # 2. 답변 렌더링 확인
-            self.assertTrue(any("테스트 답변입니다" in m.value for m in at.markdown), "답변이 렌더링되지 않았습니다.")
-            
+            self.assertTrue(
+                any("테스트 답변입니다" in m.value for m in at.markdown),
+                "답변이 렌더링되지 않았습니다.",
+            )
+
             print("✅ UI 상태 업데이트 및 답변 렌더링 테스트 통과")
-            
+
         finally:
             if os.path.exists("temp_test_timeline.py"):
                 os.remove("temp_test_timeline.py")
+
 
 if __name__ == "__main__":
     unittest.main()

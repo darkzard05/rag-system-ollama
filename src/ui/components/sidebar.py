@@ -25,11 +25,6 @@ def render_sidebar(
     pdf_path = SessionManager.get("pdf_file_path")
     is_expanded = bool(pdf_path)
 
-    # CSS 주입 (너비와 컬럼 표시 여부 제어)
-    from ui.ui import inject_custom_css
-
-    inject_custom_css(is_expanded=is_expanded)
-
     with st.sidebar:
         # [최적화] CSS 픽셀값과 정확히 일치하는 비율을 설정하여 1열 너비를 고정합니다.
         # 비확장 시 1열(300px)이 전체를 점유하도록 2열을 극소화합니다.

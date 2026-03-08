@@ -27,7 +27,6 @@ from core.graph_builder import build_graph
 from core.resource_pool import get_resource_pool
 from core.retriever_factory import create_bm25_retriever, create_vector_store
 from core.session import SessionManager
-from services.optimization.index_optimizer import get_index_optimizer
 
 logger = logging.getLogger(__name__)
 
@@ -98,29 +97,10 @@ class RAGSystem:
         if not doc_splits:
             raise InsufficientChunksError(chunk_count=0, min_required=1)
 
-        # 5. 인덱스 최적화 (선택적: 중복 제거 및 메타데이터 인덱싱)
-        if sum(len(d.page_content) for d in docs) >= 2000 and vectors is not None:
-            with contextlib.suppress(Exception):
-                from services.optimization.index_optimizer import (
-                    CompressionMethod,
-                    IndexOptimizationConfig,
-                    VectorQuantizationConfig,
-                )
-
-                # [최적화] 수동 양자화는 오버헤드가 크고 FAISS 내장 기능보다 비효율적이므로 NONE으로 설정
-                opt_config = IndexOptimizationConfig(
-                    quantization_config=VectorQuantizationConfig(
-                        compression_method=CompressionMethod.NONE
-                    )
-                )
-                optimizer = get_index_optimizer(opt_config)
-                doc_splits, vectors, _, stats = optimizer.optimize_index(
-                    doc_splits, vectors
-                )
-                SessionManager.add_status_log(
-                    f"데이터 최적화 완료 ({stats.pruned_documents}개 중복 제거)",
-                    session_id=self.session_id,
-                )
+        # 5. [수정] 인덱스 최적화 로직 통합
+        # 기존의 개별 최적화(index_optimizer) 호출을 제거하고,
+        # 모든 최적화 전략(양자화, HNSW 등)은 retriever_factory에서
+        # config.yml 설정을 바탕으로 일관되게 처리하도록 단일화합니다.
 
         # 6. 컴포넌트 생성
         vector_store = create_vector_store(doc_splits, embedder, vectors=vectors)
@@ -180,8 +160,24 @@ class RAGSystem:
             "performance": result.get("performance", {}),
         }
 
+    async def astream(self, query: str, model_name: str | None = None):
+        """[스트리밍] 새로운 스트림 모드(messages, custom)를 사용하여 이벤트를 발생시킵니다."""
+        self._ensure_session_context()
+        config = await self._prepare_config(model_name)
+        rag_engine = SessionManager.get("rag_engine", session_id=self.session_id)
+        if not rag_engine:
+            raise VectorStoreError(
+                details={"reason": "파이프라인이 준비되지 않았습니다."}
+            )
+        # messages: LLM 토큰, custom: writer() 호출 데이터, updates: 노드 상태 업데이트
+        return rag_engine.astream(
+            {"input": query},
+            config=config,
+            stream_mode=["messages", "custom", "updates"],
+        )
+
     async def astream_events(self, query: str, model_name: str | None = None):
-        """[스트리밍] 질문에 대한 이벤트를 발생시킵니다."""
+        """[스트리밍] 질문에 대한 이벤트를 발생시킵니다 (레거시 adispatch_custom_event 대응)."""
         self._ensure_session_context()
         config = await self._prepare_config(model_name)
         rag_engine = SessionManager.get("rag_engine", session_id=self.session_id)

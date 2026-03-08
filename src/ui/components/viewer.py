@@ -38,20 +38,21 @@ def _get_pdf_total_pages(pdf_path: str) -> int:
         return 0
 
 
-@st.fragment(run_every=0.5)
+@st.fragment()
 def _pdf_viewer_fragment():
-    """PDF 뷰어 프래그먼트 (격리된 리런 영역, 0.5초마다 동기화 체크)"""
+    """
+    PDF 뷰어 프래그먼트 (격리된 리런 영역)
+    [최적화] st.rerun(scope="fragment")를 사용하여 UI의 독립적 갱신을 보장합니다.
+    """
     from streamlit_pdf_viewer import pdf_viewer
 
     # 1. 상태 동기화 및 타겟 페이지 처리
     target_page = SessionManager.get("pdf_target_page")
     if target_page is not None:
-        # 채팅창에서 보낸 점프 요청 처리
-        st.session_state.current_page = target_page
-        SessionManager.set("current_page", target_page)
-        SessionManager.set("pdf_target_page", None)  # 처리 완료 후 즉시 제거
+        st.session_state.current_page = int(target_page)
+        SessionManager.set("current_page", int(target_page))
+        SessionManager.set("pdf_target_page", None)
 
-    # 세션 상태 초기화
     if "current_page" not in st.session_state:
         st.session_state.current_page = SessionManager.get("current_page", 1)
 
@@ -66,25 +67,21 @@ def _pdf_viewer_fragment():
         pdf_bytes = _get_pdf_bytes(pdf_path)
 
         if total_pages == 0:
-            st.error("⚠️ PDF 로드 실패: 페이지를 찾을 수 없습니다.")
+            st.error("⚠️ PDF 로드 실패")
             return
 
         current_page = min(max(1, st.session_state.current_page), total_pages)
 
-        # 2. 하이라이트(Annotations) 추출
-        # 특정 메시지가 선택되었다면 해당 메시지의 하이라이트 표시, 아니면 전역 하이라이트
+        # 하이라이트 어노테이션
         active_idx = st.session_state.get("active_msg_index")
         messages = SessionManager.get_messages() or []
-
         annotations = []
         if active_idx is not None and active_idx < len(messages):
             annotations = messages[active_idx].get("annotations", [])
-
         if not annotations:
             annotations = SessionManager.get("pdf_annotations", [])
 
-        # 데이터 변경 시점을 key에 반영하여 프래그먼트 내부 즉시 갱신 유도
-        anno_key = f"{len(annotations)}_{str(abs(hash(str(annotations))))[:8]}"
+        viewer_key = f"pdf_v5_{hash(pdf_path)}_{current_page}_{len(annotations)}"
 
         # 3. PDF 뷰어 렌더링
         pdf_viewer(
@@ -94,7 +91,7 @@ def _pdf_viewer_fragment():
             annotations=annotations,
             annotation_outline_size=2,
             height=650,
-            key=f"pdf_viewer_v3_p{current_page}_{anno_key}_{hash(pdf_path)}",
+            key=viewer_key,
         )
 
         # 4. 하단 컨트롤바
@@ -102,7 +99,12 @@ def _pdf_viewer_fragment():
         c_prev, c_input, c_next = st.columns([1, 2, 1])
 
         with c_prev:
-            if st.button("⬅️", use_container_width=True, disabled=current_page <= 1):
+            if st.button(
+                "⬅️",
+                use_container_width=True,
+                key="btn_nav_prev",
+                disabled=current_page <= 1,
+            ):
                 st.session_state.current_page -= 1
                 SessionManager.set("current_page", st.session_state.current_page)
                 st.rerun(scope="fragment")
@@ -110,7 +112,7 @@ def _pdf_viewer_fragment():
         with c_input:
 
             def on_page_change():
-                new_p = st.session_state.get("page_nav_input_v3", current_page)
+                new_p = st.session_state.get("page_nav_input_v5", current_page)
                 st.session_state.current_page = new_p
                 SessionManager.set("current_page", new_p)
 
@@ -119,14 +121,17 @@ def _pdf_viewer_fragment():
                 min_value=1,
                 max_value=total_pages,
                 value=current_page,
-                key="page_nav_input_v3",
+                key="page_nav_input_v5",
                 on_change=on_page_change,
                 label_visibility="collapsed",
             )
 
         with c_next:
             if st.button(
-                "➡️", use_container_width=True, disabled=current_page >= total_pages
+                "➡️",
+                use_container_width=True,
+                key="btn_nav_next",
+                disabled=current_page >= total_pages,
             ):
                 st.session_state.current_page += 1
                 SessionManager.set("current_page", st.session_state.current_page)

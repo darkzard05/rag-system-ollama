@@ -21,15 +21,15 @@
 ## ⚡ Key Highlights
 
 ### 🚀 **Extreme Performance**
-- **Optimized PyMuPDF4LLM:** Utilizes a specialized Markdown-native engine for ultra-fast document parsing (10x faster than traditional AI parsers) with font-size based noise reduction.
-- **Ultra-Fast CPU Reranking:** Powered by `FlashRank` (ms-marco-MiniLM-L-12-v2), providing industrial-grade reranking performance directly on CPU.
+- **Optimized PyMuPDF4LLM (v0.3.4+):** Utilizes a specialized Markdown-native engine for ultra-fast document parsing with **IdentifyHeaders** font-size based structure detection and intelligent margin control (header/footer removal).
+- **Ultra-Fast CPU Reranking:** Powered by `FlashRank` (ms-marco-TinyBERT-L-2-v2), providing industrial-grade reranking performance directly on CPU.
 - **Sub-Second TTFT:** Streamlined pipeline architecture minimizes Time To First Token, delivering answers almost instantly.
-- **Semantic Chunking:** Advanced embedding-based chunking that respects document structure and context continuity.
+- **DeepThinking Integration:** Seamlessly extracts model reasoning steps (CoT) using the latest `langchain-ollama` content blocks standard.
 
 ### 🛡️ **Reliability & Integrity**
 - **100% Integrity Pass:** Integrated verification system (`verify_integrity.py`) ensures code style, typing, and RAG logic are always production-ready.
+- **Ghosting-Free UI:** Advanced `st.fragment` and `st.empty` placeholder management prevents visual glitches and double-rendering during real-time streaming.
 - **LangGraph Orchestration:** Precise linear control over the retrieval-augmented generation flow.
-- **Zero-Duplicate Streaming:** Professional-grade streaming protocol delivering both "AI Thinking" and "Final Answer" in real-time.
 
 ### 🎨 **Refined UI/UX**
 - **Professional PDF Viewer:** Integrated viewer with precision navigation and grouped-control navigation.
@@ -39,12 +39,12 @@
 
 ## 🛠️ Tech Stack
 <!-- TECH_STACK_START -->
-- **Streamlit**: 1.50.0
-- **LangChain**: latest
-- **LangGraph**: latest
-- **PyMuPDF4LLM**: 0.2.9
-- **Ollama**: 0.2.2
-- **FastAPI**: 0.115.10
+- **Streamlit**: 1.54.0
+- **LangChain**: latest (0.3.x)
+- **LangGraph**: latest (0.2.x)
+- **PyMuPDF4LLM**: 0.3.4
+- **Ollama**: 0.6.x
+- **FastAPI**: 0.133.1
 <!-- TECH_STACK_END -->
 
 ---

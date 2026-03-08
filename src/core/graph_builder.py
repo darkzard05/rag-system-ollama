@@ -7,11 +7,11 @@ import asyncio
 import logging
 from typing import Any
 
-from langchain_core.callbacks.manager import adispatch_custom_event
 from langchain_core.documents import Document
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_core.runnables import RunnableConfig
 from langgraph.graph import END, START, StateGraph
+from langgraph.types import StreamWriter
 
 from api.schemas import AggregatedSearchResult, GraphState
 from cache.response_cache import get_response_cache
@@ -21,14 +21,21 @@ from common.config import (
 )
 from common.utils import fast_hash
 from core.session import SessionManager
-from services.monitoring.llm_tracker import ResponsePerformanceTracker
 
 logger = logging.getLogger(__name__)
 
 
-async def preprocess(state: GraphState) -> dict[str, Any]:
+async def preprocess(
+    state: GraphState, config: RunnableConfig, writer: StreamWriter
+) -> dict[str, Any]:
     """의도 분류 및 캐시 확인을 동시에 수행합니다."""
     query = state["input"].strip()
+
+    import contextlib
+
+    # [표준] StreamWriter 사용 (Python 3.10 호환성 방어적 처리)
+    with contextlib.suppress(Exception):
+        writer({"status": "의도 분석 및 지식 확인 중..."})
 
     # 1. 의도 분류 (단순 규칙)
     greetings = ["안녕", "hi", "hello", "도움말", "고마워"]
@@ -50,23 +57,22 @@ async def preprocess(state: GraphState) -> dict[str, Any]:
 
 
 async def retrieve_and_rerank(
-    state: GraphState, config: RunnableConfig
+    state: GraphState, config: RunnableConfig, writer: StreamWriter
 ) -> dict[str, Any]:
     """문서 검색 및 재순위화를 수행합니다."""
     if state.get("is_cached") or state.get("intent") == "general":
         return {}
 
-    from common.config import RAG_PARAMETERS
     from core.search_aggregator import AggregationStrategy, SearchResultAggregator
 
     query = state["input"]
     cfg = config.get("configurable", {})
-    RAG_PARAMETERS.get("retrieval_k", 25)
 
-    # [핵심] UI 핸들러를 위한 상태 이벤트 발생
-    await adispatch_custom_event(
-        "status_update", {"message": "관련 지식 탐색 중..."}, config=config
-    )
+    # [표준] StreamWriter 사용 (Python 3.10 호환성 방어적 처리)
+    import contextlib
+
+    with contextlib.suppress(Exception):
+        writer({"status": "관련 지식 탐색 중..."})
     SessionManager.add_status_log("문서 저장소에서 관련 지식 탐색 시작")
 
     # 리트리버 획득
@@ -118,13 +124,36 @@ async def retrieve_and_rerank(
         f"하이브리드 검색 완료 ({len(final_docs)}개 후보 확보)"
     )
 
-    # FlashRank 리랭킹 (선택적)
-    if RERANKER_CONFIG.get("enabled", True) and len(final_docs) > 1:
-        await adispatch_custom_event(
-            "status_update",
-            {"message": "지식 우선순위 정제 중 (FlashRank)"},
-            config=config,
+    # [최적화] 적응형 리랭킹 전략 (Adaptive Reranking)
+    # 1. 후보군이 너무 적거나 (3개 이하)
+    # 2. 최상위 결과가 압도적으로 우수한 경우 리랭킹 생략 (TTFT 절약)
+    skip_rerank = False
+    if len(final_docs) <= 3:
+        skip_rerank = True
+        SessionManager.add_status_log("후보 문서가 적어 리랭킹을 생략합니다.")
+    elif len(aggregated) > 0 and aggregated[0].aggregated_score > 0.85:
+        skip_rerank = True
+        SessionManager.add_status_log(
+            "명확한 검색 결과가 확인되어 리랭킹을 생략합니다."
         )
+
+    # [최적화] 리랭킹 전 문맥 병합 (Pre-Rerank Merging)
+    merged_candidates = _merge_consecutive_chunks(final_docs, max_tokens=1024)
+    if len(merged_candidates) < len(final_docs):
+        SessionManager.add_status_log(
+            f"지능형 문맥 병합 완료: {len(final_docs)}개 파편 → {len(merged_candidates)}개 섹션으로 통합"
+        )
+
+    # FlashRank 리랭킹 (선택적 실행)
+    if (
+        RERANKER_CONFIG.get("enabled", True)
+        and not skip_rerank
+        and len(merged_candidates) > 1
+    ):
+        import contextlib
+
+        with contextlib.suppress(Exception):
+            writer({"status": "지식 우선순위 정제 중 (FlashRank)"})
         SessionManager.add_status_log("지식의 우선순위 재조정 및 정제 중 (FlashRank)")
         from flashrank import RerankRequest
 
@@ -133,24 +162,22 @@ async def retrieve_and_rerank(
         ranker = await ModelManager.get_flashranker()
         passages = [
             {"id": i, "text": d.page_content, "meta": d.metadata}
-            for i, d in enumerate(final_docs)
+            for i, d in enumerate(merged_candidates)
         ]
 
         async with ModelManager.inference_session():
             results = await asyncio.to_thread(
                 ranker.rerank, RerankRequest(query=query, passages=passages)
             )
+            # 상위 10개에서 15개로 약간 확장 (병합된 청크는 정보량이 많음)
             final_docs = [
                 Document(page_content=r["text"], metadata=r["meta"])
-                for r in results[:10]
+                for r in results[:15]
             ]
 
-            # [추가] 연속된 청크 병합 (같은 페이지의 인접 청크 통합)
-            final_docs = _merge_consecutive_chunks(final_docs)
-
-            SessionManager.add_status_log(
-                f"최적의 지식 {len(final_docs)}개 선별 및 문맥 병합 완료"
-            )
+            SessionManager.add_status_log(f"최적의 지식 {len(final_docs)}개 선별 완료")
+    else:
+        final_docs = merged_candidates
 
     return {"relevant_docs": final_docs}
 
@@ -164,7 +191,9 @@ def format_context(docs: list[Document]) -> str:
     return context
 
 
-async def generate(state: GraphState, config: RunnableConfig) -> dict[str, Any]:
+async def generate(
+    state: GraphState, config: RunnableConfig, writer: StreamWriter
+) -> dict[str, Any]:
     """최종 답변을 생성합니다."""
     if state.get("is_cached"):
         return {}
@@ -174,9 +203,11 @@ async def generate(state: GraphState, config: RunnableConfig) -> dict[str, Any]:
     if not llm:
         return {"response": "LLM 미로드"}
 
-    await adispatch_custom_event(
-        "status_update", {"message": "답변 작성 중..."}, config=config
-    )
+    # [표준] StreamWriter 사용 (Python 3.10 호환성 방어적 처리)
+    import contextlib
+
+    with contextlib.suppress(Exception):
+        writer({"status": "답변 논리 설계 및 생성 중..."})
     SessionManager.add_status_log("답변 논리 설계 및 생성 시작")
 
     # 컨텍스트 포맷팅
@@ -189,47 +220,76 @@ async def generate(state: GraphState, config: RunnableConfig) -> dict[str, Any]:
         content=f"{ANALYSIS_PROTOCOL}\n\n[Context]\n{context}\n\n[Question]\n{state['input']}"
     )
 
-    tracker = ResponsePerformanceTracker(state["input"], llm)
-    tracker.set_context(context, doc_count=len(docs))
-
+    # [최적화] astream을 사용한 실시간 사고 과정 및 답변 추출
     from core.model_loader import ModelManager
 
-    async with ModelManager.inference_session():
-        async for chunk in llm.astream([sys_msg, human_msg], config=config):
-            msg = getattr(chunk, "message", chunk)
-            content, thought = msg.content, msg.additional_kwargs.get("thinking", "")
-            tracker.record_chunk(content, thought)
-            if content or thought:
-                await adispatch_custom_event(
-                    "response_chunk",
-                    {"chunk": content, "thought": thought},
-                    config=config,
-                )
+    full_response = ""
+    full_thought = ""
+    last_metadata = {}
 
-    # 성능 지표 확정 및 반환 데이터 구성
-    stats = tracker.finalize_and_log()
+    async with ModelManager.inference_session():
+        # config를 전달하여 스트리밍 컨텍스트(messages, custom 등)를 유지함
+        async for chunk in llm.astream([sys_msg, human_msg], config=config):
+            # 1. 커스텀 래퍼를 통해 사고 과정과 답변 분리
+            content_chunk, thought_chunk = llm._convert_chunk_to_thought_and_content(
+                chunk
+            )
+
+            # 2. 사고 과정 실시간 전달
+            if thought_chunk:
+                full_thought += thought_chunk
+                with contextlib.suppress(Exception):
+                    writer({"thought": thought_chunk})
+
+            # 3. 답변 본문 실시간 전달
+            if content_chunk:
+                full_response += content_chunk
+                with contextlib.suppress(Exception):
+                    writer({"content": content_chunk})
+
+            # 4. 메타데이터 수집 (마지막 청크에 포함됨)
+            if hasattr(chunk, "response_metadata") and chunk.response_metadata:
+                last_metadata = chunk.response_metadata
+
+    # 결과 반환 (누적된 데이터로 Graph State 업데이트)
+    input_tokens = last_metadata.get("prompt_eval_count", 0)
+
     return {
-        "response": tracker.full_response,
-        "thought": tracker.full_thought,
-        "performance": stats.model_dump() if hasattr(stats, "model_dump") else stats,
+        "response": full_response,
+        "thought": full_thought,
+        "performance": {
+            **last_metadata,
+            "input_token_count": input_tokens,
+            "relevant_docs_count": len(docs),
+        },
     }
 
 
-def _merge_consecutive_chunks(docs: list[Document]) -> list[Document]:
+def _merge_consecutive_chunks(
+    docs: list[Document], max_tokens: int = 1200
+) -> list[Document]:
     """
     같은 페이지의 연속된 청크들을 하나로 합쳐 풍부한 문맥을 제공합니다.
+    리랭킹 전에 호출될 경우 리랭커에게 더 넓은 문맥을 제공합니다.
     """
     if not docs:
         return []
 
-    merged_docs: list[Document] = []
-    if not docs:
-        return merged_docs
+    from common.utils import count_tokens_rough
 
-    # 원본 리스트 보호를 위한 복사
+    merged_docs: list[Document] = []
     import copy
 
-    working_docs = [copy.deepcopy(d) for d in docs]
+    # 원본 보호를 위한 복사 및 정렬 (소스/페이지/인덱스 순)
+    working_docs = sorted(
+        [copy.deepcopy(d) for d in docs],
+        key=lambda x: (
+            str(x.metadata.get("source", "")),
+            int(x.metadata.get("page", 0)),
+            int(x.metadata.get("chunk_index", 0)),
+        ),
+    )
+
     current_doc = working_docs[0]
 
     for next_doc in working_docs[1:]:
@@ -241,14 +301,29 @@ def _merge_consecutive_chunks(docs: list[Document]) -> list[Document]:
             "page"
         ) == next_m.get("page")
 
-        # 인덱스 연속성 확인 (있는 경우에만)
+        # 인덱스 연속성 확인
         is_consecutive = True
         if "chunk_index" in curr_m and "chunk_index" in next_m:
-            is_consecutive = next_m["chunk_index"] == curr_m["chunk_index"] + 1
+            # 리트리버가 건너뛴 청크가 있더라도 인접하면 병합 허용 (차이가 2 이내)
+            is_consecutive = abs(next_m["chunk_index"] - curr_m["chunk_index"]) <= 2
 
-        if is_same_context and is_consecutive:
-            current_doc.page_content += " " + next_doc.page_content
-            current_doc.metadata.update(next_m)
+        # 토큰 길이 제한 확인
+        current_tokens = count_tokens_rough(
+            current_doc.page_content + next_doc.page_content
+        )
+        within_limit = current_tokens <= max_tokens
+
+        if is_same_context and is_consecutive and within_limit:
+            # 중복된 문장이 시작/끝에 있을 수 있으므로 처리 (간단한 결합)
+            current_doc.page_content += "\n\n" + next_doc.page_content
+            # 메타데이터 업데이트 (범위 표시 등)
+            if "chunk_index_range" not in current_doc.metadata:
+                current_doc.metadata["chunk_index_range"] = [
+                    curr_m.get("chunk_index"),
+                    next_m.get("chunk_index"),
+                ]
+            else:
+                current_doc.metadata["chunk_index_range"][1] = next_m.get("chunk_index")
         else:
             merged_docs.append(current_doc)
             current_doc = next_doc

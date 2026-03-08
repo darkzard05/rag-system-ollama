@@ -60,9 +60,10 @@ def create_vector_store(
     from common.config import VECTOR_STORE_CONFIG
 
     index_params = VECTOR_STORE_CONFIG.get("index_params", {})
-    quant_threshold = index_params.get("quantization_threshold", 5000)
     use_l2 = index_params.get("use_l2_norm", True)
     hnsw_m = index_params.get("hnsw_m", 32)
+    # [수정] config.yml에서 임계값 로드 (기본값 5000)
+    q_threshold = index_params.get("quantization_threshold", 5000)
 
     # GPU 인덱스 및 정규화 전략 최적화
     # [일관성] 설정에 따라 L2 정규화 수행 (Cosine Similarity 보장)
@@ -70,26 +71,41 @@ def create_vector_store(
         faiss.normalize_L2(vectors)
         logger.debug("[FAISS] 모든 벡터에 대한 L2 정규화 완료 (Cosine Similarity 보장)")
 
+    # [최적화] 문서 규모 및 벤치마크 결과에 따른 적응형 인덱스 전략 (Adaptive Strategy)
     chunk_count = len(docs)
     d = vectors.shape[1]
 
-    # 계층형 인덱스 전략 (메모리 및 속도 균형)
-    if chunk_count < 1000:
+    if chunk_count < 500:
+        # 1단계: 초소형 (정밀도 100%, 전수 조사 오버헤드 없음)
         index_type = "Flat"
         ef_search = 0
-    elif chunk_count < quant_threshold:
+    elif chunk_count < q_threshold:
+        # 2단계: 중소형 (그래프 기반 고속 검색, 정밀도 우선)
         index_type = f"HNSW{hnsw_m},Flat"
         ef_search = 128
-    else:
-        # [최적화] 설정된 임계값 이상부터 SQ8 양자화를 적용하여 메모리 절감
+    elif chunk_count < 20000:
+        # 3단계: 대형 (양자화 임계값 적용, 메모리 75% 절감)
         index_type = f"HNSW{hnsw_m},SQ8"
         ef_search = 256
+    else:
+        # 4단계: 초대형 (클러스터링 기반 검색 범위 축소 + 양자화)
+        nlist = int(4 * np.sqrt(chunk_count))
+        index_type = f"IVF{nlist},SQ8"
+        ef_search = 0  # IVF는 nprobe 사용
 
-    logger.info(f"[FAISS] 인덱스 타입 결정: {index_type} (Chunks: {chunk_count})")
-    SessionManager.add_status_log(f"고속 검색 인덱스 구축 중 ({index_type})")
+    logger.info(f"[FAISS] 적응형 전략 적용: {index_type} (Chunks: {chunk_count})")
+    SessionManager.add_status_log(f"최적 인덱스 구축 중 ({index_type})")
+
+    # 인덱스 생성 (코사인 유사도 기준 INNER_PRODUCT 사용)
     index = faiss.index_factory(d, index_type, faiss.METRIC_INNER_PRODUCT)
 
-    # GPU 인덱스로 전환
+    # [수정] IVF/SQ 기법은 데이터 분포 학습(Train)이 필수이므로 조건부로 호출
+    # [일관성] 중복 호출을 피하고 한 번만 확실하게 훈련
+    if any(x in index_type for x in ["IVF", "SQ"]):
+        logger.info(f"[FAISS] 인덱스 분포 학습 중... ({index_type})")
+        index.train(vectors)
+
+    # GPU 인덱스로 전환 (대규모 문서군에서만 활성화)
     if use_gpu and chunk_count > 5000:
         try:
             from core.model_loader import ModelManager
@@ -110,10 +126,6 @@ def create_vector_store(
         except Exception as e:
             logger.warning(f"[FAISS GPU] 전환 실패, CPU 사용: {e}")
             use_gpu = False
-
-    if "SQ" in index_type or "IVF" in index_type:
-        logger.info(f"[FAISS] 인덱스 훈련 중: {index_type}")
-        index.train(vectors)
 
     index.add(vectors)
 
