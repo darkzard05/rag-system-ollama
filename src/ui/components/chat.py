@@ -367,7 +367,10 @@ def render_chat_interface():
 
     if user_query and not is_generating:
         SessionManager.add_message("user", user_query)
-        st.rerun(scope="fragment")
+        try:
+            st.rerun(scope="fragment")
+        except Exception:
+            st.rerun()
 
     # 대기 중인 질문이 있고 아직 답변 생성 전인 경우
     if not is_generating and messages and messages[-1].get("role") == "user":
@@ -393,4 +396,7 @@ def render_chat_interface():
                     metrics=result.get("performance"),
                     processed_content=result.get("processed_content"),
                 )
-            st.rerun(scope="fragment")
+            try:
+                st.rerun(scope="fragment")
+            except Exception:
+                st.rerun()
