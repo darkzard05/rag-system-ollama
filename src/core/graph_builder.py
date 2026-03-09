@@ -128,13 +128,15 @@ async def retrieve_and_rerank(
     # 1. 후보군이 너무 적거나 (3개 이하)
     # 2. 최상위 결과가 압도적으로 우수한 경우 리랭킹 생략 (TTFT 절약)
     skip_rerank = False
+    bypass_threshold = RERANKER_CONFIG.get("bypass_threshold", 0.95)
+
     if len(final_docs) <= 3:
         skip_rerank = True
         SessionManager.add_status_log("후보 문서가 적어 리랭킹을 생략합니다.")
-    elif len(aggregated) > 0 and aggregated[0].aggregated_score > 0.85:
+    elif len(aggregated) > 0 and aggregated[0].aggregated_score > bypass_threshold:
         skip_rerank = True
         SessionManager.add_status_log(
-            "명확한 검색 결과가 확인되어 리랭킹을 생략합니다."
+            f"명확한 검색 결과(점수 > {bypass_threshold})가 확인되어 리랭킹을 생략합니다."
         )
 
     # [최적화] 리랭킹 전 문맥 병합 (Pre-Rerank Merging)
@@ -169,10 +171,11 @@ async def retrieve_and_rerank(
             results = await asyncio.to_thread(
                 ranker.rerank, RerankRequest(query=query, passages=passages)
             )
-            # 상위 10개에서 15개로 약간 확장 (병합된 청크는 정보량이 많음)
+            # [수정] 하드코딩된 15 대신 config.yml의 Reranker top_k 설정을 따릅니다.
+            rerank_top_k = RERANKER_CONFIG.get("top_k", 10)
             final_docs = [
                 Document(page_content=r["text"], metadata=r["meta"])
-                for r in results[:15]
+                for r in results[:rerank_top_k]
             ]
 
             SessionManager.add_status_log(f"최적의 지식 {len(final_docs)}개 선별 완료")

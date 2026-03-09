@@ -90,10 +90,6 @@ def extract_annotations_from_docs(documents: list) -> list[dict]:
         ).lower()
         file_path = meta.get("file_path") or meta.get("source")
 
-        logger.debug(
-            f"[HIGHLIGHT] Checking doc on page {page_val}, file_path: {file_path}"
-        )
-
         # [고도화] On-demand 좌표 추출 (Strategy C)
         # 메타데이터에 좌표가 없으면 PDF 파일에서 실시간으로 검색합니다.
         if not all_coords and file_path and os.path.exists(file_path):

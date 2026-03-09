@@ -133,7 +133,13 @@ RETRIEVER_CONFIG: dict = _rag_config.get("retriever", {})
 # 앙상블 가중치 추출 (리트리버 설정 내에 존재)
 ENSEMBLE_WEIGHTS: list[float] = RETRIEVER_CONFIG.get("ensemble_weights", [0.4, 0.6])
 
-RERANKER_CONFIG: dict = _rag_config.get("reranker", {})
+_reranker_config = _rag_config.get("reranker", {})
+RERANKER_ENABLED: bool = _reranker_config.get("enabled", True)
+RERANKER_MODEL_NAME: str = _reranker_config.get(
+    "model_name", "ms-marco-TinyBERT-L-2-v2"
+)
+RERANKER_DEVICE: str = _reranker_config.get("device", "cpu")
+RERANKER_CONFIG: dict = _reranker_config
 TEXT_SPLITTER_CONFIG: dict = _rag_config.get(
     "text_splitter", {"chunk_size": 500, "chunk_overlap": 100}
 )
@@ -154,19 +160,10 @@ VECTOR_STORE_CACHE_DIR: str = str(
     PROJECT_ROOT
     / _rag_config.get("vector_store_cache_dir", ".model_cache/vector_store_cache")
 )
-QUERY_EXPANSION_CONFIG: dict = _rag_config.get("query_expansion", {"enabled": True})
-RAG_PARAMETERS: dict = _rag_config.get("parameters", {})
 _prompts_config = _rag_config.get("prompts") or {}
 ANALYSIS_PROTOCOL: str = _prompts_config.get("analysis_protocol", "")
-RESEARCH_SYSTEM_PROMPT: str = _prompts_config.get("research_system_prompt", "")
-FACTOID_SYSTEM_PROMPT: str = _prompts_config.get("factoid_system_prompt", "")
-GREETING_SYSTEM_PROMPT: str = _prompts_config.get("greeting_system_prompt", "")
-OUT_OF_CONTEXT_SYSTEM_PROMPT: str = _prompts_config.get(
-    "out_of_context_system_prompt", ""
-)
 QA_SYSTEM_PROMPT: str = _prompts_config.get("qa_system_prompt", "")
 QA_HUMAN_PROMPT: str = _prompts_config.get("qa_human_prompt", "")
-QUERY_EXPANSION_PROMPT: str = _prompts_config.get("query_expansion_prompt", "")
 
 # --- 캐시 보안 설정 ---
 _cache_security_config = _config.get("cache_security", {})
@@ -236,11 +233,15 @@ ENABLE_RESPONSE_CACHE: bool = _get_env(
 
 # --- 채팅 UI 상수 ---
 _ui_config = _config.get("ui", {})
-UI_CONTAINER_HEIGHT: int = _ui_config.get("container_height", 650)
+UI_CONTAINER_HEIGHT: int = _ui_config.get("container_height", 700)
 _ui_messages = _ui_config.get("messages", {})
 
 # UI 메시지 (get 메서드로 안전하게 가져오기)
 MSG_PREPARING_ANSWER = _ui_messages.get("preparing_answer", "답변 생성 준비 중...")
+MSG_THINKING = _ui_messages.get("thinking", "🤔 생각을 정리하는 중입니다...")
+MSG_NO_THOUGHT_PROCESS = _ui_messages.get(
+    "no_thought_process", "아직 생각 과정이 없습니다."
+)
 MSG_NO_RELATED_INFO = _ui_messages.get(
     "no_related_info", "관련 정보를 찾을 수 없습니다."
 )

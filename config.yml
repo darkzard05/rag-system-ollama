@@ -20,7 +20,7 @@ models:
   temperature: 0.1
 
   # Ollama 모델의 컨텍스트 윈도우 설정
-  num_ctx: 8192
+  num_ctx: 4096
 
   # Ollama 모델의 탑-피 설정
   top_p: 0.8
@@ -66,20 +66,10 @@ rag:
   # 재순위화(Reranking) 설정
   reranker:
     enabled: true
-    # 더 정확한 MiniLM 모델로 업그레이드
-    model_name: "ms-marco-MiniLM-L-12-v2" 
+    # 고속 CPU 추론을 위해 경량 모델로 교체
+    model_name: "ms-marco-TinyBERT-L-2-v2" 
     top_k: 10 # 컨텍스트 풍부화
     bypass_threshold: 0.95
-    min_score: 0.0001 # 매우 낮은 점수도 일단 수용 (순위 우선)
-    max_rerank_docs: 25
-
-  # 통합 RAG 파라미터 (기존의 의도별 파라미터를 하나로 통합)
-  parameters:
-    retrieval_k: 25
-    rerank_top_k: 8
-    rerank_threshold: 0.3
-    sort_by_page: false
-    use_strict_grading: false
 
   # 텍스트 분할 설정
   text_splitter:
@@ -88,18 +78,15 @@ rag:
   
   # 추출 엔진 설정 (PyMuPDF4LLM 최적화)
   parsing:
-    engine: "pymupdf4llm"
-    do_ocr: false
-    do_table_structure: true
-    write_images: false
     # --- 최적화된 추출 파라미터 (Balanced-Fast) ---
+    force_text: false        # [OCR 대체] true 설정 시 스캔된 이미지 내 텍스트 강제 추출 시도
     fontsize_limit: 3        # 3pt 이하 텍스트 무시
     ignore_code: false       # 코드 블록 보존
     extract_words: true      # [수정] PDF 하이라이트 기능을 위해 좌표 추출 활성화
     ignore_graphics: true    # 무거운 벡터 그래픽 처리 제외 (속도 2배 향상)
     table_strategy: "lines_strict" # [수정] 표 탐지 품질 향상
     margins: [0, 72, 0, 72]  # [추가] 상하 1인치(72pt) 마진 무시 (헤더/푸터 제거)
-    force_text: false
+    write_images: false
 
   # 의미론적 분할 설정
   semantic_chunker:
@@ -112,11 +99,8 @@ rag:
     max_chunk_size: 1000
     similarity_threshold: 0.6
 
-  # 쿼리 확장 설정
-  query_expansion:
-    enabled: false
-
   # 프롬프트 설정
+  prompts:
     # 1. 핵심 페르소나 및 분석 원칙 (The Core Identity)
     analysis_protocol: |
       당신은 업계 최고 수준의 '문서 분석 전문가'입니다. 
@@ -129,19 +113,7 @@ rag:
       4. [Synthesis]: 흩어져 있는 정보들을 유기적으로 연결하여 질문에 대한 다각도 분석을 수행하십시오.
       </Core_Guidelines>
 
-    # 2. 상황별 특화 전략 (Tailored Strategies)
-    research_system_prompt: |
-      현재 모드: [심층 분석 및 종합 요약]. 
-      제공된 여러 페이지의 정보를 유기적으로 연결하여 '원인-결과' 또는 '비교-대조'의 구조를 가진 종합적인 보고서 형태로 작성하십시오.
-      추상적인 설명보다는 컨텍스트에 포함된 구체적인 수치, 핵심 용어, 예시를 최대한 인용하며 상세히 기술하십시오.
-    factoid_system_prompt: |
-      현재 모드: [핵심 추출]. 질문에 대한 직접적인 정답(수치, 고유명사 등)을 가장 간결하게 제시하십시오. 부가 설명은 지양합니다.
-    greeting_system_prompt: |
-      현재 모드: [사용자 안내]. 친절하게 인사에 화답하고, 문서 분석을 시작할 준비가 되었음을 알리십시오.
-    out_of_context_system_prompt: |
-      현재 모드: [범위 외 안내]. 질문이 문서의 범위를 벗어났음을 정중히 알리고, 문서 내에서 답변 가능한 가장 유사한 주제를 제안하십시오.
-
-    # 3. 데이터 구조화 템플릿 (Data Injection)
+    # 2. 데이터 구조화 템플릿 (Data Injection)
     qa_system_prompt: "" # 분석 프로토콜로 통합하여 비워둠
     qa_human_prompt: |
       제공된 컨텍스트를 정밀 분석하여 사용자의 질문에 답변하십시오.
@@ -154,13 +126,6 @@ rag:
       {input}
       </Question>
 
-    # 4. 검색 최적화 지시
-    query_expansion_prompt: |
-      사용자의 질문을 문서 검색에 최적화된 3개의 핵심 키워드 또는 구문으로 변환하십시오.
-      - 불필요한 서술어 제외
-      - 고유명사 및 수치 보존
-      - JSON 형식을 엄격히 준수할 것
-
 
 # --- 평가(Evaluation) 설정 ---
 evaluation:
@@ -170,18 +135,6 @@ evaluation:
   timeout: 1200
   # 병렬 처리 수 (로컬 자원 보호를 위해 1 권장, 성능 향상을 위해 2 시도)
   max_workers: 2
-  # 한국어 맞춤형 평가 프롬프트
-  prompts:
-    statement_generator: |
-      분석 전문가로서, 주어진 답변의 각 문장을 독립적인 'statements'로 분해하세요.
-      반드시 아래 JSON 형식으로만 답변하고, 다른 설명은 하지 마세요:
-      {"statements": ["문장1", "문장2"]}
-    nli_statement: |
-      영문 컨텍스트를 근거로 한국어 문장의 진위 여부를 판단하세요.
-      논리적으로 유추 가능하면 verdict를 1, 아니면 0을 부여하세요.
-      반드시 JSON 형식으로 'verdict'와 'reason'을 포함하세요.
-    answer_relevancy: |
-      답변에 대한 적절한 한국어 질문을 생성하고, 회피 여부(noncommittal)를 0 또는 1로 표시하세요.
 
 
 # --- 캐시 보안 설정 ---

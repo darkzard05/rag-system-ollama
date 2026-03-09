@@ -15,6 +15,8 @@ from common.config import (
     MSG_CHAT_GUIDE,
     MSG_CHAT_INPUT_PLACEHOLDER,
     MSG_PREPARING_ANSWER,
+    MSG_THINKING,
+    UI_CONTAINER_HEIGHT,
 )
 from common.utils import (
     apply_tooltips_to_response,
@@ -129,7 +131,7 @@ async def _stream_chat_response(rag_sys, user_query: str, placeholder):
                                                 - state["thinking_start_time"]
                                             )
                                             with st.expander(
-                                                f"🧠 사고 과정 ({dur:.1f}초)",
+                                                f"{MSG_THINKING[:-3]} ({dur:.1f}초)",
                                                 expanded=False,
                                             ):
                                                 st.markdown(
@@ -237,7 +239,9 @@ def render_message(
         else st.container()
     ):
         if thought and thought.strip():
-            with st.expander("🧠 사고 완료", expanded=False, key=f"exp_{msg_id}"):
+            with st.expander(
+                MSG_THINKING[:-3] + " 완료", expanded=False, key=f"exp_{msg_id}"
+            ):
                 st.markdown(
                     f'<div class="thought-container" style="font-size: 0.85rem;">{thought}</div>',
                     unsafe_allow_html=True,
@@ -326,7 +330,7 @@ def _render_system_logs(logs: list[str]):
 @st.fragment
 def render_chat_interface():
     """채팅 인터페이스 (Fragment 격리 및 잔상 방지)"""
-    chat_container = st.container(height=700, border=False)
+    chat_container = st.container(height=UI_CONTAINER_HEIGHT, border=False)
     messages = SessionManager.get_messages() or []
     is_generating = bool(SessionManager.get("is_generating_answer", False))
     current_sid = SessionManager.get_session_id()

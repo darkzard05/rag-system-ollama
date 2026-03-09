@@ -30,12 +30,31 @@ def inject_custom_css(is_expanded: bool = False):
     st.markdown(
         f"""
     <style>
-    /* 1. 사이드바 전체 너비 강제 고정 및 애니메이션 */
+    /* 1. 사이드바 전체 너비 제어 (상태별 최적화) */
     [data-testid="stSidebar"] {{
+        transition: width 0.3s ease-in-out !important;
+    }}
+
+    /* 사이드바가 열려 있을 때만 너비 강제 */
+    [data-testid="stSidebar"][aria-expanded="true"] {{
         width: {sidebar_width} !important;
         min-width: {sidebar_width} !important;
         max-width: {sidebar_width} !important;
-        transition: width 0.3s ease-in-out;
+    }}
+
+    /* 사이드바가 접혔을 때는 확실하게 0으로 숨김 및 가시성 차단 */
+    [data-testid="stSidebar"][aria-expanded="false"] {{
+        width: 0px !important;
+        min-width: 0px !important;
+        max-width: 0px !important;
+        visibility: hidden !important;
+        opacity: 0 !important;
+    }}
+
+    /* 사이드바 콘텐츠 영역도 부모의 축소 상태를 따름 */
+    [data-testid="stSidebar"][aria-expanded="false"] [data-testid="stSidebarContent"] {{
+        visibility: hidden !important;
+        opacity: 0 !important;
     }}
 
     [data-testid="stSidebarContent"] {{
@@ -48,11 +67,12 @@ def inject_custom_css(is_expanded: bool = False):
         display: flex !important;
         flex-direction: row !important;
         flex-wrap: nowrap !important;
-        gap: {"40px" if is_expanded else "0px"} !important; /* 확장 시 40px 간격 적용 */
+        width: 100% !important;
+        gap: {"40px" if is_expanded else "0px"} !important;
     }}
 
     /* 제1열: 설정 영역 (300px 절대 고정) */
-    [data-testid="stSidebar"] div[data-testid="stHorizontalBlock"] > div[data-testid="column"]:nth-of-type(1) {{
+    [data-testid="stSidebar"] [data-testid="stHorizontalBlock"] > [data-testid="column"]:nth-of-type(1) {{
         flex: 0 0 300px !important;
         width: 300px !important;
         min-width: 300px !important;
@@ -60,8 +80,8 @@ def inject_custom_css(is_expanded: bool = False):
         border-right: 1px solid rgba(128, 128, 128, 0.15);
     }}
 
-    /* 제2열: 미리보기 영역 */
-    [data-testid="stSidebar"] div[data-testid="stHorizontalBlock"] > div[data-testid="column"]:nth-of-type(2) {{
+    /* 제2열: 미리보기 영역 (가시성 및 너비 강제) */
+    [data-testid="stSidebar"] [data-testid="stHorizontalBlock"] > [data-testid="column"]:nth-of-type(2) {{
         display: {"block" if is_expanded else "none"} !important;
         flex: {"0 0 700px" if is_expanded else "0 0 0px"} !important;
         width: {"700px" if is_expanded else "0px"} !important;

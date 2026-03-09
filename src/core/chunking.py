@@ -10,7 +10,11 @@ from langchain_core.documents import Document
 from langchain_core.embeddings import Embeddings
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
-from common.config import SEMANTIC_CHUNKER_CONFIG, TEXT_SPLITTER_CONFIG
+from common.config import (
+    EMBEDDING_BATCH_SIZE,
+    SEMANTIC_CHUNKER_CONFIG,
+    TEXT_SPLITTER_CONFIG,
+)
 from core.semantic_chunker import EmbeddingBasedSemanticChunker
 from core.session import SessionManager
 from services.monitoring.performance_monitor import (
@@ -24,6 +28,9 @@ monitor = get_performance_monitor()
 
 def _get_optimal_batch_size(embedder: Embeddings) -> int:
     """하드웨어 사양에 따른 최적 배치 사이즈 결정"""
+    if isinstance(EMBEDDING_BATCH_SIZE, int):
+        return EMBEDDING_BATCH_SIZE
+
     import torch
 
     if getattr(embedder, "model_kwargs", {}).get("device") == "cuda":

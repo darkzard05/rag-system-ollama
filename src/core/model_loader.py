@@ -29,6 +29,7 @@ from common.config import (
     OLLAMA_NUM_PREDICT,
     OLLAMA_TEMPERATURE,
     OLLAMA_TOP_P,
+    RERANKER_MODEL_NAME,
 )
 from common.exceptions import EmbeddingModelError
 from services.monitoring.performance_monitor import (
@@ -147,18 +148,19 @@ class ModelManager:
             logger.info("[ModelManager] GPU 캐시 비우기 완료 (torch.cuda.empty_cache)")
 
     @classmethod
-    async def get_flashranker(cls, model_name: str = "ms-marco-TinyBERT-L-2-v2") -> Any:
+    async def get_flashranker(cls, model_name: str | None = None) -> Any:
         """FlashRank 리랭커 모델을 가져오거나 로드합니다 (고속 CPU 리랭킹)"""
+        target_model = model_name or RERANKER_MODEL_NAME
         async with cls._get_lock("flashrank"):
-            cache_key = f"flashrank_{model_name}"
+            cache_key = f"flashrank_{target_model}"
             instance = cls._get_from_cache(cache_key)
             if instance:
                 return instance
 
             from flashrank import Ranker
 
-            logger.info(f"[MODEL] [LOAD] FlashRank 리랭커 로드 중: {model_name}")
-            instance = Ranker(model_name=model_name, cache_dir=CACHE_DIR)
+            logger.info(f"[MODEL] [LOAD] FlashRank 리랭커 로드 중: {target_model}")
+            instance = Ranker(model_name=target_model, cache_dir=CACHE_DIR)
             await cls._add_to_cache(cache_key, instance)
             return instance
 

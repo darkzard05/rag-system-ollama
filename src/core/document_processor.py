@@ -136,6 +136,7 @@ def load_pdf_docs(
                 ignore_code=PARSING_CONFIG.get("ignore_code", False),
                 extract_words=PARSING_CONFIG.get("extract_words", True),
                 ignore_graphics=PARSING_CONFIG.get("ignore_graphics", True),
+                force_text=PARSING_CONFIG.get("force_text", False),
                 table_strategy=PARSING_CONFIG.get(
                     "table_strategy", "lines"
                 ),  # lines_strict에서 lines로 변경하여 유연성 확보

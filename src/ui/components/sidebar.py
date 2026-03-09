@@ -23,11 +23,11 @@ def render_sidebar(
 ):
     """사이드바 최상위 렌더링 함수"""
     pdf_path = SessionManager.get("pdf_file_path")
+    # [복구] 경로 존재 여부만으로 렌더링을 결정하여 누락을 방지합니다.
     is_expanded = bool(pdf_path)
 
     with st.sidebar:
-        # [최적화] CSS 픽셀값과 정확히 일치하는 비율을 설정하여 1열 너비를 고정합니다.
-        # 비확장 시 1열(300px)이 전체를 점유하도록 2열을 극소화합니다.
+        # [안정성] CSS 픽셀값과 정확히 일치하는 비율을 설정하여 1열 너비를 고정합니다.
         column_ratios = [300, 700] if is_expanded else [300, 1]
         col_settings, col_viewer = st.columns(column_ratios)
 
@@ -36,28 +36,30 @@ def render_sidebar(
                 "<div class='sidebar-header'>🤖 RAG System</div>",
                 unsafe_allow_html=True,
             )
-            # 설정창 영역 (CSS 클래스로 높이 제어)
-            with st.container():
-                _render_settings_internal(
-                    file_uploader_callback,
-                    model_selector_callback,
-                    embedding_selector_callback,
-                    is_generating,
-                    current_file_name,
-                    available_models,
-                )
+            # 설정창 영역 (성능 및 상태 동기화를 위해 프래그먼트 없이 렌더링)
+            _render_settings_internal(
+                file_uploader_callback,
+                model_selector_callback,
+                embedding_selector_callback,
+                is_generating,
+                current_file_name,
+                available_models,
+            )
 
         with col_viewer:
-            # 2열은 PDF가 있을 때만 채워지며, 없을 때는 CSS에 의해 너비가 0이 됩니다.
+            # 2열은 PDF가 존재하고 경로가 유효할 때만 렌더링합니다.
             if is_expanded:
                 st.markdown(
                     "<div class='sidebar-header'>📄 문서 미리보기</div>",
                     unsafe_allow_html=True,
                 )
                 with st.container():
-                    from ui.components.viewer import render_pdf_viewer
+                    try:
+                        from ui.components.viewer import render_pdf_viewer
 
-                    render_pdf_viewer()
+                        render_pdf_viewer()
+                    except ImportError as e:
+                        st.error(f"뷰어 로드 실패: {e}")
             else:
                 st.empty()
 
@@ -71,6 +73,9 @@ def _render_settings_internal(
     available_models,
 ):
     """사이드바의 설정 섹션 실제 렌더링 로직"""
+    # [안정성] 입력 데이터 타입 보장
+    safe_models = available_models if isinstance(available_models, list) else []
+
     with st.container(border=True):
         st.subheader("📄 문서 업로드")
         st.file_uploader(
@@ -87,11 +92,12 @@ def _render_settings_internal(
     with st.container(border=True):
         st.subheader("⚙️ 모델 설정")
 
-        raw_models = [m for m in (available_models or []) if "---" not in m]
+        # [안정성] 필터링 시 None 에러 방지
+        raw_models = [m for m in safe_models if m and "---" not in str(m)]
         embed_keywords = ["embed", "bge", "nomic", "mxbai", "snowflake"]
 
         embedding_candidates = [
-            m for m in raw_models if any(kw in m.lower() for kw in embed_keywords)
+            m for m in raw_models if any(kw in str(m).lower() for kw in embed_keywords)
         ]
         actual_embeddings = sorted(
             set(AVAILABLE_EMBEDDING_MODELS + embedding_candidates)

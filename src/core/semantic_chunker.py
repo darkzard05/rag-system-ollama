@@ -43,7 +43,7 @@ class EmbeddingBasedSemanticChunker:
         min_chunk_size: int = 100,
         max_chunk_size: int = 800,
         chunk_overlap: int = 1,  # [추가] 겹칠 문장 수 (Context preservation)
-        similarity_threshold: float = 0.5,
+        similarity_threshold: float = 0.6,
         batch_size: int = 64,
         cache_manager: CacheManager | None = None,
     ):

@@ -81,6 +81,7 @@ def setup_logging(
     # LangChain 관련 장황한 로그 제어
     logging.getLogger("langchain").setLevel(logging.WARNING)
     logging.getLogger("langchain_core").setLevel(logging.WARNING)
+    logging.getLogger("asyncio").setLevel(logging.WARNING)
 
     # [추가] 캐시 보안 로그 폭사 차단 (가장 심각한 병목 해결)
     logging.getLogger("security").setLevel(logging.WARNING)
