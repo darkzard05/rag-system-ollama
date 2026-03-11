@@ -226,7 +226,7 @@ class EmbeddingBasedSemanticChunker:
 
         # 3. [고도화] 결과 행렬 조립 및 차원 불일치 방어
         # 모든 결과가 채워졌는지 확인하고, 차원이 일치하는지 검사
-        valid_vectors = []
+        valid_vectors: list[np.ndarray] = []
         expected_dim = None
 
         for i, vec in enumerate(all_results):
