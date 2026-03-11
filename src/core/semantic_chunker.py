@@ -64,8 +64,10 @@ class EmbeddingBasedSemanticChunker:
         # [최적화] 전역 캐시 관리자 설정
         self.cache_manager = cache_manager or get_cache_manager()
 
-        # [최적화] 모델 식별을 위한 이름 추출 (HuggingFaceEmbeddings 등 지원)
-        self.model_name = getattr(embedder, "model_name", "default_model")
+        # [최적화] 모델 식별을 위한 이름 추출 (Ollama 및 HuggingFace 지원 강화)
+        self.model_name = getattr(embedder, "model", None) or getattr(
+            embedder, "model_name", "default_model"
+        )
 
         # ✅ 정규식 사전 컴파일 (성능 최적화)
         self._sentence_pattern = re.compile(self.sentence_split_regex)
@@ -222,8 +224,31 @@ class EmbeddingBasedSemanticChunker:
                     logger.error(f"[MODEL] [BATCH] 임베딩 생성 중 오류 발생: {e}")
                     raise
 
-        # 3. 결과 행렬 조립 및 정규화
-        embeddings_matrix = np.stack(all_results).astype("float32")
+        # 3. [고도화] 결과 행렬 조립 및 차원 불일치 방어
+        # 모든 결과가 채워졌는지 확인하고, 차원이 일치하는지 검사
+        valid_vectors = []
+        expected_dim = None
+
+        for i, vec in enumerate(all_results):
+            if vec is None:
+                continue
+
+            if expected_dim is None:
+                expected_dim = vec.shape[0]
+
+            if vec.shape[0] != expected_dim:
+                logger.warning(
+                    f"[Chunker] 캐시된 벡터 차원 불일치 감지 (Index: {i}, Dim: {vec.shape[0]} != Expected: {expected_dim}). "
+                    "모델 이름이 바뀌었거나 캐시가 오염되었습니다. 해당 항목을 제외합니다."
+                )
+                continue
+
+            valid_vectors.append(vec)
+
+        if not valid_vectors:
+            return np.array([]).reshape(0, 0)
+
+        embeddings_matrix = np.stack(valid_vectors).astype("float32")
         if normalize:
             norms = np.linalg.norm(embeddings_matrix, axis=1, keepdims=True)
             embeddings_matrix = np.divide(
@@ -256,7 +281,7 @@ class EmbeddingBasedSemanticChunker:
     ) -> list[int]:
         """
         유사도 거리(1-cos_sim) 분포를 분석하여 분할 지점을 찾습니다.
-        LangChain의 최신 구현 전략(Standard Deviation, Interquartile, Gradient)을 도입합니다.
+        [고도화] 마크다운 헤더 감지 시 강제 분할 지점으로 추가합니다.
         """
         if not distances:
             return []
@@ -289,10 +314,25 @@ class EmbeddingBasedSemanticChunker:
         else:
             threshold = float(self.similarity_threshold)  # 폴백
 
-        # 임계값을 넘는 인덱스 추출 (거리가 클수록 의미가 다름)
+        # 1. 유사도 기반 분기점 추출
         breakpoints = (np.where(dist_array > threshold)[0] + 1).tolist()
 
-        # [안전 장치] 너무 긴 청크 방지
+        # 2. [고도화] 마크다운 헤더 감지 기반 강제 분할
+        header_pattern = re.compile(r"^#{1,6}\s+.+")
+        if sentences:
+            header_bps = []
+            for i, s in enumerate(sentences):
+                # 문장의 시작이 헤더 패턴인 경우 (첫 문장 제외)
+                if i > 0 and header_pattern.match(s["text"].strip()):
+                    header_bps.append(i)
+
+            if header_bps:
+                logger.info(
+                    f"[Chunker] {len(header_bps)}개의 마크다운 헤더를 감지하여 강제 분할 지점으로 설정합니다."
+                )
+                breakpoints = sorted(set(breakpoints + header_bps))
+
+        # 3. [안전 장치] 너무 긴 청크 방지
         if sentences:
             current_len = 0
             safety_bps = []
@@ -311,7 +351,7 @@ class EmbeddingBasedSemanticChunker:
     def _optimize_chunk_sizes(self, chunks: list[dict]) -> list[dict]:
         """
         생성된 청크들의 크기를 검사하여 병합하며, 벡터도 가중 평균으로 계산합니다.
-        [최적화] 크기뿐만 아니라 의미적 유사도를 고려하여 지능적으로 병합합니다.
+        [수정] 섹션(Header)이 다르면 절대로 병합하지 않습니다.
         """
         if not chunks:
             return chunks
@@ -328,35 +368,29 @@ class EmbeddingBasedSemanticChunker:
             merged_text = current_chunk["text"] + " " + chunk["text"]
             merged_len = len(merged_text)
 
-            # [수정] 지능적 병합 조건 강화
-            should_merge = False
+            # [핵심] 섹션이 다르면 병합 절대 금지
+            is_different_section = current_chunk.get("current_section") != chunk.get(
+                "current_section"
+            )
 
             # 강제 분할 지점(오프셋 단절 또는 플래그) 확인
             is_at_hard_boundary = current_chunk.get("end") != chunk.get(
                 "start"
             ) or current_chunk.get("is_hard_split", False)
 
-            # 1. 크기가 극도로 작을 때만 병합 시도 (단절된 경우 제외)
-            if (
-                not is_at_hard_boundary
-                and len(current_chunk["text"]) < self.min_chunk_size
-            ):
-                should_merge = merged_len <= self.max_chunk_size
+            # [수정] 지능적 병합 조건 강화
+            should_merge = False
 
-            # 2. 유사도 기반 지능적 병합 (단절된 경우 제외)
-            if (
-                not should_merge
-                and not is_at_hard_boundary
-                and merged_len <= self.max_chunk_size
-            ):
-                sim = float(np.dot(current_chunk["vector"], chunk["vector"]))
-                if sim > (ChunkingConstants.SIMILARITY_MERGE_THRESHOLD / 100.0):
-                    should_merge = True
+            if not is_different_section and not is_at_hard_boundary:
+                # 1. 크기가 극도로 작을 때만 병합 시도
+                if len(current_chunk["text"]) < self.min_chunk_size:
+                    should_merge = merged_len <= self.max_chunk_size
 
-            # 3. [추가] 강제 분할 지점 여부 확인 (예: 텍스트가 너무 길어 쪼개진 경우)
-            # 여기서는 단순 텍스트 비교 대신 max_chunk_size를 기준으로 방어적 분할 유지
-            if merged_len > self.max_chunk_size:
-                should_merge = False
+                # 2. 유사도 기반 지능적 병합
+                if not should_merge and merged_len <= self.max_chunk_size:
+                    sim = float(np.dot(current_chunk["vector"], chunk["vector"]))
+                    if sim > (ChunkingConstants.SIMILARITY_MERGE_THRESHOLD / 100.0):
+                        should_merge = True
 
             if should_merge:
                 # 벡터 병합: 각 청크의 길이를 고려한 가중 평균
@@ -390,6 +424,7 @@ class EmbeddingBasedSemanticChunker:
     async def split_text(self, text: str) -> list[dict]:
         """
         텍스트를 의미론적으로 분할합니다 (Buffer-based context window 적용).
+        [고도화] 마크다운 헤더 기반 섹션 정보를 추적하여 주입합니다.
         """
         if not text or not text.strip():
             return []
@@ -401,14 +436,17 @@ class EmbeddingBasedSemanticChunker:
 
         # [최적화] 너무 짧은 문장 병합 (오프셋 유지)
         min_merge_len = ChunkingConstants.MIN_MERGE_LEN.value
+        header_pattern = re.compile(r"^#{1,6}\s+.+")
 
         sentences = []
         if raw_sentences:
             current_s = raw_sentences[0]
             for s in raw_sentences[1:]:
-                # [수정] 강제 분할 플래그 확인 및 병합 조건 강화
+                # [수정] 헤더 문장이거나 강제 분할 플래그인 경우 병합 제외
+                is_header = bool(header_pattern.match(s["text"].strip()))
                 can_merge = (
                     not current_s.get("is_hard_split", False)
+                    and not is_header  # 헤더는 독립적으로 유지
                     and (len(s["text"]) < min_merge_len)
                     and (len(current_s["text"]) + len(s["text"]) < 1000)
                 )
@@ -432,27 +470,17 @@ class EmbeddingBasedSemanticChunker:
             return sentences
 
         # 2. 개별 문장 임베딩 생성 (캐싱 활용)
-        # [최적화] 중복 호출 방지를 위해 개별 문장 임베딩을 먼저 구하고 이를 조합하여 문맥 임베딩 생성
         indiv_embeddings = await self._get_embeddings([s["text"] for s in sentences])
         for s, v in zip(sentences, indiv_embeddings, strict=False):
             s["vector"] = v
 
-        if len(sentences) <= self.buffer_size:
-            return sentences
-
-        # 3. Buffer 기반 Combined Embeddings 생성 (임베딩 호출 없이 벡터 연산으로 처리)
-        # [핵심 개선] 인접한 단일 문장이 아니라 앞뒤 문맥을 합쳐서 비교 (Gregory Kamradt 방식)
-        # 텍스트를 합쳐서 다시 임베딩하는 대신, 개별 임베딩의 평균을 사용하여 획기적 속도 향상
+        # 3. Buffer 기반 Combined Embeddings 생성
         combined_embeddings = []
         for i in range(len(sentences)):
             start = max(0, i - self.buffer_size)
             end = min(len(sentences), i + self.buffer_size + 1)
-
-            # 윈도우 내 문장들의 벡터 평균 계산
             window_vectors = indiv_embeddings[start:end]
             combined_vec = np.mean(window_vectors, axis=0)
-
-            # 정규화
             norm = np.linalg.norm(combined_vec)
             if norm > 1e-9:
                 combined_vec /= norm
@@ -460,54 +488,68 @@ class EmbeddingBasedSemanticChunker:
 
         combined_embeddings = np.array(combined_embeddings)
 
-        # 4. 거리 계산 (1 - 코사인 유사도)
-        # combined_embeddings[i]와 combined_embeddings[i+1] 간의 거리 측정
+        # 4. 거리 계산
         distances = []
         for i in range(len(combined_embeddings) - 1):
             similarity = np.dot(combined_embeddings[i], combined_embeddings[i + 1])
             distances.append(1.0 - float(similarity))
 
-        # 5. 분기점 탐색
+        # 5. 분기점 탐색 (헤더 인식 로직 포함됨)
         breakpoints = self._find_breakpoints(distances, sentences=sentences)
 
-        # 6. 1차 그룹화 (오프셋 및 벡터 포함, [추가] Overlap 반영)
+        # 6. 그룹화 및 헤더 컨텍스트(Section) 추적
         chunks = []
         start_idx = 0
         all_bps = breakpoints + [len(sentences)]
+
+        current_header = "Intro/Root"
 
         for i, bp in enumerate(all_bps):
             # 현재 그룹의 인덱스 범위 계산
             group_start = start_idx
             group_end = bp
-
             if group_start >= group_end:
                 continue
 
-            # [핵심] Overlap 적용: 이전 그룹의 마지막 N개 문장을 포함시킴
-            actual_start = (
-                max(0, group_start - self.chunk_overlap) if i > 0 else group_start
+            # [고도화] 새로운 헤더로 시작하는지 확인 (오버랩 방지용)
+            is_new_header_start = bool(
+                header_pattern.match(sentences[group_start]["text"].strip())
             )
+
+            # Overlap 적용: 헤더로 시작하는 경우 오버랩 생략 (Clean Section Start)
+            actual_start = group_start
+            if i > 0 and not is_new_header_start:
+                actual_start = max(0, group_start - self.chunk_overlap)
 
             group_sentences = sentences[actual_start:group_end]
             group_embeddings = indiv_embeddings[actual_start:group_end]
 
-            # 병합된 텍스트 및 범위 계산
-            merged_text = " ".join([s["text"] for s in group_sentences])
-            c_start = group_sentences[0]["start"]
-            c_end = group_sentences[-1]["end"]
+            # [핵심] 현재 청크의 헤더 섹션 결정 (가장 마지막에 만난 헤더 기준)
+            # start_idx부터 현재 그룹의 끝까지 훑으며 헤더를 갱신
+            for s in sentences[start_idx:group_end]:
+                h_match = header_pattern.match(s["text"].strip())
+                if h_match:
+                    # [수정] 헤더 줄만 추출하여 섹션 이름으로 사용 (본문 혼입 방지)
+                    header_line = s["text"].strip().split("\n")[0]
+                    current_header = header_line.strip("# ").strip()
 
+            merged_text = " ".join([s["text"] for s in group_sentences])
             chunk_vector = np.mean(group_embeddings, axis=0)
 
             chunks.append(
                 {
                     "text": merged_text,
-                    "start": c_start,
-                    "end": c_end,
+                    "start": group_sentences[0]["start"],
+                    "end": group_sentences[-1]["end"],
                     "vector": chunk_vector,
                     "is_hard_split": group_sentences[-1].get("is_hard_split", False),
+                    "current_section": current_header,  # 섹션 정보 추가
                 }
             )
             start_idx = bp
+
+        # 7. 크기 최적화 및 결과 반환
+        return self._optimize_chunk_sizes(chunks)
 
         # 6. 크기 최적화 (오프셋 및 벡터 인식)
         return self._optimize_chunk_sizes(chunks)

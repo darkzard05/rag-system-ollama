@@ -124,12 +124,15 @@ def load_pdf_docs(
             if on_progress:
                 on_progress()
 
-            # 2. PyMuPDF4LLM 고도화 호출
-            # [최적화] margins 파라미터를 사용하여 헤더/푸터 영역(상하 60pt) 무시
+            # 2. PyMuPDF4LLM 고도화 호출 (캐시 최적화 포함)
+            from cache.coord_cache import coord_cache
+
+            file_hash = compute_file_hash(file_path, file_bytes)
+
             target_margins = PARSING_CONFIG.get("margins", (0, 60, 0, 60))
 
             chunks = pymupdf4llm.to_markdown(
-                doc,  # 열려있는 doc 객체 재사용 (성능 향상)
+                doc,
                 page_chunks=True,
                 write_images=PARSING_CONFIG.get("write_images", False),
                 fontsize_limit=PARSING_CONFIG.get("fontsize_limit", 3),
@@ -137,19 +140,17 @@ def load_pdf_docs(
                 extract_words=PARSING_CONFIG.get("extract_words", True),
                 ignore_graphics=PARSING_CONFIG.get("ignore_graphics", True),
                 force_text=PARSING_CONFIG.get("force_text", False),
-                table_strategy=PARSING_CONFIG.get(
-                    "table_strategy", "lines"
-                ),  # lines_strict에서 lines로 변경하여 유연성 확보
+                table_strategy=PARSING_CONFIG.get("table_strategy", "lines"),
                 hdr_info=hdr_info,
                 header=False,
                 footer=False,
                 margins=target_margins,
             )
 
-            # 열린 doc 객체 정리
             doc.close()
 
             docs: list[Document] = []
+            # ... (중략: 목차 및 참고문헌 필터링 로직)
             reference_started = False
             reference_text_buffer = []
 
@@ -163,18 +164,17 @@ def load_pdf_docs(
                 page_num = metadata.get("page", i + 1)
                 total_pages = metadata.get("page_count", len(chunks))
 
-                # A. TOC(목차) 페이지 필터링 (앞부분 10% 이내)
+                # A. TOC(목차) 페이지 필터링
                 if page_num <= max(3, total_pages // 10) and any(
                     p in lower_text[:100] for p in TOC_PATTERNS
                 ):
                     continue
 
-                # B. 참고문헌(References) 식별 및 추출
+                # B. 참고문헌 섹션 관리
                 if page_num >= ref_start_page:
                     if not reference_started:
                         reference_started = True
                     reference_text_buffer.append(text)
-
                 elif (
                     not reference_started
                     and page_num > (total_pages * 0.7)
@@ -191,23 +191,32 @@ def load_pdf_docs(
                 if reference_started:
                     continue
 
-                # C. 데이터 보관 (좌표 정보 포함)
+                # C. [최적화 핵심] 좌표 데이터 캐시 오프로딩
                 raw_words = chunk.get("words", [])
-                formatted_words = [(w[0], w[1], w[2], w[3], w[4]) for w in raw_words]
+                has_coords = False
+                if raw_words:
+                    # 실제 리스트는 외부 캐시에 보관
+                    formatted_words = [
+                        (w[0], w[1], w[2], w[3], w[4]) for w in raw_words
+                    ]
+                    coord_cache.save_coords(file_hash, page_num, formatted_words)
+                    has_coords = True
 
+                # 인덱스용 Document에는 최소한의 정보만 보관
                 docs.append(
                     Document(
                         page_content=text,
                         metadata={
                             "source": file_name,
-                            "file_path": file_path,
+                            "file_path": file_path,  # UI용 파일 경로 복구
+                            "file_hash": file_hash,  # 좌표 복구용 키
                             "page": page_num,
                             "total_pages": total_pages,
-                            "engine": "pymupdf4llm-layout",
+                            "engine": "pymupdf4llm-layout-optimized",
                             "format": "markdown",
                             "chunk_index": len(docs),
-                            "word_coords": formatted_words,
-                            "has_coordinates": len(formatted_words) > 0,
+                            "has_coordinates": has_coords,
+                            # word_coords 리스트는 명시적으로 제외 (메모리 절감)
                         },
                     )
                 )

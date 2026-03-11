@@ -28,9 +28,24 @@
 - `src/ui/ui.py`의 수신 루프는 오직 `on_custom_event` 중 이름이 `response_chunk`인 것만 필터링하여 `full_response`에 더합니다.
 - **이유**: 표준 이벤트(`on_chat_model_stream` 등)를 의도적으로 무시함으로써 중복 발생 가능성을 0%로 차단합니다.
 
+### 규칙 3: 비동기 하이드레이션 (Streaming Hydration)
+- `src/core/rag_core.py`의 `astream` 및 `astream_events` 래퍼는 스트리밍 중 발생하는 `retrieve` 노드의 결과(relevant_docs)를 가로채서 즉시 `_hydrate_docs`를 수행합니다.
+- **이유**: 좌표 정보(`word_coords`)는 메모리 절감을 위해 인덱스 외부 캐시에 저장되어 있으므로, UI에 검색 결과가 전달되기 직전에 반드시 캐시에서 복구되어야 하이라이트 기능이 작동합니다.
+
 ---
 
 ## 3. 핵심 코드 레퍼런스
+
+### Core (하이드레이션 래퍼: `src/core/rag_core.py`)
+```python
+async def _stream_wrapper():
+    async for chunk in rag_engine.astream(...):
+        # 상태 업데이트 청크에서 검색 결과를 찾아 좌표 복구
+        if isinstance(chunk, dict) and "retrieve" in chunk:
+            docs = chunk["retrieve"].get("relevant_docs", [])
+            self._hydrate_docs(docs)
+        yield chunk
+```
 
 ### Core (발생부: `src/core/graph_builder.py`)
 ```python

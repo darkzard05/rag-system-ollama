@@ -124,20 +124,16 @@ async def retrieve_and_rerank(
         f"하이브리드 검색 완료 ({len(final_docs)}개 후보 확보)"
     )
 
-    # [최적화] 적응형 리랭킹 전략 (Adaptive Reranking)
-    # 1. 후보군이 너무 적거나 (3개 이하)
-    # 2. 최상위 결과가 압도적으로 우수한 경우 리랭킹 생략 (TTFT 절약)
-    skip_rerank = False
-    bypass_threshold = RERANKER_CONFIG.get("bypass_threshold", 0.95)
-
     if len(final_docs) <= 3:
-        skip_rerank = True
         SessionManager.add_status_log("후보 문서가 적어 리랭킹을 생략합니다.")
-    elif len(aggregated) > 0 and aggregated[0].aggregated_score > bypass_threshold:
-        skip_rerank = True
+        return {"relevant_docs": final_docs}
+
+    bypass_threshold = RERANKER_CONFIG.get("bypass_threshold", 0.95)
+    if len(aggregated) > 0 and aggregated[0].aggregated_score > bypass_threshold:
         SessionManager.add_status_log(
             f"명확한 검색 결과(점수 > {bypass_threshold})가 확인되어 리랭킹을 생략합니다."
         )
+        return {"relevant_docs": final_docs}
 
     # [최적화] 리랭킹 전 문맥 병합 (Pre-Rerank Merging)
     merged_candidates = _merge_consecutive_chunks(final_docs, max_tokens=1024)
@@ -146,51 +142,34 @@ async def retrieve_and_rerank(
             f"지능형 문맥 병합 완료: {len(final_docs)}개 파편 → {len(merged_candidates)}개 섹션으로 통합"
         )
 
-    # FlashRank 리랭킹 (선택적 실행)
-    if (
-        RERANKER_CONFIG.get("enabled", True)
-        and not skip_rerank
-        and len(merged_candidates) > 1
-    ):
+    # DistributedReranker를 통한 통합 리랭킹 수행
+    from core.reranker import DistributedReranker, RerankerStrategy
+
+    reranker = DistributedReranker()
+    final_docs, metrics = reranker.rerank(
+        merged_candidates, query_text=query, strategy=RerankerStrategy.SEMANTIC_FLASH
+    )
+
+    if metrics.reranked_results > 0:
         import contextlib
 
         with contextlib.suppress(Exception):
-            writer({"status": "지식 우선순위 정제 중 (FlashRank)"})
-        SessionManager.add_status_log("지식의 우선순위 재조정 및 정제 중 (FlashRank)")
-        from flashrank import RerankRequest
-
-        from core.model_loader import ModelManager
-
-        ranker = await ModelManager.get_flashranker()
-        passages = [
-            {"id": i, "text": d.page_content, "meta": d.metadata}
-            for i, d in enumerate(merged_candidates)
-        ]
-
-        async with ModelManager.inference_session():
-            results = await asyncio.to_thread(
-                ranker.rerank, RerankRequest(query=query, passages=passages)
-            )
-            # [수정] 하드코딩된 15 대신 config.yml의 Reranker top_k 설정을 따릅니다.
-            rerank_top_k = RERANKER_CONFIG.get("top_k", 10)
-            final_docs = [
-                Document(page_content=r["text"], metadata=r["meta"])
-                for r in results[:rerank_top_k]
-            ]
-
-            SessionManager.add_status_log(f"최적의 지식 {len(final_docs)}개 선별 완료")
-    else:
-        final_docs = merged_candidates
+            writer({"status": "지식 우선순위 정제 완료"})
+        SessionManager.add_status_log(
+            f"최적의 지식 {len(final_docs)}개 선별 완료 (FlashRank 적용)"
+        )
 
     return {"relevant_docs": final_docs}
 
 
 def format_context(docs: list[Document]) -> str:
-    """검색된 문서들을 LLM이 읽기 좋은 형식의 문자열로 변환합니다."""
+    """검색된 문서들을 LLM이 읽기 좋은 형식의 문자열로 변환합니다 (섹션 정보 포함)."""
     context = ""
-    for i, d in enumerate(docs):
+    for _i, d in enumerate(docs):
+        # Header-Aware Chunking에서 추출한 섹션 정보 활용
+        section = d.metadata.get("current_section", "일반 본문")
         page = d.metadata.get("page", "?")
-        context += f"### [자료 {i + 1}] (P{page})\n{d.page_content}\n\n"
+        context += f"### [섹션: {section}] (P{page})\n{d.page_content}\n\n"
     return context
 
 

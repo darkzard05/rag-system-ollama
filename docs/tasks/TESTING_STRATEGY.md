@@ -12,24 +12,27 @@ This document outlines the testing hierarchy, execution guidelines, and performa
 
 ### 1.2 Performance Benchmarks
 We use dedicated scripts to measure and ensure optimization effectiveness:
-*   `tests/benchmark_reranking.py`: Measures Latency vs. Quality for different `top_k` settings.
-*   `tests/benchmark_streaming_sim.py`: Verifies the effectiveness of streaming batching.
-*   `tests/benchmark_merge.py`: Compares string concat vs. list join performance.
-*   `tests/benchmark_dedup.py`: Compares hash-based vs. tuple-based deduplication.
+*   `scripts/e2e_performance_benchmark.py`: **Final E2E validation** (Parsing → Indexing → Reranking → Answer).
+*   `scripts/compare_reranker_perf.py`: Compares Keyword Overlap vs. **FlashRank Semantic Reranking**.
+*   `scripts/verify_metadata_opt.py`: Measures **99.8% RAM savings** from reference-based offloading.
+*   `scripts/compare_chunking_logic.py`: Validates **Header-Aware** physical separation of chunks.
 
 ## 2. Execution Guide
 
 ### Standard Test Run
-Always run from the project root. Set `PYTHONPATH` to include both the root and `src` to resolve all package imports.
+Always run from the project root.
 ```powershell
-# Windows PowerShell
-$env:PYTHONPATH = "$PWD;$PWD\src"; python -m pytest tests/
+# Optimized for Windows PowerShell
+python -m pytest tests/
 ```
 
-### Running Benchmarks
-Benchmarks provide verbose output regarding system speed.
+### Running New Benchmarks
 ```powershell
-$env:PYTHONPATH = "$PWD;$PWD\src"; python tests/benchmark_merge.py
+# Full Pipeline Validation
+python scripts/e2e_performance_benchmark.py
+
+# Reranker Accuracy Check
+python scripts/compare_reranker_perf.py
 ```
 
 ## 3. Stability & Safety

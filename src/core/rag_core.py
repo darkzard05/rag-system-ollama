@@ -12,6 +12,7 @@ import logging
 from typing import Any
 
 import torch
+from langchain_core.documents import Document
 from langchain_core.embeddings import Embeddings
 
 from cache.vector_cache import VectorStoreCache
@@ -147,18 +148,35 @@ class RAGSystem:
         # LangGraph 실행
         result = await rag_engine.ainvoke({"input": query}, config=config)
 
-        # [추가] 반환 데이터 표준화 (테스트 및 API 호환성)
-        from core.graph_builder import format_context
-
+        # [추가] 좌표 데이터 복구 (Hydration)
         docs = result.get("relevant_docs", [])
+        self._hydrate_docs(docs)
+
+        from core.graph_builder import format_context
 
         return {
             "response": result.get("response", ""),
             "thought": result.get("thought", ""),
-            "context": format_context(docs),  # 포맷팅된 문자열 추가
-            "documents": docs,  # 원본 리스트 추가
+            "context": format_context(docs),
+            "documents": docs,
             "performance": result.get("performance", {}),
         }
+
+    def _hydrate_docs(self, docs: list[Document]) -> None:
+        """문서 리스트의 좌표 데이터를 캐시에서 복구합니다."""
+        from cache.coord_cache import coord_cache
+
+        for doc in docs:
+            if (
+                doc.metadata.get("has_coordinates")
+                and "word_coords" not in doc.metadata
+            ):
+                file_hash = doc.metadata.get("file_hash")
+                page_num = doc.metadata.get("page")
+                if file_hash and page_num:
+                    coords = coord_cache.get_coords(file_hash, page_num)
+                    if coords:
+                        doc.metadata["word_coords"] = coords
 
     async def astream(self, query: str, model_name: str | None = None):
         """[스트리밍] 새로운 스트림 모드(messages, custom)를 사용하여 이벤트를 발생시킵니다."""
@@ -169,12 +187,22 @@ class RAGSystem:
             raise VectorStoreError(
                 details={"reason": "파이프라인이 준비되지 않았습니다."}
             )
-        # messages: LLM 토큰, custom: writer() 호출 데이터, updates: 노드 상태 업데이트
-        return rag_engine.astream(
-            {"input": query},
-            config=config,
-            stream_mode=["messages", "custom", "updates"],
-        )
+
+        # [수정] 익명 비동기 제너레이터를 반환하여 UI의 'await'와 호환성 유지
+        async def _stream_wrapper():
+            async for chunk in rag_engine.astream(
+                {"input": query},
+                config=config,
+                stream_mode=["messages", "custom", "updates"],
+            ):
+                # 상태 업데이트(updates) 청크에서 문서를 찾아 복구
+                if isinstance(chunk, dict) and "retrieve" in chunk:
+                    docs = chunk["retrieve"].get("relevant_docs", [])
+                    self._hydrate_docs(docs)
+
+                yield chunk
+
+        return _stream_wrapper()
 
     async def astream_events(self, query: str, model_name: str | None = None):
         """[스트리밍] 질문에 대한 이벤트를 발생시킵니다 (레거시 adispatch_custom_event 대응)."""
@@ -185,7 +213,21 @@ class RAGSystem:
             raise VectorStoreError(
                 details={"reason": "파이프라인이 준비되지 않았습니다."}
             )
-        return rag_engine.astream_events({"input": query}, config=config, version="v2")
+
+        # [수정] 익명 비동기 제너레이터를 반환하여 UI의 'await'와 호환성 유지
+        async def _event_wrapper():
+            async for event in rag_engine.astream_events(
+                {"input": query}, config=config, version="v2"
+            ):
+                # 'on_chain_stream' 이벤트 등에서 문서를 발견하면 복구
+                if event["event"] == "on_chain_stream":
+                    docs = event["data"].get("chunk", {}).get("relevant_docs", [])
+                    if docs:
+                        self._hydrate_docs(docs)
+
+                yield event
+
+        return _event_wrapper()
 
     async def load_document(
         self, file_path: str, file_name: str, embedder: Embeddings, on_progress=None
