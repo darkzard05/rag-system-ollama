@@ -157,6 +157,31 @@ class StreamingResponseHandler:
                             )
                             self.chunk_index += 1
 
+                        # [추가] custom 이벤트의 content와 thought 처리
+                        content = data.get("content")
+                        thought = data.get("thought")
+
+                        if thought:
+                            yield StreamChunk(
+                                content="",
+                                timestamp=current_time,
+                                token_count=0,
+                                chunk_index=self.chunk_index,
+                                thought=thought,
+                            )
+                            self.chunk_index += 1
+
+                        if content:
+                            yield StreamChunk(
+                                content=content,
+                                timestamp=current_time,
+                                token_count=max(
+                                    1, len(content) // 2
+                                ),  # 한국어/영어 혼용 고려 간이 계산
+                                chunk_index=self.chunk_index,
+                            )
+                            self.chunk_index += 1
+
                     elif mode == "messages":
                         from langchain_core.messages import AIMessageChunk
 

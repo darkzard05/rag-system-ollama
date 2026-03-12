@@ -25,6 +25,20 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+# [상수] 표준 섹션 키워드 (정제 시 활용)
+STANDARD_SECTION_KEYWORDS = [
+    "ABSTRACT",
+    "INTRODUCTION",
+    "RELATED WORK",
+    "METHOD",
+    "EXPERIMENT",
+    "RESULT",
+    "CONCLUSION",
+    "REFERENCE",
+    "ACKNOWLEDGMENT",
+]
+
+
 class EmbeddingBasedSemanticChunker:
     """
     임베딩 기반 의미론적 텍스트 분할기.
@@ -75,30 +89,51 @@ class EmbeddingBasedSemanticChunker:
     def _split_sentences(self, text: str) -> list[dict]:
         """
         문장 단위로 텍스트를 분할하고 오프셋 정보를 함께 반환합니다.
+        [최적화] 마크다운 테이블 행(|)을 보호하며, 너무 긴 문장은 강제로 분할합니다.
         """
-        # ... (기존 정규식 분할 로직)
-        parts = list(self._sentence_pattern.finditer(text))
-        raw_segments: list[dict[str, Any]] = []
+        lines = text.split("\n")
+        temp_sentences: list[dict[str, Any]] = []
+        current_pos = 0
 
-        last_pos = 0
-        for match in parts:
-            sep_end = match.end()
-            segment_text = text[last_pos:sep_end]
-            if segment_text.strip():
-                raw_segments.append(
-                    {"text": segment_text, "start": last_pos, "end": sep_end}
+        # 1. 행 단위로 훑으며 테이블 보호 및 문장 분할
+        for line in lines:
+            line_len = len(line)
+            stripped = line.strip()
+
+            # 테이블 행 감지 ( | 로 시작하고 | 로 끝나는 패턴)
+            if stripped.startswith("|") and stripped.endswith("|"):
+                self._add_cleaned_sentence(
+                    temp_sentences, line, current_pos, current_pos + line_len
                 )
-            last_pos = sep_end
+            else:
+                # 일반 텍스트는 정규식으로 분할
+                parts = list(self._sentence_pattern.finditer(line))
+                last_pos = 0
+                for match in parts:
+                    sep_end = match.end()
+                    segment_text = line[last_pos:sep_end]
+                    if segment_text.strip():
+                        self._add_cleaned_sentence(
+                            temp_sentences,
+                            segment_text,
+                            current_pos + last_pos,
+                            current_pos + sep_end,
+                        )
+                    last_pos = sep_end
 
-        if last_pos < len(text):
-            remaining_text = text[last_pos:]
-            if remaining_text.strip():
-                raw_segments.append(
-                    {"text": remaining_text, "start": last_pos, "end": len(text)}
-                )
+                if last_pos < len(line):
+                    remaining_text = line[last_pos:]
+                    if remaining_text.strip():
+                        self._add_cleaned_sentence(
+                            temp_sentences,
+                            remaining_text,
+                            current_pos + last_pos,
+                            current_pos + len(line),
+                        )
 
-        # 2. 너무 긴 세그먼트 강제 분할 (OOM 방지 및 병합 방지 플래그 추가)
-        # [최적화] max_chunk_size의 1.5배까지 여유를 주어 기계적 분할 빈도를 줄임
+            current_pos += line_len + 1  # \n 포함
+
+        # 2. 너무 긴 세그먼트 강제 분할 (OOM 방지 및 하드 스플릿 플래그 처리)
         hard_split_limit: int = ChunkingConstants.MAX_HARD_SPLIT_LEN.value
         if self.max_chunk_size > 0:
             hard_split_limit = min(
@@ -107,40 +142,35 @@ class EmbeddingBasedSemanticChunker:
             )
 
         final_sentences: list[dict[str, Any]] = []
-        for seg in raw_segments:
+        for seg in temp_sentences:
             seg_text = str(seg["text"])
             seg_start = int(seg["start"])
-            seg_end = int(seg["end"])
 
             if len(seg_text) <= hard_split_limit:
-                self._add_cleaned_sentence(
-                    final_sentences, seg_text, seg_start, seg_end
-                )
+                final_sentences.append(seg)
             else:
-                # [최적화] 강제 분할은 정상적인 복구 프로세스이므로 레벨을 INFO로 낮춤
-                logger.info(
-                    f"[Chunker] 긴 세그먼트 발견 ({len(seg_text)}자). 설정된 한계치({hard_split_limit})에 맞춰 강제 분할을 수행합니다."
-                )
-
+                # 강제 분할 로직
                 curr_pos = 0
                 while curr_pos < len(seg_text):
                     sub_len: int = int(hard_split_limit)
                     if curr_pos + sub_len < len(seg_text):
+                        # 공백 기준으로 끊기 시도
                         last_space = seg_text.rfind(" ", curr_pos, curr_pos + sub_len)
                         if last_space != -1 and last_space > curr_pos + (sub_len // 2):
                             sub_len = int(last_space - curr_pos + 1)
 
                     sub_text = seg_text[curr_pos : curr_pos + sub_len]
-                    # [핵심] 강제 분할된 마지막 문장에 플래그 추가 (다음 문장과 병합 방지)
                     is_last_sub = curr_pos + sub_len >= len(seg_text)
+
                     self._add_cleaned_sentence(
                         final_sentences,
                         sub_text,
                         seg_start + curr_pos,
                         seg_start + curr_pos + len(sub_text),
-                        is_hard_split=not is_last_sub,  # 중간 쪼개짐 지점
+                        is_hard_split=not is_last_sub,
                     )
                     curr_pos += sub_len
+
         return final_sentences
 
     def _add_cleaned_sentence(
@@ -318,7 +348,7 @@ class EmbeddingBasedSemanticChunker:
         breakpoints = (np.where(dist_array > threshold)[0] + 1).tolist()
 
         # 2. [고도화] 마크다운 헤더 감지 기반 강제 분할
-        header_pattern = re.compile(r"^#{1,6}\s+.+")
+        header_pattern = re.compile(r"^\s*#{1,6}\s+.+", re.MULTILINE)
         if sentences:
             header_bps = []
             for i, s in enumerate(sentences):
@@ -421,6 +451,27 @@ class EmbeddingBasedSemanticChunker:
 
         return optimized
 
+    def _clean_section_title(self, raw_title: str) -> str:
+        """섹션 제목에서 마크다운 기호 및 불필요한 본문 텍스트를 제거합니다."""
+        # 1. 마크다운 헤더 기호 및 앞뒤 공백 제거 (strip 활용 최적화)
+        clean_title = raw_title.lstrip("# ").strip()
+
+        # 2. 논문의 주요 섹션 키워드 체크 (상수 활용)
+        upper_title = clean_title.upper()
+        for kw in STANDARD_SECTION_KEYWORDS:
+            if upper_title.startswith(kw):
+                return kw  # 키워드만 깔끔하게 반환
+
+        # 3. 너무 긴 경우(60자 이상) 첫 번째 끊김 지점에서 자르기
+        if len(clean_title) > 60:
+            parts = re.split(r"[\n\r\.\:]", clean_title)
+            if parts:
+                clean_title = parts[0].strip()
+
+        # 4. 특수문자 제거 및 최종 길이 제한
+        clean_title = re.sub(r"[#\*_]", "", clean_title)
+        return clean_title[:50]
+
     async def split_text(self, text: str) -> list[dict]:
         """
         텍스트를 의미론적으로 분할합니다 (Buffer-based context window 적용).
@@ -436,17 +487,20 @@ class EmbeddingBasedSemanticChunker:
 
         # [최적화] 너무 짧은 문장 병합 (오프셋 유지)
         min_merge_len = ChunkingConstants.MIN_MERGE_LEN.value
-        header_pattern = re.compile(r"^#{1,6}\s+.+")
+        header_pattern = re.compile(r"^\s*#{1,6}\s+.+", re.MULTILINE)
 
         sentences = []
         if raw_sentences:
             current_s = raw_sentences[0]
             for s in raw_sentences[1:]:
-                # [수정] 헤더 문장이거나 강제 분할 플래그인 경우 병합 제외
-                is_header = bool(header_pattern.match(s["text"].strip()))
+                # [수정] 현재 문장이 헤더거나, 다음 문장이 헤더인 경우 병합 제외 (Clean Section Preservation)
+                is_curr_header = bool(header_pattern.match(current_s["text"].strip()))
+                is_next_header = bool(header_pattern.match(s["text"].strip()))
+
                 can_merge = (
-                    not current_s.get("is_hard_split", False)
-                    and not is_header  # 헤더는 독립적으로 유지
+                    not is_curr_header  # ✅ 현재 문장이 헤더면 절대 합치지 않음
+                    and not is_next_header  # 다음 문장이 헤더면 합치지 않음
+                    and not current_s.get("is_hard_split", False)
                     and (len(s["text"]) < min_merge_len)
                     and (len(current_s["text"]) + len(s["text"]) < 1000)
                 )
@@ -503,6 +557,7 @@ class EmbeddingBasedSemanticChunker:
         all_bps = breakpoints + [len(sentences)]
 
         current_header = "Intro/Root"
+        header_pattern = re.compile(r"^\s*#{1,6}\s+.+", re.MULTILINE)
 
         for i, bp in enumerate(all_bps):
             # 현재 그룹의 인덱스 범위 계산
@@ -529,9 +584,8 @@ class EmbeddingBasedSemanticChunker:
             for s in sentences[start_idx:group_end]:
                 h_match = header_pattern.match(s["text"].strip())
                 if h_match:
-                    # [수정] 헤더 줄만 추출하여 섹션 이름으로 사용 (본문 혼입 방지)
-                    header_line = s["text"].strip().split("\n")[0]
-                    current_header = header_line.strip("# ").strip()
+                    # [수정] 전문 정제 로직 적용
+                    current_header = self._clean_section_title(s["text"])
 
             merged_text = " ".join([s["text"] for s in group_sentences])
             chunk_vector = np.mean(group_embeddings, axis=0)
@@ -549,9 +603,6 @@ class EmbeddingBasedSemanticChunker:
             start_idx = bp
 
         # 7. 크기 최적화 및 결과 반환
-        return self._optimize_chunk_sizes(chunks)
-
-        # 6. 크기 최적화 (오프셋 및 벡터 인식)
         return self._optimize_chunk_sizes(chunks)
 
     async def split_documents(
@@ -630,6 +681,11 @@ class EmbeddingBasedSemanticChunker:
                 merged_metadata["page"] = overlapping_pages[0]
                 # 다중 페이지 여부 표시
                 merged_metadata["is_cross_page"] = len(overlapping_pages) > 1
+
+            # [핵심 수정] 추출된 섹션 정보를 메타데이터에 주입
+            merged_metadata["current_section"] = chunk.get(
+                "current_section", "일반 본문"
+            )
 
             final_docs.append(Document(page_content=c_text, metadata=merged_metadata))
             final_vectors.append(c_vector)

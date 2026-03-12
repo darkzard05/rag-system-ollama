@@ -49,8 +49,10 @@ def _pdf_viewer_fragment():
     # 1. 상태 동기화 및 타겟 페이지 처리
     target_page = SessionManager.get("pdf_target_page")
     if target_page is not None:
-        st.session_state.current_page = int(target_page)
-        SessionManager.set("current_page", int(target_page))
+        target_val = int(target_page)
+        st.session_state.current_page = target_val
+        SessionManager.set("current_page", target_val)
+        # 위젯 상태는 아래 클램핑 로직에서 일괄 설정됨
         SessionManager.set("pdf_target_page", None)
 
     if "current_page" not in st.session_state:
@@ -70,7 +72,11 @@ def _pdf_viewer_fragment():
             st.error("⚠️ PDF 로드 실패")
             return
 
+        # [핵심] 위젯 생성 전 모든 상태 동기화 및 유효 범위 제한
         current_page = min(max(1, st.session_state.current_page), total_pages)
+        st.session_state.current_page = current_page
+        # 위젯의 value 파라미터와 key 상태를 일치시킴
+        st.session_state["page_nav_input_v5"] = current_page
 
         # 하이라이트 어노테이션
         active_idx = st.session_state.get("active_msg_index")
@@ -105,9 +111,14 @@ def _pdf_viewer_fragment():
                 key="btn_nav_prev",
                 disabled=current_page <= 1,
             ):
-                st.session_state.current_page -= 1
-                SessionManager.set("current_page", st.session_state.current_page)
-                st.rerun(scope="fragment")
+                new_p = max(1, current_page - 1)
+                st.session_state.current_page = new_p
+                SessionManager.set("current_page", new_p)
+                # 직접 위젯 상태를 수정하지 않고 리런하여 상단 동기화 로직 활용
+                try:
+                    st.rerun(scope="fragment")
+                except TypeError:
+                    st.rerun()
 
         with c_input:
 
@@ -120,7 +131,6 @@ def _pdf_viewer_fragment():
                 f"Page / {total_pages}",
                 min_value=1,
                 max_value=total_pages,
-                value=current_page,
                 key="page_nav_input_v5",
                 on_change=on_page_change,
                 label_visibility="collapsed",
@@ -133,9 +143,14 @@ def _pdf_viewer_fragment():
                 key="btn_nav_next",
                 disabled=current_page >= total_pages,
             ):
-                st.session_state.current_page += 1
-                SessionManager.set("current_page", st.session_state.current_page)
-                st.rerun(scope="fragment")
+                new_p = min(total_pages, current_page + 1)
+                st.session_state.current_page = new_p
+                SessionManager.set("current_page", new_p)
+                # 직접 위젯 상태를 수정하지 않고 리런하여 상단 동기화 로직 활용
+                try:
+                    st.rerun(scope="fragment")
+                except TypeError:
+                    st.rerun()
 
     except Exception as e:
         logger.error(f"PDF 뷰어 오류: {e}", exc_info=True)

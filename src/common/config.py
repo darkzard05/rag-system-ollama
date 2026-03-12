@@ -165,6 +165,22 @@ ANALYSIS_PROTOCOL: str = _prompts_config.get("analysis_protocol", "")
 QA_SYSTEM_PROMPT: str = _prompts_config.get("qa_system_prompt", "")
 QA_HUMAN_PROMPT: str = _prompts_config.get("qa_human_prompt", "")
 
+# --- RAG 평가 및 재구성 프롬프트 설정 ---
+GRADING_CONFIG: dict = _prompts_config.get(
+    "grading",
+    {
+        "instruction": "문서의 관련성을 평가하십시오.",
+        "template": "질문: {query}\n문서: {context_text}",
+    },
+)
+REWRITING_CONFIG: dict = _prompts_config.get(
+    "rewriting",
+    {
+        "instruction": "질문을 검색에 최적화된 형태로 재구성하십시오.",
+        "template": "원본 질문: {query}",
+    },
+)
+
 # --- 캐시 보안 설정 ---
 _cache_security_config = _config.get("cache_security", {})
 

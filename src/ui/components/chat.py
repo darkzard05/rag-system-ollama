@@ -144,15 +144,22 @@ async def _stream_chat_response(rag_sys, user_query: str, placeholder):
                                     time.time() - last_render_time > render_interval
                                     or chunk.is_final
                                 ):
-                                    display_text = _clean_response_redundancy(
-                                        state["full_response"]
-                                    )
-                                    display_text = normalize_latex_delimiters(
-                                        display_text
-                                    )
-                                    if state["retrieved_docs"]:
-                                        display_text = apply_tooltips_to_response(
-                                            display_text, state["retrieved_docs"]
+                                    if chunk.is_final:
+                                        # 마지막에만 모든 무거운 전처리 수행 (Final Path)
+                                        display_text = _clean_response_redundancy(
+                                            state["full_response"]
+                                        )
+                                        display_text = normalize_latex_delimiters(
+                                            display_text
+                                        )
+                                        if state["retrieved_docs"]:
+                                            display_text = apply_tooltips_to_response(
+                                                display_text, state["retrieved_docs"]
+                                            )
+                                    else:
+                                        # 스트리밍 중에는 최소한의 가공만 수행 (Fast Path)
+                                        display_text = normalize_latex_delimiters(
+                                            state["full_response"]
                                         )
 
                                     cursor = "▌" if not chunk.is_final else ""
@@ -275,11 +282,14 @@ def render_message(
                     # 안전하게 페이지 번호 추출 (Document 객체와 딕셔너리 혼용 지원)
                     extracted_pages = set()
                     for d in documents:
-                        meta = (
-                            getattr(d, "metadata", d)
-                            if hasattr(d, "metadata")
-                            else d.get("metadata", {})
-                        )
+                        # [수정] 메타데이터 추출 로직 강화
+                        if hasattr(d, "metadata"):
+                            meta = d.metadata
+                        elif isinstance(d, dict):
+                            meta = d.get("metadata") or d
+                        else:
+                            meta = {}
+
                         p = meta.get("page", 1)
                         try:
                             extracted_pages.add(int(p))
@@ -291,16 +301,26 @@ def render_message(
                     with st.popover(
                         f"📄 **{len(documents)}** Docs", use_container_width=True
                     ):
-                        cols = st.columns(min(len(pages), 3))
+                        n_cols = min(len(pages), 3)
+                        cols = st.columns(n_cols)
                         for idx, p in enumerate(pages):
-                            if cols[idx % 3].button(
-                                f"{p}p", key=f"jump_{msg_id}_{p}_{idx}"
+                            # [수정] IndexError 방지 (idx % n_cols 사용)
+                            if cols[idx % n_cols].button(
+                                f"{p}p",
+                                key=f"jump_{msg_id}_{p}_{idx}",
+                                use_container_width=True,
                             ):
+                                # [수정] 뷰어 상태와 완벽한 동기화 보장
                                 SessionManager.set("pdf_target_page", p)
+                                st.session_state.current_page = p
+                                st.session_state["page_nav_input_v5"] = p
                                 st.rerun()
 
                 else:
-                    st.markdown("📄 **0** <small>Docs</small>", unsafe_allow_html=True)
+                    st.markdown(
+                        "<div style='margin-top: 5px; opacity: 0.6;'>📄 **0** <small>Docs</small></div>",
+                        unsafe_allow_html=True,
+                    )
             with m_col4:
                 total = metrics.get("total_time", 0)
                 tps = metrics.get("tps", metrics.get("tokens_per_second", 0))

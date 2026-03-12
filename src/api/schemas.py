@@ -2,11 +2,13 @@
 애플리케이션 전체에서 사용되는 데이터 구조(스키마)를 정의합니다.
 """
 
+import operator
 import time
 from datetime import datetime
-from typing import Any, TypedDict
+from typing import Annotated, Any, TypedDict
 
 from langchain_core.documents import Document
+from langchain_core.messages import BaseMessage
 from pydantic import BaseModel, Field, computed_field
 
 
@@ -55,18 +57,21 @@ class ChatMessage(BaseModel):
 class GraphState(TypedDict):
     """
     RAG 그래프의 상태를 나타냅니다.
-    LangGraph 호환성을 위해 TypedDict 형식을 유지합니다.
+    LangGraph의 Reducer 기능을 활용하여 상태 업데이트를 관리합니다.
     """
 
     input: str
-    search_queries: list[str]
+    chat_history: Annotated[list[BaseMessage], operator.add]
+    intent: str | None
+    search_queries: Annotated[list[str], operator.add]
     documents: list[Document]
-    relevant_docs: list[Document]  # [추가] 관련성 채점을 통과한 문서들
+    relevant_docs: list[Document]
     context: str | None
     response: str | None
-    thought: str | None  # [추가] 사고 과정
-    performance: dict[str, Any] | None  # [추가] 성능 지표
-    is_cached: bool  # [추가] 캐시 히트 여부
+    thought: str | None
+    performance: dict[str, Any] | None
+    is_cached: bool
+    retry_count: Annotated[int, operator.add]
 
 
 class QueryRequest(BaseModel):

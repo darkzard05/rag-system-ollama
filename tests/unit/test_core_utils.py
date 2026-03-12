@@ -1,22 +1,22 @@
 from langchain_core.documents import Document
 from common.utils import apply_tooltips_to_response, normalize_latex_delimiters
-from core.graph_builder import _merge_consecutive_chunks
+from core.graph_builder import _merge_adjacent_chunks
 
-# --- Test _merge_consecutive_chunks ---
+# --- Test _merge_adjacent_chunks ---
 
-def test_merge_consecutive_chunks_empty():
-    assert _merge_consecutive_chunks([]) == []
+def test_merge_adjacent_chunks_empty():
+    assert _merge_adjacent_chunks([]) == []
 
 
-def test_merge_consecutive_chunks_single():
+def test_merge_adjacent_chunks_single():
     doc = Document(
         page_content="Content",
         metadata={"source": "a.pdf", "page": 1, "chunk_index": 0},
     )
-    assert _merge_consecutive_chunks([doc])[0].page_content == "Content"
+    assert _merge_adjacent_chunks([doc])[0].page_content == "Content"
 
 
-def test_merge_consecutive_chunks_no_consecutive():
+def test_merge_adjacent_chunks_no_consecutive():
     docs = [
         Document(
             page_content="Content 1",
@@ -31,7 +31,7 @@ def test_merge_consecutive_chunks_no_consecutive():
             metadata={"source": "b.pdf", "page": 1, "chunk_index": 0},
         ),
     ]
-    result = _merge_consecutive_chunks(docs)
+    result = _merge_adjacent_chunks(docs)
     assert len(result) == 3
     # 정렬 순서 확인 (source a -> b, page 1 -> 3)
     assert result[0].page_content == "Content 1"
@@ -39,7 +39,7 @@ def test_merge_consecutive_chunks_no_consecutive():
     assert result[2].page_content == "Content 3"
 
 
-def test_merge_consecutive_chunks_simple_consecutive():
+def test_merge_adjacent_chunks_simple_consecutive():
     docs = [
         Document(
             page_content="Part 1.",
@@ -54,7 +54,7 @@ def test_merge_consecutive_chunks_simple_consecutive():
             metadata={"source": "a.pdf", "page": 1, "chunk_index": 2},
         ),
     ]
-    result = _merge_consecutive_chunks(docs)
+    result = _merge_adjacent_chunks(docs)
     assert len(result) == 1
     # \n\n 구분자 확인
     assert result[0].page_content == "Part 1.\n\nPart 2.\n\nPart 3."

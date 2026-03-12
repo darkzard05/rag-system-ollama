@@ -19,9 +19,9 @@ logger = logging.getLogger(__name__)
 _RE_LATEX_BLOCK = re.compile(r"\\\[(.*?)\\\]", re.DOTALL)
 _RE_LATEX_INLINE = re.compile(r"\\\((.*?)\\\)", re.DOTALL)
 
-# [수정] 복합 인용 패턴 지원: [1], [p.5], (page 10) 등 광범위한 패턴 지원
+# [수정] 복합 인용 패턴 지원: [1], [p.5], (page 10), [섹션: ..., p.5], [DOC 1, p.5] 등 광범위한 패턴 지원
 _RE_CITATION_BLOCK = re.compile(
-    r"(\[|(?:\s|^)\()((?:[Pp](?:age)?\.?\s*)?\d+(?:[\s,]*)(?:(?:[Pp](?:age)?\.?\s*)?\d+(?:[\s,]*))*)([\]\)]|(?:\s|$))",
+    r"(\[|(?:\s|^)\()((?:[^\]\)]*?[Pp](?:age)?\.?\s*)?\d+(?:[\s,]*)(?:(?:[Pp](?:age)?\.?\s*)?\d+(?:[\s,]*))*)([\]\)]|(?:\s|$))",
     re.IGNORECASE,
 )
 _RE_EXTRACT_PAGES = re.compile(r"(\d+)")
@@ -313,34 +313,74 @@ def apply_tooltips_to_response(
         full_match = match.group(0).strip()
         inner_text = match.group(2)
 
-        # 페이지 번호 추출
-        page_matches = _RE_EXTRACT_PAGES.findall(inner_text)
-        if not page_matches:
+        # 1. 페이지 번호 추출 (p.X 또는 page X 패턴 우선 검색)
+        target_page = -1
+        p_match = re.search(r"[Pp](?:age)?\.?\s*(\d+)", inner_text)
+        if p_match:
+            target_page = int(p_match.group(1))
+        else:
+            # 키워드가 없는 경우 첫 번째 숫자 시도
+            page_matches = _RE_EXTRACT_PAGES.findall(inner_text)
+            if page_matches:
+                target_page = int(page_matches[0])
+
+        if target_page == -1:
             return full_match
 
-        target_page = int(page_matches[0])
+        # 2. 섹션명 추출 시도 (예: "[섹션: 3 CM3, p.3]" -> "3 CM3")
+        target_section = None
+        if "섹션:" in inner_text:
+            try:
+                # '섹션:' 이후부터 ',' 또는 'p.' 이전까지 추출
+                sec_part = inner_text.split("섹션:")[1]
+                target_section = sec_part.split(",")[0].strip()
+            except Exception:
+                pass
 
-        # 툴팁에 표시할 문서 내용 찾기
+        # 3. 툴팁에 표시할 문서 내용 찾기
         clean_content = "인용된 원문 정보를 불러올 수 없습니다."
+        best_doc = None
+
+        # [최적화] 섹션명과 페이지가 모두 일치하는 문서를 최우선으로 찾음
         for doc in documents:
             meta = (
                 getattr(doc, "metadata", {})
                 if hasattr(doc, "metadata")
                 else doc.get("metadata", {})
             )
-            if int(meta.get("page", -1)) == target_page:
-                content = (
-                    getattr(doc, "page_content", "")
-                    if hasattr(doc, "page_content")
-                    else doc.get("page_content", "")
-                )
-                clean_content = (
-                    content.replace('"', "&quot;").replace("'", "&apos;")[:300] + "..."
-                )
-                break
+            doc_page = int(meta.get("page", -1))
+            doc_section = meta.get("current_section", "")
 
-        # [HIGHLIGHT] 인터랙티브 하이라이트 스타일 적용
-        return f'<span class="citation-highlight" title="{clean_content}" style="color: #007bff; font-weight: 600; cursor: pointer; text-decoration: underline; text-underline-offset: 3px;">{full_match}</span>'
+            if doc_page == target_page:
+                if target_section and target_section in doc_section:
+                    best_doc = doc
+                    break
+                if not best_doc:  # 일단 페이지라도 맞으면 후보로 등록
+                    best_doc = doc
+
+        if best_doc:
+            content = (
+                getattr(best_doc, "page_content", "")
+                if hasattr(best_doc, "page_content")
+                else best_doc.get("page_content", "")
+            )
+            # HTML 속성에 넣기 위해 따옴표 및 줄바꿈 이스케이프
+            clean_content = (
+                content.replace('"', "&quot;")
+                .replace("'", "&apos;")
+                .replace("\n", " ")
+                .strip()[:300]
+                + "..."
+            )
+
+        # [HIGHLIGHT] 인터랙티브 하이라이트 스타일 및 데이터 속성 적용
+        # data-page 속성은 UI에서 클릭 시 해당 페이지로 즉시 이동하는 트리거로 사용됨
+        return (
+            f'<span class="citation-highlight" title="{clean_content}" '
+            f'data-page="{target_page}" '
+            f'style="color: #007bff; font-weight: 600; cursor: pointer; text-decoration: underline; text-underline-offset: 3px;">'
+            f"{full_match}</span>"
+        )
 
     try:
         # 인용구 패턴 매칭 및 치환

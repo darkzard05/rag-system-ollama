@@ -51,6 +51,10 @@ class RAGSystem:
     ) -> tuple[str, bool]:
         """문서를 로드하고 RAG 파이프라인을 구축합니다."""
         self._ensure_session_context()
+        import time
+
+        start_time = time.time()
+        logger.info(f"[RAG] [INDEX] 파이프라인 구축 시작: {file_name}")
 
         file_hash = compute_file_hash(file_path)
         SessionManager.set("file_hash", file_hash, session_id=self.session_id)
@@ -63,15 +67,20 @@ class RAGSystem:
         # 1. 캐시 시도
         if ENABLE_VECTOR_CACHE:
             cache_data = cache.load(embedder)
-            if all(x is not None for x in cache_data):
+            if cache_data and all(x is not None for x in cache_data):
                 doc_splits, vector_store, bm25_retriever = cache_data
-                SessionManager.add_status_log(
-                    "기존 분석 데이터 발견 (캐시 활용)", session_id=self.session_id
-                )
-                await self._register_and_finalize(
-                    file_hash, vector_store, bm25_retriever, on_progress
-                )
-                return f"'{file_name}' 캐시 데이터 로드 완료", True
+                if doc_splits is not None:
+                    logger.info(
+                        f"[RAG] [INDEX] 벡터 캐시 히트: {len(doc_splits)}개 청크 로드됨"
+                    )
+
+                    SessionManager.add_status_log(
+                        "기존 분석 데이터 발견 (캐시 활용)", session_id=self.session_id
+                    )
+                    await self._register_and_finalize(
+                        file_hash, vector_store, bm25_retriever, on_progress
+                    )
+                    return f"'{file_name}' 캐시 데이터 로드 완료", True
 
         # 2. 신규 문서 로드
         docs = load_pdf_docs(
@@ -90,6 +99,7 @@ class RAGSystem:
             else "English"
         )
         SessionManager.set("doc_language", lang, session_id=self.session_id)
+        logger.info(f"[RAG] [INDEX] 문서 언어 감지: {lang}")
 
         # 4. 청킹 및 벡터화
         doc_splits, vectors = await split_documents(
@@ -97,11 +107,6 @@ class RAGSystem:
         )
         if not doc_splits:
             raise InsufficientChunksError(chunk_count=0, min_required=1)
-
-        # 5. [수정] 인덱스 최적화 로직 통합
-        # 기존의 개별 최적화(index_optimizer) 호출을 제거하고,
-        # 모든 최적화 전략(양자화, HNSW 등)은 retriever_factory에서
-        # config.yml 설정을 바탕으로 일관되게 처리하도록 단일화합니다.
 
         # 6. 컴포넌트 생성
         vector_store = create_vector_store(doc_splits, embedder, vectors=vectors)
@@ -116,7 +121,12 @@ class RAGSystem:
             file_hash, vector_store, bm25_retriever, on_progress
         )
 
-        # 메모리 정리
+        duration = time.time() - start_time
+        logger.info(
+            f"[RAG] [INDEX] 신규 인덱싱 완료: {len(doc_splits)}개 청크 생성 (소요시간: {duration:.2f}s)"
+        )
+
+        # [복구] 메모리 정리
         if torch.cuda.is_available():
             with contextlib.suppress(Exception):
                 torch.cuda.empty_cache()
@@ -195,7 +205,20 @@ class RAGSystem:
                 config=config,
                 stream_mode=["messages", "custom", "updates"],
             ):
-                # 상태 업데이트(updates) 청크에서 문서를 찾아 복구
+                # 1. 메시지(messages) 모드 필터링: grade/rewrite 노드의 메시지 차단
+                if (
+                    isinstance(chunk, tuple)
+                    and len(chunk) == 2
+                    and chunk[0] == "messages"
+                ):
+                    _, metadata = chunk[1]
+                    # LangGraph는 메타데이터에 노드 이름을 포함할 수 있음
+                    node_name = metadata.get("langgraph_node")
+                    # generate 노드가 아니거나 내부 노드인 경우 차단 (화이트리스트 방식)
+                    if node_name != "generate" or node_name in ["grade", "rewrite"]:
+                        continue
+
+                # 2. 상태 업데이트(updates) 처리
                 if isinstance(chunk, dict) and "retrieve" in chunk:
                     docs = chunk["retrieve"].get("relevant_docs", [])
                     self._hydrate_docs(docs)

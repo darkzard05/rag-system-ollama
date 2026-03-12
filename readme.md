@@ -18,22 +18,22 @@
 
 ---
 
-## ⚡ Key Highlights (v3.2.0 Updated)
+## ⚡ Key Highlights (v3.3.0 Updated)
 
 ### 🚀 **Extreme Performance & Efficiency**
 - **Header-Aware Semantic Chunking:** Beyond simple text splitting, our system respects Markdown headers (`#`, `##`). It prevents context contamination between sections and injects structural metadata (`current_section`) into every chunk.
 - **99.8% Metadata Optimization:** Implements **Reference-based Metadata Offloading**. Word coordinates for highlighting are stored in a dedicated side-cache (`CoordCacheManager`), reducing FAISS index RAM usage by over 99% while maintaining sub-millisecond hydration during retrieval.
-- **FlashRank Semantic Reranking:** Integrated `FlashRank` (v0.2.0) with ONNX runtime. Re-evaluates search results using a Cross-Encoder model on CPU, achieving **2x higher accuracy (P@1)** with only ~5ms of additional latency.
-- **Sub-Second TTFT:** Streamlined pipeline architecture minimizes Time To First Token, delivering answers almost instantly.
+- **FlashRank Semantic Reranking:** Integrated `FlashRank` (v0.2.0) with ONNX runtime. Re-evaluates search results using a Cross-Encoder model on CPU, achieving **2x higher accuracy (P@1)** with minimal latency.
 
-### 🧠 **Intelligent Reasoning**
-- **Section-Aware Prompting:** The LLM receives context organized by document sections (e.g., `### [Section: Methodology]`). This enables the model to cite sources precisely like `[Methodology, p.5]`, greatly reducing hallucinations.
-- **DeepThinking Integration:** Seamlessly extracts model reasoning steps (CoT) using the latest `langchain-ollama` content blocks standard.
+### 🧠 **Intelligent Reasoning & Citations**
+- **Configurable Prompt System:** All RAG prompts (`grading`, `rewriting`, `QA`) are externalized in `config.yml`. They use generalized instructions to handle complex model names and technical terms without hardcoding.
+- **Section-Aware Citations:** Implements an advanced citation processor that extracts section names and matches them with document metadata. Provides **Interactive Citation Badges** with sub-second preview tooltips.
+- **Relevant Entity Extraction:** The LLM is strictly instructed to extract key technical entities during the grading phase, ensuring transparency in its reasoning process.
 
 ### 🛡️ **Reliability & Integrity**
+- **Multi-Layer Unit Testing:** 13+ new unit tests covering Graph Flow, RAG Orchestration, Document Processing, and Advanced Citations.
 - **100% Integrity Pass:** Integrated verification system (`verify_integrity.py`) ensures code style, typing, and RAG logic are always production-ready.
-- **Ghosting-Free UI:** Advanced `st.fragment` and `st.empty` placeholder management prevents visual glitches and double-rendering during real-time streaming.
-- **Streaming Hydration:** Ensures metadata and coordinates are perfectly synced even during asynchronous event-based streaming.
+- **Ghosting-Free UI:** Advanced `st.fragment` and `st.empty` placeholder management prevents visual glitches during real-time streaming.
 
 ---
 
@@ -45,7 +45,7 @@
 - **FlashRank**: 0.2.0 (ONNX Optimized)
 - **PyMuPDF4LLM**: 0.3.4+
 - **Ollama**: 0.6.x
-- **FastAPI**: 0.133.1
+- **FAISS**: CPU Optimized
 <!-- TECH_STACK_END -->
 
 ---
@@ -55,20 +55,16 @@
 ```text
 rag-system-ollama/
 ├── src/
-│   ├── api/
 │   ├── cache/          # 💾 CoordCache, VectorCache
-│   ├── common/         # ⚙️ Config, Utils
-│   ├── core/           # 🧠 RAG Engine, Semantic Chunking
-│   ├── infra/
-│   ├── logs/
-│   ├── main.py         # 🏁 Entry Point
-│   ├── services/       # 📊 Monitoring, Optimization
-│   └── ui/             # 🎨 Streamlit Components
+│   ├── common/         # ⚙️ Config (config.yml integration), Utils
+│   ├── core/           # 🧠 LangGraph Engine, Semantic Chunker (Header-aware)
+│   ├── infra/          # 🛠️ Deployment & Error Recovery
+│   ├── main.py         # 🏁 Streamlit Entry Point
+│   ├── services/       # 📊 Performance Monitoring
+│   └── ui/             # 🎨 Streaming UI Components
+├── config.yml          # 📝 Centralized RAG & Model Configuration
 ├── scripts/            # 🧪 Benchmarks & Maintenance
-│   ├── benchmarks/
-│   ├── evaluation/
-│   └── maintenance/
-├── tests/              # ✅ Unit & Integration Tests
+└── tests/              # ✅ Comprehensive Unit (Pytest) & Integration Tests
 ```
 <!-- TREE_END -->
 
@@ -83,11 +79,8 @@ ollama pull qwen3:4b-instruct-2507-q4_K_M
 ollama pull nomic-embed-text
 ```
 
-### 2️⃣ Quick Integrity Check (Recommended)
-Ensure your local environment is perfectly configured before running:
-```powershell
-python scripts/maintenance/verify_integrity.py
-```
+### 2️⃣ Configuration
+Customize your RAG behavior in `config.yml` (e.g., grading instructions, chunk sizes, model names).
 
 ### 3️⃣ Running the App
 ```bash
@@ -100,13 +93,19 @@ streamlit run src/main.py
 ## 🧪 Testing & Verification
 
 We maintain a strict **Zero-Error Policy**. Run the automated verification suite:
-- **Lint & Static Analysis**: Ruff, Mypy
-- **Core Integration**: RAG Pipeline, Retrieval Logic
-- **UI & Streaming**: Streamlit Lifecycle, SSE Protocol
-- **Performance**: E2E Benchmark (`scripts/e2e_performance_benchmark.py`)
+```powershell
+# Run all unit tests
+pytest tests/unit
+
+# Run full pipeline integration test
+python scripts/test_full_pipeline.py
+
+# Verify section metadata extraction
+python scripts/verify_section_metadata.py
+```
 
 ---
 
 ## 📄 License
 MIT License - Developed by **darkzard05**.
-**Status:** v3.2.0 | **Last Updated:** 2026-03-11
+**Status:** v3.3.0 | **Last Updated:** 2026-03-12
