@@ -70,6 +70,7 @@ class GraphState(TypedDict):
     response: str | None
     thought: str | None
     performance: dict[str, Any] | None
+    search_weights: dict[str, float] | None  # 👈 동적 가중치 추가
     is_cached: bool
     retry_count: Annotated[int, operator.add]
 

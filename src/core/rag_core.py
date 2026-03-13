@@ -6,9 +6,9 @@ RAG 시스템의 통합 엔진 (Core Engine).
 from __future__ import annotations
 
 import contextlib
-import copy
 import gc
 import logging
+import os
 from typing import Any
 
 import torch
@@ -173,20 +173,78 @@ class RAGSystem:
         }
 
     def _hydrate_docs(self, docs: list[Document]) -> None:
-        """문서 리스트의 좌표 데이터를 캐시에서 복구합니다."""
+        """문서 리스트의 좌표 데이터를 캐시에서 복구하거나, 없으면 즉시 추출(Lazy)합니다."""
+        import fitz
+
         from cache.coord_cache import coord_cache
 
+        # 1. 파일별로 처리 대상 문서 그룹화
+        file_path_map: dict[str, list[Document]] = {}
         for doc in docs:
-            if (
-                doc.metadata.get("has_coordinates")
-                and "word_coords" not in doc.metadata
-            ):
-                file_hash = doc.metadata.get("file_hash")
-                page_num = doc.metadata.get("page")
-                if file_hash and page_num:
-                    coords = coord_cache.get_coords(file_hash, page_num)
-                    if coords:
-                        doc.metadata["word_coords"] = coords
+            # 이미 좌표가 있거나 메타데이터가 부족하면 스킵
+            if "word_coords" in doc.metadata or not doc.metadata.get("has_coordinates"):
+                continue
+
+            path = doc.metadata.get("file_path")
+            if path and os.path.exists(path):
+                if path not in file_path_map:
+                    file_path_map[path] = []
+                file_path_map[path].append(doc)
+
+        if not file_path_map:
+            return
+
+        # 2. 각 파일별로 1회만 열어서 모든 대상 문서(청크) 처리
+        for path, target_docs in file_path_map.items():
+            try:
+                # [개선] Context Manager 사용으로 안전한 Close 보장
+                with fitz.open(path) as doc_obj:
+                    for doc in target_docs:
+                        file_hash = doc.metadata.get("file_hash")
+                        page_num = doc.metadata.get("page")
+
+                        if not file_hash or page_num is None:
+                            continue
+
+                        # A. 캐시 확인
+                        coords = coord_cache.get_coords(file_hash, page_num)
+
+                        # B. 캐시 없으면 지연 추출 수행
+                        if not coords:
+                            logger.info(
+                                f"[RAG] [HYDRATE] 정밀 좌표 추출: {os.path.basename(path)} P{page_num}"
+                            )
+                            try:
+                                page_obj = doc_obj[page_num - 1]
+
+                                # [개선] 정밀 구역(Clip) 추출: 메타데이터의 bbox 영역만 타겟팅
+                                chunk_bbox = doc.metadata.get("bbox")
+                                if chunk_bbox:
+                                    raw_words = page_obj.get_text(
+                                        "words", clip=fitz.Rect(chunk_bbox)
+                                    )
+                                else:
+                                    raw_words = page_obj.get_text("words")
+
+                                coords = [
+                                    (w[0], w[1], w[2], w[3], w[4]) for w in raw_words
+                                ]
+
+                                # 다음번을 위해 캐시 저장
+                                coord_cache.save_coords(file_hash, page_num, coords)
+                            except IndexError:
+                                logger.warning(
+                                    f"[RAG] [HYDRATE] 페이지 인덱스 초과: P{page_num}"
+                                )
+                                continue
+
+                        if coords:
+                            doc.metadata["word_coords"] = coords
+
+            except Exception as e:
+                logger.error(
+                    f"[RAG] [HYDRATE] 파일 처리 중 오류 ({os.path.basename(path)}): {e}"
+                )
 
     async def astream(self, query: str, model_name: str | None = None):
         """[스트리밍] 새로운 스트림 모드(messages, custom)를 사용하여 이벤트를 발생시킵니다."""
@@ -198,24 +256,24 @@ class RAGSystem:
                 details={"reason": "파이프라인이 준비되지 않았습니다."}
             )
 
-        # [수정] 익명 비동기 제너레이터를 반환하여 UI의 'await'와 호환성 유지
+        # [최적화] 익명 비동기 제너레이터를 반환하여 UI의 'await'와 호환성 유지
         async def _stream_wrapper():
             async for chunk in rag_engine.astream(
                 {"input": query},
                 config=config,
                 stream_mode=["messages", "custom", "updates"],
             ):
-                # 1. 메시지(messages) 모드 필터링: grade/rewrite 노드의 메시지 차단
+                # 1. 메시지(messages) 모드 필터링: generate 노드의 메시지만 통과
                 if (
                     isinstance(chunk, tuple)
                     and len(chunk) == 2
                     and chunk[0] == "messages"
                 ):
-                    _, metadata = chunk[1]
-                    # LangGraph는 메타데이터에 노드 이름을 포함할 수 있음
+                    msg, metadata = chunk[1]
+                    # [표준화] LangGraph 메타데이터의 노드 이름 확인
                     node_name = metadata.get("langgraph_node")
-                    # generate 노드가 아니거나 내부 노드인 경우 차단 (화이트리스트 방식)
-                    if node_name != "generate" or node_name in ["grade", "rewrite"]:
+                    # 'generate' 노드에서 생성된 메시지만 사용자에게 노출
+                    if node_name != "generate":
                         continue
 
                 # 2. 상태 업데이트(updates) 처리
@@ -237,7 +295,7 @@ class RAGSystem:
                 details={"reason": "파이프라인이 준비되지 않았습니다."}
             )
 
-        # [수정] 익명 비동기 제너레이터를 반환하여 UI의 'await'와 호환성 유지
+        # [최적화] 익명 비동기 제너레이터를 반환하여 UI의 'await'와 호환성 유지
         async def _event_wrapper():
             async for event in rag_engine.astream_events(
                 {"input": query}, config=config, version="v2"
@@ -272,7 +330,7 @@ class RAGSystem:
         file_hash = SessionManager.get("file_hash", session_id=self.session_id)
         vector_store, bm25_shared = await get_resource_pool().get(file_hash)
 
-        # 리소스 부재 시 복구 시도 (세션에 정보가 있는 경우)
+        # 리소스 부재 시 복구 시도
         if not vector_store and SessionManager.get(
             "pdf_file_path", session_id=self.session_id
         ):
@@ -290,19 +348,37 @@ class RAGSystem:
                 )
                 vector_store, bm25_shared = await get_resource_pool().get(file_hash)
 
-        # 3. 개별 리트리버 인스턴스 구성
-        faiss_ret = (
-            vector_store.as_retriever(
+        # 3. 개별 리트리버 인스턴스 구성 (세션 캐싱 활용)
+        # [최적화] 매번 as_retriever를 호출하는 대신 세션에 저장하여 재사용
+        faiss_ret = SessionManager.get(
+            "active_faiss_retriever", session_id=self.session_id
+        )
+        if not faiss_ret and vector_store:
+            faiss_ret = vector_store.as_retriever(
                 search_type=RETRIEVER_CONFIG.get("search_type", "similarity"),
                 search_kwargs=RETRIEVER_CONFIG.get("search_kwargs", {"k": 5}),
             )
-            if vector_store
-            else None
-        )
+            SessionManager.set(
+                "active_faiss_retriever", faiss_ret, session_id=self.session_id
+            )
 
-        bm25_ret = copy.copy(bm25_shared) if bm25_shared else None
+        # [최적화] BM25 리트리버는 원본 인덱스는 공유하되 얕은 복사로 격리
+        bm25_ret = SessionManager.get(
+            "active_bm25_retriever", session_id=self.session_id
+        )
+        if not bm25_ret and bm25_shared:
+            # 원본 객체를 직접 쓰지 않고 복사하여 파라미터 격리 (k 값 등)
+            import copy
+
+            bm25_ret = copy.copy(bm25_shared)
+            SessionManager.set(
+                "active_bm25_retriever", bm25_ret, session_id=self.session_id
+            )
+
         if bm25_ret:
-            bm25_ret.k = RETRIEVER_CONFIG.get("search_kwargs", {}).get("k", 5)
+            # 설정 업데이트 (복사본이므로 안전함)
+            target_k = RETRIEVER_CONFIG.get("search_kwargs", {}).get("k", 5)
+            bm25_ret.k = target_k
 
         return {
             "configurable": {

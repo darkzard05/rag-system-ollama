@@ -353,10 +353,17 @@ class MetadataIndexer:
                     if key not in self.indexes:
                         self.indexes[key] = {}
 
-                    if value not in self.indexes[key]:
-                        self.indexes[key][value] = set()
+                    # [수정] 리스트/딕셔너리 등 hashable하지 않은 타입 처리
+                    hashable_value = value
+                    if isinstance(value, list):
+                        hashable_value = tuple(value)
+                    elif isinstance(value, dict):
+                        hashable_value = str(value)
 
-                    self.indexes[key][value].add(doc_idx)
+                    if hashable_value not in self.indexes[key]:
+                        self.indexes[key][hashable_value] = set()
+
+                    self.indexes[key][hashable_value].add(doc_idx)
 
     def search_by_metadata(
         self,

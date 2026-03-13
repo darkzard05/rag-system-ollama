@@ -82,13 +82,16 @@ class ThreadSafeSessionManager:
 
     @classmethod
     def _get_state(cls, session_id: str | None = None) -> dict[str, Any]:
-        """항상 전역 폴백 저장소를 반환합니다."""
+        """항상 전역 폴백 저장소를 반환하며 접근 시간을 갱신합니다."""
         sid = session_id or cls.get_session_id()
         with cls._global_lock:
             if sid not in cls._fallback_sessions:
                 cls._fallback_sessions[sid] = cls.DEFAULT_SESSION_STATE.copy()
                 cls._fallback_sessions[sid]["messages"] = []
                 cls._fallback_sessions[sid]["status_logs"] = []
+
+            # [추가] 마지막 접근 시간 기록
+            cls._fallback_sessions[sid]["last_accessed"] = time.time()
             return cls._fallback_sessions[sid]
 
     @classmethod
@@ -113,7 +116,7 @@ class ThreadSafeSessionManager:
 
     @classmethod
     def get(cls, key: str, default: Any = None, session_id: str | None = None) -> Any:
-        # 1. 먼저 폴백 저장소 확인
+        # 1. 먼저 폴백 저장소 확인 (내부적으로 _get_state가 시간을 갱신함)
         state = cls._get_state(session_id)
         if key in state:
             return state[key]
@@ -126,7 +129,7 @@ class ThreadSafeSessionManager:
 
     @classmethod
     def set(cls, key: str, value: Any, session_id: str | None = None):
-        # 1. 폴백 저장소 업데이트
+        # 1. 폴백 저장소 업데이트 (내부적으로 _get_state가 시간을 갱신함)
         state = cls._get_state(session_id)
         with cls._global_lock:
             state[key] = value
@@ -223,13 +226,37 @@ class ThreadSafeSessionManager:
     def delete_session(cls, session_id: str) -> bool:
         with cls._global_lock:
             if session_id in cls._fallback_sessions:
+                # [수정] 참조 해제를 명시적으로 수행하여 GC 유도
+                state = cls._fallback_sessions[session_id]
+                for k in list(state.keys()):
+                    state[k] = None
                 del cls._fallback_sessions[session_id]
                 return True
         return False
 
     @classmethod
     def cleanup_expired_sessions(cls, max_idle_seconds: int = 3600):
-        pass
+        """만료된 세션을 찾아 제거합니다."""
+        now = time.time()
+        expired_ids = []
+
+        with cls._global_lock:
+            for sid, state in cls._fallback_sessions.items():
+                last_acc = state.get("last_accessed", now)
+                if now - last_acc > max_idle_seconds:
+                    expired_ids.append(sid)
+
+        if expired_ids:
+            logger.info(
+                f"[SYSTEM] [CLEANUP] {len(expired_ids)}개의 만료된 세션 정리 시작"
+            )
+            for sid in expired_ids:
+                cls.delete_session(sid)
+
+            # [추가] 메모리 정리 강제 수행
+            import gc
+
+            gc.collect()
 
     @classmethod
     def perform_security_audit(cls):

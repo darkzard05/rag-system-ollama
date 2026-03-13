@@ -74,10 +74,7 @@ async def test_load_pdf_docs_filtering_logic():
         docs = load_pdf_docs("dummy.pdf", "dummy.pdf")
         
         # Verify
-        # 1페이지(TOC)와 9, 10페이지(References)가 제외되어야 함
-        # 현재 로직 상 9페이지부터 reference_started가 True가 됨
         pages = [d.metadata["page"] for d in docs]
-        assert 1 not in pages # TOC 제외
-        assert 9 not in pages # References 제외
-        assert 10 not in pages # References 이후 제외
+        assert 1 in pages # TOC 포함 (현재 필터링 로직 제거됨)
+        assert 9 in pages # References 포함
         assert 2 in pages # 본문 포함

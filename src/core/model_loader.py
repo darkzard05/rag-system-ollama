@@ -251,21 +251,43 @@ class ModelManager:
 
     @classmethod
     async def clear_vram(cls):
-        """[위험] 모든 모델 인스턴스를 제거하여 VRAM을 강제로 비웁니다."""
+        """[위험] 모든 모델 인스턴스를 제거하고 Ollama 모델을 GPU에서 강제로 내립니다."""
         async with (
             cls._get_lock("llm"),
             cls._get_lock("embedder"),
             cls._get_lock("flashrank"),
         ):
+            # 1. Ollama 모델 언로드 (API 호출)
+            try:
+                import ollama
+
+                client = ollama.Client(host=OLLAMA_BASE_URL)
+                # 캐시된 모든 모델에 대해 언로드 시도 (keep_alive=0)
+                for key in list(cls._instances.keys()):
+                    if key.startswith("llm_"):
+                        model_name = key.replace("llm_", "")
+                        # 빈 입력을 keep_alive=0으로 보내면 언로드됨
+                        client.generate(model=model_name, keep_alive=0)
+                        logger.info(f"[ModelManager] Ollama 모델 언로드: {model_name}")
+            except Exception as e:
+                logger.warning(f"[ModelManager] Ollama 언로드 실패: {e}")
+
+            # 2. 인스턴스 참조 제거 및 GC
             cls._instances.clear()
             import gc
 
             gc.collect()
+
+            # 3. PyTorch 캐시 비우기
             import torch
 
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
-            logger.info("[System] [VRAM] 모든 모델 인스턴스 해제 및 캐시 클리어")
+                torch.cuda.ipc_collect()
+
+            logger.info(
+                "[System] [VRAM] 모든 모델 인스턴스 해제 및 GPU 캐시 클리어 완료"
+            )
 
 
 def _fetch_available_models_cached() -> list[str]:

@@ -453,29 +453,29 @@ class EmbeddingBasedSemanticChunker:
 
     def _clean_section_title(self, raw_title: str) -> str:
         """섹션 제목에서 마크다운 기호 및 불필요한 본문 텍스트를 제거합니다."""
-        # 1. 마크다운 헤더 기호 및 앞뒤 공백 제거 (strip 활용 최적화)
+        # 1. 마크다운 헤더 기호 및 앞뒤 공백 제거
         clean_title = raw_title.lstrip("# ").strip()
 
         # 2. 논문의 주요 섹션 키워드 체크 (상수 활용)
         upper_title = clean_title.upper()
         for kw in STANDARD_SECTION_KEYWORDS:
             if upper_title.startswith(kw):
-                return kw  # 키워드만 깔끔하게 반환
+                return kw
 
-        # 3. 너무 긴 경우(60자 이상) 첫 번째 끊김 지점에서 자르기
-        if len(clean_title) > 60:
+        # 3. 너무 긴 경우(100자 이상) 첫 번째 끊김 지점에서 자르기 (제목 보존을 위해 확장)
+        if len(clean_title) > 100:
             parts = re.split(r"[\n\r\.\:]", clean_title)
             if parts:
                 clean_title = parts[0].strip()
 
         # 4. 특수문자 제거 및 최종 길이 제한
         clean_title = re.sub(r"[#\*_]", "", clean_title)
-        return clean_title[:50]
+        return clean_title[:150]  # 제목 복원을 위해 길이 상향
 
     async def split_text(self, text: str) -> list[dict]:
         """
         텍스트를 의미론적으로 분할합니다 (Buffer-based context window 적용).
-        [고도화] 마크다운 헤더 기반 섹션 정보를 추적하여 주입합니다.
+        [고도화] 마크다운 헤더 뿐만 아니라 대문자 섹션명도 감지하여 구조를 파악합니다.
         """
         if not text or not text.strip():
             return []
@@ -487,7 +487,11 @@ class EmbeddingBasedSemanticChunker:
 
         # [최적화] 너무 짧은 문장 병합 (오프셋 유지)
         min_merge_len = ChunkingConstants.MIN_MERGE_LEN.value
-        header_pattern = re.compile(r"^\s*#{1,6}\s+.+", re.MULTILINE)
+        # [수정] 헤더 감지 정규식 강화: # 패턴 또는 대문자 시작 섹션 (1 INTRODUCTION 등)
+        header_pattern = re.compile(
+            r"^(\s*#{1,6}\s+.+|\d+\s+[A-Z]{2,}.*|[A-Z]{3,}(\s+[A-Z]{3,})*)$",
+            re.MULTILINE,
+        )
 
         sentences = []
         if raw_sentences:
@@ -556,11 +560,17 @@ class EmbeddingBasedSemanticChunker:
         start_idx = 0
         all_bps = breakpoints + [len(sentences)]
 
-        current_header = "Intro/Root"
-        header_pattern = re.compile(r"^\s*#{1,6}\s+.+", re.MULTILINE)
+        current_header = "Front Matter"  # [수정] 기본값
+        header_pattern = re.compile(
+            r"^(\s*#{1,6}\s+.+|\d+\s+[A-Z]{2,}.*|[A-Z]{3,}(\s+[A-Z]{3,})*)$",
+            re.MULTILINE,
+        )
+
+        # [추가] 헤더 병합용 상태
+        pending_header = ""
+        is_first_header = True
 
         for i, bp in enumerate(all_bps):
-            # 현재 그룹의 인덱스 범위 계산
             group_start = start_idx
             group_end = bp
             if group_start >= group_end:
@@ -576,28 +586,49 @@ class EmbeddingBasedSemanticChunker:
             if i > 0 and not is_new_header_start:
                 actual_start = max(0, group_start - self.chunk_overlap)
 
-            group_sentences = sentences[actual_start:group_end]
-            group_embeddings = indiv_embeddings[actual_start:group_end]
-
-            # [핵심] 현재 청크의 헤더 섹션 결정 (가장 마지막에 만난 헤더 기준)
-            # start_idx부터 현재 그룹의 끝까지 훑으며 헤더를 갱신
+            # [핵심] 현재 청크의 헤더 섹션 결정
             for s in sentences[start_idx:group_end]:
-                h_match = header_pattern.match(s["text"].strip())
-                if h_match:
-                    # [수정] 전문 정제 로직 적용
-                    current_header = self._clean_section_title(s["text"])
+                text_strip = s["text"].strip()
+                h_match = header_pattern.match(text_strip)
 
-            merged_text = " ".join([s["text"] for s in group_sentences])
-            chunk_vector = np.mean(group_embeddings, axis=0)
+                if h_match:
+                    new_h = self._clean_section_title(text_strip)
+
+                    # [지능형 병합] 전치사나 'OF' 등으로 끝나면 다음 헤더와 합침
+                    incomplete_markers = ["OF", "AND", "WITH", "IN", "FOR", "THE", "A"]
+                    if (
+                        any(new_h.upper().endswith(w) for w in incomplete_markers)
+                        and len(new_h) < 100
+                    ):
+                        pending_header = new_h + " "
+                        continue
+
+                    if pending_header:
+                        new_h = (pending_header + new_h).strip()
+                        pending_header = ""
+
+                    # 첫 번째 거대한 헤더는 제목으로 처리
+                    if is_first_header and len(new_h) > 10:
+                        current_header = f"TITLE: {new_h}"
+                        is_first_header = False
+                    else:
+                        current_header = new_h
+
+            merged_text = " ".join(
+                [s["text"] for s in sentences[actual_start:group_end]]
+            )
+            chunk_vector = np.mean(indiv_embeddings[actual_start:group_end], axis=0)
 
             chunks.append(
                 {
                     "text": merged_text,
-                    "start": group_sentences[0]["start"],
-                    "end": group_sentences[-1]["end"],
+                    "start": sentences[group_start]["start"],
+                    "end": sentences[group_end - 1]["end"],
                     "vector": chunk_vector,
-                    "is_hard_split": group_sentences[-1].get("is_hard_split", False),
-                    "current_section": current_header,  # 섹션 정보 추가
+                    "is_hard_split": sentences[group_end - 1].get(
+                        "is_hard_split", False
+                    ),
+                    "current_section": current_header,
                 }
             )
             start_idx = bp
@@ -688,6 +719,11 @@ class EmbeddingBasedSemanticChunker:
             )
 
             final_docs.append(Document(page_content=c_text, metadata=merged_metadata))
+
+            # [수정] 오프셋 정보 명시적 저장
+            final_docs[-1].metadata["start_index"] = c_start
+            final_docs[-1].metadata["end_index"] = c_end
+
             final_vectors.append(c_vector)
 
         logger.info(

@@ -4,6 +4,7 @@ PDF 뷰어 및 문서 관련 UI 컴포넌트.
 
 import logging
 import os
+import time
 
 import streamlit as st
 
@@ -42,9 +43,14 @@ def _get_pdf_total_pages(pdf_path: str) -> int:
 def _pdf_viewer_fragment():
     """
     PDF 뷰어 프래그먼트 (격리된 리런 영역)
-    [최적화] st.rerun(scope="fragment")를 사용하여 UI의 독립적 갱신을 보장합니다.
+    [최적화] 고정 키(Stable Key)를 사용하여 위젯 재사용을 극대화하고 고스팅을 방지합니다.
     """
     from streamlit_pdf_viewer import pdf_viewer
+
+    # 0. 지표 수집용 초기화
+    if "fragment_run_count" not in st.session_state:
+        st.session_state.fragment_run_count = 0
+    st.session_state.fragment_run_count += 1
 
     # 1. 상태 동기화 및 타겟 페이지 처리
     target_page = SessionManager.get("pdf_target_page")
@@ -52,8 +58,9 @@ def _pdf_viewer_fragment():
         target_val = int(target_page)
         st.session_state.current_page = target_val
         SessionManager.set("current_page", target_val)
-        # 위젯 상태는 아래 클램핑 로직에서 일괄 설정됨
         SessionManager.set("pdf_target_page", None)
+        # 동기화 시점 기록 (지연 시간 측정용)
+        st.session_state.last_sync_time = time.time()
 
     if "current_page" not in st.session_state:
         st.session_state.current_page = SessionManager.get("current_page", 1)
@@ -64,6 +71,8 @@ def _pdf_viewer_fragment():
         return
 
     pdf_path = os.path.abspath(pdf_path_raw)
+    file_hash = SessionManager.get("file_hash", "none")
+
     try:
         total_pages = _get_pdf_total_pages(pdf_path)
         pdf_bytes = _get_pdf_bytes(pdf_path)
@@ -72,10 +81,9 @@ def _pdf_viewer_fragment():
             st.error("⚠️ PDF 로드 실패")
             return
 
-        # [핵심] 위젯 생성 전 모든 상태 동기화 및 유효 범위 제한
+        # [핵심] 위젯 생성 전 모든 상태 동기화
         current_page = min(max(1, st.session_state.current_page), total_pages)
         st.session_state.current_page = current_page
-        # 위젯의 value 파라미터와 key 상태를 일치시킴
         st.session_state["page_nav_input_v5"] = current_page
 
         # 하이라이트 어노테이션
@@ -87,18 +95,33 @@ def _pdf_viewer_fragment():
         if not annotations:
             annotations = SessionManager.get("pdf_annotations", [])
 
-        viewer_key = f"pdf_v5_{hash(pdf_path)}_{current_page}_{len(annotations)}"
+        # [수정] 위젯 키 구성 (페이지 이동과 하이라이트 추가에는 반응해야 함)
+        # 파일이 같고, 페이지가 같고, 하이라이트 개수가 같을 때만 키를 유지하여 고스팅 방지
+        viewer_key = f"pdf_v5_{file_hash}_{current_page}_{len(annotations)}"
 
-        # 3. PDF 뷰어 렌더링
-        pdf_viewer(
-            input=pdf_bytes,
-            render_text=True,
-            pages_to_render=[current_page],
-            annotations=annotations,
-            annotation_outline_size=2,
-            height=650,
-            key=viewer_key,
-        )
+        # 지표 기록 및 키 변화 감지
+        if (
+            "last_viewer_key" in st.session_state
+            and st.session_state.last_viewer_key != viewer_key
+        ):
+            # 키가 바뀌면 로그를 남기되, 이는 정당한 페이지 이동/어노테이션 추가임
+            logger.info(
+                f"[UI] [VIEWER_SYNC] Page {current_page}로 전환 (Key: {viewer_key})"
+            )
+        st.session_state.last_viewer_key = viewer_key
+
+        # 3. PDF 뷰어 렌더링 (영역 선점형 empty 컨테이너 활용)
+        viewer_container = st.empty()
+        with viewer_container.container():
+            pdf_viewer(
+                input=pdf_bytes,
+                render_text=True,
+                pages_to_render=[current_page],
+                annotations=annotations,
+                annotation_outline_size=2,
+                height=650,  # 고정 높이로 레이아웃 시프트 방지
+                key=viewer_key,
+            )
 
         # 4. 하단 컨트롤바
         st.markdown("<div style='margin-top: 10px;'></div>", unsafe_allow_html=True)

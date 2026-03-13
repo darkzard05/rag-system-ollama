@@ -60,8 +60,17 @@ rag:
     search_type: "similarity"
     search_kwargs:
       k: 25  # 충분한 후보군 확보를 위해 상향
-    # BM25와 FAISS의 가중치
+    # BM25와 FAISS의 가중치 기본값
     ensemble_weights: [0.4, 0.6]
+    
+    # [추가] 동적 가중치 설정 (질문 의도에 따라 자동 조절)
+    dynamic_weighting:
+      enabled: true
+      keyword_weight: 0.8  # 키워드 중심 질문 시 BM25 비중
+      semantic_weight: 0.8 # 의미 중심 질문 시 FAISS 비중
+      # 키워드/의미 판단용 정규식 및 키워드 목록
+      keyword_patterns: ["v?\\d+\\.\\d+(\\.\\d+)?", "[a-zA-Z]+\\d+", "0x[0-9a-fA-F]+"]
+      semantic_keywords: ["차이", "작동", "이유", "철학", "설계", "구조", "개념", "설명해", "방법"]
 
   # 재순위화(Reranking) 설정
   reranker:
@@ -79,11 +88,17 @@ rag:
   # 추출 엔진 설정 (PyMuPDF4LLM 최적화)
   parsing:
     # --- 최적화된 추출 파라미터 (Adaptive Parsing 활성화) ---
-    # [참고] force_text, ignore_graphics, table_strategy는 
-    # 안정성 및 정확도를 위해 코드(document_processor.py)에서 자동 결정됩니다.
+    table_strategy: "lines_strict" # [추가] 벤치마크 결과 최적 전략
+    graphics_limit: 5000           # [추가] 표 유실 방지를 위한 넉넉한 임계값
     fontsize_limit: 3        # 3pt 이하 텍스트 무시
     ignore_code: false       # 코드 블록 보존
-    extract_words: true      # [수정] PDF 하이라이트 기능을 위해 좌표 추출 활성화
+    
+    # [수정] 하이드레이션 모드 설정
+    # precision_clip: 필요한 구역만 정밀 추출 (권장)
+    # full: 페이지 전체 좌표 추출 (비효율적)
+    # none: 좌표 추출 안 함 (하이라이트 불가)
+    hydration_mode: "precision_clip" 
+    
     margins: [0, 72, 0, 72]  # [추가] 상하 1인치(72pt) 마진 무시 (헤더/푸터 제거)
     write_images: false
 

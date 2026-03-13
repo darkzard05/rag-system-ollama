@@ -38,19 +38,44 @@ class ResourcePool:
 
     async def register(self, file_hash: str, vector_store: Any, bm25_retriever: Any):
         """리소스 등록 (LRU 정책 적용)"""
+        if not file_hash:
+            return
+
         async with self._lock:
+            # 1. 기존 리소스 갱신
             if file_hash in self._pool:
                 self._pool.move_to_end(file_hash)
-            else:
-                while len(self._pool) >= self.max_size:
-                    _, (old_vs, old_bm) = self._pool.popitem(last=False)
-                    del old_vs, old_bm
-                    self._cleanup_memory()
+                self._pool[file_hash] = (vector_store, bm25_retriever)
+                return
 
+            # 2. 용량 초과 시 오래된 리소스 제거
+            while len(self._pool) >= self.max_size:
+                old_hash, (old_vs, old_bm) = self._pool.popitem(last=False)
+                logger.info(
+                    f"[ResourcePool] 용량 초과로 리소스 해제: {old_hash[:8]}..."
+                )
+                # 명시적 참조 해제
+                del old_vs
+                del old_bm
+                self._cleanup_memory()
+
+            # 3. 신규 리소스 등록
             self._pool[file_hash] = (vector_store, bm25_retriever)
             logger.info(
-                f"[ResourcePool] 등록: {file_hash[:8]}... (사이즈: {len(self._pool)})"
+                f"[ResourcePool] 신규 리소스 등록: {file_hash[:8]}... (현재 풀: {len(self._pool)}/{self.max_size})"
             )
+
+    async def unregister(self, file_hash: str):
+        """특정 리소스를 즉시 제거합니다."""
+        if not file_hash:
+            return
+        async with self._lock:
+            if file_hash in self._pool:
+                old_vs, old_bm = self._pool.pop(file_hash)
+                del old_vs
+                del old_bm
+                self._cleanup_memory()
+                logger.info(f"[ResourcePool] 리소스 명시적 해제: {file_hash[:8]}...")
 
     async def get(self, file_hash: str | None) -> tuple[Any | None, Any | None]:
         """리소스 조회 및 순서 갱신"""
@@ -63,11 +88,17 @@ class ResourcePool:
             return None, None
 
     def _cleanup_memory(self):
-        """메모리 강제 정리"""
+        """가비지 컬렉션 및 VRAM 정리를 수행합니다."""
         gc.collect()
         if torch.cuda.is_available():
-            with contextlib.suppress(Exception):
+            try:
+                # 파편화된 메모리 정리
                 torch.cuda.empty_cache()
+                # 가능한 경우 메모리 관리자 리셋 시도
+                with contextlib.suppress(Exception):
+                    torch.cuda.ipc_collect()
+            except Exception:
+                pass
 
     async def clear(self):
         """모든 리소스 해제"""

@@ -50,7 +50,7 @@ async def test_workflow_general_intent(compiled_workflow, mock_llm):
     """일상 대화(General) 흐름 테스트: preprocess -> generate -> END"""
     llm, structured_llm = mock_llm
     
-    config = {"configurable": {"llm": llm}}
+    config = {"configurable": {"llm": llm, "thread_id": "test_thread"}}
     inputs = {"input": "안녕", "chat_history": [], "retry_count": 0, "search_queries": []}
     
     # Execute
@@ -82,7 +82,8 @@ async def test_workflow_rag_success_path(compiled_workflow, mock_llm, mock_retri
         "configurable": {
             "llm": llm,
             "bm25_retriever": bm25,
-            "faiss_retriever": faiss
+            "faiss_retriever": faiss,
+            "thread_id": "test_thread_rag"
         }
     }
     inputs = {"input": "RAG가 뭐야?", "chat_history": []}
@@ -114,7 +115,8 @@ async def test_workflow_rag_retry_path(compiled_workflow, mock_llm, mock_retriev
         "configurable": {
             "llm": llm,
             "bm25_retriever": bm25,
-            "faiss_retriever": faiss
+            "faiss_retriever": faiss,
+            "thread_id": "test_thread_rag"
         }
     }
     inputs = {"input": "정보를 알려줘", "chat_history": []}
@@ -142,7 +144,7 @@ async def test_workflow_cache_hit_path(compiled_workflow, mock_llm):
         mock_cache.get.return_value = mock_res
         mock_cache_factory.return_value = mock_cache
 
-        config = {"configurable": {"llm": llm}}
+        config = {"configurable": {"llm": llm, "thread_id": "test_thread_cache"}}
         inputs = {"input": "테스트", "chat_history": []}
         
         # Execute

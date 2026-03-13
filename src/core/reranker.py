@@ -159,13 +159,24 @@ class DistributedReranker:
             total_results=len(results), strategy_used=strategy.value
         )
 
-        # [Fast-Path] 최상위 문서 점수가 임계치 이상이면 리랭킹 생략
-        first_score = getattr(results[0], "score", 0.0)
-        if first_score >= self.bypass_threshold:
-            logger.info(
-                f"Bypass Reranking: Top score {first_score:.4f} >= {self.bypass_threshold}"
-            )
-            return results[:target_top_k], metrics
+        # [Fast-Path] 스마트 얼리 엑시트 (Smart Early Exit)
+        # 1위 점수가 압도적으로 높고 2위와의 점수 차이(Gap)가 클 경우 리랭킹 생략
+        if len(results) >= 2:
+            first_score = getattr(results[0], "score", 0.0)
+            second_score = getattr(results[1], "score", 0.0)
+            score_gap = first_score - second_score
+
+            # 임계치: 1위가 0.95 이상이면서 2위와 0.3 이상의 차이가 나면 확정적 정답으로 간주
+            if first_score >= self.bypass_threshold and score_gap >= 0.3:
+                logger.info(
+                    f"[RAG] [RERANK] Early Exit 활성화: 1위({first_score:.3f}), Gap({score_gap:.3f}) "
+                    f"-> 리랭킹 생략 (Time saved: ~80ms)"
+                )
+                metrics.strategy_used = "early_exit_bypass"
+                return results[:target_top_k], metrics
+        elif len(results) == 1:
+            # 결과가 하나뿐이면 리랭킹 무의미
+            return results, metrics
 
         # 시맨틱 리랭킹 수행
         if (
@@ -192,8 +203,11 @@ class DistributedReranker:
             reranked_docs = self.flash_engine.rerank_documents(
                 query_text, docs, top_k=target_top_k
             )
+
+            # [수정] 하드 필터링 제거: 점수가 낮더라도 모든 결과를 반환하여 LLM이 판단하도록 함
+            # (사용자 피드백 반영: 과도한 필터링으로 인한 정보 유실 방지)
             metrics.reranked_results = len(reranked_docs)
-            metrics.reranking_time = time.time() - start_time
+            metrics.reranking_time = time.perf_counter() - start_time
             return reranked_docs, metrics
 
         # 폴백: 점수 기반 정렬 (Score Only)

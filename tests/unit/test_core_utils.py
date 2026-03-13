@@ -43,21 +43,22 @@ def test_merge_adjacent_chunks_simple_consecutive():
     docs = [
         Document(
             page_content="Part 1.",
-            metadata={"source": "a.pdf", "page": 1, "chunk_index": 0},
+            metadata={"source": "a.pdf", "page": 1, "chunk_index": 0, "current_section": "Sec1", "start_index": 0, "end_index": 10},
         ),
         Document(
             page_content="Part 2.",
-            metadata={"source": "a.pdf", "page": 1, "chunk_index": 1},
+            metadata={"source": "a.pdf", "page": 1, "chunk_index": 1, "current_section": "Sec1", "start_index": 15, "end_index": 25},
         ),
         Document(
             page_content="Part 3.",
-            metadata={"source": "a.pdf", "page": 1, "chunk_index": 2},
+            metadata={"source": "a.pdf", "page": 1, "chunk_index": 2, "current_section": "Sec1", "start_index": 30, "end_index": 40},
         ),
     ]
     result = _merge_adjacent_chunks(docs)
     assert len(result) == 1
     # \n\n 구분자 확인
     assert result[0].page_content == "Part 1.\n\nPart 2.\n\nPart 3."
+    assert result[0].metadata["end_index"] == 40
 
 
 # --- Test apply_tooltips_to_response (src/common/utils.py) ---

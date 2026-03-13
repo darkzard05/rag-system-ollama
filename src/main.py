@@ -96,9 +96,10 @@ def _check_windows_integrity():
     try:
         from core.session import SessionManager
 
+        # 1시간 이상 활동 없는 세션 정리
         SessionManager.cleanup_expired_sessions(max_idle_seconds=3600)
-    except Exception:
-        pass
+    except Exception as e:
+        logger.error(f"[SYSTEM] [CLEANUP] 세션 정리 중 오류: {e}")
 
     # [최적화] CI 환경에서는 무거운 라이브러리 체크 생략 (충돌 위험 방지)
     if platform.system() != "Windows" or os.getenv("GITHUB_ACTIONS") == "true":
@@ -488,6 +489,11 @@ def _handle_pending_tasks() -> None:
 
 def main() -> None:
     """메인 애플리케이션 오케스트레이터"""
+    # 0. 실행 지표 초기화
+    if "full_run_count" not in st.session_state:
+        st.session_state.full_run_count = 0
+    st.session_state.full_run_count += 1
+
     # 1. 초기 레이아웃 및 세션 즉시 준비
     SessionManager.init_session()
 
@@ -505,10 +511,7 @@ def main() -> None:
         with st.spinner("시스템 초기화 중..."):
             from core.model_loader import get_available_models
 
-            # 실제 Ollama 모델 목록 가져오기
             fetched_models = get_available_models()
-
-            # 만약 에러 메시지가 포함되어 있거나 비어있다면 최소한 기본 모델은 포함시킴
             from common.config import DEFAULT_OLLAMA_MODEL
 
             if not fetched_models or (
@@ -517,9 +520,14 @@ def main() -> None:
                 st.session_state.available_models_list = [DEFAULT_OLLAMA_MODEL]
             else:
                 st.session_state.available_models_list = fetched_models
-
         # 목록 확보 후 즉시 리런하여 전체 UI 구성
         st.rerun()
+
+    # [추가] 리런 성능 지표 출력 (디버그 모드 시)
+    if os.getenv("DEBUG_UI") == "true":
+        st.sidebar.caption(
+            f"📊 Full Reruns: {st.session_state.full_run_count} | Frag: {st.session_state.get('fragment_run_count', 0)}"
+        )
 
     # 3. 실제 UI 렌더링 (모델이 준비된 상태)
     available_models = st.session_state.available_models_list

@@ -207,8 +207,9 @@ async def _stream_chat_response(rag_sys, user_query: str, placeholder):
         return {"response": format_error_message(e), "thought": "", "documents": []}
     finally:
         SessionManager.set("is_generating_answer", False)
-        # [핵심] 스트리밍용 임시 UI 제거 (rerun 시 히스토리에서 정식 출력됨)
-        placeholder.empty()
+        # [수정] placeholder.empty()를 여기서 호출하지 않습니다.
+        # 대신 render_chat_interface에서 다음 루프가 시작될 때 자연스럽게 덮어씌워지거나
+        # rerun 직전에 명시적으로 처리하여 공백 시간을 최소화합니다.
 
 
 def _clean_response_redundancy(text: str) -> str:
@@ -420,6 +421,10 @@ def render_chat_interface():
                     metrics=result.get("performance"),
                     processed_content=result.get("processed_content"),
                 )
+                # [핵심] 히스토리에 메시지가 성공적으로 추가된 후에만 스트리밍용 UI를 비웁니다.
+                # rerun() 직전에 수행하여 시각적 공백(Gaps)을 최소화합니다.
+                streaming_placeholder.empty()
+
             try:
                 st.rerun(scope="fragment")
             except Exception:

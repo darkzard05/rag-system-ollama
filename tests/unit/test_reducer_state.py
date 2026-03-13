@@ -30,7 +30,7 @@ async def test_rewrite_query_reducer_logic():
 
 @pytest.mark.asyncio
 async def test_preprocess_initial_state():
-    state = {"input": "Hello"}
+    state = {"input": "안녕"}
     config = {}
     writer = MagicMock()
 

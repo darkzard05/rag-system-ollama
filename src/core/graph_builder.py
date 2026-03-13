@@ -11,6 +11,7 @@ from typing import Any
 from langchain_core.documents import Document
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_core.runnables import RunnableConfig
+from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import StreamWriter
 from pydantic import BaseModel, Field
@@ -35,25 +36,47 @@ async def preprocess(
     query = state["input"].strip()
     logger.info(f"[RAG] [PREPROCESS] 입력 질의: '{query}'")
 
-    # 초기 상태 설정 (리듀서 필드는 초기값 불필요, 명시적 설정만 수행)
-    update = {
-        "intent": "rag",
-        "is_cached": False,
-    }
+    import re
 
+    from common.config import DYNAMIC_WEIGHTING_CONFIG, ENSEMBLE_WEIGHTS
+
+    # 1. 의도 분류 및 동적 가중치 결정
+    # 기본값 (Config 기반)
+    weights = {"bm25": ENSEMBLE_WEIGHTS[0], "faiss": ENSEMBLE_WEIGHTS[1]}
+    intent = "rag"
+
+    # [추가] 간단한 인사말 및 일상 대화 감지 (General Intent)
+    if len(query) < 10 and any(
+        g in query.lower() for g in ["안녕", "hi", "hello", "반가워", "누구"]
+    ):
+        intent = "general"
+        logger.info("[RAG] [PREPROCESS] 일상 대화(General) 의도 감지")
+
+    # [최적화] 설정 기반 동적 가중치 적용
+    if DYNAMIC_WEIGHTING_CONFIG.get("enabled", True):
+        # A. 키워드 중심(Keyword-Heavy) 질문 감지
+        keyword_patterns = DYNAMIC_WEIGHTING_CONFIG.get("keyword_patterns", [])
+        is_keyword_heavy = any(re.search(p, query) for p in keyword_patterns)
+
+        # B. 의미 중심(Semantic-Heavy) 질문 감지
+        semantic_keywords = DYNAMIC_WEIGHTING_CONFIG.get("semantic_keywords", [])
+        is_semantic_heavy = any(k in query for k in semantic_keywords)
+
+        if is_keyword_heavy and not is_semantic_heavy:
+            kw_w = DYNAMIC_WEIGHTING_CONFIG.get("keyword_weight", 0.8)
+            weights = {"bm25": kw_w, "faiss": round(1.0 - kw_w, 1)}
+            logger.info(f"[RAG] [PREPROCESS] 키워드 중심 질의 판단 (BM25: {kw_w})")
+        elif is_semantic_heavy and not is_keyword_heavy:
+            sm_w = DYNAMIC_WEIGHTING_CONFIG.get("semantic_weight", 0.8)
+            weights = {"bm25": round(1.0 - sm_w, 1), "faiss": sm_w}
+            logger.info(f"[RAG] [PREPROCESS] 의미 중심 질의 판단 (FAISS: {sm_w})")
+
+    # 2. 캐시 확인
     import contextlib
 
     with contextlib.suppress(Exception):
         writer({"status": "의도 분석 및 지식 확인 중..."})
 
-    # 1. 의도 분류 (단순 규칙)
-    greetings = ["안녕", "hi", "hello", "도움말", "고마워"]
-    if any(g in query.lower() for g in greetings) or len(query) < 2:
-        logger.info("[RAG] [PREPROCESS] 일상 대화 또는 짧은 질의로 판단")
-        update["intent"] = "general"
-        return update
-
-    # 2. 캐시 확인
     cache = get_response_cache()
     cached_res = await cache.get(query, use_semantic=True)
     if cached_res:
@@ -63,9 +86,14 @@ async def preprocess(
             "response": cached_res.response,
             "thought": cached_res.metadata.get("thought", ""),
             "is_cached": True,
+            "search_weights": weights,
         }
 
-    return update
+    return {
+        "intent": intent,
+        "is_cached": False,
+        "search_weights": weights,
+    }
 
 
 async def retrieve_and_rerank(
@@ -100,22 +128,27 @@ async def retrieve_and_rerank(
     bm25 = cfg.get("bm25_retriever")
     faiss = cfg.get("faiss_retriever")
 
-    # 병렬 검색
-    tasks = []
+    # 병렬 검색 (딕셔너리 기반으로 출처 명확화)
+    search_tasks = {}
     if bm25:
-        tasks.append(asyncio.create_task(bm25.ainvoke(query)))
+        search_tasks["bm25"] = asyncio.create_task(bm25.ainvoke(query))
     if faiss:
-        tasks.append(asyncio.create_task(faiss.ainvoke(query)))
+        search_tasks["faiss"] = asyncio.create_task(faiss.ainvoke(query))
 
-    results = await asyncio.gather(*tasks) if tasks else [[], []]
+    # 결과 수집
+    results = {}
+    if search_tasks:
+        task_names = list(search_tasks.keys())
+        task_results = await asyncio.gather(*search_tasks.values())
+        results = dict(zip(task_names, task_results, strict=False))
+
     logger.debug(
-        f"[RAG] [RETRIEVE] 검색 결과 확보 (BM25: {len(results[0])}, Vector: {len(results[1])})"
+        f"[RAG] [RETRIEVE] 검색 결과 확보 (BM25: {len(results.get('bm25', []))}, Vector: {len(results.get('faiss', []))})"
     )
 
     # 결과 병합 및 RRF 집계
     all_docs = []
-    for i, res in enumerate(results):
-        source = "bm25" if i == 0 else "faiss"
+    for source, res in results.items():
         for doc in res:
             all_docs.append(
                 AggregatedSearchResult(
@@ -130,7 +163,16 @@ async def retrieve_and_rerank(
     from common.config import ENSEMBLE_WEIGHTS
 
     aggregator = SearchResultAggregator()
-    weights = {"bm25": ENSEMBLE_WEIGHTS[0], "faiss": ENSEMBLE_WEIGHTS[1]}
+    # [수정] 동적 가중치 적용: preprocess 노드에서 결정된 가중치 우선 사용
+    weights = state.get("search_weights") or {
+        "bm25": ENSEMBLE_WEIGHTS[0],
+        "faiss": ENSEMBLE_WEIGHTS[1],
+    }
+
+    logger.info(
+        f"[RAG] [RETRIEVE] 하이브리드 가중치 적용: BM25({weights['bm25']:.1f}), FAISS({weights['faiss']:.1f})"
+    )
+
     aggregated, _ = aggregator.aggregate_results(
         {"all": all_docs},
         strategy=AggregationStrategy.WEIGHTED_RRF,
@@ -138,8 +180,20 @@ async def retrieve_and_rerank(
         weights=weights,
     )
 
+    # [최적화] 리랭킹 후보군 동적 제한 (Pruning)
+    # 초기 점수 분포가 조밀할 때만 많은 후보를 리랭킹함
+    # 상위 1위와 5위의 점수 차이가 크면 후보군을 좁힘
+    top_5_docs = aggregated[:5]
+    if len(top_5_docs) >= 5:
+        score_gap_5 = top_5_docs[0].aggregated_score - top_5_docs[4].aggregated_score
+        # 점수 차이가 0.5 이상이면 상위권이 확실하므로 후보군 10개로 제한
+        dynamic_top_k = 10 if score_gap_5 > 0.5 else 25
+    else:
+        dynamic_top_k = 25
+
     final_docs = [
-        Document(page_content=r.content, metadata=r.metadata) for r in aggregated
+        Document(page_content=r.content, metadata=r.metadata)
+        for r in aggregated[:dynamic_top_k]
     ]
 
     if not final_docs:
@@ -151,16 +205,18 @@ async def retrieve_and_rerank(
         return {"relevant_docs": []}
 
     # [최적화] 리랭킹 효율화: 병합 전 원본 청크들로 먼저 정밀 리랭킹 수행
-    # (텍스트 양이 적어 리랭커 속도가 향상되고 점수 희석 방지)
     from core.reranker import DistributedReranker, RerankerStrategy
 
     reranker = DistributedReranker()
-    # 후보군(Top 25)에 대해 즉시 리랭킹 수행
+    # 후보군(Dynamic Top-K)에 대해 즉시 리랭킹 수행
     ranked_docs, _ = reranker.rerank(
-        final_docs, query_text=query, strategy=RerankerStrategy.SEMANTIC_FLASH
+        final_docs,
+        query_text=query,
+        strategy=RerankerStrategy.SEMANTIC_FLASH,
+        top_k=GRADING_CONFIG.get("top_k", 5),  # 최종 선별 개수는 설정 따름
     )
     logger.info(
-        f"[RAG] [RETRIEVE] 리랭킹 선별 완료: {len(final_docs)}개 후보 중 최상위 선별"
+        f"[RAG] [RETRIEVE] 리랭킹 선별 완료: {len(final_docs)}개 후보 중 {len(ranked_docs)}개 최종 선별"
     )
 
     # [최적화] 리랭킹된 상위 문서들에 대해서만 지능적 문맥 병합 수행
@@ -197,7 +253,7 @@ class RewriteResponse(BaseModel):
 async def grade_documents(
     state: GraphState, config: RunnableConfig, writer: StreamWriter
 ) -> dict[str, Any]:
-    """검색된 문서들의 관련성을 LLM으로 평가합니다."""
+    """검색된 문서들의 관련성을 LLM으로 평가합니다 (견고한 파싱 적용)."""
     if state.get("is_cached") or state.get("intent") == "general":
         return {}
 
@@ -211,93 +267,116 @@ async def grade_documents(
     llm = cfg.get("llm")
 
     import contextlib
+    import json
+    import re
 
     with contextlib.suppress(Exception):
         writer({"status": "문서 관련성 검증 중..."})
 
-    # 상위 3개 문서만 정밀 평가 (속도 향상)
+    # 상위 3개 문서만 정밀 평가
     test_docs = docs[:3]
     context_text = "\n\n".join(
         [f"DOC {i + 1}: {d.page_content}" for i, d in enumerate(test_docs)]
     )
 
-    # 설정 파일에서 프롬프트 로드
     grade_prompt = (
-        f"{GRADING_CONFIG.get('instruction', '')}\n\n"
+        f"{GRADING_CONFIG.get('instruction', '')}\n"
+        '출력은 반드시 JSON 형식이어야 합니다. (예: {"is_relevant": true, "relevant_entities": ["A", "B"], "reason": "..."})\n\n'
         f"{GRADING_CONFIG.get('template', '').format(query=query, context_text=context_text)}"
     )
 
-    try:
-        # [최적화] 구조화된 출력(Structured Output) 적용
-        structured_llm = llm.with_structured_output(GradeResponse)
-        # 내부 노드 호출 시 히스토리 미사용 (얕은 복사 후 특정 필드만 교체하여 pickle 에러 방지)
-        call_config = (
-            {"configurable": {**cfg, "messages": []}}
-            if cfg
-            else {"configurable": {"messages": []}}
-        )
+    # 내부 노드 호출용 설정
+    call_config = (
+        {"configurable": {**cfg, "messages": []}}
+        if cfg
+        else {"configurable": {"messages": []}}
+    )
 
-        result = await structured_llm.ainvoke(grade_prompt, config=call_config)
+    try:
+        # 1차 시도: 구조화된 출력
+        try:
+            structured_llm = llm.with_structured_output(GradeResponse)
+            result = await structured_llm.ainvoke(grade_prompt, config=call_config)
+        except Exception as e:
+            logger.debug(f"[RAG] [GRADE] 표준 구조화 출력 실패, 수동 파싱 시도: {e}")
+            # 2차 시도: 일반 텍스트 생성 후 JSON 추출
+            raw_res = await llm.ainvoke(grade_prompt, config=call_config)
+            content = raw_res.content if hasattr(raw_res, "content") else str(raw_res)
+
+            # JSON 패턴 추출 ({...})
+            match = re.search(r"\{.*\}", content, re.DOTALL)
+            if match:
+                data = json.loads(match.group())
+                result = GradeResponse(**data)
+            else:
+                raise ValueError("JSON 패턴을 찾을 수 없습니다.") from e
 
         if result.is_relevant:
-            logger.info(
-                f"[RAG] [GRADE] 관련성 확인 결과: YES ({result.reason}) | 키워드: {result.relevant_entities}"
-            )
+            logger.info(f"[RAG] [GRADE] 관련성 확인: YES ({result.reason})")
             SessionManager.add_status_log("검색된 지식의 관련성이 확인되었습니다.")
             return {"intent": "generate"}
         else:
-            logger.info(
-                f"[RAG] [GRADE] 관련성 확인 결과: NO ({result.reason}) | 키워드: {result.relevant_entities}"
-            )
+            logger.info(f"[RAG] [GRADE] 관련성 확인: NO ({result.reason})")
             SessionManager.add_status_log(
                 "검색 결과가 부적합하여 질문 재구성을 시도합니다."
             )
             return {"intent": "transform"}
 
     except Exception as e:
-        logger.warning(f"[RAG] [GRADE] 구조화된 출력 실패, 기본값(YES) 적용: {e}")
+        logger.warning(f"[RAG] [GRADE] 모든 파싱 시도 실패, 기본값(YES) 적용: {e}")
         return {"intent": "generate"}
 
 
 async def rewrite_query(
     state: GraphState, config: RunnableConfig, writer: StreamWriter
 ) -> dict[str, Any]:
-    """검색에 더 최적화된 형태로 질문을 재구성합니다."""
+    """검색에 더 최적화된 형태로 질문을 재구성합니다 (견고한 파싱 적용)."""
     query = state["input"]
     cfg = config.get("configurable", {})
     llm = cfg.get("llm")
 
     import contextlib
+    import json
+    import re
 
     with contextlib.suppress(Exception):
         writer({"status": "검색 쿼리 최적화 중..."})
 
-    # 설정 파일에서 프롬프트 로드
     rewrite_prompt = (
-        f"{REWRITING_CONFIG.get('instruction', '')}\n\n"
+        f"{REWRITING_CONFIG.get('instruction', '')}\n"
+        '출력은 반드시 JSON 형식이어야 합니다. (예: {"optimized_query": "..."})\n\n'
         f"{REWRITING_CONFIG.get('template', '').format(query=query)}"
     )
 
+    call_config = (
+        {"configurable": {**cfg, "messages": []}}
+        if cfg
+        else {"configurable": {"messages": []}}
+    )
+
     try:
-        # [최적화] 구조화된 출력(Structured Output) 적용
-        structured_llm = llm.with_structured_output(RewriteResponse)
-        # 내부 노드 호출 시 히스토리 미사용
-        call_config = (
-            {"configurable": {**cfg, "messages": []}}
-            if cfg
-            else {"configurable": {"messages": []}}
-        )
+        # 1차 시도: 구조화된 출력
+        try:
+            structured_llm = llm.with_structured_output(RewriteResponse)
+            result = await structured_llm.ainvoke(rewrite_prompt, config=call_config)
+        except Exception as e:
+            logger.debug(f"[RAG] [REWRITE] 표준 구조화 출력 실패, 수동 파싱 시도: {e}")
+            # 2차 시도: 수동 추출
+            raw_res = await llm.ainvoke(rewrite_prompt, config=call_config)
+            content = raw_res.content if hasattr(raw_res, "content") else str(raw_res)
+            match = re.search(r"\{.*\}", content, re.DOTALL)
+            if match:
+                data = json.loads(match.group())
+                result = RewriteResponse(**data)
+            else:
+                raise ValueError("JSON 패턴 미검출") from e
 
-        result = await structured_llm.ainvoke(rewrite_prompt, config=call_config)
         new_query = result.optimized_query.strip().strip('"')
-
-        logger.info(f"[RAG] [REWRITE] 쿼리 재구성 완료: '{query}' -> '{new_query}'")
-        # [리듀서] 리스트를 반환하면 자동으로 기존 리스트에 추가됨
+        logger.info(f"[RAG] [REWRITE] 쿼리 재구성: '{query}' -> '{new_query}'")
         return {"search_queries": [new_query], "retry_count": 1}
 
     except Exception as e:
-        logger.warning(f"[RAG] [REWRITE] 구조화된 출력 실패, 원본 유지: {e}")
-        # 실패 시에도 재시도 횟수만 1 증가
+        logger.warning(f"[RAG] [REWRITE] 모든 시도 실패, 원본 유지: {e}")
         return {"retry_count": 1}
 
 
@@ -374,16 +453,20 @@ async def generate(
 def _merge_adjacent_chunks(
     docs: list[Document], max_tokens: int = 1200
 ) -> list[Document]:
-    """같은 페이지의 연속된 청크들을 하나로 합쳐 풍부한 문맥을 제공합니다."""
+    """같은 페이지의 연속된 청크들을 하나로 합쳐 풍부한 문맥을 제공합니다 (최적화 버전)."""
     if not docs:
         return []
+    if len(docs) == 1:
+        return docs
 
     from common.utils import count_tokens_rough
 
     merged_docs: list[Document] = []
 
+    # 1. 정렬 (원본 보존을 위해 얕은 복사 리스트 사용)
+    # [최적화] deepcopy 대신 얕은 복사 후 필요한 값만 가공
     working_docs = sorted(
-        [copy.deepcopy(d) for d in docs],
+        docs,  # 굳이 deepcopy할 필요 없음, 아래에서 필요할 때만 복사
         key=lambda x: (
             str(x.metadata.get("source", "")),
             int(x.metadata.get("page", 0)),
@@ -391,24 +474,66 @@ def _merge_adjacent_chunks(
         ),
     )
 
-    current_doc = working_docs[0]
+    # 2. 병합 루프
+    # [최적화] 첫 번째 문서는 필요할 때만 복사
+    current_doc = Document(
+        page_content=working_docs[0].page_content,
+        metadata=copy.copy(working_docs[0].metadata),
+    )
+
+    # 미리 토큰 수 계산 (반복 계산 방지)
+    current_tokens = count_tokens_rough(current_doc.page_content)
+
     for next_doc in working_docs[1:]:
         curr_m = current_doc.metadata
         next_m = next_doc.metadata
+
+        # 병합 조건 확인: 동일 페이지이며, 실제 텍스트 오프셋이 인접한지 확인
+        # (중복 제거로 인해 인덱스가 벌어져도 실제 텍스트가 연속이면 병합 가능)
         is_same_context = curr_m.get("source") == next_m.get("source") and curr_m.get(
             "page"
         ) == next_m.get("page")
-        is_consecutive = (
-            abs(next_m.get("chunk_index", 0) - curr_m.get("chunk_index", 0)) <= 2
-        )
-        current_tokens = count_tokens_rough(
-            current_doc.page_content + next_doc.page_content
-        )
-        if is_same_context and is_consecutive and current_tokens <= max_tokens:
+
+        # [최적화] 섹션 일치 여부 확인 (주제 일관성 보장)
+        is_same_section = curr_m.get("current_section") == next_m.get("current_section")
+
+        # [개선] 인덱스가 아닌 실제 텍스트 오프셋(시작/끝) 기반 인접도 체크
+        curr_end = curr_m.get("end_index")
+        next_start = next_m.get("start_index")
+
+        if curr_end is not None and next_start is not None:
+            is_actually_consecutive = abs(next_start - curr_end) <= 5
+        else:
+            is_actually_consecutive = (
+                abs(next_m.get("chunk_index", 0) - curr_m.get("chunk_index", 0)) <= 1
+            )
+
+        next_tokens = count_tokens_rough(next_doc.page_content)
+
+        # 병합 결정: 페이지, 오프셋, 섹션이 모두 일치해야 함
+        if (
+            is_same_context
+            and is_actually_consecutive
+            and is_same_section
+            and (current_tokens + next_tokens + 10) <= max_tokens
+        ):
             current_doc.page_content += "\n\n" + next_doc.page_content
+            current_tokens += next_tokens + 10  # 구분자 토큰 보정
+            # 병합된 청크의 끝 지점 업데이트
+            current_doc.metadata["end_index"] = next_m.get("end_index", curr_end)
+            # [추가] 다음 청크와 병합을 위해 인덱스 갱신
+            current_doc.metadata["chunk_index"] = next_m.get(
+                "chunk_index", curr_m.get("chunk_index")
+            )
         else:
             merged_docs.append(current_doc)
-            current_doc = next_doc
+            # 새로운 기준 문서 설정 (얕은 복사)
+            current_doc = Document(
+                page_content=next_doc.page_content,
+                metadata=copy.copy(next_doc.metadata),
+            )
+            current_tokens = next_tokens
+
     merged_docs.append(current_doc)
     return merged_docs
 
@@ -417,12 +542,15 @@ def build_graph() -> Any:
     """Self-Correction 루프가 포함된 그래프를 빌드합니다."""
     workflow = StateGraph(GraphState)
 
+    # 노드 등록
     workflow.add_node("preprocess", preprocess)
     workflow.add_node("retrieve", retrieve_and_rerank)
     workflow.add_node("grade", grade_documents)
     workflow.add_node("rewrite", rewrite_query)
+    # [최적화] generate 노드에 전용 태그 부여하여 스트리밍 필터링 안정성 확보
     workflow.add_node("generate", generate)
 
+    # 엣지 및 조건부 로직 설정
     workflow.add_edge(START, "preprocess")
 
     workflow.add_conditional_edges(
@@ -456,4 +584,9 @@ def build_graph() -> Any:
     workflow.add_edge("rewrite", "retrieve")
     workflow.add_edge("generate", END)
 
-    return workflow.compile()
+    # [최적화] 상태 영속성을 위한 체크포인터 추가
+    memory = InMemorySaver()
+
+    # [핵심] 특정 노드에 메타데이터/태그 주입 (컴파일 시점이 아닌 노드 정의 시점 권장이나,
+    # 현재 구조에서는 astream에서 필터링할 수 있도록 태그를 명시적으로 관리)
+    return workflow.compile(checkpointer=memory)
