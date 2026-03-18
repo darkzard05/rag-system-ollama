@@ -8,6 +8,7 @@ import asyncio
 import contextlib
 import gc
 import logging
+import threading
 from collections import OrderedDict
 from typing import Any
 
@@ -23,8 +24,8 @@ class ResourcePool:
     """
 
     _instance: "ResourcePool | None" = None
-    _lock = asyncio.Lock()
     _pool: OrderedDict[str, tuple[Any, Any]]
+    _lock_obj: Any = None
     max_size: int
 
     def __new__(cls, *args, **kwargs):
@@ -32,16 +33,24 @@ class ResourcePool:
             cls._instance = super().__new__(cls)
             cls._instance._pool = OrderedDict()
             cls._instance.max_size = kwargs.get("max_size", 3)
+            cls._instance._lock_obj = None
         elif "max_size" in kwargs:
             cls._instance.max_size = kwargs["max_size"]
         return cls._instance
+
+    @property
+    def _lock(self) -> threading.Lock:
+        """스레드 및 이벤트 루프 간에 공유 가능한 threading.Lock을 반환합니다."""
+        if self._lock_obj is None:
+            self._lock_obj = threading.Lock()
+        return self._lock_obj
 
     async def register(self, file_hash: str, vector_store: Any, bm25_retriever: Any):
         """리소스 등록 (LRU 정책 적용)"""
         if not file_hash:
             return
 
-        async with self._lock:
+        with self._lock:
             # 1. 기존 리소스 갱신
             if file_hash in self._pool:
                 self._pool.move_to_end(file_hash)
@@ -69,7 +78,7 @@ class ResourcePool:
         """특정 리소스를 즉시 제거합니다."""
         if not file_hash:
             return
-        async with self._lock:
+        with self._lock:
             if file_hash in self._pool:
                 old_vs, old_bm = self._pool.pop(file_hash)
                 del old_vs
@@ -81,7 +90,7 @@ class ResourcePool:
         """리소스 조회 및 순서 갱신"""
         if not file_hash:
             return None, None
-        async with self._lock:
+        with self._lock:
             if file_hash in self._pool:
                 self._pool.move_to_end(file_hash)
                 return self._pool[file_hash]
@@ -102,9 +111,10 @@ class ResourcePool:
 
     async def clear(self):
         """모든 리소스 해제"""
-        async with self._lock:
+        with self._lock:
             self._pool.clear()
             self._cleanup_memory()
+
 
 
 def get_resource_pool() -> ResourcePool:
