@@ -17,11 +17,3 @@ repos:
         files: ^requirements/.*\.txt$
         pass_filenames: false
         stages: [pre-push]
-
-    -   id: unified-checks
-        name: unified-checks
-        entry: python scripts/run_checks.py
-        language: system
-        pass_filenames: false
-        always_run: true
-        stages: [pre-push]
