@@ -118,6 +118,11 @@ def extract_annotations_from_docs(documents: list) -> list[dict]:
                     for search_query in sentences:
                         if not search_query:
                             continue
+
+                        logger.info(
+                            f"[HIGHLIGHT] Searching query on page {page_val}: '{search_query}'"
+                        )
+
                         # [개선] 긴 문장 검색은 실패 확률이 높으므로 40자씩 끊어서 검색 (Overlapping Search)
                         chunk_len = 40
                         overlap = 10
