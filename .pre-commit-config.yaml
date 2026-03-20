@@ -8,22 +8,25 @@ repos:
     -   id: ruff-format
 
 # 2. 통합 검증 및 보안 자동화 - 푸시 시점에 심층 실행
--   repo: local
+-   repo: https://github.com/PyCQA/bandit
+    rev: 1.8.3
     hooks:
     -   id: bandit
-        name: bandit
-        entry: bandit -r src/ -ll
-        language: system
+        args: ["-r", "src/", "-ll"]
         pass_filenames: false
         stages: [pre-push]
 
+-   repo: https://github.com/pre-commit/mirrors-mypy
+    rev: v1.15.0
+    hooks:
     -   id: mypy
-        name: mypy
-        entry: mypy src/
-        language: system
+        args: ["src/"]
         pass_filenames: false
         stages: [pre-push]
+        additional_dependencies: ["tokenize-rt==5.2.0"]
 
+-   repo: local
+    hooks:
     -   id: pytest-unit
         name: pytest-unit
         entry: pytest tests/unit

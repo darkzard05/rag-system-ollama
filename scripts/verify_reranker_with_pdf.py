@@ -1,5 +1,4 @@
 import sys
-import os
 from pathlib import Path
 
 # Add src to sys.path
@@ -9,8 +8,7 @@ import logging
 from langchain_community.document_loaders import PyMuPDFLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_community.retrievers import BM25Retriever
-from core.reranker import FlashReranker, RerankingResult
-from langchain_core.documents import Document
+from core.reranker import FlashReranker
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
