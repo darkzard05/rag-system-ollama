@@ -4,7 +4,6 @@ Resource Pool 관리 모듈 (Simplified)
 무거운 객체(FAISS, BM25)들을 LRU 방식으로 캐싱하여 메모리/VRAM 고갈을 방지합니다.
 """
 
-import asyncio
 import contextlib
 import gc
 import logging
@@ -114,7 +113,6 @@ class ResourcePool:
         with self._lock:
             self._pool.clear()
             self._cleanup_memory()
-
 
 
 def get_resource_pool() -> ResourcePool:
