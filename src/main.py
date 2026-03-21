@@ -3,27 +3,23 @@ RAG Chatbot 애플리케이션의 메인 진입점 파일입니다.
 Streamlit 프레임워크를 기반으로 UI를 구성하고 세션 상태를 관리합니다.
 """
 
+import logging
 import os
 from pathlib import Path
-from typing import Any
 
 import nest_asyncio
 import streamlit as st
-from streamlit.delta_generator import DeltaGenerator
-
-# 로깅 설정 (최상단)
-from common.logging_config import setup_logging
-
-logger = setup_logging(log_level="DEBUG", log_file=Path("logs/app.log"))
+from logs.logger_setup import setup_logging
 
 from common.config import (
     DEFAULT_EMBEDDING_MODEL,
     DEFAULT_OLLAMA_MODEL,
 )
-
-# noqa: E402
-from common.constants import FilePathConstants, StringConstants  # noqa: E402
+from common.constants import FilePathConstants, StringConstants
 from common.utils import safe_cache_resource, sync_run
+
+# 로깅 설정 (최상단)
+logger = setup_logging(log_level="DEBUG", log_file=Path("logs/app.log"))
 
 # [Lazy Import] 무거운 코어 모듈 임포트 제거 (함수 내부로 이동)
 from core.session import SessionManager  # noqa: E402

@@ -211,9 +211,9 @@ class EmbeddingBasedSemanticChunker:
         if not texts:
             return np.array([]).reshape(0, 0)
 
-        all_results = [None] * len(texts)
-        missing_indices = []
-        missing_texts = []
+        all_results: list[np.ndarray | None] = [None] * len(texts)
+        missing_indices: list[int] = []
+        missing_texts: list[str] = []
 
         # 1. 정제 및 캐시 확인
         for i, text in enumerate(texts):

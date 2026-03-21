@@ -4,10 +4,10 @@ Resource Pool 관리 모듈 (Simplified)
 무거운 객체(FAISS, BM25)들을 LRU 방식으로 캐싱하여 메모리/VRAM 고갈을 방지합니다.
 """
 
+import asyncio
 import contextlib
 import gc
 import logging
-import threading
 from collections import OrderedDict
 from typing import Any
 
@@ -18,13 +18,13 @@ logger = logging.getLogger(__name__)
 
 class ResourcePool:
     """
-    LRU 기반 리소스 관리자 (Thread-safe & Async-safe).
+    LRU 기반 리소스 관리자 (Async-safe).
     단일 인스턴스로 작동하여 시스템 전역 리소스를 관리합니다.
     """
 
     _instance: "ResourcePool | None" = None
     _pool: OrderedDict[str, tuple[Any, Any]]
-    _lock_obj: Any = None
+    _lock_obj: asyncio.Lock | None = None
     max_size: int
 
     def __new__(cls, *args, **kwargs):
@@ -38,10 +38,10 @@ class ResourcePool:
         return cls._instance
 
     @property
-    def _lock(self) -> threading.Lock:
-        """스레드 및 이벤트 루프 간에 공유 가능한 threading.Lock을 반환합니다."""
+    def _lock(self) -> asyncio.Lock:
+        """이벤트 루프 내에서 안전하게 사용할 수 있는 asyncio.Lock을 반환합니다."""
         if self._lock_obj is None:
-            self._lock_obj = threading.Lock()
+            self._lock_obj = asyncio.Lock()
         return self._lock_obj
 
     async def register(self, file_hash: str, vector_store: Any, bm25_retriever: Any):
@@ -49,7 +49,7 @@ class ResourcePool:
         if not file_hash:
             return
 
-        with self._lock:
+        async with self._lock:
             # 1. 기존 리소스 갱신
             if file_hash in self._pool:
                 self._pool.move_to_end(file_hash)
@@ -77,7 +77,7 @@ class ResourcePool:
         """특정 리소스를 즉시 제거합니다."""
         if not file_hash:
             return
-        with self._lock:
+        async with self._lock:
             if file_hash in self._pool:
                 old_vs, old_bm = self._pool.pop(file_hash)
                 del old_vs
@@ -89,7 +89,7 @@ class ResourcePool:
         """리소스 조회 및 순서 갱신"""
         if not file_hash:
             return None, None
-        with self._lock:
+        async with self._lock:
             if file_hash in self._pool:
                 self._pool.move_to_end(file_hash)
                 return self._pool[file_hash]
@@ -110,7 +110,7 @@ class ResourcePool:
 
     async def clear(self):
         """모든 리소스 해제"""
-        with self._lock:
+        async with self._lock:
             self._pool.clear()
             self._cleanup_memory()
 
