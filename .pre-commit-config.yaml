@@ -1,4 +1,5 @@
 repos:
+# 1. Ruff (린팅 + 포맷) - 커밋 시점에 고속 실행
 -   repo: https://github.com/astral-sh/ruff-pre-commit
     rev: v0.15.1
     hooks:
@@ -6,33 +7,38 @@ repos:
         args: [ --fix ]
     -   id: ruff-format
 
+# 2. 통합 검증 및 보안 자동화 - 푸시 시점에 심층 실행
 -   repo: https://github.com/PyCQA/bandit
     rev: 1.8.3
     hooks:
     -   id: bandit
         args: ["-r", "src/", "-ll"]
         pass_filenames: false
+        stages: [pre-push]
+
+-   repo: https://github.com/pre-commit/mirrors-mypy
+    rev: v1.15.0
+    hooks:
+    -   id: mypy
+        args: ["src/"]
+        pass_filenames: false
+        stages: [pre-push]
+        additional_dependencies: ["tokenize-rt==5.2.0"]
 
 -   repo: local
     hooks:
+    -   id: pytest-unit
+        name: pytest-unit
+        entry: pytest tests/unit
+        language: system
+        pass_filenames: false
+        always_run: true
+        stages: [pre-push]
+
     -   id: verify-requirements
         name: verify-requirements
         entry: python scripts/maintenance/verify_requirements.py
         language: system
         files: ^requirements/.*\.txt$
         pass_filenames: false
-
-    -   id: mypy
-        name: mypy
-        entry: powershell -NoProfile -Command "$env:PYTHONPATH='src'; mypy src"
-        language: system
-        types: [python]
-        pass_filenames: false
-
-    -   id: pytest-unit
-        name: pytest-unit
-        entry: pytest --disable-warnings tests/unit
-        language: system
-        pass_filenames: false
-        files: ^src/|^tests/unit/
-        always_run: false
+        stages: [pre-push]

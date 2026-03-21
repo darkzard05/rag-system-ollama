@@ -8,6 +8,7 @@ import asyncio
 import contextlib
 import gc
 import logging
+import threading
 from collections import OrderedDict
 from typing import Any
 
@@ -23,18 +24,30 @@ class ResourcePool:
     """
 
     _instance: "ResourcePool | None" = None
-    _lock = asyncio.Lock()
+    _creation_lock = threading.Lock()
     _pool: OrderedDict[str, tuple[Any, Any]]
+    _local = threading.local()
     max_size: int
 
     def __new__(cls, *args, **kwargs):
-        if cls._instance is None:
-            cls._instance = super().__new__(cls)
-            cls._instance._pool = OrderedDict()
-            cls._instance.max_size = kwargs.get("max_size", 3)
-        elif "max_size" in kwargs:
-            cls._instance.max_size = kwargs["max_size"]
-        return cls._instance
+        with cls._creation_lock:
+            if cls._instance is None:
+                cls._instance = super().__new__(cls)
+                cls._instance._pool = OrderedDict()
+                cls._instance.max_size = kwargs.get("max_size", 3)
+            elif "max_size" in kwargs:
+                cls._instance.max_size = kwargs["max_size"]
+            return cls._instance
+
+    @property
+    def _lock(self) -> asyncio.Lock:
+        """
+        현재 스레드에 한정된 asyncio.Lock을 반환하여 다중 스레드 환경에서의 안전성을 보장합니다.
+        각 스레드는 자신만의 이벤트 루프와 잠금 객체를 갖게 됩니다.
+        """
+        if not hasattr(self._local, "lock"):
+            self._local.lock = asyncio.Lock()
+        return self._local.lock
 
     async def register(self, file_hash: str, vector_store: Any, bm25_retriever: Any):
         """리소스 등록 (LRU 정책 적용)"""

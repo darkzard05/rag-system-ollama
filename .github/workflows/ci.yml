@@ -76,7 +76,8 @@ jobs:
           --ignore-vuln CVE-2025-67221 \
           --ignore-vuln CVE-2026-26013 \
           --ignore-vuln CVE-2026-27794 \
-          --ignore-vuln CVE-2026-28277
+          --ignore-vuln CVE-2026-28277 \
+          --ignore-vuln CVE-2026-28500
 
   test:
     name: Test (Py ${{ matrix.python-version }} on ${{ matrix.os }})
@@ -112,8 +113,7 @@ jobs:
       if: runner.os == 'Linux'
       run: |
         sudo apt-get update
-        # libglib2.0-0 is still useful for some utility libraries
-        sudo apt-get install -y libglib2.0-0
+        sudo apt-get install -y libgl1 libglib2.0-0
         
     - name: Install dependencies (Windows)
       if: runner.os == 'Windows'

@@ -7,7 +7,7 @@ models:
   default_ollama: "qwen3:4b-instruct-2507-q4_K_M"
 
   # 기본으로 사용할 임베딩 모델 이름 (Ollama 또는 HuggingFace)
-  default_embedding: "nomic-embed-text"
+  default_embedding: "nomic-embed-text-v2-moe"
   
   # Ollama 서버 주소 (로컬: http://127.0.0.1:11434, 도커: http://host.docker.internal:11434)
   base_url: "http://127.0.0.1:11434"
@@ -70,14 +70,14 @@ rag:
       semantic_weight: 0.8 # 의미 중심 질문 시 FAISS 비중
       # 키워드/의미 판단용 정규식 및 키워드 목록
       keyword_patterns: ["v?\\d+\\.\\d+(\\.\\d+)?", "[a-zA-Z]+\\d+", "0x[0-9a-fA-F]+"]
-      semantic_keywords: ["차이", "작동", "이유", "철학", "설계", "구조", "개념", "설명해", "방법"]
+      semantic_keywords: ["차이", "작동", "이유", "철학", "설계", "구조", "개념", "설명해", "방법", "무엇", "어떻게", "장단점", "특징", "비교", "요약", "정의"]
 
   # 재순위화(Reranking) 설정
   reranker:
     enabled: true
-    # 고속 CPU 추론을 위해 경량 모델로 교체
-    model_name: "ms-marco-TinyBERT-L-2-v2" 
-    top_k: 10 # 컨텍스트 풍부화
+    # [수정] 다국어 지원을 위해 모델 교체 (기존 TinyBERT는 영어 전용)
+    model_name: "ms-marco-MultiBERT-L-12" 
+    top_k: 15 # [수정] 문맥 유실 방지를 위해 후보군 확대
     bypass_threshold: 0.95
 
   # 텍스트 분할 설정
@@ -122,7 +122,7 @@ rag:
 
       <Core_Guidelines>
       1. [Language]: 사용자의 질문 언어에 맞추어 답변하십시오. (문서 언어와 무관)
-      2. [Groundedness]: 제공된 <Context>를 철저히 분석하십시오. 각 컨텍스트는 [섹션: 이름] 정보를 포함하고 있습니다. 이를 통해 문서의 전체 구조 내에서의 맥락을 파악하여 답변하십시오.
+      2. [Groundedness]: **절대 원칙**: 제공된 <Context>에 없는 내용은 절대 답변에 포함하지 마십시오. 외부 지식을 사용하면 정보의 신뢰성이 떨어질 수 있습니다. 모르는 내용은 "문서에 관련 정보가 없습니다"라고 답하십시오.
       3. [Citations]: 모든 정보의 출처를 `[섹션명, p.X]` 형태로 인용하십시오. 가급적 특정 수치나 핵심 명사 바로 뒤에 붙이십시오.
       4. [Synthesis]: 흩어져 있는 정보들을 유기적으로 연결하여 질문에 대한 다각도 분석을 수행하십시오. 특히 섹션 간의 관계(원인과 결과, 실험과 결론 등)를 고려하십시오.
       </Core_Guidelines>

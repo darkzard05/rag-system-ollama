@@ -42,7 +42,7 @@ ignore = [
 [tool.ruff.lint.per-file-ignores]
 "src/main.py" = ["E402", "F401"] # Streamlit 초기화 및 조건부 임포트 허용
 "src/core/rag_core.py" = ["E402"] # 지연 임포트 허용
-    "src/common/utils.py" = ["E402"] # 지연 임포트 허용
+"src/common/utils.py" = ["E402"] # 지연 임포트 허용
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
@@ -56,7 +56,6 @@ filterwarnings = [
 ]
 
 [tool.ruff.lint.isort]
-
 known-first-party = ["api", "common", "core", "infra", "security", "services", "ui"]
 
 [tool.ruff.format]
@@ -66,13 +65,13 @@ skip-magic-trailing-comma = false
 line-ending = "lf"
 
 [tool.mypy]
-python_version = "3.10"
-warn_return_any = false
-warn_unused_configs = true
-ignore_missing_imports = true
-follow_imports = "skip"
-namespace_packages = true
-explicit_package_bases = true
 mypy_path = "src"
-disable_error_code = ["import-untyped", "annotation-unchecked", "no-any-return"]
+python_version = "3.10"
 check_untyped_defs = true
+ignore_missing_imports = true
+explicit_package_bases = true
+exclude = ["tests"]
+
+[[tool.mypy.overrides]]
+module = ["requests", "yaml"]
+ignore_missing_imports = true
