@@ -100,17 +100,48 @@ def extract_annotations_from_docs(documents: list) -> list[dict]:
                     page = pdf[page_val - 1]
                     textpage = page.get_textpage()
 
-                    # [개선] 마크다운 특수문자(#, *, ` 등)를 제거하여 실제 PDF 텍스트와 매칭율 향상
-                    clean_content = re.sub(r"[#*`_~\[\]()]", "", content).lower()
+                    # [고도화] 개선된 검색 쿼리 전처리 로직 (Strategy C 기반)
+                    # 1. HTML 태그 제거 (예: <img src="...">)
+                    text = re.sub(r"<[^>]+>", " ", content)
 
-                    # [최적화] 청크 전체를 하이라이트하기 위해 모든 문장을 검색 대상으로 설정
-                    sentences = [
-                        s.strip()
-                        for s in re.split(r"[.!?\n]", clean_content)
-                        if len(s.strip()) > 8  # 너무 짧은 검색어는 무시
-                    ]
+                    # 2. 마크다운 및 특수문자 제거 (기존보다 강화, 따옴표 포함)
+                    text = re.sub(r"[#*`_~\[\]()\"']", "", text)
 
-                    if not sentences:
+                    # 3. 연속 공백 제거 및 앞뒤 공백 제거
+                    text = re.sub(r"\s+", " ", text).strip()
+
+                    # 4. 소문자 변환
+                    clean_content = text.lower()
+
+                    # 5. 문장 분리 (줄바꿈 포함)
+                    raw_sentences = re.split(r"[.!?\n]", clean_content)
+
+                    sentences = []
+                    for s in raw_sentences:
+                        s = s.strip()
+
+                        # [필터링 1] 최소 길이 상향 (8 -> 20)
+                        # 너무 짧은 문장은 오탐지(False Positive)의 원인이 됨
+                        if len(s) < 20:
+                            continue
+
+                        # [필터링 2] 숫자나 특수문자로만 구성된 쓰레기 데이터 제거
+                        if re.match(r"^[\d\s\W]+$", s):
+                            continue
+
+                        # [필터링 3] 표/그림 캡션 등 불필요한 메타데이터 제거 (휴리스틱)
+                        # 예: "table 1", "figure 3", "page 10" 등으로 시작하는 경우
+                        if re.match(r"^(table|figure|fig\.|tab\.)\s*\d+", s):
+                            continue
+
+                        # [필터링 4] 참고문헌 패턴 (예: [1], (2020)) 등으로 시작하는 경우
+                        if re.match(r"^[\(\[]\s*\d+\s*[\)\]]", s):
+                            continue
+
+                        sentences.append(s)
+
+                    if not sentences and clean_content:
+                        # 폴백: 필터링 결과가 없으면 첫 150자 사용
                         sentences = [clean_content[:150].strip()]
 
                     doc_quads = []
