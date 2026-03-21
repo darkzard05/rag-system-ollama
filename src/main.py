@@ -9,13 +9,13 @@ from pathlib import Path
 
 import nest_asyncio
 import streamlit as st
-from logs.logger_setup import setup_logging
 
 from common.config import (
     DEFAULT_EMBEDDING_MODEL,
     DEFAULT_OLLAMA_MODEL,
 )
 from common.constants import FilePathConstants, StringConstants
+from common.logging_config import setup_logging
 from common.utils import safe_cache_resource, sync_run
 
 # 로깅 설정 (최상단)
