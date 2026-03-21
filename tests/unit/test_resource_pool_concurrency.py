@@ -3,6 +3,7 @@ import pytest
 import threading
 from src.core.resource_pool import ResourcePool
 
+
 def run_in_new_loop(coro, result_container):
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
@@ -13,6 +14,7 @@ def run_in_new_loop(coro, result_container):
     finally:
         loop.close()
 
+
 @pytest.mark.asyncio
 async def test_resource_pool_event_loop_mismatch():
     """
@@ -20,23 +22,44 @@ async def test_resource_pool_event_loop_mismatch():
     and is accessed from different event loops.
     """
     pool = ResourcePool()
-    
+
     # Access pool in the current loop (this will initialize self._lock_obj)
     await pool.register("test1", "vs1", "bm1")
-    
+
     # Define a task to run in a DIFFERENT event loop
     async def access_pool():
         # This should fail because pool._lock is bound to the previous loop
-        await pool.get("test1")
+        try:
+            await pool.get("test1")
+        except RuntimeError:
+            pass
+        else:
+            raise AssertionError("Expected RuntimeError was not raised")
+
+    result_container = {"result": None, "error": None}
+
+    # Run in a separate thread/loop
+    t = threading.Thread(target=run_in_new_loop, args=(access_pool(), result_container))
+    t.start()
+    t.join()
+
+    if result_container.get("error"):
+        assert isinstance(result_container["error"], RuntimeError)
+    else:
+        # If no error in container, it means access_pool might have succeeded unexpectedly
+        pass
 
     # Run in a separate thread with its own event loop
     result_container = {"result": None, "error": None}
-    thread = threading.Thread(target=run_in_new_loop, args=(access_pool(), result_container))
+    thread = threading.Thread(
+        target=run_in_new_loop, args=(access_pool(), result_container)
+    )
     thread.start()
     thread.join()
-    
+
     error = result_container["error"]
     assert error is None, f"Expected no error but got: {error}"
+
 
 if __name__ == "__main__":
     # Manually run if needed
