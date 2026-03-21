@@ -26,7 +26,7 @@ class ResourcePool:
     _instance: "ResourcePool | None" = None
     _creation_lock = threading.Lock()
     _pool: OrderedDict[str, tuple[Any, Any]]
-    _local = threading.local()
+    _access_lock = threading.Lock()
     max_size: int
 
     def __new__(cls, *args, **kwargs):
@@ -40,21 +40,19 @@ class ResourcePool:
             return cls._instance
 
     @property
-    def _lock(self) -> asyncio.Lock:
+    def _lock(self) -> threading.Lock:
         """
-        현재 스레드에 한정된 asyncio.Lock을 반환하여 다중 스레드 환경에서의 안전성을 보장합니다.
-        각 스레드는 자신만의 이벤트 루프와 잠금 객체를 갖게 됩니다.
+        스레드 안전한 접근을 위한 threading.Lock을 반환합니다.
+        asyncio.Lock은 이벤트 루프에 종속적이므로 멀티스레드 환경(Streamlit) 공유 자원 보호에 부적합합니다.
         """
-        if not hasattr(self._local, "lock"):
-            self._local.lock = asyncio.Lock()
-        return self._local.lock
+        return self._access_lock
 
     async def register(self, file_hash: str, vector_store: Any, bm25_retriever: Any):
         """리소스 등록 (LRU 정책 적용)"""
         if not file_hash:
             return
 
-        async with self._lock:
+        with self._lock:
             # 1. 기존 리소스 갱신
             if file_hash in self._pool:
                 self._pool.move_to_end(file_hash)
@@ -82,7 +80,7 @@ class ResourcePool:
         """특정 리소스를 즉시 제거합니다."""
         if not file_hash:
             return
-        async with self._lock:
+        with self._lock:
             if file_hash in self._pool:
                 old_vs, old_bm = self._pool.pop(file_hash)
                 del old_vs
@@ -94,7 +92,7 @@ class ResourcePool:
         """리소스 조회 및 순서 갱신"""
         if not file_hash:
             return None, None
-        async with self._lock:
+        with self._lock:
             if file_hash in self._pool:
                 self._pool.move_to_end(file_hash)
                 return self._pool[file_hash]
@@ -115,7 +113,7 @@ class ResourcePool:
 
     async def clear(self):
         """모든 리소스 해제"""
-        async with self._lock:
+        with self._lock:
             self._pool.clear()
             self._cleanup_memory()
 

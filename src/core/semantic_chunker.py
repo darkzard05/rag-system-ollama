@@ -1,153 +1,266 @@
 """
-임베딩 기반 의미론적 텍스트 분할기를 구현합니다.
-
-이 모듈은 문서를 문장 단위로 우선 분할한 후, 인접 문장 간의 임베딩 유사도를
-계산하여 유사도가 낮은 지점을 경계로 선택합니다. 이를 통해 의미론적으로
-일관성 있는 청크를 생성합니다.
+의미론적(Semantic) 청크 분할 모듈.
+LLM 임베딩을 사용하여 문맥적 유사도를 기반으로 텍스트를 지능적으로 분할합니다.
 """
 
+import asyncio
 import hashlib
 import logging
 import re
-from typing import TYPE_CHECKING, Any, cast
+from typing import Any, cast
 
 import numpy as np
 from langchain_core.documents import Document
 from langchain_core.embeddings import Embeddings
 
-from common.constants import ChunkingConstants
-from services.optimization.caching_optimizer import CacheManager, get_cache_manager
-
-# 순환 참조 방지 및 타입 힌트용
-if TYPE_CHECKING:
-    pass
+from cache.embedding_cache import EmbeddingCacheManager
+from common.config import CHUNKING_CONFIG, ChunkingConstants
 
 logger = logging.getLogger(__name__)
 
-
-# [상수] 표준 섹션 키워드 (정제 시 활용)
-STANDARD_SECTION_KEYWORDS = [
+# [수정] 표준 섹션 헤더 키워드 상수 (대문자 기준)
+STANDARD_SECTION_KEYWORDS = {
     "ABSTRACT",
     "INTRODUCTION",
     "RELATED WORK",
     "METHOD",
+    "METHODOLOGY",
     "EXPERIMENT",
-    "RESULT",
+    "RESULTS",
+    "DISCUSSION",
     "CONCLUSION",
-    "REFERENCE",
-    "ACKNOWLEDGMENT",
-]
+    "REFERENCES",
+    "APPENDIX",
+}
 
 
 class EmbeddingBasedSemanticChunker:
     """
-    임베딩 기반 의미론적 텍스트 분할기.
-
-    문장 단위로 분할 후, 임베딩 유사도 기반으로 의미 경계를 탐지하여
-    일관성 있는 청크를 생성합니다.
+    임베딩 기반 의미론적 청커.
+    문장 단위 임베딩 유사도를 분석하여 문맥이 전환되는 지점을 자동으로 감지하고 분할합니다.
     """
 
     def __init__(
         self,
         embedder: Embeddings,
-        buffer_size: int = 1,  # [추가] 문맥 윈도우 크기
-        breakpoint_threshold_type: str = "percentile",
-        breakpoint_threshold_value: float = 95.0,
-        sentence_split_regex: str = r"(?<=[.?!])\s+",  # [개선] Lookbehind 적용
-        min_chunk_size: int = 100,
-        max_chunk_size: int = 800,
-        chunk_overlap: int = 1,  # [추가] 겹칠 문장 수 (Context preservation)
-        similarity_threshold: float = 0.6,
-        batch_size: int = 64,
-        cache_manager: CacheManager | None = None,
+        buffer_size: int = CHUNKING_CONFIG["buffer_size"],
+        breakpoint_threshold_type: str = CHUNKING_CONFIG["breakpoint_threshold_type"],
+        breakpoint_threshold_value: float = CHUNKING_CONFIG[
+            "breakpoint_threshold_value"
+        ],
+        similarity_threshold: float = CHUNKING_CONFIG["similarity_threshold"],
+        min_chunk_size: int = CHUNKING_CONFIG["min_chunk_size"],
+        max_chunk_size: int = CHUNKING_CONFIG["max_chunk_size"],
+        chunk_overlap: int = CHUNKING_CONFIG["chunk_overlap"],
+        batch_size: int = 64,  # 배치 처리 크기
     ):
-        """
-        의미론적 청킹 분할기를 초기화합니다.
-        """
         self.embedder = embedder
-        self.buffer_size = buffer_size  # [추가]
+        self.buffer_size = buffer_size
         self.breakpoint_threshold_type = breakpoint_threshold_type
         self.breakpoint_threshold_value = breakpoint_threshold_value
-        self.sentence_split_regex = sentence_split_regex
+        self.similarity_threshold = similarity_threshold
         self.min_chunk_size = min_chunk_size
         self.max_chunk_size = max_chunk_size
-        self.chunk_overlap = chunk_overlap  # [추가]
-        self.similarity_threshold = similarity_threshold
+        self.chunk_overlap = chunk_overlap
         self.batch_size = batch_size
 
-        # [최적화] 전역 캐시 관리자 설정
-        self.cache_manager = cache_manager or get_cache_manager()
-
-        # [최적화] 모델 식별을 위한 이름 추출 (Ollama 및 HuggingFace 지원 강화)
-        self.model_name = getattr(embedder, "model", None) or getattr(
-            embedder, "model_name", "default_model"
+        # 임베딩 모델 이름 추출 (캐싱용)
+        self.model_name = getattr(
+            embedder, "model", getattr(embedder, "model_name", "unknown")
         )
+        self.cache_manager = EmbeddingCacheManager()
 
-        # ✅ 정규식 사전 컴파일 (성능 최적화)
-        self._sentence_pattern = re.compile(self.sentence_split_regex)
+        logger.info(
+            f"Semantic Chunker 초기화 완료 (Model: {self.model_name}, "
+            f"Max Size: {max_chunk_size}, Buffer: {buffer_size})"
+        )
 
     def _split_sentences(self, text: str) -> list[dict]:
         """
-        문장 단위로 텍스트를 분할하고 오프셋 정보를 함께 반환합니다.
-        [최적화] 마크다운 테이블 행(|)을 보호하며, 너무 긴 문장은 강제로 분할합니다.
+        텍스트를 문장 단위로 분할하되, 각 문장의 원본 오프셋(start, end)을 유지합니다.
+        [최적화] 정규표현식을 미리 컴파일하여 재사용합니다.
         """
-        lines = text.split("\n")
-        temp_sentences: list[dict[str, Any]] = []
-        current_pos = 0
+        # 문장 종결 기호 패턴 (약어 제외 로직 미포함 - 단순화 버전)
+        sentence_pattern = re.compile(r"(?<=[.!?])\s+")
+        sentences = []
+        start = 0
 
-        # 1. 행 단위로 훑으며 테이블 보호 및 문장 분할
-        for line in lines:
-            line_len = len(line)
-            stripped = line.strip()
+        # 단락 구분을 위한 이중 줄바꿈 처리
+        paragraphs = re.split(r"\n\s*\n", text)
+        for para in paragraphs:
+            if not para.strip():
+                start += len(para) + 2  # 줄바꿈 길이 보정 (추정)
+                continue
 
-            # 테이블 행 감지 ( | 로 시작하고 | 로 끝나는 패턴)
-            if stripped.startswith("|") and stripped.endswith("|"):
-                self._add_cleaned_sentence(
-                    temp_sentences, line, current_pos, current_pos + line_len
+            # 문장 분할
+            raw_splits = sentence_pattern.split(para)
+            curr_pos = start
+
+            for raw_s in raw_splits:
+                s = raw_s.strip()
+                if not s:
+                    continue
+
+                # 원본 텍스트 내에서 실제 위치 찾기 (정확도 향상)
+                real_start = text.find(s, curr_pos)
+                if real_start == -1:
+                    # fallback: 단순히 길이만큼 전진
+                    real_start = curr_pos
+
+                real_end = real_start + len(s)
+                sentences.append(
+                    {"text": s, "start": real_start, "end": real_end, "vector": None}
                 )
+                curr_pos = real_end
+
+            # 단락 간 간격 보정 (다음 단락 시작점 찾기)
+            # 현재 구현의 한계로 인해 근사치 사용 (추후 개선 가능)
+            start += len(para) + 2
+
+        return sentences
+
+    def _post_process_chunks(self, chunks: list[dict]) -> list[dict]:
+        """
+        [고도화] 생성된 청크를 후처리합니다.
+        - 마크다운/HTML 태그 정리
+        - 너무 긴 청크 강제 분할
+        - 오프셋 검증
+        """
+        processed_chunks = []
+
+        for chunk in chunks:
+            # 1. 텍스트 정제 (기본 공백 정리)
+            chunk["text"] = " ".join(chunk["text"].split())
+
+            # 2. 너무 긴 청크 처리 (하드 리미트)
+            # 임베딩 모델의 최대 토큰 수를 초과하지 않도록 강제 분할
+            # 여기서는 문자 수 기준으로 대략적 제어 (토크나이저 없음)
+            limit = self.max_chunk_size * 2  # 여유분 포함
+            if len(chunk["text"]) > limit:
+                logger.warning(
+                    f"[Chunker] 청크 크기 초과 감지 ({len(chunk['text'])} > {limit}). 강제 분할합니다."
+                )
+                sub_chunks = self._hard_split_chunk(chunk, limit)
+                processed_chunks.extend(sub_chunks)
             else:
-                # 일반 텍스트는 정규식으로 분할
-                parts = list(self._sentence_pattern.finditer(line))
-                last_pos = 0
-                for match in parts:
-                    sep_end = match.end()
-                    segment_text = line[last_pos:sep_end]
-                    if segment_text.strip():
-                        self._add_cleaned_sentence(
-                            temp_sentences,
-                            segment_text,
-                            current_pos + last_pos,
-                            current_pos + sep_end,
-                        )
-                    last_pos = sep_end
+                processed_chunks.append(chunk)
 
-                if last_pos < len(line):
-                    remaining_text = line[last_pos:]
-                    if remaining_text.strip():
-                        self._add_cleaned_sentence(
-                            temp_sentences,
-                            remaining_text,
-                            current_pos + last_pos,
-                            current_pos + len(line),
-                        )
+        return processed_chunks
 
-            current_pos += line_len + 1  # \n 포함
+    def _hard_split_chunk(self, chunk: dict, limit: int) -> list[dict]:
+        """너무 긴 청크를 강제로 분할합니다 (오프셋 보정 포함)."""
+        text = chunk["text"]
+        start_offset = chunk["start"]
+        chunks = []
 
-        # 2. 너무 긴 세그먼트 강제 분할 (OOM 방지 및 하드 스플릿 플래그 처리)
-        hard_split_limit: int = ChunkingConstants.MAX_HARD_SPLIT_LEN.value
-        if self.max_chunk_size > 0:
-            hard_split_limit = min(
-                ChunkingConstants.MAX_HARD_SPLIT_LEN.value,
-                int(self.max_chunk_size * 1.5),
+        for i in range(0, len(text), limit):
+            sub_text = text[i : i + limit]
+            chunks.append(
+                {
+                    "text": sub_text,
+                    "start": start_offset + i,
+                    "end": start_offset + i + len(sub_text),
+                    "vector": chunk["vector"],  # 벡터는 원본 유지 (부정확할 수 있음)
+                    "is_hard_split": True,
+                    "current_section": chunk.get("current_section", ""),
+                }
             )
+        return chunks
 
-        final_sentences: list[dict[str, Any]] = []
-        for seg in temp_sentences:
-            seg_text = str(seg["text"])
-            seg_start = int(seg["start"])
+    def _legacy_chunking_fallback(self, text: str) -> list[dict]:
+        """
+        [Legacy Support] 의미론적 분할 실패 시 기존의 RecursiveCharacterTextSplitter 로직 흉내
+        """
+        logger.warning("[Chunker] 의미론적 분할 실패. 기본(Rule-based) 분할로 전환합니다.")
+        limit = self.max_chunk_size
+        overlap = self.chunk_overlap
+        chunks = []
+        start = 0
 
+        while start < len(text):
+            end = min(start + limit, len(text))
+            chunk_text = text[start:end]
+            chunks.append(
+                {
+                    "text": chunk_text,
+                    "start": start,
+                    "end": end,
+                    "vector": None,
+                    "is_hard_split": True,
+                }
+            )
+            start += limit - overlap
+
+        return chunks
+
+    async def _process_segment_async(
+        self, text_segment: str, start_offset: int, hard_split_limit: int = 1500
+    ) -> list[dict[str, Any]]:
+        """
+        긴 텍스트 세그먼트를 비동기적으로 처리하여 UI 블로킹을 최소화합니다.
+        문장 단위로 나누고, 너무 긴 문장은 강제로 자릅니다.
+        """
+        # 문장 분리 (정규식: .!? 뒤에 공백)
+        # [최적화] 미리 컴파일된 정규식 사용 권장되나 여기서는 가독성을 위해 직접 사용
+        raw_sentences = re.split(r"(?<=[.!?])\s+", text_segment)
+        final_sentences = []
+        curr_pos = 0
+
+        for s in raw_sentences:
+            s_len = len(s)
+            # 너무 긴 문장은 강제 분할 (임베딩 모델 한계 극복)
+            if s_len > hard_split_limit:
+                for i in range(0, s_len, hard_split_limit):
+                    sub = s[i : i + hard_split_limit]
+                    self._add_cleaned_sentence(
+                        final_sentences,
+                        sub,
+                        start_offset + curr_pos + i,
+                        start_offset + curr_pos + i + len(sub),
+                        is_hard_split=True,
+                    )
+            else:
+                self._add_cleaned_sentence(
+                    final_sentences,
+                    s,
+                    start_offset + curr_pos,
+                    start_offset + curr_pos + s_len,
+                )
+
+            curr_pos += s_len + 1  # 공백/구분자 길이 보정
+            # [UI 반응성] 긴 루프 중간에 제어권 양보
+            if len(final_sentences) % 50 == 0:
+                await asyncio.sleep(0)
+
+        return final_sentences
+
+    def _process_segment(
+        self, text_segment: str, start_offset: int, hard_split_limit: int = 1500
+    ) -> list[dict[str, Any]]:
+        """
+        텍스트 세그먼트를 문장 단위로 분리하고 메타데이터(오프셋)를 생성합니다.
+        """
+        # 문장 분리 (단순화된 정규식)
+        # 실제로는 nltk나 spacy가 더 정확하지만 속도를 위해 정규식 사용
+        segments = re.split(r"(?<=[.!?])\s+", text_segment)
+        final_sentences = []
+        seg_start = start_offset
+
+        for seg in segments:
+            if not seg.strip():
+                seg_start += len(seg)
+                continue
+
+            seg_text = seg
+            # 너무 긴 문장은 강제 분할
             if len(seg_text) <= hard_split_limit:
-                final_sentences.append(seg)
+                self._add_cleaned_sentence(
+                    final_sentences,
+                    seg_text,
+                    seg_start,
+                    seg_start + len(seg_text),
+                )
+                seg_start += len(seg_text) + 1  # 공백 가정
             else:
                 # 강제 분할 로직
                 curr_pos = 0
@@ -215,17 +328,24 @@ class EmbeddingBasedSemanticChunker:
         missing_indices: list[int] = []
         missing_texts: list[str] = []
 
-        # 1. 정제 및 캐시 확인
-        for i, text in enumerate(texts):
-            norm_text = " ".join(text.split())
-            cache_key = f"emb:{self.model_name}:{hashlib.sha256(norm_text.encode()).hexdigest()[:16]}"
+        # 1. 정제 및 캐시 키 생성
+        norm_texts = [" ".join(t.split()) for t in texts]
+        cache_keys = [
+            f"emb:{self.model_name}:{hashlib.sha256(t.encode()).hexdigest()[:16]}"
+            for t in norm_texts
+        ]
 
-            cached_vec = await self.cache_manager.get(cache_key)
-            if cached_vec is not None:
-                all_results[i] = np.array(cached_vec, dtype="float32")
+        # 캐시 병렬 조회
+        cached_vecs = await asyncio.gather(
+            *(self.cache_manager.get(k) for k in cache_keys)
+        )
+
+        for i, vec in enumerate(cached_vecs):
+            if vec is not None:
+                all_results[i] = np.array(vec, dtype="float32")
             else:
                 missing_indices.append(i)
-                missing_texts.append(norm_text)
+                missing_texts.append(norm_texts[i])
 
         # 2. 누락분 배치 임베딩 수행
         if missing_texts:
@@ -474,7 +594,7 @@ class EmbeddingBasedSemanticChunker:
 
     async def split_text(self, text: str) -> list[dict]:
         """
-        텍스트를 의미론적으로 분할합니다 (Buffer-based context window 적용).
+        텍스트를 의미론적 분할합니다 (Buffer-based context window 적용).
         [고도화] 마크다운 헤더 뿐만 아니라 대문자 섹션명도 감지하여 구조를 파악합니다.
         """
         if not text or not text.strip():

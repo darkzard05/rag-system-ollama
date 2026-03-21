@@ -1,50 +1,70 @@
 """
-RAG 시스템의 통합 엔진 (Core Engine).
-문서 로딩, 인덱싱, 검색, 질의응답의 모든 과정을 오케스트레이션합니다.
+RAG 시스템의 코어 로직을 담당하는 모듈.
+문서 로딩, 청킹, 인덱싱, 검색, 답변 생성의 전체 파이프라인을 조율합니다.
 """
 
-from __future__ import annotations
-
+import asyncio
 import contextlib
 import gc
 import logging
 import os
+import shutil
 from typing import Any
 
+import nest_asyncio
 import torch
+from langchain_community.retrievers import BM25Retriever
+from langchain_community.vectorstores import FAISS
 from langchain_core.documents import Document
 from langchain_core.embeddings import Embeddings
 
 from cache.vector_cache import VectorStoreCache
-from common.config import ENABLE_VECTOR_CACHE, RETRIEVER_CONFIG
+from common.config import (
+    ENABLE_VECTOR_CACHE,
+    RETRIEVER_CONFIG,
+    VECTOR_STORE_CACHE_DIR,
+)
+from common.constants import FilePathConstants
 from common.exceptions import (
     EmptyPDFError,
     InsufficientChunksError,
     VectorStoreError,
 )
-from core.chunking import split_documents
-from core.document_processor import compute_file_hash, load_pdf_docs
+from core.document_processor import (
+    compute_file_hash,
+    create_bm25_retriever,
+    create_vector_store,
+    load_pdf_docs,
+)
 from core.graph_builder import build_graph
 from core.resource_pool import get_resource_pool
-from core.retriever_factory import create_bm25_retriever, create_vector_store
+from core.semantic_chunker import EmbeddingBasedSemanticChunker
 from core.session import SessionManager
 
 logger = logging.getLogger(__name__)
 
+# [수정] nest_asyncio 적용 (Streamlit 환경 필수)
+nest_asyncio.apply()
+
+
+async def split_documents(
+    docs: list[Document], embedder: Embeddings, session_id: str
+) -> tuple[list[Document], list[Any]]:
+    """문서를 의미론적으로 분할합니다."""
+    chunker = EmbeddingBasedSemanticChunker(embedder=embedder)
+    return await chunker.split_documents(docs)
+
 
 class RAGSystem:
-    """
-    RAG 시스템의 통합 인터페이스.
-    인덱싱부터 질의응답까지의 전체 라이프사이클을 관리합니다.
-    """
+    """RAG 시스템의 전체 파이프라인을 관리하는 클래스 (세션 격리 적용)."""
 
     def __init__(self, session_id: str = "default"):
         self.session_id = session_id
-        SessionManager.init_session(session_id=session_id)
 
-    def _ensure_session_context(self) -> None:
-        """현재 스레드의 세션 컨텍스트를 보장합니다."""
-        SessionManager.set_session_id(self.session_id)
+    def _ensure_session_context(self):
+        """현재 세션 컨텍스트가 올바르게 설정되었는지 확인합니다."""
+        if not SessionManager.get_session_id():
+            SessionManager.init_session(self.session_id)
 
     async def build_pipeline(
         self, file_path: str, file_name: str, embedder: Embeddings, on_progress=None
@@ -66,7 +86,8 @@ class RAGSystem:
 
         # 1. 캐시 시도
         if ENABLE_VECTOR_CACHE:
-            cache_data = cache.load(embedder)
+            # [최적화] 블로킹 I/O를 스레드 풀로 위임하여 이벤트 루프 차단 방지
+            cache_data = await asyncio.to_thread(cache.load, embedder)
             if cache_data and all(x is not None for x in cache_data):
                 doc_splits, vector_store, bm25_retriever = cache_data
                 if doc_splits is not None:
@@ -114,7 +135,10 @@ class RAGSystem:
 
         # 7. 캐시 저장
         if ENABLE_VECTOR_CACHE:
-            cache.save(doc_splits, vector_store, bm25_retriever)
+            # [최적화] 블로킹 I/O를 스레드 풀로 위임
+            await asyncio.to_thread(
+                cache.save, doc_splits, vector_store, bm25_retriever
+            )
 
         # 8. 최종 등록
         await self._register_and_finalize(
