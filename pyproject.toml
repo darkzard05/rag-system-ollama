@@ -3,4 +3,9 @@ mypy_path = "src"
 python_version = "3.11"
 check_untyped_defs = true
 ignore_missing_imports = true
+explicit_package_bases = true
 exclude = ["tests"]
+
+[[tool.mypy.overrides]]
+module = ["requests", "yaml"]
+ignore_missing_imports = true

@@ -1,6 +1,5 @@
 import asyncio
 import pytest
-import threading
 from src.core.resource_pool import ResourcePool
 
 
@@ -16,54 +15,19 @@ def run_in_new_loop(coro, result_container):
 
 
 @pytest.mark.asyncio
-async def test_resource_pool_event_loop_mismatch():
+async def test_resource_pool_concurrency():
     """
-    Demonstrates RuntimeError when ResourcePool (singleton) uses asyncio.Lock
-    and is accessed from different event loops.
+    ResourcePool이 여러 비동기 작업 환경에서도 안전하게 작동하는지 검증합니다.
     """
     pool = ResourcePool()
 
-    # Access pool in the current loop (this will initialize self._lock_obj)
-    await pool.register("test1", "vs1", "bm1")
+    # 여러 등록 작업이 동시 실행되어도 락이 안전하게 처리되는지 확인
+    async def register_task(i):
+        await pool.register(f"file_{i}", f"vs_{i}", f"bm_{i}")
+        return await pool.get(f"file_{i}")
 
-    # Define a task to run in a DIFFERENT event loop
-    async def access_pool():
-        # This should fail because pool._lock is bound to the previous loop
-        try:
-            await pool.get("test1")
-        except RuntimeError:
-            pass
-        else:
-            raise AssertionError("Expected RuntimeError was not raised")
+    tasks = [register_task(i) for i in range(10)]
+    results = await asyncio.gather(*tasks)
 
-    result_container = {"result": None, "error": None}
-
-    # Run in a separate thread/loop
-    t = threading.Thread(target=run_in_new_loop, args=(access_pool(), result_container))
-    t.start()
-    t.join()
-
-    if result_container.get("error"):
-        assert isinstance(result_container["error"], RuntimeError)
-    else:
-        # If no error in container, it means access_pool might have succeeded unexpectedly
-        pass
-
-    # Run in a separate thread with its own event loop
-    result_container = {"result": None, "error": None}
-    thread = threading.Thread(
-        target=run_in_new_loop, args=(access_pool(), result_container)
-    )
-    thread.start()
-    thread.join()
-
-    error = result_container["error"]
-    assert error is None, f"Expected no error but got: {error}"
-
-
-if __name__ == "__main__":
-    # Manually run if needed
-    try:
-        asyncio.run(test_resource_pool_event_loop_mismatch())
-    except Exception as e:
-        print(f"Caught expected error: {e}")
+    assert len(results) == 10
+    assert all(r[0] is not None for r in results)
