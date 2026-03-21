@@ -1,7 +1,7 @@
 [tool.ruff]
 # 검사 대상 디렉토리
 src = ["src"]
-target-version = "py311"
+target-version = "py310"
 line-length = 88
 # 검사 제외 대상
 exclude = [

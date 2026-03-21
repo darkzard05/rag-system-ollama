@@ -124,7 +124,7 @@ class ConcurrentQueryExpander:
                         )
                         return index, expanded
 
-                    except TimeoutError:
+                    except asyncio.TimeoutError:
                         logger.warning(
                             f"[AsyncOptimizer] 쿼리 확장 타임아웃 (쿼리 {index}): {query[:50]}"
                         )
@@ -236,7 +236,7 @@ class ConcurrentDocumentRetriever:
                         )
                         return index, docs
 
-                    except TimeoutError:
+                    except asyncio.TimeoutError:
                         logger.warning(
                             f"[AsyncOptimizer] 검색 타임아웃 (쿼리 {index}): {query[:50]}"
                         )
@@ -389,7 +389,7 @@ class ConcurrentDocumentReranker:
                         )
                         return batch_idx, scored_pairs
 
-                    except TimeoutError:
+                    except asyncio.TimeoutError:
                         logger.warning(
                             f"[AsyncOptimizer] 리랭킹 배치 타임아웃 (배치 {batch_idx})"
                         )
@@ -526,7 +526,7 @@ class ConcurrentEmbeddingGenerator:
                         )
                         return batch_idx, embeddings
 
-                    except TimeoutError:
+                    except asyncio.TimeoutError:
                         logger.warning(
                             f"[AsyncOptimizer] 임베딩 배치 타임아웃 (배치 {batch_idx})"
                         )
