@@ -30,15 +30,14 @@ class ResourcePool:
     max_size: int
 
     def __new__(cls, *args, **kwargs):
-        if cls._instance is None:
-            with cls._creation_lock:
-                if cls._instance is None:
-                    cls._instance = super().__new__(cls)
-                    cls._instance._pool = OrderedDict()
-                    cls._instance.max_size = kwargs.get("max_size", 3)
-        elif "max_size" in kwargs:
-            cls._instance.max_size = kwargs["max_size"]
-        return cls._instance
+        with cls._creation_lock:
+            if cls._instance is None:
+                cls._instance = super().__new__(cls)
+                cls._instance._pool = OrderedDict()
+                cls._instance.max_size = kwargs.get("max_size", 3)
+            elif "max_size" in kwargs:
+                cls._instance.max_size = kwargs["max_size"]
+            return cls._instance
 
     @property
     def _lock(self) -> asyncio.Lock:
