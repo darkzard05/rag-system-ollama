@@ -16,7 +16,7 @@ import json
 import logging
 import os
 import stat
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from pydantic import BaseModel, Field, field_validator
@@ -278,7 +278,7 @@ class CacheSecurityManager:
         return CacheMetadata(
             file_hash=file_hash,
             integrity_hmac=integrity_hmac,
-            created_at=datetime.now(timezone.utc).isoformat(),
+            created_at=datetime.now(UTC).isoformat(),
             cache_version=2,
             python_version=f"{sys.version_info.major}.{sys.version_info.minor}",
             description=description,

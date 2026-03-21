@@ -206,7 +206,7 @@ class TimeoutManager:
             else:
                 return func(*args, **kwargs)
 
-        except asyncio.TimeoutError:
+        except TimeoutError:
             logger.error(f"[Timeout] 타임아웃 초과 ({timeout_val}초): {func.__name__}")
             raise
 

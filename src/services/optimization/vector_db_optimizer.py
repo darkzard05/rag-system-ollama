@@ -231,7 +231,7 @@ class BatchIndexer:
                 index_func(batch), timeout=self.config.timeout_per_batch
             )
             return {"indexed": len(batch), "failed": 0}
-        except asyncio.TimeoutError:
+        except TimeoutError:
             if retry_count < self.config.max_retries and self.config.retry_failed:
                 await asyncio.sleep(2**retry_count)  # Exponential backoff
                 return await self._index_batch_with_retry(
@@ -318,7 +318,7 @@ class ParallelSearcher:
                 execution_time=execution_time,
                 num_candidates_before_rerank=len(results),
             )
-        except asyncio.TimeoutError:
+        except TimeoutError:
             logger.warning(f"검색 타임아웃: {query}")
             raise
 
