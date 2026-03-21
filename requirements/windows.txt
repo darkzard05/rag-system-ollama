@@ -31,6 +31,7 @@ sentence-transformers==3.4.1
 faiss-cpu==1.9.0.post1
 numpy==1.26.4
 rank-bm25==0.2.2
+flashrank==0.2.0
 optimum[onnxruntime]==2.1.0
 onnxruntime>=1.20.1
 

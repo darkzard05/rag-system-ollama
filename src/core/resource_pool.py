@@ -8,6 +8,7 @@ import asyncio
 import contextlib
 import gc
 import logging
+import threading
 from collections import OrderedDict
 from typing import Any
 
@@ -18,13 +19,13 @@ logger = logging.getLogger(__name__)
 
 class ResourcePool:
     """
-    LRU 기반 리소스 관리자 (Async-safe).
+    LRU 기반 리소스 관리자 (Thread-safe & Async-safe).
     단일 인스턴스로 작동하여 시스템 전역 리소스를 관리합니다.
     """
 
     _instance: "ResourcePool | None" = None
     _pool: OrderedDict[str, tuple[Any, Any]]
-    _lock_obj: asyncio.Lock | None = None
+    _local = threading.local()
     max_size: int
 
     def __new__(cls, *args, **kwargs):
@@ -32,17 +33,19 @@ class ResourcePool:
             cls._instance = super().__new__(cls)
             cls._instance._pool = OrderedDict()
             cls._instance.max_size = kwargs.get("max_size", 3)
-            cls._instance._lock_obj = None
         elif "max_size" in kwargs:
             cls._instance.max_size = kwargs["max_size"]
         return cls._instance
 
     @property
     def _lock(self) -> asyncio.Lock:
-        """이벤트 루프 내에서 안전하게 사용할 수 있는 asyncio.Lock을 반환합니다."""
-        if self._lock_obj is None:
-            self._lock_obj = asyncio.Lock()
-        return self._lock_obj
+        """
+        현재 스레드에 한정된 asyncio.Lock을 반환하여 다중 스레드 환경에서의 안전성을 보장합니다.
+        각 스레드는 자신만의 이벤트 루프와 잠금 객체를 갖게 됩니다.
+        """
+        if not hasattr(self._local, "lock"):
+            self._local.lock = asyncio.Lock()
+        return self._local.lock
 
     async def register(self, file_hash: str, vector_store: Any, bm25_retriever: Any):
         """리소스 등록 (LRU 정책 적용)"""
