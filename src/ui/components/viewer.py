@@ -172,7 +172,6 @@ def _pdf_viewer_fragment():
                     st.rerun(scope="fragment")
                 except TypeError:
                     st.rerun()
-        st.markdown("</div>", unsafe_allow_html=True)
 
     except Exception as e:
         logger.error(f"PDF 뷰어 오류: {e}", exc_info=True)

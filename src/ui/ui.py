@@ -83,38 +83,20 @@ def inject_custom_css(is_expanded: bool = False):
         overflow: hidden;
     }
 
-    /* st.container 내부의 stVerticalBlockBorderWrapper: 가변 높이 및 스크롤 허용 */
-    [data-testid="column"] [data-testid="stVerticalBlockBorderWrapper"] {
+    /* st.container(height=...) 내부의 stVerticalBlockBorderWrapper: 가변 높이 및 스크롤 허용 */
+    [data-testid="column"] div[data-testid="stVerticalBlockBorderWrapper"]:has(div[style*="overflow-y: auto"]) {
         flex: 1;
         height: 0;
         min-height: 0;
     }
 
-    /* 하단 고정 영역 */
-    .fixed-bottom-area {
+    /* 하단 고정 영역: column 내부의 마지막 블록에 공통 스타일 적용 */
+    [data-testid="column"] > div > div:last-child {
         flex-shrink: 0;
-        padding: 8px;
+        padding: 12px 16px !important;
         background: white;
-        border-top: 1px solid #eee;
-    }
-
-    .pdf-control-bar {
-        flex-shrink: 0;
-        height: 60px;
-        padding: 8px 12px;
-        border-bottom: 1px solid #e0e0e0;
-        display: flex;
-        align-items: center;
-        margin: 0 !important;
-    }
-
-    .chat-input-area {
-        flex-shrink: 0;
-        height: 70px;
-        padding: 8px 4px !important;
         border-top: 1px solid #e0e0e0;
-        display: flex;
-        align-items: flex-end;
+        width: 100%;
         margin: 0 !important;
     }
     </style>

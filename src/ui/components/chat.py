@@ -401,9 +401,7 @@ def render_chat_interface():
         streaming_placeholder = st.empty()
 
     # 2. 하단 입력 영역 (고정)
-    st.markdown('<div class="fixed-bottom-area">', unsafe_allow_html=True)
     user_query = st.chat_input(MSG_CHAT_INPUT_PLACEHOLDER, disabled=is_generating)
-    st.markdown("</div>", unsafe_allow_html=True)
 
     if user_query and not is_generating:
         SessionManager.add_message("user", user_query)
