@@ -6,6 +6,7 @@ import logging
 import re
 import time
 from contextlib import aclosing
+from pathlib import Path
 from typing import Any, TypedDict, cast
 
 import streamlit as st
@@ -16,7 +17,6 @@ from common.config import (
     MSG_CHAT_INPUT_PLACEHOLDER,
     MSG_PREPARING_ANSWER,
     MSG_THINKING,
-    UI_CONTAINER_HEIGHT,
 )
 from common.utils import (
     apply_tooltips_to_response,
@@ -27,6 +27,19 @@ from common.utils import (
 from core.session import SessionManager
 
 logger = logging.getLogger(__name__)
+
+# Debug logging to file
+DEBUG_LOG_FILE = Path("debug_streaming.log")
+
+
+def debug_log(msg: str):
+    """Log to file-based buffer"""
+    try:
+        with open(DEBUG_LOG_FILE, "a", encoding="utf-8") as f:
+            f.write(f"{msg}\n")
+            f.flush()
+    except Exception:
+        pass
 
 
 class ChatState(TypedDict):
@@ -40,6 +53,11 @@ class ChatState(TypedDict):
 
 async def _stream_chat_response(rag_sys, user_query: str, placeholder):
     """RAG 시스템의 스트리밍 응답을 UI에 렌더링 (플레이스홀더 기반 잔상 방지 버전)"""
+    debug_log("[STREAMING] 🚀 STREAMING START")
+
+    # 스트리밍 시작 표시 - UI에서 확인 가능
+    print("\n=== STREAMING STARTED ===", flush=True)
+
     state: ChatState = {
         "full_response": "",
         "full_thought": "",
@@ -58,150 +76,144 @@ async def _stream_chat_response(rag_sys, user_query: str, placeholder):
     render_interval = 0.05
 
     try:
-        # [핵심] 전달받은 플레이스홀더 내부에서만 렌더링하여 위치를 고정
-        with placeholder.container():
-            with st.chat_message("assistant", avatar="🤖"):
-                # 1. 상태창 (key 인자 미지원으로 제거)
-                status_container = st.status(MSG_PREPARING_ANSWER, expanded=True)
+        # [핵심] placeholder.container() 컨텍스트 내에서 모든 처리를 수행합니다.
+        placeholder.empty()  # 이전 내용 정리
 
-                # 2. 하단 영역 선언 (이중 렌더링 방지를 위해 empty() 활용)
-                thought_area = st.container()
-                answer_area = st.empty()
+        with placeholder.container(), st.chat_message("assistant", avatar="🤖"):
+            # 1. 상태창
+            status_container = st.status(MSG_PREPARING_ANSWER, expanded=True)
+            # 2. 사고 과정 영역
+            thought_area = st.container()
+            # 3. 답변 영역
+            answer_area = st.empty()
 
-                with status_container:
-                    status_log_area = st.container()
+            with status_container:
+                status_log_area = st.container()
 
-                    event_generator = await rag_sys.astream(
-                        user_query, model_name=model_name
-                    )
+                event_generator = await rag_sys.astream(
+                    user_query, model_name=model_name
+                )
 
-                    stream = cast(Any, event_generator)
-                    event_stream = (
-                        handler.stream_graph_events(
-                            stream, adaptive_controller=controller
-                        )
-                        if handler
-                        else stream
-                    )
+                stream = cast(Any, event_generator)
+                event_stream = (
+                    handler.stream_graph_events(stream, adaptive_controller=controller)
+                    if handler
+                    else stream
+                )
 
-                    async with aclosing(cast(Any, event_stream)) as final_stream:
-                        async for chunk in final_stream:
-                            if chunk.status:
+                async with aclosing(cast(Any, event_stream)) as final_stream:
+                    async for chunk in final_stream:
+                        if chunk.status:
+                            status_container.update(
+                                label=f"⏳ {chunk.status}", state="running"
+                            )
+                            with status_log_area:
+                                st.caption(f"▹ {chunk.status}")
+                            SessionManager.add_status_log(chunk.status)
+
+                        if chunk.metadata and "documents" in chunk.metadata:
+                            state["retrieved_docs"] = chunk.metadata["documents"]
+
+                        if chunk.performance:
+                            state["performance"] = chunk.performance
+
+                        if chunk.thought:
+                            if not state["full_thought"]:
+                                state["thinking_start_time"] = time.time()
+                                with thought_area:
+                                    thought_display = st.empty()
+                            state["full_thought"] += chunk.thought
+                            if time.time() - last_render_time > render_interval:
+                                thought_display.markdown(f"*{state['full_thought']}*")
+                                last_render_time = time.time()
+
+                        if chunk.content:
+                            # [디버깅] 청크 로깅
+                            chunk_msg = f"[CHUNK] len={len(chunk.content)} FIRST50=[{chunk.content[:50]}...]"
+                            debug_log(chunk_msg)
+                            print(chunk_msg, flush=True)
+
+                            if not state["full_response"]:
                                 status_container.update(
-                                    label=f"⏳ {chunk.status}", state="running"
+                                    label="✅ 분석 완료 및 답변 작성 중",
+                                    state="complete",
+                                    expanded=False,
                                 )
-                                with status_log_area:
-                                    st.caption(f"▹ {chunk.status}")
-                                SessionManager.add_status_log(chunk.status)
-
-                            if chunk.metadata and "documents" in chunk.metadata:
-                                state["retrieved_docs"] = chunk.metadata["documents"]
-
-                            if chunk.performance:
-                                state["performance"] = chunk.performance
-
-                            if chunk.thought:
-                                if not state["full_thought"]:
-                                    state["thinking_start_time"] = time.time()
-                                    with thought_area:
-                                        thought_display = st.empty()
-                                state["full_thought"] += chunk.thought
-                                if time.time() - last_render_time > render_interval:
-                                    thought_display.markdown(
-                                        f"*{state['full_thought']}*"
-                                    )
-                                    last_render_time = time.time()
-
-                            if chunk.content:
-                                if not state["full_response"]:
-                                    status_container.update(
-                                        label="✅ 분석 완료 및 답변 작성 중",
-                                        state="complete",
-                                        expanded=False,
-                                    )
-                                    state["thinking_end_time"] = time.time()
-                                    if (
-                                        state["full_thought"]
-                                        and "thought_display" in locals()
-                                    ):
-                                        thought_display.empty()
-                                        with thought_area:
-                                            dur = (
-                                                state["thinking_end_time"]
-                                                - state["thinking_start_time"]
-                                            )
-                                            with st.expander(
-                                                f"{MSG_THINKING[:-3]} ({dur:.1f}초)",
-                                                expanded=False,
-                                            ):
-                                                st.markdown(
-                                                    f'<div class="thought-container">{state["full_thought"]}</div>',
-                                                    unsafe_allow_html=True,
-                                                )
-
-                                state["full_response"] += chunk.content
+                                state["thinking_end_time"] = time.time()
                                 if (
-                                    time.time() - last_render_time > render_interval
-                                    or chunk.is_final
+                                    state["full_thought"]
+                                    and "thought_display" in locals()
                                 ):
-                                    if chunk.is_final:
-                                        # 마지막에만 모든 무거운 전처리 수행 (Final Path)
-                                        display_text = _clean_response_redundancy(
-                                            state["full_response"]
+                                    thought_display.empty()
+                                    with thought_area:
+                                        dur = (
+                                            state["thinking_end_time"]
+                                            - state["thinking_start_time"]
                                         )
-                                        display_text = normalize_latex_delimiters(
-                                            display_text
-                                        )
-                                        if state["retrieved_docs"]:
-                                            display_text = apply_tooltips_to_response(
-                                                display_text, state["retrieved_docs"]
+                                        with st.expander(
+                                            f"{MSG_THINKING[:-3]} ({dur:.1f}초)",
+                                            expanded=False,
+                                        ):
+                                            st.markdown(
+                                                f'<div class="thought-container">{state["full_thought"]}</div>',
+                                                unsafe_allow_html=True,
                                             )
-                                    else:
-                                        # 스트리밍 중에는 최소한의 가공만 수행 (Fast Path)
-                                        display_text = normalize_latex_delimiters(
-                                            state["full_response"]
-                                        )
 
-                                    cursor = "▌" if not chunk.is_final else ""
-                                    answer_area.markdown(
-                                        display_text + cursor, unsafe_allow_html=True
-                                    )
-                                    last_render_time = time.time()
+                            state["full_response"] += chunk.content
+
+                            # [수정] 더 자주 렌더링하되, 중복을 방지하기 위해 check
+                            should_render = (
+                                time.time() - last_render_time > render_interval
+                            ) or chunk.is_final
+
+                            if should_render:
+                                # 스트리밍 중에는 최소한의 가공만 수행
+                                display_text = normalize_latex_delimiters(
+                                    state["full_response"]
+                                )
+
+                                cursor = "▌" if not chunk.is_final else ""
+
+                                # [중요] 여기서 한 번만 업데이트
+                                answer_area.markdown(
+                                    display_text + cursor, unsafe_allow_html=True
+                                )
+                                last_render_time = time.time()
 
                 # 최종 상태 업데이트
                 status_container.update(
                     label="✨ 답변 생성 완료", state="complete", expanded=False
                 )
 
-            # [수정] 결과 반환 전 PDF 하이라이트 등 후처리 수행
-            if state["retrieved_docs"]:
-                from common.utils import extract_annotations_from_docs
+        # [수정] 결과 반환 전 PDF 하이라이트 등 후처리 수행
+        if state["retrieved_docs"]:
+            from common.utils import extract_annotations_from_docs
 
-                annotations = extract_annotations_from_docs(state["retrieved_docs"])
-                SessionManager.set("pdf_annotations", annotations)
-                try:
-                    first_doc = state["retrieved_docs"][0]
-                    meta = (
-                        getattr(first_doc, "metadata", {})
-                        if hasattr(first_doc, "metadata")
-                        else first_doc.get("metadata", {})
-                    )
-                    target_p = meta.get("page")
-                    if target_p is not None:
-                        SessionManager.set("pdf_target_page", int(target_p))
-                except Exception as e:
-                    logger.warning(f"자동 점프 페이지 추출 실패: {e}")
+            annotations = extract_annotations_from_docs(state["retrieved_docs"])
+            SessionManager.set("pdf_annotations", annotations)
+            try:
+                first_doc = state["retrieved_docs"][0]
+                meta = (
+                    getattr(first_doc, "metadata", {})
+                    if hasattr(first_doc, "metadata")
+                    else first_doc.get("metadata", {})
+                )
+                target_p = meta.get("page")
+                if target_p is not None:
+                    SessionManager.set("pdf_target_page", int(target_p))
+            except Exception as e:
+                logger.warning(f"자동 점프 페이지 추출 실패: {e}")
 
-            return {
-                "response": state["full_response"],
-                "processed_content": apply_tooltips_to_response(
-                    _clean_response_redundancy(state["full_response"]),
-                    state["retrieved_docs"],
-                ),
-                "thought": state["full_thought"],
-                "documents": state["retrieved_docs"],
-                "performance": state["performance"],
-            }
+        return {
+            "response": state["full_response"],
+            "processed_content": apply_tooltips_to_response(
+                _clean_response_redundancy(state["full_response"]),
+                state["retrieved_docs"],
+            ),
+            "thought": state["full_thought"],
+            "documents": state["retrieved_docs"],
+            "performance": state["performance"],
+        }
     except Exception as e:
         logger.error(f"UI 스트리밍 오류: {e}", exc_info=True)
         return {"response": format_error_message(e), "thought": "", "documents": []}
@@ -350,13 +362,13 @@ def _render_system_logs(logs: list[str]):
 
 @st.fragment
 def render_chat_interface():
-    """채팅 인터페이스 (Fragment 격리 및 잔상 방지)"""
-    chat_container = st.container(height=UI_CONTAINER_HEIGHT, border=False)
+    """채팅 인터페이스: 메시지(위, 스크롤) + 입력창(아래, 고정)"""
     messages = SessionManager.get_messages() or []
     is_generating = bool(SessionManager.get("is_generating_answer", False))
     current_sid = SessionManager.get_session_id()
 
-    with chat_container:
+    # 1. 상단 메시지 영역 (독립 스크롤 활성화)
+    with st.container(height=500, border=False):
         if not messages:
             st.chat_message("system", avatar="⚙️").markdown(MSG_CHAT_GUIDE)
 
@@ -385,10 +397,13 @@ def render_chat_interface():
         if current_log_group:
             _render_system_logs(current_log_group)
 
-        # [핵심] 스트리밍 전용 플레이스홀더를 히스토리 렌더링 직후에 배치
+        # 스트리밍 전용 플레이스홀더
         streaming_placeholder = st.empty()
 
+    # 2. 하단 입력 영역 (고정)
+    st.markdown('<div class="fixed-bottom-area">', unsafe_allow_html=True)
     user_query = st.chat_input(MSG_CHAT_INPUT_PLACEHOLDER, disabled=is_generating)
+    st.markdown("</div>", unsafe_allow_html=True)
 
     if user_query and not is_generating:
         SessionManager.add_message("user", user_query)
@@ -421,8 +436,6 @@ def render_chat_interface():
                     metrics=result.get("performance"),
                     processed_content=result.get("processed_content"),
                 )
-                # [핵심] 히스토리에 메시지가 성공적으로 추가된 후에만 스트리밍용 UI를 비웁니다.
-                # rerun() 직전에 수행하여 시각적 공백(Gaps)을 최소화합니다.
                 streaming_placeholder.empty()
 
             try:
