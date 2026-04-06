@@ -42,8 +42,7 @@ def _get_pdf_total_pages(pdf_path: str) -> int:
 @st.fragment()
 def _pdf_viewer_fragment():
     """
-    PDF 뷰어 프래그먼트 (격리된 리런 영역)
-    [최적화] 고정 키(Stable Key)를 사용하여 위젯 재사용을 극대화하고 고스팅을 방지합니다.
+    PDF 뷰어 프래그먼트 (Streamlit 기본 기능만 사용)
     """
     from streamlit_pdf_viewer import pdf_viewer
 
@@ -110,21 +109,22 @@ def _pdf_viewer_fragment():
             )
         st.session_state.last_viewer_key = viewer_key
 
-        # 3. PDF 뷰어 렌더링 (영역 선점형 empty 컨테이너 활용)
-        viewer_container = st.empty()
-        with viewer_container.container():
+        # 레이아웃: 뷰어(상단, 스크롤) + 컨트롤바(하단 고정)
+
+        # 1. 뷰어 영역 (스크롤 가능하도록 st.container로 감싸기)
+        with st.container(height=500, border=False):
             pdf_viewer(
                 input=pdf_bytes,
                 render_text=True,
                 pages_to_render=[current_page],
                 annotations=annotations,
                 annotation_outline_size=2,
-                height=650,  # 고정 높이로 레이아웃 시프트 방지
+                height=None,  # 컨테이너 높이에 맞춤
                 key=viewer_key,
             )
 
-        # 4. 하단 컨트롤바
-        st.markdown("<div style='margin-top: 10px;'></div>", unsafe_allow_html=True)
+        # 2. 하단 고정 컨트롤바
+        st.markdown('<div class="fixed-bottom-area">', unsafe_allow_html=True)
         c_prev, c_input, c_next = st.columns([1, 2, 1])
 
         with c_prev:
@@ -137,7 +137,6 @@ def _pdf_viewer_fragment():
                 new_p = max(1, current_page - 1)
                 st.session_state.current_page = new_p
                 SessionManager.set("current_page", new_p)
-                # 직접 위젯 상태를 수정하지 않고 리런하여 상단 동기화 로직 활용
                 try:
                     st.rerun(scope="fragment")
                 except TypeError:
@@ -169,11 +168,11 @@ def _pdf_viewer_fragment():
                 new_p = min(total_pages, current_page + 1)
                 st.session_state.current_page = new_p
                 SessionManager.set("current_page", new_p)
-                # 직접 위젯 상태를 수정하지 않고 리런하여 상단 동기화 로직 활용
                 try:
                     st.rerun(scope="fragment")
                 except TypeError:
                     st.rerun()
+        st.markdown("</div>", unsafe_allow_html=True)
 
     except Exception as e:
         logger.error(f"PDF 뷰어 오류: {e}", exc_info=True)
