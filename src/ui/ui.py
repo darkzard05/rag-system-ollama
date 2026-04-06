@@ -22,144 +22,101 @@ def render_sidebar(**kwargs):
 
 def inject_custom_css(is_expanded: bool = False):
     """
-    사이드바 너비를 동적으로 제어하고 2열 레이아웃을 최적화합니다.
+    레이아웃 CSS: 두 column 높이 동기화 및 공간 최대화
+    - 헤더 & toolbar 숨김
+    - 상단/좌측/우측 여백 제거
+    - Column 높이 고정하되, 내부 Streamlit 위젯 구조는 보존
     """
-    # 문서가 있으면 1040px (300 + 40(gap) + 700), 없으면 300px 고정
-    sidebar_width = "1040px" if is_expanded else "300px"
-
     st.markdown(
-        f"""
+        """
     <style>
-    /* 1. 사이드바 전체 너비 제어 (상태별 최적화) */
-    [data-testid="stSidebar"] {{
-        transition: width 0.3s ease-in-out !important;
-    }}
+    /* 헤더 & 배포 메뉴 바 숨김 */
+    header {
+        display: none;
+    }
 
-    /* 사이드바가 열려 있을 때만 너비 강제 */
-    [data-testid="stSidebar"][aria-expanded="true"] {{
-        width: {sidebar_width} !important;
-        min-width: {sidebar_width} !important;
-        max-width: {sidebar_width} !important;
-    }}
+    [data-testid="stToolbar"] {
+        display: none;
+    }
 
-    /* 사이드바가 접혔을 때는 확실하게 0으로 숨김 및 가시성 차단 */
-    [data-testid="stSidebar"][aria-expanded="false"] {{
-        width: 0px !important;
-        min-width: 0px !important;
-        max-width: 0px !important;
-        visibility: hidden !important;
-        opacity: 0 !important;
-    }}
+    /* 전역 여백 제거 */
+    html, body {
+        margin: 0 !important;
+        padding: 0 !important;
+    }
 
-    /* 사이드바 콘텐츠 영역도 부모의 축소 상태를 따름 */
-    [data-testid="stSidebar"][aria-expanded="false"] [data-testid="stSidebarContent"] {{
-        visibility: hidden !important;
-        opacity: 0 !important;
-    }}
+    /* 메인 컨테이너 여백 제거 */
+    .appview-container {
+        margin: 0 !important;
+        padding: 0 !important;
+    }
 
-    [data-testid="stSidebarContent"] {{
-        width: {sidebar_width} !important;
-        overflow-x: hidden !important;
-    }}
+    .stMainBlockContainer {
+        padding: 0 !important;
+        margin: 0 !important;
+    }
 
-    /* 2. 내부 2열 레이아웃 및 간격(Gap) 제어 */
-    [data-testid="stSidebar"] div[data-testid="stHorizontalBlock"] {{
-        display: flex !important;
-        flex-direction: row !important;
-        flex-wrap: nowrap !important;
-        width: 100% !important;
-        gap: {"40px" if is_expanded else "0px"} !important;
-    }}
+    .main {
+        padding-top: 0 !important;
+        padding-bottom: 0 !important;
+        padding-left: 0 !important;
+        padding-right: 0 !important;
+        margin: 0 !important;
+    }
 
-    /* 제1열: 설정 영역 (300px 절대 고정) */
-    [data-testid="stSidebar"] [data-testid="stHorizontalBlock"] > [data-testid="column"]:nth-of-type(1) {{
-        flex: 0 0 300px !important;
-        width: 300px !important;
-        min-width: 300px !important;
-        max-width: 300px !important;
-        border-right: 1px solid rgba(128, 128, 128, 0.15);
-    }}
+    /* Sidebar 패딩 유지 */
+    [data-testid="stSidebar"] > div:first-child {
+        padding-top: 1rem;
+    }
 
-    /* 제2열: 미리보기 영역 (가시성 및 너비 강제) */
-    [data-testid="stSidebar"] [data-testid="stHorizontalBlock"] > [data-testid="column"]:nth-of-type(2) {{
-        display: {"block" if is_expanded else "none"} !important;
-        flex: {"0 0 700px" if is_expanded else "0 0 0px"} !important;
-        width: {"700px" if is_expanded else "0px"} !important;
-        min-width: {"700px" if is_expanded else "0px"} !important;
-        overflow-x: hidden !important;
-    }}
+    /* 2열 컨테이너: 독립적 스크롤 레이아웃 */
+    [data-testid="stHorizontalBlock"] {
+        display: flex;
+        height: 100vh;
+    }
 
-    /* 3. 잔상 제거 */
-    [data-testid="stSidebarContent"] {{
-        background-color: var(--secondary-background-color) !important;
-    }}
+    /* 개별 column: 전체 높이 차지 및 내부 플렉스 설정 */
+    [data-testid="column"] {
+        display: flex;
+        flex-direction: column;
+        height: 100vh;
+        overflow: hidden;
+    }
 
-    /* 4. 메인 컨텐츠 영역 (상단 여백 확대) */
-    [data-testid="stMainBlockContainer"] {{
-        max-width: 100% !important;
-        padding-top: 3rem !important; /* 1.5rem -> 3rem으로 확대 */
-        padding-bottom: 6rem !important;
-    }}
+    /* st.container 내부의 stVerticalBlockBorderWrapper: 가변 높이 및 스크롤 허용 */
+    [data-testid="column"] [data-testid="stVerticalBlockBorderWrapper"] {
+        flex: 1;
+        height: 0;
+        min-height: 0;
+    }
 
-    /* 5. 기타 컴포넌트 스타일 및 헤더 정렬 */
-    .sidebar-header {{
-        margin-top: 10px !important; /* 0px -> 10px로 상단 여백 추가 */
-        margin-bottom: 20px !important;
-        padding-top: 5px !important;
-        font-size: 1.5rem !important;
-        font-weight: 700 !important;
-        line-height: 1.4 !important; /* 1.2 -> 1.4로 행간 확대하여 잘림 방지 */
+    /* 하단 고정 영역 */
+    .fixed-bottom-area {
+        flex-shrink: 0;
+        padding: 8px;
+        background: white;
+        border-top: 1px solid #eee;
+    }
+
+    .pdf-control-bar {
+        flex-shrink: 0;
+        height: 60px;
+        padding: 8px 12px;
+        border-bottom: 1px solid #e0e0e0;
         display: flex;
         align-items: center;
-        min-height: 40px; /* height -> min-height로 변경하여 유연성 확보 */
-    }}
+        margin: 0 !important;
+    }
 
-
-    /* 사이드바 익스팬더(고급 설정 등)는 기본 스타일 존중 */
-    [data-testid="stSidebar"] [data-testid="stExpander"] summary,
-    [data-testid="stSidebar"] [data-testid="stExpander"] summary * {{
-        color: inherit !important;
-        font-weight: normal !important;
-    }}
-
-    .thought-container {{
-        font-style: italic;
-        color: var(--text-color) !important;
-        background-color: rgba(128, 128, 128, 0.1) !important;
-        border-left: 4px solid #1e88e5 !important;
-        padding: 15px !important;
-        margin: 10px 0 !important;
-        border-radius: 4px !important;
-        line-height: 1.6 !important;
-    }}
-    .timeline-container {{
-        border: 1px solid rgba(128, 128, 128, 0.3) !important;
-        border-radius: 8px !important;
-        padding: 12px !important;
-        background: transparent !important;
-        color: var(--text-color) !important;
-    }}
-    /* 타임라인 로그 글씨 색상 보정 */
-    .timeline-container div {{
-        color: var(--text-color) !important;
-    }}
-
-    /* 6. 인용구 하이라이트 및 툴팁 스타일 */
-    .citation-tooltip {{
-        color: #1e88e5 !important;
-        font-weight: bold !important;
-        cursor: help !important;
-        border-bottom: 2px solid rgba(30, 136, 229, 0.3) !important;
-        padding: 0 2px !important;
-        transition: all 0.2s ease !important;
-        position: relative;
-        display: inline-block;
-    }}
-
-    .citation-tooltip:hover {{
-        background-color: rgba(30, 136, 229, 0.1) !important;
-        border-bottom: 2px solid #1e88e5 !important;
-    }}
+    .chat-input-area {
+        flex-shrink: 0;
+        height: 70px;
+        padding: 8px 4px !important;
+        border-top: 1px solid #e0e0e0;
+        display: flex;
+        align-items: flex-end;
+        margin: 0 !important;
+    }
     </style>
     """,
         unsafe_allow_html=True,
