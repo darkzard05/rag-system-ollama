@@ -124,7 +124,6 @@ def _pdf_viewer_fragment():
             )
 
         # 2. 하단 고정 컨트롤바
-        st.markdown('<div class="fixed-bottom-area">', unsafe_allow_html=True)
         c_prev, c_input, c_next = st.columns([1, 2, 1])
 
         with c_prev:
