@@ -123,54 +123,55 @@ def _pdf_viewer_fragment():
                 key=viewer_key,
             )
 
-        # 2. 하단 고정 컨트롤바
-        c_prev, c_input, c_next = st.columns([1, 2, 1])
+        # 2. 하단 고정 컨트롤바 (CSS sticky 타겟팅을 위해 container로 감쌈)
+        with st.container():
+            c_prev, c_input, c_next = st.columns([1, 2, 1])
 
-        with c_prev:
-            if st.button(
-                "⬅️",
-                use_container_width=True,
-                key="btn_nav_prev",
-                disabled=current_page <= 1,
-            ):
-                new_p = max(1, current_page - 1)
-                st.session_state.current_page = new_p
-                SessionManager.set("current_page", new_p)
-                try:
-                    st.rerun(scope="fragment")
-                except TypeError:
-                    st.rerun()
+            with c_prev:
+                if st.button(
+                    "⬅️",
+                    use_container_width=True,
+                    key="btn_nav_prev",
+                    disabled=current_page <= 1,
+                ):
+                    new_p = max(1, current_page - 1)
+                    st.session_state.current_page = new_p
+                    SessionManager.set("current_page", new_p)
+                    try:
+                        st.rerun(scope="fragment")
+                    except TypeError:
+                        st.rerun()
 
-        with c_input:
+            with c_input:
 
-            def on_page_change():
-                new_p = st.session_state.get("page_nav_input_v5", current_page)
-                st.session_state.current_page = new_p
-                SessionManager.set("current_page", new_p)
+                def on_page_change():
+                    new_p = st.session_state.get("page_nav_input_v5", current_page)
+                    st.session_state.current_page = new_p
+                    SessionManager.set("current_page", new_p)
 
-            st.number_input(
-                f"Page / {total_pages}",
-                min_value=1,
-                max_value=total_pages,
-                key="page_nav_input_v5",
-                on_change=on_page_change,
-                label_visibility="collapsed",
-            )
+                st.number_input(
+                    f"Page / {total_pages}",
+                    min_value=1,
+                    max_value=total_pages,
+                    key="page_nav_input_v5",
+                    on_change=on_page_change,
+                    label_visibility="collapsed",
+                )
 
-        with c_next:
-            if st.button(
-                "➡️",
-                use_container_width=True,
-                key="btn_nav_next",
-                disabled=current_page >= total_pages,
-            ):
-                new_p = min(total_pages, current_page + 1)
-                st.session_state.current_page = new_p
-                SessionManager.set("current_page", new_p)
-                try:
-                    st.rerun(scope="fragment")
-                except TypeError:
-                    st.rerun()
+            with c_next:
+                if st.button(
+                    "➡️",
+                    use_container_width=True,
+                    key="btn_nav_next",
+                    disabled=current_page >= total_pages,
+                ):
+                    new_p = min(total_pages, current_page + 1)
+                    st.session_state.current_page = new_p
+                    SessionManager.set("current_page", new_p)
+                    try:
+                        st.rerun(scope="fragment")
+                    except TypeError:
+                        st.rerun()
 
     except Exception as e:
         logger.error(f"PDF 뷰어 오류: {e}", exc_info=True)
