@@ -90,14 +90,15 @@ def inject_custom_css(is_expanded: bool = False):
         min-height: 0;
     }
 
-    /* 하단 고정 영역: column 내부의 마지막 블록에 공통 스타일 적용 */
+    /* 하단 고정 영역 (Sticky Footer) */
     [data-testid="column"] > div > div:last-child {
-        flex-shrink: 0;
-        padding: 12px 16px !important;
-        background: white;
-        border-top: 1px solid #e0e0e0;
-        width: 100%;
-        margin: 0 !important;
+        position: sticky !important;
+        bottom: 0 !important;
+        z-index: 99 !important;
+        background-color: white !important;
+        padding: 12px 8px !important;
+        border-top: 1px solid #e0e0e0 !important;
+        width: 100% !important;
     }
     </style>
     """,
