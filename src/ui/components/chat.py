@@ -401,7 +401,8 @@ def render_chat_interface():
         streaming_placeholder = st.empty()
 
     # 2. 하단 입력 영역 (고정)
-    user_query = st.chat_input(MSG_CHAT_INPUT_PLACEHOLDER, disabled=is_generating)
+    with st.container():
+        user_query = st.chat_input(MSG_CHAT_INPUT_PLACEHOLDER, disabled=is_generating)
 
     if user_query and not is_generating:
         SessionManager.add_message("user", user_query)
