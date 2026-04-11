@@ -37,6 +37,7 @@ def render_global_status_bar():
     """
     status_msg = SessionManager.get("global_status", "✅ 시스템 준비 완료")
     status_level = SessionManager.get("status_level", "success")
+    progress = SessionManager.get("global_progress", 0)
 
     # 상태별 배경색 정의
     colors = {
@@ -48,12 +49,22 @@ def render_global_status_bar():
     bg_color = colors.get(status_level, "#212529")
     text_color = "black" if status_level == "warning" else "white"
 
+    # 진행률 표시줄 로직 (작업 중일 때만 표시)
+    progress_html = ""
+    if status_level != "success" and 0 < progress < 100:
+        progress_html = f"""
+        <div class="status-progress-container">
+            <div class="status-progress-bar" style="width: {progress}%;"></div>
+        </div>
+        """
+
     # HTML 주입 (최상단 고정 레이어)
     st.markdown(
         f"""
         <div class="global-status-bar" style="background-color: {bg_color}; color: {text_color};">
             <span class="status-dot">●</span> {status_msg}
         </div>
+        {progress_html}
         """,
         unsafe_allow_html=True,
     )
