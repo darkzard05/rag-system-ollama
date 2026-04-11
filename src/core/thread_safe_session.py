@@ -40,6 +40,11 @@ class ThreadSafeSessionManager:
         "llm": None,
         "embedder": None,
         "is_generating_answer": False,
+        "streaming_buffer": "",
+        "streaming_thought": "",
+        "global_status": "✅ 시스템 준비 완료",
+        "status_level": "success",
+        "global_progress": 0,
         "is_first_run": True,
         "needs_rag_rebuild": False,
         "needs_qa_chain_update": False,
@@ -51,6 +56,16 @@ class ThreadSafeSessionManager:
     _fallback_sessions: dict[str, dict[str, Any]] = {}
     _session_locks: dict[str, threading.Lock] = {}
     _global_lock = threading.RLock()
+
+    @classmethod
+    def _is_streamlit_running(cls) -> bool:
+        """Streamlit 런타임이 현재 스레드/프로세스에서 실행 중인지 확인합니다."""
+        try:
+            from streamlit.runtime import exists
+
+            return exists()
+        except ImportError:
+            return False
 
     @classmethod
     def _acquire_lock(cls, session_id: str | None = None) -> threading.Lock:
@@ -102,17 +117,18 @@ class ThreadSafeSessionManager:
         state = cls._get_state()
 
         # UI 스레드 동기화 (최소한의 필요한 값만)
-        try:
-            for k in [
-                "pdf_processed",
-                "pdf_file_path",
-                "is_generating_answer",
-                "new_file_uploaded",
-            ]:
-                if k in state:
-                    st.session_state[k] = state[k]
-        except Exception:
-            pass
+        if cls._is_streamlit_running():
+            try:
+                for k in [
+                    "pdf_processed",
+                    "pdf_file_path",
+                    "is_generating_answer",
+                    "new_file_uploaded",
+                ]:
+                    if k in state:
+                        st.session_state[k] = state[k]
+            except Exception:
+                pass
 
     @classmethod
     def get(cls, key: str, default: Any = None, session_id: str | None = None) -> Any:
@@ -122,21 +138,43 @@ class ThreadSafeSessionManager:
             return state[key]
 
         # 2. UI 스레드라면 st.session_state 확인
-        try:
-            return st.session_state.get(key, default)
-        except Exception:
-            return default
+        if cls._is_streamlit_running():
+            try:
+                return st.session_state.get(key, default)
+            except Exception:
+                return default
+        return default
 
     @classmethod
-    def set(cls, key: str, value: Any, session_id: str | None = None):
-        # 1. 폴백 저장소 업데이트 (내부적으로 _get_state가 시간을 갱신함)
-        state = cls._get_state(session_id)
-        with cls._global_lock:
-            state[key] = value
+    def set(
+        cls,
+        key: str | None = None,
+        value: Any = None,
+        session_id: str | None = None,
+        **kwargs,
+    ):
+        """
+        단일 또는 다중 세션 데이터를 업데이트합니다.
+        Usage:
+            set("key", "value")
+            set(key1="val1", key2="val2")
+        """
+        sid = session_id or cls.get_session_id()
+        state = cls._get_state(sid)
 
-        # 2. UI 스레드라면 즉시 반영
-        with contextlib.suppress(builtins.BaseException):
-            st.session_state[key] = value
+        updates = kwargs.copy()
+        if key is not None:
+            updates[key] = value
+
+        with cls._global_lock:
+            for k, v in updates.items():
+                state[k] = v
+
+        # UI 스레드라면 즉시 반영
+        if cls._is_streamlit_running():
+            with contextlib.suppress(builtins.BaseException):
+                for k, v in updates.items():
+                    st.session_state[k] = v
 
     @classmethod
     def get_messages(cls, session_id: str | None = None) -> list[dict[str, Any]]:
@@ -166,11 +204,18 @@ class ThreadSafeSessionManager:
             current = list(state.get("messages", []))
             current.append(msg)
             state["messages"] = current[-MAX_MESSAGE_HISTORY:]
-        with contextlib.suppress(builtins.BaseException):
-            st.session_state["messages"] = state["messages"]
+        if cls._is_streamlit_running():
+            with contextlib.suppress(builtins.BaseException):
+                st.session_state["messages"] = state["messages"]
 
     @classmethod
-    def add_status_log(cls, msg: str, session_id: str | None = None):
+    def add_status_log(
+        cls, msg: str, session_id: str | None = None, add_to_chat: bool = True
+    ):
+        """
+        시스템 상태 로그를 기록합니다.
+        add_to_chat=False 설정 시 상단 상태 바 업데이트용으로만 사용되고 채팅창에는 남지 않습니다.
+        """
         state = cls._get_state(session_id)
         with cls._global_lock:
             current = list(state.get("status_logs", []))
@@ -178,9 +223,24 @@ class ThreadSafeSessionManager:
                 return
             current.append(msg)
             state["status_logs"] = current[-30:]
-        with contextlib.suppress(builtins.BaseException):
-            st.session_state["status_logs"] = state["status_logs"]
-        cls.add_message("system", msg, msg_type="log", session_id=session_id)
+
+            # [수정] 상단 상태 표시줄 자동 연동 (편의성)
+            state["global_status"] = msg
+            if "✅" in msg or "✨" in msg:
+                state["status_level"] = "success"
+            elif "❌" in msg or "⚠️" in msg:
+                state["status_level"] = "error"
+            else:
+                state["status_level"] = "info"
+
+        if cls._is_streamlit_running():
+            with contextlib.suppress(builtins.BaseException):
+                st.session_state["status_logs"] = state["status_logs"]
+                st.session_state["global_status"] = state["global_status"]
+                st.session_state["status_level"] = state["status_level"]
+
+        if add_to_chat:
+            cls.add_message("system", msg, msg_type="log", session_id=session_id)
 
     @classmethod
     def replace_last_status_log(cls, msg: str, session_id: str | None = None):
@@ -196,9 +256,10 @@ class ThreadSafeSessionManager:
                     msgs[i]["content"] = msg
                     break
             state["messages"] = msgs
-        with contextlib.suppress(Exception):
-            st.session_state["status_logs"] = state["status_logs"]
-            st.session_state["messages"] = state["messages"]
+        if cls._is_streamlit_running():
+            with contextlib.suppress(Exception):
+                st.session_state["status_logs"] = state["status_logs"]
+                st.session_state["messages"] = state["messages"]
 
     @classmethod
     def reset_all_state(cls, session_id: str | None = None):
