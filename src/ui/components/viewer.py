@@ -71,8 +71,6 @@ def render_pdf_column():
         current_page = min(max(1, int(target_page)), total_pages)
         SessionManager.set("current_page", current_page)
         SessionManager.set("pdf_target_page", None)
-        # number_input 위젯 값 동기화를 위해 session_state 직접 수정
-        st.session_state["pdf_nav_input_v6"] = current_page
     else:
         current_page = min(max(1, SessionManager.get("current_page", 1)), total_pages)
 
@@ -138,8 +136,9 @@ def _display_pdf_controls(current_page, total_pages):
         with c_input:
 
             def on_page_change():
-                new_p = st.session_state.get("pdf_nav_input_v6", current_page)
-                SessionManager.set("current_page", new_p)
+                new_p = st.session_state.get("pdf_nav_input_v6")
+                if new_p:
+                    SessionManager.set("current_page", new_p)
 
             st.number_input(
                 f"Page / {total_pages}",
