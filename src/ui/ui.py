@@ -117,34 +117,19 @@ def inject_custom_css(is_expanded: bool = False):
         box-sizing: border-box;
     }
 
-    /* 4. 컬럼 내부 Flexbox 레이아웃 최적화 */
+    /* 4. 컬럼 내부 레이아웃 최적화 (단순화) */
     [data-testid="stColumn"] {
         height: 100% !important;
-        min-height: 0 !important;
-        display: flex;
-        flex-direction: column;
         overflow: hidden !important;
     }
 
-    [data-testid="stColumn"] > div {
-        flex-grow: 1 !important;
-        display: flex;
-        flex-direction: column;
-        height: 100% !important;
-    }
-
-    /* 컨테이너의 고정 높이를 무효화하고 남은 공간을 채우도록(flex-grow) 설정 */
+    /* 컨테이너 및 래퍼가 고정 높이를 유지하되 범위를 벗어나지 않도록 조정 */
     [data-testid="stMainBlockContainer"] [data-testid="stVerticalBlockBorderWrapper"] {
-        flex: 1 1 auto !important;
-        height: auto !important;
-        min-height: 0 !important;
         border: none !important;
     }
 
     /* 실제 스크롤이 발생하는 내부 블록 */
     [data-testid="stVerticalBlockBorderWrapper"] > div > [data-testid="stVerticalBlock"] {
-        flex-grow: 1 !important;
-        height: auto !important;
         overflow-y: auto !important;
     }
 

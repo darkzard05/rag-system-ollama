@@ -20,10 +20,12 @@ from common.config import (
 )
 from common.utils import (
     apply_tooltips_to_response,
+    extract_annotations_from_docs,
     format_error_message,
     normalize_latex_delimiters,
     sync_run,
 )
+from core.rag_core import RAGSystem
 from core.session import SessionManager
 
 logger = logging.getLogger(__name__)
@@ -187,8 +189,6 @@ async def _stream_chat_response(rag_sys, user_query: str, placeholder):
 
         # [수정] 결과 반환 전 PDF 하이라이트 등 후처리 수행
         if state["retrieved_docs"]:
-            from common.utils import extract_annotations_from_docs
-
             annotations = extract_annotations_from_docs(state["retrieved_docs"])
             SessionManager.set("pdf_annotations", annotations)
             try:
@@ -216,6 +216,7 @@ async def _stream_chat_response(rag_sys, user_query: str, placeholder):
         }
     except Exception as e:
         logger.error(f"UI 스트리밍 오류: {e}", exc_info=True)
+        placeholder.empty()  # 에러 발생 시 UI 고스트가 남지 않도록 빈 컨테이너로 초기화
         return {"response": format_error_message(e), "thought": "", "documents": []}
     finally:
         SessionManager.set("is_generating_answer", False)
@@ -260,10 +261,12 @@ def render_message(
     ):
         if thought and thought.strip():
             with st.expander(
-                MSG_THINKING[:-3] + " 완료", expanded=False, key=f"exp_{msg_id}"
+                MSG_THINKING[:-3] + " 완료",
+                expanded=False,
+                key=f"exp_{msg_id}",  # type: ignore
             ):
                 st.markdown(
-                    f'<div class="thought-container" style="font-size: 0.85rem;">{thought}</div>',
+                    f'<div class="thought-container">{thought}</div>',
                     unsafe_allow_html=True,
                 )
 
@@ -273,7 +276,9 @@ def render_message(
             display_text = normalize_latex_delimiters(content)
             if role == "assistant" and documents:
                 display_text = apply_tooltips_to_response(display_text, documents)
-            st.markdown(display_text, unsafe_allow_html=True)
+
+            # 보안 강화: 어시스턴트 메시지만 HTML 허용, 사용자 메시지는 순수 마크다운으로 처리
+            st.markdown(display_text, unsafe_allow_html=(role == "assistant"))
 
         if role == "assistant" and metrics:
             st.divider()
@@ -325,7 +330,7 @@ def render_message(
                             ):
                                 # [수정] 뷰어 상태와 완벽한 동기화 보장
                                 SessionManager.set("pdf_target_page", p)
-                                st.session_state.current_page = p
+                                SessionManager.set("current_page", p)
                                 st.session_state["page_nav_input_v5"] = p
                                 st.rerun()
 
@@ -362,13 +367,42 @@ def _render_system_logs(logs: list[str]):
 
 @st.fragment
 def render_chat_interface():
-    """채팅 인터페이스: 메시지(위, 스크롤) + 입력창(아래, 고정)"""
+    """채팅 인터페이스: 메시지(위, 스크롤) + 컨트롤바 + 입력창(아래, 고정)"""
     messages = SessionManager.get_messages() or []
     is_generating = bool(SessionManager.get("is_generating_answer", False))
     current_sid = SessionManager.get_session_id()
 
-    # 1. 상단 메시지 영역 (독립 스크롤 활성화)
-    with st.container(height=500, border=False):
+    # [추가] 3.2 에러 복구 로직: 답변 생성 중인데 마지막 사용자 메시지 이후 너무 오래 지났다면 강제 해제
+    if is_generating and messages and messages[-1].get("role") == "user":
+        last_query_time = messages[-1].get("timestamp", 0)
+        if time.time() - last_query_time > 120:  # 120초로 넉넉하게 (LLM 응답 지연 고려)
+            SessionManager.set("is_generating_answer", False)
+            is_generating = False
+            logger.warning(
+                f"[UI] [TIMEOUT] {current_sid} 세션의 답변 생성 타임아웃 발생 (강제 해제)"
+            )
+
+    # 레이아웃 관리는 ui.py의 Native CSS Flexbox를 따릅니다.
+
+    # 메시지 영역 (스크롤 가능)
+    # vh 단위를 사용하여 상단바와 하단 입력창(약 100px)을 제외한 영역을 점유
+    with st.container(height=int(st.query_params.get("height", 600)), border=False):
+        # UI 로딩 후 자바스크립트로 실제 높이를 동기화하는 로직 대안 사용
+        st.markdown(
+            """
+            <script>
+                function updateHeight() {
+                    const chatHeight = window.innerHeight - 150;
+                    const container = window.parent.document.querySelector('[data-testid="stVerticalBlock"]');
+                    if (container) container.style.height = chatHeight + 'px';
+                }
+                window.addEventListener('resize', updateHeight);
+                updateHeight();
+            </script>
+        """,
+            unsafe_allow_html=True,
+        )
+
         if not messages:
             st.chat_message("system", avatar="⚙️").markdown(MSG_CHAT_GUIDE)
 
@@ -400,21 +434,18 @@ def render_chat_interface():
         # 스트리밍 전용 플레이스홀더
         streaming_placeholder = st.empty()
 
-    # 2. 하단 입력 영역 (고정)
-    with st.container():
-        user_query = st.chat_input(MSG_CHAT_INPUT_PLACEHOLDER, disabled=is_generating)
+    # [수정] 3.1 입력창 플레이스홀더 동적 변경
+    input_placeholder = (
+        MSG_CHAT_INPUT_PLACEHOLDER if not messages else "추가 질문을 입력하세요..."
+    )
+    user_query = st.chat_input(input_placeholder, disabled=is_generating)
 
     if user_query and not is_generating:
         SessionManager.add_message("user", user_query)
-        try:
-            st.rerun(scope="fragment")
-        except Exception:
-            st.rerun()
+        st.rerun()
 
     # 대기 중인 질문이 있고 아직 답변 생성 전인 경우
     if not is_generating and messages and messages[-1].get("role") == "user":
-        from core.rag_core import RAGSystem
-
         rag_sys = RAGSystem(session_id=current_sid)
 
         if SessionManager.is_ready_for_chat(session_id=current_sid):
@@ -435,9 +466,5 @@ def render_chat_interface():
                     metrics=result.get("performance"),
                     processed_content=result.get("processed_content"),
                 )
-                streaming_placeholder.empty()
 
-            try:
-                st.rerun(scope="fragment")
-            except Exception:
-                st.rerun()
+            st.rerun()
