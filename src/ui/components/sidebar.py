@@ -22,46 +22,42 @@ def render_sidebar(
     available_models=None,
 ):
     """사이드바 최상위 렌더링 함수"""
-    pdf_path = SessionManager.get("pdf_file_path")
-    # [복구] 경로 존재 여부만으로 렌더링을 결정하여 누락을 방지합니다.
-    is_expanded = bool(pdf_path)
 
-    with st.sidebar:
-        # [안정성] CSS 픽셀값과 정확히 일치하는 비율을 설정하여 1열 너비를 고정합니다.
-        column_ratios = [300, 700] if is_expanded else [300, 1]
-        col_settings, col_viewer = st.columns(column_ratios)
+    # 사이드바 확장 상태 관리
+    is_expanded = SessionManager.get("sidebar_expanded", True)
 
-        with col_settings:
-            st.markdown(
-                "<div class='sidebar-header'>🤖 RAG System</div>",
-                unsafe_allow_html=True,
-            )
-            # 설정창 영역 (성능 및 상태 동기화를 위해 프래그먼트 없이 렌더링)
-            _render_settings_internal(
-                file_uploader_callback,
-                model_selector_callback,
-                embedding_selector_callback,
-                is_generating,
-                current_file_name,
-                available_models,
-            )
+    # 사이드바 제어 버튼
+    if st.sidebar.button("◀️" if is_expanded else "▶️", key="sidebar_toggle"):
+        SessionManager.set("sidebar_expanded", not is_expanded)
+        st.rerun()
 
-        with col_viewer:
-            # 2열은 PDF가 존재하고 경로가 유효할 때만 렌더링합니다.
-            if is_expanded:
-                st.markdown(
-                    "<div class='sidebar-header'>📄 문서 미리보기</div>",
-                    unsafe_allow_html=True,
-                )
-                with st.container():
-                    try:
-                        from ui.components.viewer import render_pdf_viewer
-
-                        render_pdf_viewer()
-                    except ImportError as e:
-                        st.error(f"뷰어 로드 실패: {e}")
-            else:
-                st.empty()
+    if is_expanded:
+        st.markdown(
+            """
+            <div class="sidebar-logo-container">
+                <div class="logo-icon-wrapper">
+                    <span style="font-size: 22px;">🤖</span>
+                </div>
+                <div class="logo-text-wrapper">
+                    <div class="logo-main-row">
+                        <span class="logo-rag">RAG</span>
+                        <span class="logo-system">SYSTEM</span>
+                    </div>
+                    <div class="logo-ollama">OLLAMA ENGINE</div>
+                </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+        # 설정창 영역 (성능 및 상태 동기화를 위해 프래그먼트 없이 렌더링)
+        _render_settings_internal(
+            file_uploader_callback,
+            model_selector_callback,
+            embedding_selector_callback,
+            is_generating,
+            current_file_name,
+            available_models,
+        )
 
 
 def _render_settings_internal(
@@ -72,12 +68,14 @@ def _render_settings_internal(
     current_file_name,
     available_models,
 ):
-    """사이드바의 설정 섹션 실제 렌더링 로직"""
-    # [안정성] 입력 데이터 타입 보장
+    """사이드바의 설정 섹션 실제 렌더링 로직 (Mockup과 1:1 일치화)"""
     safe_models = available_models if isinstance(available_models, list) else []
 
+    # 1. 문서 업로드 섹션
+    st.markdown(
+        '<span class="settings-label">📄 Document Assets</span>', unsafe_allow_html=True
+    )
     with st.container(border=True):
-        st.subheader("📄 문서 업로드")
         st.file_uploader(
             "PDF 파일 업로드",
             type="pdf",
@@ -89,8 +87,13 @@ def _render_settings_internal(
         if current_file_name:
             st.caption(f"현재 파일: :green[{current_file_name}]")
 
-    with st.container(border=True):
-        st.subheader("⚙️ 모델 설정")
+    # 2. 고급 설정 (익스팬더)
+    with st.expander("🛠️ Advanced Configuration", expanded=False):
+        # 모델 설정 그룹
+        st.markdown(
+            '<span class="settings-label" style="margin-top:2px;">⚙️ Model Setup</span>',
+            unsafe_allow_html=True,
+        )
 
         # [안정성] 필터링 시 None 에러 방지
         raw_models = [m for m in safe_models if m and "---" not in str(m)]
@@ -112,7 +115,11 @@ def _render_settings_internal(
             actual_llms.append(DEFAULT_OLLAMA_MODEL)
         actual_llms.sort()
 
-        st.write("**💬 sLLM**")
+        # LLM 선택
+        st.markdown(
+            '<div class="settings-sublabel">Reasoning Engine (sLLM)</div>',
+            unsafe_allow_html=True,
+        )
         last_model = SessionManager.get("last_selected_model") or DEFAULT_OLLAMA_MODEL
         if last_model not in actual_llms:
             last_model = actual_llms[0]
@@ -131,9 +138,11 @@ def _render_settings_internal(
             label_visibility="collapsed",
         )
 
-        st.markdown("<div style='margin-top: 15px;'></div>", unsafe_allow_html=True)
-
-        st.write("**🔍 임베딩 모델**")
+        # 임베딩 선택
+        st.markdown(
+            '<div class="settings-sublabel">Embedding Model</div>',
+            unsafe_allow_html=True,
+        )
         current_emb = (
             SessionManager.get("last_selected_embedding_model")
             or DEFAULT_EMBEDDING_MODEL
@@ -155,19 +164,96 @@ def _render_settings_internal(
             label_visibility="collapsed",
         )
 
-    with st.expander("🛠️ 고급 설정", expanded=False):
-        if st.button("🗑️ VRAM 비우기", use_container_width=True):
+        st.markdown(
+            "<hr style='margin: 20px 0; opacity: 0.1;'>", unsafe_allow_html=True
+        )
+
+        # 시스템 도구 그룹
+        st.markdown(
+            '<span class="settings-label">🔧 Maintenance</span>', unsafe_allow_html=True
+        )
+        col1, col2 = st.columns(2)
+
+        # VRAM 비우기 (Secondary)
+        col1.button(
+            "Clear VRAM",
+            use_container_width=True,
+            help="GPU 메모리를 비웁니다.",
+            key="vram_btn",
+            type="secondary",
+        )
+
+        # 초기화 (Primary)
+        if col2.button(
+            "Reset All",
+            use_container_width=True,
+            type="primary",
+            help="모든 대화와 데이터를 초기화합니다.",
+            key="reset_btn",
+        ):
+            SessionManager.reset_all_state()
+            st.rerun()
+
+        # VRAM 비우기 로직 (type="secondary" 위젯 클릭 시)
+        if st.session_state.get("vram_btn"):
             from common.utils import sync_run
             from core.model_loader import ModelManager
 
             sync_run(ModelManager.clear_vram())
             st.toast("VRAM 정리 완료")
 
-        if st.button(
-            "🔄 시스템 전체 초기화",
-            use_container_width=True,
-            type="primary",
-            help="UI가 멈추거나 오류가 발생했을 때 클릭하세요. 모든 대화와 문서가 초기화됩니다.",
-        ):
-            SessionManager.reset_all_state()
-            st.rerun()
+    # 시스템 건강 상태 (실시간 업데이트)
+    render_system_health()
+
+
+@st.fragment(run_every="5s")
+def render_system_health():
+    """시스템 건강 상태 표시 (CPU/Memory) - 현대화된 커스텀 디자인"""
+    import psutil
+
+    cpu = psutil.cpu_percent()
+    mem = psutil.virtual_memory().percent
+
+    # CPU 부하에 따른 색상 결정
+    cpu_color = "#007bff"
+    if cpu > 80:
+        cpu_color = "#dc3545"  # Error color
+    elif cpu > 50:
+        cpu_color = "#ffc107"  # Warning color
+
+    st.markdown(
+        f"""
+        <div class="status-container">
+            <div class="status-header">
+                <span class="status-title">System Health</span>
+                <div class="live-indicator">
+                    <div class="live-dot"></div>
+                    LIVE
+                </div>
+            </div>
+            <div class="metric-row">
+                <!-- CPU Metric -->
+                <div class="metric-item">
+                    <div class="metric-label-row">
+                        <span>CPU Usage</span>
+                        <span style="font-weight:700;">{cpu}%</span>
+                    </div>
+                    <div class="progress-track">
+                        <div class="progress-fill" style="width: {cpu}%; background: {cpu_color};"></div>
+                    </div>
+                </div>
+                <!-- RAM Metric -->
+                <div class="metric-item">
+                    <div class="metric-label-row">
+                        <span>Memory Usage</span>
+                        <span style="font-weight:700;">{mem}%</span>
+                    </div>
+                    <div class="progress-track">
+                        <div class="progress-fill" style="width: {mem}%; background: #6c5ce7;"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
