@@ -1,14 +1,23 @@
+# Streamlit 기반 RAG 챗봇의 메인 진입점 및 전체 오케스트레이션을 담당하는 파일
 """
 RAG Chatbot 애플리케이션의 메인 진입점 파일입니다.
 Streamlit 프레임워크를 기반으로 UI를 구성하고 세션 상태를 관리합니다.
 """
 
+# [Lazy Import용] 런타임에 필요한 모듈들
+import atexit
+import contextlib
 import logging
 import os
+import shutil
+import threading
+import time
 from pathlib import Path
+from typing import Literal, cast
 
 import nest_asyncio
 import streamlit as st
+from streamlit.runtime.scriptrunner import add_script_run_ctx
 
 from common.config import (
     DEFAULT_EMBEDDING_MODEL,
@@ -18,42 +27,22 @@ from common.constants import FilePathConstants, StringConstants
 from common.logging_config import setup_logging
 from common.utils import safe_cache_resource, sync_run
 
-# 로깅 설정 (최상단)
-logger = setup_logging(log_level="DEBUG", log_file=Path("logs/app.log"))
-
-# [Lazy Import] 무거운 코어 모듈 임포트 제거 (함수 내부로 이동)
-from core.session import SessionManager  # noqa: E402
-from infra.notification_system import SystemNotifier  # noqa: E402
-from ui.ui import (  # noqa: E402
-    inject_custom_css,
-    render_left_column,
-    render_sidebar,
+# 1. Streamlit 페이지 설정 (최우선 실행 - 가이드라인 준수)
+st.set_page_config(
+    page_title=StringConstants.PAGE_TITLE,
+    layout=cast(Literal["centered", "wide"], StringConstants.LAYOUT),
 )
+
+# 2. 로깅 설정 (최상단)
+logger = setup_logging(log_level="DEBUG", log_file=Path("logs/app.log"))
 
 # 상수 정의
 PAGE_TITLE = StringConstants.PAGE_TITLE
 LAYOUT = StringConstants.LAYOUT
 MAX_FILE_SIZE_MB = StringConstants.MAX_FILE_SIZE_MB
 
-# 비동기 패치 적용 (최상단 실행)
-
+# 비동기 패치 적용
 nest_asyncio.apply()
-
-# Streamlit 페이지 설정 (최우선 실행 - UI 즉시 표시용)
-st.set_page_config(page_title=StringConstants.PAGE_TITLE, layout=StringConstants.LAYOUT)
-
-# [보안] 세션 ID 강제 초기화 및 격리 보장
-try:
-    from streamlit.runtime.scriptrunner import get_script_run_ctx
-
-    ctx = get_script_run_ctx()
-    if ctx and not SessionManager.get_session_id():
-        # [수정] 세션이 이미 초기화되어 있다면 건너뜀 (로그 중복 방지)
-        SessionManager.init_session(session_id=ctx.session_id)
-        logger.info(f"[SYSTEM] [SESSION] 신규 세션 초기화 완료 | ID: {ctx.session_id}")
-    # [최적화] 기존 세션 유지 시에는 로깅 생략 (콘솔 정제 완료)
-except Exception as e:
-    logger.warning(f"세션 초기화 실패: {e}")
 
 # --- [추가] 필수 세션 상태 초기화 ---
 if "current_page" not in st.session_state:
@@ -67,136 +56,118 @@ if "last_valid_height" not in st.session_state:
 if "is_generating_answer" not in st.session_state:
     st.session_state.is_generating_answer = False
 
-import atexit  # noqa: E402
-import threading  # noqa: E402
-import time  # noqa: E402
-from pathlib import Path  # noqa: E402
-
-
-# [Extreme Lazy Import] 로깅 설정조차 필요한 시점으로 미룸
-def get_logger():
-    from common.logging_config import setup_logging
-
-    return setup_logging(log_level="INFO", log_file=Path("logs/app.log"))
-
 
 def _check_windows_integrity():
     """
     [Background] Windows 환경의 라이브러리 충돌을 체크하고 주기적으로 세션을 정리합니다.
     """
-    import os
-    import platform
-    import time
-
     # [최적화] 세션 정리 추가 (메모리 누수 방지)
     try:
         from core.session import SessionManager
 
-        # 1시간 이상 활동 없는 세션 정리
+        # 1시간 이상 활동 없는 세션 정리 (물리적 파일 삭제 포함)
         SessionManager.cleanup_expired_sessions(max_idle_seconds=3600)
     except Exception as e:
         logger.error(f"[SYSTEM] [CLEANUP] 세션 정리 중 오류: {e}")
 
     # [최적화] CI 환경에서는 무거운 라이브러리 체크 생략 (충돌 위험 방지)
+    import platform
+
     if platform.system() != "Windows" or os.getenv("GITHUB_ACTIONS") == "true":
         return
 
     try:
-        # UI 렌더링을 위해 잠시 양보
-        time.sleep(1.5)
-
         # 무거운 라이브러리 로드 테스트 (핵심 RAG용)
-        import torch
+        import sys
 
-        # 간단한 연산 테스트로 DLL 로드 확인
-        _ = torch.tensor([1.0])
-        logger.info("[SYSTEM] [INTEGRITY] Windows 라이브러리 무결성 점검 완료 (OK)")
+        if "torch" not in sys.modules:
+            import torch
 
-    except ImportError as e:
-        error_msg = str(e)
-        if "0xc0000139" in error_msg or "DLL load failed" in error_msg:
-            logger.critical(f"[SYSTEM] [INTEGRITY] 치명적 오류 감지: {error_msg}")
-            # 사용자가 인지할 수 있도록 세션에 경고 기록
-            from core.session import SessionManager
+            _ = torch.tensor([1.0])
 
-            SessionManager.add_message(
-                "system",
-                f"⚠️ 시스템 무결성 경고: Windows DLL 호환성 문제가 감지되었습니다. \n({error_msg})",
-            )
+        with contextlib.suppress(ValueError, RuntimeError):
+            logger.info("[SYSTEM] [INTEGRITY] Windows 라이브러리 무결성 점검 완료 (OK)")
+
     except Exception as e:
         logger.warning(f"[SYSTEM] [INTEGRITY] 점검 중 예외 발생: {e}")
 
 
-def _run_background_checks():
-    """백그라운드 점검 작업을 시작합니다."""
-    # [최적화] 중복 실행 방지 (이미 시작되었거나 완료된 경우 스킵)
-    if st.session_state.get("integrity_check_triggered"):
-        return
+@st.cache_resource
+def _start_global_background_worker():
+    """
+    [Singleton] 서버 인스턴스당 단 하나만 실행되는 백그라운드 워커입니다.
+    세션 정리 및 시스템 무결성 점검을 주기적으로 수행합니다.
+    """
 
-    st.session_state.integrity_check_triggered = True
-    threading.Thread(target=_check_windows_integrity, daemon=True).start()
-    # 임시 디렉토리 정리도 여기서 호출하거나 기존처럼 유지
-    # _init_temp_directory()는 이미 별도 스레드를 쓰고 있음
+    def maintenance_loop():
+        logger.info("[SYSTEM] 전역 백그라운드 워커 시작됨")
+
+        while True:
+            try:
+                _check_windows_integrity()
+            except Exception as e:
+                logger.error(f"[SYSTEM] 백그라운드 워커 루프 중 오류: {e}")
+
+            # 1시간(3600초) 대기 후 반복
+            time.sleep(3600)
+
+    thread = threading.Thread(
+        target=maintenance_loop, name="GlobalMaintenanceWorker", daemon=True
+    )
+    thread.start()
+    return thread
+
+
+def _run_background_checks():
+    """백그라운드 점검 작업을 시작합니다 (싱글톤 보장)."""
+    _start_global_background_worker()
+
+
+@st.cache_data(ttl=300)  # 5분간 캐싱
+def _get_available_models_cached():
+    """Ollama 모델 목록을 캐싱하여 UI 블로킹을 최소화합니다."""
+    from core.model_loader import get_available_models
+
+    return get_available_models()
 
 
 @safe_cache_resource(show_spinner=False)
 def _init_temp_directory():
-    """임시 디렉토리를 초기화하고 잔해를 백그라운드에서 제거합니다."""
+    """임시 디렉토리를 초기화합니다."""
     from common.constants import FilePathConstants
 
     temp_path = Path(FilePathConstants.TEMP_DIR).absolute()
     temp_path.mkdir(parents=True, exist_ok=True)
-
-    def cleanup_task():
-        try:
-            # UI가 먼저 뜨도록 잠시 대기
-            time.sleep(1)
-            from infra.deployment_manager import get_deployment_manager
-
-            manager = get_deployment_manager()
-            # 실제 임시 디렉토리(temp_path)와 배포 디렉토리를 모두 정리
-            # [수정] 임시 파일은 1시간만 지나도 정리 (테스트 반복 시 쌓임 방지)
-            manager.cleanup_orphaned_artifacts(max_age_hours=1, target_dir=temp_path)
-            manager.cleanup_orphaned_artifacts(max_age_hours=24)  # 기본 배포 폴더 정리
-            logger.info(
-                f"[SYSTEM] [JANITOR] 백그라운드 자원 정리 완료 | 대상: {temp_path} 및 deployments/"
-            )
-        except Exception as e:
-            logger.error(f"[SYSTEM] [JANITOR] 리소스 정리 실패 | {e}")
-
-    # 백그라운드 스레드 시작
-    threading.Thread(target=cleanup_task, daemon=True).start()
+    logger.info(f"[SYSTEM] [INIT] 임시 디렉토리 준비 완료: {temp_path}")
     return str(temp_path)
+
+
+def _cleanup_current_file():
+    """현재 세션에서 사용 중인 임시 파일을 삭제합니다. (종료 핸들러용)"""
+    from core.session import SessionManager
+
+    # Streamlit 세션 상태를 직접 접근하기 어려우므로 SessionManager는 thread-safe하게 설계됨
+    try:
+        # [수정] create=False로 설정하여 종료 시 불필요한 세션 생성 및 로깅 오류 방지
+        path = SessionManager.get("pdf_file_path", create=False)
+        if path:
+            SessionManager.safe_remove_file(path)
+    except Exception:
+        pass
+
+
+@st.cache_resource
+def _register_cleanup_handlers():
+    """[Singleton] 프로세스 종료 핸들러를 단 한 번만 등록합니다."""
+    atexit.register(_cleanup_current_file)
+    logger.info("[SYSTEM] 프로세스 종료 핸들러 등록 완료")
+    return True
 
 
 # 앱 시작 시 초기화 수행 (캐싱으로 인해 최초 1회만 작동)
 _init_temp_directory()
 _run_background_checks()
-
-
-def _cleanup_current_file():
-    """현재 세션에서 사용 중인 임시 파일을 삭제합니다. (종료 핸들러용)"""
-    # Streamlit 세션 상태를 직접 접근하기 어려우므로 SessionManager는 thread-safe하게 설계됨
-    try:
-        path = SessionManager.get("pdf_file_path")
-        if path and os.path.exists(path):
-            # [Windows] 파일 잠금 해제를 위한 재시도 로직
-            for attempt in range(3):
-                try:
-                    os.remove(path)
-                    print(f"[System] Cleanup: Deleted temp file {path}")
-                    return
-                except PermissionError:
-                    if attempt < 2:  # 마지막 시도가 아니면 대기
-                        time.sleep(0.5)
-                except Exception:
-                    pass
-    except Exception:
-        pass
-
-
-# 프로세스 종료 시 핸들러 등록
-atexit.register(_cleanup_current_file)
+_register_cleanup_handlers()
 
 
 def _ensure_models_are_loaded() -> bool:
@@ -204,6 +175,8 @@ def _ensure_models_are_loaded() -> bool:
     선택된 LLM 및 임베딩 모델을 중앙 관리자를 통해 안전하게 로드합니다.
     """
     from core.model_loader import ModelManager
+    from core.session import SessionManager
+    from infra.notification_system import SystemNotifier
 
     selected_model = SessionManager.get("last_selected_model")
     selected_embedding = SessionManager.get("last_selected_embedding_model")
@@ -242,23 +215,30 @@ def _ensure_models_are_loaded() -> bool:
 
     except Exception as e:
         logger.error(f"모델 로드 중 치명적 오류 발생: {e}", exc_info=True)
-        st.error(f"❌ 모델 로드 실패: {e}")
+        # [수정] st.error 대신 스레드 안전한 알림 시스템 사용 (Thread-Safety 보장)
+        SystemNotifier.error("모델 로드 실패", details=str(e))
         return False
 
 
-def _rebuild_rag_system() -> None:
+def _rebuild_rag_system(session_id: str | None = None) -> None:
     """
-    업로드된 파일과 선택된 모델을 사용하여 RAG 파이프라인을 재구축합니다.
+    업로드된 파일과 선택된 모델을 사용하여 RAG 파이프라인을 백그라운드에서 재구축합니다.
     """
+    from core.session import SessionManager
+    from infra.notification_system import SystemNotifier
+
+    if session_id:
+        SessionManager.set_session_id(session_id)
+    else:
+        session_id = SessionManager.get_session_id()
     file_name = SessionManager.get("last_uploaded_file_name")
     file_path = SessionManager.get("pdf_file_path")
 
     if not file_name or not file_path:
         return
 
-    # [중복 실행 방지 강화]
-    if st.session_state.get("is_building_rag"):
-        return
+    # [수정] 호출부(_handle_pending_tasks)에서 이미 플래그를 관리하므로 내부 중복 체크는 로그로 대체
+    logger.debug(f"[SYSTEM] RAG 파이프라인 구축 시작: {file_name}")
 
     if (
         SessionManager.get("pdf_processed")
@@ -267,7 +247,7 @@ def _rebuild_rag_system() -> None:
     ):
         return
 
-    st.session_state.is_building_rag = True
+    SessionManager.set("is_building_rag", True)
     try:
         if not _ensure_models_are_loaded():
             return
@@ -302,13 +282,19 @@ def _rebuild_rag_system() -> None:
         SessionManager.set("pdf_processed", True)
         SessionManager.add_message("system", f"❌ {error_msg}")
     finally:
-        st.session_state.is_building_rag = False
+        SessionManager.set("is_building_rag", False)
+        SessionManager.set("rag_build_complete_flag", True)
 
 
-def _update_qa_chain() -> None:
+def _update_qa_chain(session_id: str | None = None) -> None:
     """
     문서 인덱싱은 유지한 채 LLM(QA Chain)만 교체합니다.
     """
+    from core.session import SessionManager
+
+    if session_id:
+        SessionManager.set_session_id(session_id)
+
     selected_model = SessionManager.get("last_selected_model")
     try:
         SessionManager.add_status_log("🔄 추론 모델 교체 중")
@@ -328,13 +314,19 @@ def _update_qa_chain() -> None:
     except Exception as e:
         logger.error(f"QA 업데이트 실패: {e}", exc_info=True)
         SessionManager.add_message("assistant", f"❌ 업데이트 실패: {e}")
+    finally:
+        # UI 리런 유도를 위한 플래그 설정 (global-status-bar에서 감지)
+        SessionManager.set("rag_build_complete_flag", True)
 
 
 # --- Callbacks ---
 def on_file_upload() -> None:
     """파일 업로드 이벤트 콜백"""
+    from core.session import SessionManager
+    from infra.notification_system import SystemNotifier
+
     uploaded_file = st.session_state.get("pdf_uploader")
-    if not uploaded_file:
+    if uploaded_file is None or not hasattr(uploaded_file, "type"):
         return
 
     # [개선] 파일 타입 검사 (MIME 타입 확인)
@@ -361,12 +353,8 @@ def on_file_upload() -> None:
 
         # [관리강화] 이전 임시 파일 즉시 삭제
         old_path = SessionManager.get("pdf_file_path")
-        if old_path and os.path.exists(old_path):
-            try:
-                os.remove(old_path)
-                logger.info(f"[System] [Cleanup] 이전 파일 삭제: {old_path}")
-            except Exception as e:
-                logger.warning(f"이전 파일 삭제 실패: {e}")
+        if old_path:
+            SessionManager.safe_remove_file(old_path)
 
         SessionManager.set("last_uploaded_file_name", uploaded_file.name)
 
@@ -376,26 +364,28 @@ def on_file_upload() -> None:
             temp_dir = os.path.abspath(FilePathConstants.TEMP_DIR)
             os.makedirs(temp_dir, exist_ok=True)
 
-            # 파일명에 타임스탬프를 넣어 중복 방지 (안전성)
-            import time
-
-            safe_name = f"upload_{int(time.time())}.pdf"
+            # [개선] 파일명에 세션 ID와 타임스탬프를 넣어 충돌 방지
+            sid = SessionManager.get_session_id()
+            safe_name = f"upload_{sid}_{int(time.time())}.pdf"
             tmp_path = os.path.join(temp_dir, safe_name)
 
             with open(tmp_path, "wb") as f:
-                f.write(uploaded_file.getbuffer())
+                # [개선] 메모리 버퍼 대신 스트림 복사 사용
+                shutil.copyfileobj(uploaded_file, f)
 
             SessionManager.set("pdf_file_path", tmp_path)
             SessionManager.set("new_file_uploaded", True)
             SystemNotifier.success(f"문서 업로드 완료: {uploaded_file.name}", icon="📄")
             SystemNotifier.info("문서 내용 분석 및 인덱싱 시작")
-            logger.info(f"[System] [Upload] 파일 저장 완료: {tmp_path}")
+            logger.info(f"[SYSTEM] [UPLOAD] 파일 저장 완료: {tmp_path}")
         except Exception as e:
             SystemNotifier.error("파일 저장 중 오류 발생", details=str(e))
 
 
 def on_model_change() -> None:
     """LLM 모델 변경 이벤트 콜백"""
+    from core.session import SessionManager
+
     selected = st.session_state.get("model_selector")
     last = SessionManager.get("last_selected_model")
 
@@ -413,6 +403,8 @@ def on_model_change() -> None:
 
 def on_embedding_change() -> None:
     """임베딩 모델 변경 이벤트 콜백"""
+    from core.session import SessionManager
+
     selected = st.session_state.get("embedding_model_selector")
     last = SessionManager.get("last_selected_embedding_model")
 
@@ -429,8 +421,18 @@ def on_embedding_change() -> None:
 
 
 def _render_app_layout(available_models: list[str] | None = None) -> None:
-    """앱의 전체 레이아웃을 렌더링합니다. (사이드바 PDF + 메인 채팅)"""
-    # 1. 사이드바 렌더링 (내부에 설정 및 PDF 뷰어 포함)
+    """앱의 전체 레이아웃을 렌더링합니다. (사이드바 설정 + 메인 2열: PDF + 채팅)"""
+    from core.session import SessionManager
+    from ui.ui import (
+        render_global_status_bar,
+        render_left_column,
+        render_sidebar,
+    )
+
+    # [추가] 1초 주기 상태 업데이트 및 리런 트리거 활성화
+    render_global_status_bar()
+
+    # 1. 사이드바 렌더링 (설정만)
     render_sidebar(
         file_uploader_callback=on_file_upload,
         model_selector_callback=on_model_change,
@@ -441,18 +443,32 @@ def _render_app_layout(available_models: list[str] | None = None) -> None:
         available_models=available_models,
     )
 
-    # 2. 메인 영역 (전체 너비 채팅창)
-    st.subheader("💬 문서 분석 채팅")
-    render_left_column()
+    # 2. 메인 영역을 2열로 구성 (동일 비율 1:1)
+    col_pdf, col_chat = st.columns([1, 1], gap="medium")
+
+    with col_pdf:
+        from ui.components.viewer import render_pdf_column
+
+        render_pdf_column()
+
+    with col_chat:
+        render_left_column()
 
 
 def _handle_pending_tasks() -> None:
     """지연된 무거운 작업(RAG 빌드, 모델 교체 등)을 순차적으로 처리합니다."""
+    from core.session import SessionManager
+
+    # 중복 실행 방지를 위한 사전 체크
+    is_building = bool(SessionManager.get("is_building_rag", False))
+
     # 1. 새 파일 업로드 처리
-    if SessionManager.get("new_file_uploaded"):
+    if SessionManager.get("new_file_uploaded") and not is_building:
         logger.info("[SYSTEM] 새 파일 업로드 감지 -> 처리 시작")
         # 즉시 플래그 해제 (중복 실행 방지)
         SessionManager.set("new_file_uploaded", False)
+        # 스레드 기동 전 미리 플래그 설정 (Race Condition 방지)
+        SessionManager.set("is_building_rag", True)
 
         current_file_path = SessionManager.get("pdf_file_path")
         current_file_name = SessionManager.get("last_uploaded_file_name")
@@ -461,53 +477,54 @@ def _handle_pending_tasks() -> None:
         SessionManager.reset_for_new_file()
         SessionManager.set("pdf_file_path", current_file_path)
         SessionManager.set("last_uploaded_file_name", current_file_name)
+        # reset_for_new_file에서 is_building_rag가 꺼졌을 수 있으므로 다시 켬
+        SessionManager.set("is_building_rag", True)
 
-        # RAG 구축 실행
-        _rebuild_rag_system()
-
-        logger.info("[SYSTEM] RAG 구축 완료 -> 화면 갱신")
-        st.rerun()
+        # RAG 구축 실행 (백그라운드 스레드)
+        sid = SessionManager.get_session_id()
+        thread = threading.Thread(target=_rebuild_rag_system, args=(sid,), daemon=True)
+        add_script_run_ctx(thread)
+        thread.start()
+        logger.info("[SYSTEM] RAG 구축 백그라운드 스레드 시작됨")
 
     # 2. 모델 재빌드 요청 처리
-    elif SessionManager.get("needs_rag_rebuild"):
+    elif SessionManager.get("needs_rag_rebuild") and not is_building:
         logger.info("[SYSTEM] RAG 재빌드 요청 수락")
         SessionManager.set("needs_rag_rebuild", False)
-        _rebuild_rag_system()
-        st.rerun()
+        SessionManager.set("is_building_rag", True)
+
+        sid = SessionManager.get_session_id()
+        thread = threading.Thread(target=_rebuild_rag_system, args=(sid,), daemon=True)
+        add_script_run_ctx(thread)
+        thread.start()
 
     # 3. QA 체인 업데이트 처리
     elif SessionManager.get("needs_qa_chain_update"):
-        logger.info("[SYSTEM] QA 체인 업데이트 시작")
+        logger.info("[SYSTEM] QA 체인 업데이트 요청 수락")
         SessionManager.set("needs_qa_chain_update", False)
-        _update_qa_chain()
-        st.rerun()
+
+        # [수정] UI 블로킹 방지를 위해 백그라운드 스레드에서 실행
+        sid = SessionManager.get_session_id()
+        thread = threading.Thread(target=_update_qa_chain, args=(sid,), daemon=True)
+        add_script_run_ctx(thread)
+        thread.start()
+        logger.info("[SYSTEM] QA 체인 업데이트 백그라운드 스레드 시작됨")
 
 
 def main() -> None:
     """메인 애플리케이션 오케스트레이터"""
+    from core.session import SessionManager
+    from ui.ui import inject_custom_css
+
     # 0. 실행 지표 초기화
     if "full_run_count" not in st.session_state:
         st.session_state.full_run_count = 0
     st.session_state.full_run_count += 1
 
-    # 1. 초기 레이아웃 및 세션 즉시 준비
-    SessionManager.init_session()
-
-    # [수정] PDF 업로드 상태에 따른 사이드바 확장 상태 결정 후 CSS 주입 (단 1회 수행)
-    is_expanded = bool(SessionManager.get("pdf_file_path"))
-    inject_custom_css(is_expanded=is_expanded)
-
-    # [추가] 세션 ID 불일치로 인한 '영구 분석 중' 상태 방지
-    if SessionManager.get("pdf_file_path") and not SessionManager.get("pdf_processed"):
-        # 분석이 중단된 것으로 간주하고 입력창 열기
-        SessionManager.set("is_generating_answer", False)
-
-    # 2. 모델 목록 로딩 (Ghosting 방지를 위해 UI 렌더링 전 수행)
+    # 1. 모델 목록 로딩 (캐싱 적용)
     if "available_models_list" not in st.session_state:
         with st.spinner("시스템 초기화 중..."):
-            from core.model_loader import get_available_models
-
-            fetched_models = get_available_models()
+            fetched_models = _get_available_models_cached()
             from common.config import DEFAULT_OLLAMA_MODEL
 
             if not fetched_models or (
@@ -518,6 +535,18 @@ def main() -> None:
                 st.session_state.available_models_list = fetched_models
         # 목록 확보 후 즉시 리런하여 전체 UI 구성
         st.rerun()
+
+    # 2. 세션 즉시 준비
+    SessionManager.init_session()
+
+    # [수정] PDF 업로드 상태에 따른 사이드바 확장 상태 결정 후 CSS 주입 (단 1회 수행)
+    is_expanded = bool(SessionManager.get("pdf_file_path"))
+    inject_custom_css(is_expanded=is_expanded)
+
+    # [추가] 세션 ID 불일치로 인한 '영구 분석 중' 상태 방지
+    if SessionManager.get("pdf_file_path") and not SessionManager.get("pdf_processed"):
+        # 분석이 중단된 것으로 간주하고 입력창 열기
+        SessionManager.set("is_generating_answer", False)
 
     # [추가] 리런 성능 지표 출력 (디버그 모드 시)
     if os.getenv("DEBUG_UI") == "true":
