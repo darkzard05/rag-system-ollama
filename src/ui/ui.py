@@ -126,17 +126,25 @@ def inject_custom_css(is_expanded: bool = False):
         overflow: hidden !important;
     }
 
-    /* 컨테이너의 고정 높이 강제 무효화 및 부모에 맞춤 */
-    [data-testid="stMainBlockContainer"] [data-testid="stVerticalBlockBorderWrapper"] {
+    [data-testid="stColumn"] > div {
         flex-grow: 1 !important;
+        display: flex;
+        flex-direction: column;
         height: 100% !important;
+    }
+
+    /* 컨테이너의 고정 높이를 무효화하고 남은 공간을 채우도록(flex-grow) 설정 */
+    [data-testid="stMainBlockContainer"] [data-testid="stVerticalBlockBorderWrapper"] {
+        flex: 1 1 auto !important;
+        height: auto !important;
         min-height: 0 !important;
         border: none !important;
     }
 
     /* 실제 스크롤이 발생하는 내부 블록 */
     [data-testid="stVerticalBlockBorderWrapper"] > div > [data-testid="stVerticalBlock"] {
-        height: 100% !important;
+        flex-grow: 1 !important;
+        height: auto !important;
         overflow-y: auto !important;
     }
 
