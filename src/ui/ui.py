@@ -8,28 +8,6 @@ import streamlit as st
 
 from core.session import SessionManager
 from ui.components.chat import render_chat_interface
-from ui.components.sidebar import render_sidebar as _render_sidebar
-
-
-def render_sidebar(
-    file_uploader_callback,
-    model_selector_callback,
-    embedding_selector_callback,
-    is_generating=False,
-    current_file_name=None,
-    current_embedding_model=None,
-    available_models=None,
-):
-    """사이드바 렌더링 위임"""
-    return _render_sidebar(
-        file_uploader_callback=file_uploader_callback,
-        model_selector_callback=model_selector_callback,
-        embedding_selector_callback=embedding_selector_callback,
-        is_generating=is_generating,
-        current_file_name=current_file_name,
-        current_embedding_model=current_embedding_model,
-        available_models=available_models,
-    )
 
 
 @st.fragment(run_every="1s")
