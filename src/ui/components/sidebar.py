@@ -23,15 +23,7 @@ def render_sidebar(
 ):
     """사이드바 최상위 렌더링 함수"""
 
-    # 사이드바 확장 상태 관리
-    is_expanded = SessionManager.get("sidebar_expanded", True)
-
-    # 사이드바 제어 버튼
-    if st.sidebar.button("◀️" if is_expanded else "▶️", key="sidebar_toggle"):
-        SessionManager.set("sidebar_expanded", not is_expanded)
-        st.rerun()
-
-    if is_expanded:
+    with st.sidebar:
         st.markdown(
             """
             <div class="sidebar-logo-container">

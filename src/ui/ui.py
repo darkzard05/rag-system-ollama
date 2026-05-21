@@ -144,7 +144,6 @@ def inject_custom_css(is_expanded: bool = False):
 
     /* 6. UI 요소 최적화 및 가림 방지 */
     header { display: none !important; }
-    button[kind="header"] { display: none !important; } /* 내장 사이드바 토글 버튼 숨김 */
     [data-testid="stToolbar"] { display: none !important; }
     [data-testid="stDecoration"] { display: none !important; }
 
