@@ -143,6 +143,7 @@ def inject_custom_css(is_expanded: bool = False):
     }
 
     /* 6. UI 요소 최적화 및 가림 방지 */
+    header { display: none !important; }
     [data-testid="stToolbar"] { display: none !important; }
     [data-testid="stDecoration"] { display: none !important; }
 
