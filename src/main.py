@@ -426,7 +426,6 @@ def _render_app_layout(available_models: list[str] | None = None) -> None:
     from ui.ui import (
         render_global_status_bar,
         render_left_column,
-        render_sidebar,
     )
 
     # [추가] 1초 주기 상태 업데이트 및 리런 트리거 활성화
