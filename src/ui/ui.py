@@ -148,10 +148,15 @@ def inject_custom_css(is_expanded: bool = False):
     [data-testid="stDecoration"] { display: none !important; }
 
     .global-status-bar {
-        position: fixed; top: 0; left: 0; width: 100%; height: 28px;
-        z-index: 999999; display: flex; align-items: center; justify-content: center;
-        padding: 0 15px; font-size: 13px; font-weight: 600;
-        box-shadow: 0 1px 3px rgba(0,0,0,0.2);
+        width: 100%;
+        height: 28px;
+        display: flex;
+        align-items: center;
+        padding: 0 15px;
+        font-size: 13px;
+        font-weight: 600;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+        border-radius: 6px;
     }
 
     .thought-container {

@@ -12,7 +12,7 @@ from common.config import (
 from core.session import SessionManager
 
 
-def render_sidebar(
+def render_settings_content(
     file_uploader_callback,
     model_selector_callback,
     embedding_selector_callback,
@@ -21,35 +21,16 @@ def render_sidebar(
     current_embedding_model=None,
     available_models=None,
 ):
-    """사이드바 최상위 렌더링 함수"""
-
-    with st.sidebar:
-        st.markdown(
-            """
-            <div class="sidebar-logo-container">
-                <div class="logo-icon-wrapper">
-                    <span style="font-size: 22px;">🤖</span>
-                </div>
-                <div class="logo-text-wrapper">
-                    <div class="logo-main-row">
-                        <span class="logo-rag">RAG</span>
-                        <span class="logo-system">SYSTEM</span>
-                    </div>
-                    <div class="logo-ollama">OLLAMA ENGINE</div>
-                </div>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-        # 설정창 영역 (성능 및 상태 동기화를 위해 프래그먼트 없이 렌더링)
-        _render_settings_internal(
-            file_uploader_callback,
-            model_selector_callback,
-            embedding_selector_callback,
-            is_generating,
-            current_file_name,
-            available_models,
-        )
+    """설정창 내부 콘텐츠 렌더링 (사이드바 외부 호출용)"""
+    # [수정] 설정창 전용으로 로고는 생략하고 내부 설정만 렌더링하도록 함
+    _render_settings_internal(
+        file_uploader_callback,
+        model_selector_callback,
+        embedding_selector_callback,
+        is_generating,
+        current_file_name,
+        available_models,
+    )
 
 
 def _render_settings_internal(

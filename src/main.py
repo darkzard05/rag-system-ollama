@@ -432,16 +432,22 @@ def _render_app_layout(available_models: list[str] | None = None) -> None:
     # [추가] 1초 주기 상태 업데이트 및 리런 트리거 활성화
     render_global_status_bar()
 
-    # 1. 사이드바 렌더링 (설정만)
-    render_sidebar(
-        file_uploader_callback=on_file_upload,
-        model_selector_callback=on_model_change,
-        embedding_selector_callback=on_embedding_change,
-        is_generating=bool(SessionManager.get("is_generating_answer", False)),
-        current_file_name=SessionManager.get("last_uploaded_file_name"),
-        current_embedding_model=SessionManager.get("last_selected_embedding_model"),
-        available_models=available_models,
-    )
+    # [개선] 상단 툴바 레이아웃 (상태바 + 설정 팝오버)
+    from ui.components.sidebar import render_settings_content
+
+    with st.container():
+        col_status, col_settings = st.columns([0.85, 0.15])
+        with col_status:
+            render_global_status_bar()
+        with col_settings, st.popover("⚙️ 설정", use_container_width=True):
+            render_settings_content(
+                file_uploader_callback=on_file_upload,
+                model_selector_callback=on_model_change,
+                embedding_selector_callback=on_embedding_change,
+                is_generating=bool(SessionManager.get("is_generating_answer", False)),
+                current_file_name=SessionManager.get("last_uploaded_file_name"),
+                available_models=available_models,
+            )
 
     # 2. 메인 영역을 2열로 구성 (동일 비율 1:1)
     col_pdf, col_chat = st.columns([1, 1], gap="medium")
