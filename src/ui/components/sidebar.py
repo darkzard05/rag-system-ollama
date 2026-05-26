@@ -68,25 +68,11 @@ def _render_settings_internal(
             unsafe_allow_html=True,
         )
 
-        # [안정성] 필터링 시 None 에러 방지
-        raw_models = [m for m in safe_models if m and "---" not in str(m)]
-        embed_keywords = ["embed", "bge", "nomic", "mxbai", "snowflake"]
-
-        embedding_candidates = [
-            m for m in raw_models if any(kw in str(m).lower() for kw in embed_keywords)
-        ]
-        actual_embeddings = sorted(
-            set(AVAILABLE_EMBEDDING_MODELS + embedding_candidates)
-        )
-        if DEFAULT_EMBEDDING_MODEL not in actual_embeddings:
-            actual_embeddings.append(DEFAULT_EMBEDDING_MODEL)
-        actual_embeddings.sort()
-
-        llm_candidates = [m for m in raw_models if m not in embedding_candidates]
-        actual_llms = llm_candidates if llm_candidates else [DEFAULT_OLLAMA_MODEL]
-        if DEFAULT_OLLAMA_MODEL not in actual_llms:
-            actual_llms.append(DEFAULT_OLLAMA_MODEL)
-        actual_llms.sort()
+        # [안정성] ModelManager를 통한 필터링 로직 통합
+        from core.model_loader import ModelManager
+        filtered = ModelManager.get_filtered_models(safe_models)
+        actual_llms = filtered["llm"]
+        actual_embeddings = filtered["embedding"]
 
         # LLM 선택
         st.markdown(
@@ -175,58 +161,3 @@ def _render_settings_internal(
             sync_run(ModelManager.clear_vram())
             st.toast("VRAM 정리 완료")
 
-    # 시스템 건강 상태 (실시간 업데이트)
-    render_system_health()
-
-
-@st.fragment(run_every="5s")
-def render_system_health():
-    """시스템 건강 상태 표시 (CPU/Memory) - 현대화된 커스텀 디자인"""
-    import psutil
-
-    cpu = psutil.cpu_percent()
-    mem = psutil.virtual_memory().percent
-
-    # CPU 부하에 따른 색상 결정
-    cpu_color = "#007bff"
-    if cpu > 80:
-        cpu_color = "#dc3545"  # Error color
-    elif cpu > 50:
-        cpu_color = "#ffc107"  # Warning color
-
-    st.markdown(
-        f"""
-        <div class="status-container">
-            <div class="status-header">
-                <span class="status-title">System Health</span>
-                <div class="live-indicator">
-                    <div class="live-dot"></div>
-                    LIVE
-                </div>
-            </div>
-            <div class="metric-row">
-                <!-- CPU Metric -->
-                <div class="metric-item">
-                    <div class="metric-label-row">
-                        <span>CPU Usage</span>
-                        <span style="font-weight:700;">{cpu}%</span>
-                    </div>
-                    <div class="progress-track">
-                        <div class="progress-fill" style="width: {cpu}%; background: {cpu_color};"></div>
-                    </div>
-                </div>
-                <!-- RAM Metric -->
-                <div class="metric-item">
-                    <div class="metric-label-row">
-                        <span>Memory Usage</span>
-                        <span style="font-weight:700;">{mem}%</span>
-                    </div>
-                    <div class="progress-track">
-                        <div class="progress-fill" style="width: {mem}%; background: #6c5ce7;"></div>
-                    </div>
-                </div>
-            </div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )

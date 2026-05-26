@@ -31,6 +31,7 @@ from common.utils import safe_cache_resource, sync_run
 st.set_page_config(
     page_title=StringConstants.PAGE_TITLE,
     layout=cast(Literal["centered", "wide"], StringConstants.LAYOUT),
+    initial_sidebar_state="expanded",
 )
 
 # 2. 로깅 설정 (최상단)
@@ -423,32 +424,22 @@ def on_embedding_change() -> None:
 def _render_app_layout(available_models: list[str] | None = None) -> None:
     """앱의 전체 레이아웃을 렌더링합니다. (사이드바 설정 + 메인 2열: PDF + 채팅)"""
     from core.session import SessionManager
+    from ui.components.sidebar import render_settings_content
     from ui.ui import (
-        render_global_status_bar,
         render_left_column,
     )
 
-    # [추가] 1초 주기 상태 업데이트 및 리런 트리거 활성화
-    render_global_status_bar()
+    with st.sidebar:
+        render_settings_content(
+            file_uploader_callback=on_file_upload,
+            model_selector_callback=on_model_change,
+            embedding_selector_callback=on_embedding_change,
+            is_generating=bool(SessionManager.get("is_generating_answer", False)),
+            current_file_name=SessionManager.get("last_uploaded_file_name"),
+            available_models=available_models,
+        )
 
-    # [개선] 상단 툴바 레이아웃 (상태바 + 설정 팝오버)
-    from ui.components.sidebar import render_settings_content
-
-    with st.container():
-        col_status, col_settings = st.columns([0.85, 0.15])
-        with col_status:
-            render_global_status_bar()
-        with col_settings, st.popover("⚙️ 설정", use_container_width=True):
-            render_settings_content(
-                file_uploader_callback=on_file_upload,
-                model_selector_callback=on_model_change,
-                embedding_selector_callback=on_embedding_change,
-                is_generating=bool(SessionManager.get("is_generating_answer", False)),
-                current_file_name=SessionManager.get("last_uploaded_file_name"),
-                available_models=available_models,
-            )
-
-    # 2. 메인 영역을 2열로 구성 (동일 비율 1:1)
+    # 메인 영역을 2열로 구성 (동일 비율 1:1)
     col_pdf, col_chat = st.columns([1, 1], gap="medium")
 
     with col_pdf:
@@ -461,36 +452,31 @@ def _render_app_layout(available_models: list[str] | None = None) -> None:
 
 
 def _handle_pending_tasks() -> None:
-    """지연된 무거운 작업(RAG 빌드, 모델 교체 등)을 순차적으로 처리합니다."""
+    """지연된 무거운 작업(RAG 빌드, 모델 교체 등)을 동기적으로 순차 처리합니다."""
     from core.session import SessionManager
 
-    # 중복 실행 방지를 위한 사전 체크
     is_building = bool(SessionManager.get("is_building_rag", False))
 
     # 1. 새 파일 업로드 처리
     if SessionManager.get("new_file_uploaded") and not is_building:
         logger.info("[SYSTEM] 새 파일 업로드 감지 -> 처리 시작")
-        # 즉시 플래그 해제 (중복 실행 방지)
         SessionManager.set("new_file_uploaded", False)
-        # 스레드 기동 전 미리 플래그 설정 (Race Condition 방지)
         SessionManager.set("is_building_rag", True)
 
         current_file_path = SessionManager.get("pdf_file_path")
         current_file_name = SessionManager.get("last_uploaded_file_name")
 
-        # 기본 상태 초기화 (필요한 경로 정보는 유지)
         SessionManager.reset_for_new_file()
         SessionManager.set("pdf_file_path", current_file_path)
         SessionManager.set("last_uploaded_file_name", current_file_name)
-        # reset_for_new_file에서 is_building_rag가 꺼졌을 수 있으므로 다시 켬
         SessionManager.set("is_building_rag", True)
 
-        # RAG 구축 실행 (백그라운드 스레드)
         sid = SessionManager.get_session_id()
-        thread = threading.Thread(target=_rebuild_rag_system, args=(sid,), daemon=True)
-        add_script_run_ctx(thread)
-        thread.start()
-        logger.info("[SYSTEM] RAG 구축 백그라운드 스레드 시작됨")
+        # [수정] st.spinner 대신 상태 로그 사용 (레이아웃 밀림 방지)
+        SessionManager.add_status_log(f"🔄 '{current_file_name}' 분석 중...")
+        _rebuild_rag_system(sid)
+
+        st.rerun()
 
     # 2. 모델 재빌드 요청 처리
     elif SessionManager.get("needs_rag_rebuild") and not is_building:
@@ -499,21 +485,21 @@ def _handle_pending_tasks() -> None:
         SessionManager.set("is_building_rag", True)
 
         sid = SessionManager.get_session_id()
-        thread = threading.Thread(target=_rebuild_rag_system, args=(sid,), daemon=True)
-        add_script_run_ctx(thread)
-        thread.start()
+        SessionManager.add_status_log("🔄 RAG 파이프라인 재구축 중...")
+        _rebuild_rag_system(sid)
+
+        st.rerun()
 
     # 3. QA 체인 업데이트 처리
     elif SessionManager.get("needs_qa_chain_update"):
         logger.info("[SYSTEM] QA 체인 업데이트 요청 수락")
         SessionManager.set("needs_qa_chain_update", False)
 
-        # [수정] UI 블로킹 방지를 위해 백그라운드 스레드에서 실행
         sid = SessionManager.get_session_id()
-        thread = threading.Thread(target=_update_qa_chain, args=(sid,), daemon=True)
-        add_script_run_ctx(thread)
-        thread.start()
-        logger.info("[SYSTEM] QA 체인 업데이트 백그라운드 스레드 시작됨")
+        SessionManager.add_status_log("🔄 추론 모델 교체 중...")
+        _update_qa_chain(sid)
+
+        st.rerun()
 
 
 def main() -> None:
@@ -544,8 +530,11 @@ def main() -> None:
     # 2. 세션 즉시 준비
     SessionManager.init_session()
 
-    # [수정] PDF 업로드 상태에 따른 사이드바 확장 상태 결정 후 CSS 주입 (단 1회 수행)
-    is_expanded = bool(SessionManager.get("pdf_file_path"))
+    # [수정] PDF 업로드 상태뿐만 아니라 실제 사이드바 축소 상태를 반영하도록 플래그 체크
+    is_expanded = bool(
+        SessionManager.get("pdf_file_path")
+    ) and not st.session_state.get("sidebar_collapsed", False)
+
     inject_custom_css(is_expanded=is_expanded)
 
     # [추가] 세션 ID 불일치로 인한 '영구 분석 중' 상태 방지
