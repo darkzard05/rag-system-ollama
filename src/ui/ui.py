@@ -138,6 +138,14 @@ def inject_custom_css(is_expanded: bool = False):
         box-shadow: 0 4px 10px rgba(0, 0, 0, 0.4) !important;
         border: 2px solid rgba(255, 255, 255, 0.2) !important;
         cursor: pointer !important;
+        opacity: 1 !important;
+    }
+
+    /* 버튼 내부 아이콘 색상 강제 (보이지 않을 경우 대비) */
+    [data-testid="stSidebarCollapsedControl"] svg,
+    [data-testid="stSidebarCollapseButton"] svg {
+        fill: white !important;
+        color: white !important;
     }
 
     /* 사이드바 내부의 축소 버튼(X) 숨김 (1.54.0+ 에서는 확장 버튼과 ID 공유하므로 범위 한정) */
@@ -171,17 +179,14 @@ def inject_custom_css(is_expanded: bool = False):
         var BTN_ID = '__sidebar_expand_btn__';
 
         function fixSidebarBtn() {
-            // Streamlit 원본 확장 버튼 탐색 (1.54.0 대응)
             var original = document.querySelector('[data-testid="stSidebarCollapsedControl"]')
                         || document.querySelector('[data-testid="collapsedControl"]');
 
-            // 1.54.0에서 동일한 data-testid를 사용하는 버튼 처리
             if (!original) {
                 var buttons = document.querySelectorAll('[data-testid="stSidebarCollapseButton"]');
                 var sidebar = document.querySelector('[data-testid="stSidebar"]');
                 for (var i = 0; i < buttons.length; i++) {
-                    // 사이드바 내부에 있지 않은 버튼이 확장 버튼임
-                    if (sidebar && !sidebar.contains(buttons[i])) {
+                    if (!sidebar || !sidebar.contains(buttons[i])) {
                         original = buttons[i];
                         break;
                     }
@@ -189,13 +194,13 @@ def inject_custom_css(is_expanded: bool = False):
             }
 
             if (original) {
-                // body로 이동시켜 header 클리핑에서 완전히 벗어남
                 if (original.parentElement !== document.body) {
                     document.body.appendChild(original);
                 }
                 Object.assign(original.style, {
                     display: 'flex',
                     visibility: 'visible',
+                    opacity: '1',
                     position: 'fixed',
                     top: '15px',
                     left: '15px',
@@ -210,6 +215,13 @@ def inject_custom_css(is_expanded: bool = False):
                     cursor: 'pointer',
                     border: '2px solid rgba(255, 255, 255, 0.2)'
                 });
+                
+                // 내부 아이콘(svg) 가시성 확보
+                var svg = original.querySelector('svg');
+                if (svg) {
+                    svg.style.fill = 'white';
+                    svg.style.color = 'white';
+                }
             }
         }
 
