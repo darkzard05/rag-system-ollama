@@ -120,36 +120,37 @@ def inject_custom_css(is_expanded: bool = False):
         background: transparent !important;
     }
 
-    /* 사이드바 확장 버튼 (접혔을 때 나타남): 화면 좌상단 고정 배치 */
+    /* 사이드바 확장 버튼: 디자인 및 위치 강화 (가시성 극대화) */
     [data-testid="stSidebarCollapsedControl"],
     [data-testid="stSidebarCollapseButton"] {
         display: flex !important;
         visibility: visible !important;
+        opacity: 1 !important;
         position: fixed !important;
-        top: 15px !important;
-        left: 15px !important;
-        z-index: 1000001 !important;
+        top: 20px !important;
+        left: 20px !important;
+        z-index: 9999999 !important;
         background-color: #007bff !important;
         border-radius: 10px !important;
-        width: 44px !important;
-        height: 36px !important;
+        width: 48px !important;
+        height: 40px !important;
         justify-content: center !important;
         align-items: center !important;
-        box-shadow: 0 4px 10px rgba(0, 0, 0, 0.4) !important;
-        border: 2px solid rgba(255, 255, 255, 0.2) !important;
+        box-shadow: 0 4px 15px rgba(0, 0, 0, 0.6) !important;
+        border: 2px solid white !important;
         cursor: pointer !important;
-        opacity: 1 !important;
     }
 
-    /* 버튼 내부 아이콘 색상 강제 (보이지 않을 경우 대비) */
     [data-testid="stSidebarCollapsedControl"] svg,
     [data-testid="stSidebarCollapseButton"] svg {
         fill: white !important;
         color: white !important;
+        width: 24px !important;
+        height: 24px !important;
     }
 
-    /* 사이드바 내부의 축소 버튼(X) 숨김 (1.54.0+ 에서는 확장 버튼과 ID 공유하므로 범위 한정) */
-    [data-testid="stSidebar"] [data-testid="stSidebarCollapseButton"],
+    /* 사이드바 내부(확장된 상태)의 축소 버튼만 숨김 */
+    section[data-testid="stSidebar"][aria-expanded="true"] [data-testid="stSidebarCollapseButton"],
     [data-testid="stToolbar"],
     [data-testid="stDecoration"] {
         display: none !important;
@@ -186,12 +187,28 @@ def inject_custom_css(is_expanded: bool = False):
                 var buttons = document.querySelectorAll('[data-testid="stSidebarCollapseButton"]');
                 var sidebar = document.querySelector('[data-testid="stSidebar"]');
                 for (var i = 0; i < buttons.length; i++) {
+                    // 사이드바 외부(aria-expanded가 없거나 부모가 sidebar가 아닌 경우) 버튼 탐색
                     if (!sidebar || !sidebar.contains(buttons[i])) {
                         original = buttons[i];
                         break;
                     }
                 }
             }
+
+            // 디버그 레이어 생성/업데이트
+            var debugId = '__ui_debug_info__';
+            var debug = document.getElementById(debugId);
+            if (!debug) {
+                debug = document.createElement('div');
+                debug.id = debugId;
+                Object.assign(debug.style, {
+                    position: 'fixed', top: '5px', right: '5px', padding: '4px 8px',
+                    background: 'rgba(255,0,0,0.8)', color: 'white', zIndex: '10000000',
+                    fontSize: '10px', borderRadius: '4px', pointerEvents: 'none', fontMemory: 'monospace'
+                });
+                document.body.appendChild(debug);
+            }
+            debug.innerText = 'SB Btn: ' + (original ? 'FOUND' : 'NOT FOUND');
 
             if (original) {
                 if (original.parentElement !== document.body) {
@@ -202,25 +219,26 @@ def inject_custom_css(is_expanded: bool = False):
                     visibility: 'visible',
                     opacity: '1',
                     position: 'fixed',
-                    top: '15px',
-                    left: '15px',
-                    zIndex: '1000001',
+                    top: '20px',
+                    left: '20px',
+                    zIndex: '9999999',
                     backgroundColor: '#007bff',
                     borderRadius: '10px',
-                    width: '44px',
-                    height: '36px',
+                    width: '48px',
+                    height: '40px',
                     justifyContent: 'center',
                     alignItems: 'center',
-                    boxShadow: '0 4px 10px rgba(0,0,0,0.4)',
+                    boxShadow: '0 4px 15px rgba(0,0,0,0.6)',
                     cursor: 'pointer',
-                    border: '2px solid rgba(255, 255, 255, 0.2)'
+                    border: '2px solid white'
                 });
                 
-                // 내부 아이콘(svg) 가시성 확보
                 var svg = original.querySelector('svg');
                 if (svg) {
                     svg.style.fill = 'white';
                     svg.style.color = 'white';
+                    svg.style.width = '24px';
+                    svg.style.height = '24px';
                 }
             }
         }
