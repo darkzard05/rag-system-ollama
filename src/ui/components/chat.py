@@ -372,37 +372,9 @@ def render_chat_interface():
     is_generating = bool(SessionManager.get("is_generating_answer", False))
     current_sid = SessionManager.get_session_id()
 
-    # [추가] 3.2 에러 복구 로직: 답변 생성 중인데 마지막 사용자 메시지 이후 너무 오래 지났다면 강제 해제
-    if is_generating and messages and messages[-1].get("role") == "user":
-        last_query_time = messages[-1].get("timestamp", 0)
-        if time.time() - last_query_time > 120:  # 120초로 넉넉하게 (LLM 응답 지연 고려)
-            SessionManager.set("is_generating_answer", False)
-            is_generating = False
-            logger.warning(
-                f"[UI] [TIMEOUT] {current_sid} 세션의 답변 생성 타임아웃 발생 (강제 해제)"
-            )
-
-    # 레이아웃 관리는 ui.py의 Native CSS Flexbox를 따릅니다.
-
     # 메시지 영역 (스크롤 가능)
-    # vh 단위를 사용하여 상단바와 하단 입력창(약 100px)을 제외한 영역을 점유
-    with st.container(height=int(st.query_params.get("height", 600)), border=False):
-        # UI 로딩 후 자바스크립트로 실제 높이를 동기화하는 로직 대안 사용
-        st.markdown(
-            """
-            <script>
-                function updateHeight() {
-                    const chatHeight = window.innerHeight - 150;
-                    const container = window.parent.document.querySelector('[data-testid="stVerticalBlock"]');
-                    if (container) container.style.height = chatHeight + 'px';
-                }
-                window.addEventListener('resize', updateHeight);
-                updateHeight();
-            </script>
-        """,
-            unsafe_allow_html=True,
-        )
-
+    # CSS Flexbox 레이아웃이 실제 높이를 제어하므로, 충분히 큰 값을 설정하여 컨테이너가 확장되도록 합니다.
+    with st.container(height=500, border=False):
         if not messages:
             st.chat_message("system", avatar="⚙️").markdown(MSG_CHAT_GUIDE)
 
@@ -438,7 +410,7 @@ def render_chat_interface():
     input_placeholder = (
         MSG_CHAT_INPUT_PLACEHOLDER if not messages else "추가 질문을 입력하세요..."
     )
-    user_query = st.chat_input(input_placeholder, disabled=is_generating)
+    user_query = st.chat_input(input_placeholder, disabled=is_generating, key="main_chat_input")
 
     if user_query and not is_generating:
         SessionManager.add_message("user", user_query)
