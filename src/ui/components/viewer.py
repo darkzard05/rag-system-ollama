@@ -78,9 +78,8 @@ def render_pdf_column():
     _display_pdf_controls(current_page, total_pages)
 
     # 3. PDF 표시 영역 (독립 스크롤 컨테이너)
-    with st.container(
-        height=500, border=False
-    ):  # CSS가 100%로 덮어씌울 것이므로 상징적인 값 사용
+    # CSS Flexbox 레이아웃이 실제 높이를 제어하므로, 충분히 큰 값을 설정하여 컨테이너가 확장되도록 합니다.
+    with st.container(height=500, border=False):
         _display_pdf_viewer(pdf_path, current_page, file_hash)
 
 
@@ -147,7 +146,6 @@ def _display_pdf_controls(current_page, total_pages):
                 value=current_page,
                 key="pdf_nav_input_v6",
                 on_change=on_page_change,
-                label_visibility="collapsed",
             )
 
         with c_next:

@@ -48,7 +48,6 @@ def _render_settings_internal(
         '<span class="settings-label">📄 Document Assets</span>', unsafe_allow_html=True
     )
     with st.container(border=True):
-        # 접근성 개선: label_visibility="collapsed" 제거 후 CSS로 숨김 처리 예정
         st.file_uploader(
             "PDF 파일 업로드",
             type="pdf",
