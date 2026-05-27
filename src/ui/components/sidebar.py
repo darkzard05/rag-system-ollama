@@ -1,11 +1,11 @@
 """
-사이드바 설정 및 관리 컴포넌트 (고정 2열 레이아웃).
+사이드바 설정 및 관리 컴포넌트.
+(접근성 개선: label_visibility="collapsed" 대신 CSS 클래스 사용)
 """
 
 import streamlit as st
 
 from common.config import (
-    AVAILABLE_EMBEDDING_MODELS,
     DEFAULT_EMBEDDING_MODEL,
     DEFAULT_OLLAMA_MODEL,
 )
@@ -22,7 +22,6 @@ def render_settings_content(
     available_models=None,
 ):
     """설정창 내부 콘텐츠 렌더링 (사이드바 외부 호출용)"""
-    # [수정] 설정창 전용으로 로고는 생략하고 내부 설정만 렌더링하도록 함
     _render_settings_internal(
         file_uploader_callback,
         model_selector_callback,
@@ -41,7 +40,7 @@ def _render_settings_internal(
     current_file_name,
     available_models,
 ):
-    """사이드바의 설정 섹션 실제 렌더링 로직 (Mockup과 1:1 일치화)"""
+    """사이드바의 설정 섹션 실제 렌더링 로직 (접근성 최적화 버전)"""
     safe_models = available_models if isinstance(available_models, list) else []
 
     # 1. 문서 업로드 섹션
@@ -49,13 +48,13 @@ def _render_settings_internal(
         '<span class="settings-label">📄 Document Assets</span>', unsafe_allow_html=True
     )
     with st.container(border=True):
+        # 접근성 개선: label_visibility="collapsed" 제거 후 CSS로 숨김 처리 예정
         st.file_uploader(
             "PDF 파일 업로드",
             type="pdf",
             key="pdf_uploader",
             on_change=file_uploader_callback,
             disabled=is_generating,
-            label_visibility="collapsed",
         )
         if current_file_name:
             st.caption(f"현재 파일: :green[{current_file_name}]")
@@ -68,8 +67,8 @@ def _render_settings_internal(
             unsafe_allow_html=True,
         )
 
-        # [안정성] ModelManager를 통한 필터링 로직 통합
         from core.model_loader import ModelManager
+
         filtered = ModelManager.get_filtered_models(safe_models)
         actual_llms = filtered["llm"]
         actual_embeddings = filtered["embedding"]
@@ -88,13 +87,12 @@ def _render_settings_internal(
             def_idx = 0
 
         st.selectbox(
-            "LLM 선택",
+            "LLM 모델 선택",
             actual_llms,
             index=def_idx,
             key="model_selector",
             on_change=model_selector_callback,
             disabled=is_generating,
-            label_visibility="collapsed",
         )
 
         # 임베딩 선택
@@ -114,13 +112,12 @@ def _render_settings_internal(
             emb_idx = 0
 
         st.selectbox(
-            "임베딩 선택",
+            "임베딩 모델 선택",
             actual_embeddings,
             index=emb_idx,
             key="embedding_model_selector",
             on_change=embedding_selector_callback,
             disabled=is_generating or (available_models is None),
-            label_visibility="collapsed",
         )
 
         st.markdown(
@@ -133,7 +130,7 @@ def _render_settings_internal(
         )
         col1, col2 = st.columns(2)
 
-        # VRAM 비우기 (Secondary)
+        # VRAM 비우기
         col1.button(
             "Clear VRAM",
             use_container_width=True,
@@ -142,7 +139,7 @@ def _render_settings_internal(
             type="secondary",
         )
 
-        # 초기화 (Primary)
+        # 초기화
         if col2.button(
             "Reset All",
             use_container_width=True,
@@ -153,11 +150,9 @@ def _render_settings_internal(
             SessionManager.reset_all_state()
             st.rerun()
 
-        # VRAM 비우기 로직 (type="secondary" 위젯 클릭 시)
         if st.session_state.get("vram_btn"):
             from common.utils import sync_run
             from core.model_loader import ModelManager
 
             sync_run(ModelManager.clear_vram())
             st.toast("VRAM 정리 완료")
-
