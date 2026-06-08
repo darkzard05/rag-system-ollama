@@ -1,21 +1,21 @@
 """
-채팅 인터페이스 및 스트리밍 응답 관련 컴포넌트.
+채팅 인터페이스 및 스트리밍 응답 관련 컴포넌트 - Native Streaming Refactored
 """
 
+import asyncio
+import contextlib
 import logging
+import queue
 import re
-import time
-from contextlib import aclosing
-from pathlib import Path
-from typing import Any, TypedDict, cast
+import threading
+from typing import Any, TypedDict
 
 import streamlit as st
 
-from api.streaming_handler import get_adaptive_controller, get_streaming_handler
+from api.streaming_handler import get_streaming_handler
 from common.config import (
     MSG_CHAT_GUIDE,
     MSG_CHAT_INPUT_PLACEHOLDER,
-    MSG_PREPARING_ANSWER,
     MSG_THINKING,
 )
 from common.utils import (
@@ -23,25 +23,11 @@ from common.utils import (
     extract_annotations_from_docs,
     format_error_message,
     normalize_latex_delimiters,
-    sync_run,
 )
 from core.rag_core import RAGSystem
 from core.session import SessionManager
 
 logger = logging.getLogger(__name__)
-
-# Debug logging to file
-DEBUG_LOG_FILE = Path("debug_streaming.log")
-
-
-def debug_log(msg: str):
-    """Log to file-based buffer"""
-    try:
-        with open(DEBUG_LOG_FILE, "a", encoding="utf-8") as f:
-            f.write(f"{msg}\n")
-            f.flush()
-    except Exception:
-        pass
 
 
 class ChatState(TypedDict):
@@ -53,176 +39,42 @@ class ChatState(TypedDict):
     thinking_end_time: float
 
 
-async def _stream_chat_response(rag_sys, user_query: str, placeholder):
-    """RAG 시스템의 스트리밍 응답을 UI에 렌더링 (플레이스홀더 기반 잔상 방지 버전)"""
-    debug_log("[STREAMING] 🚀 STREAMING START")
+def _sync_stream_generator(query: str, model_name: str, session_id: str):
+    """비동기 스트림을 동기 Streamlit 환경에서 소비하기 위한 브릿지 제너레이터"""
+    q = queue.Queue()
 
-    # 스트리밍 시작 표시 - UI에서 확인 가능
-    print("\n=== STREAMING STARTED ===", flush=True)
-
-    state: ChatState = {
-        "full_response": "",
-        "full_thought": "",
-        "retrieved_docs": [],
-        "performance": {},
-        "thinking_start_time": 0.0,
-        "thinking_end_time": 0.0,
-    }
-
-    controller = get_adaptive_controller()
-    handler = get_streaming_handler()
-    model_name = SessionManager.get("last_selected_model")
-    session_id = SessionManager.get_session_id()
-
-    last_render_time = time.time()
-    render_interval = 0.05
-
-    try:
-        # [핵심] placeholder.container() 컨텍스트 내에서 모든 처리를 수행합니다.
-        placeholder.empty()  # 이전 내용 정리
-
-        with placeholder.container(), st.chat_message("assistant", avatar="🤖"):
-            # 1. 상태창
-            status_container = st.status(MSG_PREPARING_ANSWER, expanded=True)
-            # 2. 사고 과정 영역
-            thought_area = st.container()
-            # 3. 답변 영역
-            answer_area = st.empty()
-
-            with status_container:
-                status_log_area = st.container()
-
-                event_generator = await rag_sys.astream(
-                    user_query, model_name=model_name
-                )
-
-                stream = cast(Any, event_generator)
-                event_stream = (
-                    handler.stream_graph_events(stream, adaptive_controller=controller)
-                    if handler
-                    else stream
-                )
-
-                async with aclosing(cast(Any, event_stream)) as final_stream:
-                    async for chunk in final_stream:
-                        if chunk.status:
-                            status_container.update(
-                                label=f"⏳ {chunk.status}", state="running"
-                            )
-                            with status_log_area:
-                                st.caption(f"▹ {chunk.status}")
-                            SessionManager.add_status_log(chunk.status)
-
-                        if chunk.metadata and "documents" in chunk.metadata:
-                            state["retrieved_docs"] = chunk.metadata["documents"]
-
-                        if chunk.performance:
-                            state["performance"] = chunk.performance
-
-                        if chunk.thought:
-                            if not state["full_thought"]:
-                                state["thinking_start_time"] = time.time()
-                                with thought_area:
-                                    thought_display = st.empty()
-                            state["full_thought"] += chunk.thought
-                            if time.time() - last_render_time > render_interval:
-                                thought_display.markdown(f"*{state['full_thought']}*")
-                                last_render_time = time.time()
-
-                        if chunk.content:
-                            # [디버깅] 청크 로깅
-                            chunk_msg = f"[CHUNK] len={len(chunk.content)} FIRST50=[{chunk.content[:50]}...]"
-                            debug_log(chunk_msg)
-                            print(chunk_msg, flush=True)
-
-                            if not state["full_response"]:
-                                status_container.update(
-                                    label="✅ 분석 완료 및 답변 작성 중",
-                                    state="complete",
-                                    expanded=False,
-                                )
-                                state["thinking_end_time"] = time.time()
-                                if (
-                                    state["full_thought"]
-                                    and "thought_display" in locals()
-                                ):
-                                    thought_display.empty()
-                                    with thought_area:
-                                        dur = (
-                                            state["thinking_end_time"]
-                                            - state["thinking_start_time"]
-                                        )
-                                        with st.expander(
-                                            f"{MSG_THINKING[:-3]} ({dur:.1f}초)",
-                                            expanded=False,
-                                        ):
-                                            st.markdown(
-                                                f'<div class="thought-container">{state["full_thought"]}</div>',
-                                                unsafe_allow_html=True,
-                                            )
-
-                            state["full_response"] += chunk.content
-
-                            # [수정] 더 자주 렌더링하되, 중복을 방지하기 위해 check
-                            should_render = (
-                                time.time() - last_render_time > render_interval
-                            ) or chunk.is_final
-
-                            if should_render:
-                                # 스트리밍 중에는 최소한의 가공만 수행
-                                display_text = normalize_latex_delimiters(
-                                    state["full_response"]
-                                )
-
-                                cursor = "▌" if not chunk.is_final else ""
-
-                                # [중요] 여기서 한 번만 업데이트
-                                answer_area.markdown(
-                                    display_text + cursor, unsafe_allow_html=True
-                                )
-                                last_render_time = time.time()
-
-                # 최종 상태 업데이트
-                status_container.update(
-                    label="✨ 답변 생성 완료", state="complete", expanded=False
-                )
-
-        # [수정] 결과 반환 전 PDF 하이라이트 등 후처리 수행
-        if state["retrieved_docs"]:
-            annotations = extract_annotations_from_docs(state["retrieved_docs"])
-            SessionManager.set("pdf_annotations", annotations)
+    def bg_task():
+        async def run():
             try:
-                first_doc = state["retrieved_docs"][0]
-                meta = (
-                    getattr(first_doc, "metadata", {})
-                    if hasattr(first_doc, "metadata")
-                    else first_doc.get("metadata", {})
-                )
-                target_p = meta.get("page")
-                if target_p is not None:
-                    SessionManager.set("pdf_target_page", int(target_p))
-            except Exception as e:
-                logger.warning(f"자동 점프 페이지 추출 실패: {e}")
+                SessionManager.set_session_id(session_id)
+                rag_sys = RAGSystem(session_id=session_id)
+                event_generator = await rag_sys.astream(query, model_name=model_name)
+                handler = get_streaming_handler()
+                event_stream = handler.stream_graph_events(event_generator)
 
-        return {
-            "response": state["full_response"],
-            "processed_content": apply_tooltips_to_response(
-                _clean_response_redundancy(state["full_response"]),
-                state["retrieved_docs"],
-            ),
-            "thought": state["full_thought"],
-            "documents": state["retrieved_docs"],
-            "performance": state["performance"],
-        }
-    except Exception as e:
-        logger.error(f"UI 스트리밍 오류: {e}", exc_info=True)
-        placeholder.empty()  # 에러 발생 시 UI 고스트가 남지 않도록 빈 컨테이너로 초기화
-        return {"response": format_error_message(e), "thought": "", "documents": []}
-    finally:
-        SessionManager.set("is_generating_answer", False)
-        # [수정] placeholder.empty()를 여기서 호출하지 않습니다.
-        # 대신 render_chat_interface에서 다음 루프가 시작될 때 자연스럽게 덮어씌워지거나
-        # rerun 직전에 명시적으로 처리하여 공백 시간을 최소화합니다.
+                async for chunk in event_stream:
+                    q.put(("chunk", chunk))
+            except Exception as e:
+                q.put(("error", e))
+            finally:
+                q.put(("done", None))
+
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        loop.run_until_complete(run())
+        loop.close()
+
+    t = threading.Thread(target=bg_task, daemon=True)
+    t.start()
+
+    while True:
+        msg_type, data = q.get()
+        if msg_type == "done":
+            break
+        elif msg_type == "error":
+            raise data
+        else:
+            yield data
 
 
 def _clean_response_redundancy(text: str) -> str:
@@ -248,6 +100,7 @@ def render_message(
     msg_type: str = "general",
     wrap_in_container: bool = True,
     msg_index: int = 0,
+    is_latest: bool = False,
     **kwargs,
 ):
     """메시지를 렌더링하는 통합 엔진."""
@@ -260,15 +113,15 @@ def render_message(
         else st.container()
     ):
         if thought and thought.strip():
-            with st.expander(
-                MSG_THINKING[:-3] + " 완료",
-                expanded=False,
-                key=f"exp_{msg_id}",  # type: ignore
-            ):
-                st.markdown(
-                    f'<div class="thought-container">{thought}</div>',
-                    unsafe_allow_html=True,
-                )
+            st.markdown(
+                f"""
+                <details class="thought-expander">
+                    <summary>{MSG_THINKING[:-3]} 완료</summary>
+                    <div class="thought-container">{thought}</div>
+                </details>
+                """,
+                unsafe_allow_html=True,
+            )
 
         if processed_content:
             st.markdown(processed_content, unsafe_allow_html=True)
@@ -276,119 +129,99 @@ def render_message(
             display_text = normalize_latex_delimiters(content)
             if role == "assistant" and documents:
                 display_text = apply_tooltips_to_response(display_text, documents)
-
-            # 보안 강화: 어시스턴트 메시지만 HTML 허용, 사용자 메시지는 순수 마크다운으로 처리
             st.markdown(display_text, unsafe_allow_html=(role == "assistant"))
 
-        if role == "assistant" and metrics:
-            st.divider()
-            m_col1, m_col2, m_col3, m_col4 = st.columns([1, 1, 1.2, 2.2])
-            with m_col1:
-                st.markdown(
-                    f"📥 **{metrics.get('input_token_count', 0)}** <small>In</small>",
-                    help="입력 토큰 수",
-                    unsafe_allow_html=True,
-                )
-            with m_col2:
-                st.markdown(
-                    f"📤 **{metrics.get('token_count', metrics.get('output_token_count', 0))}** <small>Out</small>",
-                    help="출력 토큰 수",
-                    unsafe_allow_html=True,
-                )
-            with m_col3:
+        if role == "assistant" and (metrics or documents):
+            with st.popover("ℹ️ 상세 정보 및 참조", use_container_width=False):
+                if metrics:
+                    total = metrics.get("total_time", 0)
+                    tps = metrics.get("tps", metrics.get("tokens_per_second", 0))
+                    in_tok = metrics.get("input_token_count", 0)
+                    out_tok = metrics.get(
+                        "token_count", metrics.get("output_token_count", 0)
+                    )
+                    st.caption(
+                        f"**성능 지표:** ⏱️ {total:.1f}s ({tps:.1f} tok/s) | 📥 In: {in_tok} | 📤 Out: {out_tok}"
+                    )
+
                 if documents:
-                    # 안전하게 페이지 번호 추출 (Document 객체와 딕셔너리 혼용 지원)
                     extracted_pages = set()
                     for d in documents:
-                        # [수정] 메타데이터 추출 로직 강화
-                        if hasattr(d, "metadata"):
-                            meta = d.metadata
-                        elif isinstance(d, dict):
-                            meta = d.get("metadata") or d
-                        else:
-                            meta = {}
-
+                        meta = (
+                            getattr(d, "metadata", {})
+                            if hasattr(d, "metadata")
+                            else d.get("metadata", {})
+                        )
                         p = meta.get("page", 1)
-                        try:
+                        with contextlib.suppress(ValueError, TypeError):
                             extracted_pages.add(int(p))
-                        except (ValueError, TypeError):
-                            extracted_pages.add(1)
 
                     pages = sorted(extracted_pages)
-
-                    with st.popover(
-                        f"📄 **{len(documents)}** Docs", use_container_width=True
-                    ):
-                        n_cols = min(len(pages), 3)
-                        cols = st.columns(n_cols)
+                    if pages:
+                        st.divider()
+                        st.caption("**📑 참조 페이지로 이동:**")
+                        cols = st.columns(min(len(pages), 5))
                         for idx, p in enumerate(pages):
-                            # [수정] IndexError 방지 (idx % n_cols 사용)
-                            if cols[idx % n_cols].button(
+                            if cols[idx % len(cols)].button(
                                 f"{p}p",
                                 key=f"jump_{msg_id}_{p}_{idx}",
                                 use_container_width=True,
                             ):
-                                # [수정] 뷰어 상태와 완벽한 동기화 보장
                                 SessionManager.set("pdf_target_page", p)
                                 SessionManager.set("current_page", p)
-                                st.session_state["page_nav_input_v5"] = p
                                 st.rerun()
 
-                else:
-                    st.markdown(
-                        "<div style='margin-top: 5px; opacity: 0.6;'>📄 **0** <small>Docs</small></div>",
-                        unsafe_allow_html=True,
-                    )
-            with m_col4:
-                total = metrics.get("total_time", 0)
-                tps = metrics.get("tps", metrics.get("tokens_per_second", 0))
-                st.markdown(
-                    f"⏱️ **{total:.1f}s** <small>({tps:.1f}t/s)</small>",
-                    help=f"총 {total:.2f}초",
-                    unsafe_allow_html=True,
-                )
 
+@st.fragment(run_every=1.0)
+def _render_build_status_in_chat(sid: str):
+    """문서 분석 진행 상황을 채팅창 상단에 표시합니다."""
+    is_building = bool(SessionManager.get("is_building_rag", False, sid))
 
-def _render_system_logs(logs: list[str]):
-    """시스템 로그를 익스팬더로 그룹화하여 렌더링"""
-    if not logs:
-        return
-    latest_log = logs[-1].strip()
-    if len(latest_log) > 35:
-        latest_log = latest_log[:32] + "..."
-
-    with (
-        st.chat_message("system", avatar="⚙️"),
-        st.expander(f"⚙️ {latest_log}", expanded=False),
-    ):
-        for log in logs:
-            st.caption(f"▹ {log}")
-
-
-@st.fragment
-def render_chat_interface():
-    """채팅 인터페이스: 메시지(위, 스크롤) + 컨트롤바 + 입력창(아래, 고정)"""
-    messages = SessionManager.get_messages() or []
-    is_generating = bool(SessionManager.get("is_generating_answer", False))
-    current_sid = SessionManager.get_session_id()
-
-    # 메시지 영역 (스크롤 가능)
-    # CSS Flexbox 레이아웃이 실제 높이를 제어하므로, 충분히 큰 값을 설정하여 컨테이너가 확장되도록 합니다.
-    with st.container(height=500, border=False):
-        if not messages:
-            st.chat_message("system", avatar="⚙️").markdown(MSG_CHAT_GUIDE)
-
-        current_log_group = []
-        for i, msg in enumerate(messages):
-            role = msg.get("role", "user")
-            content = msg.get("content", "")
-            if role == "system" or msg.get("msg_type") == "log":
-                if content != "READY_FOR_QUERY":
-                    current_log_group.append(content)
+    if is_building:
+        status_msg = SessionManager.get("rebuild_status", "문서 분석 중...", sid)
+        with st.status(f"⏳ {status_msg}", expanded=True):
+            logs = SessionManager.get("status_logs", [], sid)
+            if logs:
+                for log in logs[-3:]:
+                    st.caption(f"▹ {log}")
             else:
-                if current_log_group:
-                    _render_system_logs(current_log_group)
-                    current_log_group = []
+                st.write("파이프라인 구축을 시작합니다...")
+
+        rebuild_done = bool(SessionManager.get("rebuild_done", False, sid))
+        if rebuild_done:
+            SessionManager.set("is_building_rag", False, sid)
+            st.rerun(scope="app")
+
+
+def render_chat_interface():
+    messages = SessionManager.get_messages() or []
+    current_sid = SessionManager.get_session_id()
+    is_generating = bool(SessionManager.get("is_generating_answer", False, current_sid))
+    model_name = SessionManager.get("last_selected_model", session_id=current_sid)
+
+    _render_build_status_in_chat(current_sid)
+
+    # [수정] 클래스 부여를 위해 외곽 컨테이너 추가 및 하드코딩된 height 제거
+    with st.container():
+        st.markdown('<div class="chat-scroll-container">', unsafe_allow_html=True)
+
+        # [주의] st.container(height=...) 대신 CSS 클래스 제어를 위해 일반 container 사용
+        with st.container(border=False):
+            if not messages:
+                st.chat_message("system", avatar="⚙️").markdown(MSG_CHAT_GUIDE)
+
+            for i, msg in enumerate(messages):
+                role = msg.get("role", "user")
+                content = msg.get("content", "")
+
+                if (
+                    role == "system"
+                    or msg.get("msg_type") == "log"
+                    or content == "READY_FOR_QUERY"
+                ):
+                    continue
+
+                is_latest = (i == len(messages) - 1) and not is_generating
                 render_message(
                     role=role,
                     content=content,
@@ -398,45 +231,125 @@ def render_chat_interface():
                     processed_content=msg.get("processed_content"),
                     msg_index=i,
                     msg_id=msg.get("msg_id"),
+                    is_latest=is_latest,
                 )
 
-        if current_log_group:
-            _render_system_logs(current_log_group)
+            if is_generating and messages and messages[-1].get("role") == "user":
+                query = messages[-1]["content"]
 
-        # 스트리밍 전용 플레이스홀더
-        streaming_placeholder = st.empty()
+                with st.chat_message("assistant", avatar="🤖"):
+                    stream_placeholder = st.empty()
 
-    # [수정] 3.1 입력창 플레이스홀더 동적 변경
+                    content_acc = ""
+                    thought_acc = ""
+                    docs_acc = []
+                    perf_acc = {}
+                    current_status = ""
+
+                    try:
+                        for chunk in _sync_stream_generator(
+                            query, model_name, current_sid
+                        ):
+                            if chunk.status:
+                                # [개선] 상태 메시지에 streaming-pulse 클래스 적용하여 레이아웃 점프 방지
+                                current_status = f"<div class='streaming-pulse'>⏳ {chunk.status}</div>\n\n"
+                            if chunk.metadata and "documents" in chunk.metadata:
+                                docs_acc = chunk.metadata["documents"]
+                            if chunk.performance:
+                                perf_acc = chunk.performance
+                            if chunk.thought:
+                                thought_acc += chunk.thought
+                            if chunk.content:
+                                content_acc += chunk.content
+
+                            display_text = normalize_latex_delimiters(content_acc)
+                            thought_html = (
+                                f"""
+                            <details class="thought-expander" open>
+                                <summary>🤔 생각 과정</summary>
+                                <div class="thought-container">{thought_acc}</div>
+                            </details>
+                            """
+                                if thought_acc
+                                else ""
+                            )
+
+                            stream_placeholder.markdown(
+                                f"{current_status}{thought_html}{display_text} ▌",
+                                unsafe_allow_html=True,
+                            )
+
+                        final_content = _clean_response_redundancy(content_acc)
+                        processed_content = apply_tooltips_to_response(
+                            final_content, docs_acc
+                        )
+
+                        thought_html_final = (
+                            f"""
+                        <details class="thought-expander">
+                            <summary>{MSG_THINKING[:-3]} 완료</summary>
+                            <div class="thought-container">{thought_acc}</div>
+                        </details>
+                        """
+                            if thought_acc
+                            else ""
+                        )
+
+                        stream_placeholder.markdown(
+                            f"{thought_html_final}{processed_content}",
+                            unsafe_allow_html=True,
+                        )
+
+                        SessionManager.add_message(
+                            role="assistant",
+                            content=final_content,
+                            thought=thought_acc,
+                            documents=docs_acc,
+                            metrics=perf_acc,
+                            processed_content=processed_content,
+                            session_id=current_sid,
+                        )
+
+                        if docs_acc:
+                            annotations = extract_annotations_from_docs(docs_acc)
+                            SessionManager.set(
+                                "pdf_annotations", annotations, current_sid
+                            )
+                            try:
+                                target_p = getattr(docs_acc[0], "metadata", {}).get(
+                                    "page"
+                                )
+                                if target_p:
+                                    SessionManager.set(
+                                        "pdf_target_page", int(target_p), current_sid
+                                    )
+                                    SessionManager.set(
+                                        "current_page", int(target_p), current_sid
+                                    )
+                            except Exception:
+                                pass
+
+                    except Exception as e:
+                        logger.error(f"Streaming error: {e}", exc_info=True)
+                        error_msg = format_error_message(e)
+                        stream_placeholder.error(error_msg)
+                        SessionManager.add_message(
+                            "assistant", error_msg, session_id=current_sid
+                        )
+                    finally:
+                        SessionManager.set("is_generating_answer", False, current_sid)
+                        st.rerun()
+
+        st.markdown("</div>", unsafe_allow_html=True)
+
     input_placeholder = (
         MSG_CHAT_INPUT_PLACEHOLDER if not messages else "추가 질문을 입력하세요..."
     )
-    user_query = st.chat_input(input_placeholder, disabled=is_generating, key="main_chat_input")
+    user_query = st.chat_input(
+        input_placeholder, disabled=is_generating, key="main_chat_input"
+    )
 
     if user_query and not is_generating:
-        SessionManager.add_message("user", user_query)
+        SessionManager.add_message("user", user_query, session_id=current_sid)
+        SessionManager.set("is_generating_answer", True, current_sid)
         st.rerun()
-
-    # 대기 중인 질문이 있고 아직 답변 생성 전인 경우
-    if not is_generating and messages and messages[-1].get("role") == "user":
-        rag_sys = RAGSystem(session_id=current_sid)
-
-        if SessionManager.is_ready_for_chat(session_id=current_sid):
-            SessionManager.set("is_generating_answer", True)
-            # 스트리밍 실행 (플레이스홀더 전달)
-            result = sync_run(
-                _stream_chat_response(
-                    rag_sys, messages[-1]["content"], streaming_placeholder
-                )
-            )
-
-            if result and result.get("response"):
-                SessionManager.add_message(
-                    role="assistant",
-                    content=result["response"],
-                    thought=result.get("thought"),
-                    documents=result.get("documents"),
-                    metrics=result.get("performance"),
-                    processed_content=result.get("processed_content"),
-                )
-
-            st.rerun()
