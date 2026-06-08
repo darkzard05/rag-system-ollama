@@ -11,7 +11,7 @@ class UIConstants(IntEnum):
     """UI 관련 상수"""
 
     # 채팅 및 PDF 뷰어 높이
-    CONTAINER_HEIGHT = 650
+    CONTAINER_HEIGHT = 600
     CHAT_SCROLL_HEIGHT = 650
     PDF_VIEWER_HEIGHT = 650
 
