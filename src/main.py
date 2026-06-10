@@ -52,12 +52,38 @@ if "sidebar_auto_collapsed" not in st.session_state:
 
 
 def _check_windows_integrity():
+    """
+    [Background] Windows 환경의 라이브러리 충돌을 체크하고 주기적으로 세션을 정리합니다.
+    """
+    # [최적화] 세션 정리 추가 (메모리 누수 방지)
     try:
         from core.session import SessionManager
 
+        # 1시간 이상 활동 없는 세션 정리 (물리적 파일 삭제 포함)
         SessionManager.cleanup_expired_sessions(max_idle_seconds=3600)
     except Exception as e:
         logger.error(f"[SYSTEM] [CLEANUP] 세션 정리 중 오류: {e}")
+
+    # [최적화] CI 환경에서는 무거운 라이브러리 체크 생략 (충돌 위험 방지)
+    import platform
+
+    if platform.system() != "Windows" or os.getenv("GITHUB_ACTIONS") == "true":
+        return
+
+    try:
+        # 무거운 라이브러리 로드 테스트 (핵심 RAG용)
+        import sys
+
+        if "torch" not in sys.modules:
+            import torch
+
+            _ = torch.tensor([1.0])
+
+        with contextlib.suppress(ValueError, RuntimeError):
+            logger.info("[SYSTEM] [INTEGRITY] Windows 라이브러리 무결성 점검 완료 (OK)")
+
+    except Exception as e:
+        logger.warning(f"[SYSTEM] [INTEGRITY] 점검 중 예외 발생: {e}")
 
 
 @st.cache_resource
