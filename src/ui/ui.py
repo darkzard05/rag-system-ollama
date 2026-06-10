@@ -20,26 +20,33 @@ def inject_custom_css(is_expanded: bool = False):
         height: 100dvh;
         overflow: hidden;
     }}
-    /* 메인 컨테이너 패딩 최적화 */
+    /* 메인 컨테이너 패딩 최적화: 헤더 공간 확보 및 하단 여백 제거 */
     .block-container {{
         padding-top: 3.5rem !important;
         padding-bottom: 0px !important;
         padding-left: 1rem !important;
         padding-right: 1rem !important;
         height: 100%;
+        display: flex;
+        flex-direction: column;
     }}
-    /* 채팅 영역 스크롤바 스타일링 */
-    .chat-scroll-container {{
-        height: calc(100dvh - 12rem) !important;
-        overflow-y: auto !important;
-        min-height: 400px;
-        padding-right: 10px;
+
+    /* Streamlit 고정 높이 컨테이너를 뷰포트 기반 반응형으로 변환 */
+    /* .block-container 내부에 위치한 스크롤 컨테이너만 타겟팅하여 사이드바 등 타 요소 보호 */
+    .block-container [data-testid="stVerticalBlockBorderWrapper"] {{
+        height: calc(100dvh - 11rem) !important;
+        min-height: 200px !important;
+        border: none !important;
     }}
-    /* PDF 뷰어 영역 스크롤바 스타일링 */
-    .viewer-scroll-container {{
-        height: calc(100dvh - 10rem) !important;
+
+    /* 채팅창 내부 메시지 영역 스크롤바 디자인 */
+    .block-container [data-testid="stVerticalBlockBorderWrapper"] > div {{
         overflow-y: auto !important;
-        min-height: 400px;
+    }}
+
+    /* PDF 뷰어 전용 보정 (첫 번째 컬럼에 위치하며 상단 컨트롤러 존재 대응) */
+    .block-container [data-testid="stColumn"]:first-of-type [data-testid="stVerticalBlockBorderWrapper"] {{
+        height: calc(100dvh - 13.5rem) !important;
     }}
 
     /* 1. 사이드바 확장 버튼 가시성 강제 확보 (Invisible 이슈 해결) */
@@ -154,3 +161,21 @@ def inject_custom_css(is_expanded: bool = False):
 
 def render_left_column():
     return render_chat_interface()
+
+
+def inject_sidebar_closer():
+    """사이드바를 프로그램적으로 닫기 위한 JS 인젝션"""
+    js = """
+    <script>
+        const collapseSidebar = () => {
+            const sidebar = window.parent.document.querySelector('[data-testid="stSidebar"]');
+            const collapseButton = window.parent.document.querySelector('[data-testid="stSidebarCollapseButton"]');
+            if (sidebar && sidebar.getAttribute('aria-expanded') === 'true' && collapseButton) {
+                collapseButton.click();
+            }
+        };
+        // 실행 지연을 주어 Streamlit 렌더링 후 동작하도록 함
+        setTimeout(collapseSidebar, 500);
+    </script>
+    """
+    st.components.v1.html(js, height=0, width=0)
