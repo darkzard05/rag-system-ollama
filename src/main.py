@@ -1,7 +1,10 @@
+# Streamlit 기반 RAG 챗봇의 메인 진입점 및 전체 오케스트레이션을 담당하는 파일
 """
-RAG Chatbot 애플리케이션의 메인 진입점 - Native Streaming Architecture
+RAG Chatbot 애플리케이션의 메인 진입점 파일입니다.
+Streamlit 프레임워크를 기반으로 UI를 구성하고 세션 상태를 관리합니다.
 """
 
+# [Lazy Import용] 런타임에 필요한 모듈들
 import atexit
 import contextlib
 import logging
@@ -12,6 +15,7 @@ import time
 from pathlib import Path
 from typing import Literal, cast
 
+import nest_asyncio
 import streamlit as st
 
 from common.config import (
@@ -22,15 +26,20 @@ from common.constants import FilePathConstants, StringConstants
 from common.logging_config import setup_logging
 from common.utils import safe_cache_resource, sync_run
 
+# 1. Streamlit 페이지 설정 (최우선 실행 - 가이드라인 준수)
 st.set_page_config(
     page_title=StringConstants.PAGE_TITLE,
     layout=cast(Literal["centered", "wide"], StringConstants.LAYOUT),
     initial_sidebar_state="expanded",
 )
 
+# 2. 로깅 설정 (최상단)
 logger = setup_logging(log_level="DEBUG", log_file=Path("logs/app.log"))
 
 MAX_FILE_SIZE_MB = StringConstants.MAX_FILE_SIZE_MB
+
+# 비동기 패치 적용 (Streamlit의 asyncio 루프 충돌 방지)
+nest_asyncio.apply()
 
 if "current_page" not in st.session_state:
     st.session_state.current_page = 1
