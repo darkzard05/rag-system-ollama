@@ -21,7 +21,6 @@ from services.monitoring.performance_monitor import (
     OperationType,
     get_performance_monitor,
 )
-from services.optimization.index_optimizer import get_index_optimizer
 
 logger = logging.getLogger(__name__)
 monitor = get_performance_monitor()
@@ -121,10 +120,13 @@ async def split_documents(
         split_docs = docs
         if embedder:
             SessionManager.add_status_log("지식 벡터화 중...", session_id=session_id)
-            vectors = [
-                np.array(v)
-                for v in embedder.embed_documents([d.page_content for d in split_docs])
-            ]
+            import asyncio
+
+            # [최적화] 동기 임베딩 생성을 비동기 스레드로 분리
+            raw_vectors = await asyncio.to_thread(
+                embedder.embed_documents, [d.page_content for d in split_docs]
+            )
+            vectors = [np.array(v) for v in raw_vectors]
     else:
         if needs_sub_chunking:
             SessionManager.add_status_log(
@@ -146,41 +148,28 @@ async def split_documents(
                 split_docs, vectors = await semantic_chunker.split_documents(docs)
                 msg = f"의미론적 분할 완료 ({len(split_docs)}개 조각)"
         else:
+            import asyncio
+
             recursive_chunker = RecursiveCharacterTextSplitter(
                 chunk_size=TEXT_SPLITTER_CONFIG["chunk_size"],
                 chunk_overlap=TEXT_SPLITTER_CONFIG["chunk_overlap"],
             )
-            split_docs = recursive_chunker.split_documents(docs)
+            # [최적화] CPU 집약적 청킹 분리
+            split_docs = await asyncio.to_thread(
+                recursive_chunker.split_documents, docs
+            )
             if embedder:
-                vectors = [
-                    np.array(v)
-                    for v in embedder.embed_documents(
-                        [d.page_content for d in split_docs]
-                    )
-                ]
+                # [최적화] 동기 임베딩 생성을 비동기 스레드로 분리
+                raw_vectors = await asyncio.to_thread(
+                    embedder.embed_documents, [d.page_content for d in split_docs]
+                )
+                vectors = [np.array(v) for v in raw_vectors]
             msg = f"표준 분할 완료 ({len(split_docs)}개 조각)"
 
         SessionManager.add_status_log(msg, session_id=session_id)
         logger.info(
             f"[RAG] [CHUNKING] 분할 완료 | 원본: {len(docs)} | 청크: {len(split_docs)}"
         )
-
-    # [최적화 핵심] 중복 및 유사 문서 프루닝 (IndexOptimizer 연동)
-    if vectors and len(split_docs) > 1:
-        try:
-            optimizer = get_index_optimizer()
-            original_count = len(split_docs)
-
-            # optimize_index는 Document 리스트와 NumPy 벡터 리스트를 기대함
-            split_docs, vectors, _, _ = optimizer.optimize_index(split_docs, vectors)
-
-            pruned_count = original_count - len(split_docs)
-            if pruned_count > 0:
-                msg = f"중복 제거 최적화: {pruned_count}개 청크 정제됨 (최종: {len(split_docs)})"
-                SessionManager.add_status_log(msg, session_id=session_id)
-                logger.info(f"[RAG] [OPTIMIZE] {msg}")
-        except Exception as e:
-            logger.warning(f"[RAG] [OPTIMIZE] 인덱스 최적화 중 오류 발생 (건너뜀): {e}")
 
     _postprocess_metadata(split_docs)
     return split_docs, vectors

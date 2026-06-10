@@ -8,6 +8,7 @@ import copy
 import logging
 from typing import Any
 
+from langchain_core.callbacks.manager import adispatch_custom_event
 from langchain_core.documents import Document
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_core.runnables import RunnableConfig
@@ -17,7 +18,6 @@ from langgraph.types import StreamWriter
 from pydantic import BaseModel, Field
 
 from api.schemas import AggregatedSearchResult, GraphState
-from cache.response_cache import get_response_cache
 from common.config import (
     ANALYSIS_PROTOCOL,
     GRADING_CONFIG,
@@ -29,11 +29,18 @@ from core.session import SessionManager
 logger = logging.getLogger(__name__)
 
 
+def get_state_attr(state: Any, key: str, default: Any = None) -> Any:
+    """dict와 object(GraphState) 모두에서 속성을 안전하게 가져옵니다."""
+    if isinstance(state, dict):
+        return state.get(key, default)
+    return getattr(state, key, default)
+
+
 async def preprocess(
-    state: GraphState, config: RunnableConfig, writer: StreamWriter
+    state: GraphState, config: RunnableConfig, *, writer: StreamWriter
 ) -> dict[str, Any]:
     """의도 분류 및 캐시 확인을 수행합니다."""
-    query = state["input"].strip()
+    query = get_state_attr(state, "input", "").strip()
     logger.info(f"[RAG] [PREPROCESS] 입력 질의: '{query}'")
 
     import re
@@ -41,24 +48,19 @@ async def preprocess(
     from common.config import DYNAMIC_WEIGHTING_CONFIG, ENSEMBLE_WEIGHTS
 
     # 1. 의도 분류 및 동적 가중치 결정
-    # 기본값 (Config 기반)
     weights = {"bm25": ENSEMBLE_WEIGHTS[0], "faiss": ENSEMBLE_WEIGHTS[1]}
     intent = "rag"
 
-    # [추가] 간단한 인사말 및 일상 대화 감지 (General Intent)
     if len(query) < 10 and any(
         g in query.lower() for g in ["안녕", "hi", "hello", "반가워", "누구"]
     ):
         intent = "general"
         logger.info("[RAG] [PREPROCESS] 일상 대화(General) 의도 감지")
 
-    # [최적화] 설정 기반 동적 가중치 적용
     if DYNAMIC_WEIGHTING_CONFIG.get("enabled", True):
-        # A. 키워드 중심(Keyword-Heavy) 질문 감지
         keyword_patterns = DYNAMIC_WEIGHTING_CONFIG.get("keyword_patterns", [])
         is_keyword_heavy = any(re.search(p, query) for p in keyword_patterns)
 
-        # B. 의미 중심(Semantic-Heavy) 질문 감지
         semantic_keywords = DYNAMIC_WEIGHTING_CONFIG.get("semantic_keywords", [])
         is_semantic_heavy = any(k in query for k in semantic_keywords)
 
@@ -71,46 +73,32 @@ async def preprocess(
             weights = {"bm25": round(1.0 - sm_w, 1), "faiss": sm_w}
             logger.info(f"[RAG] [PREPROCESS] 의미 중심 질의 판단 (FAISS: {sm_w})")
 
-    # 2. 캐시 확인
-    import contextlib
-
-    with contextlib.suppress(Exception):
-        writer({"status": "의도 분석 및 지식 확인 중..."})
-
-    cache = get_response_cache()
-    cached_res = await cache.get(query, use_semantic=True)
-    if cached_res:
-        logger.info("[RAG] [PREPROCESS] 시맨틱 캐시 히트")
-        SessionManager.add_status_log("캐시된 답변을 발견했습니다.")
-        return {
-            "response": cached_res.response,
-            "thought": cached_res.metadata.get("thought", ""),
-            "is_cached": True,
-            "search_weights": weights,
-        }
-
     return {
         "intent": intent,
         "is_cached": False,
         "search_weights": weights,
+        "retry_count": 0,
     }
 
 
 async def retrieve_and_rerank(
-    state: GraphState, config: RunnableConfig, writer: StreamWriter
+    state: GraphState, config: RunnableConfig, *, writer: StreamWriter
 ) -> dict[str, Any]:
     """문서 검색 및 재순위화를 수행합니다."""
-    if state.get("is_cached") or state.get("intent") == "general":
+    if (
+        get_state_attr(state, "is_cached")
+        or get_state_attr(state, "intent") == "general"
+    ):
         return {}
 
     from core.search_aggregator import AggregationStrategy, SearchResultAggregator
 
-    # [수정] 재시도 시 재구성된 쿼리가 있으면 그것을 사용
-    query = state.get("input")
-    if state.get("search_queries"):
-        query = state["search_queries"][-1]
+    query = get_state_attr(state, "input")
+    search_queries = get_state_attr(state, "search_queries")
+    if search_queries:
+        query = search_queries[-1]
         logger.info(
-            f"[RAG] [RETRIEVE] 재구성된 쿼리 사용: '{query}' (Retry: {state.get('retry_count')})"
+            f"[RAG] [RETRIEVE] 재구성된 쿼리 사용: '{query}' (Retry: {get_state_attr(state, 'retry_count')})"
         )
         SessionManager.add_status_log(f"재구성된 쿼리로 검색 시도: {query}")
     else:
@@ -118,24 +106,21 @@ async def retrieve_and_rerank(
 
     cfg = config.get("configurable", {})
 
-    import contextlib
-
-    with contextlib.suppress(Exception):
-        writer({"status": "관련 지식 탐색 중..."})
+    if writer is not None:
+        await adispatch_custom_event(
+            "graph_status", {"status": "관련 지식 탐색 중..."}, config=config
+        )
     SessionManager.add_status_log(f"지식 탐색 중: {query}")
 
-    # 리트리버 획득
     bm25 = cfg.get("bm25_retriever")
     faiss = cfg.get("faiss_retriever")
 
-    # 병렬 검색 (딕셔너리 기반으로 출처 명확화)
     search_tasks = {}
     if bm25:
         search_tasks["bm25"] = asyncio.create_task(bm25.ainvoke(query))
     if faiss:
         search_tasks["faiss"] = asyncio.create_task(faiss.ainvoke(query))
 
-    # 결과 수집
     results = {}
     if search_tasks:
         task_names = list(search_tasks.keys())
@@ -146,7 +131,6 @@ async def retrieve_and_rerank(
         f"[RAG] [RETRIEVE] 검색 결과 확보 (BM25: {len(results.get('bm25', []))}, Vector: {len(results.get('faiss', []))})"
     )
 
-    # 결과 병합 및 RRF 집계
     all_docs = []
     for source, res in results.items():
         for doc in res:
@@ -163,8 +147,7 @@ async def retrieve_and_rerank(
     from common.config import ENSEMBLE_WEIGHTS
 
     aggregator = SearchResultAggregator()
-    # [수정] 동적 가중치 적용: preprocess 노드에서 결정된 가중치 우선 사용
-    weights = state.get("search_weights") or {
+    weights = get_state_attr(state, "search_weights") or {
         "bm25": ENSEMBLE_WEIGHTS[0],
         "faiss": ENSEMBLE_WEIGHTS[1],
     }
@@ -180,14 +163,17 @@ async def retrieve_and_rerank(
         weights=weights,
     )
 
-    # [최적화] 리랭킹 후보군 동적 제한 (Pruning)
-    # 초기 점수 분포가 조밀할 때만 많은 후보를 리랭킹함
-    # 상위 1위와 5위의 점수 차이가 크면 후보군을 좁힘
-    top_5_docs = aggregated[:5]
-    if len(top_5_docs) >= 5:
-        score_gap_5 = top_5_docs[0].aggregated_score - top_5_docs[4].aggregated_score
-        # 점수 차이가 0.5 이상이면 상위권이 확실하므로 후보군 10개로 제한
-        dynamic_top_k = 10 if score_gap_5 > 0.5 else 25
+    # [최적화] Dynamic Top-K 결정: 상위권 점수 격차(Gap)가 크면 리랭킹 후보군 축소
+    if len(aggregated) >= 10:
+        top_1_score = aggregated[0].aggregated_score
+        top_10_score = aggregated[9].aggregated_score
+        score_gap = top_1_score - top_10_score
+
+        # Gap이 0.5 이상이면 상위 그룹이 명확하므로 후보군을 12개로 제한
+        dynamic_top_k = 12 if score_gap > 0.5 else 25
+        logger.info(
+            f"[RAG] [RETRIEVE] Dynamic Top-K 적용: {dynamic_top_k} (Score Gap: {score_gap:.3f})"
+        )
     else:
         dynamic_top_k = 25
 
@@ -204,24 +190,23 @@ async def retrieve_and_rerank(
         SessionManager.add_status_log("검색된 문서가 없습니다.")
         return {"relevant_docs": []}
 
-    # [최적화] 리랭킹 효율화: 병합 전 원본 청크들로 먼저 정밀 리랭킹 수행
     from core.reranker import DistributedReranker, RerankerStrategy
 
     reranker = DistributedReranker()
-    # 후보군(Dynamic Top-K)에 대해 즉시 리랭킹 수행
     ranked_docs, _ = reranker.rerank(
         final_docs,
         query_text=query,
         strategy=RerankerStrategy.SEMANTIC_FLASH,
-        top_k=GRADING_CONFIG.get("top_k", 5),  # 최종 선별 개수는 설정 따름
+        top_k=GRADING_CONFIG.get("top_k", 5),
     )
     logger.info(
         f"[RAG] [RETRIEVE] 리랭킹 선별 완료: {len(final_docs)}개 후보 중 {len(ranked_docs)}개 최종 선별"
     )
 
-    # [최적화] 리랭킹된 상위 문서들에 대해서만 지능적 문맥 병합 수행
-    # (최종 생성 모델에 전달할 풍부한 문맥 확보)
-    merged_context_docs = _merge_adjacent_chunks(ranked_docs, max_tokens=1200)
+    from typing import cast
+
+    context_docs = cast(list[Document], ranked_docs)
+    merged_context_docs = _merge_adjacent_chunks(context_docs, max_tokens=800)
     logger.info(
         f"[RAG] [RETRIEVE] 하이브리드 검색 및 문맥 보강 완료: 최종 {len(merged_context_docs)}개 섹션 구성"
     )
@@ -251,29 +236,52 @@ class RewriteResponse(BaseModel):
 
 
 async def grade_documents(
-    state: GraphState, config: RunnableConfig, writer: StreamWriter
+    state: GraphState, config: RunnableConfig, *, writer: StreamWriter
 ) -> dict[str, Any]:
     """검색된 문서들의 관련성을 LLM으로 평가합니다 (견고한 파싱 적용)."""
-    if state.get("is_cached") or state.get("intent") == "general":
+    if (
+        get_state_attr(state, "is_cached")
+        or get_state_attr(state, "intent") == "general"
+    ):
         return {}
 
-    docs = state.get("relevant_docs", [])
+    retry_count = get_state_attr(state, "retry_count", 0)
+    if retry_count >= 2:
+        logger.info(
+            f"[RAG] [GRADE] 최대 재시도 횟수({retry_count}) 도달. 즉시 생성 단계로 이동."
+        )
+        return {"intent": "generate"}
+
+    docs = get_state_attr(state, "relevant_docs")
     if not docs:
         logger.info("[RAG] [GRADE] 문서가 없어 즉시 재구성 단계로 이동")
         return {"intent": "transform"}
 
-    query = state["input"]
+    # [최적화] Short-circuit: 리랭킹 점수가 충분히 높으면 LLM 검증 생략
+    max_rerank_score = max(
+        (d.metadata.get("rerank_score", 0.0) for d in docs), default=0.0
+    )
+    if max_rerank_score >= 0.85:
+        logger.info(
+            f"[RAG] [GRADE] Short-circuit 활성화 (Max Rerank Score: {max_rerank_score:.3f} >= 0.85)"
+        )
+        SessionManager.add_status_log(
+            "신뢰도 높은 지식이 발견되어 즉시 답변 생성을 시작합니다."
+        )
+        return {"intent": "generate"}
+
+    query = get_state_attr(state, "input")
     cfg = config.get("configurable", {})
     llm = cfg.get("llm")
 
-    import contextlib
     import json
     import re
 
-    with contextlib.suppress(Exception):
-        writer({"status": "문서 관련성 검증 중..."})
+    if writer is not None:
+        await adispatch_custom_event(
+            "graph_status", {"status": "문서 관련성 검증 중..."}, config=config
+        )
 
-    # 상위 3개 문서만 정밀 평가
     test_docs = docs[:3]
     context_text = "\n\n".join(
         [f"DOC {i + 1}: {d.page_content}" for i, d in enumerate(test_docs)]
@@ -285,7 +293,6 @@ async def grade_documents(
         f"{GRADING_CONFIG.get('template', '').format(query=query, context_text=context_text)}"
     )
 
-    # 내부 노드 호출용 설정
     call_config = (
         {"configurable": {**cfg, "messages": []}}
         if cfg
@@ -293,25 +300,35 @@ async def grade_documents(
     )
 
     try:
-        # 1차 시도: 구조화된 출력
+        if llm is None:
+            raise ValueError("LLM is not initialized")
+
+        async def safe_invoke(invokable, prompt, config):
+            res = invokable.ainvoke(prompt, config=config)
+            if asyncio.iscoroutine(res):
+                return await res
+            return res
+
         try:
             structured_llm = llm.with_structured_output(GradeResponse)
-            result = await structured_llm.ainvoke(grade_prompt, config=call_config)
+            result = await safe_invoke(structured_llm, grade_prompt, call_config)
         except Exception as e:
             logger.debug(f"[RAG] [GRADE] 표준 구조화 출력 실패, 수동 파싱 시도: {e}")
-            # 2차 시도: 일반 텍스트 생성 후 JSON 추출
-            raw_res = await llm.ainvoke(grade_prompt, config=call_config)
+            raw_res = await safe_invoke(llm, grade_prompt, call_config)
             content = raw_res.content if hasattr(raw_res, "content") else str(raw_res)
 
-            # JSON 패턴 추출 ({...})
             match = re.search(r"\{.*\}", content, re.DOTALL)
             if match:
-                data = json.loads(match.group())
-                result = GradeResponse(**data)
+                try:
+                    data = json.loads(match.group())
+                    result = GradeResponse(**data)
+                except Exception as parse_err:
+                    logger.warning(f"[RAG] [GRADE] JSON 파싱 실패: {parse_err}")
+                    raise ValueError("JSON Parsing Error") from parse_err
             else:
-                raise ValueError("JSON 패턴을 찾을 수 없습니다.") from e
+                raise ValueError("JSON 패턴을 찾을 수 없습니다.") from None
 
-        if result.is_relevant:
+        if result and getattr(result, "is_relevant", False):
             logger.info(f"[RAG] [GRADE] 관련성 확인: YES ({result.reason})")
             SessionManager.add_status_log("검색된 지식의 관련성이 확인되었습니다.")
             return {"intent": "generate"}
@@ -328,19 +345,27 @@ async def grade_documents(
 
 
 async def rewrite_query(
-    state: GraphState, config: RunnableConfig, writer: StreamWriter
+    state: GraphState, config: RunnableConfig, *, writer: StreamWriter
 ) -> dict[str, Any]:
     """검색에 더 최적화된 형태로 질문을 재구성합니다 (견고한 파싱 적용)."""
-    query = state["input"]
+    query = get_state_attr(state, "input")
     cfg = config.get("configurable", {})
     llm = cfg.get("llm")
 
-    import contextlib
     import json
     import re
 
-    with contextlib.suppress(Exception):
-        writer({"status": "검색 쿼리 최적화 중..."})
+    if llm is None:
+        logger.error("[RAG] [REWRITE] LLM 로드 실패")
+        return {
+            "search_queries": [query],
+            "retry_count": get_state_attr(state, "retry_count", 0) + 1,
+        }
+
+    if writer is not None:
+        await adispatch_custom_event(
+            "graph_status", {"status": "검색 쿼리 최적화 중..."}, config=config
+        )
 
     rewrite_prompt = (
         f"{REWRITING_CONFIG.get('instruction', '')}\n"
@@ -355,29 +380,41 @@ async def rewrite_query(
     )
 
     try:
-        # 1차 시도: 구조화된 출력
+
+        async def safe_invoke(invokable, prompt, config):
+            res = invokable.ainvoke(prompt, config=config)
+            if asyncio.iscoroutine(res):
+                return await res
+            return res
+
         try:
             structured_llm = llm.with_structured_output(RewriteResponse)
-            result = await structured_llm.ainvoke(rewrite_prompt, config=call_config)
+            result = await safe_invoke(structured_llm, rewrite_prompt, call_config)
         except Exception as e:
             logger.debug(f"[RAG] [REWRITE] 표준 구조화 출력 실패, 수동 파싱 시도: {e}")
-            # 2차 시도: 수동 추출
-            raw_res = await llm.ainvoke(rewrite_prompt, config=call_config)
+            raw_res = await safe_invoke(llm, rewrite_prompt, call_config)
             content = raw_res.content if hasattr(raw_res, "content") else str(raw_res)
             match = re.search(r"\{.*\}", content, re.DOTALL)
             if match:
-                data = json.loads(match.group())
-                result = RewriteResponse(**data)
+                try:
+                    data = json.loads(match.group())
+                    result = RewriteResponse(**data)
+                except Exception as parse_err:
+                    logger.warning(f"[RAG] [REWRITE] JSON 파싱 실패: {parse_err}")
+                    raise ValueError("JSON Parsing Error") from parse_err
             else:
-                raise ValueError("JSON 패턴 미검출") from e
+                raise ValueError("JSON 패턴 미검출") from None
 
-        new_query = result.optimized_query.strip().strip('"')
+        new_query = getattr(result, "optimized_query", query).strip().strip('"')
         logger.info(f"[RAG] [REWRITE] 쿼리 재구성: '{query}' -> '{new_query}'")
-        return {"search_queries": [new_query], "retry_count": 1}
+
+        current_retry = get_state_attr(state, "retry_count", 0)
+        return {"search_queries": [new_query], "retry_count": current_retry + 1}
 
     except Exception as e:
         logger.warning(f"[RAG] [REWRITE] 모든 시도 실패, 원본 유지: {e}")
-        return {"retry_count": 1}
+        current_retry = get_state_attr(state, "retry_count", 0)
+        return {"retry_count": current_retry + 1}
 
 
 def format_context(docs: list[Document]) -> str:
@@ -391,29 +428,35 @@ def format_context(docs: list[Document]) -> str:
 
 
 async def generate(
-    state: GraphState, config: RunnableConfig, writer: StreamWriter
+    state: GraphState, config: RunnableConfig, *, writer: StreamWriter
 ) -> dict[str, Any]:
     """최종 답변을 생성합니다."""
-    if state.get("is_cached"):
-        return {}
-
     cfg = config.get("configurable", {})
     llm = cfg.get("llm")
     if not llm:
         return {"response": "LLM 미로드"}
 
-    import contextlib
-
-    with contextlib.suppress(Exception):
-        writer({"status": "답변 논리 설계 및 생성 중..."})
+    if writer is not None:
+        await adispatch_custom_event(
+            "graph_status", {"status": "답변 논리 설계 및 생성 중..."}, config=config
+        )
     SessionManager.add_status_log("답변 논리 설계 및 생성 시작")
 
-    docs = state.get("relevant_docs", [])
-    context = format_context(docs)
+    docs = get_state_attr(state, "relevant_docs")
+    if not docs and get_state_attr(state, "intent") != "general":
+        logger.info("[RAG] [GENERATE] 관련 문서 없음 -> 사용자 안내 메시지 생성")
+        no_info_msg = "제공된 문서에서 질문과 관련된 정보를 찾을 수 없습니다. 다른 질문을 입력하거나 문서 내용을 확인해 주세요."
+        if writer is not None:
+            await adispatch_custom_event(
+                "response_chunk", {"content": no_info_msg}, config=config
+            )
+        return {"response": no_info_msg}
+
+    context = format_context(docs) if docs else "일상적인 대화입니다."
 
     sys_msg = SystemMessage(content="전문 문서 분석가로서 한국어로 답변하세요.")
     human_msg = HumanMessage(
-        content=f"{ANALYSIS_PROTOCOL}\n\n[Context]\n{context}\n\n[Question]\n{state['input']}"
+        content=f"{ANALYSIS_PROTOCOL}\n\n[Context]\n{context}\n\n[Question]\n{get_state_attr(state, 'input')}"
     )
 
     from core.model_loader import ModelManager
@@ -427,14 +470,17 @@ async def generate(
             content_chunk, thought_chunk = llm._convert_chunk_to_thought_and_content(
                 chunk
             )
+            if (content_chunk or thought_chunk) and writer is not None:
+                await adispatch_custom_event(
+                    "response_chunk",
+                    {"content": content_chunk, "thought": thought_chunk},
+                    config=config,
+                )
+
             if thought_chunk:
                 full_thought += thought_chunk
-                with contextlib.suppress(Exception):
-                    writer({"thought": thought_chunk})
             if content_chunk:
                 full_response += content_chunk
-                with contextlib.suppress(Exception):
-                    writer({"content": content_chunk})
             if hasattr(chunk, "response_metadata") and chunk.response_metadata:
                 last_metadata = chunk.response_metadata
 
@@ -463,10 +509,8 @@ def _merge_adjacent_chunks(
 
     merged_docs: list[Document] = []
 
-    # 1. 정렬 (원본 보존을 위해 얕은 복사 리스트 사용)
-    # [최적화] deepcopy 대신 얕은 복사 후 필요한 값만 가공
     working_docs = sorted(
-        docs,  # 굳이 deepcopy할 필요 없음, 아래에서 필요할 때만 복사
+        docs,
         key=lambda x: (
             str(x.metadata.get("source", "")),
             int(x.metadata.get("page", 0)),
@@ -474,30 +518,23 @@ def _merge_adjacent_chunks(
         ),
     )
 
-    # 2. 병합 루프
-    # [최적화] 첫 번째 문서는 필요할 때만 복사
     current_doc = Document(
         page_content=working_docs[0].page_content,
         metadata=copy.copy(working_docs[0].metadata),
     )
 
-    # 미리 토큰 수 계산 (반복 계산 방지)
     current_tokens = count_tokens_rough(current_doc.page_content)
 
     for next_doc in working_docs[1:]:
         curr_m = current_doc.metadata
         next_m = next_doc.metadata
 
-        # 병합 조건 확인: 동일 페이지이며, 실제 텍스트 오프셋이 인접한지 확인
-        # (중복 제거로 인해 인덱스가 벌어져도 실제 텍스트가 연속이면 병합 가능)
         is_same_context = curr_m.get("source") == next_m.get("source") and curr_m.get(
             "page"
         ) == next_m.get("page")
 
-        # [최적화] 섹션 일치 여부 확인 (주제 일관성 보장)
         is_same_section = curr_m.get("current_section") == next_m.get("current_section")
 
-        # [개선] 인덱스가 아닌 실제 텍스트 오프셋(시작/끝) 기반 인접도 체크
         curr_end = curr_m.get("end_index")
         next_start = next_m.get("start_index")
 
@@ -510,7 +547,6 @@ def _merge_adjacent_chunks(
 
         next_tokens = count_tokens_rough(next_doc.page_content)
 
-        # 병합 결정: 페이지, 오프셋, 섹션이 모두 일치해야 함
         if (
             is_same_context
             and is_actually_consecutive
@@ -518,16 +554,13 @@ def _merge_adjacent_chunks(
             and (current_tokens + next_tokens + 10) <= max_tokens
         ):
             current_doc.page_content += "\n\n" + next_doc.page_content
-            current_tokens += next_tokens + 10  # 구분자 토큰 보정
-            # 병합된 청크의 끝 지점 업데이트
+            current_tokens += next_tokens + 10
             current_doc.metadata["end_index"] = next_m.get("end_index", curr_end)
-            # [추가] 다음 청크와 병합을 위해 인덱스 갱신
             current_doc.metadata["chunk_index"] = next_m.get(
                 "chunk_index", curr_m.get("chunk_index")
             )
         else:
             merged_docs.append(current_doc)
-            # 새로운 기준 문서 설정 (얕은 복사)
             current_doc = Document(
                 page_content=next_doc.page_content,
                 metadata=copy.copy(next_doc.metadata),
@@ -539,54 +572,38 @@ def _merge_adjacent_chunks(
 
 
 def build_graph() -> Any:
-    """Self-Correction 루프가 포함된 그래프를 빌드합니다."""
+    """자가 교정형 RAG 워크플로우를 구성합니다."""
     workflow = StateGraph(GraphState)
 
     # 노드 등록
     workflow.add_node("preprocess", preprocess)
     workflow.add_node("retrieve", retrieve_and_rerank)
-    workflow.add_node("grade", grade_documents)
-    workflow.add_node("rewrite", rewrite_query)
-    # [최적화] generate 노드에 전용 태그 부여하여 스트리밍 필터링 안정성 확보
+    workflow.add_node("grade_documents", grade_documents)
+    workflow.add_node("rewrite_query", rewrite_query)
     workflow.add_node("generate", generate)
 
-    # 엣지 및 조건부 로직 설정
+    # 엣지 설정
     workflow.add_edge(START, "preprocess")
 
     workflow.add_conditional_edges(
         "preprocess",
         lambda s: (
-            "END"
-            if s.get("is_cached")
-            else ("generate" if s.get("intent") == "general" else "retrieve")
+            "generate" if get_state_attr(s, "intent") == "general" else "retrieve"
         ),
-        {"END": END, "generate": "generate", "retrieve": "retrieve"},
+        {"generate": "generate", "retrieve": "retrieve"},
     )
 
-    workflow.add_edge("retrieve", "grade")
-
-    def decide_to_generate(state: GraphState):
-        if state.get("intent") == "generate":
-            return "generate"
-        if state.get("retry_count", 0) >= 1:
-            SessionManager.add_status_log(
-                "최대 재시도 횟수에 도달하여 현재 지식으로 답변을 생성합니다."
-            )
-            return "generate"
-        return "rewrite"
+    workflow.add_edge("retrieve", "grade_documents")
 
     workflow.add_conditional_edges(
-        "grade",
-        decide_to_generate,
-        {"generate": "generate", "rewrite": "rewrite"},
+        "grade_documents",
+        lambda s: get_state_attr(s, "intent"),
+        {"generate": "generate", "transform": "rewrite_query"},
     )
 
-    workflow.add_edge("rewrite", "retrieve")
+    workflow.add_edge("rewrite_query", "retrieve")
     workflow.add_edge("generate", END)
 
-    # [최적화] 상태 영속성을 위한 체크포인터 추가
     memory = InMemorySaver()
 
-    # [핵심] 특정 노드에 메타데이터/태그 주입 (컴파일 시점이 아닌 노드 정의 시점 권장이나,
-    # 현재 구조에서는 astream에서 필터링할 수 있도록 태그를 명시적으로 관리)
     return workflow.compile(checkpointer=memory)

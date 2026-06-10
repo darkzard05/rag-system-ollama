@@ -218,7 +218,7 @@ class EmbeddingBasedSemanticChunker:
         # 1. 정제 및 캐시 확인
         for i, text in enumerate(texts):
             norm_text = " ".join(text.split())
-            cache_key = f"emb:{self.model_name}:{hashlib.sha256(norm_text.encode()).hexdigest()[:16]}"
+            cache_key = f"emb:{self.model_name}:{hashlib.sha256(norm_text.encode()).hexdigest()[:32]}"
 
             cached_vec = await self.cache_manager.get(cache_key)
             if cached_vec is not None:
@@ -247,7 +247,7 @@ class EmbeddingBasedSemanticChunker:
 
                         # 캐시 저장
                         norm_text = texts[idx]
-                        cache_key = f"emb:{self.model_name}:{hashlib.sha256(norm_text.encode()).hexdigest()[:16]}"
+                        cache_key = f"emb:{self.model_name}:{hashlib.sha256(norm_text.encode()).hexdigest()[:32]}"
                         await self.cache_manager.set(cache_key, vec_np.tolist())
 
                 except Exception as e:
@@ -259,21 +259,21 @@ class EmbeddingBasedSemanticChunker:
         valid_vectors: list[np.ndarray] = []
         expected_dim = None
 
-        for i, vec in enumerate(all_results):
-            if vec is None:
+        for i, res_vec in enumerate(all_results):
+            if res_vec is None:
                 continue
 
             if expected_dim is None:
-                expected_dim = vec.shape[0]
+                expected_dim = res_vec.shape[0]
 
-            if vec.shape[0] != expected_dim:
+            if res_vec.shape[0] != expected_dim:
                 logger.warning(
-                    f"[Chunker] 캐시된 벡터 차원 불일치 감지 (Index: {i}, Dim: {vec.shape[0]} != Expected: {expected_dim}). "
+                    f"[Chunker] 캐시된 벡터 차원 불일치 감지 (Index: {i}, Dim: {res_vec.shape[0]} != Expected: {expected_dim}). "
                     "모델 이름이 바뀌었거나 캐시가 오염되었습니다. 해당 항목을 제외합니다."
                 )
                 continue
 
-            valid_vectors.append(vec)
+            valid_vectors.append(res_vec)
 
         if not valid_vectors:
             return np.array([]).reshape(0, 0)
@@ -472,6 +472,32 @@ class EmbeddingBasedSemanticChunker:
         clean_title = re.sub(r"[#\*_]", "", clean_title)
         return clean_title[:150]  # 제목 복원을 위해 길이 상향
 
+    def _prune_duplicates(
+        self, chunks: list[dict], threshold: float = 0.98
+    ) -> list[dict]:
+        """임베딩 벡터 기반으로 유사도가 높은 중복 청크를 제거합니다."""
+        if not chunks:
+            return []
+
+        pruned = [chunks[0]]
+        for i in range(1, len(chunks)):
+            current_vec = chunks[i]["vector"]
+            is_dup = False
+
+            # 최근 3개의 청크와 비교하여 중복 여부 확인 (대량 문서 내 반복 구간 처리)
+            for prev in pruned[-3:]:
+                sim = float(np.dot(current_vec, prev["vector"]))
+                if sim > threshold:
+                    is_dup = True
+                    break
+
+            if not is_dup:
+                pruned.append(chunks[i])
+            else:
+                logger.debug(f"[Chunker] 중복 청크 제거됨 (유사도 > {threshold})")
+
+        return pruned
+
     async def split_text(self, text: str) -> list[dict]:
         """
         텍스트를 의미론적으로 분할합니다 (Buffer-based context window 적용).
@@ -544,12 +570,14 @@ class EmbeddingBasedSemanticChunker:
                 combined_vec /= norm
             combined_embeddings.append(combined_vec)
 
-        combined_embeddings = np.array(combined_embeddings)
+        combined_embeddings_arr = np.array(combined_embeddings)
 
         # 4. 거리 계산
         distances = []
-        for i in range(len(combined_embeddings) - 1):
-            similarity = np.dot(combined_embeddings[i], combined_embeddings[i + 1])
+        for i in range(len(combined_embeddings_arr) - 1):
+            similarity = np.dot(
+                combined_embeddings_arr[i], combined_embeddings_arr[i + 1]
+            )
             distances.append(1.0 - float(similarity))
 
         # 5. 분기점 탐색 (헤더 인식 로직 포함됨)
@@ -633,8 +661,9 @@ class EmbeddingBasedSemanticChunker:
             )
             start_idx = bp
 
-        # 7. 크기 최적화 및 결과 반환
-        return self._optimize_chunk_sizes(chunks)
+        # 7. 크기 최적화 및 중복 제거
+        optimized_chunks = self._optimize_chunk_sizes(chunks)
+        return self._prune_duplicates(optimized_chunks)
 
     async def split_documents(
         self, docs: list["Document"]
@@ -698,13 +727,15 @@ class EmbeddingBasedSemanticChunker:
             for doc_range in doc_ranges:
                 # 범위 겹침 확인: [start1, end1] 과 [start2, end2]
                 if max(c_start, doc_range["start"]) < min(c_end, doc_range["end"]):
-                    page = doc_range["metadata"].get("page")
+                    # [수정] Mypy 타입 추론 강화를 위해 cast 사용
+                    metadata = cast(dict[str, Any], doc_range["metadata"])
+                    page = metadata.get("page")
                     if page and page not in overlapping_pages:
                         overlapping_pages.append(page)
 
                     # 기본 메타데이터는 첫 번째 겹치는 문서에서 가져오되, 페이지 정보는 업데이트
                     if not merged_metadata:
-                        merged_metadata = doc_range["metadata"].copy()
+                        merged_metadata = metadata.copy()
 
             if overlapping_pages:
                 merged_metadata["pages"] = sorted(overlapping_pages)
