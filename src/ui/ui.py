@@ -128,7 +128,7 @@ def inject_custom_css(is_expanded: bool = False):
         border-radius: 0 4px 4px 0;
     }}
 
-    /* 6. 인용 가독성 효과 */
+    /* 6. 인용 가독성 효과 및 모바일 터치 피드백 개선 */
     .citation-highlight {{
         background-color: color-mix(in srgb, var(--primary-color) 15%, transparent);
         border-bottom: 2px dashed var(--primary-color);
@@ -137,10 +137,15 @@ def inject_custom_css(is_expanded: bool = False):
         color: var(--primary-color);
         font-weight: 600;
         cursor: help;
-        transition: background-color 0.2s;
+        transition: background-color 0.2s, transform 0.1s;
+        display: inline-block;
     }}
     .citation-highlight:hover {{
         background-color: color-mix(in srgb, var(--primary-color) 30%, transparent);
+    }}
+    .citation-highlight:active {{
+        background-color: color-mix(in srgb, var(--primary-color) 50%, transparent);
+        transform: scale(0.98);
     }}
 
     /* 7. 스트리밍 대기 애니메이션 (Pulse) */
@@ -153,6 +158,42 @@ def inject_custom_css(is_expanded: bool = False):
         50% {{ opacity: 1; }}
         100% {{ opacity: 0.4; }}
     }}
+
+    /* 8. 성능 지표(Performance Metrics) 커스텀 테이블 스타일 */
+    .perf-table {{
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 13px;
+        margin-top: 5px;
+        font-family: inherit;
+    }}
+    .perf-row {{
+        border-bottom: 1px solid color-mix(in srgb, var(--faded-text-color), transparent 90%);
+    }}
+    .perf-row:last-child {{
+        border-bottom: none;
+    }}
+    .perf-label {{
+        color: var(--faded-text-color);
+        padding: 8px 0;
+        width: 40%;
+        text-align: left;
+    }}
+    .perf-value {{
+        font-weight: 600;
+        text-align: right;
+        padding: 8px 12px;
+        color: var(--text-color);
+    }}
+    .perf-status {{
+        width: 35%;
+        text-align: right;
+        font-size: 11px;
+        font-weight: 500;
+    }}
+    .status-excellent {{ color: #2ecc71 !important; }}
+    .status-stable {{ color: var(--primary-color) !important; }}
+    .status-poor {{ color: #e74c3c !important; }}
     </style>
     """,
         unsafe_allow_html=True,
