@@ -193,12 +193,21 @@ def on_file_upload() -> None:
     from core.session import SessionManager
     from infra.notification_system import SystemNotifier
 
-    uploaded_file = st.session_state.get("pdf_uploader")
+    uploaded_file = st.session_state.get("file_uploader")
     if uploaded_file is None or not hasattr(uploaded_file, "type"):
         return
 
+    # [개선] 파일 타입 검사 (MIME 타입 확인)
     if uploaded_file.type != "application/pdf":
-        st.error("❌ 올바른 PDF 파일이 아닙니다.")
+        st.error("❌ 올바른 PDF 파일이 아닙니다. PDF 형식의 파일을 업로드해주세요.")
+        return
+
+    # [개선] 파일 크기 검사
+    file_size_mb = uploaded_file.size / (1024 * 1024)
+    if file_size_mb > MAX_FILE_SIZE_MB:
+        st.error(
+            f"❌ 파일 크기가 너무 큽니다 ({file_size_mb:.2f} MB). {MAX_FILE_SIZE_MB}MB 이하의 파일을 업로드해주세요."
+        )
         return
 
     if uploaded_file.name != SessionManager.get("last_uploaded_file_name"):
