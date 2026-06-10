@@ -168,12 +168,32 @@ def render_message(
                     out_tok = metrics.get(
                         "token_count", metrics.get("output_token_count", 0)
                     )
-                    # [개선] 성능 지표 가독성 향상
+
+                    # 성능 상태 판별
+                    status = _get_performance_status(total, tps)
+
                     st.markdown("**📊 성능 지표**")
-                    m_col1, m_col2, m_col3 = st.columns(3)
-                    m_col1.metric("소요 시간", f"{total:.1f}s")
-                    m_col2.metric("생성 속도", f"{tps:.1f} tok/s")
-                    m_col3.metric("토큰 (In/Out)", f"{in_tok} / {out_tok}")
+
+                    perf_html = f"""
+                    <table class="perf-table">
+                        <tr class="perf-row">
+                            <td class="perf-label">⏱️ 응답 지연</td>
+                            <td class="perf-value">{total:.1f}s</td>
+                            <td class="perf-status {status["latency"]["class"]}">{status["latency"]["label"]}</td>
+                        </tr>
+                        <tr class="perf-row">
+                            <td class="perf-label">⚡ 생성 속도</td>
+                            <td class="perf-value">{tps:.1f} t/s</td>
+                            <td class="perf-status {status["throughput"]["class"]}">{status["throughput"]["label"]}</td>
+                        </tr>
+                        <tr class="perf-row">
+                            <td class="perf-label">🎟️ 토큰 사용</td>
+                            <td class="perf-value">{in_tok} / {out_tok}</td>
+                            <td class="perf-status">{in_tok + out_tok} total</td>
+                        </tr>
+                    </table>
+                    """
+                    st.markdown(perf_html, unsafe_allow_html=True)
 
                 if documents:
                     extracted_pages = set()
