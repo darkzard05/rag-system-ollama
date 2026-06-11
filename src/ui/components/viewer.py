@@ -127,7 +127,7 @@ def _display_pdf_controls(current_page, total_pages):
         with c_center:
             # "Page [X] of Y" 스타일을 위한 내부 정밀 레이아웃
             inner_col1, inner_col2, inner_col3 = st.columns(
-                [0.7, 1, 1.3], gap="none", vertical_alignment="center"
+                [0.7, 1, 1.3], gap="xxsmall", vertical_alignment="center"
             )
 
             with inner_col1:
