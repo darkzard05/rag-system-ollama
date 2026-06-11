@@ -1,6 +1,5 @@
 """
 PDF 뷰어 및 문서 관련 UI 컴포넌트.
-(Architectural Refactor: 통합 프래그먼트 구조로 동기화 문제 해결 및 독립 스크롤 적용)
 """
 
 import logging
@@ -10,6 +9,7 @@ import streamlit as st
 from streamlit_pdf_viewer import pdf_viewer
 
 from common.config import MSG_PDF_VIEWER_NO_FILE
+from common.constants import UIConstants
 from common.utils import safe_cache_data, safe_cache_resource
 from core.session import SessionManager
 
@@ -18,7 +18,6 @@ logger = logging.getLogger(__name__)
 
 @safe_cache_data(show_spinner=False)
 def _get_pdf_bytes(pdf_path: str) -> bytes:
-    """PDF 파일의 바이트 데이터를 캐싱하여 로드합니다."""
     if not os.path.exists(pdf_path):
         return b""
     try:
@@ -31,7 +30,6 @@ def _get_pdf_bytes(pdf_path: str) -> bytes:
 
 @safe_cache_resource(show_spinner=False)
 def _get_pdf_total_pages(pdf_path: str) -> int:
-    """PDF의 총 페이지 수를 캐싱합니다."""
     import fitz
 
     if not os.path.exists(pdf_path):
@@ -44,13 +42,7 @@ def _get_pdf_total_pages(pdf_path: str) -> int:
         return 0
 
 
-@st.fragment()
 def render_pdf_column():
-    """
-    PDF 뷰어 컬럼 통합 렌더링 함수.
-    표시(Display)와 제어(Controls)를 하나의 프래그먼트로 묶어 완벽한 동기화를 보장합니다.
-    App-Shell 구조를 위해 고정 높이 컨테이너 내에서 스크롤되도록 설계되었습니다.
-    """
     pdf_path_raw = SessionManager.get("pdf_file_path")
     if not pdf_path_raw:
         st.info(MSG_PDF_VIEWER_NO_FILE)
@@ -59,48 +51,45 @@ def render_pdf_column():
     pdf_path = os.path.abspath(pdf_path_raw)
     file_hash = SessionManager.get("file_hash", "none")
 
-    # 1. 페이지 상태 결정 (Single Source of Truth)
     total_pages = _get_pdf_total_pages(pdf_path)
     if total_pages == 0:
         st.error("⚠️ PDF 로드 실패: 파일이 손상되었거나 경로가 올바르지 않습니다.")
         return
 
-    # 외부(채팅 레퍼런스 등)에서의 페이지 이동 요청 처리
     target_page = SessionManager.get("pdf_target_page")
     if target_page is not None:
         current_page = min(max(1, int(target_page)), total_pages)
         SessionManager.set("current_page", current_page)
         SessionManager.set("pdf_target_page", None)
+        st.session_state["pdf_nav_input_v6"] = current_page
     else:
-        current_page = min(max(1, SessionManager.get("current_page", 1)), total_pages)
+        if "pdf_nav_input_v6" in st.session_state:
+            current_page = min(
+                max(1, int(st.session_state["pdf_nav_input_v6"])), total_pages
+            )
+            SessionManager.set("current_page", current_page)
+        else:
+            current_page = min(
+                max(1, SessionManager.get("current_page", 1)), total_pages
+            )
+            st.session_state["pdf_nav_input_v6"] = current_page
 
-    # 2. 상단 컨트롤 영역 (고정)
-    _display_pdf_controls(current_page, total_pages)
-
-    # 3. PDF 표시 영역 (독립 스크롤 컨테이너)
-    # CSS Flexbox 레이아웃이 실제 높이를 제어하므로, 충분히 큰 값을 설정하여 컨테이너가 확장되도록 합니다.
-    with st.container(height=500, border=False):
+    # 하드코딩 제거 및 UIConstants 적용 (실제 높이는 CSS calc가 덮어씌움)
+    with st.container(height=UIConstants.CONTAINER_HEIGHT, border=False):
         _display_pdf_viewer(pdf_path, current_page, file_hash)
+
+    # [최적화] 네비게이션을 하단으로 이동하여 우측 채팅 입력창과 대칭 구조 형성
+    _display_pdf_controls(current_page, total_pages)
 
 
 def _display_pdf_viewer(pdf_path, current_page, file_hash):
-    """실제 PDF 렌더링 영역"""
     try:
         pdf_bytes = _get_pdf_bytes(pdf_path)
         if not pdf_bytes:
             st.error("⚠️ PDF 데이터를 불러올 수 없습니다.")
             return
 
-        # 하이라이트 어노테이션 추출
-        active_idx = st.session_state.get("active_msg_index")
-        messages = SessionManager.get_messages() or []
-        annotations = []
-        if active_idx is not None and active_idx < len(messages):
-            annotations = messages[active_idx].get("annotations", [])
-        if not annotations:
-            annotations = SessionManager.get("pdf_annotations", [])
-
-        # 키 생성: 페이지 변경 및 어노테이션 개수 변화 감지 (리렌더링 트리거)
+        annotations = SessionManager.get("pdf_annotations", [])
         viewer_key = f"pdf_v7_{file_hash}_{current_page}_{len(annotations)}"
 
         pdf_viewer(
@@ -109,7 +98,6 @@ def _display_pdf_viewer(pdf_path, current_page, file_hash):
             pages_to_render=[current_page],
             annotations=annotations,
             annotation_outline_size=2,
-            height=None,
             key=viewer_key,
         )
     except Exception as e:
@@ -118,45 +106,69 @@ def _display_pdf_viewer(pdf_path, current_page, file_hash):
 
 
 def _display_pdf_controls(current_page, total_pages):
-    """페이지 이동 컨트롤 영역"""
     try:
-        c_prev, c_input, c_next = st.columns([1, 2, 1], gap="small")
+        # [개선] 4컬럼 -> 3컬럼 구조로 변경하여 중앙 집중형 레이아웃 구현
+        c_prev, c_center, c_next = st.columns(
+            [1, 2, 1], gap="small", vertical_alignment="center"
+        )
 
         with c_prev:
             if st.button(
-                "⬅️",
+                "⬅️ 이전",
                 use_container_width=True,
                 key="btn_nav_prev_v6",
                 disabled=current_page <= 1,
             ):
-                SessionManager.set("current_page", max(1, current_page - 1))
-                st.rerun(scope="fragment")
+                new_page = max(1, current_page - 1)
+                SessionManager.set("pdf_target_page", new_page)
+                SessionManager.set("current_page", new_page)
+                st.rerun()
 
-        with c_input:
-
-            def on_page_change():
-                new_p = st.session_state.get("pdf_nav_input_v6")
-                if new_p:
-                    SessionManager.set("current_page", new_p)
-
-            st.number_input(
-                f"Page / {total_pages}",
-                min_value=1,
-                max_value=total_pages,
-                value=current_page,
-                key="pdf_nav_input_v6",
-                on_change=on_page_change,
+        with c_center:
+            # "Page [X] of Y" 스타일을 위한 내부 정밀 레이아웃
+            inner_col1, inner_col2, inner_col3 = st.columns(
+                [0.7, 1, 1.3], gap="none", vertical_alignment="center"
             )
+
+            with inner_col1:
+                st.markdown(
+                    "<div style='text-align: right; font-weight: 600; opacity: 0.8; padding-top: 2px;'>Page</div>",
+                    unsafe_allow_html=True,
+                )
+
+            with inner_col2:
+
+                def on_page_change():
+                    new_p = st.session_state.get("pdf_nav_input_v6")
+                    if new_p:
+                        SessionManager.set("current_page", new_p)
+
+                st.number_input(
+                    "P",
+                    min_value=1,
+                    max_value=total_pages,
+                    key="pdf_nav_input_v6",
+                    on_change=on_page_change,
+                    label_visibility="collapsed",
+                )
+
+            with inner_col3:
+                st.markdown(
+                    f"<div style='text-align: left; font-weight: 600; opacity: 0.8; padding-top: 2px;'>of {total_pages}</div>",
+                    unsafe_allow_html=True,
+                )
 
         with c_next:
             if st.button(
-                "➡️",
+                "다음 ➡️",
                 use_container_width=True,
                 key="btn_nav_next_v6",
                 disabled=current_page >= total_pages,
             ):
-                SessionManager.set("current_page", min(total_pages, current_page + 1))
-                st.rerun(scope="fragment")
+                new_page = min(total_pages, current_page + 1)
+                SessionManager.set("pdf_target_page", new_page)
+                SessionManager.set("current_page", new_page)
+                st.rerun()
 
     except Exception as e:
         logger.error(f"PDF 컨트롤바 오류: {e}", exc_info=True)

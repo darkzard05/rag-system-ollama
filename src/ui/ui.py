@@ -44,9 +44,9 @@ def inject_custom_css(is_expanded: bool = False):
         overflow-y: auto !important;
     }}
 
-    /* PDF 뷰어 전용 보정 (첫 번째 컬럼에 위치하며 상단 컨트롤러 존재 대응) */
+    /* PDF 뷰어 전용 보정 (네비게이션이 하단으로 이동함에 따라 상단 높이 확보) */
     .block-container [data-testid="stColumn"]:first-of-type [data-testid="stVerticalBlockBorderWrapper"] {{
-        height: calc(100dvh - 13.5rem) !important;
+        height: calc(100dvh - 12rem) !important;
     }}
 
     /* 1. 사이드바 확장 버튼 가시성 강제 확보 (Invisible 이슈 해결) */
