@@ -23,7 +23,7 @@ def inject_custom_css(is_expanded: bool = False):
 
     /* Remove default Streamlit padding that causes shifts */
     .block-container {{
-        padding-top: 3.5rem !important;
+        padding-top: 3rem !important;
         padding-bottom: 0rem !important;
         max-width: 100% !important;
     }}
@@ -40,13 +40,8 @@ def inject_custom_css(is_expanded: bool = False):
         border-top: 1px solid color-mix(in srgb, var(--faded-text-color) 10%, transparent);
     }}
 
-    /* 3. Hide all other scrollbars except our containers */
-    [data-testid="stMain"], [data-testid="stVerticalBlock"] {{
-        overflow: hidden !important;
-    }}
-    
-    /* Ensure the column itself doesn't scroll, only our internal container */
-    [data-testid="stColumn"] {{
+    /* 3. Hide only the main block to prevent double scrolls */
+    [data-testid="stMain"] {{
         overflow: hidden !important;
     }}
 
