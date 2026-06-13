@@ -23,8 +23,10 @@ def inject_custom_css(is_expanded: bool = False):
 
     /* Remove default Streamlit padding that causes shifts */
     .block-container {{
-        padding-top: 3rem !important;
+        padding-top: 1.5rem !important; /* Reduced from 3.5rem */
         padding-bottom: 0rem !important;
+        padding-left: 1rem !important;
+        padding-right: 1rem !important;
         max-width: 100% !important;
     }}
 
@@ -37,7 +39,8 @@ def inject_custom_css(is_expanded: bool = False):
         width: 50% !important;
         z-index: 1000;
         background-color: var(--background-color) !important;
-        border-top: 1px solid color-mix(in srgb, var(--faded-text-color) 10%, transparent);
+        padding-bottom: 1rem !important; /* Tighter padding */
+        padding-top: 0.5rem !important;
     }}
 
     /* 3. Hide only the main block to prevent double scrolls */

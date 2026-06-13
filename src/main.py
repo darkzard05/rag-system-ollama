@@ -304,7 +304,14 @@ def _render_app_layout(available_models: list[str] | None = None) -> None:
             available_models=available_models,
         )
 
-    col_pdf, col_chat = st.columns([1, 1], gap="medium")
+    col_pdf, col_chat = st.columns([1, 1], gap="small")
+    
+    # Refined height offset: 180 is a good balance for density and safety
+    if viewport_height:
+        target_height = max(400, viewport_height - 180)
+    else:
+        target_height = 600 # Slightly higher default for better initial visibility
+
     with col_pdf:
         with st.container(height=target_height, border=False):
             from ui.components.viewer import render_pdf_column
