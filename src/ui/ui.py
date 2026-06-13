@@ -80,17 +80,28 @@ def inject_custom_css(is_expanded: bool = False):
         background-color: color-mix(in srgb, var(--text-color) 40%, transparent);
     }}
 
-    /* 3. 채팅 입력창 하단 고정 및 보호 */
-    [data-testid="stChatInputContainer"] {{
+    /* 4. Scoped Chat Input */
+    [data-testid="stChatInputContainer"] {
+        position: fixed !important;
+        bottom: 0 !important;
+        right: 0 !important;
+        left: 50% !important; /* Start from middle */
+        width: 50% !important; /* Take right half */
         padding-bottom: 1.5rem !important;
         padding-top: 0.5rem !important;
         background-color: var(--background-color) !important;
         z-index: 100;
-    }}
+        border-top: 1px solid color-mix(in srgb, var(--faded-text-color) 10%, transparent);
+    }
 
-    [data-testid="stChatMessage"]:last-child {{
+    /* Ensure column has enough bottom space so messages aren't hidden by the input */
+    [data-testid="stColumn"]:last-child > div {
+        padding-bottom: 120px !important;
+    }
+
+    [data-testid="stChatMessage"]:last-child {
         margin-bottom: 2rem !important;
-    }}
+    }
 
     /* 4. 사이드바 확장 버튼 가시성 확보 */
     [data-testid="stSidebarCollapseButton"] {{
