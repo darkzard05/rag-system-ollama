@@ -16,12 +16,12 @@ def inject_custom_css(is_expanded: bool = False):
         f"""
     <style>
     /* 1. Viewport Locking */
-    .stApp {
+    .stApp {{
         height: 100vh !important;
         overflow: hidden !important;
-    }
+    }}
 
-    .block-container {
+    .block-container {{
         padding-top: 3rem !important;
         padding-bottom: 0rem !important;
         padding-left: 1.5rem !important;
@@ -30,32 +30,32 @@ def inject_custom_css(is_expanded: bool = False):
         height: 100vh !important;
         display: flex;
         flex-direction: column;
-    }
+    }}
 
     /* 2. Flex Chain - Intermediate containers */
     /* Streamlit structure: .block-container > div > [data-testid="stVerticalBlock"] > [data-testid="stHorizontalBlock"] */
-    .block-container > div {
+    .block-container > div {{
         display: flex;
         flex-direction: column;
         flex-grow: 1;
         min-height: 0;
-    }
+    }}
 
-    [data-testid="stVerticalBlock"] {
+    [data-testid="stVerticalBlock"] {{
         display: flex;
         flex-direction: column;
         flex-grow: 1;
         min-height: 0;
-    }
+    }}
 
-    [data-testid="stHorizontalBlock"] {
+    [data-testid="stHorizontalBlock"] {{
         display: flex;
         flex-grow: 1;
         min-height: 0;
-    }
+    }}
 
     /* 3. Independent Columns */
-    [data-testid="stColumn"] {
+    [data-testid="stColumn"] {{
         height: 100% !important; 
         overflow-y: auto !important;
         overflow-x: hidden !important;
@@ -63,7 +63,7 @@ def inject_custom_css(is_expanded: bool = False):
         scroll-behavior: smooth;
         display: flex;
         flex-direction: column;
-    }
+    }}
 
     /* 스크롤바 스타일링 */
     [data-testid="stColumn"]::-webkit-scrollbar {{
@@ -81,7 +81,7 @@ def inject_custom_css(is_expanded: bool = False):
     }}
 
     /* 4. Scoped Chat Input */
-    [data-testid="stChatInputContainer"] {
+    [data-testid="stChatInputContainer"] {{
         position: fixed !important;
         bottom: 0 !important;
         right: 0 !important;
@@ -92,16 +92,16 @@ def inject_custom_css(is_expanded: bool = False):
         background-color: var(--background-color) !important;
         z-index: 100;
         border-top: 1px solid color-mix(in srgb, var(--faded-text-color) 10%, transparent);
-    }
+    }}
 
     /* Ensure column has enough bottom space so messages aren't hidden by the input */
-    [data-testid="stColumn"]:last-child > div {
+    [data-testid="stColumn"]:last-child > div {{
         padding-bottom: 120px !important;
-    }
+    }}
 
-    [data-testid="stChatMessage"]:last-child {
+    [data-testid="stChatMessage"]:last-child {{
         margin-bottom: 2rem !important;
-    }
+    }}
 
     /* 4. 사이드바 확장 버튼 가시성 확보 */
     [data-testid="stSidebarCollapseButton"] {{
@@ -291,25 +291,25 @@ def inject_custom_css(is_expanded: bool = False):
     }}
 
     /* 11. 채팅 메시지 내부 수직 유격 압축 */
-    [data-testid="stChatMessage"] div[data-testid="stVerticalBlock"] {
+    [data-testid="stChatMessage"] div[data-testid="stVerticalBlock"] {{
         gap: 0px !important; /* [수정] 내부 블록 간격 완벽 제거 */
-    }
+    }}
 
     /* 12. Mobile Responsiveness */
-    @media (max-width: 768px) {
-        .stApp, .block-container {
+    @media (max-width: 768px) {{
+        .stApp, .block-container {{
             height: auto !important;
             overflow: visible !important;
-        }
-        [data-testid="stColumn"] {
+        }}
+        [data-testid="stColumn"] {{
             height: auto !important;
             overflow: visible !important;
-        }
-        [data-testid="stChatInputContainer"] {
+        }}
+        [data-testid="stChatInputContainer"] {{
             left: 0 !important;
             width: 100% !important;
-        }
-    }
+        }}
+    }}
     </style>
     """,
         unsafe_allow_html=True,
