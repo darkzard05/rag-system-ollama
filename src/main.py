@@ -1,3 +1,4 @@
+# src/main.py
 # Streamlit 기반 RAG 챗봇의 메인 진입점 및 전체 오케스트레이션을 담당하는 파일
 """
 RAG Chatbot 애플리케이션의 메인 진입점 파일입니다.
@@ -73,7 +74,6 @@ def _check_windows_integrity():
 
         if "torch" not in sys.modules:
             import torch
-
             _ = torch.tensor([1.0])
 
         with contextlib.suppress(ValueError, RuntimeError):
@@ -109,7 +109,6 @@ def _start_global_background_worker():
 def _get_available_models_cached():
     """Ollama 모델 목록을 캐싱하여 UI 블로킹을 최소화합니다."""
     from core.model_loader import get_available_models
-
     return get_available_models()
 
 
@@ -284,6 +283,13 @@ def on_embedding_change() -> None:
 def _render_app_layout(available_models: list[str] | None = None) -> None:
     from core.session import SessionManager
     from ui.components.sidebar import render_settings_content
+    from streamlit_js_eval import streamlit_js_eval
+
+    # Get browser height dynamically
+    viewport_height = streamlit_js_eval(js_expressions="window.innerHeight", key="viewport_height")
+    # Calculate target height (header/padding offset: ~150px)
+    # Default to 800 if not yet detected
+    target_height = (viewport_height - 150) if viewport_height else 800
 
     with st.sidebar:
         render_settings_content(
@@ -297,13 +303,13 @@ def _render_app_layout(available_models: list[str] | None = None) -> None:
 
     col_pdf, col_chat = st.columns([1, 1], gap="medium")
     with col_pdf:
-        from ui.components.viewer import render_pdf_column
-
-        render_pdf_column()
+        with st.container(height=target_height, border=False):
+            from ui.components.viewer import render_pdf_column
+            render_pdf_column()
     with col_chat:
-        from ui.ui import render_left_column
-
-        render_left_column()
+        with st.container(height=target_height, border=False):
+            from ui.ui import render_left_column
+            render_left_column()
 
 
 def _handle_pending_tasks() -> None:
