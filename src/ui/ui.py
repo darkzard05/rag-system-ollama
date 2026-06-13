@@ -244,17 +244,18 @@ def inject_custom_css(is_expanded: bool = False):
 
     /* 12. Mobile Responsiveness */
     @media (max-width: 768px) {{
-        .stApp, .block-container {{
+        .stApp, [data-testid="stAppViewContainer"] {{
             height: auto !important;
             overflow: visible !important;
         }}
-        [data-testid="stColumn"] {{
+        /* Revert containers to auto height on mobile */
+        [data-testid="stVerticalBlockBorderWrapper"] > div {{
             height: auto !important;
-            overflow: visible !important;
         }}
         [data-testid="stChatInputContainer"] {{
             left: 0 !important;
             width: 100% !important;
+            position: fixed !important;
         }}
     }}
     </style>
