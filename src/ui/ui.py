@@ -291,9 +291,25 @@ def inject_custom_css(is_expanded: bool = False):
     }}
 
     /* 11. 채팅 메시지 내부 수직 유격 압축 */
-    [data-testid="stChatMessage"] div[data-testid="stVerticalBlock"] {{
+    [data-testid="stChatMessage"] div[data-testid="stVerticalBlock"] {
         gap: 0px !important; /* [수정] 내부 블록 간격 완벽 제거 */
-    }}
+    }
+
+    /* 12. Mobile Responsiveness */
+    @media (max-width: 768px) {
+        .stApp, .block-container {
+            height: auto !important;
+            overflow: visible !important;
+        }
+        [data-testid="stColumn"] {
+            height: auto !important;
+            overflow: visible !important;
+        }
+        [data-testid="stChatInputContainer"] {
+            left: 0 !important;
+            width: 100% !important;
+        }
+    }
     </style>
     """,
         unsafe_allow_html=True,
