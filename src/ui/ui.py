@@ -1,6 +1,7 @@
+# src/ui/ui.py
 """
 Streamlit UI 컴포넌트들을 조립하여 전체 레이아웃을 구성하는 메인 UI 파일.
-(스타일 최적화, 이중 스크롤 방지 및 접근성 준수 버전)
+(하이브리드 레이아웃 전략: Flexbox 기반 가변 높이 및 반응형 칩 레이아웃 적용)
 """
 
 from __future__ import annotations
@@ -14,42 +15,84 @@ def inject_custom_css(is_expanded: bool = False):
     st.markdown(
         f"""
     <style>
-    /* is_expanded: {is_expanded} */
-    /* 전체 화면 스크롤 차단 및 높이 고정 */
-    .stApp {{
-        height: 100dvh;
-        overflow: hidden;
-    }}
-    /* 메인 컨테이너 패딩 최적화: 헤더 공간 확보 및 하단 여백 제거 */
-    .block-container {{
-        padding-top: 3.5rem !important;
-        padding-bottom: 0px !important;
-        padding-left: 1rem !important;
-        padding-right: 1rem !important;
-        height: 100%;
+    /* 1. Viewport Locking */
+    .stApp {
+        height: 100vh !important;
+        overflow: hidden !important;
+    }
+
+    .block-container {
+        padding-top: 3rem !important;
+        padding-bottom: 0rem !important;
+        padding-left: 1.5rem !important;
+        padding-right: 1.5rem !important;
+        max-width: 100% !important;
+        height: 100vh !important;
         display: flex;
         flex-direction: column;
-    }}
+    }
 
-    /* Streamlit 고정 높이 컨테이너를 뷰포트 기반 반응형으로 변환 */
-    /* .block-container 내부에 위치한 스크롤 컨테이너만 타겟팅하여 사이드바 등 타 요소 보호 */
-    .block-container [data-testid="stVerticalBlockBorderWrapper"] {{
-        height: calc(100dvh - 11rem) !important;
-        min-height: 200px !important;
-        border: none !important;
-    }}
+    /* 2. Flex Chain - Intermediate containers */
+    /* Streamlit structure: .block-container > div > [data-testid="stVerticalBlock"] > [data-testid="stHorizontalBlock"] */
+    .block-container > div {
+        display: flex;
+        flex-direction: column;
+        flex-grow: 1;
+        min-height: 0;
+    }
 
-    /* 채팅창 내부 메시지 영역 스크롤바 디자인 */
-    .block-container [data-testid="stVerticalBlockBorderWrapper"] > div {{
+    [data-testid="stVerticalBlock"] {
+        display: flex;
+        flex-direction: column;
+        flex-grow: 1;
+        min-height: 0;
+    }
+
+    [data-testid="stHorizontalBlock"] {
+        display: flex;
+        flex-grow: 1;
+        min-height: 0;
+    }
+
+    /* 3. Independent Columns */
+    [data-testid="stColumn"] {
+        height: 100% !important; 
         overflow-y: auto !important;
+        overflow-x: hidden !important;
+        padding-right: 5px;
+        scroll-behavior: smooth;
+        display: flex;
+        flex-direction: column;
+    }
+
+    /* 스크롤바 스타일링 */
+    [data-testid="stColumn"]::-webkit-scrollbar {{
+        width: 6px;
+    }}
+    [data-testid="stColumn"]::-webkit-scrollbar-track {{
+        background: transparent;
+    }}
+    [data-testid="stColumn"]::-webkit-scrollbar-thumb {{
+        background-color: color-mix(in srgb, var(--text-color) 20%, transparent);
+        border-radius: 10px;
+    }}
+    [data-testid="stColumn"]::-webkit-scrollbar-thumb:hover {{
+        background-color: color-mix(in srgb, var(--text-color) 40%, transparent);
     }}
 
-    /* PDF 뷰어 전용 보정 (네비게이션이 하단으로 이동함에 따라 상단 높이 확보) */
-    .block-container [data-testid="stColumn"]:first-of-type [data-testid="stVerticalBlockBorderWrapper"] {{
-        height: calc(100dvh - 12rem) !important;
+    /* 3. 채팅 입력창 하단 고정 및 보호 */
+    [data-testid="stChatInputContainer"] {{
+        padding-bottom: 1.5rem !important;
+        padding-top: 0.5rem !important;
+        background-color: var(--background-color) !important;
+        z-index: 100;
     }}
 
-    /* 1. 사이드바 확장 버튼 가시성 강제 확보 (Invisible 이슈 해결) */
+    [data-testid="stChatMessage"]:last-child {{
+        margin-bottom: 2rem !important;
+    }}
+
+    /* 4. 사이드바 확장 버튼 가시성 확보 */
     [data-testid="stSidebarCollapseButton"] {{
         z-index: 100000 !important;
         visibility: visible !important;
@@ -59,7 +102,7 @@ def inject_custom_css(is_expanded: bool = False):
         border-radius: 50% !important;
     }}
 
-    /* 2. 상단 헤더 복구 및 Glassmorphism 적용 (Transparent 이슈 해결) */
+    /* 5. 상단 헤더 Glassmorphism */
     header[data-testid="stHeader"] {{
         background: color-mix(in srgb, var(--background-color), transparent 30%) !important;
         backdrop-filter: blur(12px) !important;
@@ -67,43 +110,36 @@ def inject_custom_css(is_expanded: bool = False):
         border-bottom: 1px solid color-mix(in srgb, var(--faded-text-color), transparent 80%) !important;
         box-shadow: 0 2px 15px rgba(0,0,0,0.05) !important;
         z-index: 99999 !important;
-        display: flex !important; /* display: none 제거 효과 */
+        display: flex !important;
         visibility: visible !important;
     }}
 
-    /* 3. 불필요한 배포 버튼 등은 숨김 유지 (선택적) */
     .stAppDeployButton {{
         display: none !important;
     }}
 
-    /* 4. 레이아웃 보정: 헤더와 본문 겹침 방지 - 제거 (상단에서 통합 관리) */
-
-    /* 5. 사고 과정(Thought Process) 컴포넌트 모던 UI */
+    /* 6. 사고 과정(Thought Process) UI - Layout Shift 방지 및 여백 압축 */
     details.thought-expander {{
         background-color: var(--secondary-background-color);
-        border: 1px solid var(--faded-text-color);
+        border: 1px solid color-mix(in srgb, var(--faded-text-color) 30%, transparent);
         border-radius: 8px;
-        margin: 8px 0 16px 0;
+        /* [수정] 아래쪽 마진을 16px에서 6px로 대폭 줄여 텍스트와의 간격 압축 */
+        margin: 0px 0 6px 0;
         padding: 8px 12px;
         transition: all 0.2s ease-in-out;
     }}
-    details.thought-expander:hover {{
-        border-color: var(--primary-color);
-    }}
     details.thought-expander summary {{
         cursor: pointer;
-        font-size: 0.9em;
+        font-size: 0.85em;
         font-weight: 600;
         color: var(--text-color);
-        opacity: 0.8;
+        opacity: 0.7;
         outline: none;
         list-style: none;
         display: flex;
         align-items: center;
         gap: 8px;
-    }}
-    details.thought-expander summary::-webkit-details-marker {{
-        display: none;
+        user-select: none;
     }}
     details.thought-expander summary::before {{
         content: "▶";
@@ -114,21 +150,21 @@ def inject_custom_css(is_expanded: bool = False):
         transform: rotate(90deg);
     }}
     .thought-container {{
-        border-left: 3px solid var(--primary-color);
+        border-left: 3px solid color-mix(in srgb, var(--primary-color) 70%, transparent);
         padding: 10px 15px;
-        margin-top: 12px;
+        margin-top: 8px; /* [수정] 내부 마진 축소 */
         font-size: 0.85em;
         color: var(--text-color);
         opacity: 0.85;
         font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
         white-space: pre-wrap;
-        max-height: 300px;
+        max-height: 300px; 
         overflow-y: auto;
         background-color: color-mix(in srgb, var(--background-color) 50%, transparent);
         border-radius: 0 4px 4px 0;
     }}
 
-    /* 6. 인용 가독성 효과 및 모바일 터치 피드백 개선 */
+    /* 7. 인용 가독성 및 툴팁 */
     .citation-highlight {{
         background-color: color-mix(in srgb, var(--primary-color) 15%, transparent);
         border-bottom: 2px dashed var(--primary-color);
@@ -139,19 +175,37 @@ def inject_custom_css(is_expanded: bool = False):
         cursor: help;
         transition: background-color 0.2s, transform 0.1s;
         display: inline-block;
+        position: relative;
     }}
-    .citation-highlight:hover {{
-        background-color: color-mix(in srgb, var(--primary-color) 30%, transparent);
-    }}
-    .citation-highlight:active {{
-        background-color: color-mix(in srgb, var(--primary-color) 50%, transparent);
-        transform: scale(0.98);
+    .citation-highlight:active::after {{
+        content: attr(title);
+        position: absolute;
+        bottom: 100%;
+        left: 50%;
+        transform: translateX(-50%);
+        background-color: var(--text-color);
+        color: var(--background-color);
+        padding: 8px 12px;
+        border-radius: 6px;
+        font-size: 0.85em;
+        font-weight: normal;
+        white-space: pre-wrap;
+        width: max-content;
+        max-width: 250px;
+        z-index: 1000;
+        box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+        pointer-events: none;
     }}
 
-    /* 7. 스트리밍 대기 애니메이션 (Pulse) */
+    /* 8. 스트리밍 애니메이션 (빌드 상태 표시에도 공용 사용) */
     .streaming-pulse {{
         animation: pulse 1.5s infinite ease-in-out;
         min-height: 24px;
+        font-size: 0.9em;
+        color: var(--primary-color);
+        font-weight: 500;
+        /* [수정] 마진 축소 */
+        margin-bottom: 4px;
     }}
     @keyframes pulse {{
         0% {{ opacity: 0.4; }}
@@ -159,41 +213,76 @@ def inject_custom_css(is_expanded: bool = False):
         100% {{ opacity: 0.4; }}
     }}
 
-    /* 8. 성능 지표(Performance Metrics) 커스텀 테이블 스타일 */
-    .perf-table {{
-        width: 100%;
-        border-collapse: collapse;
-        font-size: 13px;
-        margin-top: 5px;
-        font-family: inherit;
+    /* 9. 성능 지표 HUD - 컴팩트 디자인 */
+    .perf-details {{
+        margin-top: 2px !important;
+        padding-top: 0px !important;
     }}
-    .perf-row {{
-        border-bottom: 1px solid color-mix(in srgb, var(--faded-text-color), transparent 90%);
+    .perf-grid {{
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(100px, 1fr));
+        gap: 8px;
+        margin-top: 8px;
     }}
-    .perf-row:last-child {{
-        border-bottom: none;
+    .perf-card {{
+        background-color: var(--secondary-background-color);
+        border: 1px solid color-mix(in srgb, var(--faded-text-color) 15%, transparent);
+        border-radius: 6px;
+        padding: 6px 8px;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        text-align: center;
     }}
-    .perf-label {{
+    .perf-card-title {{
+        font-size: 10px;
         color: var(--faded-text-color);
-        padding: 8px 0;
-        width: 40%;
-        text-align: left;
-    }}
-    .perf-value {{
-        font-weight: 600;
-        text-align: right;
-        padding: 8px 12px;
-        color: var(--text-color);
-    }}
-    .perf-status {{
-        width: 35%;
-        text-align: right;
-        font-size: 11px;
+        margin-bottom: 2px;
         font-weight: 500;
     }}
-    .status-excellent {{ color: #2ecc71 !important; }}
-    .status-stable {{ color: var(--primary-color) !important; }}
-    .status-poor {{ color: #e74c3c !important; }}
+    .perf-card-value {{
+        font-size: 13px;
+        font-weight: 700;
+        color: var(--text-color);
+    }}
+    .perf-card-desc {{
+        font-size: 9px;
+        color: var(--faded-text-color);
+        margin-top: 1px;
+    }}
+    
+    /* 10. 참조 페이지 버튼 반응형 랩핑 시스템 */
+    [data-testid="stHorizontalBlock"] {{
+        flex-wrap: wrap !important;
+        gap: 8px !important;
+    }}
+    div[data-testid="column"] {{
+        min-width: 60px !important;
+        flex: 0 1 auto !important;
+        margin: 0 !important;
+    }}
+    div[data-testid="column"] button {{
+        border-radius: 20px !important;
+        padding: 4px 12px !important;
+        font-size: 12px !important;
+        font-weight: 600 !important;
+        background-color: var(--secondary-background-color) !important;
+        color: var(--text-color) !important;
+        border: 1px solid color-mix(in srgb, var(--faded-text-color) 20%, transparent) !important;
+        transition: all 0.2s ease !important;
+        width: 100% !important;
+    }}
+    div[data-testid="column"] button:hover {{
+        border-color: var(--primary-color) !important;
+        color: var(--primary-color) !important;
+        background-color: color-mix(in srgb, var(--primary-color) 10%, transparent) !important;
+    }}
+
+    /* 11. 채팅 메시지 내부 수직 유격 압축 */
+    [data-testid="stChatMessage"] div[data-testid="stVerticalBlock"] {{
+        gap: 0px !important; /* [수정] 내부 블록 간격 완벽 제거 */
+    }}
     </style>
     """,
         unsafe_allow_html=True,
@@ -215,7 +304,6 @@ def inject_sidebar_closer():
                 collapseButton.click();
             }
         };
-        // 실행 지연을 주어 Streamlit 렌더링 후 동작하도록 함
         setTimeout(collapseSidebar, 500);
     </script>
     """
