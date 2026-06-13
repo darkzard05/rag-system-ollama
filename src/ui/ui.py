@@ -15,92 +15,39 @@ def inject_custom_css(is_expanded: bool = False):
     st.markdown(
         f"""
     <style>
-    /* 1. Viewport Locking */
-    .stApp {{
+    /* 1. Global Viewport Lock */
+    .stApp, [data-testid="stAppViewContainer"] {{
         height: 100vh !important;
         overflow: hidden !important;
     }}
 
+    /* Remove default Streamlit padding that causes shifts */
     .block-container {{
-        padding-top: 3rem !important;
+        padding-top: 3.5rem !important;
         padding-bottom: 0rem !important;
-        padding-left: 1.5rem !important;
-        padding-right: 1.5rem !important;
         max-width: 100% !important;
-        height: 100vh !important;
-        display: flex;
-        flex-direction: column;
     }}
 
-    /* 2. Flex Chain - Intermediate containers */
-    /* Streamlit structure: .block-container > div > [data-testid="stVerticalBlock"] > [data-testid="stHorizontalBlock"] */
-    .block-container > div {{
-        display: flex;
-        flex-direction: column;
-        flex-grow: 1;
-        min-height: 0;
-    }}
-
-    [data-testid="stVerticalBlock"] {{
-        display: flex;
-        flex-direction: column;
-        flex-grow: 1;
-        min-height: 0;
-    }}
-
-    [data-testid="stHorizontalBlock"] {{
-        display: flex;
-        flex-grow: 1;
-        min-height: 0;
-    }}
-
-    /* 3. Independent Columns */
-    [data-testid="stColumn"] {{
-        height: 100% !important; 
-        overflow-y: auto !important;
-        overflow-x: hidden !important;
-        padding-right: 5px;
-        scroll-behavior: smooth;
-        display: flex;
-        flex-direction: column;
-    }}
-
-    /* 스크롤바 스타일링 */
-    [data-testid="stColumn"]::-webkit-scrollbar {{
-        width: 6px;
-    }}
-    [data-testid="stColumn"]::-webkit-scrollbar-track {{
-        background: transparent;
-    }}
-    [data-testid="stColumn"]::-webkit-scrollbar-thumb {{
-        background-color: color-mix(in srgb, var(--text-color) 20%, transparent);
-        border-radius: 10px;
-    }}
-    [data-testid="stColumn"]::-webkit-scrollbar-thumb:hover {{
-        background-color: color-mix(in srgb, var(--text-color) 40%, transparent);
-    }}
-
-    /* 4. Scoped Chat Input */
+    /* 2. Scoped Chat Input */
     [data-testid="stChatInputContainer"] {{
         position: fixed !important;
         bottom: 0 !important;
         right: 0 !important;
-        left: 50% !important; /* Start from middle */
-        width: 50% !important; /* Take right half */
-        padding-bottom: 1.5rem !important;
-        padding-top: 0.5rem !important;
+        left: 50% !important;
+        width: 50% !important;
+        z-index: 1000;
         background-color: var(--background-color) !important;
-        z-index: 100;
         border-top: 1px solid color-mix(in srgb, var(--faded-text-color) 10%, transparent);
     }}
 
-    /* Ensure column has enough bottom space so messages aren't hidden by the input */
-    [data-testid="stColumn"]:last-child > div {{
-        padding-bottom: 120px !important;
+    /* 3. Hide all other scrollbars except our containers */
+    [data-testid="stMain"], [data-testid="stVerticalBlock"] {{
+        overflow: hidden !important;
     }}
-
-    [data-testid="stChatMessage"]:last-child {{
-        margin-bottom: 2rem !important;
+    
+    /* Ensure the column itself doesn't scroll, only our internal container */
+    [data-testid="stColumn"] {{
+        overflow: hidden !important;
     }}
 
     /* 4. 사이드바 확장 버튼 가시성 확보 */
