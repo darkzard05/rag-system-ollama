@@ -10,6 +10,7 @@ import gc
 import logging
 import threading
 from collections import OrderedDict
+from collections.abc import Callable
 from typing import Any
 
 import torch
@@ -26,7 +27,8 @@ class ResourcePool:
     _instance: "ResourcePool | None" = None
     _creation_lock = threading.Lock()
     _pool: OrderedDict[str, tuple[Any, Any]]
-    _local = threading.local()
+    _lock = threading.Lock()
+    _build_locks: dict[str, asyncio.Lock] = {}  # 파일별 빌드 락
     max_size: int
 
     def __new__(cls, *args, **kwargs):
@@ -39,22 +41,20 @@ class ResourcePool:
                 cls._instance.max_size = kwargs["max_size"]
             return cls._instance
 
-    @property
-    def _lock(self) -> asyncio.Lock:
-        """
-        현재 스레드에 한정된 asyncio.Lock을 반환하여 다중 스레드 환경에서의 안전성을 보장합니다.
-        각 스레드는 자신만의 이벤트 루프와 잠금 객체를 갖게 됩니다.
-        """
-        if not hasattr(self._local, "lock"):
-            self._local.lock = asyncio.Lock()
-        return self._local.lock
-
     async def register(self, file_hash: str, vector_store: Any, bm25_retriever: Any):
         """리소스 등록 (LRU 정책 적용)"""
         if not file_hash:
             return
 
-        async with self._lock:
+        # [추가] 리소스 등록 전 VRAM 상태 체크 (순환 참조 방지를 위해 로컬 임포트)
+        try:
+            from core.model_loader import ModelManager
+
+            await ModelManager._check_memory_pressure()
+        except Exception:
+            pass
+
+        with self._lock:
             # 1. 기존 리소스 갱신
             if file_hash in self._pool:
                 self._pool.move_to_end(file_hash)
@@ -82,7 +82,7 @@ class ResourcePool:
         """특정 리소스를 즉시 제거합니다."""
         if not file_hash:
             return
-        async with self._lock:
+        with self._lock:
             if file_hash in self._pool:
                 old_vs, old_bm = self._pool.pop(file_hash)
                 del old_vs
@@ -94,11 +94,43 @@ class ResourcePool:
         """리소스 조회 및 순서 갱신"""
         if not file_hash:
             return None, None
-        async with self._lock:
+        with self._lock:
             if file_hash in self._pool:
                 self._pool.move_to_end(file_hash)
                 return self._pool[file_hash]
             return None, None
+
+    async def get_or_build(
+        self, file_hash: str, build_fn: Callable, *build_args, **build_kwargs
+    ) -> tuple[Any, Any]:
+        """리소스 획득 또는 원자적 빌드 (중복 빌드 방지).
+
+        여러 요청이 동시에 같은 파일에 접근할 때, 첫 요청만 빌드하고
+        나머지는 완료를 기다렸다가 같은 리소스를 사용합니다.
+        """
+        if not file_hash:
+            raise ValueError("file_hash가 필요합니다")
+
+        # 파일별 빌드 락 확보 (다중 요청 직렬화)
+        if file_hash not in self._build_locks:
+            self._build_locks[file_hash] = asyncio.Lock()
+
+        async with self._build_locks[file_hash]:
+            # 다시 확인: 다른 요청이 이미 빌드했을 수 있음 (Double-Check)
+            vector_store, bm25 = await self.get(file_hash)
+            if vector_store and bm25:
+                logger.info(f"[ResourcePool] 리소스 이미 존재 (Hash: {file_hash[:8]})")
+                return vector_store, bm25
+
+            # 여전히 없으면 빌드
+            logger.info(f"[ResourcePool] 리소스 구축 시작 (Hash: {file_hash[:8]})")
+            vs, bm = await build_fn(*build_args, **build_kwargs)
+
+            # 빌드 완료 후 풀에 등록
+            await self.register(file_hash, vs, bm)
+
+            logger.info(f"[ResourcePool] 리소스 구축 완료 (Hash: {file_hash[:8]})")
+            return vs, bm
 
     def _cleanup_memory(self):
         """가비지 컬렉션 및 VRAM 정리를 수행합니다."""
@@ -115,7 +147,7 @@ class ResourcePool:
 
     async def clear(self):
         """모든 리소스 해제"""
-        async with self._lock:
+        with self._lock:
             self._pool.clear()
             self._cleanup_memory()
 

@@ -5,8 +5,6 @@ UI 스레드와 비동기 스레드 간의 완벽한 데이터 공유를 위해
 전역 폴백 저장소를 주 데이터원으로 사용합니다.
 """
 
-import builtins
-import contextlib
 import logging
 import os
 import threading
@@ -83,18 +81,17 @@ class SessionManager:
         if sid and sid != "default":
             return sid
 
-        # [추가] Streamlit 컨텍스트 확인 강화
-        try:
-            if cls._is_streamlit_running():
+        # Streamlit 컨텍스트 확인 (최소화하여 오버헤드 감소)
+        if cls._is_streamlit_running():
+            try:
                 from streamlit.runtime.scriptrunner import get_script_run_ctx
 
                 ctx = get_script_run_ctx()
-                if ctx:
-                    # 복구된 ID를 ContextVar에 다시 고정 (전파 준비)
+                if ctx and ctx.session_id:
                     _session_id_var.set(ctx.session_id)
                     return ctx.session_id
-        except Exception:
-            pass
+            except Exception:
+                pass
 
         return sid or "default"
 
@@ -103,9 +100,6 @@ class SessionManager:
         if not session_id:
             return
         _session_id_var.set(session_id)
-        # [추가] 로깅 (디버그용)
-        if session_id != "default":
-            logger.debug(f"[SESSION] 컨텍스트 세션 ID 설정: {session_id}")
 
     @classmethod
     def _get_state(cls, session_id: str | None = None) -> dict[str, Any]:
@@ -114,14 +108,12 @@ class SessionManager:
 
         with cls._global_lock:
             if sid not in cls._fallback_sessions:
-                # [수정] 딥카피 대신 복사 후 명시적 초기화로 성능과 안전성 확보
                 new_state = cls.DEFAULT_SESSION_STATE.copy()
                 new_state["messages"] = []
                 new_state["status_logs"] = []
                 new_state["last_accessed"] = time.time()
                 cls._fallback_sessions[sid] = new_state
-                with contextlib.suppress(ValueError, RuntimeError):
-                    logger.info(f"[SESSION] 신규 세션 저장소 생성: {sid}")
+                logger.debug(f"[SESSION] 신규 세션 저장소 생성: {sid}")
 
             state = cls._fallback_sessions[sid]
             state["last_accessed"] = time.time()
@@ -129,37 +121,55 @@ class SessionManager:
 
     @classmethod
     def init_session(cls, session_id: str | None = None):
-        """세션을 초기화하고 필요한 경우 st.session_state를 업데이트합니다."""
+        """세션을 초기화합니다. Streamlit 동기화는 sync_to_streamlit에서 수행합니다."""
         if session_id:
             cls.set_session_id(session_id)
 
         sid = session_id or cls.get_session_id()
         state = cls._get_state(sid)
+        logger.debug(f"[SESSION] 세션 초기화 완료: {sid}")
 
-        # UI 스레드 동기화 (최소한의 필요한 값만)
-        if cls._is_streamlit_running():
-            try:
-                # [수정] 락을 획득한 상태에서 st.session_state 업데이트 (경합 방지)
-                with cls._acquire_lock(sid):
-                    for k in [
-                        "pdf_processed",
-                        "pdf_file_path",
-                        "is_generating_answer",
-                        "new_file_uploaded",
-                        "last_selected_model",
-                        "last_selected_embedding_model",
-                    ]:
-                        if k in state and k not in st.session_state:
-                            st.session_state[k] = state[k]
-                        elif (
-                            k in state
-                            and state[k] is not None
-                            and st.session_state.get(k) != state[k]
-                        ):
-                            # 이미 존재하더라도 상태가 다르면 동기화
-                            st.session_state[k] = state[k]
-            except Exception as e:
-                logger.warning(f"UI 세션 동기화 중 경미한 오류: {e}")
+    @classmethod
+    def sync_to_streamlit(cls, session_id: str | None = None):
+        """Streamlit UI 컨텍스트에서 세션 상태를 동기화합니다.
+
+        이 메서드는 UI 렌더링 단계에서만 호출되어야 하며,
+        백그라운드 스레드에서 호출되면 무시됩니다.
+        """
+        if not cls._is_streamlit_running():
+            return
+
+        try:
+            from streamlit.runtime.scriptrunner import get_script_run_ctx
+
+            if not get_script_run_ctx():
+                return
+        except Exception:
+            return
+
+        sid = session_id or cls.get_session_id()
+        state = cls._get_state(sid)
+
+        # UI 스레드에서만 st.session_state 업데이트
+        sync_keys = [
+            "pdf_processed",
+            "pdf_file_path",
+            "is_generating_answer",
+            "new_file_uploaded",
+            "last_selected_model",
+            "last_selected_embedding_model",
+            "status_logs",
+            "messages",
+            "current_page",
+        ]
+
+        try:
+            for k in sync_keys:
+                if k in state:
+                    if k not in st.session_state or st.session_state.get(k) != state[k]:
+                        st.session_state[k] = state[k]
+        except Exception as e:
+            logger.warning(f"[SESSION] Streamlit 동기화 중 오류: {e}")
 
     @classmethod
     def get(
@@ -169,25 +179,27 @@ class SessionManager:
         session_id: str | None = None,
         create: bool = True,
     ) -> Any:
-        """세션 상태에서 값을 가져옵니다. create=False이면 세션이 없을 때 새로 생성하지 않습니다."""
-        # 1. 먼저 폴백 저장소 확인
+        """세션 상태에서 값을 가져옵니다."""
         if not create:
             sid = session_id or cls.get_session_id()
-            if sid not in cls._fallback_sessions:
-                return default
-            state = cls._fallback_sessions[sid]
+            with cls._global_lock:
+                if sid not in cls._fallback_sessions:
+                    return default
+                state = cls._fallback_sessions[sid]
         else:
             state = cls._get_state(session_id)
 
         if key in state:
             return state[key]
 
-        # 2. UI 스레드라면 st.session_state 확인
         if cls._is_streamlit_running():
             try:
-                return st.session_state.get(key, default)
+                from streamlit.runtime.scriptrunner import get_script_run_ctx
+
+                if get_script_run_ctx():
+                    return st.session_state.get(key, default)
             except Exception:
-                return default
+                pass
         return default
 
     @classmethod
@@ -198,10 +210,10 @@ class SessionManager:
         session_id: str | None = None,
         **kwargs,
     ):
-        """
-        단일 또는 다중 세션 데이터를 업데이트합니다.
-        [수정] 백그라운드 스레드에서 st.session_state 접근 시 발생하는 오류를 방지하기 위해
-        현재 스레드가 메인 UI 스레드인지(또는 Streamlit 컨텍스트가 있는지) 확인 후 조건부 실행합니다.
+        """단일 또는 다중 세션 데이터를 업데이트합니다.
+
+        Streamlit st.session_state는 직접 접근하지 않습니다.
+        대신 sync_to_streamlit()을 UI 단계에서 호출하여 동기화합니다.
         """
         sid = session_id or cls.get_session_id()
         state = cls._get_state(sid)
@@ -210,37 +222,20 @@ class SessionManager:
         if key is not None:
             updates[key] = value
 
-        with cls._global_lock:
+        with cls._acquire_lock(sid):
             for k, v in updates.items():
                 state[k] = v
-
-        # [핵심 개선] UI 스레드이며, 현재 실행 중인 ScriptRunner 컨텍스트가 있을 때만 st.session_state에 직접 반영
-        if cls._is_streamlit_running():
-            try:
-                from streamlit.runtime.scriptrunner import get_script_run_ctx
-
-                if get_script_run_ctx():
-                    for k, v in updates.items():
-                        st.session_state[k] = v
-            except Exception:
-                # 백그라운드 스레드 등에서 컨텍스트 없이 접근 시 무시 (폴백 저장소에는 이미 저장됨)
-                pass
 
     @classmethod
     def delete(cls, key: str, session_id: str | None = None):
         """세션 상태에서 특정 키를 삭제합니다."""
         sid = session_id or cls.get_session_id()
-        state = cls._get_state(sid)
 
-        with cls._global_lock:
-            if key in state:
-                del state[key]
-
-        # UI 스레드라면 즉시 반영
-        if cls._is_streamlit_running():
-            with contextlib.suppress(Exception):
-                if key in st.session_state:
-                    del st.session_state[key]
+        with cls._acquire_lock(sid):
+            if sid in cls._fallback_sessions:
+                state = cls._fallback_sessions[sid]
+                if key in state:
+                    del state[key]
 
     @classmethod
     def get_messages(cls, session_id: str | None = None) -> list[dict[str, Any]]:
@@ -266,33 +261,23 @@ class SessionManager:
             "timestamp": time.time(),
             **kwargs,
         }
-        with cls._global_lock:
+        with cls._acquire_lock(session_id or cls.get_session_id()):
             current = list(state.get("messages", []))
             current.append(msg)
             state["messages"] = current[-MAX_MESSAGE_HISTORY:]
-        if cls._is_streamlit_running():
-            with contextlib.suppress(builtins.BaseException):
-                st.session_state["messages"] = state["messages"]
 
     @classmethod
     def add_status_log(
         cls, msg: str, session_id: str | None = None, add_to_chat: bool = True
     ):
-        """
-        시스템 상태 로그를 기록합니다.
-        add_to_chat=False 설정 시 상단 상태 바 업데이트용으로만 사용되고 채팅창에는 남지 않습니다.
-        """
+        """시스템 상태 로그를 기록합니다."""
         state = cls._get_state(session_id)
-        with cls._global_lock:
+        with cls._acquire_lock(session_id or cls.get_session_id()):
             current = list(state.get("status_logs", []))
             if current and current[-1] == msg:
                 return
             current.append(msg)
             state["status_logs"] = current[-30:]
-
-        if cls._is_streamlit_running():
-            with contextlib.suppress(builtins.BaseException):
-                st.session_state["status_logs"] = state["status_logs"]
 
         if add_to_chat:
             cls.add_message("system", msg, msg_type="log", session_id=session_id)
@@ -300,7 +285,8 @@ class SessionManager:
     @classmethod
     def replace_last_status_log(cls, msg: str, session_id: str | None = None):
         state = cls._get_state(session_id)
-        with cls._global_lock:
+        sid = session_id or cls.get_session_id()
+        with cls._acquire_lock(sid):
             logs = list(state.get("status_logs", []))
             if logs:
                 logs[-1] = msg
@@ -311,17 +297,11 @@ class SessionManager:
                     msgs[i]["content"] = msg
                     break
             state["messages"] = msgs
-        if cls._is_streamlit_running():
-            with contextlib.suppress(Exception):
-                st.session_state["status_logs"] = state["status_logs"]
-                st.session_state["messages"] = state["messages"]
 
     @classmethod
     def reset_all_state(cls, session_id: str | None = None):
         sid = session_id or cls.get_session_id()
-        with cls._global_lock:
-            if sid in cls._fallback_sessions:
-                del cls._fallback_sessions[sid]
+        cls.delete_session(sid)
         cls.init_session(sid)
 
     @classmethod
@@ -364,24 +344,40 @@ class SessionManager:
 
     @classmethod
     def delete_session(cls, session_id: str) -> bool:
+        """세션을 삭제하고 무거운 객체의 참조를 명시적으로 해제합니다."""
         with cls._global_lock:
             if session_id in cls._fallback_sessions:
-                # [추가] 물리적 파일 삭제 (리소스 누수 방지)
                 state = cls._fallback_sessions[session_id]
+
+                # 물리적 파일 삭제
                 pdf_path = state.get("pdf_file_path")
                 if pdf_path:
                     cls.safe_remove_file(pdf_path)
 
-                # [수정] 참조 해제를 명시적으로 수행하여 GC 유도
-                for k in list(state.keys()):
-                    state[k] = None
+                # 무거운 객체 명시적 참조 해제 (메모리 누수 방지)
+                heavy_keys = [
+                    "rag_engine",
+                    "llm",
+                    "embedder",
+                    "active_faiss_retriever",
+                    "active_bm25_retriever",
+                ]
+                for k in heavy_keys:
+                    if k in state:
+                        state[k] = None
+
                 del cls._fallback_sessions[session_id]
+
+                if session_id in cls._session_locks:
+                    del cls._session_locks[session_id]
+
+                logger.info(f"[SESSION] 세션 삭제 완료: {session_id}")
                 return True
         return False
 
     @classmethod
     def cleanup_expired_sessions(cls, max_idle_seconds: int = 3600):
-        """만료된 세션을 찾아 제거합니다."""
+        """만료된 세션을 찾아 제거합니다. (강제 gc.collect() 제거)"""
         now = time.time()
         expired_ids = []
 
@@ -397,20 +393,14 @@ class SessionManager:
             )
             for sid in expired_ids:
                 cls.delete_session(sid)
-
-            # [추가] 메모리 정리 강제 수행
-            import gc
-
-            gc.collect()
+            # 강제 gc.collect()는 Stop-the-world를 유발하므로 파이썬 내장 GC에 위임합니다.
 
     @classmethod
     def perform_security_audit(cls):
-        """[Placeholder] 세션 보안 감사 수행"""
         pass
 
     @classmethod
     def get_stats(cls) -> dict[str, Any]:
-        """[Placeholder] 시스템 통계 반환"""
         return {
             "active_sessions": len(cls._fallback_sessions),
             "total_messages": sum(

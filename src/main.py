@@ -55,23 +55,20 @@ def _check_windows_integrity():
     """
     [Background] Windows 환경의 라이브러리 충돌을 체크하고 주기적으로 세션을 정리합니다.
     """
-    # [최적화] 세션 정리 추가 (메모리 누수 방지)
     try:
         from core.session import SessionManager
 
-        # 1시간 이상 활동 없는 세션 정리 (물리적 파일 삭제 포함)
+        # 1시간 이상 활동 없는 세션 정리 (물리적 파일 삭제 및 참조 해제 포함)
         SessionManager.cleanup_expired_sessions(max_idle_seconds=3600)
     except Exception as e:
         logger.error(f"[SYSTEM] [CLEANUP] 세션 정리 중 오류: {e}")
 
-    # [최적화] CI 환경에서는 무거운 라이브러리 체크 생략 (충돌 위험 방지)
     import platform
 
     if platform.system() != "Windows" or os.getenv("GITHUB_ACTIONS") == "true":
         return
 
     try:
-        # 무거운 라이브러리 로드 테스트 (핵심 RAG용)
         import sys
 
         if "torch" not in sys.modules:
@@ -88,19 +85,29 @@ def _check_windows_integrity():
 
 @st.cache_resource
 def _start_global_background_worker():
+    """
+    [Singleton] 서버 인스턴스당 단 하나만 실행되는 백그라운드 워커입니다.
+    세션 정리 및 시스템 무결성 점검을 주기적으로 수행합니다.
+    """
+
     def maintenance_loop():
+        logger.info("[SYSTEM] 전역 백그라운드 워커 시작됨")
         while True:
             with contextlib.suppress(Exception):
                 _check_windows_integrity()
+            # 1시간(3600초) 대기 후 반복
             time.sleep(3600)
 
-    thread = threading.Thread(target=maintenance_loop, daemon=True)
+    thread = threading.Thread(
+        target=maintenance_loop, name="GlobalMaintenanceWorker", daemon=True
+    )
     thread.start()
     return thread
 
 
 @st.cache_data(ttl=300)
 def _get_available_models_cached():
+    """Ollama 모델 목록을 캐싱하여 UI 블로킹을 최소화합니다."""
     from core.model_loader import get_available_models
 
     return get_available_models()
@@ -108,12 +115,15 @@ def _get_available_models_cached():
 
 @safe_cache_resource(show_spinner=False)
 def _init_temp_directory():
+    """임시 디렉토리를 초기화합니다."""
     temp_path = Path(FilePathConstants.TEMP_DIR).absolute()
     temp_path.mkdir(parents=True, exist_ok=True)
+    logger.info(f"[SYSTEM] [INIT] 임시 디렉토리 준비 완료: {temp_path}")
     return str(temp_path)
 
 
 def _cleanup_current_file():
+    """현재 세션에서 사용 중인 임시 파일을 삭제합니다. (종료 핸들러용)"""
     from core.session import SessionManager
 
     try:
@@ -126,10 +136,13 @@ def _cleanup_current_file():
 
 @st.cache_resource
 def _register_cleanup_handlers():
+    """[Singleton] 프로세스 종료 핸들러를 단 한 번만 등록합니다."""
     atexit.register(_cleanup_current_file)
+    logger.info("[SYSTEM] 프로세스 종료 핸들러 등록 완료")
     return True
 
 
+# 앱 시작 시 초기화 수행 (캐싱으로 인해 최초 1회만 작동)
 _init_temp_directory()
 _start_global_background_worker()
 _register_cleanup_handlers()
@@ -138,14 +151,19 @@ _register_cleanup_handlers()
 async def _bg_rebuild_task(
     session_id: str, file_path: str, file_name: str, embedder_name: str
 ):
+    """
+    [Background Task] 업로드된 파일과 선택된 모델을 사용하여 RAG 파이프라인을 비동기로 재구축합니다.
+    """
     from core.model_loader import ModelManager
     from core.rag_core import RAGSystem
     from core.session import SessionManager
 
     SessionManager.set_session_id(session_id)
-    SessionManager.set("rebuild_done", False)
-    SessionManager.set("rebuild_error", None)
-    SessionManager.set("rebuild_status", f"'{file_name}' 분석 중...")
+    SessionManager.set("rebuild_done", False, session_id=session_id)
+    SessionManager.set("rebuild_error", None, session_id=session_id)
+    SessionManager.set(
+        "rebuild_status", f"'{file_name}' 분석 중...", session_id=session_id
+    )
 
     try:
         embedder = await ModelManager.get_embedder(embedder_name)
@@ -155,22 +173,25 @@ async def _bg_rebuild_task(
             file_path=file_path, file_name=file_name, embedder=embedder
         )
 
-        SessionManager.set("pdf_processed", True)
-        SessionManager.add_status_log(f"✅ {success_message}")
-        SessionManager.add_message("system", success_message)
+        SessionManager.set("pdf_processed", True, session_id=session_id)
+        SessionManager.add_status_log(f"✅ {success_message}", session_id=session_id)
+        SessionManager.add_message("system", success_message, session_id=session_id)
     except Exception as e:
         logger.error(f"Background RAG rebuild error: {e}", exc_info=True)
         error_msg = f"문서 처리 중 오류가 발생했습니다: {str(e)}"
-        SessionManager.set("rebuild_error", error_msg)
-        SessionManager.set("pdf_processing_error", error_msg)
-        SessionManager.set("pdf_processed", True)
-        SessionManager.add_message("system", f"❌ {error_msg}")
+        SessionManager.set("rebuild_error", error_msg, session_id=session_id)
+        SessionManager.set("pdf_processing_error", error_msg, session_id=session_id)
+        SessionManager.set("pdf_processed", True, session_id=session_id)
+        SessionManager.add_message("system", f"❌ {error_msg}", session_id=session_id)
     finally:
-        SessionManager.set("rebuild_done", True)
-        SessionManager.set("is_building_rag", False)
+        SessionManager.set("rebuild_done", True, session_id=session_id)
+        SessionManager.set("is_building_rag", False, session_id=session_id)
 
 
 def _update_qa_chain(session_id: str | None = None) -> None:
+    """
+    문서 인덱싱은 유지한 채 LLM(QA Chain)만 교체합니다.
+    """
     from core.session import SessionManager
 
     sid = session_id or SessionManager.get_session_id()
@@ -193,16 +214,14 @@ def on_file_upload() -> None:
     from core.session import SessionManager
     from infra.notification_system import SystemNotifier
 
-    uploaded_file = st.session_state.get("file_uploader")
+    uploaded_file = st.session_state.get("pdf_uploader")
     if uploaded_file is None or not hasattr(uploaded_file, "type"):
         return
 
-    # [개선] 파일 타입 검사 (MIME 타입 확인)
     if uploaded_file.type != "application/pdf":
         st.error("❌ 올바른 PDF 파일이 아닙니다. PDF 형식의 파일을 업로드해주세요.")
         return
 
-    # [개선] 파일 크기 검사
     file_size_mb = uploaded_file.size / (1024 * 1024)
     if file_size_mb > MAX_FILE_SIZE_MB:
         st.error(
@@ -211,7 +230,7 @@ def on_file_upload() -> None:
         return
 
     if uploaded_file.name != SessionManager.get("last_uploaded_file_name"):
-        st.session_state.sidebar_auto_collapsed = False  # Reset flag for new file
+        st.session_state.sidebar_auto_collapsed = False
         SessionManager.set("current_page", 1)
         old_path = SessionManager.get("pdf_file_path")
         if old_path:
@@ -365,6 +384,9 @@ def main() -> None:
     from ui.ui import inject_custom_css
 
     SessionManager.init_session()
+
+    # UI 렌더 단계에서 Streamlit 상태 동기화 (스레드 안전)
+    SessionManager.sync_to_streamlit()
 
     if "available_models_list" not in st.session_state:
         with st.spinner("시스템 초기화 중..."):

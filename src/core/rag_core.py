@@ -5,13 +5,11 @@ RAG 시스템의 통합 엔진 (Core Engine).
 
 from __future__ import annotations
 
-import contextlib
-import gc
+import asyncio
 import logging
 import os
 from typing import Any
 
-import torch
 from langchain_core.documents import Document
 from langchain_core.embeddings import Embeddings
 
@@ -82,95 +80,168 @@ class RAGSystem:
                     )
                     return f"'{file_name}' 캐시 데이터 로드 완료", True
 
-        # 2. 신규 문서 로드
-        docs = load_pdf_docs(
-            file_path, file_name, on_progress=on_progress, session_id=self.session_id
+        # 2. 신규 문서 로드 (Sync)
+        SessionManager.add_status_log(
+            f"'{file_name}' 텍스트 추출 중...", session_id=self.session_id
         )
-        if not docs:
-            raise EmptyPDFError(
-                filename=file_name, details={"reason": "텍스트를 추출할 수 없습니다."}
-            )
+        documents = load_pdf_docs(file_path, file_name, session_id=self.session_id)
+        if not documents:
+            raise EmptyPDFError()
 
-        # 3. 언어 감지
-        sample_text = docs[0].page_content[:1000]
-        lang = (
-            "Korean"
-            if any("\uac00" <= char <= "\ud7a3" for char in sample_text)
-            else "English"
+        # 3. 청크 분할 (Async)
+        SessionManager.add_status_log(
+            "문맥 최적화 및 청크 분할 중...", session_id=self.session_id
         )
-        SessionManager.set("doc_language", lang, session_id=self.session_id)
-        logger.info(f"[RAG] [INDEX] 문서 언어 감지: {lang}")
-
-        # 4. 청킹 및 벡터화
         doc_splits, vectors = await split_documents(
-            docs, embedder, session_id=self.session_id
+            documents, embedder=embedder, session_id=self.session_id
         )
         if not doc_splits:
-            raise InsufficientChunksError(chunk_count=0, min_required=1)
+            raise InsufficientChunksError()
 
-        # 6. 컴포넌트 생성
+        # 4. 벡터 스토어 생성 (Sync)
+        SessionManager.add_status_log(
+            "지식 베이스(Vector Index) 생성 중...", session_id=self.session_id
+        )
         vector_store = create_vector_store(doc_splits, embedder, vectors=vectors)
+
+        # 5. BM25 리트리버 생성 (Sync)
         bm25_retriever = create_bm25_retriever(doc_splits)
 
-        # 7. 캐시 저장
+        # 6. 캐시 저장
         if ENABLE_VECTOR_CACHE:
             cache.save(doc_splits, vector_store, bm25_retriever)
 
-        # 8. 최종 등록
+        # 7. 등록 및 최종화
         await self._register_and_finalize(
             file_hash, vector_store, bm25_retriever, on_progress
         )
 
         duration = time.time() - start_time
         logger.info(
-            f"[RAG] [INDEX] 신규 인덱싱 완료: {len(doc_splits)}개 청크 생성 (소요시간: {duration:.2f}s)"
+            f"[RAG] [INDEX] 파이프라인 구축 완료: {file_name} ({duration:.2f}s)"
         )
-
-        # [복구] 메모리 정리
-        if torch.cuda.is_available():
-            with contextlib.suppress(Exception):
-                torch.cuda.empty_cache()
-        gc.collect()
-
-        return f"'{file_name}' 신규 인덱싱 완료", False
+        return f"'{file_name}' 분석 및 신규 인덱싱 완료", False
 
     async def _register_and_finalize(
-        self, file_hash, vector_store, bm25_retriever, on_progress
+        self, file_hash, vector_store, bm25_retriever, on_progress=None
     ):
-        """리소스를 등록하고 파이프라인을 최종 조립합니다."""
+        """생성된 리소스를 전역 풀에 등록하고 세션을 초기화합니다."""
         await get_resource_pool().register(file_hash, vector_store, bm25_retriever)
-        SessionManager.set("rag_engine", build_graph(), session_id=self.session_id)
-        SessionManager.set("pdf_processed", True, session_id=self.session_id)
-        SessionManager.add_status_log("검색 엔진 구축 완료", session_id=self.session_id)
+
+        # 그래프 엔진 빌드
+        workflow = build_graph()
+        SessionManager.set("rag_engine", workflow, session_id=self.session_id)
+
+        try:
+            current_loop = asyncio.get_running_loop()
+            current_loop_id = id(current_loop)
+        except RuntimeError:
+            current_loop_id = 0
+        SessionManager.set(
+            "rag_engine_loop_id", current_loop_id, session_id=self.session_id
+        )
+
         if on_progress:
-            on_progress()
+            on_progress(100)
+
+    async def _get_rag_engine(self) -> Any:
+        """
+        현재 이벤트 루프에 적합한 RAG 엔진(LangGraph)을 반환합니다.
+        이벤트 루프가 변경되었거나 엔진이 없으면 그래프를 즉시 컴파일하여 루프 불일치 예외를 방지합니다.
+        """
+        try:
+            current_loop = asyncio.get_running_loop()
+            current_loop_id = id(current_loop)
+        except RuntimeError:
+            current_loop_id = 0
+
+        # 세션에서 기존 엔진과 루프 ID 가져오기
+        rag_engine = SessionManager.get("rag_engine", session_id=self.session_id)
+        cached_loop_id = SessionManager.get(
+            "rag_engine_loop_id", 0, session_id=self.session_id
+        )
+
+        # 이벤트 루프 변경을 감지했을 때 즉시 LangGraph 컴파일러를 다시 호출합니다.
+        if not rag_engine or cached_loop_id != current_loop_id:
+            file_hash = SessionManager.get("file_hash", session_id=self.session_id)
+            if not file_hash:
+                return None
+
+            from core.graph_builder import build_graph
+
+            rag_engine = build_graph()
+
+            SessionManager.set("rag_engine", rag_engine, session_id=self.session_id)
+            SessionManager.set(
+                "rag_engine_loop_id", current_loop_id, session_id=self.session_id
+            )
+            logger.info(
+                f"[RAG] 비동기 루프 변경 감지({cached_loop_id} -> {current_loop_id}): LangGraph 엔진 핫스왑 재구성 성공"
+            )
+
+        return rag_engine
 
     async def aquery(self, query: str, model_name: str | None = None) -> dict[str, Any]:
-        """[기본] 질문에 대한 답변을 비동기로 생성합니다 (Full Response)."""
+        """[비동기] 질문에 대한 답변을 생성합니다 (전체 워크플로우 실행)."""
         self._ensure_session_context()
         config = await self._prepare_config(model_name)
-        rag_engine = SessionManager.get("rag_engine", session_id=self.session_id)
+
+        rag_engine = await self._get_rag_engine()
         if not rag_engine:
             raise VectorStoreError(
                 details={"reason": "파이프라인이 준비되지 않았습니다."}
             )
 
-        # LangGraph 실행
-        result = await rag_engine.ainvoke({"input": query}, config=config)
+        from services.monitoring.performance_monitor import (
+            OperationType,
+            get_performance_monitor,
+        )
 
-        # [추가] 좌표 데이터 복구 (Hydration)
+        monitor = get_performance_monitor()
+
+        # [추가] 대화 이력 주입
+        chat_history = self._get_recent_history()
+
+        with monitor.track_operation(OperationType.RAG_PIPELINE_TOTAL):
+            result = await rag_engine.ainvoke(
+                {"input": query, "chat_history": chat_history}, config=config
+            )
+
         docs = result.get("relevant_docs", [])
-        self._hydrate_docs(docs)
+        await asyncio.to_thread(self._hydrate_docs, docs)
 
         from core.graph_builder import format_context
+
+        # 성능 지표 통합
+        perf_report = monitor.get_report()
+        combined_perf = {**result.get("performance", {}), "metrics": perf_report}
 
         return {
             "response": result.get("response", ""),
             "thought": result.get("thought", ""),
             "context": format_context(docs),
             "documents": docs,
-            "performance": result.get("performance", {}),
+            "performance": combined_perf,
         }
+
+    def _get_recent_history(self, limit: int = 5) -> list:
+        """최근 대화 이력을 LangChain 메시지 객체 형식으로 변환하여 반환합니다."""
+        from langchain_core.messages import AIMessage, HumanMessage
+
+        raw_messages = SessionManager.get_messages(session_id=self.session_id)
+        # 일반 대화(general)만 이력에 포함 (시스템 로그 등 제외)
+        filtered = [m for m in raw_messages if m.get("msg_type") == "general"]
+        recent = filtered[-limit:]
+
+        formatted = []
+        for msg in recent:
+            role = msg.get("role")
+            content = msg.get("content", "")
+            if role == "user":
+                formatted.append(HumanMessage(content=content))
+            elif role == "assistant":
+                formatted.append(AIMessage(content=content))
+        return formatted
 
     def _hydrate_docs(self, docs: list[Document]) -> None:
         """문서 리스트의 좌표 데이터를 캐시에서 복구하거나, 없으면 즉시 추출(Lazy)합니다."""
@@ -181,7 +252,6 @@ class RAGSystem:
         # 1. 파일별로 처리 대상 문서 그룹화
         file_path_map: dict[str, list[Document]] = {}
         for doc in docs:
-            # 이미 좌표가 있거나 메타데이터가 부족하면 스킵
             if "word_coords" in doc.metadata or not doc.metadata.get("has_coordinates"):
                 continue
 
@@ -197,7 +267,6 @@ class RAGSystem:
         # 2. 각 파일별로 1회만 열어서 모든 대상 문서(청크) 처리
         for path, target_docs in file_path_map.items():
             try:
-                # [개선] Context Manager 사용으로 안전한 Close 보장
                 with fitz.open(path) as doc_obj:
                     for doc in target_docs:
                         file_hash = doc.metadata.get("file_hash")
@@ -206,10 +275,8 @@ class RAGSystem:
                         if not file_hash or page_num is None:
                             continue
 
-                        # A. 캐시 확인
                         coords = coord_cache.get_coords(file_hash, page_num)
 
-                        # B. 캐시 없으면 지연 추출 수행
                         if not coords:
                             logger.info(
                                 f"[RAG] [HYDRATE] 정밀 좌표 추출: {os.path.basename(path)} P{page_num}"
@@ -217,7 +284,6 @@ class RAGSystem:
                             try:
                                 page_obj = doc_obj[page_num - 1]
 
-                                # [개선] 정밀 구역(Clip) 추출: 메타데이터의 bbox 영역만 타겟팅
                                 chunk_bbox = doc.metadata.get("bbox")
                                 if chunk_bbox:
                                     raw_words = page_obj.get_text(
@@ -230,7 +296,6 @@ class RAGSystem:
                                     (w[0], w[1], w[2], w[3], w[4]) for w in raw_words
                                 ]
 
-                                # 다음번을 위해 캐시 저장
                                 coord_cache.save_coords(file_hash, page_num, coords)
                             except IndexError:
                                 logger.warning(
@@ -247,68 +312,137 @@ class RAGSystem:
                 )
 
     async def astream(self, query: str, model_name: str | None = None):
-        """[스트리밍] 새로운 스트림 모드(messages, custom)를 사용하여 이벤트를 발생시킵니다."""
+        """[스트리밍] astream_events(v2)를 사용하여 이벤트를 안전하게 발생시키고 브릿징합니다."""
         self._ensure_session_context()
         config = await self._prepare_config(model_name)
-        rag_engine = SessionManager.get("rag_engine", session_id=self.session_id)
+
+        rag_engine = await self._get_rag_engine()
         if not rag_engine:
             raise VectorStoreError(
                 details={"reason": "파이프라인이 준비되지 않았습니다."}
             )
 
-        # [최적화] 익명 비동기 제너레이터를 반환하여 UI의 'await'와 호환성 유지
-        async def _stream_wrapper():
-            async for chunk in rag_engine.astream(
-                {"input": query},
-                config=config,
-                stream_mode=["messages", "custom", "updates"],
-            ):
-                # 1. 메시지(messages) 모드 필터링: generate 노드의 메시지만 통과
-                if (
-                    isinstance(chunk, tuple)
-                    and len(chunk) == 2
-                    and chunk[0] == "messages"
+        # [추가] 대화 이력 주입
+        chat_history = self._get_recent_history()
+
+        async def _consumer():
+            try:
+                # astream_events(v2)는 multi-loop 및 nested 환경에서도 안정적인 이벤트 전파를 보장합니다.
+                async for event in rag_engine.astream_events(
+                    {"input": query, "chat_history": chat_history},
+                    config=config,
+                    version="v2",
                 ):
-                    msg, metadata = chunk[1]
-                    # [표준화] LangGraph 메타데이터의 노드 이름 확인
-                    node_name = metadata.get("langgraph_node")
-                    # 'generate' 노드에서 생성된 메시지만 사용자에게 노출
-                    if node_name != "generate":
-                        continue
+                    kind = event["event"]
+                    metadata = event.get("metadata", {})
+                    langgraph_node = metadata.get("langgraph_node")
 
-                # 2. 상태 업데이트(updates) 처리
-                if isinstance(chunk, dict) and "retrieve" in chunk:
-                    docs = chunk["retrieve"].get("relevant_docs", [])
-                    self._hydrate_docs(docs)
+                    # 1. 커스텀 이벤트 브릿징 (generate 노드 등에서 발송)
+                    if kind == "on_custom_event":
+                        yield ("custom", event["data"])
 
-                yield chunk
+                    # 2. 채팅 모델 스트림 브릿징 (폴백용)
+                    # [최적화] generate 노드에서 직접 발생하는 스트림은 custom 이벤트를 통해 이미 전달되므로 중복 방지를 위해 스킵
+                    elif kind == "on_chat_model_stream":
+                        if langgraph_node == "generate":
+                            continue
+                        yield ("messages", event["data"])
 
-        return _stream_wrapper()
+                    # 3. 노드 업데이트 브릿징 (하이드레이션 처리 포함)
+                    elif kind == "on_chain_stream":
+                        data = event["data"]
+                        chunk = data.get("chunk")
+                        if chunk:
+                            if isinstance(chunk, dict) and "retrieve" in chunk:
+                                docs = chunk["retrieve"].get("relevant_docs", [])
+                                if docs:
+                                    # 비동기로 하이드레이션 시작 (블로킹 방지)
+                                    asyncio.create_task(
+                                        asyncio.to_thread(self._hydrate_docs, docs)
+                                    )
+                            yield ("updates", chunk)
+
+            except Exception as e:
+                logger.error(f"[RAG] 스트림 엔진 소비 중 에러: {e}", exc_info=True)
+                raise e
+
+        return _consumer()
 
     async def astream_events(self, query: str, model_name: str | None = None):
-        """[스트리밍] 질문에 대한 이벤트를 발생시킵니다 (레거시 adispatch_custom_event 대응)."""
+        """[스트리밍] 질문에 대한 이벤트를 발생시킵니다 (안전한 생산자-소비자 패턴)."""
         self._ensure_session_context()
         config = await self._prepare_config(model_name)
-        rag_engine = SessionManager.get("rag_engine", session_id=self.session_id)
+
+        rag_engine = await self._get_rag_engine()
         if not rag_engine:
             raise VectorStoreError(
                 details={"reason": "파이프라인이 준비되지 않았습니다."}
             )
 
-        # [최적화] 익명 비동기 제너레이터를 반환하여 UI의 'await'와 호환성 유지
-        async def _event_wrapper():
-            async for event in rag_engine.astream_events(
-                {"input": query}, config=config, version="v2"
-            ):
-                # 'on_chain_stream' 이벤트 등에서 문서를 발견하면 복구
-                if event["event"] == "on_chain_stream":
-                    docs = event["data"].get("chunk", {}).get("relevant_docs", [])
-                    if docs:
-                        self._hydrate_docs(docs)
+        import asyncio
 
-                yield event
+        queue: asyncio.Queue = asyncio.Queue(maxsize=100)
+        producer_task: asyncio.Task | None = None
 
-        return _event_wrapper()
+        async def _producer():
+            try:
+                async for event in rag_engine.astream_events(
+                    {"input": query}, config=config, version="v2"
+                ):
+                    if event["event"] == "on_chain_stream":
+                        docs = event["data"].get("chunk", {}).get("relevant_docs", [])
+                        if docs:
+                            await asyncio.to_thread(self._hydrate_docs, docs)
+
+                    try:
+                        queue.put_nowait(event)
+                    except asyncio.QueueFull:
+                        logger.warning("[RAG] 큐 오버플로우: 소비자가 느림")
+                        break
+            except asyncio.CancelledError:
+                logger.info("[RAG] 생산자 취소됨")
+                raise
+            except Exception as e:
+                logger.error(f"[RAG] 생산자 오류: {e}", exc_info=True)
+                await queue.put({"error": str(e)})
+            finally:
+                await queue.put(None)  # EOF 신호
+
+        async def _consumer():
+            nonlocal producer_task
+            try:
+                producer_task = asyncio.create_task(_producer())
+
+                while True:
+                    try:
+                        event = await asyncio.wait_for(queue.get(), timeout=300)
+                    except asyncio.TimeoutError:
+                        logger.warning("[RAG] 스트림 타임아웃 (5분)")
+                        break
+
+                    if event is None:
+                        break
+
+                    if isinstance(event, dict) and "error" in event:
+                        logger.error(f"[RAG] 스트림 오류: {event['error']}")
+                        break
+
+                    yield event
+
+            except asyncio.CancelledError:
+                logger.info("[RAG] 소비자 취소됨")
+                if producer_task:
+                    producer_task.cancel()
+                raise
+            finally:
+                if producer_task and not producer_task.done():
+                    producer_task.cancel()
+                    try:
+                        await producer_task
+                    except asyncio.CancelledError:
+                        pass
+
+        return _consumer()
 
     async def load_document(
         self, file_path: str, file_name: str, embedder: Embeddings, on_progress=None
@@ -321,35 +455,41 @@ class RAGSystem:
         from common.config import DEFAULT_OLLAMA_MODEL
         from core.model_loader import ModelManager
 
-        # 1. LLM 확보 (타입 안정성을 위해 기본값 명시)
         target_model = model_name or DEFAULT_OLLAMA_MODEL
         llm = await ModelManager.get_llm(target_model)
         SessionManager.set("llm", llm, session_id=self.session_id)
 
-        # 2. 리소스 풀에서 리트리버 확보
+        selected_embedding = SessionManager.get(
+            "last_selected_embedding_model", session_id=self.session_id
+        )
+        if not selected_embedding:
+            from common.config import DEFAULT_EMBEDDING_MODEL
+
+            selected_embedding = DEFAULT_EMBEDDING_MODEL
+        embedder = await ModelManager.get_embedder(selected_embedding)
+        SessionManager.set("embedder", embedder, session_id=self.session_id)
+
         file_hash = SessionManager.get("file_hash", session_id=self.session_id)
-        vector_store, bm25_shared = await get_resource_pool().get(file_hash)
+        if not file_hash:
+            raise VectorStoreError(details={"reason": "파일 해시 없음"})
 
-        # 리소스 부재 시 복구 시도
-        if not vector_store and SessionManager.get(
-            "pdf_file_path", session_id=self.session_id
-        ):
-            logger.info(
-                f"[RAG] 리소스 부재로 파이프라인 재구축 시도 (Hash: {file_hash[:8]})"
+        # 원자적 획득 또는 빌드 (중복 빌드 방지)
+        pdf_file_path = SessionManager.get("pdf_file_path", session_id=self.session_id)
+        if pdf_file_path:
+            # 파이프라인이 필요한 경우에만 get_or_build 사용
+            vector_store, bm25_shared = await get_resource_pool().get_or_build(
+                file_hash,
+                build_fn=self.build_pipeline,
+                file_path=pdf_file_path,
+                file_name=SessionManager.get(
+                    "last_uploaded_file_name", session_id=self.session_id
+                ),
+                embedder=embedder,
             )
-            embedder = SessionManager.get("embedder", session_id=self.session_id)
-            if embedder:
-                await self.build_pipeline(
-                    SessionManager.get("pdf_file_path", session_id=self.session_id),
-                    SessionManager.get(
-                        "last_uploaded_file_name", session_id=self.session_id
-                    ),
-                    embedder,
-                )
-                vector_store, bm25_shared = await get_resource_pool().get(file_hash)
+        else:
+            # 파이프라인 불필요한 경우 단순 조회
+            vector_store, bm25_shared = await get_resource_pool().get(file_hash)
 
-        # 3. 개별 리트리버 인스턴스 구성 (세션 캐싱 활용)
-        # [최적화] 매번 as_retriever를 호출하는 대신 세션에 저장하여 재사용
         faiss_ret = SessionManager.get(
             "active_faiss_retriever", session_id=self.session_id
         )
@@ -362,12 +502,10 @@ class RAGSystem:
                 "active_faiss_retriever", faiss_ret, session_id=self.session_id
             )
 
-        # [최적화] BM25 리트리버는 원본 인덱스는 공유하되 얕은 복사로 격리
         bm25_ret = SessionManager.get(
             "active_bm25_retriever", session_id=self.session_id
         )
         if not bm25_ret and bm25_shared:
-            # 원본 객체를 직접 쓰지 않고 복사하여 파라미터 격리 (k 값 등)
             import copy
 
             bm25_ret = copy.copy(bm25_shared)
@@ -376,7 +514,6 @@ class RAGSystem:
             )
 
         if bm25_ret:
-            # 설정 업데이트 (복사본이므로 안전함)
             target_k = RETRIEVER_CONFIG.get("search_kwargs", {}).get("k", 5)
             bm25_ret.k = target_k
 

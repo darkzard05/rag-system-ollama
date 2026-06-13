@@ -60,18 +60,19 @@ def _init_semantic_chunker(embedder: Embeddings) -> EmbeddingBasedSemanticChunke
 def _postprocess_metadata(split_docs: list[Document]) -> None:
     """청크별 메타데이터 정리 및 내용 유형(콘텐츠/참고문헌 등) 식별"""
     noise_keywords = ["index", "references", "bibliography", "doi:", "isbn"]
-    found_ref_start = False
+
+    # 참고문헌 시작 섹션 탐지 (전체 문서 스캔)
+    ref_start_idx = None
+    for i, doc in enumerate(split_docs):
+        content_lower = doc.page_content.lower()
+        if any(kw in content_lower[:50] for kw in ["## references", "references\n---"]):
+            ref_start_idx = i
+            break
 
     for i, doc in enumerate(split_docs):
         doc.metadata = doc.metadata.copy()
         doc.metadata["chunk_index"] = i
         content_lower = doc.page_content.lower()
-
-        # 참고문헌 섹션 감지
-        if doc.metadata.get("is_reference_start") or any(
-            kw in content_lower[:50] for kw in ["## references", "references\n---"]
-        ):
-            found_ref_start = True
 
         # 노이즈 판별
         is_noise = any(kw in content_lower[:100] for kw in noise_keywords)
@@ -80,16 +81,19 @@ def _postprocess_metadata(split_docs: list[Document]) -> None:
         ):
             is_noise = True
 
+        # 참고문헌 여부: ref_start_idx 이후만 True (한 번 True면 계속 True인 버그 제거)
+        is_reference = ref_start_idx is not None and i >= ref_start_idx
+
         doc.metadata.update(
             {
-                "is_content": not (is_noise or found_ref_start),
-                "is_reference": found_ref_start,
+                "is_content": not (is_noise or is_reference),
+                "is_reference": is_reference,
                 "is_anchor": doc.metadata.get("is_anchor", False)
                 if i == 0
                 else False,  # 첫 페이지만 앵커 유지
                 "is_header": True
                 if (doc.metadata.get("page") == 1 and i < 3)
-                else doc.metadata.get("is_header", False),
+                else False,
             }
         )
 

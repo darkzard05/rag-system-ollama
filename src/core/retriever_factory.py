@@ -37,7 +37,10 @@ def create_vector_store(
         vectors = np.array(vectors_list).astype("float32")
     else:
         if isinstance(vectors, list):
-            vectors = np.vstack(vectors).astype("float32")
+            vectors = np.vstack(vectors)
+            # 메모리 효율: 타입 변환만 수행하고 복사 최소화
+            if vectors.dtype != np.float32:
+                vectors = vectors.astype("float32", copy=False)
         else:
             vectors = np.ascontiguousarray(vectors, dtype="float32")
 
