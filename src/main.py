@@ -287,9 +287,12 @@ def _render_app_layout(available_models: list[str] | None = None) -> None:
 
     # Get browser height dynamically
     viewport_height = streamlit_js_eval(js_expressions="window.innerHeight", key="viewport_height")
-    # Calculate target height (header/padding offset: ~150px)
-    # Default to 800 if not yet detected
-    target_height = (viewport_height - 150) if viewport_height else 800
+    # Increase offset from 150 to 180 to account for padding and chat input safety
+    # Default to 700 if not yet detected for safer initial load
+    if viewport_height:
+        target_height = max(400, viewport_height - 180)
+    else:
+        target_height = 700
 
     with st.sidebar:
         render_settings_content(
