@@ -1,22 +1,19 @@
-# RAG 파이프라인 최적화 체크리스트
+# Checklist: Session & Loop Integrity Fix
 
-## Phase 1: LLM Grading Short-circuit
-- [x] `src/api/schemas.py` 또는 관련 메타데이터에 `rerank_score` 필드 확인
-- [x] `src/core/graph_builder.py`의 `grade_documents` 노드 수정 (Short-circuit 로직 추가)
-- [x] 최상위 점수 0.85 이상 시 LLM 호출 스킵 여부 로그 확인
-- [x] 속도 개선 수치 측정
-
-## Phase 2: Dynamic Reranking Top-K
-- [x] `src/core/graph_builder.py`의 `retrieve_and_rerank` 내 Score Gap 분석 로직 추가
-- [x] 격차(Gap)에 따른 `dynamic_top_k` 결정 로직 구현
-- [x] FlashRank 호출 시 동적 후보군 전달 확인
-
-## Phase 3: Unified Indexing & Single-Pass Pruning
-- [x] `src/core/semantic_chunker.py`에 중복 제거 로직 통합
-- [x] `src/core/chunking.py`에서 불필요한 `IndexOptimizer` 중복 호출 제거
-- [x] 인덱싱 시간 측정 및 대용량 문서 테스트
-- [x] `graphify update .` 실행하여 지식 그래프 업데이트 (CLI 이슈 확인됨)
-
-## Final Verification
-- [x] 전체 파이프라인 통합 테스트 수행
-- [x] `docs/superpowers/specs/2026-06-10-rag-pipeline-optimization.md` 문서 업데이트 및 완료 처리
+- [x] **Task 1: Foundation - Thread-Safe Session Manager Refactoring**
+    - [x] Step 1: Write a test to reproduce the thread-unsafe `set` behavior
+    - [x] Step 2: Run the test to verify current behavior
+    - [x] Step 3: Refactor `SessionManager.set`
+    - [x] Step 4: Update `sync_to_streamlit`
+    - [x] Step 5: Commit
+- [x] **Task 2: Loop Integrity - RAG Core Engine Factory**
+    - [x] Step 1: Write a test to reproduce the loop mismatch error
+    - [x] Step 2: Run the test to verify it fails
+    - [x] Step 3: Refactor `_get_rag_engine`
+    - [x] Step 4: Run tests to verify fix
+    - [x] Step 5: Commit
+- [x] **Task 3: UI Integration and Verification**
+    - [x] Step 1: Ensure `sync_to_streamlit` is called at the start of `main()`
+    - [x] Step 2: Verify `astream_events` uses the updated engine factory
+    - [x] Step 3: Run full integration test suite
+    - [x] Step 4: Commit
