@@ -1,3 +1,4 @@
+# src/core/session/manager.py
 """
 Session Management (Reliable Sync)
 
@@ -126,7 +127,7 @@ class SessionManager:
             cls.set_session_id(session_id)
 
         sid = session_id or cls.get_session_id()
-        state = cls._get_state(sid)
+        cls._get_state(sid)
         logger.debug(f"[SESSION] 세션 초기화 완료: {sid}")
 
     @classmethod
@@ -166,8 +167,14 @@ class SessionManager:
         try:
             for k in sync_keys:
                 if k in state:
-                    if k not in st.session_state or st.session_state.get(k) != state[k]:
-                        st.session_state[k] = state[k]
+                    # [수정] 참조 문제 방지를 위해 명시적으로 덮어쓰기 수행
+                    val = state[k]
+                    if isinstance(val, (list, dict)):
+                        import copy
+
+                        st.session_state[k] = copy.copy(val)
+                    else:
+                        st.session_state[k] = val
         except Exception as e:
             logger.warning(f"[SESSION] Streamlit 동기화 중 오류: {e}")
 
@@ -210,11 +217,7 @@ class SessionManager:
         session_id: str | None = None,
         **kwargs,
     ):
-        """단일 또는 다중 세션 데이터를 업데이트합니다.
-
-        Streamlit st.session_state는 직접 접근하지 않습니다.
-        대신 sync_to_streamlit()을 UI 단계에서 호출하여 동기화합니다.
-        """
+        """단일 또는 다중 세션 데이터를 업데이트합니다."""
         sid = session_id or cls.get_session_id()
         state = cls._get_state(sid)
 
@@ -225,6 +228,17 @@ class SessionManager:
         with cls._acquire_lock(sid):
             for k, v in updates.items():
                 state[k] = v
+
+        # [수정] Streamlit 환경일 경우 st.session_state에도 즉시 반영하여 rerun 시 유실 방지
+        if cls._is_streamlit_running():
+            try:
+                from streamlit.runtime.scriptrunner import get_script_run_ctx
+
+                if get_script_run_ctx():
+                    for k, v in updates.items():
+                        st.session_state[k] = v
+            except Exception:
+                pass
 
     @classmethod
     def delete(cls, key: str, session_id: str | None = None):
@@ -261,23 +275,31 @@ class SessionManager:
             "timestamp": time.time(),
             **kwargs,
         }
+
         with cls._acquire_lock(session_id or cls.get_session_id()):
-            current = list(state.get("messages", []))
+            # [수정] 새로운 리스트를 생성하지 않고 기존 리스트를 가져와 업데이트
+            current = state.get("messages", [])
             current.append(msg)
-            state["messages"] = current[-MAX_MESSAGE_HISTORY:]
+            if len(current) > MAX_MESSAGE_HISTORY:
+                current = current[-MAX_MESSAGE_HISTORY:]
+
+        # [수정] set 메서드를 호출하여 백그라운드와 st.session_state 양쪽 모두 동기화
+        cls.set("messages", current, session_id=session_id)
 
     @classmethod
     def add_status_log(
-        cls, msg: str, session_id: str | None = None, add_to_chat: bool = True
+        cls, msg: str, session_id: str | None = None, add_to_chat: bool = False
     ):
-        """시스템 상태 로그를 기록합니다."""
+        """시스템 상태 로그를 기록합니다. (UX 개편: 영구 대화 목록 오염 방지를 위해 기본값 False 변경)"""
         state = cls._get_state(session_id)
         with cls._acquire_lock(session_id or cls.get_session_id()):
             current = list(state.get("status_logs", []))
             if current and current[-1] == msg:
                 return
             current.append(msg)
-            state["status_logs"] = current[-30:]
+            logs = current[-30:]
+
+        cls.set("status_logs", logs, session_id=session_id)
 
         if add_to_chat:
             cls.add_message("system", msg, msg_type="log", session_id=session_id)
@@ -290,13 +312,8 @@ class SessionManager:
             logs = list(state.get("status_logs", []))
             if logs:
                 logs[-1] = msg
-            state["status_logs"] = logs
-            msgs = list(state.get("messages", []))
-            for i in range(len(msgs) - 1, -1, -1):
-                if msgs[i].get("msg_type") == "log":
-                    msgs[i]["content"] = msg
-                    break
-            state["messages"] = msgs
+
+        cls.set("status_logs", logs, session_id=sid)
 
     @classmethod
     def reset_all_state(cls, session_id: str | None = None):
@@ -377,15 +394,16 @@ class SessionManager:
 
     @classmethod
     def cleanup_expired_sessions(cls, max_idle_seconds: int = 3600):
-        """만료된 세션을 찾아 제거합니다. (강제 gc.collect() 제거)"""
+        """만료된 세션을 찾아 제거합니다. (딕셔너리 순회 중 삭제 방지)"""
         now = time.time()
-        expired_ids = []
 
         with cls._global_lock:
-            for sid, state in cls._fallback_sessions.items():
-                last_acc = state.get("last_accessed", now)
-                if now - last_acc > max_idle_seconds:
-                    expired_ids.append(sid)
+            # 순회 중 딕셔너리 크기 변경을 막기 위해 키를 리스트로 복사
+            expired_ids = [
+                sid
+                for sid, state in cls._fallback_sessions.items()
+                if now - state.get("last_accessed", now) > max_idle_seconds
+            ]
 
         if expired_ids:
             logger.info(
@@ -393,7 +411,6 @@ class SessionManager:
             )
             for sid in expired_ids:
                 cls.delete_session(sid)
-            # 강제 gc.collect()는 Stop-the-world를 유발하므로 파이썬 내장 GC에 위임합니다.
 
     @classmethod
     def perform_security_audit(cls):
@@ -401,9 +418,10 @@ class SessionManager:
 
     @classmethod
     def get_stats(cls) -> dict[str, Any]:
-        return {
-            "active_sessions": len(cls._fallback_sessions),
-            "total_messages": sum(
-                len(s.get("messages", [])) for s in cls._fallback_sessions.values()
-            ),
-        }
+        with cls._global_lock:
+            return {
+                "active_sessions": len(cls._fallback_sessions),
+                "total_messages": sum(
+                    len(s.get("messages", [])) for s in cls._fallback_sessions.values()
+                ),
+            }
