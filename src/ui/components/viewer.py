@@ -9,7 +9,6 @@ import streamlit as st
 from streamlit_pdf_viewer import pdf_viewer
 
 from common.config import MSG_PDF_VIEWER_NO_FILE
-from common.constants import UIConstants
 from common.utils import safe_cache_data, safe_cache_resource
 from core.session import SessionManager
 
@@ -74,9 +73,7 @@ def render_pdf_column():
             )
             st.session_state["pdf_nav_input_v6"] = current_page
 
-    # 하드코딩 제거 및 UIConstants 적용 (실제 높이는 CSS calc가 덮어씌움)
-    with st.container(height=UIConstants.CONTAINER_HEIGHT, border=False):
-        _display_pdf_viewer(pdf_path, current_page, file_hash)
+    _display_pdf_viewer(pdf_path, current_page, file_hash)
 
     # [최적화] 네비게이션을 하단으로 이동하여 우측 채팅 입력창과 대칭 구조 형성
     _display_pdf_controls(current_page, total_pages)
@@ -127,7 +124,7 @@ def _display_pdf_controls(current_page, total_pages):
         with c_center:
             # "Page [X] of Y" 스타일을 위한 내부 정밀 레이아웃
             inner_col1, inner_col2, inner_col3 = st.columns(
-                [0.7, 1, 1.3], gap="xxsmall", vertical_alignment="center"
+                [0.7, 1, 1.3], gap="small", vertical_alignment="center"
             )
 
             with inner_col1:

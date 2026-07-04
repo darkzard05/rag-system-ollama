@@ -10,10 +10,10 @@ async def test_chat_scroll():
 
         # 1. Navigate to the app
         try:
-            await page.goto("http://localhost:8501", timeout=15000)
+            await page.goto("http://127.0.0.1:8501", timeout=15000)
         except Exception as e:
             print(
-                f"Error: Could not connect to app at localhost:8501. Is it running? {e}"
+                f"Error: Could not connect to app at 127.0.0.1:8501. Is it running? {e}"
             )
             await browser.close()
             return
@@ -50,8 +50,12 @@ async def test_chat_scroll():
             () => {
                 const cols = document.querySelectorAll('div[data-testid="stColumn"]');
                 for (const col of cols) {
-                    if (col.querySelector('[data-testid="stTabs"]')) {
-                        return col.querySelector(':scope > [data-testid="stVerticalBlock"]');
+                    if (col.querySelector('[data-testid="stChatInput"], [data-testid="stChatMessage"]')) {
+                        // Return the scrollable inner stVerticalBlock (under stLayoutWrapper)
+                        const outer = col.querySelector(':scope > [data-testid="stVerticalBlock"]');
+                        if (!outer) return null;
+                        const inner = outer.querySelector('[data-testid="stLayoutWrapper"] > [data-testid="stVerticalBlock"]');
+                        return inner || outer;
                     }
                 }
                 return null;

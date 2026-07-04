@@ -7,15 +7,6 @@ Enum 기반으로 관리하여 IDE 자동완성과 타입 검사를 지원합니
 from enum import IntEnum
 
 
-class UIConstants(IntEnum):
-    """UI 관련 상수"""
-
-    # 채팅 및 PDF 뷰어 높이
-    CONTAINER_HEIGHT = 600
-    CHAT_SCROLL_HEIGHT = 650
-    PDF_VIEWER_HEIGHT = 650
-
-
 class PerformanceConstants(IntEnum):
     """성능 관련 상수"""
 

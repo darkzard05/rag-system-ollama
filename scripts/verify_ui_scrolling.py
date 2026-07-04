@@ -32,13 +32,13 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Configuration
-BASE_URL = "http://localhost:8501"
+BASE_URL = "http://127.0.0.1:8501"
 TIMEOUT = 30000  # 30 seconds
 
 # Selectors
 # We find all stVerticalBlocks and filter them by style and parent in JS.
 SCROLLABLE_BLOCK_SELECTOR = (
-    "div[data-testid='stColumn'] > [data-testid='stVerticalBlock']"
+    "[data-testid='stLayoutWrapper'] [data-testid='stVerticalBlock']"
 )
 
 
@@ -59,14 +59,16 @@ async def verify_elements_scrolling(page):
 
         # Get all matching elements and their styles/parents in one go
         results = await page.evaluate("""() => {
-            const blocks = document.querySelectorAll('div[data-testid="stColumn"] > [data-testid="stVerticalBlock"]');
-            return Array.from(blocks).map(el => {
-                const style = window.getComputedStyle(el);
-                return {
-                    overflowY: style.overflowY,
-                    maxHeight: style.maxHeight
-                };
-            });
+            const blocks = document.querySelectorAll('[data-testid="stLayoutWrapper"] [data-testid="stVerticalBlock"]');
+            return Array.from(blocks)
+                .filter(el => el.clientHeight > 100)
+                .map(el => {
+                    const style = window.getComputedStyle(el);
+                    return {
+                        overflowY: style.overflowY,
+                        maxHeight: style.maxHeight
+                    };
+                });
         }""")
 
         logger.info(f"Found {len(results)} total stVerticalBlocks. Analyzing styles...")
@@ -74,14 +76,8 @@ async def verify_elements_scrolling(page):
         verified_count = 0
         for i, item in enumerate(results):
             overflow_ok = item["overflowY"] in ["auto", "scroll"]
-            max_height = item["maxHeight"]
-            height_ok = (
-                max_height
-                and max_height != "none"
-                and any(unit in max_height for unit in ["px", "dvh", "vh"])
-            )
 
-            if overflow_ok and height_ok:
+            if overflow_ok:
                 logger.info(
                     f"Block {i}: ✅ PASS (overflowY={item['overflowY']}, maxHeight={item['maxHeight']})"
                 )

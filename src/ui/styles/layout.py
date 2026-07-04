@@ -80,11 +80,4 @@ def get_layout_css() -> str:
         z-index: 100 !important;
     }
 
-    /* 13. Responsive Container Heights for PDF Viewer and Chat columns */
-    div[data-testid="stColumn"] > [data-testid="stVerticalBlock"] {
-        height: auto !important;
-        max-height: calc(100vh - var(--viewport-offset));
-        max-height: calc(100dvh - var(--viewport-offset));
-        overflow-y: auto !important;
-    }
     """

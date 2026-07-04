@@ -13,12 +13,17 @@ from ui.components.chat import render_chat_interface
 
 def inject_custom_css(is_expanded: bool = False):
     st.markdown(
-        f"""
+        """
     <style>
     /* 1. Global Viewport Lock */
     .stApp, [data-testid="stAppViewContainer"] {{
         height: 100vh !important;
         overflow: hidden !important;
+    }}
+
+    /* 1b. Fill main content area */
+    [data-testid="stMainBlockContainer"] {{
+        height: calc(100vh - var(--header-height, 55px)) !important;
     }}
 
     /* Remove default Streamlit padding that causes shifts */
@@ -31,7 +36,7 @@ def inject_custom_css(is_expanded: bool = False):
     }}
 
     /* 2. Scoped Chat Input */
-    [data-testid="stChatInputContainer"] {{
+    [data-testid="stChatInput"] {{
         position: fixed !important;
         bottom: 0 !important;
         right: 0 !important;
@@ -114,7 +119,7 @@ def inject_custom_css(is_expanded: bool = False):
         opacity: 0.85;
         font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
         white-space: pre-wrap;
-        max-height: 300px; 
+        max-height: 300px;
         overflow-y: auto;
         background-color: color-mix(in srgb, var(--background-color) 50%, transparent);
         border-radius: 0 4px 4px 0;
@@ -207,7 +212,7 @@ def inject_custom_css(is_expanded: bool = False):
         color: var(--faded-text-color);
         margin-top: 1px;
     }}
-    
+
     /* 10. 참조 페이지 버튼 반응형 랩핑 시스템 */
     [data-testid="stHorizontalBlock"] {{
         flex-wrap: wrap !important;
@@ -250,7 +255,7 @@ def inject_custom_css(is_expanded: bool = False):
         [data-testid="stVerticalBlockBorderWrapper"] > div {{
             height: auto !important;
         }}
-        [data-testid="stChatInputContainer"] {{
+        [data-testid="stChatInput"] {{
             left: 0 !important;
             width: 100% !important;
             position: fixed !important;
