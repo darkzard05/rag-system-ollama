@@ -11,9 +11,6 @@ import os
 from collections import OrderedDict
 from typing import TYPE_CHECKING, Any
 
-import psutil
-import torch
-
 if TYPE_CHECKING:
     from langchain_core.embeddings import Embeddings
 
@@ -39,6 +36,36 @@ from services.monitoring.performance_monitor import (
     OperationType,
     get_performance_monitor,
 )
+
+_torch = None
+
+
+def _get_torch():
+    global _torch
+    if _torch is None:
+        try:
+            import torch as _torch_module
+
+            _torch = _torch_module
+        except ImportError:
+            _torch = None
+    return _torch
+
+
+_psutil = None
+
+
+def _get_psutil():
+    global _psutil
+    if _psutil is None:
+        try:
+            import psutil as _psutil_module
+
+            _psutil = _psutil_module
+        except ImportError:
+            _psutil = None
+    return _psutil
+
 
 logger = logging.getLogger(__name__)
 monitor = get_performance_monitor()
@@ -67,15 +94,21 @@ class ModelManager:
     @classmethod
     def get_filtered_models(cls, available_models: list[str]) -> dict[str, list[str]]:
         """모델 목록을 LLM과 임베딩 모델로 분류하여 반환합니다."""
-        from common.config import AVAILABLE_EMBEDDING_MODELS, DEFAULT_EMBEDDING_MODEL, DEFAULT_OLLAMA_MODEL
-        
+        from common.config import (
+            AVAILABLE_EMBEDDING_MODELS,
+            DEFAULT_EMBEDDING_MODEL,
+            DEFAULT_OLLAMA_MODEL,
+        )
+
         safe_models = [m for m in available_models if m and "---" not in str(m)]
         embed_keywords = ["embed", "bge", "nomic", "mxbai", "snowflake"]
 
         embedding_candidates = [
             m for m in safe_models if any(kw in str(m).lower() for kw in embed_keywords)
         ]
-        actual_embeddings = sorted(set(AVAILABLE_EMBEDDING_MODELS + embedding_candidates))
+        actual_embeddings = sorted(
+            set(AVAILABLE_EMBEDDING_MODELS + embedding_candidates)
+        )
         if DEFAULT_EMBEDDING_MODEL not in actual_embeddings:
             actual_embeddings.append(DEFAULT_EMBEDDING_MODEL)
         actual_embeddings.sort()
@@ -86,10 +119,7 @@ class ModelManager:
             actual_llms.append(DEFAULT_OLLAMA_MODEL)
         actual_llms.sort()
 
-        return {
-            "llm": actual_llms,
-            "embedding": actual_embeddings
-        }
+        return {"llm": actual_llms, "embedding": actual_embeddings}
 
     @classmethod
     def _get_lock(cls, name: str) -> asyncio.Lock:
@@ -153,29 +183,38 @@ class ModelManager:
         """현재 VRAM/RAM 사용량을 확인하고 압박 시 가장 오래된 모델을 방출합니다."""
 
         # 1. GPU VRAM 체크 (사용 가능한 경우)
-        if torch.cuda.is_available():
+        _torch = _get_torch()
+        if _torch and _torch.cuda.is_available():
             try:
                 # 현재 디바이스의 메모리 정보 (MB 단위)
-                device = torch.cuda.current_device()
-                total_mem = torch.cuda.get_device_properties(device).total_memory / (1024**2)
-                reserved_mem = torch.cuda.memory_reserved(device) / (1024**2)
+                device = _torch.cuda.current_device()
+                total_mem = _torch.cuda.get_device_properties(device).total_memory / (
+                    1024**2
+                )
+                reserved_mem = _torch.cuda.memory_reserved(device) / (1024**2)
 
                 # 실질 점유율 (Reserved 기준)
                 usage_pct = (reserved_mem / total_mem) * 100
 
-                if usage_pct > 90: # 90% 이상 사용 시
-                    logger.warning(f"[ModelManager] VRAM 압박 감지 ({usage_pct:.1f}%). 자원 방출을 시작합니다.")
+                if usage_pct > 90:  # 90% 이상 사용 시
+                    logger.warning(
+                        f"[ModelManager] VRAM 압박 감지 ({usage_pct:.1f}%). 자원 방출을 시작합니다."
+                    )
                     await cls._evict_oldest_model()
                     return True
             except Exception as e:
                 logger.debug(f"VRAM 체크 실패 (무시): {e}")
 
         # 2. 시스템 RAM 체크 (폴백)
-        mem = psutil.virtual_memory()
-        if mem.percent > 95:
-            logger.warning(f"[ModelManager] 시스템 RAM 부족 ({mem.percent}%). 자원 방출을 시작합니다.")
-            await cls._evict_oldest_model()
-            return True
+        _psutil = _get_psutil()
+        if _psutil:
+            mem = _psutil.virtual_memory()
+            if mem.percent > 95:
+                logger.warning(
+                    f"[ModelManager] 시스템 RAM 부족 ({mem.percent}%). 자원 방출을 시작합니다."
+                )
+                await cls._evict_oldest_model()
+                return True
         return False
 
     @classmethod
@@ -358,7 +397,8 @@ def _fetch_available_models_cached() -> list[str]:
     try:
         import ollama
 
-        ollama_response = ollama.list()
+        client = ollama.Client(host=OLLAMA_BASE_URL, timeout=5)
+        ollama_response = client.list()
         models = []
         if hasattr(ollama_response, "models"):
             for model in ollama_response.models:
