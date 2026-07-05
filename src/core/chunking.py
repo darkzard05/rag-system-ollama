@@ -91,9 +91,7 @@ def _postprocess_metadata(split_docs: list[Document]) -> None:
                 "is_anchor": doc.metadata.get("is_anchor", False)
                 if i == 0
                 else False,  # 첫 페이지만 앵커 유지
-                "is_header": True
-                if (doc.metadata.get("page") == 1 and i < 3)
-                else False,
+                "is_header": bool(doc.metadata.get("page") == 1 and i < 3),
             }
         )
 

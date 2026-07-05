@@ -24,7 +24,7 @@ from playwright.async_api import async_playwright
 # Configuration
 STREAMLIT_PORT = os.environ.get("STREAMLIT_PORT", "8501")
 BASE_URL = f"http://127.0.0.1:{STREAMLIT_PORT}"
-EVIDENCE_FILE = Path(".omo/evidence/task-7-e2e-verification.txt")
+EVIDENCE_FILE = Path(".omo/evidence/task-6-e2e-verification.txt")
 TIMEOUT = 15000  # 15 seconds for page load
 
 
@@ -50,28 +50,33 @@ async def main():
         dom = await page.evaluate("""() => {
             const main = document.querySelector('[data-testid="stMainBlockContainer"]');
             const header = document.querySelector('[data-testid="stHeader"]');
-            const wrappers = document.querySelectorAll('[data-testid="stLayoutWrapper"]');
             return {
-                headerHeight: header ? header.getBoundingClientRect().height : null,
-                layoutDisplay: wrappers.length > 0 ? window.getComputedStyle(wrappers[0]).display : null,
+                headerH: header ? header.getBoundingClientRect().height : null,
                 mainExists: !!main,
                 mainDisplay: main ? window.getComputedStyle(main).display : null,
+                mainHeight: main ? window.getComputedStyle(main).height : null,
+                windowH: window.innerHeight
             };
         }""")
 
+        # Verify main height is approx window.innerHeight - 60
+        expected_main_h = (dom["windowH"] or 0) - 60
+        actual_main_h = float(dom["mainHeight"].replace('px', '')) if dom["mainHeight"] else 0
+        height_ok = abs(actual_main_h - expected_main_h) <= 5
+
         c1_pass = (
-            dom["headerHeight"] is not None
-            and 50 <= dom["headerHeight"] <= 70
-            and dom["layoutDisplay"] == "flex"
+            dom["headerH"] is not None
+            and 50 <= dom["headerH"] <= 70
             and dom["mainExists"]
             and dom["mainDisplay"] == "block"
+            and height_ok
         )
 
         c1_res = (
             f"=== CHECK 1: DOM Structure ===\n"
-            f"Header height: {dom['headerHeight']}px {'✓' if 50 <= (dom['headerHeight'] or 0) <= 70 else '✗'} (expected ~60px)\n"
-            f"stLayoutWrapper display: {dom['layoutDisplay']} {'✓' if dom['layoutDisplay'] == 'flex' else '✗'}\n"
+            f"Header height: {dom['headerH']}px {'✓' if 50 <= (dom['headerH'] or 0) <= 70 else '✗'} (expected ~60px)\n"
             f"stMainBlockContainer display: {dom['mainDisplay']} {'✓' if dom['mainDisplay'] == 'block' else '✗'}\n"
+            f"stMainBlockContainer height: {dom['mainHeight']} {'✓' if height_ok else '✗'} (expected ~{expected_main_h}px)\n"
             f"Result: {'PASS' if c1_pass else 'FAIL'}\n"
         )
         results["details"].append(c1_res)
@@ -83,35 +88,34 @@ async def main():
         # === CHECK 2: Flex Chain CSS Properties ===
         print("Running Check 2: Flex Chain CSS...")
         flex = await page.evaluate("""() => {
-            const blocks = document.querySelectorAll(
-                '[data-testid="stMainBlockContainer"] [data-testid="stColumn"] > [data-testid="stVerticalBlock"]'
-            );
-            return Array.from(blocks).filter(el => el.clientHeight > 100).map(el => {
-                const s = window.getComputedStyle(el);
+            const cols = document.querySelectorAll('[data-testid="stColumn"]');
+            return Array.from(cols).map(c => {
+                const s = window.getComputedStyle(c);
+                const vb = c.querySelector(':scope > [data-testid="stVerticalBlock"]');
+                const vs = vb ? window.getComputedStyle(vb) : null;
                 return {
-                    overflowY: s.overflowY,
-                    flex: s.flex,
-                    height: s.height
+                    display: s.display,
+                    overflowY: vs ? vs.overflowY : null,
                 };
             });
         }""")
 
-        verified_blocks = [
-            b for b in flex if b["overflowY"] in ["auto", "scroll"] and "1" in b["flex"]
+        verified_cols = [
+            c for c in flex if c["display"] == "flex" and c["overflowY"] in ["auto", "scroll"]
         ]
-        c2_pass = len(verified_blocks) >= 2
+        c2_pass = len(verified_cols) >= 2
 
-        block_details = "\n".join(
+        col_details = "\n".join(
             [
-                f"  Block {i}: overflowY={b['overflowY']}, flex={b['flex']} {'✓' if b['overflowY'] in ['auto', 'scroll'] and '1' in b['flex'] else '✗'}"
-                for i, b in enumerate(flex)
+                f"  Col {i}: display={c['display']}, overflowY={c['overflowY']} {'✓' if c['display'] == 'flex' and c['overflowY'] in ['auto', 'scroll'] else '✗'}"
+                for i, c in enumerate(flex)
             ]
         )
 
         c2_res = (
             f"=== CHECK 2: Flex Chain CSS ===\n"
-            f"Found {len(flex)} scrollable blocks:\n"
-            f"{block_details}\n"
+            f"Found {len(flex)} columns:\n"
+            f"{col_details}\n"
             f"Result: {'PASS' if c2_pass else 'FAIL'}\n"
         )
         results["details"].append(c2_res)
@@ -152,8 +156,7 @@ async def main():
                     + 'Test scroll content line. '.repeat(8)
                     + '</p>'
                 ).join('') + '</div>';
-                const tabContent = wrapper.querySelector('[role="tabpanel"], [data-testid="stTabs"]');
-                if (tabContent) tabContent.appendChild(contentDiv); else wrapper.appendChild(contentDiv);
+                wrapper.appendChild(contentDiv);
                 return {{ initialSh, initialCh, finalSh: wrapper.scrollHeight, finalCh: wrapper.clientHeight }};
             }}
         """)
@@ -196,7 +199,6 @@ async def main():
             c3_res = (
                 f"=== CHECK 3: Independent Scrolling ===\n"
                 f"Overflow created: scrollHeight({overflow_data['finalSh']}) > clientHeight({overflow_data['finalCh']}) {'✓' if overflow_ok else '✗'}\n"
-                f"PDF column before scroll: 0\n"
                 f"Chat column scrollTop after scroll: {scroll_metrics['chatScrollTop']} {'✓' if chat_scrolled else '✗'}\n"
                 f"PDF column after scroll: {scroll_metrics['pdfScrollTop']} {'✓' if pdf_unmoved else '✗'} (unchanged)\n"
                 f"Main window scrollY: {scroll_metrics['windowScrollY']} {'✓' if window_locked else '✗'}\n"

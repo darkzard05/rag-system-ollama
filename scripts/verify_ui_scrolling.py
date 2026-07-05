@@ -38,7 +38,7 @@ TIMEOUT = 30000  # 30 seconds
 # Selectors
 # We find all stVerticalBlocks and filter them by style and parent in JS.
 SCROLLABLE_BLOCK_SELECTOR = (
-    "[data-testid='stLayoutWrapper'] [data-testid='stVerticalBlock']"
+    "[data-testid='stMainBlockContainer'] [data-testid='stColumn'] > [data-testid='stVerticalBlock']"
 )
 
 
@@ -59,14 +59,15 @@ async def verify_elements_scrolling(page):
 
         # Get all matching elements and their styles/parents in one go
         results = await page.evaluate("""() => {
-            const blocks = document.querySelectorAll('[data-testid="stLayoutWrapper"] [data-testid="stVerticalBlock"]');
+            const blocks = document.querySelectorAll('[data-testid="stMainBlockContainer"] [data-testid="stColumn"] > [data-testid="stVerticalBlock"]');
             return Array.from(blocks)
                 .filter(el => el.clientHeight > 100)
                 .map(el => {
                     const style = window.getComputedStyle(el);
                     return {
                         overflowY: style.overflowY,
-                        maxHeight: style.maxHeight
+                        maxHeight: style.maxHeight,
+                        flex: style.flex
                     };
                 });
         }""")
@@ -75,16 +76,18 @@ async def verify_elements_scrolling(page):
 
         verified_count = 0
         for i, item in enumerate(results):
+            # Flex chain verification: overflow-y must be auto/scroll AND flex must be 1
             overflow_ok = item["overflowY"] in ["auto", "scroll"]
+            flex_ok = item["flex"] == "1" or "1 1 0px" in item["flex"]
 
-            if overflow_ok:
+            if overflow_ok and flex_ok:
                 logger.info(
-                    f"Block {i}: ✅ PASS (overflowY={item['overflowY']}, maxHeight={item['maxHeight']})"
+                    f"Block {i}: ✅ PASS (overflowY={item['overflowY']}, flex={item['flex']})"
                 )
                 verified_count += 1
             else:
                 logger.info(
-                    f"Block {i}: ❌ SKIP (overflowY={item['overflowY']}, maxHeight={item['maxHeight']})"
+                    f"Block {i}: ❌ SKIP (overflowY={item['overflowY']}, flex={item['flex']})"
                 )
 
         if verified_count >= 2:

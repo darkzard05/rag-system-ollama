@@ -48,14 +48,13 @@ async def test_chat_scroll():
         # is not supported in all Chromium versions
         FIND_CHAT_WRAPPER_JS = """
             () => {
-                const cols = document.querySelectorAll('div[data-testid="stColumn"]');
+                const mainContainer = document.querySelector('[data-testid="stMainBlockContainer"]');
+                if (!mainContainer) return null;
+                const cols = mainContainer.querySelectorAll('[data-testid="stColumn"]');
                 for (const col of cols) {
                     if (col.querySelector('[data-testid="stChatInput"], [data-testid="stChatMessage"]')) {
-                        // Return the scrollable inner stVerticalBlock (under stLayoutWrapper)
-                        const outer = col.querySelector(':scope > [data-testid="stVerticalBlock"]');
-                        if (!outer) return null;
-                        const inner = outer.querySelector('[data-testid="stLayoutWrapper"] > [data-testid="stVerticalBlock"]');
-                        return inner || outer;
+                        // Flex chain step 6: stColumn > stVerticalBlock has overflow-y:auto
+                        return col.querySelector(':scope > [data-testid="stVerticalBlock"]');
                     }
                 }
                 return null;
@@ -115,9 +114,11 @@ async def test_chat_scroll():
         # 4. Verify Independent Scroll
         before_scroll_pdf = await page.evaluate("""
             () => {
-                const cols = document.querySelectorAll('div[data-testid="stColumn"]');
-                const pdfBlock = cols.length >= 3
-                    ? cols[2].querySelector(':scope > [data-testid="stVerticalBlock"]')
+                const mainContainer = document.querySelector('[data-testid="stMainBlockContainer"]');
+                if (!mainContainer) return null;
+                const cols = mainContainer.querySelectorAll('[data-testid="stColumn"]');
+                const pdfBlock = cols.length >= 1
+                    ? cols[0].querySelector(':scope > [data-testid="stVerticalBlock"]')
                     : null;
                 return pdfBlock ? pdfBlock.scrollTop : -1;
             }
@@ -151,9 +152,11 @@ async def test_chat_scroll():
         # Check PDF column scrollTop remained 0 (independent scrolling)
         after_scroll_pdf = await page.evaluate("""
             () => {
-                const cols = document.querySelectorAll('div[data-testid="stColumn"]');
-                const pdfBlock = cols.length >= 3
-                    ? cols[2].querySelector(':scope > [data-testid="stVerticalBlock"]')
+                const mainContainer = document.querySelector('[data-testid="stMainBlockContainer"]');
+                if (!mainContainer) return null;
+                const cols = mainContainer.querySelectorAll('[data-testid="stColumn"]');
+                const pdfBlock = cols.length >= 1
+                    ? cols[0].querySelector(':scope > [data-testid="stVerticalBlock"]')
                     : null;
                 return pdfBlock ? pdfBlock.scrollTop : -1;
             }

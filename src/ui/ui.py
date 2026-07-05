@@ -14,278 +14,128 @@ from ui.components.chat import render_chat_interface
 def inject_custom_css(is_expanded: bool = False):
     st.markdown(
         """
-    <style>
-    /* 1. Global Viewport Lock */
-    .stApp, [data-testid="stAppViewContainer"] {{
-        height: 100vh !important;
-        overflow: hidden !important;
-    }}
-
-    /* 1b. Fill main content area */
-    [data-testid="stMainBlockContainer"] {{
-        height: calc(100vh - var(--header-height, 55px)) !important;
-    }}
-
-    /* Remove default Streamlit padding that causes shifts */
-    .block-container {{
-        padding-top: 1.5rem !important; /* Reduced from 3.5rem */
-        padding-bottom: 0rem !important;
-        padding-left: 1rem !important;
-        padding-right: 1rem !important;
-        max-width: 100% !important;
-    }}
-
-    /* 2. Scoped Chat Input */
-    [data-testid="stChatInput"] {{
-        position: fixed !important;
-        bottom: 0 !important;
-        right: 0 !important;
-        left: 50% !important;
-        width: 50% !important;
-        z-index: 1000;
-        background-color: var(--background-color) !important;
-        padding-bottom: 1rem !important; /* Tighter padding */
-        padding-top: 0.5rem !important;
-    }}
-
-    /* 3. Hide only the main block to prevent double scrolls */
-    [data-testid="stMain"] {{
-        overflow: hidden !important;
-    }}
-
-    /* 4. 사이드바 확장 버튼 가시성 확보 */
-    [data-testid="stSidebarCollapseButton"] {{
-        z-index: 100000 !important;
-        visibility: visible !important;
-        opacity: 1 !important;
-        background-color: color-mix(in srgb, var(--background-color), transparent 20%) !important;
-        box-shadow: 0 2px 8px rgba(0,0,0,0.1) !important;
-        border-radius: 50% !important;
-    }}
-
-    /* 5. 상단 헤더 Glassmorphism */
-    header[data-testid="stHeader"] {{
-        background: color-mix(in srgb, var(--background-color), transparent 30%) !important;
-        backdrop-filter: blur(12px) !important;
-        -webkit-backdrop-filter: blur(12px) !important;
-        border-bottom: 1px solid color-mix(in srgb, var(--faded-text-color), transparent 80%) !important;
-        box-shadow: 0 2px 15px rgba(0,0,0,0.05) !important;
-        z-index: 99999 !important;
-        display: flex !important;
-        visibility: visible !important;
-    }}
-
-    .stAppDeployButton {{
-        display: none !important;
-    }}
-
-    /* 6. 사고 과정(Thought Process) UI - Layout Shift 방지 및 여백 압축 */
-    details.thought-expander {{
-        background-color: var(--secondary-background-color);
-        border: 1px solid color-mix(in srgb, var(--faded-text-color) 30%, transparent);
-        border-radius: 8px;
-        /* [수정] 아래쪽 마진을 16px에서 6px로 대폭 줄여 텍스트와의 간격 압축 */
-        margin: 0px 0 6px 0;
-        padding: 8px 12px;
-        transition: all 0.2s ease-in-out;
-    }}
-    details.thought-expander summary {{
-        cursor: pointer;
-        font-size: 0.85em;
-        font-weight: 600;
-        color: var(--text-color);
-        opacity: 0.7;
-        outline: none;
-        list-style: none;
-        display: flex;
-        align-items: center;
-        gap: 8px;
-        user-select: none;
-    }}
-    details.thought-expander summary::before {{
-        content: "▶";
-        font-size: 0.8em;
-        transition: transform 0.2s;
-    }}
-    details[open].thought-expander summary::before {{
-        transform: rotate(90deg);
-    }}
-    .thought-container {{
-        border-left: 3px solid color-mix(in srgb, var(--primary-color) 70%, transparent);
-        padding: 10px 15px;
-        margin-top: 8px; /* [수정] 내부 마진 축소 */
-        font-size: 0.85em;
-        color: var(--text-color);
-        opacity: 0.85;
-        font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
-        white-space: pre-wrap;
-        max-height: 300px;
-        overflow-y: auto;
-        background-color: color-mix(in srgb, var(--background-color) 50%, transparent);
-        border-radius: 0 4px 4px 0;
-    }}
-
-    /* 7. 인용 가독성 및 툴팁 */
-    .citation-highlight {{
-        background-color: color-mix(in srgb, var(--primary-color) 15%, transparent);
-        border-bottom: 2px dashed var(--primary-color);
-        padding: 0 4px;
-        border-radius: 3px;
-        color: var(--primary-color);
-        font-weight: 600;
-        cursor: help;
-        transition: background-color 0.2s, transform 0.1s;
-        display: inline-block;
-        position: relative;
-    }}
-    .citation-highlight:active::after {{
-        content: attr(title);
-        position: absolute;
-        bottom: 100%;
-        left: 50%;
-        transform: translateX(-50%);
-        background-color: var(--text-color);
-        color: var(--background-color);
-        padding: 8px 12px;
-        border-radius: 6px;
-        font-size: 0.85em;
-        font-weight: normal;
-        white-space: pre-wrap;
-        width: max-content;
-        max-width: 250px;
-        z-index: 1000;
-        box-shadow: 0 4px 12px rgba(0,0,0,0.15);
-        pointer-events: none;
-    }}
-
-    /* 8. 스트리밍 애니메이션 (빌드 상태 표시에도 공용 사용) */
-    .streaming-pulse {{
-        animation: pulse 1.5s infinite ease-in-out;
-        min-height: 24px;
-        font-size: 0.9em;
-        color: var(--primary-color);
-        font-weight: 500;
-        /* [수정] 마진 축소 */
-        margin-bottom: 4px;
-    }}
-    @keyframes pulse {{
-        0% {{ opacity: 0.4; }}
-        50% {{ opacity: 1; }}
-        100% {{ opacity: 0.4; }}
-    }}
-
-    /* 9. 성능 지표 HUD - 컴팩트 디자인 */
-    .perf-details {{
-        margin-top: 2px !important;
-        padding-top: 0px !important;
-    }}
-    .perf-grid {{
-        display: grid;
-        grid-template-columns: repeat(auto-fit, minmax(100px, 1fr));
-        gap: 8px;
-        margin-top: 8px;
-    }}
-    .perf-card {{
-        background-color: var(--secondary-background-color);
-        border: 1px solid color-mix(in srgb, var(--faded-text-color) 15%, transparent);
-        border-radius: 6px;
-        padding: 6px 8px;
-        display: flex;
-        flex-direction: column;
-        align-items: center;
-        justify-content: center;
-        text-align: center;
-    }}
-    .perf-card-title {{
-        font-size: 10px;
-        color: var(--faded-text-color);
-        margin-bottom: 2px;
-        font-weight: 500;
-    }}
-    .perf-card-value {{
-        font-size: 13px;
-        font-weight: 700;
-        color: var(--text-color);
-    }}
-    .perf-card-desc {{
-        font-size: 9px;
-        color: var(--faded-text-color);
-        margin-top: 1px;
-    }}
-
-    /* 10. 참조 페이지 버튼 반응형 랩핑 시스템 */
-    [data-testid="stHorizontalBlock"] {{
-        flex-wrap: wrap !important;
-        gap: 8px !important;
-    }}
-    div[data-testid="stColumn"] {{
-        min-width: 60px !important;
-        flex: 0 1 auto !important;
-        margin: 0 !important;
-    }}
-    div[data-testid="stColumn"] button {{
-        border-radius: 20px !important;
-        padding: 4px 12px !important;
-        font-size: 12px !important;
-        font-weight: 600 !important;
-        background-color: var(--secondary-background-color) !important;
-        color: var(--text-color) !important;
-        border: 1px solid color-mix(in srgb, var(--faded-text-color) 20%, transparent) !important;
-        transition: all 0.2s ease !important;
-        width: 100% !important;
-    }}
-    div[data-testid="stColumn"] button:hover {{
-        border-color: var(--primary-color) !important;
-        color: var(--primary-color) !important;
-        background-color: color-mix(in srgb, var(--primary-color) 10%, transparent) !important;
-    }}
-
-    /* 11. 채팅 메시지 내부 수직 유격 압축 */
-    [data-testid="stChatMessage"] div[data-testid="stVerticalBlock"] {{
-        gap: 0px !important; /* [수정] 내부 블록 간격 완벽 제거 */
-    }}
-
-    /* 12. Mobile Responsiveness */
-    @media (max-width: 768px) {{
-        .stApp, [data-testid="stAppViewContainer"] {{
-            height: auto !important;
-            overflow: visible !important;
-        }}
-        /* Revert containers to auto height on mobile */
-        [data-testid="stVerticalBlockBorderWrapper"] > div {{
-            height: auto !important;
-        }}
-        [data-testid="stChatInput"] {{
-            left: 0 !important;
-            width: 100% !important;
-            position: fixed !important;
-        }}
-    }}
-    /* 13. Main content columns - restore 50/50 flex (override section 10 global rules) */
-    [data-testid="stMainBlockContainer"] [data-testid="stHorizontalBlock"] {{
-        flex-wrap: nowrap !important;
-        gap: 0.25rem !important;
-    }}
-    [data-testid="stMainBlockContainer"] [data-testid="stHorizontalBlock"] > [data-testid="stColumn"] {{
-        flex: 1 1 0px !important;
-        min-width: 0 !important;
-    }}
-
-    /* 13b. Column containers - viewport-relative height + independent scroll (override inline height) */
-    [data-testid="stMainBlockContainer"] [data-testid="stColumn"] [data-testid="stLayoutWrapper"] > [data-testid="stVerticalBlock"] {{
-        height: calc(100vh - 130px) !important;
-        max-height: calc(100vh - 130px) !important;
-        overflow-y: auto !important;
-        overflow-x: hidden !important;
-    }}
-
-    /* 14. Right column padding-bottom for fixed chat input */
-    [data-testid="stMainBlockContainer"] [data-testid="stColumn"]:last-child [data-testid="stLayoutWrapper"] > [data-testid="stVerticalBlock"] {{
-        padding-bottom: 60px !important;
-    }}
-    </style>
-    """,
+<style>
+.stApp, [data-testid="stAppViewContainer"] {
+    height: 100vh !important;
+    overflow: hidden !important;
+}
+[data-testid="stMainBlockContainer"] {
+    height: calc(100vh - var(--header-h, 60px)) !important;
+}
+.block-container {
+    padding-top: 1.5rem !important;
+    padding-bottom: 0rem !important;
+    padding-left: 1rem !important;
+    padding-right: 1rem !important;
+    max-width: 100% !important;
+}
+[data-testid="stChatInput"] {
+    position: fixed !important;
+    bottom: 0 !important;
+    right: 0 !important;
+    left: 50% !important;
+    width: 50% !important;
+    z-index: 1000;
+    background-color: var(--background-color) !important;
+    padding-bottom: 1rem !important;
+    padding-top: 0.5rem !important;
+}
+[data-testid="stMain"] { overflow: hidden !important; }
+[data-testid="stSidebarCollapseButton"] { z-index: 100000 !important; visibility: visible !important; opacity: 1 !important; background-color: color-mix(in srgb, var(--background-color), transparent 20%) !important; }
+header[data-testid="stHeader"] { background: color-mix(in srgb, var(--background-color), transparent 30%) !important; backdrop-filter: blur(12px) !important; z-index: 99999 !important; display: flex !important; }
+.stAppDeployButton { display: none !important; }
+details.thought-expander { background-color: var(--secondary-background-color); border: 1px solid color-mix(in srgb, var(--faded-text-color) 30%, transparent); border-radius: 8px; margin: 0 0 6px 0; padding: 8px 12px; }
+details.thought-expander summary { cursor: pointer; font-size: 0.85em; font-weight: 600; color: var(--text-color); display: flex; align-items: center; gap: 8px; }
+details.thought-expander summary::before { content: "\25B6"; font-size: 0.8em; transition: transform 0.2s; }
+details[open].thought-expander summary::before { transform: rotate(90deg); }
+.thought-container { border-left: 3px solid color-mix(in srgb, var(--primary-color) 70%, transparent); padding: 10px 15px; margin-top: 8px; font-size: 0.85em; color: var(--text-color); opacity: 0.85; max-height: 300px; overflow-y: auto; background-color: color-mix(in srgb, var(--background-color) 50%, transparent); border-radius: 0 4px 4px 0; }
+.citation-highlight { background-color: color-mix(in srgb, var(--primary-color) 15%, transparent); border-bottom: 2px dashed var(--primary-color); padding: 0 4px; border-radius: 3px; color: var(--primary-color); cursor: help; display: inline-block; position: relative; }
+.streaming-pulse { animation: pulse 1.5s infinite ease-in-out; min-height: 24px; font-size: 0.9em; color: var(--primary-color); margin-bottom: 4px; }
+@keyframes pulse { 0% { opacity: 0.4; } 50% { opacity: 1; } 100% { opacity: 0.4; } }
+.perf-details { margin-top: 2px !important; }
+.perf-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(100px, 1fr)); gap: 8px; }
+[data-testid="stHorizontalBlock"] { flex-wrap: wrap !important; gap: 8px !important; }
+div[data-testid="stColumn"] { min-width: 60px !important; flex: 0 1 auto !important; margin: 0 !important; }
+div[data-testid="stColumn"] button { border-radius: 20px !important; padding: 4px 12px !important; font-size: 12px !important; width: 100% !important; }
+[data-testid="stChatMessage"] div[data-testid="stVerticalBlock"] { gap: 0px !important; }
+html body [data-testid="stMainBlockContainer"] {
+    height: calc(100vh - var(--header-h, 60px)) !important;
+    height: calc(100dvh - var(--header-h, 60px)) !important;
+    overflow: hidden !important;
+}
+[data-testid="stColumn"] {
+    display: flex !important;
+    flex-direction: column !important;
+    flex: 1 1 0px !important;
+    min-height: 0 !important;
+    position: relative !important;
+}
+[data-testid="stColumn"] > [data-testid="stVerticalBlock"] {
+    position: absolute !important;
+    top: 0 !important;
+    left: 0 !important;
+    right: 0 !important;
+    bottom: 0 !important;
+    overflow-y: auto !important;
+    padding-bottom: 80px !important;
+}
+[data-testid="stColumn"]:last-child > [data-testid="stVerticalBlock"] {
+    padding-bottom: 80px !important;
+}
+@media (max-width: 768px) {
+    .stApp, [data-testid="stAppViewContainer"] { height: auto !important; overflow: visible !important; }
+    [data-testid="stMainBlockContainer"] { height: auto !important; }
+    [data-testid="stColumn"] > [data-testid="stVerticalBlock"] { max-height: none !important; overflow-y: visible !important; }
+    [data-testid="stChatInput"] { left: 0 !important; width: 100% !important; position: fixed !important; }
+}
+</style>
+""",
         unsafe_allow_html=True,
+    )
+    inject_column_inline_styles()
+
+
+def inject_column_inline_styles():
+    st.components.v1.html(
+        """
+    <script>
+    (function() {
+        function apply() {
+            var w = window.parent;
+            if (!w) return;
+            var cols = w.document.querySelectorAll('[data-testid="stColumn"]');
+            for (var i = 0; i < cols.length; i++) {
+                cols[i].style.setProperty('display', 'flex', 'important');
+                cols[i].style.setProperty('flex-direction', 'column', 'important');
+                cols[i].style.setProperty('flex', '1 1 0px', 'important');
+                cols[i].style.setProperty('min-height', '0', 'important');
+            }
+            var vbs = w.document.querySelectorAll('[data-testid="stColumn"] > [data-testid="stVerticalBlock"]');
+            for (var i = 0; i < vbs.length; i++) {
+                vbs[i].style.setProperty('overflow-y', 'auto', 'important');
+                vbs[i].style.setProperty('overflow-x', 'hidden', 'important');
+                vbs[i].style.setProperty('flex', '1', 'important');
+                vbs[i].style.setProperty('min-height', '0', 'important');
+            }
+            var last = w.document.querySelector('[data-testid="stColumn"]:last-child > [data-testid="stVerticalBlock"]');
+            if (last) last.style.setProperty('padding-bottom', '80px', 'important');
+        }
+        if (w.document.readyState === 'loading') {
+            w.document.addEventListener('DOMContentLoaded', apply);
+        } else {
+            apply();
+        }
+        var timer = null;
+        var obs = new MutationObserver(function() {
+            if (timer) clearTimeout(timer);
+            timer = setTimeout(apply, 200);
+        });
+        obs.observe(w.document.body, { childList: true, subtree: true });
+    })();
+    </script>
+    """,
+        height=0,
+        width=0,
     )
 
 

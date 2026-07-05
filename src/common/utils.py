@@ -620,6 +620,39 @@ def sync_run(coro):
     return asyncio.run(coro)
 
 
+def run_in_background_worker(coro, session_id: str) -> None:
+    """
+    Streamlit 환경에서 코루틴을 별도의 스레드에서 실행하는 백그라운드 워커.
+    - ScriptRunContext를 새 스레드에 전달하여 Streamlit 세션 함수 사용 가능하게 함
+    - 작업 완료 후 자동으로 rerun 트리거
+    """
+    import threading
+
+    from streamlit.runtime import get_instance
+    from streamlit.runtime.scriptrunner import add_script_run_ctx, get_script_run_ctx
+
+    from core.session import SessionManager
+
+    ctx = get_script_run_ctx()
+
+    def _wrapper():
+        add_script_run_ctx(threading.current_thread(), ctx)
+        SessionManager.set_session_id(session_id)
+        try:
+            asyncio.run(coro)
+        except Exception as e:
+            logger.error(f"Background worker error: {e}", exc_info=True)
+        finally:
+            try:
+                instance = get_instance()
+                if instance:
+                    instance.request_rerun(session_id)  # type: ignore[union-attr]
+            except Exception as e:
+                logger.error(f"Background worker rerun failed: {e}", exc_info=True)
+
+    threading.Thread(target=_wrapper, daemon=True).start()
+
+
 def log_operation(operation_name):
     """
     동기 및 비동기 함수를 모두 지원하는 로깅 데코레이터.

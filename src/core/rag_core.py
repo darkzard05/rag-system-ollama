@@ -6,6 +6,7 @@ RAG 시스템의 통합 엔진 (Core Engine).
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import os
 from typing import Any
@@ -437,10 +438,8 @@ class RAGSystem:
             finally:
                 if producer_task and not producer_task.done():
                     producer_task.cancel()
-                    try:
+                    with contextlib.suppress(asyncio.CancelledError):
                         await producer_task
-                    except asyncio.CancelledError:
-                        pass
 
         return _consumer()
 
