@@ -39,6 +39,10 @@ logger = setup_logging(log_level="DEBUG", log_file=Path("logs/app.log"))
 
 MAX_FILE_SIZE_MB = StringConstants.MAX_FILE_SIZE_MB
 
+# NumExpr 최대 스레드 설정 (CPU 코어 수 기반)
+_numexpr_threads = os.cpu_count() or 4
+os.environ.setdefault("NUMEXPR_MAX_THREADS", str(_numexpr_threads))
+
 # 비동기 패치 적용 (Streamlit의 asyncio 루프 충돌 방지)
 nest_asyncio.apply()
 

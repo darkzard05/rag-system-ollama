@@ -6,6 +6,7 @@ LangGraph를 사용하여 자가 교정(Self-Correction) RAG 워크플로우를 
 import asyncio
 import copy
 import logging
+import warnings
 from typing import Any
 
 from langchain_core.callbacks.manager import adispatch_custom_event
@@ -604,6 +605,12 @@ def build_graph() -> Any:
     workflow.add_edge("rewrite_query", "retrieve")
     workflow.add_edge("generate", END)
 
+    # LangChain pending deprecation warning (allowed_objects 기본값 변경 예정) 침묵화
+    warnings.filterwarnings(
+        "ignore",
+        category=DeprecationWarning,
+        message=".*allowed_objects.*",
+    )
     memory = InMemorySaver()
 
     return workflow.compile(checkpointer=memory)

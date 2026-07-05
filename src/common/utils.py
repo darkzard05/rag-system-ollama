@@ -628,7 +628,6 @@ def run_in_background_worker(coro, session_id: str) -> None:
     """
     import threading
 
-    from streamlit.runtime import get_instance
     from streamlit.runtime.scriptrunner import add_script_run_ctx, get_script_run_ctx
 
     from core.session import SessionManager
@@ -644,9 +643,8 @@ def run_in_background_worker(coro, session_id: str) -> None:
             logger.error(f"Background worker error: {e}", exc_info=True)
         finally:
             try:
-                instance = get_instance()
-                if instance:
-                    instance.request_rerun(session_id)  # type: ignore[union-attr]
+                if ctx and ctx.session:
+                    ctx.session.request_rerun(None)
             except Exception as e:
                 logger.error(f"Background worker rerun failed: {e}", exc_info=True)
 
