@@ -311,11 +311,11 @@ def _render_app_layout(available_models: list[str] | None = None) -> None:
 
     col_pdf, col_chat = st.columns([1, 1], gap="small")
 
-    with col_pdf, st.container(height=target_height, border=False):
+    with col_pdf, st.container(height=target_height):
         from ui.components.viewer import render_pdf_column
 
         render_pdf_column()
-    with col_chat, st.container(height=target_height, border=False):
+    with col_chat, st.container(height=target_height):
         from ui.ui import render_left_column
 
         render_left_column()

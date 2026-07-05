@@ -218,12 +218,12 @@ def inject_custom_css(is_expanded: bool = False):
         flex-wrap: wrap !important;
         gap: 8px !important;
     }}
-    div[data-testid="column"] {{
+    div[data-testid="stColumn"] {{
         min-width: 60px !important;
         flex: 0 1 auto !important;
         margin: 0 !important;
     }}
-    div[data-testid="column"] button {{
+    div[data-testid="stColumn"] button {{
         border-radius: 20px !important;
         padding: 4px 12px !important;
         font-size: 12px !important;
@@ -234,7 +234,7 @@ def inject_custom_css(is_expanded: bool = False):
         transition: all 0.2s ease !important;
         width: 100% !important;
     }}
-    div[data-testid="column"] button:hover {{
+    div[data-testid="stColumn"] button:hover {{
         border-color: var(--primary-color) !important;
         color: var(--primary-color) !important;
         background-color: color-mix(in srgb, var(--primary-color) 10%, transparent) !important;
@@ -260,6 +260,28 @@ def inject_custom_css(is_expanded: bool = False):
             width: 100% !important;
             position: fixed !important;
         }}
+    }}
+    /* 13. Main content columns - restore 50/50 flex (override section 10 global rules) */
+    [data-testid="stMainBlockContainer"] [data-testid="stHorizontalBlock"] {{
+        flex-wrap: nowrap !important;
+        gap: 0.25rem !important;
+    }}
+    [data-testid="stMainBlockContainer"] [data-testid="stHorizontalBlock"] > [data-testid="stColumn"] {{
+        flex: 1 1 0px !important;
+        min-width: 0 !important;
+    }}
+
+    /* 13b. Column containers - viewport-relative height + independent scroll (override inline height) */
+    [data-testid="stMainBlockContainer"] [data-testid="stColumn"] [data-testid="stLayoutWrapper"] > [data-testid="stVerticalBlock"] {{
+        height: calc(100vh - 130px) !important;
+        max-height: calc(100vh - 130px) !important;
+        overflow-y: auto !important;
+        overflow-x: hidden !important;
+    }}
+
+    /* 14. Right column padding-bottom for fixed chat input */
+    [data-testid="stMainBlockContainer"] [data-testid="stColumn"]:last-child [data-testid="stLayoutWrapper"] > [data-testid="stVerticalBlock"] {{
+        padding-bottom: 60px !important;
     }}
     </style>
     """,
