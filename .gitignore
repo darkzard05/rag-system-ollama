@@ -60,3 +60,9 @@ gha-creds-*.json
 # Data and temporary uploads
 data/
 !tests/data/
+
+.omo/
+
+
+find_chat_selectors.py
+

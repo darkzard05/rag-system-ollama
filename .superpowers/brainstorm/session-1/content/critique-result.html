@@ -1,0 +1,72 @@
+<h2>전문가 비판 분석 결과</h2>
+<p class="subtitle">세 명의 서브에이전트가 각자의 관점에서 현재 로고를 정밀 진단했습니다.</p>
+
+<div class="pros-cons">
+  <div class="pros">
+    <h4>✅ 강점 (Strengths)</h4>
+    <ul>
+      <li><strong>현대적인 스타일:</strong> 그라데이션과 쉐도우를 활용해 트렌디한 느낌을 줌</li>
+      <li><strong>명확한 계층:</strong> RAG와 SYSTEM의 크기 대비로 정보 우선순위가 명확함</li>
+      <li><strong>코드 효율성:</strong> 외부 자산 없이 순수 CSS로만 구현되어 성능에 유리함</li>
+    </ul>
+  </div>
+  <div class="cons">
+    <h4>⚠️ 보완점 (Weaknesses)</h4>
+    <ul>
+      <li><strong>가독성 이슈:</strong> 배경 그라데이션과 텍스트 색상의 대비가 일부 환경에서 낮을 수 있음</li>
+      <li><strong>상징성 부족:</strong> '🤖' 이모지는 범용적이라 RAG만의 고유한 정체성을 드러내기엔 한계가 있음</li>
+      <li><strong>확장성 제한:</strong> 현재 CSS가 `ui.py`에 하드코딩되어 있어 테마 변경 시 대응이 번거로움</li>
+    </ul>
+  </div>
+</div>
+
+<div class="section">
+    <h3>🤖 관점별 상세 리포트</h3>
+    <div class="cards">
+        <div class="card">
+            <div class="card-body">
+                <span class="label">UI/UX 관점</span>
+                <p>사이드바 폭이 좁아질 경우 로고의 좌우 여백이 부족해 답답해 보일 수 있습니다. 아이콘 박스의 쉐도우가 다크 모드에서는 잘 보이지 않을 수 있으므로 테두리 강조가 필요합니다.</p>
+            </div>
+        </div>
+        <div class="card">
+            <div class="card-body">
+                <span class="label">브랜딩 관점</span>
+                <p>"RAG SYSTEM"이라는 명칭은 기술적이지만 건조합니다. 'Intelligent Library'나 'Neural Assistant' 등 서비스의 가치를 담은 보조 문구를 활용하는 것이 브랜드 구축에 유리합니다.</p>
+            </div>
+        </div>
+        <div class="card">
+            <div class="card-body">
+                <span class="label">개발 관점</span>
+                <p>현재 인라인으로 주입된 CSS는 CSS Variables를 활용해 `primary-color` 등을 중앙 관리하도록 리팩토링하는 것을 추천합니다. 유지보수성이 크게 향상됩니다.</p>
+            </div>
+        </div>
+    </div>
+</div>
+
+<h3>다음 단계 제안</h3>
+<p class="subtitle">어떤 방향으로 개선을 진행할까요?</p>
+
+<div class="options">
+  <div class="option" data-choice="refine-css" onclick="toggleSelect(this)">
+    <div class="letter">1</div>
+    <div class="content">
+      <h3>디자인 정교화</h3>
+      <p>가독성 향상을 위한 대비 조정 및 마진 최적화</p>
+    </div>
+  </div>
+  <div class="option" data-choice="branding-update" onclick="toggleSelect(this)">
+    <div class="letter">2</div>
+    <div class="content">
+      <h3>브랜딩 강화</h3>
+      <p>이모지 대신 커스텀 아이콘(SVG) 또는 브랜드 슬로건 추가</p>
+    </div>
+  </div>
+  <div class="option" data-choice="code-refactor" onclick="toggleSelect(this)">
+    <div class="letter">3</div>
+    <div class="content">
+      <h3>코드 구조 개선</h3>
+      <p>CSS 변수 적용 및 테마 대응 로직 추가</p>
+    </div>
+  </div>
+</div>

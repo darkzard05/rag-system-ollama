@@ -1,0 +1,96 @@
+<h2>사이드바 확장 버튼 가림 현상 분석</h2>
+<p class="subtitle">현재 레이아웃의 충돌 지점과 개선 방향을 시각화합니다.</p>
+
+<div class="split">
+  <div class="mockup">
+    <div class="mockup-header">현재 상태 (AS-IS)</div>
+    <div class="mockup-body" style="background: #1e1e1e; height: 300px; position: relative; overflow: hidden; color: #ccc; border: 1px solid #333;">
+      <!-- Sidebar Collapsed Control -->
+      <div style="position: absolute; top: 8px; left: 8px; width: 40px; height: 32px; background: #007bff; color: white; border-radius: 8px; display: flex; align-items: center; justify-content: center; z-index: 10; box-shadow: 0 2px 5px rgba(0,0,0,0.5); font-size: 12px;">
+        &gt;
+      </div>
+      
+      <!-- Main Content Area -->
+      <div style="margin-left: 0; padding: 0 15px; height: 100%;">
+        <!-- PDF Viewer Controls (Potential Overlay) -->
+        <div style="display: flex; gap: 10px; padding: 10px 0; border-bottom: 1px solid #333; background: #252525;">
+          <div style="width: 30px; height: 30px; background: #444; border-radius: 4px; display: flex; align-items: center; justify-content: center;">&lt;</div>
+          <div style="flex: 1; height: 30px; background: #333; border-radius: 4px; display: flex; align-items: center; justify-content: center; font-size: 11px;">Page 1 / 10</div>
+          <div style="width: 30px; height: 30px; background: #444; border-radius: 4px; display: flex; align-items: center; justify-content: center;">&gt;</div>
+        </div>
+        <div style="padding: 20px; font-size: 12px; opacity: 0.5;">PDF Content area...</div>
+      </div>
+
+      <!-- Analysis Note -->
+      <div style="position: absolute; top: 45px; left: 10px; background: rgba(255, 0, 0, 0.2); border: 1px solid red; padding: 5px; font-size: 10px; color: #ffcccc; border-radius: 4px;">
+        ⚠️ PDF 컨트롤바와 확장 버튼이 겹침
+      </div>
+    </div>
+  </div>
+
+  <div class="mockup">
+    <div class="mockup-header">개선 방향 (TO-BE)</div>
+    <div class="mockup-body" style="background: #1e1e1e; height: 300px; position: relative; overflow: hidden; color: #ccc; border: 1px solid #333;">
+      <!-- Adjusted Sidebar Collapsed Control -->
+      <div style="position: absolute; top: 15px; left: 15px; width: 44px; height: 36px; background: #007bff; color: white; border-radius: 10px; display: flex; align-items: center; justify-content: center; z-index: 100; box-shadow: 0 4px 10px rgba(0,0,0,0.6); font-size: 14px; border: 2px solid rgba(255,255,255,0.2);">
+        &gt;
+      </div>
+      
+      <!-- Main Content Area with Safety Margin -->
+      <div style="margin-left: 0; padding: 0 15px; height: 100%;">
+        <!-- Space reserved for button -->
+        <div style="height: 10px;"></div>
+        
+        <!-- PDF Viewer Controls shifted or padded -->
+        <div style="display: flex; gap: 10px; padding: 10px 0; padding-left: 60px; border-bottom: 1px solid #333; background: #252525;">
+          <div style="width: 30px; height: 30px; background: #444; border-radius: 4px; display: flex; align-items: center; justify-content: center;">&lt;</div>
+          <div style="flex: 1; height: 30px; background: #333; border-radius: 4px; display: flex; align-items: center; justify-content: center; font-size: 11px;">Page 1 / 10</div>
+          <div style="width: 30px; height: 30px; background: #444; border-radius: 4px; display: flex; align-items: center; justify-content: center;">&gt;</div>
+        </div>
+        <div style="padding: 20px; font-size: 12px; opacity: 0.5;">PDF Content area...</div>
+      </div>
+
+      <!-- Improvement Note -->
+      <div style="position: absolute; bottom: 10px; right: 10px; background: rgba(0, 255, 0, 0.1); border: 1px solid #0f0; padding: 5px; font-size: 10px; color: #cfc; border-radius: 4px;">
+        ✅ 버튼 위치 조정 및 컨텐츠 여백 확보
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="section">
+  <h3>개선 사항 상세</h3>
+  <div class="pros-cons">
+    <div class="pros">
+      <h4>장점</h4>
+      <ul>
+        <li>버튼 위치를 소폭(15px) 이동하여 가시성 확보</li>
+        <li>메인 컨텐츠 상단 좌측에 여백(Padding-left: 60px)을 추가하여 겹침 방지</li>
+        <li>버튼에 강조 효과(Shadow, Border)를 추가하여 배경과 구분</li>
+      </ul>
+    </div>
+    <div class="cons">
+      <h4>고려 사항</h4>
+      <ul>
+        <li>사이드바가 확장되었을 때는 이 여백을 제거해야 함 (조건부 CSS)</li>
+      </ul>
+    </div>
+  </div>
+</div>
+
+<div class="options">
+  <div class="option" data-choice="proceed" onclick="toggleSelect(this)">
+    <div class="letter">A</div>
+    <div class="content">
+      <h3>이 설계대로 진행</h3>
+      <p>위치 조정 및 조건부 여백 확보 로직을 구현합니다.</p>
+    </div>
+  </div>
+  <div class="option" data-choice="modify" onclick="toggleSelect(this)">
+    <div class="letter">B</div>
+    <div class="content">
+      <h3>수정 제안</h3>
+      <p>버튼의 위치나 여백 정도를 다르게 하고 싶습니다.</p>
+    </div>
+  </div>
+</div>

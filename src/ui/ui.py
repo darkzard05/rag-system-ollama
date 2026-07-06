@@ -11,35 +11,124 @@ import streamlit as st
 from ui.components.chat import render_chat_interface
 
 
-def inject_custom_css(is_expanded: bool = False):
+def inject_custom_css():
     st.markdown(
         """
 <style>
+/* ════════════════════════════════════════════
+   0. GLOBAL VIEWPORT LOCK
+   ════════════════════════════════════════════ */
 .stApp, [data-testid="stAppViewContainer"] {
     height: 100vh !important;
+    height: 100dvh !important;
     overflow: hidden !important;
 }
+
+/* ════════════════════════════════════════════
+   1-8. FLEX CHAIN (DOM 검증 기반 7-step)
+   ════════════════════════════════════════════ */
+
+/* 1. Main container: 헤더 제외 높이 + flex 컬럼 */
 [data-testid="stMainBlockContainer"] {
     height: calc(100vh - var(--header-h, 60px)) !important;
+    height: calc(100dvh - var(--header-h, 60px)) !important;
+    display: flex !important;
+    flex-direction: column !important;
+    overflow: hidden !important;
 }
-.block-container {
-    padding-top: 1.5rem !important;
-    padding-bottom: 0rem !important;
-    padding-left: 1rem !important;
-    padding-right: 1rem !important;
-    max-width: 100% !important;
+
+/* 2. stMainBlockContainer의 직계 stVerticalBlock이 flex 공간 채움 */
+[data-testid="stMainBlockContainer"] > [data-testid="stVerticalBlock"] {
+    flex: 1 !important;
+    min-height: 0 !important;
+    min-width: 0 !important;
 }
-[data-testid="stChatInput"] {
-    position: fixed !important;
+
+/* 3. stLayoutWrapper (stMainBlockContainer > stVerticalBlock 내부) */
+[data-testid="stMainBlockContainer"] > [data-testid="stVerticalBlock"] > [data-testid="stLayoutWrapper"] {
+    flex: 1 !important;
+    min-height: 0 !important;
+    min-width: 0 !important;
+    overflow: hidden !important;
+}
+
+/* 4. stHorizontalBlock: fill remaining space */
+[data-testid="stHorizontalBlock"] {
+    height: 100% !important;
+    min-height: 0 !important;
+    flex-wrap: nowrap !important;
+    gap: 0.25rem !important;
+    overflow: hidden !important;
+}
+
+/* 5. stColumn: flex container */
+[data-testid="stColumn"] {
+    flex: 1 1 0px !important;
+    min-width: 0 !important;
+    display: flex !important;
+    flex-direction: column !important;
+    min-height: 0 !important;
+    position: relative !important;
+}
+
+/* 6. Column 내부 1단계 stVerticalBlock: flex 확장 */
+[data-testid="stColumn"] > [data-testid="stVerticalBlock"] {
+    flex: 1 !important;
+    min-height: 0 !important;
+    min-width: 0 !important;
+    overflow: hidden !important;
+}
+
+/* 7. Column 내부 stLayoutWrapper: flex 확장 */
+[data-testid="stColumn"] > [data-testid="stVerticalBlock"] > [data-testid="stLayoutWrapper"] {
+    flex: 1 !important;
+    min-height: 0 !important;
+    min-width: 0 !important;
+    overflow: hidden !important;
+}
+
+/* 8. ★ SCROLLABLE: Column 내부 2단계 stVerticalBlock (stLayoutWrapper 내부) */
+[data-testid="stColumn"] > [data-testid="stVerticalBlock"] > [data-testid="stLayoutWrapper"] > [data-testid="stVerticalBlock"] {
+    flex: 1 !important;
+    min-height: 0 !important;
+    overflow-y: auto !important;
+    overflow-x: hidden !important;
+}
+
+/* 9. 우측 컬럼 하단 패딩 (sticky 입력창이 메시지 가리지 않도록) */
+[data-testid="stMainBlockContainer"] [data-testid="stColumn"]:last-child
+> [data-testid="stVerticalBlock"] > [data-testid="stLayoutWrapper"]
+> [data-testid="stVerticalBlock"] {
+    padding-bottom: 4rem !important;
+}
+
+/* ════════════════════════════════════════════
+   10. ★ STICKY CHAT INPUT
+   우측 컬럼 스크롤 가능 영역의 마지막 자식에 sticky
+   ════════════════════════════════════════════ */
+[data-testid="stMainBlockContainer"] [data-testid="stColumn"]:last-child
+> [data-testid="stVerticalBlock"] > [data-testid="stLayoutWrapper"]
+> [data-testid="stVerticalBlock"] > [data-testid="stElementContainer"]:last-child {
+    position: sticky !important;
     bottom: 0 !important;
-    right: 0 !important;
-    left: 50% !important;
-    width: 50% !important;
-    z-index: 1000;
+    z-index: 100 !important;
     background-color: var(--background-color) !important;
-    padding-bottom: 1rem !important;
+    border-top: 1px solid color-mix(in srgb, var(--border-color, #ccc) 30%, transparent) !important;
     padding-top: 0.5rem !important;
 }
+
+/* Restore chat input to relative (remove the global fixed positioning) */
+[data-testid="stChatInput"] {
+    position: relative !important;
+    left: auto !important;
+    right: auto !important;
+    width: 100% !important;
+    bottom: auto !important;
+}
+
+/* ════════════════════════════════════════════
+   EXISTING STYLES TO KEEP (thought expander, citation, streaming, etc.)
+   ════════════════════════════════════════════ */
 [data-testid="stMain"] { overflow: hidden !important; }
 [data-testid="stSidebarCollapseButton"] { z-index: 100000 !important; visibility: visible !important; opacity: 1 !important; background-color: color-mix(in srgb, var(--background-color), transparent 20%) !important; }
 header[data-testid="stHeader"] { background: color-mix(in srgb, var(--background-color), transparent 30%) !important; backdrop-filter: blur(12px) !important; z-index: 99999 !important; display: flex !important; }
@@ -54,88 +143,38 @@ details[open].thought-expander summary::before { transform: rotate(90deg); }
 @keyframes pulse { 0% { opacity: 0.4; } 50% { opacity: 1; } 100% { opacity: 0.4; } }
 .perf-details { margin-top: 2px !important; }
 .perf-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(100px, 1fr)); gap: 8px; }
-[data-testid="stHorizontalBlock"] { flex-wrap: wrap !important; gap: 8px !important; }
-div[data-testid="stColumn"] { min-width: 60px !important; flex: 0 1 auto !important; margin: 0 !important; }
-div[data-testid="stColumn"] button { border-radius: 20px !important; padding: 4px 12px !important; font-size: 12px !important; width: 100% !important; }
 [data-testid="stChatMessage"] div[data-testid="stVerticalBlock"] { gap: 0px !important; }
-html body [data-testid="stMainBlockContainer"] {
-    height: calc(100vh - var(--header-h, 60px)) !important;
-    height: calc(100dvh - var(--header-h, 60px)) !important;
-    overflow: hidden !important;
-}
-[data-testid="stColumn"] {
-    display: flex !important;
-    flex-direction: column !important;
-    flex: 1 1 0px !important;
-    min-height: 0 !important;
-    position: relative !important;
-}
-[data-testid="stColumn"] > [data-testid="stVerticalBlock"] {
-    position: absolute !important;
-    top: 0 !important;
-    left: 0 !important;
-    right: 0 !important;
-    bottom: 0 !important;
-    overflow-y: auto !important;
-    padding-bottom: 80px !important;
-}
-[data-testid="stColumn"]:last-child > [data-testid="stVerticalBlock"] {
-    padding-bottom: 80px !important;
-}
+
+/* ════════════════════════════════════════════
+   12. MOBILE RESPONSIVE
+   ════════════════════════════════════════════ */
 @media (max-width: 768px) {
-    .stApp, [data-testid="stAppViewContainer"] { height: auto !important; overflow: visible !important; }
-    [data-testid="stMainBlockContainer"] { height: auto !important; }
-    [data-testid="stColumn"] > [data-testid="stVerticalBlock"] { max-height: none !important; overflow-y: visible !important; }
-    [data-testid="stChatInput"] { left: 0 !important; width: 100% !important; position: fixed !important; }
+    .stApp, [data-testid="stAppViewContainer"] {
+        height: auto !important;
+        overflow: visible !important;
+    }
+    [data-testid="stMainBlockContainer"] {
+        height: auto !important;
+        display: block !important;
+    }
+    [data-testid="stColumn"] {
+        display: block !important;
+    }
+    [data-testid="stColumn"] > [data-testid="stVerticalBlock"]
+    > [data-testid="stLayoutWrapper"] > [data-testid="stVerticalBlock"] {
+        max-height: none !important;
+        overflow-y: visible !important;
+    }
+    [data-testid="stChatInput"] {
+        position: fixed !important;
+        bottom: 0 !important;
+        left: 0 !important;
+        width: 100% !important;
+    }
 }
 </style>
 """,
         unsafe_allow_html=True,
-    )
-    inject_column_inline_styles()
-
-
-def inject_column_inline_styles():
-    st.components.v1.html(
-        """
-    <script>
-    (function() {
-        function apply() {
-            var w = window.parent;
-            if (!w) return;
-            var cols = w.document.querySelectorAll('[data-testid="stColumn"]');
-            for (var i = 0; i < cols.length; i++) {
-                cols[i].style.setProperty('display', 'flex', 'important');
-                cols[i].style.setProperty('flex-direction', 'column', 'important');
-                cols[i].style.setProperty('flex', '1 1 0px', 'important');
-                cols[i].style.setProperty('min-height', '0', 'important');
-            }
-            var vbs = w.document.querySelectorAll('[data-testid="stColumn"] > [data-testid="stVerticalBlock"]');
-            for (var i = 0; i < vbs.length; i++) {
-                vbs[i].style.setProperty('overflow-y', 'auto', 'important');
-                vbs[i].style.setProperty('overflow-x', 'hidden', 'important');
-                vbs[i].style.setProperty('flex', '1', 'important');
-                vbs[i].style.setProperty('min-height', '0', 'important');
-            }
-            var last = w.document.querySelector('[data-testid="stColumn"]:last-child > [data-testid="stVerticalBlock"]');
-            if (last) last.style.setProperty('padding-bottom', '80px', 'important');
-        }
-        if (w.document.readyState === 'loading') {
-            w.document.addEventListener('DOMContentLoaded', apply);
-        } else {
-            apply();
-        }
-        var timer = null;
-        var obs = new MutationObserver(function() {
-            if (timer) clearTimeout(timer);
-            timer = setTimeout(apply, 200);
-        });
-        obs.observe(w.document.body, { childList: true, subtree: true });
-    })();
-    </script>
-    """,
-        height=0,
-        width=0,
     )
 
 

@@ -1,0 +1,95 @@
+<h2>심볼 및 레이아웃 후보군</h2>
+<p class="subtitle">이모지를 대체할 SVG 기반의 고유 심볼과 레이아웃 옵션입니다. 클릭하여 선호하는 스타일을 선택해주세요.</p>
+
+<div class="cards" data-multiselect>
+  <!-- 옵션 1: 기술적/신경망 스타일 -->
+  <div class="card" data-choice="neural" onclick="toggleSelect(this)">
+    <div class="card-image" style="background:#1e1e1e; padding:20px; display:flex; justify-content:center;">
+        <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="#007bff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/>
+        </svg>
+    </div>
+    <div class="card-body">
+      <h3>1. Layers & Nodes</h3>
+      <p>데이터 계층과 신경망을 상징하는 레이어드 아이콘. RAG의 구조적 특성을 강조합니다.</p>
+    </div>
+  </div>
+
+  <!-- 옵션 2: 지식/도서관 스타일 -->
+  <div class="card" data-choice="knowledge" onclick="toggleSelect(this)">
+    <div class="card-image" style="background:#1e1e1e; padding:20px; display:flex; justify-content:center;">
+        <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="#007bff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/>
+            <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/>
+            <line x1="12" y1="6" x2="12" y2="18"/>
+        </svg>
+    </div>
+    <div class="card-body">
+      <h3>2. Smart Library</h3>
+      <p>책과 회로를 결합한 형태로, '지능형 문서 창고'라는 서비스의 본질을 직관적으로 보여줍니다.</p>
+    </div>
+  </div>
+
+  <!-- 옵션 3: 검색/추출 스타일 -->
+  <div class="card" data-choice="retrieval" onclick="toggleSelect(this)">
+    <div class="card-image" style="background:#1e1e1e; padding:20px; display:flex; justify-content:center;">
+        <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="#007bff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="11" cy="11" r="8"/>
+            <line x1="21" y1="21" x2="16.65" y2="16.65"/>
+            <path d="M11 8v6M8 11h6"/>
+        </svg>
+    </div>
+    <div class="card-body">
+      <h3>3. Precision Search</h3>
+      <p>검색 돋보기와 플러스 기호를 결합. 방대한 데이터 속에서 정확한 정보를 찾는 능력을 상징합니다.</p>
+    </div>
+  </div>
+
+  <!-- 옵션 4: 추상적/미래지향적 -->
+  <div class="card" data-choice="abstract" onclick="toggleSelect(this)">
+    <div class="card-image" style="background:#1e1e1e; padding:20px; display:flex; justify-content:center;">
+        <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="#007bff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/>
+        </svg>
+    </div>
+    <div class="card-body">
+      <h3>4. Core Spark</h3>
+      <p>데이터의 정수(Essence)를 추출하여 빛나는 통찰을 준다는 의미의 스파크 심볼입니다.</p>
+    </div>
+  </div>
+</div>
+
+<div class="section">
+    <h3>✨ 슬로건 레이아웃 미리보기</h3>
+    <div class="split">
+        <div class="mockup">
+            <div class="mockup-header">A: Compact (현재 유지)</div>
+            <div class="mockup-body" style="background:#1e1e1e; padding:20px;">
+                <div class="sidebar-logo-container">
+                    <div class="logo-icon-wrapper">✨</div>
+                    <div class="logo-text-wrapper">
+                        <span class="logo-brand">RAG</span>
+                        <span class="logo-subtitle">SYSTEM</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="mockup">
+            <div class="mockup-header">B: Descriptive (슬로건 추가)</div>
+            <div class="mockup-body" style="background:#1e1e1e; padding:20px;">
+                <div class="sidebar-logo-container" style="flex-direction: column; align-items: flex-start; gap: 8px;">
+                    <div style="display:flex; align-items:center; gap:12px;">
+                        <div class="logo-icon-wrapper">✨</div>
+                        <div class="logo-text-wrapper">
+                            <span class="logo-brand">RAG</span>
+                            <span class="logo-subtitle">SYSTEM</span>
+                        </div>
+                    </div>
+                    <div style="font-size: 0.6rem; color: #888; letter-spacing: 0.5px; border-top: 1px solid rgba(255,255,255,0.1); padding-top: 4px; width: 100%;">
+                        Intelligent Knowledge Assistant
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>

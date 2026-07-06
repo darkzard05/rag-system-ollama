@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Layout Efficiency Analysis</title>
+    <style>
+        :root {
+            --primary: #007AFF;
+            --bg: #F5F5F7;
+            --card: #FFFFFF;
+            --text: #1D1D1F;
+            --border: #D2D2D7;
+        }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            background-color: var(--bg);
+            color: var(--text);
+            margin: 0;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+        }
+        .container {
+            max-width: 1000px;
+            margin: 0 auto;
+            width: 100%;
+        }
+        .card {
+            background: var(--card);
+            border-radius: 12px;
+            padding: 24px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.05);
+            margin-bottom: 20px;
+        }
+        h2 { margin-top: 0; color: var(--primary); }
+        .layout-demo {
+            display: flex;
+            gap: 10px;
+            height: 300px;
+            border: 2px dashed var(--border);
+            padding: 10px;
+            background: #eee;
+        }
+        .panel {
+            flex: 1;
+            background: var(--card);
+            border: 1px solid var(--border);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: bold;
+            position: relative;
+        }
+        .panel::after {
+            content: "50%";
+            position: absolute;
+            bottom: 10px;
+            font-size: 12px;
+            color: #888;
+        }
+        .issue-list {
+            list-style: none;
+            padding: 0;
+        }
+        .issue-item {
+            display: flex;
+            align-items: flex-start;
+            gap: 12px;
+            margin-bottom: 12px;
+            padding: 12px;
+            background: #FFF5F5;
+            border-left: 4px solid #FF3B30;
+            border-radius: 4px;
+        }
+        .issue-icon { font-size: 20px; }
+        .solution-card {
+            border-left: 4px solid var(--primary);
+            background: #F0F7FF;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="card">
+            <h2>현행 레이아웃 분석: 고정 1:1 비율</h2>
+            <div class="layout-demo">
+                <div class="panel">PDF Viewer</div>
+                <div class="panel">Chat Interface</div>
+            </div>
+            <p><strong>진단:</strong> 현재 <code>st.columns([1, 1])</code> 방식으로 구현된 레이아웃은 다음과 같은 UX 저하를 유발합니다.</p>
+            
+            <ul class="issue-list">
+                <li class="issue-item">
+                    <span class="issue-icon">🚨</span>
+                    <div>
+                        <strong>정보 밀도 불균형</strong><br>
+                        PDF의 세밀한 도표를 볼 때는 넓은 화면이 필요하지만, 채팅 답변이 짧을 때는 우측 공간이 낭비됩니다.
+                    </div>
+                </li>
+                <li class="issue-item">
+                    <span class="issue-icon">🚨</span>
+                    <div>
+                        <strong>컨텍스트 전환 피로도</strong><br>
+                        사용자의 시선이 좌우로 과도하게 분산되어, 긴 문서를 읽으며 동시에 대화하는 '멀티태스킹' 효율이 떨어집니다.
+                    </div>
+                </li>
+                <li class="issue-item">
+                    <span class="issue-icon">🚨</span>
+                    <div>
+                        <strong>반응형 대응 한계</strong><br>
+                        노트북 등 작은 화면에서 2컬럼 고정 시, PDF 텍스트가 너무 작게 렌더링되어 가독성이 심각하게 훼손됩니다.
+                    </div>
+                </li>
+            </ul>
+        </div>
+
+        <div class="card solution-card">
+            <h2>개선 제안: 유동적 공간 관리 (Adaptive Workspace)</h2>
+            <p>단순한 고정 배치를 넘어, 사용자의 <strong>의도(Intent)</strong>에 반응하는 레이아웃으로 진화해야 합니다.</p>
+            <ul>
+                <li><strong>가변형 분할 (Resizable Splitter)</strong>: 사용자가 마우스 드래그로 직접 영역 비율을 조정 (Streamlit 기본 기능 한계 극복 필요)</li>
+                <li><strong>포커스 모드 (Focus Mode)</strong>: PDF만 보기 / 채팅만 보기 버튼을 통해 특정 영역을 일시적으로 전체 화면화</li>
+                <li><strong>지능형 자동 조절</strong>: 문서 분석 중에는 PDF 강조, 답변 생성 중에는 채팅 영역 확대</li>
+            </ul>
+        </div>
+    </div>
+</body>
+</html>

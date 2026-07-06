@@ -1,0 +1,192 @@
+<style>
+    .gallery-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+        gap: 20px;
+        padding: 10px;
+    }
+    .logo-card {
+        background: #1e1e1e;
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        border-radius: 16px;
+        padding: 24px;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 16px;
+        transition: transform 0.2s, border-color 0.2s;
+        cursor: pointer;
+    }
+    .logo-card:hover {
+        transform: translateY(-4px);
+        border-color: #007bff;
+    }
+    .logo-card.selected {
+        border-color: #007bff;
+        background: rgba(0, 123, 255, 0.05);
+        box-shadow: 0 0 0 2px #007bff;
+    }
+
+    /* Common Styles */
+    .sidebar-logo-container {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        padding: 12px;
+        border-radius: 10px;
+    }
+    .logo-icon-wrapper {
+        width: 40px;
+        height: 40px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        border-radius: 8px;
+    }
+    .logo-text-wrapper {
+        display: flex;
+        flex-direction: column;
+        line-height: 1.1;
+    }
+    .logo-brand {
+        font-size: 1.2rem;
+        font-weight: 800;
+        letter-spacing: 0.5px;
+    }
+    .logo-subtitle {
+        font-size: 0.6rem;
+        font-weight: 700;
+        letter-spacing: 2px;
+    }
+
+    /* Variation Specifics */
+    .v1-bg { background: linear-gradient(135deg, rgba(0, 123, 255, 0.2), rgba(0, 123, 255, 0.05)); border: 1px solid rgba(0, 123, 255, 0.2); }
+    .v1-icon { background: #007bff; box-shadow: 0 4px 12px rgba(0, 123, 255, 0.4); }
+    
+    .v2-bg { background: linear-gradient(135deg, rgba(138, 43, 226, 0.2), rgba(0, 0, 255, 0.05)); border: 1px solid rgba(138, 43, 226, 0.2); }
+    .v2-icon { background: linear-gradient(45deg, #8a2be2, #0000ff); }
+    
+    .v3-bg { background: rgba(255, 255, 255, 0.03); border: 1px solid rgba(255, 255, 255, 0.1); }
+    .v3-icon { border: 2px solid #00d1b2; color: #00d1b2; }
+    
+    .v4-bg { background: #000; border: 1px solid #333; }
+    .v4-icon { background: #fff; color: #000; }
+</style>
+
+<h2>로고 디자인 갤러리</h2>
+<p class="subtitle">다양한 스타일, 색상, 레이아웃의 조합입니다. 마음에 드는 컨셉을 클릭하여 선택해주세요.</p>
+
+<div class="gallery-grid" data-multiselect>
+  
+  <!-- 컨셉 1: Classic Blue Tech -->
+  <div class="logo-card" data-choice="classic-tech" onclick="toggleSelect(this)">
+    <div class="sidebar-logo-container v1-bg">
+        <div class="logo-icon-wrapper v1-icon">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></svg>
+        </div>
+        <div class="logo-text-wrapper">
+            <span class="logo-brand" style="color:white">RAG</span>
+            <span class="logo-subtitle" style="color:#007bff">SYSTEM</span>
+        </div>
+    </div>
+    <div class="card-body" style="text-align:center">
+        <h4>1. Classic Tech</h4>
+        <p style="font-size:0.8rem; color:#888">신뢰감을 주는 블루 컬러와 레이어 아이콘</p>
+    </div>
+  </div>
+
+  <!-- 컨셉 2: AI Intelligence (Violet) -->
+  <div class="logo-card" data-choice="ai-violet" onclick="toggleSelect(this)">
+    <div class="sidebar-logo-container v2-bg">
+        <div class="logo-icon-wrapper v2-icon">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg>
+        </div>
+        <div class="logo-text-wrapper">
+            <span class="logo-brand" style="color:white">RAG</span>
+            <span class="logo-subtitle" style="color:#a29bfe">INTELLIGENCE</span>
+        </div>
+    </div>
+    <div class="card-body" style="text-align:center">
+        <h4>2. Deep Learning</h4>
+        <p style="font-size:0.8rem; color:#888">지능형 모델을 상징하는 바이올렛 그라데이션</p>
+    </div>
+  </div>
+
+  <!-- 컨셉 3: Minimalist Emerald -->
+  <div class="logo-card" data-choice="minimal-emerald" onclick="toggleSelect(this)">
+    <div class="sidebar-logo-container v3-bg">
+        <div class="logo-icon-wrapper v3-icon">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#00d1b2" stroke-width="2"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/></svg>
+        </div>
+        <div class="logo-text-wrapper">
+            <span class="logo-brand" style="color:#00d1b2">RAG</span>
+            <span class="logo-subtitle" style="color:#fff">CORE</span>
+        </div>
+    </div>
+    <div class="card-body" style="text-align:center">
+        <h4>3. Core Minimal</h4>
+        <p style="font-size:0.8rem; color:#888">깔끔한 라인 아트와 에메랄드 포인트</p>
+    </div>
+  </div>
+
+  <!-- 컨셉 4: Premium Dark -->
+  <div class="logo-card" data-choice="premium-dark" onclick="toggleSelect(this)">
+    <div class="sidebar-logo-container v4-bg">
+        <div class="logo-icon-wrapper v4-icon">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="black" stroke-width="2"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg>
+        </div>
+        <div class="logo-text-wrapper">
+            <span class="logo-brand" style="color:white">RAG</span>
+            <span class="logo-subtitle" style="color:#888">PRO</span>
+        </div>
+    </div>
+    <div class="card-body" style="text-align:center">
+        <h4>4. Premium Dark</h4>
+        <p style="font-size:0.8rem; color:#888">강렬한 대비를 활용한 프로페셔널 룩</p>
+    </div>
+  </div>
+
+  <!-- 컨셉 5: Knowledge Node -->
+  <div class="logo-card" data-choice="knowledge-node" onclick="toggleSelect(this)">
+    <div class="sidebar-logo-container" style="background: rgba(255, 165, 0, 0.1); border: 1px solid rgba(255, 165, 0, 0.2);">
+        <div class="logo-icon-wrapper" style="background: #ffa500;">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/></svg>
+        </div>
+        <div class="logo-text-wrapper">
+            <span class="logo-brand" style="color:white">KNOWLEDGE</span>
+            <span class="logo-subtitle" style="color:#ffa500">GRAPH RAG</span>
+        </div>
+    </div>
+    <div class="card-body" style="text-align:center">
+        <h4>5. Knowledge Graph</h4>
+        <p style="font-size:0.8rem; color:#888">데이터 연결성을 강조한 오렌지 테마</p>
+    </div>
+  </div>
+
+  <!-- 컨셉 6: Vertical Stack -->
+  <div class="logo-card" data-choice="vertical-stack" onclick="toggleSelect(this)">
+    <div class="sidebar-logo-container" style="flex-direction: column; width: 100px; padding: 20px;">
+        <div class="logo-icon-wrapper" style="background: #ef4444; width: 50px; height: 50px;">
+            <svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2"><path d="M21 12V7H5a2 2 0 0 1 0-4h14v4"/><path d="M3 5v14a2 2 0 0 0 2 2h16v-5"/><path d="M18 12a2 2 0 0 0 0 4h4v-4Z"/></svg>
+        </div>
+        <div class="logo-text-wrapper" style="align-items: center; margin-top: 10px;">
+            <span class="logo-brand" style="color:white; font-size: 1.5rem;">RAG</span>
+            <span class="logo-subtitle" style="color:#ef4444">STUDIO</span>
+        </div>
+    </div>
+    <div class="card-body" style="text-align:center">
+        <h4>6. Vertical Studio</h4>
+        <p style="font-size:0.8rem; color:#888">강렬한 레드와 세로형 레이아웃</p>
+    </div>
+  </div>
+
+</div>
+
+<div class="section" style="margin-top:40px; border-top: 1px solid #333; padding-top: 20px;">
+    <h3>💡 커스터마이징 팁</h3>
+    <ul style="color: #ccc; font-size: 0.9rem; line-height: 1.6;">
+        <li><strong>컬러:</strong> 브랜드의 성격에 따라 블루(신뢰), 퍼플(지능), 그린(안정), 레드(열정) 등을 선택할 수 있습니다.</li>
+        <li><strong>심볼:</strong> 레이어(구조), 원(연결), 번개(속도), 육각형(보안) 등의 의미를 담을 수 있습니다.</li>
+        <li><strong>레이아웃:</strong> 사이드바의 공간 활용도에 따라 가로형(Compact) 또는 세로형(Bold)을 선택합니다.</li>
+    </ul>
+</div>

@@ -53,8 +53,8 @@ async def test_chat_scroll():
                 const cols = mainContainer.querySelectorAll('[data-testid="stColumn"]');
                 for (const col of cols) {
                     if (col.querySelector('[data-testid="stChatInput"], [data-testid="stChatMessage"]')) {
-                        // Flex chain step 6: stColumn > stVerticalBlock has overflow-y:auto
-                        return col.querySelector(':scope > [data-testid="stVerticalBlock"]');
+                        // Flex chain step 6: stColumn > stVerticalBlock > stLayoutWrapper > stVerticalBlock has overflow-y:auto
+                        return col.querySelector(':scope > [data-testid="stVerticalBlock"] > [data-testid="stLayoutWrapper"] > [data-testid="stVerticalBlock"]');
                     }
                 }
                 return null;

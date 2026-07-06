@@ -1,0 +1,135 @@
+<style>
+    .status-container {
+        background: rgba(255, 255, 255, 0.03);
+        border: 1px solid rgba(255, 255, 255, 0.05);
+        border-radius: 12px;
+        padding: 15px;
+        margin-top: 20px;
+    }
+    .status-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        margin-bottom: 12px;
+    }
+    .status-title {
+        font-size: 0.85rem;
+        font-weight: 700;
+        color: #888;
+        letter-spacing: 0.5px;
+        text-transform: uppercase;
+    }
+    .live-indicator {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        font-size: 0.7rem;
+        color: #4caf50;
+        font-weight: 700;
+    }
+    .live-dot {
+        width: 6px;
+        height: 6px;
+        background: #4caf50;
+        border-radius: 50%;
+        box-shadow: 0 0 8px #4caf50;
+        animation: pulse 2s infinite;
+    }
+    @keyframes pulse {
+        0% { opacity: 1; }
+        50% { opacity: 0.4; }
+        100% { opacity: 1; }
+    }
+    .metric-row {
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+    }
+    .metric-item {
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+    }
+    .metric-label-row {
+        display: flex;
+        justify-content: space-between;
+        font-size: 0.75rem;
+        color: #ccc;
+    }
+    .progress-track {
+        background: rgba(255, 255, 255, 0.1);
+        height: 4px;
+        border-radius: 2px;
+        overflow: hidden;
+    }
+    .progress-fill {
+        height: 100%;
+        background: #007bff;
+        border-radius: 2px;
+        transition: width 0.5s ease-in-out;
+    }
+</style>
+
+<h2>시스템 상태 컴포넌트 개선 계획</h2>
+<p class="subtitle">새로 적용된 로고의 디자인 언어(Modern, Sleek)를 시스템 상태 표시줄에도 이식하는 계획입니다.</p>
+
+<div class="mockup">
+    <div class="mockup-header">개선된 시스템 상태 프리뷰 (사이드바 하단용)</div>
+    <div class="mockup-body" style="background:#1e1e1e; padding:30px;">
+        <div class="status-container">
+            <div class="status-header">
+                <span class="status-title">System Health</span>
+                <div class="live-indicator">
+                    <div class="live-dot"></div>
+                    LIVE
+                </div>
+            </div>
+            <div class="metric-row">
+                <!-- CPU Metric -->
+                <div class="metric-item">
+                    <div class="metric-label-row">
+                        <span>CPU Usage</span>
+                        <span style="font-weight:700;">42%</span>
+                    </div>
+                    <div class="progress-track">
+                        <div class="progress-fill" style="width: 42%;"></div>
+                    </div>
+                </div>
+                <!-- RAM Metric -->
+                <div class="metric-item">
+                    <div class="metric-label-row">
+                        <span>Memory Usage</span>
+                        <span style="font-weight:700;">68%</span>
+                    </div>
+                    <div class="progress-track">
+                        <div class="progress-fill" style="width: 68%; background: #6c5ce7;"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<h3>디자인 핵심 포인트</h3>
+<p class="subtitle">기존 Streamlit 기본 위젯 대신 커스텀 요소를 사용하는 이유입니다.</p>
+
+<div class="cards">
+  <div class="card">
+    <div class="card-body">
+      <h3>1. 일관된 시각적 언어</h3>
+      <p>로고에서 사용한 둥근 모서리(12px)와 반투명 배경을 동일하게 적용하여 UI의 일체감을 높입니다.</p>
+    </div>
+  </div>
+  <div class="card">
+    <div class="card-body">
+      <h3>2. 공간 효율성</h3>
+      <p>기존의 큼직한 st.metric 대신 슬림한 프로그레스 바를 사용하여 사이드바의 수직 공간을 절약합니다.</p>
+    </div>
+  </div>
+  <div class="card">
+    <div class="card-body">
+      <h3>3. 실시간성 강조</h3>
+      <p>반짝이는 'LIVE' 인디케이터를 추가하여 시스템이 실시간으로 모니터링되고 있음을 직관적으로 보여줍니다.</p>
+    </div>
+  </div>
+</div>

@@ -1,0 +1,181 @@
+<style>
+    .preview-gallery {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+        gap: 24px;
+        padding: 10px;
+    }
+    .preview-card {
+        background: #1e1e1e;
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        border-radius: 16px;
+        overflow: hidden;
+        transition: transform 0.2s, border-color 0.2s;
+        cursor: pointer;
+        display: flex;
+        flex-direction: column;
+    }
+    .preview-card:hover {
+        transform: translateY(-4px);
+        border-color: #007bff;
+    }
+    .preview-card.selected {
+        border-color: #007bff;
+        box-shadow: 0 0 0 2px #007bff;
+    }
+    .preview-header {
+        padding: 12px 16px;
+        background: rgba(255, 255, 255, 0.05);
+        border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+        font-size: 0.9rem;
+        font-weight: 700;
+        color: #ddd;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+    }
+    .preview-body {
+        padding: 20px;
+        flex-grow: 1;
+    }
+    
+    /* Document Display Mockups */
+    .doc-viewer {
+        background: #fff;
+        border-radius: 4px;
+        height: 180px;
+        width: 100%;
+        position: relative;
+        overflow: hidden;
+        box-shadow: inset 0 0 10px rgba(0,0,0,0.1);
+    }
+    .highlight-overlay {
+        position: absolute;
+        background: rgba(255, 255, 0, 0.3);
+        border: 1px solid rgba(255, 215, 0, 0.5);
+        pointer-events: none;
+    }
+    .skeleton-line {
+        height: 8px;
+        background: #eee;
+        margin-bottom: 8px;
+        border-radius: 2px;
+    }
+</style>
+
+<h2>미리보기(PDF Viewer) 컬럼 레이아웃 제안</h2>
+<p class="subtitle">채팅 결과와 함께 표시될 PDF 미리보기 영역의 다양한 레이아웃과 기능적 디자인 옵션입니다.</p>
+
+<div class="preview-gallery" data-multiselect>
+  
+  <!-- 옵션 1: Precision Highlighting (정밀 하이라이트) -->
+  <div class="preview-card" data-choice="precision-view" onclick="toggleSelect(this)">
+    <div class="preview-header">
+        <span>🔍 Precision View</span>
+        <span class="label">Recommended</span>
+    </div>
+    <div class="preview-body">
+        <div class="doc-viewer" style="padding: 15px;">
+            <div class="skeleton-line" style="width: 80%;"></div>
+            <div class="skeleton-line" style="width: 90%;"></div>
+            <div class="highlight-overlay" style="top: 45px; left: 15px; width: 150px; height: 35px; border-left: 4px solid #ff4757;"></div>
+            <div class="skeleton-line" style="width: 95%;"></div>
+            <div class="skeleton-line" style="width: 70%;"></div>
+            <div style="position: absolute; bottom: 10px; right: 10px; background: #007bff; color: white; font-size: 10px; padding: 2px 6px; border-radius: 4px;">Page 12 / 45</div>
+        </div>
+        <div style="margin-top: 15px;">
+            <h4 style="margin: 0 0 8px 0; font-size: 0.9rem;">정밀 텍스트 매칭</h4>
+            <p style="font-size: 0.75rem; color: #888;">답변의 근거가 되는 구절을 문서에서 정확히 찾아 형광펜 효과와 측면 바(Bar)로 강조합니다.</p>
+        </div>
+    </div>
+  </div>
+
+  <!-- 옵션 2: Split Reference (분할 참조) -->
+  <div class="preview-card" data-choice="split-ref" onclick="toggleSelect(this)">
+    <div class="preview-header">
+        <span>📋 Context Reference</span>
+    </div>
+    <div class="preview-body">
+        <div style="display: flex; gap: 10px; height: 180px;">
+            <div class="doc-viewer" style="flex: 1; transform: scale(0.9);">
+                 <div style="padding: 10px;">
+                    <div class="skeleton-line" style="width: 100%;"></div>
+                    <div class="highlight-overlay" style="top: 25px; left: 10px; width: 80%; height: 20px;"></div>
+                 </div>
+            </div>
+            <div style="flex: 1; font-size: 0.65rem; color: #ccc; overflow: hidden; border-left: 1px solid #333; padding-left: 10px;">
+                <div style="font-weight: 700; color: #007bff; margin-bottom: 5px;">Source Meta</div>
+                <div>Filename: technical_spec.pdf</div>
+                <div>Section: 3.2 Protocol</div>
+                <div style="margin-top: 10px; background: rgba(0,123,255,0.1); padding: 5px; border-radius: 4px; font-size: 0.6rem;">
+                    "추출된 핵심 텍스트 데이터가 여기에 요약되어 표시됩니다..."
+                </div>
+            </div>
+        </div>
+        <div style="margin-top: 15px;">
+            <h4 style="margin: 0 0 8px 0; font-size: 0.9rem;">메타데이터 동시 표기</h4>
+            <p style="font-size: 0.75rem; color: #888;">문서 원본과 함께 해당 페이지의 핵심 메타데이터 및 추출 텍스트를 요약하여 보여줍니다.</p>
+        </div>
+    </div>
+  </div>
+
+  <!-- 옵션 3: Interactive Inspector (인터랙티브 분석) -->
+  <div class="preview-card" data-choice="inspector" onclick="toggleSelect(this)">
+    <div class="preview-header">
+        <span>🧪 Analysis Inspector</span>
+    </div>
+    <div class="preview-body">
+        <div class="doc-viewer" style="background: #f8f9fa;">
+            <div style="padding: 15px;">
+                <div style="display: flex; justify-content: space-between; margin-bottom: 10px;">
+                    <div style="width: 20px; height: 20px; border: 2px solid #007bff; border-radius: 50%;"></div>
+                    <div style="width: 60%; height: 6px; background: #ddd; margin-top: 7px;"></div>
+                </div>
+                <div style="border: 2px dashed #007bff; height: 80px; display: flex; align-items: center; justify-content: center; color: #007bff; font-size: 10px;">
+                    DETECTED TABLE / GRAPHIC
+                </div>
+            </div>
+        </div>
+        <div style="margin-top: 15px;">
+            <h4 style="margin: 0 0 8px 0; font-size: 0.9rem;">개체 자동 탐지 및 강조</h4>
+            <p style="font-size: 0.75rem; color: #888;">문서 내의 표(Table)나 이미지 등 중요한 개체를 자동으로 인식하여 박스로 표시해줍니다.</p>
+        </div>
+    </div>
+  </div>
+
+  <!-- 옵션 4: Minimal Focus (미니멀 포커스) -->
+  <div class="preview-card" data-choice="minimal-focus" onclick="toggleSelect(this)">
+    <div class="preview-header">
+        <span>🖼️ Clean View</span>
+    </div>
+    <div class="preview-body">
+        <div class="doc-viewer" style="display: flex; align-items: center; justify-content: center; background: #333;">
+            <div style="width: 60%; height: 80%; background: white; box-shadow: 0 10px 30px rgba(0,0,0,0.5);">
+                <div style="padding: 10px;">
+                    <div class="skeleton-line" style="width: 40%; height: 4px;"></div>
+                    <div class="skeleton-line" style="width: 90%; height: 4px;"></div>
+                </div>
+            </div>
+        </div>
+        <div style="margin-top: 15px;">
+            <h4 style="margin: 0 0 8px 0; font-size: 0.9rem;">방해 없는 원본 뷰어</h4>
+            <p style="font-size: 0.75rem; color: #888;">최대한 원본 느낌을 살려 깔끔하게 페이지를 렌더링하고 탐색 기능에 집중합니다.</p>
+        </div>
+    </div>
+  </div>
+
+</div>
+
+<div class="section" style="margin-top:30px; border-top: 1px solid #333; padding-top: 20px;">
+    <h3>💡 미리보기 컬럼 설계 포인트</h3>
+    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px;">
+        <div style="background: rgba(255,255,255,0.02); padding: 15px; border-radius: 8px;">
+            <h5 style="color: #007bff; margin: 0 0 5px 0;">동적 하이라이트</h5>
+            <p style="font-size: 0.8rem; color: #ccc; margin: 0;">채팅에서 언급된 내용에 따라 문서의 해당 위치로 자동 스크롤되고 색상이 표시되어야 합니다.</p>
+        </div>
+        <div style="background: rgba(255,255,255,0.02); padding: 15px; border-radius: 8px;">
+            <h5 style="color: #007bff; margin: 0 0 5px 0;">상호작용성</h5>
+            <p style="font-size: 0.8rem; color: #ccc; margin: 0;">페이지 이동, 확대/축소, 텍스트 복사 등 기본적인 PDF 핸들링이 매끄러워야 합니다.</p>
+        </div>
+    </div>
+</div>

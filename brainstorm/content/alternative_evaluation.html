@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Alternative Layout Proposal Evaluation</title>
+    <style>
+        :root {
+            --primary: #007AFF;
+            --success: #34C759;
+            --warning: #FF9500;
+            --bg: #F5F5F7;
+            --card: #FFFFFF;
+            --text: #1D1D1F;
+            --border: #D2D2D7;
+        }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            background-color: var(--bg);
+            color: var(--text);
+            margin: 0;
+            padding: 20px;
+        }
+        .container { max-width: 900px; margin: 0 auto; }
+        .card {
+            background: var(--card);
+            border-radius: 12px;
+            padding: 24px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.08);
+            margin-bottom: 24px;
+        }
+        h2 { margin-top: 0; color: var(--primary); border-bottom: 2px solid var(--bg); padding-bottom: 10px; }
+        .split-demo {
+            display: flex;
+            height: 150px;
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            overflow: hidden;
+            margin: 15px 0;
+        }
+        .left { flex: 0.7; background: #eef; display: flex; align-items: center; justify-content: center; font-size: 12px; }
+        .right { flex: 0.3; background: #fee; display: flex; align-items: center; justify-content: center; font-size: 12px; }
+        .divider {
+            width: 4px;
+            background: var(--primary);
+            cursor: col-resize;
+            position: relative;
+        }
+        .divider:hover::after {
+            content: "↔";
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: var(--primary);
+            color: white;
+            padding: 2px 5px;
+            border-radius: 4px;
+            font-size: 10px;
+        }
+        .eval-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+            margin-top: 15px;
+        }
+        .eval-box {
+            padding: 15px;
+            border-radius: 8px;
+            font-size: 0.9em;
+        }
+        .pro { background: #E8F5E9; border-left: 4px solid var(--success); }
+        .con { background: #FFF3E0; border-left: 4px solid var(--warning); }
+        .tag {
+            display: inline-block;
+            padding: 2px 8px;
+            border-radius: 12px;
+            font-size: 0.8em;
+            font-weight: bold;
+            margin-bottom: 8px;
+        }
+        .tag-pro { background: var(--success); color: white; }
+        .tag-con { background: var(--warning); color: white; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="card">
+            <h2>제안 1: 실시간 드래그 구분선 (Resizable Splitter)</h2>
+            <div class="split-demo">
+                <div class="left">PDF Viewer (70%)</div>
+                <div class="divider"></div>
+                <div class="right">Chat (30%)</div>
+            </div>
+            <div class="eval-grid">
+                <div class="eval-box pro">
+                    <span class="tag tag-pro">UX 장점</span><br>
+                    - 사용자가 현재 읽고 있는 문서의 복잡도에 따라 즉각적으로 공간을 최적화할 수 있는 **최고의 유연성**을 제공합니다.<br>
+                    - 현대적인 IDE(VS Code 등)와 유사한 경험으로 전문가용 도구라는 인상을 줍니다.
+                </div>
+                <div class="eval-box con">
+                    <span class="tag tag-con">기술적 도전</span><br>
+                    - Streamlit의 표준 컬럼(`st.columns`)은 정적입니다. 이를 구현하려면 **Custom Component**(React 기반)를 도입하거나 복잡한 CSS/JS 해킹이 필요하여 유지보수 비용이 상승할 수 있습니다.
+                </div>
+            </div>
+        </div>
+
+        <div class="card">
+            <h2>제안 2: 사이드바 상태 자동화 (Auto-Collapsing Sidebar)</h2>
+            <p><strong>로직:</strong> 시작 시 확장(Expanded) → 문서 로드 시 자동 축소(Collapsed)</p>
+            <div class="eval-grid">
+                <div class="eval-box pro">
+                    <span class="tag tag-pro">UX 장점</span><br>
+                    - **작업 맥락 인식**: 설정(모델 선택 등)이 필요한 초기 단계와 실제 작업(문서 분석) 단계를 명확히 분리하여 자동으로 공간을 확보해줍니다.<br>
+                    - "사용자가 무엇을 해야 할지" 앱이 선제적으로 제안하는 느낌을 줍니다.
+                </div>
+                <div class="eval-box con">
+                    <span class="tag tag-con">고려 사항</span><br>
+                    - **제어권 상실**: 사용자가 설정을 자주 변경해야 하는 상황(모델 비교 등)에서는 자동으로 닫히는 동작이 방해로 느껴질 수 있습니다.<br>
+                    - Streamlit의 `initial_sidebar_state`는 런타임에 동적으로 변경하기 까다로운 지점이 있습니다.
+                </div>
+            </div>
+        </div>
+
+        <div class="card" style="border-top: 4px solid var(--primary);">
+            <h2>종합 평가 및 전문가 의견</h2>
+            <p>사용자님의 제안은 **"정적인 편의 기능(버튼)"보다 "직관적인 도구의 형태(드래그/자동화)"**를 지향한다는 점에서 훨씬 수준 높은 접근입니다.</p>
+            <p>특히 **사이드바 자동화**는 현재 코드 구조 내에서 즉시 구현 가능성이 높으면서도 실질적인 가로 공간 확보(약 20~30%)에 매우 효과적입니다. **드래그 구분선**은 기술적 제약이 따르지만, 도입 시 앱의 '프로페셔널함'을 결정짓는 핵심 요소가 될 것입니다.</p>
+        </div>
+    </div>
+</body>
+</html>

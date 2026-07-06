@@ -1,0 +1,92 @@
+<h2>미리보기 컬럼 초기 화면 디자인 제안 (v2)</h2>
+<p class="subtitle">문서 업로드 전, 사용자 경험을 개선하기 위한 추가 시안들입니다.</p>
+
+<div class="options" data-multiselect>
+  <div class="option" data-choice="modern-minimal" onclick="toggleSelect(this)">
+    <div class="letter">A</div>
+    <div class="content">
+      <h3>모던 미니멀 (Modern Minimal)</h3>
+      <p>부드러운 애니메이션이 포함된 업로드 영역과 세련된 타이포그래피를 사용하여 첫인상을 깔끔하게 유지합니다.</p>
+    </div>
+  </div>
+
+  <div class="option" data-choice="benefit-cards" onclick="toggleSelect(this)">
+    <div class="letter">B</div>
+    <div class="content">
+      <h3>가치 중심 카드 (Value-Focused)</h3>
+      <p>"이 시스템으로 무엇을 할 수 있나요?"에 대한 답을 시각적인 카드로 구성하여 신규 사용자의 이해를 돕습니다.</p>
+    </div>
+  </div>
+
+  <div class="option" data-choice="interactive-flow" onclick="toggleSelect(this)">
+    <div class="letter">C</div>
+    <div class="content">
+      <h3>인터랙티브 플로우 (Interactive Flow)</h3>
+      <p>현재 시스템 상태(Ollama 연결 여부 등)와 연동되어 실시간으로 다음 단계를 가이드합니다.</p>
+    </div>
+  </div>
+</div>
+
+<div class="section">
+  <h3>상세 디자인 미리보기</h3>
+  <div class="cards">
+    <!-- Option A Mockup -->
+    <div class="card">
+      <div class="card-image" style="background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%); display: flex; align-items: center; justify-content: center; height: 180px; border-radius: 8px; border: 2px dashed #a0aec0; margin: 10px;">
+        <div style="text-align: center;">
+          <div style="font-size: 50px;">☁️</div>
+          <div style="font-weight: 800; color: #4a5568; margin-top: 10px;">파일을 여기에 놓으세요</div>
+          <div style="font-size: 13px; color: #718096;">또는 브라우저에서 선택</div>
+        </div>
+      </div>
+      <div class="card-body">
+        <p class="label">Option A</p>
+        <p>깔끔하고 현대적인 드롭존</p>
+      </div>
+    </div>
+
+    <!-- Option B Mockup -->
+    <div class="card">
+      <div class="card-image" style="background: white; padding: 15px; height: 180px; border-radius: 8px; overflow: hidden; display: flex; flex-direction: column; gap: 8px;">
+        <div style="background: #ebf8ff; border-left: 4px solid #3182ce; padding: 8px; font-size: 11px;">
+          <strong>💡 질문 답변</strong><br>문서 내용을 기반으로 정확한 답변을 생성합니다.
+        </div>
+        <div style="background: #f0fff4; border-left: 4px solid #38a169; padding: 8px; font-size: 11px;">
+          <strong>📍 출처 확인</strong><br>답변의 근거가 되는 페이지로 즉시 이동합니다.
+        </div>
+        <div style="background: #fffaf0; border-left: 4px solid #dd6b20; padding: 8px; font-size: 11px;">
+          <strong>🖍️ 자동 하이라이트</strong><br>관련 문장을 자동으로 찾아 표시합니다.
+        </div>
+      </div>
+      <div class="card-body">
+        <p class="label">Option B</p>
+        <p>기능적 이점 강조</p>
+      </div>
+    </div>
+
+    <!-- Option C Mockup -->
+    <div class="card">
+      <div class="card-image" style="background: #1a202c; padding: 20px; height: 180px; border-radius: 8px; color: white;">
+        <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 12px;">
+          <div style="width: 8px; height: 8px; background: #48bb78; border-radius: 50%;"></div>
+          <div style="font-size: 12px; font-weight: bold;">시스템 준비됨</div>
+        </div>
+        <div style="margin-bottom: 20px;">
+          <div style="font-size: 11px; color: #a0aec0;">현재 단계</div>
+          <div style="font-size: 14px; font-weight: bold;">📄 분석할 문서를 업로드해주세요</div>
+        </div>
+        <div style="background: #2d3748; height: 6px; border-radius: 3px; position: relative;">
+          <div style="width: 40%; height: 100%; background: #3182ce; border-radius: 3px;"></div>
+          <div style="position: absolute; right: 0; top: -20px; font-size: 10px; color: #718096;">Step 2 of 3</div>
+        </div>
+        <div style="margin-top: 15px; font-size: 11px; color: #718096;">
+          다음: 첫 번째 질문 던지기
+        </div>
+      </div>
+      <div class="card-body">
+        <p class="label">Option C</p>
+        <p>워크플로우 가이드</p>
+      </div>
+    </div>
+  </div>
+</div>

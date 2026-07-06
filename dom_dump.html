@@ -1,0 +1,336 @@
+<!DOCTYPE html><html lang="en"><head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no">
+    <link rel="shortcut icon" href="./favicon.png">
+    <link rel="preload" href="./static/media/SourceSansVF-Upright.ttf.BsWL4Kly.woff2" as="font" type="font/woff2" crossorigin="">
+
+    <title>RAG Chatbot</title>
+
+    <!-- initialize window.prerenderReady to false and then set to true in React app when app is ready for indexing -->
+    <script>
+      window.prerenderReady = false
+    </script>
+    <script type="module" crossorigin="" src="./static/js/index.Drusyo5m.js"></script>
+    <link rel="stylesheet" crossorigin="" href="./static/css/index.BUP6fTcR.css">
+  <style media=""></style><style data-emotion="st-emotion-cache-global" data-s=""></style><style data-emotion="st-emotion-cache" data-s=""></style><link rel="modulepreload" as="script" crossorigin="" href="http://localhost:8501/static/js/index.YYb2u0jk.js"><link rel="modulepreload" as="script" crossorigin="" href="http://localhost:8501/static/js/index.bsVAaBS1.js"><link rel="modulepreload" as="script" crossorigin="" href="http://localhost:8501/static/js/index.FsTmxLbT.js"><link rel="modulepreload" as="script" crossorigin="" href="http://localhost:8501/static/js/index.DuUyDGnP.js"><link rel="modulepreload" as="script" crossorigin="" href="http://localhost:8501/static/js/index.DOXrMIxB.js"><link rel="modulepreload" as="script" crossorigin="" href="http://localhost:8501/static/js/index.C4KskYz6.js"><link rel="modulepreload" as="script" crossorigin="" href="http://localhost:8501/static/js/FormClearHelper.C__r5Llk.js"><link rel="modulepreload" as="script" crossorigin="" href="http://localhost:8501/static/js/FileHelper.BvVTNdmy.js"><link rel="modulepreload" as="script" crossorigin="" href="http://localhost:8501/static/js/UploadFileInfo.Dr-zDST7.js"><link rel="modulepreload" as="script" crossorigin="" href="http://localhost:8501/static/js/ProgressBar.DLCRvt4m.js"><link rel="modulepreload" as="script" crossorigin="" href="http://localhost:8501/static/js/index.B0pzzCsH.js"><link rel="modulepreload" as="script" crossorigin="" href="http://localhost:8501/static/js/useBasicWidgetState.DFklfao0.js"><link rel="modulepreload" as="script" crossorigin="" href="http://localhost:8501/static/js/index.CV1sObFX.js"><link rel="modulepreload" as="script" crossorigin="" href="http://localhost:8501/static/js/iconPosition.B4EEXI3E.js"><link rel="modulepreload" as="script" crossorigin="" href="http://localhost:8501/static/js/index.CyouXqCz.js"><link rel="modulepreload" as="script" crossorigin="" href="http://localhost:8501/static/js/useWaveformController.lzTbjMW2.js"><link rel="modulepreload" as="script" crossorigin="" href="http://localhost:8501/static/js/InputInstructions.DOtkdOMV.js"><link rel="modulepreload" as="script" crossorigin="" href="http://localhost:8501/static/js/useTextInputAutoExpand.D9nU_y-e.js"><link rel="modulepreload" as="script" crossorigin="" href="http://localhost:8501/static/js/base-input.TSQjctlq.js"><link rel="modulepreload" as="script" crossorigin="" href="http://localhost:8501/static/js/inputUtils.CptNuJwn.js"><link rel="modulepreload" as="script" crossorigin="" href="http://localhost:8501/static/js/TableChart.esm.D6ydHcIm.js"><link rel="modulepreload" as="script" crossorigin="" href="http://localhost:8501/static/js/ErrorOutline.esm.BWk6F-Tz.js"></head>
+  <body>
+    <noscript>You need to enable JavaScript to run this app.</noscript>
+    <div id="root"><div class=""><div class="withScreencast" data-testid="stScreencast"><div class="stApp stAppEmbeddingId-thpg41bwo2kl streamlit-wide st-emotion-cache-1r4qj8v e1vju3fw0" data-testid="stApp" data-test-script-state="notRunning" data-test-connection-state="CONNECTED"><div class="stAppViewContainer appview-container st-emotion-cache-1yiq2ps e1td4qo60" data-testid="stAppViewContainer" data-layout="wide"><section class="stSidebar st-emotion-cache-1kss9tm e9ic3ti0" data-testid="stSidebar" aria-expanded="true" style="position: relative; user-select: auto; width: 300px; height: auto; box-sizing: border-box; flex-shrink: 0;"><div data-testid="stSidebarContent" class="st-emotion-cache-1csi29a e9ic3ti2"><div data-testid="stSidebarHeader" class="st-emotion-cache-10p9htt e9ic3ti4"><div data-testid="stLogoSpacer" class="st-emotion-cache-11ukie e9ic3ti9"></div><div data-testid="stSidebarCollapseButton" class="st-emotion-cache-qmp9ai e9ic3ti10"><button kind="headerNoPadding" data-testid="stBaseButton-headerNoPadding" aria-label="" class="st-emotion-cache-1aplgmp e1mwqyj915"><span color="rgba(49, 51, 63, 0.6)" class="st-emotion-cache-2x5h05 emntfgb2"><span color="rgba(49, 51, 63, 0.6)" data-testid="stIconMaterial" translate="no" class="st-emotion-cache-5r6ut5 exvv1vr0">keyboard_double_arrow_left</span></span></button></div></div><div data-testid="stSidebarUserContent" class="st-emotion-cache-1r1cntt e9ic3ti1"><div class="st-emotion-cache-8atqhb e1td4qo65"><div direction="column" height="auto" class="stVerticalBlock st-emotion-cache-tn0cau e12zf7d53" data-testid="stVerticalBlock"><div class="stElementContainer element-container st-emotion-cache-3pwa5w e12zf7d51" data-testid="stElementContainer" data-stale="false" width="100%" height="auto" overflow="visible"><div class="stMarkdown" data-testid="stMarkdown"><div class="st-emotion-cache-6c7yup e13xr0422"><div data-testid="stMarkdownContainer" class="st-emotion-cache-104fm5o e1t8ru6f0"><p><span class="settings-label">📄 Document Assets</span></p></div></div></div></div><div data-testid="stLayoutWrapper" width="100%" height="auto" overflow="visible" class="st-emotion-cache-18kf3ut e12zf7d54"><div direction="column" overflow="visible" height="auto" class="stVerticalBlock st-emotion-cache-1ne20ew e12zf7d53" data-testid="stVerticalBlock" data-test-scroll-behavior="normal"><div class="stElementContainer element-container st-key-pdf_uploader st-emotion-cache-1vo6xi6 e12zf7d51" data-testid="stElementContainer" data-stale="false" width="100%" height="auto" overflow="visible"><div class="stFileUploader st-emotion-cache-36dndz ewslnz917" data-testid="stFileUploader" width="208"><label data-testid="stWidgetLabel" class="st-emotion-cache-1s2v671 e1kt9bl70"><span aria-hidden="true"><div data-testid="stMarkdownContainer" class="st-emotion-cache-h1zhg5 e1t8ru6f0"><p>PDF 파일 업로드</p></div></span></label><section role="presentation" tabindex="0" data-testid="stFileUploaderDropzone" aria-label="PDF 파일 업로드" aria-disabled="false" class="st-emotion-cache-h2yu1l ewslnz90"><input data-testid="stFileUploaderDropzoneInput" accept="application/streamlit,.pdf" type="file" tabindex="-1" style="border: 0px; clip: rect(0px, 0px, 0px, 0px); clip-path: inset(50%); height: 1px; margin: 0px -1px -1px 0px; overflow: hidden; padding: 0px; position: absolute; width: 1px; white-space: nowrap;"><div data-testid="stFileUploaderDropzoneInstructions" class="st-emotion-cache-i0nc7r ewslnz91"><span class="st-emotion-cache-yo0lzo ewslnz92"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false" fill="currentColor" xmlns="http://www.w3.org/2000/svg" class="emntfgb1 st-emotion-cache-6gvodc ex0cdmw0"><path fill="none" d="M0 0h24v24H0V0z"></path><path d="M19.35 10.04A7.49 7.49 0 0012 4C9.11 4 6.6 5.64 5.35 8.04A5.994 5.994 0 000 14c0 3.31 2.69 6 6 6h13c2.76 0 5-2.24 5-5 0-2.64-2.05-4.78-4.65-4.96zM19 18H6c-2.21 0-4-1.79-4-4 0-2.05 1.53-3.76 3.56-3.97l1.07-.11.5-.95A5.469 5.469 0 0112 6c2.62 0 4.88 1.86 5.39 4.43l.3 1.5 1.53.11A2.98 2.98 0 0122 15c0 1.65-1.35 3-3 3zM8 13h2.55v3h2.9v-3H16l-4-4z"></path></svg></span><div class="st-emotion-cache-kt79cc ewslnz95"><span class="st-emotion-cache-ycmcfb ewslnz93">Drag and drop file here</span><span class="st-emotion-cache-1sct1q3 ewslnz94">Limit 200MB per file • PDF</span></div></div><span class="st-emotion-cache-epvm6 ewslnz96"><button kind="secondary" data-testid="stBaseButton-secondary" aria-label="" class="st-emotion-cache-18b91qn e1mwqyj92">Browse files</button></span></section></div></div></div></div><div data-testid="stLayoutWrapper" width="100%" height="auto" overflow="visible" class="st-emotion-cache-18kf3ut e12zf7d54"><div class="stExpander st-emotion-cache-8atqhb e12o48ov0" data-testid="stExpander"><details class="st-emotion-cache-1h9usn1 e12o48ov1"><summary class="st-emotion-cache-pxambx e12o48ov4"><span class="st-emotion-cache-nwb5ao e12o48ov2"><span class="st-emotion-cache-leahp2 emntfgb2"><span color="inherit" data-testid="stIconMaterial" translate="no" class="st-emotion-cache-1c9yjad exvv1vr0">keyboard_arrow_right</span></span><div class="st-emotion-cache-11fa8fd e12o48ov3"><div data-testid="stMarkdownContainer" class="st-emotion-cache-1fge4g4 e1t8ru6f0"><p>🛠️ Advanced Configuration</p></div></div></span></summary><div data-testid="stExpanderDetails" class="st-emotion-cache-3n56ur e12o48ov5"><div direction="column" height="100%" class="stVerticalBlock st-emotion-cache-wfksaw e12zf7d53" data-testid="stVerticalBlock"><div class="stElementContainer element-container st-emotion-cache-3pwa5w e12zf7d51" data-testid="stElementContainer" data-stale="false" width="100%" height="auto" overflow="visible"><div class="stMarkdown" data-testid="stMarkdown"><div class="st-emotion-cache-6c7yup e13xr0422"><div data-testid="stMarkdownContainer" class="st-emotion-cache-104fm5o e1t8ru6f0"><p><span class="settings-label" style="margin-top: 2px;">⚙️ Model Setup</span></p></div></div></div></div><div class="stElementContainer element-container st-emotion-cache-3pwa5w e12zf7d51" data-testid="stElementContainer" data-stale="false" width="100%" height="auto" overflow="visible"><div class="stMarkdown" data-testid="stMarkdown"><div class="st-emotion-cache-6c7yup e13xr0422"><div data-testid="stMarkdownContainer" class="st-emotion-cache-104fm5o e1t8ru6f0"><div class="settings-sublabel">Reasoning Engine (sLLM)</div></div></div></div></div><div class="stElementContainer element-container st-key-model_selector st-emotion-cache-1vo6xi6 e12zf7d51" data-testid="stElementContainer" data-stale="false" width="100%" height="auto" overflow="visible"><div class="stSelectbox" data-testid="stSelectbox"><label data-testid="stWidgetLabel" class="st-emotion-cache-1s2v671 e1kt9bl70"><span aria-hidden="true"><div data-testid="stMarkdownContainer" class="st-emotion-cache-h1zhg5 e1t8ru6f0"><p>LLM 모델 선택</p></div></span></label><div data-baseweb="select" class="st-ba st-af st-ag st-bb st-ai st-aj st-bc st-bd st-b8"><div class="st-au st-ax st-av st-aw st-bc st-be st-b8 st-b3 st-b4 st-bf st-bg st-bh st-bi st-bj st-bk st-bl st-bm st-bn st-bo st-b1 st-bp st-bq st-br st-bs st-bt st-bu st-bv st-bw"><div class="st-bc st-bd st-bx st-by st-bz st-b3 st-c0 st-c1 st-be st-c2 st-c3 st-c4 st-c5"><div value="qwen3:4b-instruct-2507-q4_K_M" class="st-c6 st-bc st-b6 st-c7 st-c8 st-be st-c9 st-ca st-cb">qwen3:4b-instruct-2507-q4_K_M</div><div class="st-bd st-cc st-c8 st-cd st-ce st-cf st-cg st-ch st-ay st-bc st-ci st-ar st-as st-cj st-b5 st-ck st-cl st-cm st-cn st-am st-co"><input aria-autocomplete="list" aria-expanded="false" aria-haspopup="listbox" aria-label="Selected qwen3:4b-instruct-2507-q4_K_M. LLM 모델 선택" role="combobox" tabindex="0" class="st-ba st-af st-cp st-bb st-ai st-aj st-bq st-cq st-d6 st-c8 st-cs st-ce st-cf st-cg st-ch st-ay st-cc st-ci st-ar st-as st-b6 st-b5 st-ck st-cl st-cm st-cn" value=""><div class="st-ba st-af st-cp st-bb st-ai st-aj st-ct st-cu st-cv st-cw st-cx st-cy st-cz"></div></div></div><div class="st-bc st-bd st-b3 st-d0 st-c0 st-d1 st-c5"><svg data-baseweb="icon" title="open" viewBox="0 0 24 24" class="st-cc st-d2 st-bq st-d3 st-d4"><title>open</title><path transform="rotate(270, 12, 12)" fill-rule="evenodd" clip-rule="evenodd" d="M9 12C9 12.2652 9.10536 12.5196 9.29289 12.7071L13.2929 16.7071C13.6834 17.0976 14.3166 17.0976 14.7071 16.7071C15.0976 16.3166 15.0976 15.6834 14.7071 15.2929L11.4142 12L14.7071 8.70711C15.0976 8.31658 15.0976 7.68342 14.7071 7.29289C14.3166 6.90237 13.6834 6.90237 13.2929 7.29289L9.29289 11.2929C9.10536 11.4804 9 11.7348 9 12Z"></path></svg></div></div></div></div></div><div class="stElementContainer element-container st-emotion-cache-3pwa5w e12zf7d51" data-testid="stElementContainer" data-stale="false" width="100%" height="auto" overflow="visible"><div class="stMarkdown" data-testid="stMarkdown"><div class="st-emotion-cache-6c7yup e13xr0422"><div data-testid="stMarkdownContainer" class="st-emotion-cache-104fm5o e1t8ru6f0"><div class="settings-sublabel">Embedding Model</div></div></div></div></div><div class="stElementContainer element-container st-key-embedding_model_selector st-emotion-cache-1vo6xi6 e12zf7d51" data-testid="stElementContainer" data-stale="false" width="100%" height="auto" overflow="visible"><div class="stSelectbox" data-testid="stSelectbox"><label data-testid="stWidgetLabel" class="st-emotion-cache-1s2v671 e1kt9bl70"><span aria-hidden="true"><div data-testid="stMarkdownContainer" class="st-emotion-cache-h1zhg5 e1t8ru6f0"><p>임베딩 모델 선택</p></div></span></label><div data-baseweb="select" class="st-ba st-af st-ag st-bb st-ai st-aj st-bc st-bd st-b8"><div class="st-au st-ax st-av st-aw st-bc st-be st-b8 st-b3 st-b4 st-bf st-bg st-bh st-bi st-bj st-bk st-bl st-bm st-bn st-bo st-b1 st-bp st-bq st-br st-bs st-bt st-bu st-bv st-bw"><div class="st-bc st-bd st-bx st-by st-bz st-b3 st-c0 st-c1 st-be st-c2 st-c3 st-c4 st-c5"><div value="nomic-embed-text-v2-moe" class="st-c6 st-bc st-b6 st-c7 st-c8 st-be st-c9 st-ca st-cb">nomic-embed-text-v2-moe</div><div class="st-bd st-cc st-c8 st-cd st-ce st-cf st-cg st-ch st-ay st-bc st-ci st-ar st-as st-cj st-b5 st-ck st-cl st-cm st-cn st-am st-co"><input aria-autocomplete="list" aria-expanded="false" aria-haspopup="listbox" aria-label="Selected nomic-embed-text-v2-moe. 임베딩 모델 선택" role="combobox" tabindex="0" class="st-ba st-af st-cp st-bb st-ai st-aj st-bq st-cq st-d6 st-c8 st-cs st-ce st-cf st-cg st-ch st-ay st-cc st-ci st-ar st-as st-b6 st-b5 st-ck st-cl st-cm st-cn" value=""><div class="st-ba st-af st-cp st-bb st-ai st-aj st-ct st-cu st-cv st-cw st-cx st-cy st-cz"></div></div></div><div class="st-bc st-bd st-b3 st-d0 st-c0 st-d1 st-c5"><svg data-baseweb="icon" title="open" viewBox="0 0 24 24" class="st-cc st-d2 st-bq st-d3 st-d4"><title>open</title><path transform="rotate(270, 12, 12)" fill-rule="evenodd" clip-rule="evenodd" d="M9 12C9 12.2652 9.10536 12.5196 9.29289 12.7071L13.2929 16.7071C13.6834 17.0976 14.3166 17.0976 14.7071 16.7071C15.0976 16.3166 15.0976 15.6834 14.7071 15.2929L11.4142 12L14.7071 8.70711C15.0976 8.31658 15.0976 7.68342 14.7071 7.29289C14.3166 6.90237 13.6834 6.90237 13.2929 7.29289L9.29289 11.2929C9.10536 11.4804 9 11.7348 9 12Z"></path></svg></div></div></div></div></div><div class="stElementContainer element-container st-emotion-cache-3pwa5w e12zf7d51" data-testid="stElementContainer" data-stale="false" width="100%" height="auto" overflow="visible"><div class="stMarkdown" data-testid="stMarkdown"><div class="st-emotion-cache-6c7yup e13xr0422"><div data-testid="stMarkdownContainer" class="st-emotion-cache-104fm5o e1t8ru6f0"><hr style="margin: 20px 0px; opacity: 0.1;"></div></div></div></div><div class="stElementContainer element-container st-emotion-cache-3pwa5w e12zf7d51" data-testid="stElementContainer" data-stale="false" width="100%" height="auto" overflow="visible"><div class="stMarkdown" data-testid="stMarkdown"><div class="st-emotion-cache-6c7yup e13xr0422"><div data-testid="stMarkdownContainer" class="st-emotion-cache-104fm5o e1t8ru6f0"><p><span class="settings-label">🔧 Maintenance</span></p></div></div></div></div><div data-testid="stLayoutWrapper" width="100%" height="auto" overflow="visible" class="st-emotion-cache-18kf3ut e12zf7d54"><div direction="row" overflow="visible" height="auto" class="stHorizontalBlock st-emotion-cache-1permvm e12zf7d53" data-testid="stHorizontalBlock" data-test-scroll-behavior="normal"><div class="stColumn st-emotion-cache-19ysvjp e12zf7d52" data-testid="stColumn"><div direction="column" height="100%" class="stVerticalBlock st-emotion-cache-wfksaw e12zf7d53" data-testid="stVerticalBlock"><div class="stElementContainer element-container st-key-vram_btn st-emotion-cache-1vo6xi6 e12zf7d51" data-testid="stElementContainer" data-stale="false" width="100%" height="auto" overflow="visible"><div class="stButton st-emotion-cache-8atqhb ew64v8o0" data-testid="stButton"><div class="st-emotion-cache-6dnr6u e1mwqyj918"><div class="stTooltipIcon st-emotion-cache-1ohrxuo e13xr0421" data-testid="stTooltipIcon"><div data-testid="stTooltipHoverTarget" class="stTooltipHoverTarget" id="bui6__anchor" style="display: flex; flex-direction: row; justify-content: flex-end; width: 100%;"><button kind="secondary" data-testid="stBaseButton-secondary" aria-label="" class="st-emotion-cache-9114l4 e1mwqyj92"><div class="st-emotion-cache-1lads1q e1mwqyj922"><span data-has-shortcut="false" class="st-emotion-cache-1kl7f1u e1mwqyj923"><div data-testid="stMarkdownContainer" class="st-emotion-cache-1fge4g4 e1t8ru6f0"><p>Clear VRAM</p></div></span></div></button></div></div></div><div class="st-emotion-cache-1cyexbd e1mwqyj919"><button kind="secondary" data-testid="stBaseButton-secondary" aria-label="" class="st-emotion-cache-9114l4 e1mwqyj92"><div class="st-emotion-cache-1lads1q e1mwqyj922"><span data-has-shortcut="false" class="st-emotion-cache-1kl7f1u e1mwqyj923"><div data-testid="stMarkdownContainer" class="st-emotion-cache-1fge4g4 e1t8ru6f0"><p>Clear VRAM</p></div></span></div></button></div></div></div></div></div><div class="stColumn st-emotion-cache-19ysvjp e12zf7d52" data-testid="stColumn"><div direction="column" height="100%" class="stVerticalBlock st-emotion-cache-wfksaw e12zf7d53" data-testid="stVerticalBlock"><div class="stElementContainer element-container st-key-reset_btn st-emotion-cache-1vo6xi6 e12zf7d51" data-testid="stElementContainer" data-stale="false" width="100%" height="auto" overflow="visible"><div class="stButton st-emotion-cache-8atqhb ew64v8o0" data-testid="stButton"><div class="st-emotion-cache-6dnr6u e1mwqyj918"><div class="stTooltipIcon st-emotion-cache-1ohrxuo e13xr0421" data-testid="stTooltipIcon"><div data-testid="stTooltipHoverTarget" class="stTooltipHoverTarget" id="bui7__anchor" style="display: flex; flex-direction: row; justify-content: flex-end; width: 100%;"><button kind="primary" data-testid="stBaseButton-primary" aria-label="" class="st-emotion-cache-1cl4umz e1mwqyj91"><div class="st-emotion-cache-1lads1q e1mwqyj922"><span data-has-shortcut="false" class="st-emotion-cache-1kl7f1u e1mwqyj923"><div data-testid="stMarkdownContainer" class="st-emotion-cache-1fge4g4 e1t8ru6f0"><p>Reset All</p></div></span></div></button></div></div></div><div class="st-emotion-cache-1cyexbd e1mwqyj919"><button kind="primary" data-testid="stBaseButton-primary" aria-label="" class="st-emotion-cache-1cl4umz e1mwqyj91"><div class="st-emotion-cache-1lads1q e1mwqyj922"><span data-has-shortcut="false" class="st-emotion-cache-1kl7f1u e1mwqyj923"><div data-testid="stMarkdownContainer" class="st-emotion-cache-1fge4g4 e1t8ru6f0"><p>Reset All</p></div></span></div></button></div></div></div></div></div></div></div></div></div></details></div></div></div></div></div></div><div><div style="position: absolute; user-select: none; width: 8px; height: 100%; top: 0px; cursor: col-resize; right: -6px;"><div class="st-emotion-cache-m0hag0 e9ic3ti3"></div></div></div></section><div class="st-emotion-cache-6px8kg e1td4qo610"><header class="stAppHeader st-emotion-cache-1imcqvs est0q591" data-testid="stHeader"><div class="stAppToolbar st-emotion-cache-14vh5up est0q592" data-testid="stToolbar"><div class="st-emotion-cache-1j22a0y est0q594"><div class="st-emotion-cache-jma0kd est0q595"></div><div class="st-emotion-cache-scp8yw est0q596"><div class="stToolbarActions st-emotion-cache-1p1m4ay eyud7442" data-testid="stToolbarActions"></div><div class="stAppDeployButton" data-testid="stAppDeployButton"><button kind="header" data-testid="stBaseButton-header" aria-label="" class="st-emotion-cache-egm30d e1mwqyj914"><div class="st-emotion-cache-1wbqy5l e19wr9s00"><span>Deploy</span></div></button></div><span id="MainMenu" class="stMainMenu st-emotion-cache-czk5ss e1vxtby88" data-testid="stMainMenu" aria-haspopup="true" aria-expanded="false"><button kind="headerNoPadding" data-testid="stBaseButton-headerNoPadding" aria-label="" class="st-emotion-cache-1aplgmp e1mwqyj915"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false" fill="currentColor" xmlns="http://www.w3.org/2000/svg" class="emntfgb1 st-emotion-cache-nsoqg8 ex0cdmw0"><path fill="none" d="M0 0h24v24H0V0z"></path><path d="M12 8c1.1 0 2-.9 2-2s-.9-2-2-2-2 .9-2 2 .9 2 2 2zm0 2c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm0 6c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2z"></path></svg></button></span></div></div></div></header><section tabindex="0" class="stMain st-emotion-cache-4rsbii e1td4qo61" data-testid="stMain"><div class="stMainBlockContainer block-container st-emotion-cache-zy6yx3 e1td4qo64" data-testid="stMainBlockContainer"><div direction="column" height="auto" class="stVerticalBlock st-emotion-cache-tn0cau e12zf7d53" data-testid="stVerticalBlock"><div class="stElementContainer element-container st-emotion-cache-3pwa5w e12zf7d51" data-testid="stElementContainer" data-stale="false" width="100%" height="auto" overflow="visible"><div class="stMarkdown" data-testid="stMarkdown"><div class="st-emotion-cache-6c7yup e13xr0422"><div data-testid="stMarkdownContainer" class="st-emotion-cache-1frkdi4 e1t8ru6f0"><style>
+/* 1. Global Viewport Lock */
+.stApp, [data-testid="stAppViewContainer"] {{
+    height: 100vh !important;
+    overflow: hidden !important;
+}}
+
+/* 1b. Fill main content area */
+[data-testid="stMainBlockContainer"] {{
+    height: calc(100vh - var(--header-h, 60px)) !important;
+}}
+
+/* Remove default Streamlit padding that causes shifts */
+.block-container {{
+    padding-top: 1.5rem !important; /* Reduced from 3.5rem */
+    padding-bottom: 0rem !important;
+    padding-left: 1rem !important;
+    padding-right: 1rem !important;
+    max-width: 100% !important;
+}}
+
+/* 2. Scoped Chat Input */
+[data-testid="stChatInput"] {{
+    position: fixed !important;
+    bottom: 0 !important;
+    right: 0 !important;
+    left: 50% !important;
+    width: 50% !important;
+    z-index: 1000;
+    background-color: var(--background-color) !important;
+    padding-bottom: 1rem !important; /* Tighter padding */
+    padding-top: 0.5rem !important;
+}}
+
+/* 3. Hide only the main block to prevent double scrolls */
+[data-testid="stMain"] {{
+    overflow: hidden !important;
+}}
+
+/* 4. 사이드바 확장 버튼 가시성 확보 */
+[data-testid="stSidebarCollapseButton"] {{
+    z-index: 100000 !important;
+    visibility: visible !important;
+    opacity: 1 !important;
+    background-color: color-mix(in srgb, var(--background-color), transparent 20%) !important;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.1) !important;
+    border-radius: 50% !important;
+}}
+
+/* 5. 상단 헤더 Glassmorphism */
+header[data-testid="stHeader"] {{
+    background: color-mix(in srgb, var(--background-color), transparent 30%) !important;
+    backdrop-filter: blur(12px) !important;
+    -webkit-backdrop-filter: blur(12px) !important;
+    border-bottom: 1px solid color-mix(in srgb, var(--faded-text-color), transparent 80%) !important;
+    box-shadow: 0 2px 15px rgba(0,0,0,0.05) !important;
+    z-index: 99999 !important;
+    display: flex !important;
+    visibility: visible !important;
+}}
+
+.stAppDeployButton {{
+    display: none !important;
+}}
+
+/* 6. 사고 과정(Thought Process) UI - Layout Shift 방지 및 여백 압축 */
+details.thought-expander {{
+    background-color: var(--secondary-background-color);
+    border: 1px solid color-mix(in srgb, var(--faded-text-color) 30%, transparent);
+    border-radius: 8px;
+    /* [수정] 아래쪽 마진을 16px에서 6px로 대폭 줄여 텍스트와의 간격 압축 */
+    margin: 0px 0 6px 0;
+    padding: 8px 12px;
+    transition: all 0.2s ease-in-out;
+}}
+details.thought-expander summary {{
+    cursor: pointer;
+    font-size: 0.85em;
+    font-weight: 600;
+    color: var(--text-color);
+    opacity: 0.7;
+    outline: none;
+    list-style: none;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    user-select: none;
+}}
+details.thought-expander summary::before {{
+    content: "▶";
+    font-size: 0.8em;
+    transition: transform 0.2s;
+}}
+details[open].thought-expander summary::before {{
+    transform: rotate(90deg);
+}}
+.thought-container {{
+    border-left: 3px solid color-mix(in srgb, var(--primary-color) 70%, transparent);
+    padding: 10px 15px;
+    margin-top: 8px; /* [수정] 내부 마진 축소 */
+    font-size: 0.85em;
+    color: var(--text-color);
+    opacity: 0.85;
+    font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+    white-space: pre-wrap;
+    max-height: 300px;
+    overflow-y: auto;
+    background-color: color-mix(in srgb, var(--background-color) 50%, transparent);
+    border-radius: 0 4px 4px 0;
+}}
+
+/* 7. 인용 가독성 및 툴팁 */
+.citation-highlight {{
+    background-color: color-mix(in srgb, var(--primary-color) 15%, transparent);
+    border-bottom: 2px dashed var(--primary-color);
+    padding: 0 4px;
+    border-radius: 3px;
+    color: var(--primary-color);
+    font-weight: 600;
+    cursor: help;
+    transition: background-color 0.2s, transform 0.1s;
+    display: inline-block;
+    position: relative;
+}}
+.citation-highlight:active::after {{
+    content: attr(title);
+    position: absolute;
+    bottom: 100%;
+    left: 50%;
+    transform: translateX(-50%);
+    background-color: var(--text-color);
+    color: var(--background-color);
+    padding: 8px 12px;
+    border-radius: 6px;
+    font-size: 0.85em;
+    font-weight: normal;
+    white-space: pre-wrap;
+    width: max-content;
+    max-width: 250px;
+    z-index: 1000;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+    pointer-events: none;
+}}
+
+/* 8. 스트리밍 애니메이션 (빌드 상태 표시에도 공용 사용) */
+.streaming-pulse {{
+    animation: pulse 1.5s infinite ease-in-out;
+    min-height: 24px;
+    font-size: 0.9em;
+    color: var(--primary-color);
+    font-weight: 500;
+    /* [수정] 마진 축소 */
+    margin-bottom: 4px;
+}}
+@keyframes pulse {{
+    0% {{ opacity: 0.4; }}
+    50% {{ opacity: 1; }}
+    100% {{ opacity: 0.4; }}
+}}
+
+/* 9. 성능 지표 HUD - 컴팩트 디자인 */
+.perf-details {{
+    margin-top: 2px !important;
+    padding-top: 0px !important;
+}}
+.perf-grid {{
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(100px, 1fr));
+    gap: 8px;
+    margin-top: 8px;
+}}
+.perf-card {{
+    background-color: var(--secondary-background-color);
+    border: 1px solid color-mix(in srgb, var(--faded-text-color) 15%, transparent);
+    border-radius: 6px;
+    padding: 6px 8px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+}}
+.perf-card-title {{
+    font-size: 10px;
+    color: var(--faded-text-color);
+    margin-bottom: 2px;
+    font-weight: 500;
+}}
+.perf-card-value {{
+    font-size: 13px;
+    font-weight: 700;
+    color: var(--text-color);
+}}
+.perf-card-desc {{
+    font-size: 9px;
+    color: var(--faded-text-color);
+    margin-top: 1px;
+}}
+
+/* 10. 참조 페이지 버튼 반응형 랩핑 시스템 */
+[data-testid="stHorizontalBlock"] {{
+    flex-wrap: wrap !important;
+    gap: 8px !important;
+}}
+div[data-testid="stColumn"] {{
+    min-width: 60px !important;
+    flex: 0 1 auto !important;
+    margin: 0 !important;
+}}
+div[data-testid="stColumn"] button {{
+    border-radius: 20px !important;
+    padding: 4px 12px !important;
+    font-size: 12px !important;
+    font-weight: 600 !important;
+    background-color: var(--secondary-background-color) !important;
+    color: var(--text-color) !important;
+    border: 1px solid color-mix(in srgb, var(--faded-text-color) 20%, transparent) !important;
+    transition: all 0.2s ease !important;
+    width: 100% !important;
+}}
+div[data-testid="stColumn"] button:hover {{
+    border-color: var(--primary-color) !important;
+    color: var(--primary-color) !important;
+    background-color: color-mix(in srgb, var(--primary-color) 10%, transparent) !important;
+}}
+
+/* 11. 채팅 메시지 내부 수직 유격 압축 */
+[data-testid="stChatMessage"] div[data-testid="stVerticalBlock"] {{
+    gap: 0px !important; /* [수정] 내부 블록 간격 완벽 제거 */
+}}
+
+/* 12. Mobile Responsiveness */
+@media (max-width: 768px) {{
+    .stApp, [data-testid="stAppViewContainer"] {{
+        height: auto !important;
+        overflow: visible !important;
+    }}
+    /* Mobile: disable flex-fill, restore natural flow */
+    [data-testid="stMainBlockContainer"] {{
+        height: auto !important;
+    }}
+    [data-testid="stMainBlockContainer"] [data-testid="stColumn"] > [data-testid="stVerticalBlock"] {{
+        max-height: none !important;
+        overflow-y: visible !important;
+    }}
+    [data-testid="stChatInput"] {{
+        left: 0 !important;
+        width: 100% !important;
+        position: fixed !important;
+    }}
+}}
+/* ════════════════════════════════════════════
+   13. COLUMN FLEX-FILL: 독립 스크롤 + 뷰포트 채움
+   flex chain: stMainBlockContainer → stVerticalBlock
+   → stLayoutWrapper → stHorizontalBlock → stColumn → stVerticalBlock
+   ════════════════════════════════════════════ */
+
+/* 1. Main container: 뷰포트 높이 - header */
+[data-testid="stMainBlockContainer"] {{
+    height: calc(100vh - var(--header-h, 60px)) !important;
+    height: calc(100dvh - var(--header-h, 60px)) !important;
+    overflow: hidden !important;
+    display: flex !important;
+    flex-direction: column !important;
+}}
+
+/* 2. stMainBlockContainer의 직계 stVerticalBlock이 flex 공간 채움 */
+[data-testid="stMainBlockContainer"] > [data-testid="stVerticalBlock"] {{
+    flex: 1 !important;
+    min-height: 0 !important;
+}}
+
+/* 3. stLayoutWrapper가 높이 전달 (display: flex - confirmed by Task 1) */
+[data-testid="stMainBlockContainer"] [data-testid="stLayoutWrapper"] {{
+    height: 100% !important;
+    min-height: 0 !important;
+}}
+
+/* 4. Columns wrapper가 남은 공간 채움 */
+[data-testid="stMainBlockContainer"] [data-testid="stHorizontalBlock"] {{
+    height: 100% !important;
+    min-height: 0 !important;
+    flex-wrap: nowrap !important;
+    gap: 0.25rem !important;
+}}
+
+/* 5. 각 column이 flex 컬럼이 되어 내부 stVerticalBlock을 늘림 */
+[data-testid="stMainBlockContainer"] [data-testid="stColumn"] {{
+    flex: 1 1 0px !important;
+    min-width: 0 !important;
+    display: flex !important;
+    flex-direction: column !important;
+    min-height: 0 !important;
+}}
+
+/* 6. Scrollable content area inside each column */
+[data-testid="stMainBlockContainer"] [data-testid="stColumn"] > [data-testid="stVerticalBlock"] {{
+    flex: 1 !important;
+    min-height: 0 !important;
+    overflow-y: auto !important;
+    overflow-x: hidden !important;
+}}
+
+/* 7. Right column padding for fixed chat input (override section 14) */
+[data-testid="stMainBlockContainer"] [data-testid="stColumn"]:last-child > [data-testid="stVerticalBlock"] {{
+    padding-bottom: 80px !important;
+}}
+
+</style></div></div></div></div><div data-testid="stLayoutWrapper" width="100%" height="auto" overflow="visible" class="st-emotion-cache-18kf3ut e12zf7d54"><div direction="row" overflow="visible" height="auto" class="stHorizontalBlock st-emotion-cache-1permvm e12zf7d53" data-testid="stHorizontalBlock" data-test-scroll-behavior="normal"><div class="stColumn st-emotion-cache-19ysvjp e12zf7d52" data-testid="stColumn"><div direction="column" height="100%" class="stVerticalBlock st-emotion-cache-wfksaw e12zf7d53" data-testid="stVerticalBlock"><div data-testid="stLayoutWrapper" width="100%" height="auto" overflow="visible" class="st-emotion-cache-18kf3ut e12zf7d54"><div direction="column" overflow="visible" height="auto" class="stVerticalBlock st-emotion-cache-1n6tfoc e12zf7d53" data-testid="stVerticalBlock" data-test-scroll-behavior="normal"><div class="stElementContainer element-container st-emotion-cache-1vo6xi6 e12zf7d51" data-testid="stElementContainer" data-stale="false" width="100%" height="auto" overflow="visible"><div class="stAlert" data-testid="stAlert"><div role="alert" data-baseweb="notification" data-testid="stAlertContainer" class="stAlertContainer st-ae st-af st-ag st-ah st-ai st-aj st-ak st-al st-am st-an st-ao st-ap st-aq st-ar st-as st-at st-au st-av st-aw st-ax st-ay st-d5 st-b0 st-b1 st-b2 st-b3 st-b4 st-b5 st-b6 st-b7"><div class="st-b8 st-b9"><div data-testid="stAlertContentInfo" class="st-emotion-cache-wmn9kq e5p6yly0"><div class="st-emotion-cache-1s9wf0g e10i2jnt0"><div data-testid="stMarkdownContainer" class="st-emotion-cache-1frkdi4 e1t8ru6f0" style="width: 100%;"><p>미리볼 PDF가 없습니다. 사이드바에서 파일을 업로드해주세요.</p></div></div></div></div></div></div></div></div></div></div></div><div class="stColumn st-emotion-cache-19ysvjp e12zf7d52" data-testid="stColumn"><div direction="column" height="100%" class="stVerticalBlock st-emotion-cache-wfksaw e12zf7d53" data-testid="stVerticalBlock"><div data-testid="stLayoutWrapper" width="100%" height="auto" overflow="visible" class="st-emotion-cache-18kf3ut e12zf7d54"><div direction="column" overflow="visible" height="auto" class="stVerticalBlock st-emotion-cache-1n6tfoc e12zf7d53" data-testid="stVerticalBlock" data-test-scroll-behavior="normal"><div data-testid="stLayoutWrapper" width="100%" height="auto" overflow="visible" class="st-emotion-cache-18kf3ut e12zf7d54"><div class="stChatMessage st-emotion-cache-1iitq1e e9vv8y20" data-testid="stChatMessage"><div class="st-emotion-cache-1dgsum0 e9vv8y22">⚙️</div><div data-testid="stChatMessageContent" aria-label="Chat message from system" class="st-emotion-cache-1flajlm e9vv8y21"><div direction="column" height="100%" class="stVerticalBlock st-emotion-cache-wfksaw e12zf7d53" data-testid="stVerticalBlock"><div class="stElementContainer element-container st-emotion-cache-3pwa5w e12zf7d51" data-testid="stElementContainer" data-stale="false" width="100%" height="auto" overflow="visible"><div class="stMarkdown" data-testid="stMarkdown"><div class="st-emotion-cache-6c7yup e13xr0422"><div data-testid="stMarkdownContainer" class="st-emotion-cache-1frkdi4 e1t8ru6f0"><p><strong>RAG-Chat에 오신 것을 환영합니다!</strong></p>
+<p><strong>💡 사용 가이드</strong></p>
+<ul>
+<li><strong>PDF 업로드:</strong> 좌측 사이드바에서 분석하고 싶은 PDF를 업로드하세요.</li>
+<li><strong>모델 선택:</strong> 로컬 추론 모델을 선택할 수 있습니다.</li>
+<li><strong>질문하기:</strong> 문서 처리가 완료되면, 내용에 대해 자유롭게 질문할 수 있습니다.</li>
+<li><strong>PDF 뷰어:</strong> 우측에서 원본 문서를 함께 보며 대화할 수 있습니다.</li>
+</ul></div></div></div></div></div></div></div></div><div class="stElementContainer element-container st-key-main_chat_input st-emotion-cache-1vo6xi6 e12zf7d51" data-testid="stElementContainer" data-stale="false" width="100%" height="auto" overflow="visible"><div class="stChatInput st-emotion-cache-1ab1jlb e15xmbo00" data-testid="stChatInput"><div class="st-emotion-cache-6mn6c9 e15xmbo01"><div class="st-emotion-cache-1wp6n47 e15xmbo03"><div class="st-emotion-cache-qr9lfa e15xmbo05"></div><div class="st-emotion-cache-1p0pcv1 e15xmbo09"><div class="st-emotion-cache-1g8seck e15xmbo010"><div></div></div></div><div class="st-emotion-cache-dx87ye e15xmbo04"><div data-baseweb="textarea" class="st-bc st-b3 st-be st-b8 st-d7 st-d8 st-d9 st-da st-bk st-bl st-bm st-bn st-db st-b1 st-bp st-dc st-dd st-de st-df st-dg st-dh st-di st-dj st-dk st-dl st-dm st-dn st-ci"><div data-baseweb="base-input" class="st-b3 st-b8 st-do st-b1 st-bp st-ae st-af st-cp st-ah st-ai st-aj st-bq st-dk"><textarea aria-label="PDF 내용에 대해 질문해보세요." aria-invalid="false" aria-required="false" autocomplete="on" inputmode="text" name="" placeholder="PDF 내용에 대해 질문해보세요." type="textarea" rows="1" data-testid="stChatInputTextArea" class="st-bc st-cd st-d7 st-d8 st-d9 st-da st-ce st-cg st-cf st-ch st-ci st-b8 st-dp st-c8 st-bf st-dq st-dr st-ds st-cm st-cn st-ae st-af st-ag st-bb st-ai st-aj st-bq st-dt st-du st-dv st-am st-dy st-dx" style=""></textarea></div></div></div><div class="st-emotion-cache-k1jj38 e15xmbo06"><button disabled="" data-testid="stChatInputSubmitButton" aria-label="Send message" class="st-emotion-cache-wn2gva e15xmbo08"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false" fill="currentColor" xmlns="http://www.w3.org/2000/svg" color="inherit" class="emntfgb1 st-emotion-cache-nsoqg8 ex0cdmw0"><path fill="none" d="M0 0h24v24H0V0z"></path><path d="M13 19V7.83l4.88 4.88c.39.39 1.03.39 1.42 0a.996.996 0 000-1.41l-6.59-6.59a.996.996 0 00-1.41 0l-6.6 6.58a.996.996 0 101.41 1.41L11 7.83V19c0 .55.45 1 1 1s1-.45 1-1z"></path></svg></button></div></div></div></div></div></div></div></div></div></div></div></div></div><div data-testid="stAppIframeResizerAnchor" data-iframe-height="true" class="st-emotion-cache-1dumvfu e1td4qo69"></div></section></div></div></div></div><div data-testid="portal" id="portal" class="st-emotion-cache-1q6lfs0 eaoz1g71"></div></div><div class=""></div></div>
+  
+
+</body></html>

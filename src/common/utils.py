@@ -643,8 +643,16 @@ def run_in_background_worker(coro, session_id: str) -> None:
             logger.error(f"Background worker error: {e}", exc_info=True)
         finally:
             try:
-                if ctx and ctx.session:
-                    ctx.session.request_rerun(None)
+                if ctx and ctx.session_id:
+                    from streamlit.runtime import get_instance
+
+                    runtime = get_instance()
+                    if runtime:
+                        session_info = runtime._session_mgr.get_session_info(
+                            ctx.session_id
+                        )
+                        if session_info:
+                            session_info.session.request_rerun(None)
             except Exception as e:
                 logger.error(f"Background worker rerun failed: {e}", exc_info=True)
 

@@ -1,0 +1,150 @@
+<style>
+    .gallery-container {
+        display: flex;
+        flex-direction: column;
+        gap: 30px;
+    }
+    .sidebar-logo-container {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        padding: 15px;
+        border-radius: 12px;
+        width: fit-content;
+    }
+    .logo-icon-wrapper {
+        width: 40px;
+        height: 40px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        border-radius: 8px;
+    }
+    .logo-text-wrapper {
+        display: flex;
+        flex-direction: column;
+        line-height: 1.2;
+    }
+    .logo-main-row {
+        display: flex;
+        align-items: baseline;
+        gap: 4px;
+        font-size: 1.3rem;
+        font-weight: 800;
+        letter-spacing: -0.5px;
+    }
+    .logo-sub-row {
+        font-size: 0.75rem;
+        font-weight: 700;
+        letter-spacing: 2px;
+        margin-top: -2px;
+    }
+
+    /* Option 1: High Contrast Blue */
+    .v1-bg { background: rgba(0, 123, 255, 0.1); border: 1px solid rgba(0, 123, 255, 0.2); }
+    .v1-icon { background: #007bff; }
+    .v1-rag { color: #ffffff; }
+    .v1-system { color: #007bff; }
+    .v1-ollama { color: #888; border-top: 1px solid rgba(255,255,255,0.1); padding-top: 2px; }
+
+    /* Option 2: Cyberpunk / Modern Glow */
+    .v2-bg { background: #000; border: 1px solid #333; }
+    .v2-icon { border: 2px solid #00d1b2; color: #00d1b2; }
+    .v2-rag { color: #00d1b2; }
+    .v2-system { color: #fff; opacity: 0.9; }
+    .v2-ollama { color: #ffeb3b; font-style: italic; letter-spacing: 3px; }
+
+    /* Option 3: Minimalist Professional */
+    .v3-bg { background: rgba(255, 255, 255, 0.03); border: 1px solid rgba(255, 255, 255, 0.1); }
+    .v3-icon { background: #fff; color: #000; }
+    .v3-rag { color: #fff; }
+    .v3-system { color: #888; font-weight: 400; }
+    .v3-ollama { background: rgba(255,255,255,0.1); padding: 0 6px; border-radius: 3px; color: #ccc; width: fit-content; }
+
+    /* Option 4: Bold Gradient */
+    .v4-bg { background: linear-gradient(135deg, rgba(255, 71, 87, 0.1), rgba(255, 71, 87, 0.05)); border: 1px solid rgba(255, 71, 87, 0.2); }
+    .v4-icon { background: #ff4757; }
+    .v4-rag { color: #ff4757; }
+    .v4-system { color: #ffffff; }
+    .v4-ollama { color: #ffa500; font-weight: 900; text-transform: lowercase; }
+
+</style>
+
+<h2>한 줄 배치 + OLLAMA 통합 예제</h2>
+<p class="subtitle">RAG와 SYSTEM을 한 줄에 두되 색상으로 구분하고, 그 아래 OLLAMA를 배치한 4가지 스타일입니다.</p>
+
+<div class="gallery-container">
+    
+    <!-- 옵션 1: Classic High Contrast -->
+    <div class="mockup" data-choice="classic-split" onclick="toggleSelect(this)">
+        <div class="mockup-header">1. Classic Split (신뢰/안정)</div>
+        <div class="mockup-body" style="background:#1e1e1e; padding:30px;">
+            <div class="sidebar-logo-container v1-bg">
+                <div class="logo-icon-wrapper v1-icon">🤖</div>
+                <div class="logo-text-wrapper">
+                    <div class="logo-main-row">
+                        <span class="v1-rag">RAG</span>
+                        <span class="v1-system">SYSTEM</span>
+                    </div>
+                    <div class="logo-sub-row v1-ollama">OLLAMA ENGINE</div>
+                </div>
+            </div>
+            <p style="margin-top:15px; font-size:0.85rem; color:#aaa;">평가: 가장 정석적인 레이아웃. RAG가 강조되면서도 SYSTEM이 색상으로 명확히 분리되어 읽기 쉽습니다.</p>
+        </div>
+    </div>
+
+    <!-- 옵션 2: Cyberpunk Glow -->
+    <div class="mockup" data-choice="cyber-glow" onclick="toggleSelect(this)">
+        <div class="mockup-header">2. Cyber Glow (미래지향/강렬)</div>
+        <div class="mockup-body" style="background:#1e1e1e; padding:30px;">
+            <div class="sidebar-logo-container v2-bg">
+                <div class="logo-icon-wrapper v2-icon">⚡</div>
+                <div class="logo-text-wrapper">
+                    <div class="logo-main-row">
+                        <span class="v2-rag">RAG</span>
+                        <span class="v2-system">SYSTEM</span>
+                    </div>
+                    <div class="logo-sub-row v2-ollama">OLLAMA</div>
+                </div>
+            </div>
+            <p style="margin-top:15px; font-size:0.85rem; color:#aaa;">평가: 색상 대비가 가장 강렬합니다. OLLAMA를 이탤릭체와 넓은 자간으로 배치하여 '엔진'의 속도감을 표현했습니다.</p>
+        </div>
+    </div>
+
+    <!-- 옵션 3: Minimalist Mono -->
+    <div class="mockup" data-choice="minimal-mono" onclick="toggleSelect(this)">
+        <div class="mockup-header">3. Minimalist Mono (세련/깔끔)</div>
+        <div class="mockup-body" style="background:#1e1e1e; padding:30px;">
+            <div class="sidebar-logo-container v3-bg">
+                <div class="logo-icon-wrapper v3-icon">🧠</div>
+                <div class="logo-text-wrapper">
+                    <div class="logo-main-row">
+                        <span class="v3-rag">RAG</span>
+                        <span class="v3-system">system</span>
+                    </div>
+                    <div class="logo-sub-row v3-ollama">powered by ollama</div>
+                </div>
+            </div>
+            <p style="margin-top:15px; font-size:0.85rem; color:#aaa;">평가: 폰트 두께와 대소문자 차이를 이용한 절제된 스타일. SYSTEM을 소문자로 두어 RAG를 더욱 돋보이게 합니다.</p>
+        </div>
+    </div>
+
+    <!-- 옵션 4: Bold Energy -->
+    <div class="mockup" data-choice="bold-energy" onclick="toggleSelect(this)">
+        <div class="mockup-header">4. Bold Energy (열정/혁신)</div>
+        <div class="mockup-body" style="background:#1e1e1e; padding:30px;">
+            <div class="sidebar-logo-container v4-bg">
+                <div class="logo-icon-wrapper v4-icon">🔥</div>
+                <div class="logo-text-wrapper">
+                    <div class="logo-main-row">
+                        <span class="v4-rag">RAG</span>
+                        <span class="v4-system">SYSTEM</span>
+                    </div>
+                    <div class="logo-sub-row v4-ollama">ollama_core</div>
+                </div>
+            </div>
+            <p style="margin-top:15px; font-size:0.85rem; color:#aaa;">평가: 붉은 계열의 포인트 컬러를 사용. OLLAMA를 언더바(_) 형식의 코드 스타일로 표기하여 개발자 친화적인 느낌을 줍니다.</p>
+        </div>
+    </div>
+
+</div>

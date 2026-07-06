@@ -1,0 +1,77 @@
+<h2>메인 페이지 왼쪽 열(미리보기 컬럼) 초기 화면 디자인</h2>
+<p class="subtitle">채팅창(오른쪽)과 1:1 비율로 배치되는 왼쪽 영역의 디자인 제안입니다.</p>
+
+<div class="split">
+  <!-- Option A: Minimal Focus -->
+  <div class="mockup">
+    <div class="mockup-header">시안 A: 미니멀 포커스</div>
+    <div class="mockup-body" style="height: 400px; display: flex; flex-direction: column; align-items: center; justify-content: center; background: #fafafa; border: 1px solid #eee;">
+      <div style="font-size: 64px; margin-bottom: 20px;">📂</div>
+      <h4 style="margin: 0; color: #333;">분석할 문서를 업로드하세요</h4>
+      <p style="font-size: 14px; color: #666; text-align: center; padding: 0 40px; margin-top: 10px;">
+        사이드바의 업로드 버튼을 사용하거나 파일을 여기로 끌어다 놓으세요.
+      </p>
+      <button style="margin-top: 20px; padding: 10px 20px; background: #007bff; color: white; border: none; border-radius: 5px; cursor: pointer;">파일 선택하기</button>
+    </div>
+  </div>
+
+  <!-- Option B: Multi-Card Guide -->
+  <div class="mockup">
+    <div class="mockup-header">시안 B: 멀티 카드 가이드</div>
+    <div class="mockup-body" style="height: 400px; background: white; padding: 20px; border: 1px solid #eee; overflow-y: auto;">
+      <h4 style="margin-top: 0;">RAG 시스템 활용 팁</h4>
+      <div style="background: #f8f9fa; border-radius: 8px; padding: 15px; margin-bottom: 15px; border-left: 4px solid #007bff;">
+        <div style="font-weight: bold; font-size: 14px;">✨ 스마트 하이라이트</div>
+        <div style="font-size: 12px; color: #666; margin-top: 4px;">답변의 근거 문장을 PDF에서 자동으로 찾아 표시해줍니다.</div>
+      </div>
+      <div style="background: #f8f9fa; border-radius: 8px; padding: 15px; margin-bottom: 15px; border-left: 4px solid #28a745;">
+        <div style="font-weight: bold; font-size: 14px;">🔗 즉시 페이지 이동</div>
+        <div style="font-size: 12px; color: #666; margin-top: 4px;">인용구를 클릭하면 해당 내용이 있는 페이지로 바로 이동합니다.</div>
+      </div>
+      <div style="background: #f8f9fa; border-radius: 8px; padding: 15px; border-left: 4px solid #6f42c1;">
+        <div style="font-weight: bold; font-size: 14px;">🧠 다양한 모델 지원</div>
+        <div style="font-size: 12px; color: #666; margin-top: 4px;">Llama, Qwen 등 최신 LLM을 선택하여 성능을 비교해보세요.</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="section">
+  <h3>시안 C: 인터랙티브 대시보드 (추천)</h3>
+  <div class="mockup">
+    <div class="mockup-header">시스템 상태 및 준비 가이드</div>
+    <div class="mockup-body" style="height: 300px; background: #1a1a1a; color: white; padding: 30px; display: grid; grid-template-columns: 1fr 1fr; gap: 20px;">
+      <div>
+        <div style="color: #888; font-size: 12px; text-transform: uppercase; margin-bottom: 10px;">Connection Status</div>
+        <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 20px;">
+          <div style="width: 10px; height: 10px; background: #4caf50; border-radius: 50%; box-shadow: 0 0 10px #4caf50;"></div>
+          <div style="font-weight: bold;">Ollama 서버 연결됨</div>
+        </div>
+        <div style="color: #888; font-size: 12px; text-transform: uppercase; margin-bottom: 10px;">Current Model</div>
+        <div style="font-size: 14px; background: #333; padding: 8px 12px; border-radius: 4px;">qwen3:4b-instruct</div>
+      </div>
+      <div style="border-left: 1px solid #333; padding-left: 20px;">
+        <div style="color: #888; font-size: 12px; text-transform: uppercase; margin-bottom: 15px;">Get Started</div>
+        <div style="display: flex; flex-direction: column; gap: 12px;">
+          <div style="display: flex; align-items: center; gap: 10px; color: #4caf50;">
+            <span>✅</span> <span style="font-size: 13px;">모델 최적화 완료</span>
+          </div>
+          <div style="display: flex; align-items: center; gap: 10px; color: #007bff;">
+            <span style="animation: pulse 2s infinite;">🔵</span> <span style="font-size: 13px; font-weight: bold;">분석할 문서 업로드 대기</span>
+          </div>
+          <div style="display: flex; align-items: center; gap: 10px; color: #555;">
+            <span>⚪</span> <span style="font-size: 13px;">첫 질문 시작하기</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<style>
+@keyframes pulse {
+  0% { opacity: 1; }
+  50% { opacity: 0.4; }
+  100% { opacity: 1; }
+}
+</style>

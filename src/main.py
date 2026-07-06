@@ -397,10 +397,7 @@ def main() -> None:
     if "available_models_list" not in st.session_state:
         st.session_state.available_models_list = [DEFAULT_OLLAMA_MODEL]
 
-    is_expanded = bool(
-        SessionManager.get("pdf_file_path")
-    ) and not st.session_state.get("sidebar_collapsed", False)
-    inject_custom_css(is_expanded=is_expanded)
+    inject_custom_css()
 
     if SessionManager.get("pdf_file_path") and not SessionManager.get("pdf_processed"):
         SessionManager.set("is_generating_answer", False)

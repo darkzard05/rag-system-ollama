@@ -1,0 +1,20 @@
+[
+  {
+    "query": "짧게 인사해줘",
+    "ttft_ms": 10143.68519999698,
+    "tps": 0.09854925639662919,
+    "itl_avg_ms": 0,
+    "itl_std_ms": 0,
+    "total_time_s": 10.147209999995539,
+    "total_tokens": 1
+  },
+  {
+    "query": "CM3 모델의 'Causal Masking' 목표(Objective)에 대해 Methodology 섹션의 내용을 바탕으로 상세히 설명해주고 정확한 출처를 표기해줘.",
+    "ttft_ms": 12690.061200002674,
+    "tps": 29.13412341905588,
+    "itl_avg_ms": 18.858616463419423,
+    "itl_std_ms": 9.500646614820281,
+    "total_time_s": 28.180013800003508,
+    "total_tokens": 821
+  }
+]

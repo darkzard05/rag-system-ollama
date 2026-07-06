@@ -5,6 +5,7 @@ Runs ALL layout verification in ONE browser session:
 - DOM structure verification (replaces verify_dom_structure.py)
 - Flex chain CSS property verification (replaces verify_ui_scrolling.py)
 - Independent scrolling test (replaces test_chat_scroll.py)
+- Chat input alignment verification (new)
 
 Usage:
     1. Start Streamlit: streamlit run src/main.py
@@ -50,11 +51,13 @@ async def main():
         dom = await page.evaluate("""() => {
             const main = document.querySelector('[data-testid="stMainBlockContainer"]');
             const header = document.querySelector('[data-testid="stHeader"]');
+            const wrapper = document.querySelector('[data-testid="stLayoutWrapper"]');
             return {
                 headerH: header ? header.getBoundingClientRect().height : null,
                 mainExists: !!main,
                 mainDisplay: main ? window.getComputedStyle(main).display : null,
                 mainHeight: main ? window.getComputedStyle(main).height : null,
+                wrapperDisplay: wrapper ? window.getComputedStyle(wrapper).display : null,
                 windowH: window.innerHeight
             };
         }""")
@@ -68,14 +71,16 @@ async def main():
             dom["headerH"] is not None
             and 50 <= dom["headerH"] <= 70
             and dom["mainExists"]
-            and dom["mainDisplay"] == "block"
+            and dom["mainDisplay"] == "flex"
+            and dom["wrapperDisplay"] is not None
             and height_ok
         )
 
         c1_res = (
             f"=== CHECK 1: DOM Structure ===\n"
             f"Header height: {dom['headerH']}px {'✓' if 50 <= (dom['headerH'] or 0) <= 70 else '✗'} (expected ~60px)\n"
-            f"stMainBlockContainer display: {dom['mainDisplay']} {'✓' if dom['mainDisplay'] == 'block' else '✗'}\n"
+            f"stMainBlockContainer display: {dom['mainDisplay']} {'✓' if dom['mainDisplay'] == 'flex' else '✗'} (expected flex)\n"
+            f"stLayoutWrapper display: {dom['wrapperDisplay']} {'✓' if dom['wrapperDisplay'] is not None else '✗'}\n"
             f"stMainBlockContainer height: {dom['mainHeight']} {'✓' if height_ok else '✗'} (expected ~{expected_main_h}px)\n"
             f"Result: {'PASS' if c1_pass else 'FAIL'}\n"
         )
@@ -90,24 +95,26 @@ async def main():
         flex = await page.evaluate("""() => {
             const cols = document.querySelectorAll('[data-testid="stColumn"]');
             return Array.from(cols).map(c => {
-                const s = window.getComputedStyle(c);
-                const vb = c.querySelector(':scope > [data-testid="stVerticalBlock"]');
-                const vs = vb ? window.getComputedStyle(vb) : null;
+                const colStyle = window.getComputedStyle(c);
+                // Find the actual scrollable container (2 levels deep)
+                const innerVb = c.querySelector(':scope > [data-testid="stVerticalBlock"] > [data-testid="stLayoutWrapper"] > [data-testid="stVerticalBlock"]');
+                const vbStyle = innerVb ? window.getComputedStyle(innerVb) : null;
                 return {
-                    display: s.display,
-                    overflowY: vs ? vs.overflowY : null,
+                    display: colStyle.display,
+                    innerOverflowY: vbStyle ? vbStyle.overflowY : null,
+                    innerFlex: vbStyle ? vbStyle.flex : null
                 };
             });
         }""")
 
         verified_cols = [
-            c for c in flex if c["display"] == "flex" and c["overflowY"] in ["auto", "scroll"]
+            c for c in flex if c["display"] == "flex" and c["innerOverflowY"] in ["auto", "scroll"]
         ]
         c2_pass = len(verified_cols) >= 2
 
         col_details = "\n".join(
             [
-                f"  Col {i}: display={c['display']}, overflowY={c['overflowY']} {'✓' if c['display'] == 'flex' and c['overflowY'] in ['auto', 'scroll'] else '✗'}"
+                f"  Col {i}: display={c['display']}, innerOverflowY={c['innerOverflowY']} {'✓' if c['display'] == 'flex' and c['innerOverflowY'] in ['auto', 'scroll'] else '✗'}"
                 for i, c in enumerate(flex)
             ]
         )
@@ -135,7 +142,7 @@ async def main():
                 const cols = mainContainer.querySelectorAll('[data-testid="stColumn"]');
                 for (const col of cols) {
                     if (col.querySelector('[data-testid="stChatInput"], [data-testid="stChatMessage"]')) {
-                        return col.querySelector(':scope > [data-testid="stVerticalBlock"]');
+                        return col.querySelector(':scope > [data-testid="stVerticalBlock"] > [data-testid="stLayoutWrapper"] > [data-testid="stVerticalBlock"]');
                     }
                 }
                 return null;
@@ -211,6 +218,51 @@ async def main():
         else:
             results["failed"] += 1
 
+        # === CHECK 4: Chat Input Alignment ===
+        print("Running Check 4: Chat Input Alignment...")
+        await asyncio.sleep(0.5)
+        alignment = await page.evaluate("""() => {
+            const chatInput = document.querySelector('[data-testid="stChatInput"]');
+            if (!chatInput) return null;
+            const container = chatInput.closest('[data-testid="stElementContainer"]');
+            if (!container) return null;
+            const containerStyle = window.getComputedStyle(container);
+            const chatColumn = chatInput.closest('[data-testid="stColumn"]');
+            if (!chatColumn) return null;
+            const colRect = chatColumn.getBoundingClientRect();
+            const inputRect = chatInput.getBoundingClientRect();
+            return {
+                position: containerStyle.position,
+                bottom: containerStyle.bottom,
+                inputLeft: inputRect.left,
+                colLeft: colRect.left,
+                inputRight: inputRect.right,
+                colRight: colRect.right
+            };
+        }""")
+
+        if not alignment:
+            c4_res = "=== CHECK 4: Chat Input Alignment ===\nElements not found\nResult: FAIL\n"
+            c4_pass = False
+        else:
+            pos_ok = alignment["position"] == "sticky"
+            bottom_ok = alignment["bottom"] == "0px"
+            bounds_ok = (alignment["inputLeft"] >= alignment["colLeft"] - 5) and (alignment["inputRight"] <= alignment["colRight"] + 5)
+            c4_pass = pos_ok and bottom_ok and bounds_ok
+            c4_res = (
+                f"=== CHECK 4: Chat Input Alignment ===\n"
+                f"Position: {alignment['position']} {'✓' if pos_ok else '✗'} (expected sticky)\n"
+                f"Bottom: {alignment['bottom']} {'✓' if bottom_ok else '✗'} (expected 0px)\n"
+                f"Within column bounds: {'✓' if bounds_ok else '✗'} (L:{alignment['inputLeft']:.1f} vs {alignment['colLeft']:.1f}, R:{alignment['inputRight']:.1f} vs {alignment['colRight']:.1f})\n"
+                f"Result: {'PASS' if c4_pass else 'FAIL'}\n"
+            )
+
+        results["details"].append(c4_res)
+        if c4_pass:
+            results["passed"] += 1
+        else:
+            results["failed"] += 1
+
         # === FINAL RESULTS ===
         end_time = datetime.datetime.now()
         duration = (end_time - start_time).total_seconds()
@@ -220,7 +272,7 @@ async def main():
             f"Date: {end_time.strftime('%Y-%m-%d %H:%M:%S')}\n\n"
             + "\n".join(results["details"])
             + f"\n=== SUMMARY ===\n"
-            f"All 3 checks: {'PASS' if results['failed'] == 0 else 'FAIL'}\n"
+            f"All 4 checks: {'PASS' if results['failed'] == 0 else 'FAIL'}\n"
             f"Duration: {duration:.1f}s\n"
         )
 

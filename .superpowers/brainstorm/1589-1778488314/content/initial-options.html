@@ -1,0 +1,75 @@
+<h2>미리보기 컬럼 초기 화면 디자인 제안</h2>
+<p class="subtitle">문서가 업로드되기 전, 사용자에게 보여줄 세 가지 디자인 방향입니다.</p>
+
+<div class="options">
+  <div class="option" data-choice="minimalist" onclick="toggleSelect(this)">
+    <div class="letter">A</div>
+    <div class="content">
+      <h3>심플 & 미니멀 (Minimalist)</h3>
+      <p>가장 핵심적인 동작에 집중합니다. 중앙에 큰 아이콘과 "PDF를 업로드하여 시작하세요"라는 메시지만 노출하여 깔끔한 느낌을 줍니다.</p>
+    </div>
+  </div>
+
+  <div class="option" data-choice="showcase" onclick="toggleSelect(this)">
+    <div class="letter">B</div>
+    <div class="content">
+      <h3>기능 가이드 (Feature Showcase)</h3>
+      <p>RAG 시스템의 주요 기능(하이라이트, 인용구 이동, 페이지 탐색 등)을 작은 카드 형태로 소개하여 사용자가 기대할 수 있는 가치를 보여줍니다.</p>
+    </div>
+  </div>
+
+  <div class="option" data-choice="step-by-step" onclick="toggleSelect(this)">
+    <div class="letter">C</div>
+    <div class="content">
+      <h3>단계별 안내 (Interactive Setup)</h3>
+      <p>1. 모델 선택 -> 2. 문서 업로드 -> 3. 질문 시작 순서로 진행 상황을 체크리스트처럼 보여주어 사용자의 다음 행동을 유도합니다.</p>
+    </div>
+  </div>
+</div>
+
+<div class="section">
+  <h3>상세 미리보기 (Mockups)</h3>
+  <div class="cards">
+    <div class="card">
+      <div class="card-image" style="background: #f8f9fa; display: flex; align-items: center; justify-content: center; height: 150px; border-radius: 8px;">
+        <div style="text-align: center; color: #6c757d;">
+          <div style="font-size: 40px; margin-bottom: 10px;">📄</div>
+          <div style="font-weight: bold;">PDF 파일을 선택해주세요</div>
+          <div style="font-size: 12px;">마우스로 끌어다 놓거나 버튼을 클릭하세요</div>
+        </div>
+      </div>
+      <div class="card-body">
+        <p class="label">Option A</p>
+        <p>집중도 높은 사용자 경험</p>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-image" style="background: #e7f3ff; padding: 20px; height: 150px; border-radius: 8px; display: grid; grid-template-columns: 1fr 1fr; gap: 10px;">
+        <div style="background: white; border-radius: 4px; padding: 5px; font-size: 10px; border: 1px solid #cce5ff;">✨ 정확한 하이라이트</div>
+        <div style="background: white; border-radius: 4px; padding: 5px; font-size: 10px; border: 1px solid #cce5ff;">🔗 인용구 즉시 이동</div>
+        <div style="background: white; border-radius: 4px; padding: 5px; font-size: 10px; border: 1px solid #cce5ff;">🔍 스마트 검색</div>
+        <div style="background: white; border-radius: 4px; padding: 5px; font-size: 10px; border: 1px solid #cce5ff;">📂 여러 문서 지원</div>
+      </div>
+      <div class="card-body">
+        <p class="label">Option B</p>
+        <p>풍부한 기능 안내</p>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-image" style="background: #fff; border: 1px solid #eee; padding: 20px; height: 150px; border-radius: 8px;">
+        <div style="font-size: 12px; margin-bottom: 8px;">✅ 모델 설정 완료 (Llama 3)</div>
+        <div style="font-size: 12px; margin-bottom: 8px; font-weight: bold; color: #007bff;">⏳ 문서 업로드 대기 중...</div>
+        <div style="font-size: 12px; color: #ced4da;">⚪ 대화 시작 가능</div>
+        <div style="margin-top: 15px; height: 4px; background: #f0f0f0; border-radius: 2px;">
+          <div style="width: 33%; height: 100%; background: #007bff; border-radius: 2px;"></div>
+        </div>
+      </div>
+      <div class="card-body">
+        <p class="label">Option C</p>
+        <p>명확한 진행 상태 표시</p>
+      </div>
+    </div>
+  </div>
+</div>

@@ -1,0 +1,132 @@
+<style>
+    .sidebar-logo-container {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        padding: 15px 12px;
+        background: linear-gradient(135deg, rgba(0, 123, 255, 0.15) 0%, rgba(0, 123, 255, 0.05) 100%);
+        border-radius: 12px;
+        margin-bottom: 20px;
+        border: 1px solid rgba(0, 123, 255, 0.2);
+        width: fit-content;
+    }
+    .logo-icon-wrapper {
+        background: #007bff;
+        width: 42px;
+        height: 42px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        border-radius: 10px;
+        box-shadow: 0 4px 12px rgba(0, 123, 255, 0.4);
+    }
+    .logo-text-wrapper {
+        display: flex;
+        flex-direction: column;
+        line-height: 1.0;
+    }
+    .logo-brand {
+        font-size: 1.4rem;
+        font-weight: 800;
+        color: #ffffff;
+        letter-spacing: 0.5px;
+    }
+    .logo-subtitle {
+        font-size: 0.7rem;
+        font-weight: 700;
+        color: #007bff;
+        letter-spacing: 2.5px;
+        margin-top: 1px;
+    }
+    .logo-tagline {
+        font-size: 0.6rem;
+        font-weight: 600;
+        color: #888;
+        letter-spacing: 1.5px;
+        margin-top: 4px;
+        padding-top: 4px;
+        border-top: 1px solid rgba(255,255,255,0.1);
+        text-transform: uppercase;
+    }
+    .preview-grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 20px;
+    }
+</style>
+
+<h2>OLLAMA 통합 레이아웃 제안</h2>
+<p class="subtitle">"RAG SYSTEM" 아래에 "OLLAMA"를 배치하는 다양한 스타일 옵션입니다.</p>
+
+<div class="preview-grid">
+    <!-- 옵션 A: 서브타이틀 강조형 -->
+    <div class="mockup" data-choice="ollama-tagline" onclick="toggleSelect(this)">
+        <div class="mockup-header">A. Tagline Style</div>
+        <div class="mockup-body" style="background:#1e1e1e; padding:30px; display:flex; justify-content:center;">
+            <div class="sidebar-logo-container">
+                <div class="logo-icon-wrapper">
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></svg>
+                </div>
+                <div class="logo-text-wrapper">
+                    <span class="logo-brand">RAG</span>
+                    <span class="logo-subtitle">SYSTEM</span>
+                    <span class="logo-tagline">Powered by Ollama</span>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 옵션 B: 3단 스택형 -->
+    <div class="mockup" data-choice="ollama-stack" onclick="toggleSelect(this)">
+        <div class="mockup-header">B. Three-Tier Stack</div>
+        <div class="mockup-body" style="background:#1e1e1e; padding:30px; display:flex; justify-content:center;">
+            <div class="sidebar-logo-container">
+                <div class="logo-icon-wrapper">
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></svg>
+                </div>
+                <div class="logo-text-wrapper">
+                    <span class="logo-brand">RAG</span>
+                    <span class="logo-subtitle">SYSTEM</span>
+                    <span style="font-size: 0.8rem; font-weight: 800; color: #ffeb3b; letter-spacing: 1px; margin-top: 2px;">OLLAMA</span>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 옵션 C: 아이콘 통합형 -->
+    <div class="mockup" data-choice="ollama-icon" onclick="toggleSelect(this)">
+        <div class="mockup-header">C. Icon Labeling</div>
+        <div class="mockup-body" style="background:#1e1e1e; padding:30px; display:flex; justify-content:center;">
+            <div class="sidebar-logo-container" style="flex-direction: column; align-items: flex-start; gap: 8px;">
+                <div style="display:flex; align-items:center; gap:12px;">
+                    <div class="logo-icon-wrapper">
+                        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></svg>
+                    </div>
+                    <div class="logo-text-wrapper">
+                        <span class="logo-brand">RAG</span>
+                        <span class="logo-subtitle">SYSTEM</span>
+                    </div>
+                </div>
+                <div style="background: rgba(255,255,255,0.1); border-radius: 4px; padding: 2px 8px; font-size: 0.55rem; color: #aaa; font-weight: 700; letter-spacing: 1px;">
+                    OLLAMA ENGINE
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 옵션 D: 미니멀 배치 -->
+    <div class="mockup" data-choice="ollama-minimal" onclick="toggleSelect(this)">
+        <div class="mockup-header">D. Minimal Dot</div>
+        <div class="mockup-body" style="background:#1e1e1e; padding:30px; display:flex; justify-content:center;">
+            <div class="sidebar-logo-container" style="padding: 10px 15px;">
+                <div class="logo-text-wrapper">
+                    <span class="logo-brand">RAG SYSTEM</span>
+                    <div style="display:flex; align-items:center; gap:5px; margin-top:3px;">
+                        <span style="width:6px; height:6px; background:#4caf50; border-radius:50%;"></span>
+                        <span style="font-size: 0.65rem; color: #888; font-weight: 600;">Ollama Active</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>

@@ -1,0 +1,163 @@
+<style>
+    /* Sidebar Layout Mockup */
+    .sidebar-mockup {
+        width: 300px;
+        background: #0e1117;
+        padding: 20px;
+        border-right: 1px solid #333;
+        font-family: 'Inter', sans-serif;
+    }
+
+    /* Modern Expander Style */
+    .custom-expander {
+        background: rgba(255, 255, 255, 0.03);
+        border: 1px solid rgba(255, 255, 255, 0.05);
+        border-radius: 12px;
+        margin-top: 15px;
+        overflow: hidden;
+    }
+    .expander-header {
+        padding: 12px 15px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        cursor: pointer;
+        background: rgba(255, 255, 255, 0.02);
+        border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+    }
+    .expander-title {
+        font-size: 0.85rem;
+        font-weight: 700;
+        color: #ddd;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+    }
+    .expander-content {
+        padding: 15px;
+    }
+
+    /* Settings Group */
+    .settings-group {
+        margin-bottom: 18px;
+    }
+    .settings-label {
+        font-size: 0.75rem;
+        font-weight: 600;
+        color: #888;
+        margin-bottom: 8px;
+        display: block;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+    }
+
+    /* Modern Select/Input Mockup */
+    .mock-select {
+        background: #1e1e1e;
+        border: 1px solid #333;
+        border-radius: 6px;
+        padding: 8px 12px;
+        color: #fff;
+        font-size: 0.85rem;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        width: 100%;
+    }
+
+    /* Utility Buttons */
+    .btn-row {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 8px;
+        margin-top: 10px;
+    }
+    .custom-btn {
+        padding: 8px;
+        border-radius: 6px;
+        font-size: 0.75rem;
+        font-weight: 600;
+        text-align: center;
+        cursor: pointer;
+        transition: all 0.2s;
+    }
+    .btn-secondary {
+        background: rgba(255, 255, 255, 0.05);
+        color: #ccc;
+        border: 1px solid rgba(255, 255, 255, 0.1);
+    }
+    .btn-danger {
+        background: rgba(220, 53, 69, 0.1);
+        color: #ff6b6b;
+        border: 1px solid rgba(220, 53, 69, 0.2);
+    }
+</style>
+
+<h2>고급 설정(Advanced Settings) UI 개선 계획</h2>
+<p class="subtitle">기존의 투박한 Expander 구조를 로고/시스템 상태와 동일한 카드 기반 디자인으로 현대화합니다.</p>
+
+<div class="mockup">
+    <div class="mockup-header">개선된 고급 설정 프리뷰</div>
+    <div class="mockup-body" style="background:#1e1e1e; padding:30px; display:flex; justify-content:center;">
+        <div class="sidebar-mockup" style="border:none; width: 100%; max-width: 280px;">
+            
+            <!-- Modernized Expander -->
+            <div class="custom-expander">
+                <div class="expander-header">
+                    <span class="expander-title">🛠️ Advanced Settings</span>
+                    <span style="font-size: 10px; color: #666;">▼</span>
+                </div>
+                <div class="expander-content">
+                    
+                    <!-- 모델 설정 섹션 -->
+                    <div class="settings-group">
+                        <span class="settings-label">Model Configuration</span>
+                        <div style="margin-bottom: 8px;">
+                            <div style="font-size: 0.7rem; color: #666; margin-bottom: 4px;">Large Language Model</div>
+                            <div class="mock-select">Qwen 4B Instruct ▾</div>
+                        </div>
+                        <div>
+                            <div style="font-size: 0.7rem; color: #666; margin-bottom: 4px;">Embedding Model</div>
+                            <div class="mock-select">Nomic Embed V2 ▾</div>
+                        </div>
+                    </div>
+
+                    <!-- 시스템 도구 섹션 -->
+                    <div class="settings-group" style="margin-bottom: 0;">
+                        <span class="settings-label">System Tools</span>
+                        <div class="btn-row">
+                            <div class="custom-btn btn-secondary">Clear VRAM</div>
+                            <div class="custom-btn btn-danger">Reset All</div>
+                        </div>
+                    </div>
+
+                </div>
+            </div>
+
+        </div>
+    </div>
+</div>
+
+<h3>🛠️ 개선 전략</h3>
+<p class="subtitle">Streamlit의 한계를 극복하고 일관된 사용자 경험을 제공하는 방법입니다.</p>
+
+<div class="cards">
+  <div class="card">
+    <div class="card-body">
+      <h3>1. 카드 기반의 계층 구조</h3>
+      <p>로고 컨테이너와 동일한 <code>border-radius: 12px</code>와 반투명 배경을 적용하여 시각적 통일성을 확보합니다.</p>
+    </div>
+  </div>
+  <div class="card">
+    <div class="card-body">
+      <h3>2. 타이포그래피 정돈</h3>
+      <p>너무 큰 <code>st.subheader</code> 대신, 작고 세련된 대문자 레이블(Upper-case label)을 사용하여 전문적인 대시보드 느낌을 줍니다.</p>
+    </div>
+  </div>
+  <div class="card">
+    <div class="card-body">
+      <h3>3. 버튼 디자인 최적화</h3>
+      <p>전체 폭을 차지하는 투박한 버튼 대신, 역할에 맞는 색상(Secondary/Danger)과 조밀한 배치를 통해 인지적 부하를 줄입니다.</p>
+    </div>
+  </div>
+</div>

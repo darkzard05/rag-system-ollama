@@ -1,0 +1,167 @@
+<style>
+    .initial-gallery {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+        gap: 20px;
+        padding: 10px;
+    }
+    .initial-card {
+        background: #1e1e1e;
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        border-radius: 16px;
+        height: 400px;
+        overflow: hidden;
+        display: flex;
+        flex-direction: column;
+        transition: transform 0.2s, border-color 0.2s;
+        cursor: pointer;
+    }
+    .initial-card:hover {
+        transform: translateY(-4px);
+        border-color: #007bff;
+    }
+    .initial-card.selected {
+        border-color: #007bff;
+        box-shadow: 0 0 0 2px #007bff;
+    }
+    .initial-header {
+        padding: 10px 15px;
+        background: rgba(255, 255, 255, 0.03);
+        border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+        font-size: 0.8rem;
+        font-weight: 600;
+        color: #888;
+    }
+    .initial-body {
+        flex-grow: 1;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        padding: 30px;
+        text-align: center;
+    }
+    
+    /* Elements */
+    .big-icon {
+        font-size: 50px;
+        margin-bottom: 20px;
+        opacity: 0.8;
+    }
+    .title {
+        font-size: 1.1rem;
+        font-weight: 700;
+        color: #fff;
+        margin-bottom: 10px;
+    }
+    .desc {
+        font-size: 0.85rem;
+        color: #aaa;
+        line-height: 1.5;
+    }
+    
+    /* Option Specifics */
+    .step-item {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        margin-bottom: 12px;
+        text-align: left;
+        width: 100%;
+    }
+    .step-num {
+        width: 24px;
+        height: 24px;
+        background: #007bff;
+        border-radius: 50%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 0.75rem;
+        font-weight: 700;
+        color: white;
+    }
+</style>
+
+<h2>미리보기 컬럼 초기 화면(Empty State) 제안</h2>
+<p class="subtitle">PDF가 업로드되기 전, 우측 미리보기 영역에 표시될 초기 가이드 화면 옵션들입니다.</p>
+
+<div class="initial-gallery" data-multiselect>
+  
+  <!-- 옵션 1: Action Focused (직관적 업로드 유도) -->
+  <div class="initial-card" data-choice="action-focused" onclick="toggleSelect(this)">
+    <div class="initial-header">Option 1: Action Focused</div>
+    <div class="initial-body">
+        <div class="big-icon">📄</div>
+        <div class="title">문서를 기다리고 있습니다</div>
+        <div class="desc">좌측 사이드바에서 PDF 파일을 업로드하여<br>지능형 분석을 시작해보세요.</div>
+        <div style="margin-top:20px; padding: 8px 20px; border: 1px dashed #007bff; border-radius: 8px; color: #007bff; font-size: 0.8rem; font-weight: 600;">
+            Upload PDF to Start
+        </div>
+    </div>
+  </div>
+
+  <!-- 옵션 2: Feature Showcase (기능 강조형) -->
+  <div class="initial-card" data-choice="feature-showcase" onclick="toggleSelect(this)">
+    <div class="initial-header">Option 2: Feature Showcase</div>
+    <div class="initial-body" style="justify-content: flex-start; padding-top: 50px;">
+        <div class="title" style="margin-bottom: 30px;">지능형 PDF 분석 도구</div>
+        <div style="width: 100%;">
+            <div class="step-item">
+                <div style="font-size: 1.2rem;">🔍</div>
+                <div class="desc" style="color: #eee;"><strong>정밀 근거 추적</strong>: 답변의 출처를 즉시 확인</div>
+            </div>
+            <div class="step-item">
+                <div style="font-size: 1.2rem;">🧠</div>
+                <div class="desc" style="color: #eee;"><strong>시맨틱 청킹</strong>: 문맥을 이해하는 지식 분할</div>
+            </div>
+            <div class="step-item">
+                <div style="font-size: 1.2rem;">📊</div>
+                <div class="desc" style="color: #eee;"><strong>표/그래픽 인식</strong>: 복잡한 데이터 정밀 추출</div>
+            </div>
+        </div>
+    </div>
+  </div>
+
+  <!-- 옵션 3: Interactive Guide (프로세스 안내형) -->
+  <div class="initial-card" data-choice="step-guide" onclick="toggleSelect(this)">
+    <div class="initial-header">Option 3: Step Guide</div>
+    <div class="initial-body">
+        <div class="title" style="margin-bottom: 25px;">분석 프로세스</div>
+        <div style="width: 100%;">
+            <div class="step-item">
+                <div class="step-num">1</div>
+                <div class="desc">사이드바에서 PDF 업로드</div>
+            </div>
+            <div style="height: 20px; border-left: 2px solid rgba(255,255,255,0.1); margin-left: 11px;"></div>
+            <div class="step-item">
+                <div class="step-num" style="background:#444;">2</div>
+                <div class="desc" style="opacity: 0.5;">지능형 인덱싱 (벡터화)</div>
+            </div>
+            <div style="height: 20px; border-left: 2px solid rgba(255,255,255,0.1); margin-left: 11px;"></div>
+            <div class="step-item">
+                <div class="step-num" style="background:#444;">3</div>
+                <div class="desc" style="opacity: 0.5;">채팅 및 근거 하이라이트 확인</div>
+            </div>
+        </div>
+    </div>
+  </div>
+
+  <!-- 옵션 4: Minimal Branding (브랜드 강조형) -->
+  <div class="initial-card" data-choice="minimal-brand" onclick="toggleSelect(this)">
+    <div class="initial-header">Option 4: Minimalist</div>
+    <div class="initial-body">
+        <div style="background: rgba(0,123,255,0.1); width: 80px; height: 80px; border-radius: 20px; display: flex; align-items: center; justify-content: center; margin-bottom: 20px;">
+            <span style="font-size: 40px;">🤖</span>
+        </div>
+        <div class="logo-main-row" style="display:flex; gap:5px; font-size: 1.5rem; font-weight: 800; margin-bottom: 5px;">
+            <span style="color:white;">RAG</span>
+            <span style="color:#007bff;">SYSTEM</span>
+        </div>
+        <div style="font-size: 0.7rem; color: #666; letter-spacing: 2px; text-transform: uppercase; font-weight: 700;">
+            Next-Gen Intelligence
+        </div>
+    </div>
+  </div>
+
+</div>

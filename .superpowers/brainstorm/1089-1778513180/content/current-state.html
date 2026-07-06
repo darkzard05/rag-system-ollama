@@ -1,0 +1,42 @@
+<h2>현재 UI 레이아웃 분석</h2>
+<p class="subtitle">사이드바가 접혔을 때 확장 버튼(>)이 배치되는 위치와 주변 요소입니다.</p>
+
+<div class="mockup">
+  <div class="mockup-header">App Shell Layout</div>
+  <div class="mockup-body" style="height: 300px; position: relative; background: #1e1e1e; overflow: hidden;">
+    <!-- Fixed Sidebar Button -->
+    <div style="position: absolute; top: 8px; left: 8px; width: 40px; height: 32px; background: #007bff; color: white; border-radius: 8px; display: flex; align-items: center; justify-content: center; z-index: 1000; box-shadow: 0 2px 5px rgba(0,0,0,0.5);">
+      &gt;
+    </div>
+    
+    <div style="display: flex; height: 100%; margin-top: 0;">
+      <!-- PDF Column -->
+      <div style="flex: 1; border-right: 1px solid #333; padding: 10px; display: flex; flex-direction: column;">
+        <div style="background: #2d2d2d; height: 30px; margin-bottom: 5px; border-radius: 4px; display: flex; align-items: center; padding-left: 45px; font-size: 10px; color: #888;">
+          PDF Controls (Left Column)
+        </div>
+        <div style="flex: 1; background: #252525; border-radius: 4px; display: flex; align-items: center; justify-content: center; color: #555;">
+          PDF Viewer Area
+        </div>
+      </div>
+      
+      <!-- Chat Column -->
+      <div style="flex: 1; padding: 10px; display: flex; flex-direction: column;">
+        <div style="flex: 1; background: #252525; border-radius: 4px; margin-bottom: 5px;"></div>
+        <div style="height: 40px; background: #333; border-radius: 20px;"></div>
+      </div>
+    </div>
+    
+    <!-- Potential Obscuring Layer (e.g. Toast or Header) -->
+    <div style="position: absolute; top: 0; left: 0; right: 0; height: 5px; background: rgba(255,0,0,0.1); display: none;" id="obscure-layer"></div>
+  </div>
+</div>
+
+<div class="section">
+  <h3>관찰 포인트</h3>
+  <ul>
+    <li>버튼은 <strong>좌상단 (8px, 8px)</strong>에 고정(fixed)되어 있습니다.</li>
+    <li>PDF 뷰어의 컨트롤 바가 버튼 바로 뒤나 옆에 위치합니다.</li>
+    <li><code>z-index</code>는 1,000,001로 매우 높게 설정되어 있습니다.</li>
+  </ul>
+</div>

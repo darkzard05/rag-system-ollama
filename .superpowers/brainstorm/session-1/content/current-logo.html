@@ -1,0 +1,95 @@
+<style>
+    .sidebar-logo-container {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        padding: 15px 12px;
+        background: linear-gradient(135deg, rgba(0, 123, 255, 0.15) 0%, rgba(0, 123, 255, 0.05) 100%);
+        border-radius: 12px;
+        margin-bottom: 20px;
+        border: 1px solid rgba(0, 123, 255, 0.2);
+        width: fit-content;
+    }
+    .logo-icon-wrapper {
+        background: #007bff;
+        width: 38px;
+        height: 38px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        border-radius: 10px;
+        box-shadow: 0 4px 12px rgba(0, 123, 255, 0.4);
+    }
+    .logo-text-wrapper {
+        display: flex;
+        flex-direction: column;
+        line-height: 1.1;
+    }
+    .logo-brand {
+        font-size: 1.3rem;
+        font-weight: 800;
+        color: #ffffff;
+        letter-spacing: 0.5px;
+    }
+    .logo-subtitle {
+        font-size: 0.65rem;
+        font-weight: 700;
+        color: #007bff;
+        letter-spacing: 2px;
+        margin-top: 2px;
+    }
+    .preview-box {
+        background: #1e1e1e;
+        padding: 40px;
+        border-radius: 8px;
+        display: flex;
+        justify-content: center;
+    }
+</style>
+
+<h2>현재 로고 검증</h2>
+<p class="subtitle">다양한 서브에이전트들이 아래 로고를 각기 다른 관점에서 비판적으로 분석할 예정입니다.</p>
+
+<div class="mockup">
+    <div class="mockup-header">현재 사이드바 로고 프리뷰</div>
+    <div class="mockup-body">
+        <div class="preview-box">
+            <div class="sidebar-logo-container">
+                <div class="logo-icon-wrapper">
+                    <span style="font-size: 20px;">🤖</span>
+                </div>
+                <div class="logo-text-wrapper">
+                    <span class="logo-brand">RAG</span>
+                    <span class="logo-subtitle">SYSTEM</span>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<h3>검증 방향 선택</h3>
+<p class="subtitle">분석에 참여할 전문가(서브에이전트)들의 중점 검증 분야를 확인해주세요.</p>
+
+<div class="options" data-multiselect>
+  <div class="option" data-choice="uiux" onclick="toggleSelect(this)">
+    <div class="letter">A</div>
+    <div class="content">
+      <h3>UI/UX 전문가</h3>
+      <p>시각적 가시성, 색상 조화, 레이아웃 균형 분석</p>
+    </div>
+  </div>
+  <div class="option" data-choice="branding" onclick="toggleSelect(this)">
+    <div class="letter">B</div>
+    <div class="content">
+      <h3>브랜드 전략가</h3>
+      <p>프로젝트(RAG)의 정체성 표현, 전문성 및 신뢰도 평가</p>
+    </div>
+  </div>
+  <div class="option" data-choice="dev" onclick="toggleSelect(this)">
+    <div class="letter">C</div>
+    <div class="content">
+      <h3>프론트엔드 개발자</h3>
+      <p>구현 코드의 효율성, 유지보수성, 확장성 검토</p>
+    </div>
+  </div>
+</div>
