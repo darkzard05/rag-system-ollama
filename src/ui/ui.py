@@ -19,6 +19,7 @@ def inject_custom_css():
    0. GLOBAL VIEWPORT LOCK
    ════════════════════════════════════════════ */
 .stApp, [data-testid="stAppViewContainer"] {
+    --header-h: 60px;
     height: 100vh !important;
     height: 100dvh !important;
     overflow: hidden !important;
@@ -95,35 +96,23 @@ def inject_custom_css():
     overflow-x: hidden !important;
 }
 
-/* 9. 우측 컬럼 하단 패딩 (sticky 입력창이 메시지 가리지 않도록) */
+/* 9. 우측 컬럼 하단 패딩 (fixed 입력창이 메시지 가리지 않도록) */
 [data-testid="stMainBlockContainer"] [data-testid="stColumn"]:last-child
 > [data-testid="stVerticalBlock"] > [data-testid="stLayoutWrapper"]
 > [data-testid="stVerticalBlock"] {
     padding-bottom: 4rem !important;
 }
 
-/* ════════════════════════════════════════════
-   10. ★ STICKY CHAT INPUT
-   우측 컬럼 스크롤 가능 영역의 마지막 자식에 sticky
-   ════════════════════════════════════════════ */
-[data-testid="stMainBlockContainer"] [data-testid="stColumn"]:last-child
-> [data-testid="stVerticalBlock"] > [data-testid="stLayoutWrapper"]
-> [data-testid="stVerticalBlock"] > [data-testid="stElementContainer"]:last-child {
-    position: sticky !important;
+/* 10. ★ FIXED CHAT INPUT (bypasses DOM nesting issues - position:fixed on element directly) */
+[data-testid="stChatInput"] {
+    position: fixed !important;
     bottom: 0 !important;
-    z-index: 100 !important;
+    right: 0 !important;
+    left: 62% !important;
+    width: 32% !important;
+    z-index: 1000 !important;
     background-color: var(--background-color) !important;
     border-top: 1px solid color-mix(in srgb, var(--border-color, #ccc) 30%, transparent) !important;
-    padding-top: 0.5rem !important;
-}
-
-/* Restore chat input to relative (remove the global fixed positioning) */
-[data-testid="stChatInput"] {
-    position: relative !important;
-    left: auto !important;
-    right: auto !important;
-    width: 100% !important;
-    bottom: auto !important;
 }
 
 /* ════════════════════════════════════════════
@@ -131,6 +120,46 @@ def inject_custom_css():
    ════════════════════════════════════════════ */
 [data-testid="stMain"] { overflow: hidden !important; }
 [data-testid="stSidebarCollapseButton"] { z-index: 100000 !important; visibility: visible !important; opacity: 1 !important; background-color: color-mix(in srgb, var(--background-color), transparent 20%) !important; }
+    /* Sidebar Logo Styles - Minimalist & Native */
+    .sidebar-logo-container {
+        display: flex !important;
+        align-items: center !important;
+        gap: 12px !important;
+        padding: 0 !important;
+        background: transparent !important;
+        border: none !important;
+        box-shadow: none !important;
+        margin: 0 0 16px 0 !important;
+    }
+    .logo-brand {
+        font-size: 1.2rem !important;
+        font-weight: 700 !important;
+        color: var(--text-color) !important;
+    }
+    .logo-subtitle {
+        font-size: 0.75rem !important;
+        color: var(--primary-color) !important;
+        opacity: 0.8 !important;
+    }
+
+    /* Sidebar Settings Labels - Minimalist & Native */
+    .settings-label {
+        display: block !important;
+        font-size: 0.85rem !important;
+        font-weight: 600 !important;
+        color: var(--text-color) !important;
+        opacity: 0.9 !important;
+        margin: 16px 0 4px 0 !important;
+    }
+    .settings-sublabel {
+        display: block !important;
+        font-size: 0.75rem !important;
+        color: var(--text-color) !important;
+        opacity: 0.6 !important;
+        margin: 0 0 8px 0 !important;
+    }
+
+
 header[data-testid="stHeader"] { background: color-mix(in srgb, var(--background-color), transparent 30%) !important; backdrop-filter: blur(12px) !important; z-index: 99999 !important; display: flex !important; }
 .stAppDeployButton { display: none !important; }
 details.thought-expander { background-color: var(--secondary-background-color); border: 1px solid color-mix(in srgb, var(--faded-text-color) 30%, transparent); border-radius: 8px; margin: 0 0 6px 0; padding: 8px 12px; }
@@ -141,7 +170,46 @@ details[open].thought-expander summary::before { transform: rotate(90deg); }
 .citation-highlight { background-color: color-mix(in srgb, var(--primary-color) 15%, transparent); border-bottom: 2px dashed var(--primary-color); padding: 0 4px; border-radius: 3px; color: var(--primary-color); cursor: help; display: inline-block; position: relative; }
 .streaming-pulse { animation: pulse 1.5s infinite ease-in-out; min-height: 24px; font-size: 0.9em; color: var(--primary-color); margin-bottom: 4px; }
 @keyframes pulse { 0% { opacity: 0.4; } 50% { opacity: 1; } 100% { opacity: 0.4; } }
-.perf-details { margin-top: 2px !important; }
+    .perf-table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 0.8rem;
+        margin: 4px 0;
+    }
+    .perf-row {
+        display: flex;
+        justify-content: space-between;
+        padding: 2px 0;
+        border-bottom: 1px solid color-mix(in srgb, var(--border-color, #ccc) 20%, transparent);
+    }
+    .perf-label {
+        color: var(--text-color);
+        opacity: 0.7;
+    }
+    .perf-value {
+        font-weight: 600;
+        color: var(--text-color);
+    }
+    .perf-status {
+        font-size: 0.7rem;
+        padding: 1px 4px;
+        border-radius: 4px;
+        font-weight: 700;
+        text-transform: uppercase;
+    }
+    .status-excellent {
+        background-color: color-mix(in srgb, #2ecc71 20%, transparent);
+        color: #2ecc71;
+    }
+    .status-stable {
+        background-color: color-mix(in srgb, #f1c40f 20%, transparent);
+        color: #f1c40f;
+    }
+    .status-poor {
+        background-color: color-mix(in srgb, #e74c3c 20%, transparent);
+        color: #e74c3c;
+    }
+    .perf-details { margin-top: 2px !important; }
 .perf-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(100px, 1fr)); gap: 8px; }
 [data-testid="stChatMessage"] div[data-testid="stVerticalBlock"] { gap: 0px !important; }
 
@@ -157,6 +225,9 @@ details[open].thought-expander summary::before { transform: rotate(90deg); }
         height: auto !important;
         display: block !important;
     }
+    [data-testid="stHorizontalBlock"] {
+        flex-wrap: wrap !important;
+    }
     [data-testid="stColumn"] {
         display: block !important;
     }
@@ -164,12 +235,14 @@ details[open].thought-expander summary::before { transform: rotate(90deg); }
     > [data-testid="stLayoutWrapper"] > [data-testid="stVerticalBlock"] {
         max-height: none !important;
         overflow-y: visible !important;
+        padding-bottom: 4rem !important;
     }
     [data-testid="stChatInput"] {
         position: fixed !important;
         bottom: 0 !important;
         left: 0 !important;
         width: 100% !important;
+        z-index: 1000 !important;
     }
 }
 </style>

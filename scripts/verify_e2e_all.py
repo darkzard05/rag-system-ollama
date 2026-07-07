@@ -227,13 +227,16 @@ async def main():
             const container = chatInput.closest('[data-testid="stElementContainer"]');
             if (!container) return null;
             const containerStyle = window.getComputedStyle(container);
+            const chatInputStyle = window.getComputedStyle(chatInput);
             const chatColumn = chatInput.closest('[data-testid="stColumn"]');
             if (!chatColumn) return null;
             const colRect = chatColumn.getBoundingClientRect();
             const inputRect = chatInput.getBoundingClientRect();
             return {
-                position: containerStyle.position,
-                bottom: containerStyle.bottom,
+                containerPosition: containerStyle.position,
+                inputPosition: chatInputStyle.position,
+                inputBottom: chatInputStyle.bottom,
+                containerBottom: containerStyle.bottom,
                 inputLeft: inputRect.left,
                 colLeft: colRect.left,
                 inputRight: inputRect.right,
@@ -245,15 +248,43 @@ async def main():
             c4_res = "=== CHECK 4: Chat Input Alignment ===\nElements not found\nResult: FAIL\n"
             c4_pass = False
         else:
-            pos_ok = alignment["position"] == "sticky"
-            bottom_ok = alignment["bottom"] == "0px"
+            pos_ok = alignment["inputPosition"] in ("fixed", "sticky") or alignment["containerPosition"] == "sticky"
+            bottom_ok = alignment["inputBottom"] == "0px" or alignment["containerBottom"] == "0px"
             bounds_ok = (alignment["inputLeft"] >= alignment["colLeft"] - 5) and (alignment["inputRight"] <= alignment["colRight"] + 5)
-            c4_pass = pos_ok and bottom_ok and bounds_ok
+
+            # Mobile viewport check
+            viewport_width = await page.evaluate("window.innerWidth")
+            mobile_ok = True
+            mobile_msg = ""
+            if viewport_width <= 768:
+                input_style = await page.evaluate("""() => {
+                    const el = document.querySelector('[data-testid="stChatInput"]');
+                    if (!el) return null;
+                    const s = window.getComputedStyle(el);
+                    return { left: s.left, width: s.width };
+                }""")
+                if input_style:
+                    left_ok = input_style["left"] == "0px"
+                    width_ok = input_style["width"] == "100%"
+                    mobile_ok = left_ok and width_ok
+                    mobile_msg = (
+                        f"Mobile viewport ({viewport_width}px): "
+                        f"left: {input_style['left']} {'✓' if left_ok else '✗'} (expected 0px), "
+                        f"width: {input_style['width']} {'✓' if width_ok else '✗'} (expected 100%)\n"
+                    )
+                else:
+                    mobile_ok = False
+                    mobile_msg = f"Mobile viewport ({viewport_width}px): stChatInput not found (FAIL)\n"
+            else:
+                mobile_msg = f"Desktop viewport ({viewport_width}px): mobile check skipped\n"
+
+            c4_pass = pos_ok and bottom_ok and bounds_ok and mobile_ok
             c4_res = (
                 f"=== CHECK 4: Chat Input Alignment ===\n"
-                f"Position: {alignment['position']} {'✓' if pos_ok else '✗'} (expected sticky)\n"
-                f"Bottom: {alignment['bottom']} {'✓' if bottom_ok else '✗'} (expected 0px)\n"
+                f"Position: input={alignment['inputPosition']}, container={alignment['containerPosition']} {'✓' if pos_ok else '✗'} (expected fixed or sticky)\n"
+                f"Bottom: input={alignment['inputBottom']}, container={alignment['containerBottom']} {'✓' if bottom_ok else '✗'} (expected 0px)\n"
                 f"Within column bounds: {'✓' if bounds_ok else '✗'} (L:{alignment['inputLeft']:.1f} vs {alignment['colLeft']:.1f}, R:{alignment['inputRight']:.1f} vs {alignment['colRight']:.1f})\n"
+                f"{mobile_msg}"
                 f"Result: {'PASS' if c4_pass else 'FAIL'}\n"
             )
 
