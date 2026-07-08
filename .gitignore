@@ -63,6 +63,8 @@ data/
 
 .omo/
 
+# Playwright session cache
+.playwright-mcp/
 
 find_chat_selectors.py
 
