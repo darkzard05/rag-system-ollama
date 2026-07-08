@@ -30,19 +30,24 @@ def inject_custom_css():
    ════════════════════════════════════════════ */
 
 /* 1. Main container: 헤더 제외 높이 + flex 컬럼 */
+/* Streamlit 기본 padding-top(96px), padding-bottom(160px) 제거하여 화면 꽉 채움 */
 [data-testid="stMainBlockContainer"] {
     height: calc(100vh - var(--header-h, 60px)) !important;
     height: calc(100dvh - var(--header-h, 60px)) !important;
     display: flex !important;
     flex-direction: column !important;
     overflow: hidden !important;
+    padding-top: var(--header-h, 60px) !important;
+    padding-bottom: 0 !important;
 }
 
-/* 2. stMainBlockContainer의 직계 stVerticalBlock이 flex 공간 채움 */
+/* 2. stMainBlockContainer의 직계 stVerticalBlock이 flex 공간 채움 (내부 gap 제거) */
 [data-testid="stMainBlockContainer"] > [data-testid="stVerticalBlock"] {
     flex: 1 !important;
     min-height: 0 !important;
     min-width: 0 !important;
+    gap: 0 !important;
+    row-gap: 0 !important;
 }
 
 /* 3. stLayoutWrapper (stMainBlockContainer > stVerticalBlock 내부) */
@@ -88,31 +93,64 @@ def inject_custom_css():
     overflow: hidden !important;
 }
 
-/* 8. ★ SCROLLABLE: Column 내부 2단계 stVerticalBlock (stLayoutWrapper 내부) */
+/* 8. ★ FLEX CONTAINER: Column 내부 2단계 stVerticalBlock (stLayoutWrapper 내부) */
 [data-testid="stColumn"] > [data-testid="stVerticalBlock"] > [data-testid="stLayoutWrapper"] > [data-testid="stVerticalBlock"] {
+    flex: 1 !important;
+    min-height: 0 !important;
+    overflow: hidden !important;
+    display: flex !important;
+    flex-direction: column !important;
+}
+
+/* 8b. PDF viewer area (inside step 8 flex container) - scrollable */
+[data-testid="stMainBlockContainer"] [data-testid="stColumn"]:first-child
+> [data-testid="stVerticalBlock"] > [data-testid="stLayoutWrapper"]
+> [data-testid="stVerticalBlock"] > [data-testid="stVerticalBlock"] {
     flex: 1 !important;
     min-height: 0 !important;
     overflow-y: auto !important;
     overflow-x: hidden !important;
 }
 
-/* 9. 우측 컬럼 하단 패딩 (fixed 입력창이 메시지 가리지 않도록) */
+/* 8c. PDF controls wrapper - fixed at bottom inside flex container */
+[data-testid="stMainBlockContainer"] [data-testid="stColumn"]:first-child
+> [data-testid="stVerticalBlock"] > [data-testid="stLayoutWrapper"]
+> [data-testid="stVerticalBlock"] > [data-testid="stLayoutWrapper"] {
+    flex-shrink: 0 !important;
+    border-top: 1px solid color-mix(in srgb, var(--border-color, #ccc) 30%, transparent) !important;
+}
+
+/* 8d. Right column (chat): keep overflow-y:auto for chat scrolling */
+[data-testid="stMainBlockContainer"] [data-testid="stColumn"]:last-child
+> [data-testid="stVerticalBlock"] > [data-testid="stLayoutWrapper"]
+> [data-testid="stVerticalBlock"] {
+    overflow-y: auto !important;
+}
+
+/* 9. 우측 컬럼 하단 패딩 (입력창이 메시지 가리지 않도록) */
 [data-testid="stMainBlockContainer"] [data-testid="stColumn"]:last-child
 > [data-testid="stVerticalBlock"] > [data-testid="stLayoutWrapper"]
 > [data-testid="stVerticalBlock"] {
     padding-bottom: 4rem !important;
 }
 
-/* 10. ★ FIXED CHAT INPUT (bypasses DOM nesting issues - position:fixed on element directly) */
+/* 10. ★ STICKY CHAT INPUT (inherits column width via sticky; no hardcoded left/width) */
 [data-testid="stChatInput"] {
-    position: fixed !important;
+    position: sticky !important;
     bottom: 0 !important;
-    right: 0 !important;
-    left: 62% !important;
-    width: 32% !important;
     z-index: 1000 !important;
     background-color: var(--background-color) !important;
     border-top: 1px solid color-mix(in srgb, var(--border-color, #ccc) 30%, transparent) !important;
+}
+
+/* ════════════════════════════════════════════
+   11. PDF CONTROLS - STICKY BOTTOM
+   ════════════════════════════════════════════ */
+
+/* 11a. Left column stVerticalBlock bottom padding */
+[data-testid="stMainBlockContainer"] [data-testid="stColumn"]:first-child
+> [data-testid="stVerticalBlock"] {
+    padding-bottom: 3.5rem !important;
 }
 
 /* ════════════════════════════════════════════
@@ -160,7 +198,7 @@ def inject_custom_css():
     }
 
 
-header[data-testid="stHeader"] { background: color-mix(in srgb, var(--background-color), transparent 30%) !important; backdrop-filter: blur(12px) !important; z-index: 99999 !important; display: flex !important; }
+header[data-testid="stHeader"] { background: var(--background-color) !important; z-index: 99999 !important; display: flex !important; border-bottom: 1px solid color-mix(in srgb, var(--border-color, #ccc) 30%, transparent) !important; }
 .stAppDeployButton { display: none !important; }
 details.thought-expander { background-color: var(--secondary-background-color); border: 1px solid color-mix(in srgb, var(--faded-text-color) 30%, transparent); border-radius: 8px; margin: 0 0 6px 0; padding: 8px 12px; }
 details.thought-expander summary { cursor: pointer; font-size: 0.85em; font-weight: 600; color: var(--text-color); display: flex; align-items: center; gap: 8px; }
