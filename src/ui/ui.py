@@ -118,6 +118,46 @@ def inject_custom_css():
 > [data-testid="stVerticalBlock"] > [data-testid="stLayoutWrapper"] {
     flex-shrink: 0 !important;
     border-top: 1px solid color-mix(in srgb, var(--border-color, #ccc) 30%, transparent) !important;
+    padding: 0.25rem 0.5rem !important;
+    background-color: color-mix(in srgb, var(--secondary-background-color) 50%, transparent) !important;
+    border-radius: 8px !important;
+    margin: 0.25rem 0 !important;
+}
+
+/* PDF Control Buttons */
+[data-testid="stMainBlockContainer"] [data-testid="stColumn"]:first-child
+> [data-testid="stVerticalBlock"] > [data-testid="stLayoutWrapper"]
+> [data-testid="stVerticalBlock"] > [data-testid="stLayoutWrapper"] button {
+    transition: all 0.2s ease-in-out !important;
+    border-radius: 6px !important;
+}
+
+[data-testid="stMainBlockContainer"] [data-testid="stColumn"]:first-child
+> [data-testid="stVerticalBlock"] > [data-testid="stLayoutWrapper"]
+> [data-testid="stVerticalBlock"] > [data-testid="stLayoutWrapper"] button:hover:not(:disabled) {
+    background-color: color-mix(in srgb, var(--primary-color) 15%, transparent) !important;
+    border-color: var(--primary-color) !important;
+}
+
+[data-testid="stMainBlockContainer"] [data-testid="stColumn"]:first-child
+> [data-testid="stVerticalBlock"] > [data-testid="stLayoutWrapper"]
+> [data-testid="stVerticalBlock"] > [data-testid="stLayoutWrapper"] button:disabled {
+    opacity: 0.4 !important;
+    cursor: not-allowed !important;
+}
+
+/* PDF Page Text — target only the 1st (Page X) and last (of Y) column labels */
+[data-testid="stMainBlockContainer"] [data-testid="stColumn"]:first-child
+> [data-testid="stVerticalBlock"] > [data-testid="stLayoutWrapper"]
+> [data-testid="stVerticalBlock"] > [data-testid="stLayoutWrapper"]
+[data-testid="stColumn"]:first-child div,
+[data-testid="stMainBlockContainer"] [data-testid="stColumn"]:first-child
+> [data-testid="stVerticalBlock"] > [data-testid="stLayoutWrapper"]
+> [data-testid="stVerticalBlock"] > [data-testid="stLayoutWrapper"]
+[data-testid="stColumn"]:last-child div {
+    font-size: 0.85rem !important;
+    font-weight: 600 !important;
+    opacity: 0.8 !important;
 }
 
 /* 8d. Right column (chat): keep overflow-y:auto for chat scrolling */
@@ -143,8 +183,28 @@ def inject_custom_css():
     border-top: 1px solid color-mix(in srgb, var(--border-color, #ccc) 30%, transparent) !important;
 }
 
+/* Chat Input Focus Enhancement */
+[data-testid="stChatInput"]:focus-within {
+    border-color: var(--primary-color) !important;
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--primary-color) 20%, transparent) !important;
+}
+
+/* Chat Input Disabled State */
+[data-testid="stChatInput"]:has(textarea:disabled) {
+    opacity: 0.6 !important;
+}
+
 /* ════════════════════════════════════════════
-   11. PDF CONTROLS - STICKY BOTTOM
+     CJK TYPOGRAPHY (Korean / Japanese / Chinese)
+    ════════════════════════════════════════════ */
+[data-testid="stMainBlockContainer"] [data-testid="stColumn"] div,
+[data-testid="stMainBlockContainer"] p {
+    word-break: keep-all !important;
+    overflow-wrap: break-word !important;
+}
+
+/* ════════════════════════════════════════════
+     11. PDF CONTROLS - STICKY BOTTOM
    ════════════════════════════════════════════ */
 
 /* 11a. Left column stVerticalBlock bottom padding */
@@ -283,6 +343,7 @@ details[open].thought-expander summary::before { transform: rotate(90deg); }
         z-index: 1000 !important;
     }
 }
+
 </style>
 """,
         unsafe_allow_html=True,

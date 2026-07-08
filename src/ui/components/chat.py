@@ -112,6 +112,19 @@ def _get_performance_status(total_time: float, tps: float) -> dict[str, dict[str
     return {"latency": latency, "throughput": throughput}
 
 
+def _render_thought_expander(thought: str, is_open: bool = False) -> str:
+    """생각 과정(Thought)을 위한 HTML expander를 렌더링합니다."""
+    escaped_thought = html.escape(thought)
+    summary = "🤔 생각 과정" if is_open else f"{MSG_THINKING[:-3]} 완료"
+    open_attr = " open" if is_open else ""
+    return f"""
+    <details class="thought-expander"{open_attr}>
+        <summary>{summary}</summary>
+        <div class="thought-container">{escaped_thought}</div>
+    </details>
+    """
+
+
 def render_message(
     role: str,
     content: str,
@@ -135,16 +148,7 @@ def render_message(
         else st.container()
     ):
         if thought and thought.strip():
-            escaped_thought = html.escape(thought)
-            st.markdown(
-                f"""
-                <details class="thought-expander">
-                    <summary>{MSG_THINKING[:-3]} 완료</summary>
-                    <div class="thought-container">{escaped_thought}</div>
-                </details>
-                """,
-                unsafe_allow_html=True,
-            )
+            st.markdown(_render_thought_expander(thought), unsafe_allow_html=True)
 
         if processed_content:
             st.markdown(processed_content, unsafe_allow_html=True)
@@ -307,14 +311,8 @@ def render_chat_interface():
                         content_acc += chunk.content
 
                     display_text = normalize_latex_delimiters(html.escape(content_acc))
-                    escaped_thought_acc = html.escape(thought_acc)
                     thought_html = (
-                        f"""
-                        <details class="thought-expander" open>
-                            <summary>🤔 생각 과정</summary>
-                            <div class="thought-container">{escaped_thought_acc}</div>
-                        </details>
-                        """
+                        _render_thought_expander(thought_acc, is_open=True)
                         if thought_acc
                         else ""
                     )
@@ -329,16 +327,8 @@ def render_chat_interface():
                     html.escape(final_content), docs_acc
                 )
 
-                escaped_thought_final = html.escape(thought_acc)
                 thought_html_final = (
-                    f"""
-                    <details class="thought-expander">
-                        <summary>{MSG_THINKING[:-3]} 완료</summary>
-                        <div class="thought-container">{escaped_thought_final}</div>
-                    </details>
-                    """
-                    if thought_acc
-                    else ""
+                    _render_thought_expander(thought_acc) if thought_acc else ""
                 )
 
                 stream_placeholder.markdown(
@@ -382,9 +372,12 @@ def render_chat_interface():
                 SessionManager.set("is_generating_answer", False, current_sid)
                 st.rerun()
 
-    input_placeholder = (
-        MSG_CHAT_INPUT_PLACEHOLDER if not messages else "추가 질문을 입력하세요..."
-    )
+    if is_generating:
+        input_placeholder = "AI가 답변 생성 중입니다..."
+    elif not messages:
+        input_placeholder = MSG_CHAT_INPUT_PLACEHOLDER
+    else:
+        input_placeholder = "추가 질문을 입력하세요..."
     user_query = st.chat_input(
         input_placeholder, disabled=is_generating, key="main_chat_input"
     )

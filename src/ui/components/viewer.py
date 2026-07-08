@@ -129,7 +129,7 @@ def _display_pdf_controls(current_page, total_pages):
 
             with inner_col1:
                 st.markdown(
-                    "<div style='text-align: right; font-weight: 600; opacity: 0.8; padding-top: 2px;'>Page</div>",
+                    '<div style="text-align:right;padding-top:2px;">Page</div>',
                     unsafe_allow_html=True,
                 )
 
@@ -151,7 +151,7 @@ def _display_pdf_controls(current_page, total_pages):
 
             with inner_col3:
                 st.markdown(
-                    f"<div style='text-align: left; font-weight: 600; opacity: 0.8; padding-top: 2px;'>of {total_pages}</div>",
+                    f'<div style="text-align:left;padding-top:2px;">of {total_pages}</div>',
                     unsafe_allow_html=True,
                 )
 
