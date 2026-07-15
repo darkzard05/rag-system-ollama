@@ -57,6 +57,8 @@ rag:
 
   # 리트리버 설정
   retriever:
+    max_resource_pool_size: 10
+    max_resource_pool_size_bytes: 1073741824 # 1GB limit for resource pool
     search_type: "similarity"
     search_kwargs:
       k: 25  # 충분한 후보군 확보를 위해 상향
@@ -180,7 +182,26 @@ evaluation:
   max_workers: 2
 
 
+# --- 정밀 검증 루브릭 설정 (Grading Rubrics) ---
+GRADING_CONFIG:
+  rubrics:
+    sufficiency:
+      name: "근거 충분성"
+      description: "질문에 대해 완전하고 정확한 답변을 생성하기 위해 필요한 핵심 정보가 문서 내에 충분히 포함되어 있는지를 평가합니다."
+      criteria: "단순한 키워드 포함 여부를 넘어, 답변의 논리적 완결성을 뒷받침할 수 있는 구체적인 수치, 정의, 혹은 설명이 존재하는가?"
+    relevance:
+      name: "질문 연관성"
+      description: "문서의 내용이 사용자의 질문 의도 및 핵심 주제와 얼마나 직접적으로 연관되어 있는지를 평가합니다."
+      criteria: "질문에서 요구하는 핵심 엔티티나 개념이 문서의 주된 맥락에서 다뤄지고 있는가? 부수적인 언급에 그치지 않고 실질적인 연관성이 있는가?"
+    consistency:
+      name: "모순 여부"
+      description: "문서 내 정보가 서로 충돌하지 않으며, 질문에 대해 일관된 근거를 제공하는지를 평가합니다."
+      criteria: "동일한 대상에 대해 서로 다른 설명이 존재하거나, 논리적으로 상충하는 내용이 포함되어 답변의 신뢰성을 떨어뜨리지 않는가?"
+  scoring_scale: "0.0 to 1.0"
+  default_threshold: 0.7
+
 # --- 캐시 보안 설정 ---
+
 cache_security:
   security_level: "medium"
   hmac_secret: null
