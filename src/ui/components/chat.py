@@ -25,7 +25,6 @@ from common.utils import (
     format_error_message,
     normalize_latex_delimiters,
 )
-from core.rag_core import RAGSystem
 from core.session import SessionManager
 
 logger = logging.getLogger(__name__)
@@ -47,8 +46,14 @@ def _sync_stream_generator(query: str, model_name: str, session_id: str):
     def bg_task():
         async def run():
             try:
-                SessionManager.set_session_id(session_id)
-                rag_sys = RAGSystem(session_id=session_id)
+                from core.rag_core import RAGOrchestrator
+                from core.session.context import set_session_id
+                from core.session.store import session_store
+
+                set_session_id(session_id)
+                sid = session_id or "default"
+                state = session_store.load_state(sid)
+                rag_sys = RAGOrchestrator(state=state, store=session_store)
                 event_generator = await rag_sys.astream(query, model_name=model_name)
                 handler = get_streaming_handler()
                 event_stream = handler.stream_graph_events(event_generator)
@@ -62,20 +67,40 @@ def _sync_stream_generator(query: str, model_name: str, session_id: str):
 
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
-        loop.run_until_complete(run())
-        loop.close()
+        try:
+            loop.run_until_complete(run())
+        except Exception as e:
+            logger.error(f"[CHAT] 백그라운드 작업 오류: {e}", exc_info=True)
+        finally:
+            loop.close()
 
-    t = threading.Thread(target=bg_task, daemon=True)
+    t = threading.Thread(
+        target=bg_task, daemon=True, name=f"chat-stream-{session_id[-12:]}"
+    )
     t.start()
 
-    while True:
-        msg_type, data = q.get()
-        if msg_type == "done":
-            break
-        elif msg_type == "error":
-            raise data
-        else:
-            yield data
+    try:
+        while True:
+            try:
+                # 타임아웃 추가 (30초)로 무한 루프 방지
+                msg_type, data = q.get(timeout=30)
+                if msg_type == "done":
+                    break
+                elif msg_type == "error":
+                    raise data
+                else:
+                    yield data
+            except queue.Empty:
+                logger.error(
+                    "[CHAT] 스트리밍 타임아웃: 백그라운드 작업이 응답하지 않음"
+                )
+                break
+            except Exception as e:
+                logger.error(f"[CHAT] 스트리밍 오류: {e}")
+                break
+    finally:
+        if t.is_alive():
+            logger.debug(f"[CHAT] Stream thread cleanup: {t.name}")
 
 
 def _clean_response_redundancy(text: str) -> str:
@@ -241,6 +266,18 @@ def _render_build_status_in_chat(sid: str):
                     st.caption(f"▹ {log}")
             else:
                 st.write("파이프라인 구축을 시작합니다...")
+
+            # Cancel button for rebuild
+            col1, col2 = st.columns([3, 1])
+            with col2:
+                if st.button(
+                    "❌ 취소",
+                    key=f"cancel_rebuild_{sid}",
+                    type="secondary",
+                    use_container_width=True,
+                ):
+                    SessionManager.set("rebuild_cancelled", True, session_id=sid)
+                    st.rerun()
 
         rebuild_done = bool(SessionManager.get("rebuild_done", False, sid))
         if rebuild_done:

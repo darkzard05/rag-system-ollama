@@ -172,12 +172,44 @@ async def _bg_rebuild_task(
 
     try:
         embedder = await ModelManager.get_embedder(embedder_name)
+
+        # Check cancellation before starting build
+        if SessionManager.get("rebuild_cancelled", False, session_id=session_id):
+            logger.info(f"[MAIN] Rebuild cancelled by user for session {session_id}")
+            SessionManager.set("rebuild_cancelled", False, session_id=session_id)
+            SessionManager.set("rebuild_progress", 0, session_id=session_id)
+            SessionManager.add_status_log(
+                "❌ 문서 분석이 취소되었습니다.", session_id=session_id
+            )
+            return
+
         rag_sys = RAGSystem(session_id=session_id)
 
+        def _report_progress(pct: int, msg: str = ""):
+            SessionManager.set("rebuild_progress", pct, session_id=session_id)
+            if msg:
+                SessionManager.set("rebuild_status", msg, session_id=session_id)
+
+        SessionManager.set("rebuild_progress", 0, session_id=session_id)
+
+        # Check cancellation again before expensive build_pipeline call
+        if SessionManager.get("rebuild_cancelled", False, session_id=session_id):
+            logger.info(f"[MAIN] Rebuild cancelled by user for session {session_id}")
+            SessionManager.set("rebuild_cancelled", False, session_id=session_id)
+            SessionManager.set("rebuild_progress", 0, session_id=session_id)
+            SessionManager.add_status_log(
+                "❌ 문서 분석이 취소되었습니다.", session_id=session_id
+            )
+            return
+
         success_message, cache_used = await rag_sys.build_pipeline(
-            file_path=file_path, file_name=file_name, embedder=embedder
+            file_path=file_path,
+            file_name=file_name,
+            embedder=embedder,
+            on_progress=_report_progress,
         )
 
+        SessionManager.set("rebuild_progress", 100, session_id=session_id)
         SessionManager.set("pdf_processed", True, session_id=session_id)
         SessionManager.add_status_log(f"✅ {success_message}", session_id=session_id)
         SessionManager.add_message("system", success_message, session_id=session_id)
@@ -186,6 +218,7 @@ async def _bg_rebuild_task(
         error_msg = f"문서 처리 중 오류가 발생했습니다: {str(e)}"
         SessionManager.set("rebuild_error", error_msg, session_id=session_id)
         SessionManager.set("pdf_processing_error", error_msg, session_id=session_id)
+        SessionManager.set("rebuild_progress", 0, session_id=session_id)
         SessionManager.set("pdf_processed", True, session_id=session_id)
         SessionManager.add_message("system", f"❌ {error_msg}", session_id=session_id)
     finally:
