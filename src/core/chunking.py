@@ -2,6 +2,7 @@
 문서 분할(Chunking)을 담당하는 모듈.
 """
 
+import asyncio
 import logging
 import os
 
@@ -96,6 +97,16 @@ def _postprocess_metadata(split_docs: list[Document]) -> None:
         )
 
 
+async def _embed_documents_chunks(
+    chunks: list[Document], embedder: Embeddings
+) -> list[np.ndarray]:
+    """Generate embeddings for document chunks asynchronously (CPU-offloaded)."""
+    raw_vectors = await asyncio.to_thread(
+        embedder.embed_documents, [d.page_content for d in chunks]
+    )
+    return [np.array(v) for v in raw_vectors]
+
+
 async def split_documents(
     docs: list[Document],
     embedder: Embeddings | None = None,
@@ -122,13 +133,7 @@ async def split_documents(
         split_docs = docs
         if embedder:
             SessionManager.add_status_log("지식 벡터화 중...", session_id=session_id)
-            import asyncio
-
-            # [최적화] 동기 임베딩 생성을 비동기 스레드로 분리
-            raw_vectors = await asyncio.to_thread(
-                embedder.embed_documents, [d.page_content for d in split_docs]
-            )
-            vectors = [np.array(v) for v in raw_vectors]
+            vectors = await _embed_documents_chunks(split_docs, embedder)
     else:
         if needs_sub_chunking:
             SessionManager.add_status_log(
@@ -150,8 +155,6 @@ async def split_documents(
                 split_docs, vectors = await semantic_chunker.split_documents(docs)
                 msg = f"의미론적 분할 완료 ({len(split_docs)}개 조각)"
         else:
-            import asyncio
-
             recursive_chunker = RecursiveCharacterTextSplitter(
                 chunk_size=TEXT_SPLITTER_CONFIG["chunk_size"],
                 chunk_overlap=TEXT_SPLITTER_CONFIG["chunk_overlap"],
@@ -161,11 +164,7 @@ async def split_documents(
                 recursive_chunker.split_documents, docs
             )
             if embedder:
-                # [최적화] 동기 임베딩 생성을 비동기 스레드로 분리
-                raw_vectors = await asyncio.to_thread(
-                    embedder.embed_documents, [d.page_content for d in split_docs]
-                )
-                vectors = [np.array(v) for v in raw_vectors]
+                vectors = await _embed_documents_chunks(split_docs, embedder)
             msg = f"표준 분할 완료 ({len(split_docs)}개 조각)"
 
         SessionManager.add_status_log(msg, session_id=session_id)

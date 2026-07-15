@@ -6,6 +6,7 @@
 일관성 있는 청크를 생성합니다.
 """
 
+import asyncio
 import hashlib
 import logging
 import re
@@ -238,8 +239,10 @@ class EmbeddingBasedSemanticChunker:
                 batch_indices = missing_indices[b_idx : b_idx + self.batch_size]
 
                 try:
-                    # [최적화] embed_documents 호출
-                    batch_vecs = self.embedder.embed_documents(batch)
+                    # [최적화] 동기 임베딩 생성을 비동기 스레드로 분리
+                    batch_vecs = await asyncio.to_thread(
+                        self.embedder.embed_documents, batch
+                    )
 
                     for idx, vec in zip(batch_indices, batch_vecs, strict=False):
                         vec_np = np.array(vec, dtype="float32")
@@ -248,10 +251,22 @@ class EmbeddingBasedSemanticChunker:
                         # 캐시 저장
                         norm_text = texts[idx]
                         cache_key = f"emb:{self.model_name}:{hashlib.sha256(norm_text.encode()).hexdigest()[:32]}"
-                        await self.cache_manager.set(cache_key, vec_np.tolist())
+                        await asyncio.wait_for(
+                            self.cache_manager.set(cache_key, vec_np.tolist()),
+                            timeout=30.0,
+                        )
 
+                except asyncio.TimeoutError:
+                    logger.error(f"[Chunker] 배치 {b_idx} 캐시 저장 타임아웃")
+                    raise
                 except Exception as e:
-                    logger.error(f"[MODEL] [BATCH] 임베딩 생성 중 오류 발생: {e}")
+                    logger.error(
+                        f"[Chunker] 배치 {b_idx} 임베딩 생성 중 오류 발생: {e}",
+                        exc_info=True,
+                    )
+                    # 배치 실패 시 해당 인덱스의 결과 제거
+                    for idx in batch_indices:
+                        all_results[idx] = None
                     raise
 
         # 3. [고도화] 결과 행렬 조립 및 차원 불일치 방어
