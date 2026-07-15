@@ -349,6 +349,7 @@ async def rewrite_query(
     state: GraphState, config: RunnableConfig, *, writer: StreamWriter
 ) -> dict[str, Any]:
     """검색에 더 최적화된 형태로 질문을 재구성합니다 (견고한 파싱 적용)."""
+    MAX_REWRITE_RETRIES = 3
     query = get_state_attr(state, "input")
     cfg = config.get("configurable", {})
     llm = cfg.get("llm")
@@ -360,7 +361,9 @@ async def rewrite_query(
         logger.error("[RAG] [REWRITE] LLM 로드 실패")
         return {
             "search_queries": [query],
-            "retry_count": get_state_attr(state, "retry_count", 0) + 1,
+            "retry_count": min(
+                get_state_attr(state, "retry_count", 0) + 1, MAX_REWRITE_RETRIES
+            ),
         }
 
     if writer is not None:
@@ -410,12 +413,15 @@ async def rewrite_query(
         logger.info(f"[RAG] [REWRITE] 쿼리 재구성: '{query}' -> '{new_query}'")
 
         current_retry = get_state_attr(state, "retry_count", 0)
-        return {"search_queries": [new_query], "retry_count": current_retry + 1}
+        return {
+            "search_queries": [new_query],
+            "retry_count": min(current_retry + 1, MAX_REWRITE_RETRIES),
+        }
 
     except Exception as e:
         logger.warning(f"[RAG] [REWRITE] 모든 시도 실패, 원본 유지: {e}")
         current_retry = get_state_attr(state, "retry_count", 0)
-        return {"retry_count": current_retry + 1}
+        return {"retry_count": min(current_retry + 1, MAX_REWRITE_RETRIES)}
 
 
 def format_context(docs: list[Document]) -> str:
@@ -468,9 +474,16 @@ async def generate(
 
     async with ModelManager.inference_session():
         async for chunk in llm.astream([sys_msg, human_msg], config=config):
-            content_chunk, thought_chunk = llm._convert_chunk_to_thought_and_content(
-                chunk
-            )
+            if hasattr(llm, "_convert_chunk_to_thought_and_content"):
+                content_chunk, thought_chunk = (
+                    llm._convert_chunk_to_thought_and_content(chunk)
+                )
+            else:
+                # Fallback for LLMs without thought/content separation
+                content_chunk = (
+                    chunk.content if hasattr(chunk, "content") else str(chunk)
+                )
+                thought_chunk = ""
             if (content_chunk or thought_chunk) and writer is not None:
                 await adispatch_custom_event(
                     "response_chunk",
@@ -611,6 +624,9 @@ def build_graph() -> Any:
         category=DeprecationWarning,
         message=".*allowed_objects.*",
     )
+    # NOTE: Intentionally using InMemorySaver (not SqliteSaver) to avoid
+    # file-path isolation, check_same_thread, and connection cleanup issues.
+    # If persistence is needed, use per-session tempfile paths and context managers.
     memory = InMemorySaver()
 
     return workflow.compile(checkpointer=memory)

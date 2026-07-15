@@ -9,6 +9,7 @@ import asyncio
 import contextlib
 import logging
 import os
+from collections.abc import AsyncIterator, Callable
 from typing import Any
 
 from langchain_core.documents import Document
@@ -29,6 +30,29 @@ from core.retriever_factory import create_bm25_retriever, create_vector_store
 from core.session import SessionManager
 
 logger = logging.getLogger(__name__)
+
+
+async def _stream_with_retry(
+    event_stream_factory: Callable[[], AsyncIterator[dict]],
+    max_retries: int = 3,
+    base_delay: float = 1.0,
+) -> AsyncIterator[dict]:
+    """Stream events with exponential backoff retry for transient errors."""
+    for attempt in range(max_retries):
+        try:
+            async for item in event_stream_factory():
+                yield item
+            return  # Success — stream completed
+        except (ConnectionError, TimeoutError, OSError) as e:
+            if attempt == max_retries - 1:
+                raise  # Last attempt, re-raise
+            delay = base_delay * (2**attempt)
+            logger.warning(
+                f"[RAG] Stream retry {attempt + 1}/{max_retries} after {delay:.1f}s: {e}"
+            )
+            await asyncio.sleep(delay)
+        except asyncio.CancelledError:
+            raise
 
 
 class RAGSystem:
@@ -108,14 +132,14 @@ class RAGSystem:
         # 5. BM25 리트리버 생성 (Sync)
         bm25_retriever = create_bm25_retriever(doc_splits)
 
-        # 6. 캐시 저장
-        if ENABLE_VECTOR_CACHE:
-            cache.save(doc_splits, vector_store, bm25_retriever)
-
-        # 7. 등록 및 최종화
+        # 6. 등록 및 최종화 (캐시 저장 전에 수행 — 실패 시 캐시 미저장)
         await self._register_and_finalize(
             file_hash, vector_store, bm25_retriever, on_progress
         )
+
+        # 7. 캐시 저장 (엔진 등록 성공 후에만 저장)
+        if ENABLE_VECTOR_CACHE:
+            cache.save(doc_splits, vector_store, bm25_retriever)
 
         duration = time.time() - start_time
         logger.info(
@@ -312,28 +336,38 @@ class RAGSystem:
                     f"[RAG] [HYDRATE] 파일 처리 중 오류 ({os.path.basename(path)}): {e}"
                 )
 
-    async def astream(self, query: str, model_name: str | None = None):
-        """[스트리밍] astream_events(v2)를 사용하여 이벤트를 안전하게 발생시키고 브릿징합니다."""
+    async def _prepare_stream_context(
+        self, query: str, model_name: str | None = None
+    ) -> tuple[dict, Any, list]:
+        """Prepare shared streaming context: config, rag_engine, and chat history."""
         self._ensure_session_context()
         config = await self._prepare_config(model_name)
-
         rag_engine = await self._get_rag_engine()
         if not rag_engine:
             raise VectorStoreError(
                 details={"reason": "파이프라인이 준비되지 않았습니다."}
             )
-
-        # [추가] 대화 이력 주입
         chat_history = self._get_recent_history()
+        return config, rag_engine, chat_history
+
+    async def astream(self, query: str, model_name: str | None = None):
+        """[스트리밍] astream_events(v2)를 사용하여 이벤트를 안전하게 발생시키고 브릿징합니다."""
+        config, rag_engine, chat_history = await self._prepare_stream_context(
+            query, model_name
+        )
 
         async def _consumer():
             try:
-                # astream_events(v2)는 multi-loop 및 nested 환경에서도 안정적인 이벤트 전파를 보장합니다.
-                async for event in rag_engine.astream_events(
-                    {"input": query, "chat_history": chat_history},
-                    config=config,
-                    version="v2",
-                ):
+
+                async def _event_factory():
+                    async for event in rag_engine.astream_events(
+                        {"input": query, "chat_history": chat_history},
+                        config=config,
+                        version="v2",
+                    ):
+                        yield event
+
+                async for event in _stream_with_retry(_event_factory):
                     kind = event["event"]
                     metadata = event.get("metadata", {})
                     langgraph_node = metadata.get("langgraph_node")
@@ -358,9 +392,21 @@ class RAGSystem:
                                 docs = chunk["retrieve"].get("relevant_docs", [])
                                 if docs:
                                     # 비동기로 하이드레이션 시작 (블로킹 방지)
-                                    asyncio.create_task(
-                                        asyncio.to_thread(self._hydrate_docs, docs)
-                                    )
+                                    # 작업 생성 및 예외 처리
+                                    try:
+                                        task = asyncio.create_task(
+                                            asyncio.to_thread(self._hydrate_docs, docs)
+                                        )
+                                        # 작업 실패 시 로깅
+                                        task.add_done_callback(
+                                            lambda t: logger.error(
+                                                f"[RAG] 문서 하이드레이션 실패: {t.exception()}"
+                                            )
+                                        )
+                                    except Exception as task_e:
+                                        logger.error(
+                                            f"[RAG] 하이드레이션 작업 생성 실패: {task_e}"
+                                        )
                             yield ("updates", chunk)
 
             except Exception as e:
@@ -371,25 +417,25 @@ class RAGSystem:
 
     async def astream_events(self, query: str, model_name: str | None = None):
         """[스트리밍] 질문에 대한 이벤트를 발생시킵니다 (안전한 생산자-소비자 패턴)."""
-        self._ensure_session_context()
-        config = await self._prepare_config(model_name)
+        config, rag_engine, chat_history = await self._prepare_stream_context(
+            query, model_name
+        )
 
-        rag_engine = await self._get_rag_engine()
-        if not rag_engine:
-            raise VectorStoreError(
-                details={"reason": "파이프라인이 준비되지 않았습니다."}
-            )
-
-        import asyncio
-
-        queue: asyncio.Queue = asyncio.Queue(maxsize=100)
+        queue: asyncio.Queue = asyncio.Queue(maxsize=50)
         producer_task: asyncio.Task | None = None
 
         async def _producer():
             try:
-                async for event in rag_engine.astream_events(
-                    {"input": query}, config=config, version="v2"
-                ):
+
+                async def _event_factory():
+                    async for event in rag_engine.astream_events(
+                        {"input": query, "chat_history": chat_history},
+                        config=config,
+                        version="v2",
+                    ):
+                        yield event
+
+                async for event in _stream_with_retry(_event_factory):
                     if event["event"] == "on_chain_stream":
                         docs = event["data"].get("chunk", {}).get("relevant_docs", [])
                         if docs:
@@ -397,6 +443,7 @@ class RAGSystem:
 
                     try:
                         queue.put_nowait(event)
+
                     except asyncio.QueueFull:
                         logger.warning("[RAG] 큐 오버플로우: 소비자가 느림")
                         break
@@ -405,9 +452,15 @@ class RAGSystem:
                 raise
             except Exception as e:
                 logger.error(f"[RAG] 생산자 오류: {e}", exc_info=True)
-                await queue.put({"error": str(e)})
+                try:
+                    queue.put_nowait({"error": str(e)})
+                except asyncio.QueueFull:
+                    logger.error("[RAG] 큐가 가득 차서 오류 이벤트를 버립니다")
             finally:
-                await queue.put(None)  # EOF 신호
+                try:
+                    queue.put_nowait(None)  # EOF 신호
+                except asyncio.QueueFull:
+                    logger.error("[RAG] 큐가 가득 차서 EOF 신호를 버립니다")
 
         async def _consumer():
             nonlocal producer_task
@@ -416,9 +469,15 @@ class RAGSystem:
 
                 while True:
                     try:
-                        event = await asyncio.wait_for(queue.get(), timeout=300)
+                        # 더 짧은 타임아웃으로 잠재적 데드락 방지 (60초)
+                        event = await asyncio.wait_for(queue.get(), timeout=60.0)
                     except asyncio.TimeoutError:
-                        logger.warning("[RAG] 스트림 타임아웃 (5분)")
+                        logger.error("[RAG] 스트림 데드락 감지: 60초 타임아웃")
+                        # 데드락 복구: 생산자 작업 취소
+                        if producer_task and not producer_task.done():
+                            producer_task.cancel()
+                            with contextlib.suppress(asyncio.CancelledError):
+                                await producer_task
                         break
 
                     if event is None:
@@ -535,4 +594,11 @@ class RAGSystem:
 
     def clear_session(self) -> None:
         self._ensure_session_context()
+        # Clear resource pool BEFORE session reset to release FAISS/BM25
+        try:
+            loop = asyncio.get_running_loop()
+            if loop.is_running():
+                loop.create_task(get_resource_pool().clear())
+        except RuntimeError:
+            logger.warning("[RAG] No running event loop for resource pool cleanup")
         SessionManager.reset_all_state(session_id=self.session_id)
