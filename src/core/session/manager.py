@@ -6,10 +6,12 @@ UI 스레드와 비동기 스레드 간의 완벽한 데이터 공유를 위해
 전역 폴백 저장소를 주 데이터원으로 사용합니다.
 """
 
+import copy
 import logging
 import os
 import threading
 import time
+import uuid
 from contextvars import ContextVar
 from typing import Any
 
@@ -170,8 +172,6 @@ class SessionManager:
                     # [수정] 참조 문제 방지를 위해 명시적으로 덮어쓰기 수행
                     val = state[k]
                     if isinstance(val, (list, dict)):
-                        import copy
-
                         st.session_state[k] = copy.copy(val)
                     else:
                         st.session_state[k] = val
@@ -264,56 +264,84 @@ class SessionManager:
         session_id: str | None = None,
         **kwargs,
     ):
-        import uuid
-
-        state = cls._get_state(session_id)
-        msg = {
-            "msg_id": str(uuid.uuid4()),
-            "role": role,
-            "content": content,
-            "msg_type": msg_type,
-            "timestamp": time.time(),
-            **kwargs,
-        }
-
-        with cls._acquire_lock(session_id or cls.get_session_id()):
-            # [수정] 새로운 리스트를 생성하지 않고 기존 리스트를 가져와 업데이트
+        sid = session_id or cls.get_session_id()
+        # Hold the per-session lock across the entire read-modify-write cycle
+        # to prevent TOCTOU races with concurrent state["messages"] mutations.
+        with cls._acquire_lock(sid):
+            state = cls._get_state(sid)
+            msg = {
+                "msg_id": str(uuid.uuid4()),
+                "role": role,
+                "content": content,
+                "msg_type": msg_type,
+                "timestamp": time.time(),
+                **kwargs,
+            }
+            # Current list is mutated in-place (already referenced by state)
             current = state.get("messages", [])
             current.append(msg)
             if len(current) > MAX_MESSAGE_HISTORY:
-                current = current[-MAX_MESSAGE_HISTORY:]
+                # Trim creates a new list; assign it back to state
+                state["messages"] = current[-MAX_MESSAGE_HISTORY:]
 
-        # [수정] set 메서드를 호출하여 백그라운드와 st.session_state 양쪽 모두 동기화
-        cls.set("messages", current, session_id=session_id)
+            # Sync to Streamlit inside the same lock
+            if cls._is_streamlit_running():
+                try:
+                    from streamlit.runtime.scriptrunner import get_script_run_ctx
+
+                    if get_script_run_ctx():
+                        st.session_state["messages"] = copy.copy(state["messages"])
+                except Exception:
+                    pass
 
     @classmethod
     def add_status_log(
         cls, msg: str, session_id: str | None = None, add_to_chat: bool = False
     ):
         """시스템 상태 로그를 기록합니다. (UX 개편: 영구 대화 목록 오염 방지를 위해 기본값 False 변경)"""
-        state = cls._get_state(session_id)
-        with cls._acquire_lock(session_id or cls.get_session_id()):
-            current = list(state.get("status_logs", []))
-            if current and current[-1] == msg:
+        sid = session_id or cls.get_session_id()
+        with cls._acquire_lock(sid):
+            state = cls._get_state(sid)
+            logs = list(state.get("status_logs", []))
+            if logs and logs[-1] == msg:
                 return
-            current.append(msg)
-            logs = current[-30:]
+            logs.append(msg)
+            state["status_logs"] = logs[-30:]
 
-        cls.set("status_logs", logs, session_id=session_id)
+            if cls._is_streamlit_running():
+                try:
+                    from streamlit.runtime.scriptrunner import get_script_run_ctx
+
+                    if get_script_run_ctx():
+                        st.session_state["status_logs"] = copy.copy(
+                            state["status_logs"]
+                        )
+                except Exception:
+                    pass
 
         if add_to_chat:
             cls.add_message("system", msg, msg_type="log", session_id=session_id)
 
     @classmethod
     def replace_last_status_log(cls, msg: str, session_id: str | None = None):
-        state = cls._get_state(session_id)
         sid = session_id or cls.get_session_id()
         with cls._acquire_lock(sid):
+            state = cls._get_state(sid)
             logs = list(state.get("status_logs", []))
             if logs:
                 logs[-1] = msg
+                state["status_logs"] = logs
 
-        cls.set("status_logs", logs, session_id=sid)
+            if cls._is_streamlit_running():
+                try:
+                    from streamlit.runtime.scriptrunner import get_script_run_ctx
+
+                    if get_script_run_ctx():
+                        st.session_state["status_logs"] = copy.copy(
+                            state["status_logs"]
+                        )
+                except Exception:
+                    pass
 
     @classmethod
     def reset_all_state(cls, session_id: str | None = None):
@@ -338,8 +366,6 @@ class SessionManager:
     @classmethod
     def safe_remove_file(cls, path: str, max_retries: int = 3):
         """[Windows 대응] 지수 백오프를 사용한 안전한 파일 삭제"""
-        import time
-
         for attempt in range(max_retries):
             try:
                 if os.path.exists(path):
