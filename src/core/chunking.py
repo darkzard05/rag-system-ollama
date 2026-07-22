@@ -58,40 +58,38 @@ def _init_semantic_chunker(embedder: Embeddings) -> EmbeddingBasedSemanticChunke
     )
 
 
-def _postprocess_metadata(split_docs: list[Document]) -> None:
+def _postprocess_metadata(
+    split_docs: list[Document], source_docs: list[Document] | None = None
+) -> None:
     """청크별 메타데이터 정리 및 내용 유형(콘텐츠/참고문헌 등) 식별"""
-    noise_keywords = ["index", "references", "bibliography", "doi:", "isbn"]
-
-    # 참고문헌 시작 섹션 탐지 (전체 문서 스캔)
     ref_start_idx = None
+    noise_keywords = ["index", "references", "bibliography", "doi:", "isbn"]
+    ref_keywords = ["## references", "references\n---", "## 참고문헌", "참고문헌\n---"]
+
     for i, doc in enumerate(split_docs):
         content_lower = doc.page_content.lower()
-        if any(kw in content_lower[:50] for kw in ["## references", "references\n---"]):
-            ref_start_idx = i
-            break
 
-    for i, doc in enumerate(split_docs):
+        if ref_start_idx is None and any(
+            kw in content_lower[:50] for kw in ref_keywords
+        ):
+            ref_start_idx = i
+
         doc.metadata = doc.metadata.copy()
         doc.metadata["chunk_index"] = i
-        content_lower = doc.page_content.lower()
 
-        # 노이즈 판별
         is_noise = any(kw in content_lower[:100] for kw in noise_keywords)
         if not is_noise and (
             content_lower.count("doi:") > 2 or content_lower.count(",") > 25
         ):
             is_noise = True
 
-        # 참고문헌 여부: ref_start_idx 이후만 True (한 번 True면 계속 True인 버그 제거)
         is_reference = ref_start_idx is not None and i >= ref_start_idx
 
         doc.metadata.update(
             {
                 "is_content": not (is_noise or is_reference),
                 "is_reference": is_reference,
-                "is_anchor": doc.metadata.get("is_anchor", False)
-                if i == 0
-                else False,  # 첫 페이지만 앵커 유지
+                "is_anchor": doc.metadata.get("is_anchor", False) if i == 0 else False,
                 "is_header": bool(doc.metadata.get("page") == 1 and i < 3),
             }
         )
@@ -131,7 +129,7 @@ async def split_documents(
             f"기존 분할 구조 활용 ({len(docs)}개 섹션)", session_id=session_id
         )
         split_docs = docs
-        if embedder:
+        if embedder and vectors is None:
             SessionManager.add_status_log("지식 벡터화 중...", session_id=session_id)
             vectors = await _embed_documents_chunks(split_docs, embedder)
     else:
@@ -163,7 +161,7 @@ async def split_documents(
             split_docs = await asyncio.to_thread(
                 recursive_chunker.split_documents, docs
             )
-            if embedder:
+            if embedder and vectors is None:
                 vectors = await _embed_documents_chunks(split_docs, embedder)
             msg = f"표준 분할 완료 ({len(split_docs)}개 조각)"
 
