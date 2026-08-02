@@ -7,7 +7,7 @@ This document outlines the testing hierarchy, execution guidelines, and performa
 ### 1.1 Multi-Layer Unit Tests (`tests/unit/`)
 We implement a deep unit testing strategy to ensure each core component functions reliably in isolation:
 *   **Graph Flow (`test_graph_flow.py`)**: Validates the **LangGraph** orchestration. Mocks LLM and retrievers to verify state transitions (General intent vs. RAG intent, retry loops, and cache hit paths).
-*   **RAG Orchestration (`test_rag_pipeline.py`)**: Tests the `RAGSystem` class lifecycle including pipeline building, indexing coordination, and query routing.
+*   **RAG Orchestration (`test_rag_pipeline.py`)**: Tests the `RAGOrchestrator` class lifecycle including pipeline building, indexing coordination, and query routing.
 *   **Document Processor (`test_document_processor.py`)**: Validates PDF layout diagnosis (1-column vs. 2-column) and intelligent section filtering (TOC/Reference removal).
 *   **Advanced Citations (`test_citation_advanced.py`)**: Ensures citation normalization and section-aware matching work across complex patterns like `[섹션: ..., p.X]`.
 *   **Semantic Chunking (`test_semantic_chunking.py`)**: Verifies that Markdown headers are preserved and not merged into body text.

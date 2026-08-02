@@ -4,7 +4,7 @@
 Simplify the RAG streaming pipeline to reduce latency (TTFT), improve reliability, and remove over-engineered layers (Queue, redundant buffers).
 
 ## 2. Strategy
-- **Direct Streaming:** Remove the producer-consumer pattern in `RAGSystem`.
+- **Direct Streaming:** Remove the producer-consumer pattern in `RAGOrchestrator`.
 - **Minimal Buffering:** Disable or minimize `TokenStreamBuffer` in `StreamingResponseHandler`.
 - **Deterministic Routing:** Use LangGraph event metadata for clean separation of status vs. content.
 

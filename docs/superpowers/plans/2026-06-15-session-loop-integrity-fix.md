@@ -120,12 +120,12 @@ git commit -m "refactor: implement thread-safe pull-based session sync"
 # Create tests/unit/test_loop_integrity.py
 import asyncio
 import pytest
-from src.core.rag_core import RAGSystem
+from src.core.rag_core import RAGOrchestrator
 
 @pytest.mark.asyncio
 async def test_engine_recompilation_on_loop_change():
-    """Verify that RAGSystem re-compiles the graph when event loop changes."""
-    rag = RAGSystem(session_id="test_loop")
+    """Verify that RAGOrchestrator re-compiles the graph when event loop changes."""
+    rag = RAGOrchestrator(session_id="test_loop")
     
     # Initialize engine in current loop
     engine1 = await rag._get_rag_engine()

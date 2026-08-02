@@ -10,6 +10,7 @@ Covers:
 import io
 import os
 import sys
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
@@ -19,8 +20,8 @@ sys.path.append(os.path.abspath("src"))
 
 from src.api.api_server import app
 
+from common.constants import MAX_MESSAGE_HISTORY
 from core.session import SessionManager
-from core.thread_safe_session import MAX_MESSAGE_HISTORY, ThreadSafeSessionManager
 
 client = TestClient(app)
 
@@ -28,16 +29,16 @@ client = TestClient(app)
 @pytest.fixture(autouse=True)
 def cleanup_sessions():
     """Cleanup sessions before and after each test."""
-    ThreadSafeSessionManager._fallback_sessions.clear()
+    SessionManager.reset()
     yield
-    ThreadSafeSessionManager._fallback_sessions.clear()
+    SessionManager.reset()
 
 
 def test_standalone_session_ops():
     """Basic set/get and status logging."""
     sid = "test_standalone"
-    ThreadSafeSessionManager.set_session_id(sid)
-    ThreadSafeSessionManager.init_session()
+    SessionManager.set_session_id(sid)
+    SessionManager.init_session()
 
     SessionManager.set("test_key", "hello")
     assert SessionManager.get("test_key") == "hello"
@@ -49,8 +50,8 @@ def test_standalone_session_ops():
 def test_message_persistence_and_limits():
     """Test message accumulation and MAX_HISTORY constraint."""
     sid = "test_limits"
-    ThreadSafeSessionManager.set_session_id(sid)
-    ThreadSafeSessionManager.init_session()
+    SessionManager.set_session_id(sid)
+    SessionManager.init_session()
 
     # 1. Basic persistence
     SessionManager.add_message("user", "Hello")
@@ -67,22 +68,36 @@ def test_message_persistence_and_limits():
     assert msgs[-1]["content"] == f"msg {MAX_MESSAGE_HISTORY + 9}"
 
 
-def test_object_reassignment_for_streamlit():
-    """Ensure mutable objects are reassigned to trigger Streamlit change detection."""
+def test_streamlit_sync_reassigns_mutable_objects():
+    """sync_to_streamlit은 긴 리스트를 새 객체로 할당해 Streamlit 변경 감지를 트리거합니다.
+
+    (신규 SessionManager는 메시지 리스트를 제자리(in-place)에서 변경하므로,
+    UI 동기화 시점에 리스트 복사본을 할당합니다.)
+    """
     sid = "test_reassignment"
-    ThreadSafeSessionManager.set_session_id(sid)
-    ThreadSafeSessionManager.init_session()
+    SessionManager.set_session_id(sid)
+    SessionManager.init_session()
 
-    state = ThreadSafeSessionManager._get_state()
+    for i in range(15):
+        SessionManager.add_message("user", f"v{i}")
 
-    SessionManager.add_message("user", "v1")
-    list_v1 = state.get("messages")
+    fallback_messages = SessionManager.get_messages()
+    mock_state = {}
 
-    SessionManager.add_message("user", "v2")
-    list_v2 = state.get("messages")
+    with (
+        patch.object(SessionManager, "_is_streamlit_running", return_value=True),
+        patch(
+            "streamlit.runtime.scriptrunner.get_script_run_ctx",
+            return_value=MagicMock(),
+        ),
+        patch("streamlit.session_state", mock_state),
+    ):
+        SessionManager.sync_to_streamlit()
 
-    # Must be different objects
-    assert list_v1 is not list_v2
+    assert "messages" in mock_state
+    # 10개 초과 리스트는 복사본(val[:])이 할당되어 객체 재할당이 발생합니다.
+    assert mock_state["messages"] is not fallback_messages
+    assert mock_state["messages"] == fallback_messages
 
 
 def test_api_session_isolation():
@@ -101,10 +116,26 @@ def test_api_session_isolation():
     pdf_content = b"%PDF-1.4 mock content"
     files = {"file": ("test.pdf", io.BytesIO(pdf_content), "application/pdf")}
 
-    # Note: Using session_id form data as expected by api_server.py
-    client.post(
-        "/api/v1/upload", files=files, data={"session_id": session_a}, headers=headers
+    # [우회] 업로드 엔드포인트의 무거운 리소스(임베딩 로더, RAGSystem)를 목킹합니다.
+    mock_rag_system = MagicMock()
+    mock_rag_system.return_value.build_pipeline = AsyncMock(
+        return_value=("인덱싱 완료", False)
     )
+
+    with (
+        patch("src.api.api_server.RAGSystem", mock_rag_system),
+        patch(
+            "src.api.api_server.RAGResourceManager.get_embedder",
+            new_callable=AsyncMock,
+        ),
+    ):
+        response_a = client.post(
+            "/api/v1/upload",
+            files=files,
+            data={"session_id": session_a},
+            headers=headers,
+        )
+        assert response_a.status_code == 200
 
     # User B queries without uploading
     response_b = client.post(

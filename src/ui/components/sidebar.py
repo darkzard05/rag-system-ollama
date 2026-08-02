@@ -12,6 +12,23 @@ from common.config import (
 from core.session import SessionManager
 
 
+def _render_sidebar_logo():
+    """사이드바 상단에 브랜드 로고를 렌더링합니다."""
+    st.markdown(
+        """
+<div style="text-align: center; padding: 10px 0; margin-bottom: 10px;">
+    <div style="font-size: 1.5rem; font-weight: 700; color: var(--text-color);">
+        GraphRAG-Ollama
+    </div>
+    <div style="font-size: 0.9rem; color: var(--primary-color); opacity: 0.8;">
+        Local RAG · PDF Chat
+    </div>
+</div>
+""",
+        unsafe_allow_html=True,
+    )
+
+
 def render_settings_content(
     file_uploader_callback,
     model_selector_callback,
@@ -22,6 +39,7 @@ def render_settings_content(
     available_models=None,
 ):
     """설정창 내부 콘텐츠 렌더링 (사이드바 외부 호출용)"""
+    _render_sidebar_logo()
     _render_settings_internal(
         file_uploader_callback,
         model_selector_callback,
@@ -44,28 +62,20 @@ def _render_settings_internal(
     safe_models = available_models if isinstance(available_models, list) else []
 
     # 1. 문서 업로드 섹션
-    st.markdown(
-        '<span class="settings-label">📄 Document Assets</span>', unsafe_allow_html=True
-    )
     with st.container(border=True):
         st.file_uploader(
-            "PDF 파일 업로드",
+            "Upload PDF Document",
             type="pdf",
             key="pdf_uploader",
             on_change=file_uploader_callback,
             disabled=is_generating,
         )
         if current_file_name:
-            st.caption(f"현재 파일: :green[{current_file_name}]")
+            st.caption(f"Current File: :green[{current_file_name}]")
 
     # 2. 고급 설정 (익스팬더)
-    with st.expander("🛠️ Advanced Configuration", expanded=False):
+    with st.expander("🛠️ Settings", expanded=False):
         # 모델 설정 그룹
-        st.markdown(
-            '<span class="settings-label" style="margin-top:2px;">⚙️ Model Setup</span>',
-            unsafe_allow_html=True,
-        )
-
         from core.model_loader import ModelManager
 
         filtered = ModelManager.get_filtered_models(safe_models)
@@ -73,10 +83,6 @@ def _render_settings_internal(
         actual_embeddings = filtered["embedding"]
 
         # LLM 선택
-        st.markdown(
-            '<div class="settings-sublabel">Reasoning Engine (sLLM)</div>',
-            unsafe_allow_html=True,
-        )
         last_model = SessionManager.get("last_selected_model") or DEFAULT_OLLAMA_MODEL
         if last_model not in actual_llms:
             last_model = actual_llms[0]
@@ -86,7 +92,7 @@ def _render_settings_internal(
             def_idx = 0
 
         st.selectbox(
-            "LLM 모델 선택",
+            "LLM Model Selection",
             actual_llms,
             index=def_idx,
             key="model_selector",
@@ -95,10 +101,6 @@ def _render_settings_internal(
         )
 
         # 임베딩 선택
-        st.markdown(
-            '<div class="settings-sublabel">Embedding Model</div>',
-            unsafe_allow_html=True,
-        )
         current_emb = (
             SessionManager.get("last_selected_embedding_model")
             or DEFAULT_EMBEDDING_MODEL
@@ -111,7 +113,7 @@ def _render_settings_internal(
             emb_idx = 0
 
         st.selectbox(
-            "임베딩 모델 선택",
+            "Embedding Model Selection",
             actual_embeddings,
             index=emb_idx,
             key="embedding_model_selector",
@@ -119,27 +121,8 @@ def _render_settings_internal(
             disabled=is_generating or (available_models is None),
         )
 
-        st.markdown(
-            "<hr style='margin: 20px 0; opacity: 0.1;'>", unsafe_allow_html=True
-        )
-
-        # 시스템 도구 그룹
-        st.markdown(
-            '<span class="settings-label">🔧 Maintenance</span>', unsafe_allow_html=True
-        )
-        col1, col2 = st.columns(2)
-
-        # VRAM 비우기
-        col1.button(
-            "Clear VRAM",
-            use_container_width=True,
-            help="GPU 메모리를 비웁니다.",
-            key="vram_btn",
-            type="secondary",
-        )
-
         # 초기화
-        if col2.button(
+        if st.button(
             "Reset All",
             use_container_width=True,
             type="primary",
@@ -148,10 +131,3 @@ def _render_settings_internal(
         ):
             SessionManager.reset_all_state()
             st.rerun()
-
-        if st.session_state.get("vram_btn"):
-            from common.utils import sync_run
-            from core.model_loader import ModelManager
-
-            sync_run(ModelManager.clear_vram())
-            st.toast("VRAM 정리 완료")

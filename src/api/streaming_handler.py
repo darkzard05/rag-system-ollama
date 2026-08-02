@@ -300,8 +300,9 @@ class StreamingResponseHandler:
                                     )
                                     self.chunk_index += 1
 
-        except Exception as e:
+        except (RuntimeError, ValueError, TypeError) as e:
             logger.error(f"[Streaming] 스트림 처리 중 오류: {e}", exc_info=True)
+            raise
         finally:
             remaining = self.buffer.flush()
             if remaining:
@@ -426,7 +427,7 @@ class StreamingResponseHandler:
 
                 op.tokens = self.metrics.total_tokens
 
-            except Exception as e:
+            except (RuntimeError, ValueError) as e:
                 logger.error(f"[Streaming] 에러: {e}")
                 op.error = str(e)
                 if on_error:

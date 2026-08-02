@@ -1,5 +1,5 @@
 from langchain_core.documents import Document
-from src.core.graph_builder import _merge_consecutive_chunks, format_context
+from src.core.graph_builder import _merge_adjacent_chunks, format_context
 
 
 def test_metadata_to_context_string_conversion():
@@ -29,7 +29,7 @@ def test_metadata_to_context_string_conversion():
         )
 
     # 2. 청크 병합 테스트
-    merged_docs = _merge_consecutive_chunks(docs)
+    merged_docs = _merge_adjacent_chunks(docs)
     print(f"\n[Test] 병합 후 문서 개수: {len(merged_docs)} (기대값: 2)")
 
     assert len(merged_docs) == 2
@@ -37,20 +37,18 @@ def test_metadata_to_context_string_conversion():
     assert merged_docs[0].metadata["page"] == 1
     assert merged_docs[1].metadata["page"] == 2
 
-    # 3. 최종 컨텍스트 포맷팅 테스트
-    state = {"documents": docs, "input": "질문"}
-    result = format_context(state)
-    context_str = result["context"]
+    # 3. 최종 컨텍스트 포맷팅 테스트 (병합된 문서 기준)
+    context_str = format_context(merged_docs)
 
     print("\n[Test] 최종 컨텍스트 문자열 출력:")
     print("-" * 40)
     print(context_str)
     print("-" * 40)
 
-    # 4. 검증: [p.X] 형식이 포함되어 있는가?
-    assert "[p.1]" in context_str
-    assert "[p.2]" in context_str
-    assert context_str.startswith("[p.1]")
+    # 4. 검증: [섹션, p.X] 형식이 포함되어 있는가? (기본 섹션 = "일반 본문")
+    assert "[일반 본문, p.1]" in context_str
+    assert "[일반 본문, p.2]" in context_str
+    assert context_str.startswith("[일반 본문, p.1]")
 
     # 페이지 1의 내용들이 하나로 합쳐져서 나타나는지 확인
     assert "첫 내용" in context_str

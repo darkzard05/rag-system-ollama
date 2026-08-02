@@ -1,5 +1,4 @@
 import asyncio
-import io
 import sys
 from pathlib import Path
 
@@ -11,10 +10,6 @@ from langchain_core.documents import Document
 from common.config import OLLAMA_MODEL_NAME
 from core.graph_builder import build_graph
 from core.model_loader import load_llm
-
-# Windows 인코딩 대응
-if sys.platform == "win32":
-    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8")
 
 
 async def verify_language(text: str, expected_lang: str) -> bool:

@@ -4,9 +4,11 @@ from langchain_core.documents import Document
 from common.exceptions import EmptyPDFError, VectorStoreError
 from core.rag_core import RAGSystem
 
+
 @pytest.fixture
 def rag_system():
     return RAGSystem(session_id="test_session")
+
 
 @pytest.mark.asyncio
 async def test_build_pipeline_success(rag_system):
@@ -14,79 +16,115 @@ async def test_build_pipeline_success(rag_system):
     mock_docs = [Document(page_content="테스트 본문", metadata={"page": 1})]
     mock_splits = [Document(page_content="청크 1")]
     mock_vectors = [[0.1, 0.2]]
-    
-    # 의존성 모킹
-    with patch("core.rag_core.load_pdf_docs", return_value=mock_docs) as mock_load, \
-         patch("core.rag_core.split_documents", AsyncMock(return_value=(mock_splits, mock_vectors))) as mock_split, \
-         patch("core.rag_core.create_vector_store") as mock_vs, \
-         patch("core.rag_core.create_bm25_retriever") as mock_bm25, \
-         patch("core.rag_core.compute_file_hash", return_value="hash123"), \
-         patch("core.rag_core.get_resource_pool") as mock_pool, \
-         patch("core.rag_core.SessionManager") as mock_session:
-        
-        mock_pool_instance = AsyncMock()
-        mock_pool.return_value = mock_pool_instance
-        
+
+    with (
+        patch(
+            "core.pipeline_builder.load_pdf_docs", return_value=mock_docs
+        ) as mock_load,
+        patch(
+            "core.pipeline_builder.split_documents",
+            AsyncMock(return_value=(mock_splits, mock_vectors)),
+        ) as mock_split,
+        patch("core.pipeline_builder.create_vector_store") as mock_vs,
+        patch("core.pipeline_builder.create_bm25_retriever") as mock_bm25,
+        patch("core.pipeline_builder.compute_file_hash", return_value="hash123"),
+        patch("core.pipeline_builder.get_resource_manager") as mock_manager,
+        patch("core.pipeline_builder.SessionManager") as mock_session,
+        patch("core.pipeline_builder.ENABLE_VECTOR_CACHE", False),
+        patch("core.pipeline_builder.build_graph", new_callable=AsyncMock),
+        patch("core.pipeline_builder.VectorStoreCache") as mock_cache_cls,
+    ):
+        mock_manager_instance = MagicMock()
+        mock_manager.return_value = mock_manager_instance
+        mock_manager_instance.register_retrievers = AsyncMock()
+
         embedder = MagicMock()
-        
-        # Execute
+        embedder.model = "test-model"
+
         msg, is_cached = await rag_system.build_pipeline(
-            file_path="dummy.pdf", 
-            file_name="dummy.pdf", 
-            embedder=embedder
+            file_path="dummy.pdf",
+            file_name="dummy.pdf",
+            embedder=embedder,
         )
-        
-        # Verify
+
         assert "신규 인덱싱 완료" in msg
         assert is_cached is False
         mock_load.assert_called_once()
         mock_split.assert_called_once()
         mock_vs.assert_called_once()
         mock_bm25.assert_called_once()
-        mock_pool_instance.register.assert_called_once()
+        mock_manager_instance.register_retrievers.assert_called_once()
+
 
 @pytest.mark.asyncio
 async def test_build_pipeline_empty_pdf(rag_system):
     """빈 PDF 입력 시 에러 발생 테스트"""
-    with patch("core.rag_core.load_pdf_docs", return_value=[]), \
-         patch("core.rag_core.compute_file_hash", return_value="hash123"), \
-         patch("core.rag_core.SessionManager"):
-        
+    with (
+        patch("core.pipeline_builder.load_pdf_docs", return_value=[]),
+        patch("core.pipeline_builder.compute_file_hash", return_value="hash123"),
+        patch("core.pipeline_builder.SessionManager"),
+        patch("core.pipeline_builder.ENABLE_VECTOR_CACHE", False),
+        patch("core.pipeline_builder.VectorStoreCache"),
+    ):
         embedder = MagicMock()
-        
+        embedder.model = "test-model"
+
         with pytest.raises(EmptyPDFError):
             await rag_system.build_pipeline("empty.pdf", "empty.pdf", embedder)
 
+
 @pytest.mark.asyncio
 async def test_aquery_success(rag_system):
-    """정상적인 질의 응답 흐방 테스트"""
+    """정상적인 질의 응답 흐름 테스트"""
     mock_engine = AsyncMock()
     mock_engine.ainvoke.return_value = {
         "response": "답변입니다.",
         "thought": "생각 중...",
         "relevant_docs": [Document(page_content="근거", metadata={"page": 1})],
-        "performance": {}
+        "performance": {},
     }
-    
-    with patch("core.rag_core.SessionManager") as mock_session, \
-         patch.object(rag_system, "_prepare_config", AsyncMock(return_value={})), \
-         patch.object(rag_system, "_hydrate_docs") as mock_hydrate:
-        
+
+    mock_monitor = MagicMock()
+    mock_monitor.track_operation.return_value.__enter__ = MagicMock(return_value=None)
+    mock_monitor.track_operation.return_value.__exit__ = MagicMock(return_value=False)
+    mock_monitor.get_report.return_value = {}
+
+    mock_op_type = MagicMock()
+    mock_op_type.RAG_PIPELINE_TOTAL = "rag_total"
+
+    with (
+        patch("core.rag_core.SessionManager") as mock_session,
+        patch(
+            "core.rag_core.prepare_query_config_or_build", AsyncMock(return_value={})
+        ),
+        patch("core.rag_core.hydrate_documents") as mock_hydrate,
+        patch("core.rag_core.get_resource_manager") as mock_manager,
+        patch.object(
+            rag_system, "_get_rag_engine", AsyncMock(return_value=mock_engine)
+        ),
+        patch(
+            "services.monitoring.performance_monitor.get_performance_monitor",
+            return_value=mock_monitor,
+        ),
+        patch("services.monitoring.performance_monitor.OperationType", mock_op_type),
+        patch("core.graph_builder.format_context", return_value="context"),
+    ):
         mock_session.get.return_value = mock_engine
-        
-        # Execute
+        mock_manager_instance = MagicMock()
+        mock_manager.return_value = mock_manager_instance
+
         result = await rag_system.aquery("질문")
-        
-        # Verify
+
         assert result["response"] == "답변입니다."
         mock_engine.ainvoke.assert_called_once()
         mock_hydrate.assert_called_once()
+
 
 @pytest.mark.asyncio
 async def test_aquery_not_ready(rag_system):
     """파이프라인 구축 전 질의 시 에러 발생 테스트"""
     with patch("core.rag_core.SessionManager") as mock_session:
-        mock_session.get.return_value = None # rag_engine 없음
-        
+        mock_session.get.return_value = None
+
         with pytest.raises(VectorStoreError):
             await rag_system.aquery("질문")

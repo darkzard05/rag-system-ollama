@@ -58,9 +58,7 @@ def _init_semantic_chunker(embedder: Embeddings) -> EmbeddingBasedSemanticChunke
     )
 
 
-def _postprocess_metadata(
-    split_docs: list[Document], source_docs: list[Document] | None = None
-) -> None:
+def _postprocess_metadata(split_docs: list[Document]) -> None:
     """청크별 메타데이터 정리 및 내용 유형(콘텐츠/참고문헌 등) 식별"""
     ref_start_idx = None
     noise_keywords = ["index", "references", "bibliography", "doi:", "isbn"]

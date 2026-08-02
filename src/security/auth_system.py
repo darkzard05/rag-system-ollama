@@ -7,6 +7,7 @@ import base64
 import hashlib
 import hmac
 import json
+import os
 import secrets
 import time
 import uuid
@@ -101,8 +102,10 @@ class PasswordHasher:
 class SimpleJWT:
     """간단한 JWT 토큰 생성/검증"""
 
-    def __init__(self, secret_key: str = "secret"):
-        self.secret_key = secret_key
+    def __init__(self, secret_key: str | None = None):
+        self.secret_key = (
+            secret_key or os.getenv("JWT_SECRET_KEY") or secrets.token_urlsafe(32)
+        )
 
     def create_token(self, user_id: str, expires_in: int = 3600) -> str:
         """토큰 생성"""
@@ -183,7 +186,7 @@ class AuthenticationManager:
         self._lock = RLock()
         self._max_failed_attempts = 5
         self._lockout_duration = 900  # 15분
-        self._jwt = SimpleJWT(secret_key="your-secret-key")
+        self._jwt = SimpleJWT()
 
     def register_user(self, user_id: str, username: str, password: str) -> bool:
         """사용자 등록"""

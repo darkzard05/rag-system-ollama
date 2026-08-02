@@ -1,92 +1,122 @@
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+
 from src.common.utils import run_in_background_worker
 
 
-@pytest.mark.asyncio
-async def test_run_in_background_worker_success():
-    """
-    Verify that run_in_background_worker correctly calls request_rerun(None)
-    after the background coroutine completes in the happy path.
-    Uses the Streamlit 1.54.0 Runtime._session_mgr API path.
-    """
-    # Setup mocks
-    mock_ctx = MagicMock()
-    mock_ctx.session_id = "test_sid_abc"
+class TestRunInBackgroundWorker:
+    def test_submits_coroutine_to_async_worker(self):
+        mock_ctx = MagicMock()
+        mock_ctx.session_id = "test_sid"
+        mock_coro = AsyncMock()
+        mock_future = MagicMock()
 
-    mock_runtime = MagicMock()
-    mock_session_info = MagicMock()
-    mock_session_info.session = MagicMock()
-    mock_runtime._session_mgr.get_session_info.return_value = mock_session_info
+        with (
+            patch(
+                "streamlit.runtime.scriptrunner.get_script_run_ctx",
+                return_value=mock_ctx,
+            ),
+            patch("common.async_worker.AsyncWorker") as mock_worker_cls,
+        ):
+            mock_worker = MagicMock()
+            mock_worker.submit.return_value = mock_future
+            mock_worker_cls.return_value = mock_worker
 
-    mock_coro = AsyncMock()
-    session_id = "test_session_123"
+            run_in_background_worker(mock_coro, "test_session")
 
-    # Patch all dependencies
-    with patch("streamlit.runtime.scriptrunner.get_script_run_ctx", return_value=mock_ctx), \
-         patch("streamlit.runtime.scriptrunner.add_script_run_ctx") as mock_add_ctx, \
-         patch("streamlit.runtime.get_instance", return_value=mock_runtime), \
-         patch("core.session.SessionManager.set_session_id") as mock_set_sid, \
-         patch("threading.Thread") as mock_thread_cls:
+            mock_worker.submit.assert_called_once_with(mock_coro)
+            mock_future.add_done_callback.assert_called_once()
 
-        run_in_background_worker(mock_coro, session_id)
+    def test_callback_triggers_rerun_on_success(self):
+        mock_ctx = MagicMock()
+        mock_ctx.session_id = "test_sid"
+        mock_runtime = MagicMock()
+        mock_session_info = MagicMock()
+        mock_runtime._session_mgr.get_session_info.return_value = mock_session_info
+        mock_future = MagicMock()
 
-        # Capture the target function passed to threading.Thread
-        mock_thread_cls.assert_called_once()
-        target = mock_thread_cls.call_args.kwargs['target']
+        with (
+            patch(
+                "streamlit.runtime.scriptrunner.get_script_run_ctx",
+                return_value=mock_ctx,
+            ),
+            patch("common.async_worker.AsyncWorker") as mock_worker_cls,
+        ):
+            mock_worker = MagicMock()
+            mock_worker.submit.return_value = mock_future
+            mock_worker_cls.return_value = mock_worker
 
-        # Run the wrapper synchronously to verify its logic
-        target()
+            run_in_background_worker(AsyncMock(), "test_sid")
 
-        # Verifications
-        mock_add_ctx.assert_called_once()
-        mock_set_sid.assert_called_once_with(session_id)
-        mock_runtime._session_mgr.get_session_info.assert_called_once_with(
-            "test_sid_abc"
-        )
-        mock_session_info.session.request_rerun.assert_called_once_with(None)
+            callback = mock_future.add_done_callback.call_args[0][0]
 
-@pytest.mark.asyncio
-async def test_run_in_background_worker_no_ctx():
-    """
-    Verify that run_in_background_worker handles cases where get_script_run_ctx()
-    returns None without raising an error.
-    """
-    mock_coro = AsyncMock()
-    session_id = "test_session_456"
+            with patch("streamlit.runtime.get_instance", return_value=mock_runtime):
+                callback(mock_future)
 
-    with patch("streamlit.runtime.scriptrunner.get_script_run_ctx", return_value=None), \
-         patch("streamlit.runtime.scriptrunner.add_script_run_ctx"), \
-         patch("streamlit.runtime.get_instance"), \
-         patch("core.session.SessionManager.set_session_id"), \
-         patch("threading.Thread") as mock_thread_cls:
+            mock_session_info.session.request_rerun.assert_called_once_with(None)
 
-        run_in_background_worker(mock_coro, session_id)
-        target = mock_thread_cls.call_args.kwargs['target']
+    def test_callback_handles_no_ctx(self):
+        mock_future = MagicMock()
 
-        # Should not raise when ctx is None — guard `if ctx and ctx.session_id`
-        target()
+        with (
+            patch(
+                "streamlit.runtime.scriptrunner.get_script_run_ctx",
+                return_value=None,
+            ),
+            patch("common.async_worker.AsyncWorker") as mock_worker_cls,
+        ):
+            mock_worker = MagicMock()
+            mock_worker.submit.return_value = mock_future
+            mock_worker_cls.return_value = mock_worker
 
-@pytest.mark.asyncio
-async def test_run_in_background_worker_no_session_id():
-    """
-    Verify that run_in_background_worker handles cases where ctx.session_id is
-    None without raising an error.
-    """
-    mock_ctx = MagicMock()
-    mock_ctx.session_id = None
-    mock_coro = AsyncMock()
-    session_id = "test_session_789"
+            run_in_background_worker(AsyncMock(), "test_sid")
 
-    with patch("streamlit.runtime.scriptrunner.get_script_run_ctx", return_value=mock_ctx), \
-         patch("streamlit.runtime.scriptrunner.add_script_run_ctx"), \
-         patch("streamlit.runtime.get_instance"), \
-         patch("core.session.SessionManager.set_session_id"), \
-         patch("threading.Thread") as mock_thread_cls:
+            callback = mock_future.add_done_callback.call_args[0][0]
+            callback(mock_future)
 
-        run_in_background_worker(mock_coro, session_id)
-        target = mock_thread_cls.call_args.kwargs['target']
+    def test_callback_handles_none_session_id(self):
+        mock_ctx = MagicMock()
+        mock_ctx.session_id = None
+        mock_future = MagicMock()
 
-        # Should not raise when ctx.session_id is None — guard `if ctx and ctx.session_id`
-        target()
+        with (
+            patch(
+                "streamlit.runtime.scriptrunner.get_script_run_ctx",
+                return_value=mock_ctx,
+            ),
+            patch("common.async_worker.AsyncWorker") as mock_worker_cls,
+        ):
+            mock_worker = MagicMock()
+            mock_worker.submit.return_value = mock_future
+            mock_worker_cls.return_value = mock_worker
+
+            run_in_background_worker(AsyncMock(), "test_sid")
+
+            callback = mock_future.add_done_callback.call_args[0][0]
+            callback(mock_future)
+
+    def test_callback_handles_error_without_raising(self):
+        mock_ctx = MagicMock()
+        mock_ctx.session_id = "test_sid"
+        mock_future = MagicMock()
+        error = RuntimeError("async task failed")
+        mock_future.result.side_effect = error
+
+        with (
+            patch(
+                "streamlit.runtime.scriptrunner.get_script_run_ctx",
+                return_value=mock_ctx,
+            ),
+            patch("common.async_worker.AsyncWorker") as mock_worker_cls,
+            patch("streamlit.runtime.get_instance", return_value=None),
+        ):
+            mock_worker = MagicMock()
+            mock_worker.submit.return_value = mock_future
+            mock_worker_cls.return_value = mock_worker
+
+            run_in_background_worker(AsyncMock(), "test_sid")
+
+            callback = mock_future.add_done_callback.call_args[0][0]
+
+            callback(mock_future)

@@ -1,79 +1,98 @@
-import asyncio
-import pytest
+"""채팅 턴 라이프사이클 검증: 스트리밍 완료 후 영속화(persist_completed_turn) 동작.
+
+Phase A에서 실제 구조(render_streaming_area + persist_completed_turn)에 맞게
+영속화 단계의 상태 전이를 검증하는 테스트로 복구함.
+Phase B: StreamingResult.cancelled 필드 제거 → result dict에서 해당 키 제거,
+documents 포함 턴(pdf_annotations/pdf_target_page 부작용) 케이스 추가.
+"""
+
 from unittest.mock import MagicMock, patch
 
-from src.core.session import SessionManager
-from src.ui.components.chat import _process_streaming
+from core.session import SessionManager
+from ui.components.streaming import StreamingResult, persist_completed_turn
 
 
-@pytest.mark.asyncio
-async def test_chat_streaming_lifecycle():
-    # Setup
+def test_persist_completed_turn_stores_assistant_message():
+    """정상 완료 턴: 어시스턴트 메시지 저장 + is_generating_answer 리셋."""
     session_id = "test_session"
-    query = "Test query"
-    model_name = "test_model"
+    SessionManager.reset_all_state(session_id)
+    SessionManager.set("is_generating_answer", True, session_id)
 
-    # Mock RAGSystem.astream to return a mock event generator
-    mock_event = MagicMock()
-    mock_event.status = "Thinking..."
-    mock_event.metadata = {"documents": [MagicMock()]}
-    mock_event.performance = {"total_time": 1.0, "tps": 30.0}
-    mock_event.thought = "I am thinking"
-    mock_event.content = "Hello world"
+    result: StreamingResult = {
+        "content": "Hello world",
+        "thought": "I am thinking",
+        "documents": [],
+        "performance": {"total_time": 1.0},
+        "processed_content": "Hello world",
+        "error": None,
+    }
 
-    async def mock_astream(q, model_name=None):
-        yield (
-            "custom",
-            {
-                "content": "Hello world",
-                "thought": "I am thinking",
-                "status": "Thinking...",
-            },
-        )
-        yield (
-            "updates",
-            {"generate": {"performance": {"token_count": 10, "input_token_count": 5}}},
-        )
+    with patch("ui.components.streaming.st") as mock_st:
+        mock_st.rerun = MagicMock()
+        persist_completed_turn(session_id, result)
 
-        # Mock Streamlit components
-        with (
-            patch("streamlit.chat_message"),
-            patch("streamlit.empty"),
-            patch("streamlit.markdown"),
-            patch("src.core.rag_core.RAGSystem.astream", side_effect=mock_astream),
-            patch("api.streaming_handler.get_streaming_handler") as mock_handler_getter,
-        ):
-            # Mock streaming handler
-            mock_handler = MagicMock()
-
-            async def mock_stream_graph_events(gen):
-                async for event in gen:
-                    yield event
-
-            mock_handler.stream_graph_events.side_effect = mock_stream_graph_events
-            mock_handler_getter.return_value = mock_handler
-
-        # Initial state
-        SessionManager.reset_all_state()
-        SessionManager.set("is_generating_answer", False, session_id)
-        SessionManager.set("file_hash", "mock_hash", session_id=session_id)
-
-        # Execute
-        await _process_streaming(query, model_name, session_id)
-
-        # Verify state transitions
-        # 1. is_generating_answer should be False after completion (finally block)
-        assert (
-            SessionManager.get("is_generating_answer", session_id=session_id) is False
-        )
-
-        # 2. Assistant message should be added to history
-        messages = SessionManager.get_messages(session_id=session_id)
-        assert len(messages) > 0
-        assert messages[-1]["role"] == "assistant"
-        assert messages[-1]["content"] == "Hello world"
-        assert messages[-1]["thought"] == "I am thinking"
+    messages = SessionManager.get_messages(session_id=session_id)
+    assert messages[-1]["role"] == "assistant"
+    assert messages[-1]["content"] == "Hello world"
+    assert messages[-1]["thought"] == "I am thinking"
+    assert messages[-1]["processed_content"] == "Hello world"
+    assert SessionManager.get("is_generating_answer", session_id=session_id) is False
+    mock_st.rerun.assert_called_once()
 
 
-if __name__ == "__main__":
-    asyncio.run(test_chat_streaming_lifecycle())
+def test_persist_completed_turn_stores_error_message():
+    """오류 턴: 오류 메시지 저장 + is_generating_answer 리셋."""
+    session_id = "test_session"
+    SessionManager.reset_all_state(session_id)
+    SessionManager.set("is_generating_answer", True, session_id)
+
+    result: StreamingResult = {
+        "content": "",
+        "thought": "",
+        "documents": [],
+        "performance": {},
+        "processed_content": None,
+        "error": "stream failed",
+    }
+
+    with patch("ui.components.streaming.st") as mock_st:
+        mock_st.rerun = MagicMock()
+        persist_completed_turn(session_id, result)
+
+    messages = SessionManager.get_messages(session_id=session_id)
+    assert messages[-1]["role"] == "assistant"
+    assert messages[-1]["content"] == "stream failed"
+    assert SessionManager.get("is_generating_answer", session_id=session_id) is False
+    mock_st.rerun.assert_called_once()
+
+
+def test_persist_completed_turn_sets_pdf_side_effects_from_documents():
+    """documents 포함 턴: pdf_annotations 저장 + pdf_target_page/current_page 점프."""
+    session_id = "test_session_docs"
+    SessionManager.reset_all_state(session_id)
+    SessionManager.set("is_generating_answer", True, session_id)
+
+    doc = MagicMock()
+    doc.metadata = {"page": 7}
+
+    result: StreamingResult = {
+        "content": "정리된 답변입니다.",
+        "thought": "",
+        "documents": [doc],
+        "performance": {"total_time": 1.0},
+        "processed_content": "정리된 답변입니다.",
+        "error": None,
+    }
+
+    with patch("ui.components.streaming.st") as mock_st:
+        mock_st.rerun = MagicMock()
+        persist_completed_turn(session_id, result)
+
+    messages = SessionManager.get_messages(session_id=session_id)
+    assert messages[-1]["role"] == "assistant"
+    assert messages[-1]["documents"] == [doc]
+    assert SessionManager.get("pdf_annotations", session_id=session_id) == []
+    assert SessionManager.get("pdf_target_page", session_id=session_id) == 7
+    assert SessionManager.get("current_page", session_id=session_id) == 7
+    assert SessionManager.get("is_generating_answer", session_id=session_id) is False
+    mock_st.rerun.assert_called_once()

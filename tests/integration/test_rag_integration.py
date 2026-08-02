@@ -8,8 +8,6 @@ Tests the full pipeline:
 - LLM response generation
 - Timeout handling and error recovery
 - Memory usage and garbage collection
-- Batch optimization
-- Configuration validation
 """
 
 import asyncio
@@ -34,7 +32,6 @@ for path in [str(BASE_DIR), str(SRC_DIR)]:
 import psutil
 import pytest
 
-from common.config_validation import load_and_validate_config
 from common.exceptions import (
     EmbeddingModelError,
     EmptyPDFError,
@@ -45,13 +42,7 @@ from common.exceptions import (
 )
 from common.logging_config import get_logger
 from core.graph_builder import build_graph
-from core.model_loader import load_embedding_model
 from core.rag_core import RAGSystem
-from services.optimization.batch_optimizer import (
-    get_gpu_memory_info,
-    get_optimal_batch_size,
-    validate_batch_size,
-)
 
 logger = get_logger(__name__)
 
@@ -118,73 +109,6 @@ class TestRAGInitialization(unittest.TestCase):
             "retrieval": {"top_k": 3, "similarity_threshold": 0.3},
         }
 
-    def test_config_validation(self):
-        """Test that configuration validation works."""
-        from common.config import CACHE_DIR
-        import os
-    
-        config = load_and_validate_config(self.test_config)
-    
-        # 설정 객체가 환경 변수나 기본 설정을 올바르게 포함하는지 검증
-        # 경로 비교 시 절대 경로로 변환하여 일관성 유지
-        assert config.model.default_ollama is not None
-        assert os.path.abspath(config.cache.cache_dir) == os.path.abspath(CACHE_DIR)
-        # 테스트용 입력값이 잘 반영되었는지 확인 (중첩 구조 필드)
-        assert config.chunking.chunk_size == 200
-        assert config.retrieval.top_k == 3
-        logger.info("✓ Configuration validation passed (Pydantic structure check)")
-
-    def test_invalid_config_temperature(self):
-        """Test that invalid temperature is rejected."""
-        invalid_config = self.test_config.copy()
-        invalid_config["model"]["temperature"] = 1.5  # Invalid
-
-        with pytest.raises(ValueError):
-            load_and_validate_config(invalid_config)
-        logger.info("✓ Invalid temperature rejection passed")
-
-    def test_invalid_config_batch_size(self):
-        """Test that invalid batch size is rejected."""
-        invalid_config = self.test_config.copy()
-        invalid_config["embedding"]["batch_size"] = (
-            8  # Invalid (allowed: 16,32,64,128,256,512)
-        )
-
-        with pytest.raises(ValueError):
-            load_and_validate_config(invalid_config)
-        logger.info("✓ Invalid batch size rejection passed")
-
-    def test_gpu_memory_detection(self):
-        """Test that GPU memory detection works."""
-        is_available, total_memory = get_gpu_memory_info()
-
-        assert isinstance(is_available, bool)
-        assert isinstance(total_memory, (int, float))
-
-        if is_available:
-            assert total_memory > 0
-            logger.info(f"✓ GPU detected: {total_memory}MB")
-        else:
-            logger.info("✓ No GPU available (CPU mode)")
-
-    def test_optimal_batch_size_calculation(self):
-        """Test that optimal batch size is calculated correctly."""
-        batch_size = get_optimal_batch_size(device="cpu", model_type="embedding")
-
-        assert isinstance(batch_size, int)
-        assert batch_size > 0
-        assert batch_size in [16, 32, 64, 128, 256, 512]
-        logger.info(f"✓ Optimal batch size calculated: {batch_size}")
-
-    def test_batch_size_validation(self):
-        """Test that batch size validation works."""
-        is_valid, message = validate_batch_size(
-            batch_size=64, device="cpu", model_type="embedding"
-        )
-
-        assert is_valid
-        logger.info(f"✓ Batch size validation: {message}")
-
     def test_rag_system_initialization(self):
         """Test that RAG system initializes without errors."""
         try:
@@ -208,7 +132,7 @@ class TestDocumentProcessing(unittest.TestCase):
             self.skipTest(f"RAG system not available: {e}")
 
     def test_empty_document_handling(self):
-        """Test that empty documents are handled properly by load_document."""
+        """Test that empty documents are handled properly by build_pipeline."""
         import tempfile
         import os
 
@@ -217,18 +141,20 @@ class TestDocumentProcessing(unittest.TestCase):
             tmp_path = tmp.name
 
         try:
-            # RAGSystem.load_document는 embedder를 필요로 함
+            # RAGSystem.build_pipeline는 embedder를 필요로 함
             mock_embedder = MagicMock()
-            
+
             with pytest.raises((EmptyPDFError, PDFProcessingError)):
-                asyncio.run(self.rag.load_document(tmp_path, "empty.pdf", mock_embedder))
-            logger.info("✓ Empty document handling (load_document) passed")
+                asyncio.run(
+                    self.rag.build_pipeline(tmp_path, "empty.pdf", mock_embedder)
+                )
+            logger.info("✓ Empty document handling (build_pipeline) passed")
         finally:
             if os.path.exists(tmp_path):
                 os.unlink(tmp_path)
 
     def test_document_chunking(self):
-        """Test that documents are processed and chunked via load_document."""
+        """Test that documents are processed and chunked via build_pipeline."""
         import tempfile
         import os
 
@@ -244,22 +170,26 @@ class TestDocumentProcessing(unittest.TestCase):
         try:
             # 2. Mock Embedder 준비
             mock_embedder = MagicMock()
-            
+
             # 3. 로드 실행 (통합 파이프라인)
             # 실제 임베딩 모델 로딩은 무거우므로 로직 흐름만 검증하기 위해 mock 사용
-            # 하지만 build_rag_pipeline 내부에서 실제 처리가 일어나므로 
+            # 하지만 build_rag_pipeline 내부에서 실제 처리가 일어나므로
             # 여기서는 성공 여부와 로그를 확인
             try:
-                asyncio.run(self.rag.load_document(tmp_path, "test.pdf", mock_embedder))
-                
+                asyncio.run(
+                    self.rag.build_pipeline(tmp_path, "test.pdf", mock_embedder)
+                )
+
                 # 4. 상태 로그 확인 (청킹 완료 로그가 있어야 함)
                 status = self.rag.get_status()
                 has_chunk_log = any("완료" in s or "청크" in s for s in status)
-                
+
                 assert len(status) > 0
                 logger.info(f"✓ Document pipeline verified. Status logs: {len(status)}")
             except Exception as e:
-                logger.warning(f"Pipeline execution test semi-passed (expected in mock env): {e}")
+                logger.warning(
+                    f"Pipeline execution test semi-passed (expected in mock env): {e}"
+                )
 
         finally:
             if os.path.exists(tmp_path):
@@ -274,21 +204,6 @@ class TestDocumentProcessing(unittest.TestCase):
             logger.info("✓ Duplicate chunk handling logic verified")
         except Exception as e:
             logger.warning(f"Duplicate removal test skipped: {e}")
-
-    def test_batch_embedding(self):
-        """Test that batch embedding works correctly."""
-        # NOTE: Loading sentence-transformers can hard-crash on some Windows envs
-        # (e.g. missing torchvision DLL entry points). Keep this test purely unit-level.
-        # Patch the symbol used in this module (imported at module import time),
-        # to avoid triggering heavy ML stack imports on Windows.
-        with patch(
-            __name__ + ".load_embedding_model", return_value=MagicMock()
-        ) as _mock:
-            model = load_embedding_model()
-            assert model is not None
-            batch_size = get_optimal_batch_size(model_type="embedding")
-            assert batch_size in [16, 32, 64, 128, 256, 512]
-            logger.info(f"✓ Batch embedding (mocked) with batch_size={batch_size}")
 
 
 class TestRetrieval(unittest.TestCase):
@@ -507,19 +422,6 @@ class TestPerformanceMonitoring(unittest.TestCase):
         assert elapsed < 1.0  # Should complete quickly
         logger.info(f"✓ Response time tracking: {elapsed:.3f}s")
 
-    def test_batch_size_impact(self):
-        """Test that batch size is calculated for performance."""
-        batch_sizes = {
-            "embedding": get_optimal_batch_size(model_type="embedding"),
-            "reranker": get_optimal_batch_size(model_type="reranker"),
-            "llm": get_optimal_batch_size(model_type="llm"),
-        }
-
-        for _key, size in batch_sizes.items():
-            assert size in [4, 8, 16, 32, 64, 128, 256, 512]
-
-        logger.info(f"✓ Batch sizes optimized: {batch_sizes}")
-
 
 class TestPipelineIntegration(unittest.TestCase):
     """Test the complete end-to-end pipeline."""
@@ -527,25 +429,13 @@ class TestPipelineIntegration(unittest.TestCase):
     def setUp(self):
         """Set up test fixtures."""
         try:
-            from common.config import DEFAULT_OLLAMA_MODEL
-
             self.rag = RAGSystem()
-            # ApplicationConfig 구조에 맞춰 중첩 딕셔너리로 설정 로드
-            self.config = load_and_validate_config(
-                {
-                    "model": {"default_ollama": DEFAULT_OLLAMA_MODEL},
-                    "embedding": {"batch_size": 16},
-                    "chunking": {"chunk_size": 200},
-                    "retrieval": {"top_k": 3},
-                }
-            )
         except Exception as e:
             self.skipTest(f"Pipeline setup failed: {e}")
 
     def test_pipeline_initialization(self):
         """Test that the entire pipeline initializes."""
         assert self.rag is not None
-        assert self.config is not None
         logger.info("✓ Pipeline initialization successful")
 
     def test_streaming_events_emission(self):
@@ -555,33 +445,54 @@ class TestPipelineIntegration(unittest.TestCase):
         """
 
         async def run_streaming_test():
-            graph = build_graph()
-            # Mock LLM with minimal attributes
-            mock_llm = MagicMock()
-            mock_llm.model = "test-model"
+            # build_graph()는 async이므로 await 필수
+            graph = await build_graph()
 
-            config = {"configurable": {"llm": mock_llm}}
+            # 실제 LLM 없이 그래프를 끝까지 완주시키는 최소 페이크 LLM
+            # (generate 노드의 llm.astream만 사용되며 _convert_chunk... 속성은 없어야 함)
+            class FakeChunk:
+                content = "테스트 응답입니다."
+
+            class FakeLLM:
+                model = "test-model"
+
+                async def astream(self, messages, config=None):
+                    yield FakeChunk()
+
+            config = {
+                "configurable": {
+                    "llm": FakeLLM(),
+                    "thread_id": "test-streaming-thread",
+                }
+            }
             events = []
 
             async for event in graph.astream_events(
-                {"input": "Test query"}, config=config, version="v2"
+                {"input": "Test query", "chat_history": []},
+                config=config,
+                version="v2",
             ):
                 events.append(event)
             return events
 
-        try:
-            events = asyncio.run(run_streaming_test())
-            event_names = [e.get("name") for e in events]
+        events = asyncio.run(run_streaming_test())
+        event_names = [e.get("name") for e in events]
 
-            # Check for core RAG nodes in events
-            assert "router" in event_names
-            assert "retrieve" in event_names
-            logger.info(f"✓ Streaming events verified: {len(events)} events captured")
-        except Exception as e:
-            logger.warning(f"Streaming event test skipped/failed: {e}")
+        # 그래프에 실제 등록된 노드명 (src/core/graph_builder.py 기준)
+        # preprocess -> retrieve -> grade_documents -> (rewrite_query -> retrieve) -> generate
+        expected_nodes = [
+            "preprocess",
+            "retrieve",
+            "grade_documents",
+            "rewrite_query",
+            "generate",
+        ]
+        for node in expected_nodes:
+            assert node in event_names, f"Missing streaming event for node: {node}"
+        logger.info(f"✓ Streaming events verified: {len(events)} events captured")
 
     def test_pipeline_error_recovery(self):
-        """Test that pipeline handles errors gracefully via load_document."""
+        """Test that pipeline handles errors gracefully via build_pipeline."""
         import tempfile
         import os
 
@@ -592,7 +503,9 @@ class TestPipelineIntegration(unittest.TestCase):
         try:
             mock_embedder = MagicMock()
             with pytest.raises((EmptyPDFError, PDFProcessingError)):
-                asyncio.run(self.rag.load_document(tmp_path, "error_test.pdf", mock_embedder))
+                asyncio.run(
+                    self.rag.build_pipeline(tmp_path, "error_test.pdf", mock_embedder)
+                )
 
             logger.info("✓ Pipeline error recovery (EmptyPDF) verified")
         finally:

@@ -3,13 +3,11 @@
 Utils Rebuild: 복잡한 데코레이터 제거 및 비동기 헬퍼 단순화.
 """
 
-import asyncio
-import functools
 import hashlib
+import html
 import logging
 import os
 import re
-import time
 
 import streamlit as st
 
@@ -41,15 +39,28 @@ _RE_QUERY_CLEAN_PREFIX = re.compile(
 _RE_QUERY_CLEAN_QUOTES = re.compile(r'^["\']+|["\']+$')
 
 
+_RE_CODE_BLOCK = re.compile(r"(```[\s\S]*?```|`[^`\n]+`)")
+
+
 def normalize_latex_delimiters(text: str) -> str:
     r"""
     LLM이 출력하는 다양한 LaTeX 수식 구분자를 Streamlit 표준($ 또는 $$)으로 변환합니다.
     - \( ... \) -> $ ... $ (인라인)
     - \[ ... \] -> $$ ... $$ (블록)
     - 기호 앞뒤의 불필요한 이스케이프 제거
+    - 코드 블록 내의 내용은 변환에서 제외하여 코드 예제 보호
     """
     if not text:
         return text
+
+    # 0. 코드 블록(```...``` / `...`) 임시 치환 — 내부 LaTeX 변환 방지
+    code_blocks: list[str] = []
+
+    def _save_code(m: re.Match[str]) -> str:
+        code_blocks.append(m.group(0))
+        return f"\x00LATEX_BLOCK_{len(code_blocks) - 1}\x00"
+
+    text = _RE_CODE_BLOCK.sub(_save_code, text)
 
     # 1. 블록 수식 변환: \[ ... \] -> $$ ... $$
     text = _RE_LATEX_BLOCK.sub(r"$$\1$$", text)
@@ -58,8 +69,11 @@ def normalize_latex_delimiters(text: str) -> str:
     text = _RE_LATEX_INLINE.sub(r"$\1$", text)
 
     # 3. 잘못된 이스케이프 문자 정제 (예: \$ -> $)
-    # 단, 코드 블록 내의 기호는 건드리지 않도록 주의가 필요하나 일반 답변 기준 처리
     text = text.replace(r"\$", "$")
+
+    # 4. 코드 블록 복원
+    for i, block in enumerate(code_blocks):
+        text = text.replace(f"\x00LATEX_BLOCK_{i}\x00", block)
 
     return text
 
@@ -290,45 +304,6 @@ def extract_annotations_from_docs(documents: list) -> list[dict]:
     return annotations
 
 
-def parse_reference_section(text: str) -> dict[str, str]:
-    """
-    참고문헌 섹션 텍스트에서 [1] 또는 Author (Year) 형태의 인용 정보를 추출하여 맵으로 반환합니다.
-    """
-    if not text:
-        return {}
-
-    ref_map = {}
-
-    # 1. 숫자형 패턴: [1] Author... 또는 1. Author...
-    num_pattern = re.compile(r"^[\s]*[\[\(]?(\d+)[\]\)]?[\s\.]+(.*)", re.MULTILINE)
-    num_matches = num_pattern.findall(text)
-    for num, content in num_matches:
-        ref_map[num] = content.strip()
-
-    # 2. 이름-연도형 패턴: Author et al. (Year) 또는 Author (Year) 또는 (Author, Year)
-    # 문단 단위로 나누어 첫 부분에서 저자와 연도를 추출
-    paragraphs = text.split("\n\n")
-    # 좀 더 유연한 패턴: 문장 시작 또는 괄호 안에 저자와 연도가 포함된 경우
-    name_year_pattern = re.compile(
-        r"([A-Z][a-z]+(?:\s+et\s+al\.)?)\s*[\(,]?\s*(\d{4})[\s\)]?"
-    )
-
-    for para in paragraphs:
-        para = para.strip()
-        if not para:
-            continue
-
-        match = name_year_pattern.search(para)
-        if match:
-            author = match.group(1).replace(" et al.", "").strip()
-            year = match.group(2).strip()
-            # 저자 성(Last Name)과 연도 조합을 키로 사용 (소문자화)
-            key = f"{author}_{year}".lower()
-            ref_map[key] = para
-
-    return ref_map
-
-
 def apply_tooltips_to_response(
     response_text: str, documents: list | None = None, msg_index: int = 0
 ) -> str:
@@ -400,13 +375,9 @@ def apply_tooltips_to_response(
                 if hasattr(best_doc, "page_content")
                 else best_doc.get("page_content", "")
             )
-            # HTML 속성에 넣기 위해 따옴표 및 줄바꿈 이스케이프
+            # HTML title 속성에 넣기 위해 이스케이프 (XSS 방어)
             clean_content = (
-                content.replace('"', "&quot;")
-                .replace("'", "&apos;")
-                .replace("\n", " ")
-                .strip()[:300]
-                + "..."
+                html.escape(content).replace("\n", " ").strip()[:300] + "..."
             )
 
         # [HIGHLIGHT] 인터랙티브 하이라이트 스타일 및 데이터 속성 적용
@@ -447,20 +418,6 @@ def preprocess_text(text: str) -> str:
     return " ".join(text.split())
 
 
-def clean_query_text(query: str) -> str:
-    """쿼리 텍스트에서 불필요한 기호, 번호, 접두사(Example:, Question: 등) 제거"""
-    if not query:
-        return ""
-
-    # 1. 문두의 숫자, 불렛, 접두사(Example:, Query: 등) 일괄 제거
-    query = _RE_QUERY_CLEAN_PREFIX.sub("", query.strip())
-
-    # 2. 문두/문미 따옴표 제거
-    query = _RE_QUERY_CLEAN_QUOTES.sub("", query.strip())
-
-    return query.strip()
-
-
 def safe_cache_data(func=None, **kwargs):
     """Streamlit 런타임이 있을 때만 cache_data를 적용하고, 없으면 원본 함수를 반환합니다."""
     if func is None:
@@ -487,82 +444,6 @@ def safe_cache_resource(func=None, **kwargs):
     return func
 
 
-@safe_cache_data(ttl=5)  # 5초 동안 리소스 정보 캐싱
-def get_ollama_resource_usage(model_name: str) -> str:
-    """
-    Ollama API를 통해 특정 모델의 리소스 사용 상태(GPU/CPU)를 조회합니다.
-    """
-    try:
-        import requests
-
-        from common.config import OLLAMA_BASE_URL
-
-        # Ollama ps API 호출
-        response = requests.get(f"{OLLAMA_BASE_URL}/api/ps", timeout=2.0)
-        if response.status_code == 200:
-            data = response.json()
-            models = data.get("models", [])
-
-            for m in models:
-                if model_name in m.get("name", ""):
-                    size_vram = m.get("size_vram", 0)
-                    size = m.get("size", 1)
-
-                    # VRAM 사용 비율 계산
-                    vram_ratio = (size_vram / size) * 100
-                    if vram_ratio >= 90:
-                        return f"GPU (VRAM {vram_ratio:.1f}%)"
-                    elif vram_ratio > 0:
-                        return f"Hybrid (VRAM {vram_ratio:.1f}%, CPU {100 - vram_ratio:.1f}%)"
-                    else:
-                        return "CPU (0% VRAM)"
-
-            return "Unknown (Not running)"
-        return "Unknown (API Error)"
-    except Exception:
-        return "Unknown (Connection Error)"
-
-
-def format_error_message(e: Exception) -> str:
-    """
-    발생한 예외 객체를 분석하여 사용자에게 보여줄 친절한 메시지를 반환합니다.
-    """
-    from common.exceptions import (
-        EmbeddingModelError,
-        EmptyPDFError,
-        InsufficientChunksError,
-        LLMInferenceError,
-    )
-
-    err_type = type(e).__name__
-    msg = str(e)
-
-    # 1. 커스텀 도메인 예외 처리
-    if isinstance(e, EmptyPDFError):
-        return "📄 PDF 파일에 텍스트가 없거나 이미지로만 구성되어 있습니다. 다른 파일을 시도해 보세요."
-    elif isinstance(e, InsufficientChunksError):
-        return "⚠️ 문서의 유효한 텍스트가 너무 적어 분석할 수 없습니다."
-    elif isinstance(e, LLMInferenceError):
-        return f"🤖 추론 모델 응답 중 오류가 발생했습니다: {msg}"
-    elif isinstance(e, EmbeddingModelError):
-        return "🧠 임베딩 모델 로드에 실패했습니다. 자원(VRAM/RAM)이 부족한지 확인해 주세요."
-
-    # 2. 일반 시스템 예외 처리
-    if "ConnectionError" in err_type or "11434" in msg:
-        return (
-            "🔌 Ollama 서버에 연결할 수 없습니다. Ollama가 실행 중인지 확인해 주세요."
-        )
-    elif "timeout" in msg.lower():
-        return (
-            "⌛ 처리 시간이 너무 오래 걸려 중단되었습니다. 잠시 후 다시 시도해 주세요."
-        )
-    elif "out of memory" in msg.lower() or "CUDA" in msg:
-        return "🚀 GPU 메모리(VRAM)가 부족합니다. 다른 프로그램을 종료하거나 모델을 작은 것으로 바꿔보세요."
-
-    # 3. 기본값
-    return f"❌ 알 수 없는 오류 발생 ({err_type}): {msg}"
-
-
 def fast_hash(text: str, length: int = 16) -> str:
     """
     보안이 필요 없는 단순 식별용 고속 해시 함수.
@@ -570,6 +451,10 @@ def fast_hash(text: str, length: int = 16) -> str:
     """
     if not text:
         return "0" * length
+    if isinstance(text, bytes):
+        text = text.decode(errors="ignore")
+    elif not isinstance(text, str):
+        text = str(text)
     # usedforsecurity=False: 보안 진단 도구(Bandit 등)에 이 해시가
     # 암호화나 보안 목적으로 사용되지 않음을 알립니다.
     return hashlib.md5(text.encode(errors="ignore"), usedforsecurity=False).hexdigest()[
@@ -604,103 +489,35 @@ def count_tokens_rough(text: str) -> int:
     return int(rough_count) + 1
 
 
-def sync_run(coro):
-    """
-    Streamlit(동기 환경)에서 비동기 코루틴을 안전하게 실행하기 위한 헬퍼.
-    전역적으로 nest_asyncio가 적용되어 있어야 작동합니다.
-    """
-    try:
-        loop = asyncio.get_running_loop()
-    except RuntimeError:
-        loop = None
-
-    if loop and loop.is_running():
-        return loop.run_until_complete(coro)
-
-    return asyncio.run(coro)
-
-
 def run_in_background_worker(coro, session_id: str) -> None:
     """
-    Streamlit 환경에서 코루틴을 별도의 스레드에서 실행하는 백그라운드 워커.
-    - ScriptRunContext를 새 스레드에 전달하여 Streamlit 세션 함수 사용 가능하게 함
+    Streamlit 환경에서 코루틴을 AsyncWorker의 전용 이벤트 루프에서 실행하는 백그라운드 워커.
+    - run_coroutine_threadsafe로 스레드 안전하게 코루틴 제출
     - 작업 완료 후 자동으로 rerun 트리거
     """
-    import threading
+    from streamlit.runtime.scriptrunner import get_script_run_ctx
 
-    from streamlit.runtime.scriptrunner import add_script_run_ctx, get_script_run_ctx
-
-    from core.session import SessionManager
+    from common.async_worker import AsyncWorker
 
     ctx = get_script_run_ctx()
 
-    def _wrapper():
-        add_script_run_ctx(threading.current_thread(), ctx)
-        SessionManager.set_session_id(session_id)
+    def _on_complete(future):
         try:
-            asyncio.run(coro)
+            future.result()
         except Exception as e:
             logger.error(f"Background worker error: {e}", exc_info=True)
-        finally:
-            try:
-                if ctx and ctx.session_id:
-                    from streamlit.runtime import get_instance
 
-                    runtime = get_instance()
-                    if runtime:
-                        session_info = runtime._session_mgr.get_session_info(
-                            ctx.session_id
-                        )
-                        if session_info:
-                            session_info.session.request_rerun(None)
+        if ctx and ctx.session_id:
+            try:
+                from streamlit.runtime import get_instance
+
+                runtime = get_instance()
+                if runtime:
+                    session_info = runtime._session_mgr.get_session_info(ctx.session_id)
+                    if session_info:
+                        session_info.session.request_rerun(None)
             except Exception as e:
                 logger.error(f"Background worker rerun failed: {e}", exc_info=True)
 
-    threading.Thread(target=_wrapper, daemon=True).start()
-
-
-def log_operation(operation_name):
-    """
-    동기 및 비동기 함수를 모두 지원하는 로깅 데코레이터.
-    GraphBuilder의 Node 함수에는 사용하지 마세요! (config 전달 문제 발생 가능)
-    """
-
-    def decorator(func):
-        if asyncio.iscoroutinefunction(func):
-
-            @functools.wraps(func)
-            async def async_wrapper(*args, **kwargs):
-                logger.info(f"[SYSTEM] [TASK] {operation_name} 시작")
-                start = time.time()
-                try:
-                    res = await func(*args, **kwargs)
-                    dur = time.time() - start
-                    logger.info(
-                        f"[SYSTEM] [TASK] {operation_name} 완료 | 소요: {dur:.2f}s"
-                    )
-                    return res
-                except Exception as e:
-                    logger.info(f"[SYSTEM] [TASK] {operation_name} 실패 | {e}")
-                    raise
-
-            return async_wrapper
-        else:
-
-            @functools.wraps(func)
-            def sync_wrapper(*args, **kwargs):
-                logger.info(f"[SYSTEM] [TASK] {operation_name} 시작")
-                start = time.time()
-                try:
-                    res = func(*args, **kwargs)
-                    dur = time.time() - start
-                    logger.info(
-                        f"[SYSTEM] [TASK] {operation_name} 완료 | 소요: {dur:.2f}s"
-                    )
-                    return res
-                except Exception as e:
-                    logger.info(f"[SYSTEM] [TASK] {operation_name} 실패 | {e}")
-                    raise
-
-            return sync_wrapper
-
-    return decorator
+    future = AsyncWorker().submit(coro)
+    future.add_done_callback(_on_complete)

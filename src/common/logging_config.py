@@ -113,7 +113,7 @@ def setup_logging(
     # 1. 콘솔 핸들러 (개발용 - 간단한 형식)
     if console_output:
         console_handler = logging.StreamHandler()
-        console_handler.setLevel(logging.DEBUG)
+        console_handler.setLevel(log_level_int)
         console_handler.setFormatter(simple_formatter)
         console_handler.addFilter(ContextFilter())
         root_logger.addHandler(console_handler)
@@ -129,7 +129,7 @@ def setup_logging(
             backupCount=5,  # 최대 5개 백업
             encoding="utf-8",
         )
-        file_handler.setLevel(logging.DEBUG)
+        file_handler.setLevel(log_level_int)
         file_handler.setFormatter(detailed_formatter)
         file_handler.addFilter(ContextFilter())
         root_logger.addHandler(file_handler)

@@ -3,6 +3,7 @@ Shared pytest fixtures for RAG System tests.
 """
 
 import sys
+import uuid
 from pathlib import Path
 
 import pytest
@@ -27,3 +28,8 @@ def mock_llm():
     from unittest.mock import MagicMock
 
     return MagicMock()
+
+
+@pytest.fixture
+def session_context():
+    return f"test_session_{uuid.uuid4().hex[:8]}"

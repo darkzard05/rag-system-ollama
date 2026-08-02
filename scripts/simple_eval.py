@@ -19,6 +19,7 @@ from src.core.session import SessionManager
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+
 async def judge_response(llm, query, response, context):
     """LLM을 사용하여 답변의 충실도(Faithfulness)와 관련성(Relevancy)을 평가합니다."""
     prompt = f"""
@@ -39,23 +40,25 @@ async def judge_response(llm, query, response, context):
         "reason": "<간결한 평가 이유>"
     }}
     """
-    
+
     try:
         # judge_model 사용 (ModelManager를 통해 로드)
         judge_llm = await ModelManager.get_llm(EVAL_JUDGE_MODEL)
         # 단순 invoke 사용 (스트리밍 불필요)
         res = await judge_llm.ainvoke([{"role": "user", "content": prompt}])
-        content = res.content if hasattr(res, 'content') else str(res)
-        
+        content = res.content if hasattr(res, "content") else str(res)
+
         # JSON 추출 (간단한 파싱)
         import re
-        match = re.search(r'\{.*\}', content, re.DOTALL)
+
+        match = re.search(r"\{.*\}", content, re.DOTALL)
         if match:
             return json.loads(match.group())
     except Exception as e:
         logger.error(f"Judging error: {e}")
-    
+
     return {"faithfulness": 0, "relevancy": 0, "reason": "Error during evaluation"}
+
 
 async def main():
     # 1. Load Golden Set
@@ -67,8 +70,8 @@ async def main():
     session_id = f"eval-simple-session-{int(datetime.now().timestamp())}"
     SessionManager.init_session(session_id=session_id)
     rag_system = RAGSystem(session_id=session_id)
-    
-    pdf_path = str(ROOT_DIR / "tests" / "data" / "2201.07520v1.pdf") 
+
+    pdf_path = str(ROOT_DIR / "tests" / "data" / "2201.07520v1.pdf")
     embedder = await ModelManager.get_embedder("nomic-embed-text-v2-moe")
     await rag_system.build_pipeline(pdf_path, "eval_doc", embedder)
 
@@ -78,35 +81,44 @@ async def main():
     for item in golden_set:
         query = item["query"]
         logger.info(f"Evaluating: {query[:50]}...")
-        
+
         response_text = ""
         retrieved_docs = []
-        
+
         try:
-            event_stream = await rag_system.astream_events(query, model_name=DEFAULT_OLLAMA_MODEL)
-            async for event in event_stream:
-                if event["event"] == "on_chain_end" and event["name"] == "retrieve":
-                    retrieved_docs = event["data"]["output"].get("relevant_docs", [])
-                elif event["event"] == "on_chat_model_stream":
-                    chunk = event["data"]["chunk"]
-                    content = getattr(chunk, 'content', chunk) if chunk else ""
+            # astream_events API는 제거됨 → astream 사용
+            # (("custom" | "messages" | "updates"), data) 튜플을 생성하는 비동기 제너레이터
+            event_stream = await rag_system.astream(
+                query, model_name=DEFAULT_OLLAMA_MODEL
+            )
+            async for kind, data in event_stream:
+                if kind == "messages":
+                    chunk = data.get("chunk")
+                    content = getattr(chunk, "content", chunk) if chunk else ""
                     if content:
                         response_text += content
+                elif kind == "updates":
+                    if isinstance(data, dict) and "retrieve" in data:
+                        upd = data["retrieve"]
+                        if isinstance(upd, dict):
+                            retrieved_docs = upd.get("relevant_docs", [])
         except Exception as e:
             logger.error(f"Query error: {e}")
             continue
 
         context_text = "\n".join([d.page_content for d in retrieved_docs])
-        
+
         # LLM Judge 평가
         score = await judge_response(None, query, response_text, context_text)
-        
-        results.append({
-            "query": query,
-            "faithfulness": score["faithfulness"],
-            "relevancy": score["relevancy"],
-            "reason": score["reason"]
-        })
+
+        results.append(
+            {
+                "query": query,
+                "faithfulness": score["faithfulness"],
+                "relevancy": score["relevancy"],
+                "reason": score["reason"],
+            }
+        )
 
     # 3. 결과 집계
     if not results:
@@ -115,17 +127,20 @@ async def main():
 
     avg_f = sum(r["faithfulness"] for r in results) / len(results)
     avg_r = sum(r["relevancy"] for r in results) / len(results)
-    
-    print("\n" + "="*50)
+
+    print("\n" + "=" * 50)
     print("📊 RAG Quality Audit Summary")
-    print("="*50)
+    print("=" * 50)
     print(f"Total Cases: {len(results)}")
     print(f"Avg Faithfulness: {avg_f:.2f} / 5.0")
     print(f"Avg Relevancy:    {avg_r:.2f} / 5.0")
     print("-" * 50)
     for i, r in enumerate(results):
-        print(f"Case {i+1}: F={r['faithfulness']}, R={r['relevancy']} | {r['reason']}")
-    print("="*50)
+        print(
+            f"Case {i + 1}: F={r['faithfulness']}, R={r['relevancy']} | {r['reason']}"
+        )
+    print("=" * 50)
+
 
 if __name__ == "__main__":
     asyncio.run(main())

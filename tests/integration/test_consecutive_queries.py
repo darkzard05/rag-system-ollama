@@ -8,7 +8,7 @@ import pytest
 sys.path.append(os.path.join(os.getcwd(), "src"))
 
 from common.config import AVAILABLE_EMBEDDING_MODELS, DEFAULT_OLLAMA_MODEL
-from core.model_loader import load_embedding_model, load_llm
+from core.model_loader import load_embedding_model
 from core.rag_core import RAGSystem
 
 
@@ -26,14 +26,12 @@ async def test_consecutive_queries():
 
     print(f"🧬 모델 로딩: {embedding_model}, {llm_model}")
     embedder = await asyncio.to_thread(load_embedding_model, embedding_model)
-    llm = await asyncio.to_thread(load_llm, llm_model)
 
     rag = RAGSystem(session_id="consecutive_test_session")
 
     pdf_path = os.path.join("tests", "data", "2201.07520v1.pdf")
     print(f"📂 문서 인덱싱: {pdf_path}")
-    await asyncio.to_thread(
-        rag.load_document,
+    await rag.build_pipeline(
         file_path=pdf_path,
         file_name="2201.07520v1.pdf",
         embedder=embedder,
@@ -42,7 +40,7 @@ async def test_consecutive_queries():
     # 2. 첫 번째 질문: 개요 위주
     q1 = "What is the main objective of the CM3 model?"
     print(f"\n💬 질문 1: {q1}")
-    res1 = await rag.aquery(input_text=q1, llm=llm)
+    res1 = await rag.aquery(q1, model_name=llm_model)
     ans1 = res1.get("response", "")
 
     print("-" * 30)
@@ -57,7 +55,7 @@ async def test_consecutive_queries():
     # 3. 두 번째 질문: 세부 사항 위주 (메모리 및 컨텍스트 확인)
     q2 = "What datasets were used to train the CM3 models?"
     print(f"\n💬 질문 2: {q2}")
-    res2 = await rag.aquery(input_text=q2, llm=llm)
+    res2 = await rag.aquery(q2, model_name=llm_model)
     ans2 = res2.get("response", "")
 
     print("-" * 30)

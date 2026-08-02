@@ -34,7 +34,7 @@ class ModelManager:
         pass
 ```
 
-- [ ] **Step 2: `RAGSystem` 및 관련 코드에서 `ResourcePool` 호출을 `ModelManager`로 변경**
+- [ ] **Step 2: `RAGOrchestrator` 및 관련 코드에서 `ResourcePool` 호출을 `ModelManager`로 변경**
 
 - [ ] **Step 3: `ResourcePool` 파일 삭제 및 임포트 정리**
 

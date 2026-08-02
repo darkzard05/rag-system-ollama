@@ -3,10 +3,12 @@ streamlit==1.54.0
 streamlit-pdf-viewer==0.0.27
 pymupdf>=1.25.0
 pymupdf4llm>=0.3.4
+tabulate>=0.9.0
 
 # LangChain & RAG Core
 langchain>=0.3.18
 langgraph>=0.2.74
+langgraph-checkpoint-sqlite>=3.0.1
 langchain-community>=0.3.18
 langchain-core>=0.3.34,<0.4.0
 langchain-huggingface>=0.1.2
@@ -47,14 +49,3 @@ pillow>=12.1.1
 nest-asyncio==1.6.0
 psutil==6.1.1
 streamlit-javascript==0.1.5
-
-# Testing
-pytest==8.3.2
-pytest-mock==3.14.0
-pytest-cov==5.0.0
-pytest-asyncio==0.24.0
-httpx>=0.28.1
-pre-commit==3.5.0
-pip-audit>=2.8.0
-mypy==1.11.0
-bandit==1.8.3

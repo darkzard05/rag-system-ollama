@@ -115,7 +115,7 @@ async def _bg_rebuild_task(session_id: str, file_path: str, file_name: str, embe
     run_in_background_worker에 의해 실행됩니다.
     """
     from core.model_loader import ModelManager
-    from core.rag_core import RAGSystem
+    from core.rag_core import RAGOrchestrator
     from core.session import SessionManager
 
     # run_in_background_worker가 이미 SessionManager.set_session_id(session_id)를 호출했지만,
@@ -128,7 +128,7 @@ async def _bg_rebuild_task(session_id: str, file_path: str, file_name: str, embe
 
     try:
         embedder = await ModelManager.get_embedder(embedder_name)
-        rag_sys = RAGSystem(session_id=session_id)
+        rag_sys = RAGOrchestrator(session_id=session_id)
 
         # 파이프라인 빌드
         success_message, cache_used = await rag_sys.build_pipeline(

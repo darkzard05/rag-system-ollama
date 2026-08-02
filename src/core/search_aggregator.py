@@ -244,12 +244,15 @@ class SearchResultAggregator:
         k: int = 60,
         weights: dict[str, float] | None = None,
     ) -> list[AggregatedResult]:
-        import numpy as np
+        node_ids = list(search_results.keys())
+        node_count = len(node_ids)
+
+        # Fast-path: 2-node RRF (BM25 + FAISS) — inline the arithmetic
+        if node_count == 2:
+            return self._rrf_fusion_2node(search_results, metrics, k, weights)
 
         all_docs = {}
-        node_ranks = {}
-        node_ids = list(search_results.keys())
-
+        node_ranks: dict[str, dict[str, int]] = {}
         for node_id, results in search_results.items():
             metrics.total_input_results += len(results)
             sorted_res = sorted(results, key=lambda x: x.score, reverse=True)
@@ -263,27 +266,75 @@ class SearchResultAggregator:
                 if node_id not in all_docs[r.doc_id].source_nodes:
                     all_docs[r.doc_id].source_nodes.append(node_id)
 
-        doc_ids = list(all_docs.keys())
-        if not doc_ids:
+        if not all_docs:
             return []
 
-        rank_matrix = np.full((len(doc_ids), len(node_ids)), np.inf)
-        weight_vec = np.array(
-            [weights.get(nid, 1.0) if weights else 1.0 for nid in node_ids]
-        )
+        weight_by_nid = {
+            nid: weights.get(nid, 1.0) if weights else 1.0 for nid in node_ids
+        }
+        for doc_id, agg in all_docs.items():
+            score = 0.0
+            for nid in node_ids:
+                rank = node_ranks.get(nid, {}).get(doc_id)
+                if rank is not None:
+                    score += weight_by_nid[nid] / (k + rank)
+            agg.aggregated_score = score
 
-        nid_to_idx = {nid: i for i, nid in enumerate(node_ids)}
-        for i, doc_id in enumerate(doc_ids):
-            for nid, ranks in node_ranks.items():
-                if doc_id in ranks:
-                    rank_matrix[i, nid_to_idx[nid]] = ranks[doc_id]
-
-        rrf_scores = np.sum(weight_vec / (k + rank_matrix), axis=1)
-        for i, doc_id in enumerate(doc_ids):
-            all_docs[doc_id].aggregated_score = float(rrf_scores[i])
-
-        metrics.score_adjustments = len(doc_ids)
+        metrics.score_adjustments = len(all_docs)
         return list(all_docs.values())
+
+    def _rrf_fusion_2node(
+        self,
+        search_results: dict[str, list[Any]],
+        metrics: AggregationMetrics,
+        k: int = 60,
+        weights: dict[str, float] | None = None,
+    ) -> list[AggregatedResult]:
+        """2-node RRF fast-path — avoids building per-node rank dicts."""
+        node_ids = list(search_results.keys())
+        n0, n1 = node_ids
+        r0 = search_results[n0]
+        r1 = search_results[n1]
+
+        metrics.total_input_results = len(r0) + len(r1)
+
+        w0 = weights.get(n0, 1.0) if weights else 1.0
+        w1 = weights.get(n1, 1.0) if weights else 1.0
+
+        # Single pass: build rank for n0, accumulate scores for n1 in one go
+        rank0: dict[str, int] = {}
+        doc_map: dict[str, AggregatedResult] = {}
+        for i, r in enumerate(r0):
+            rank0[r.doc_id] = i + 1
+            agg = self._create_agg_result(r, score=0.0)
+            agg.source_nodes = [n0]
+            agg.original_scores = [r.score]
+            doc_map[r.doc_id] = agg
+
+        for r in r1:
+            agg = doc_map.get(r.doc_id)
+            if agg:
+                agg.source_nodes.append(n1)
+                agg.original_scores.append(r.score)
+            else:
+                agg = self._create_agg_result(r, score=0.0)
+                agg.source_nodes = [n0, n1]  # will be scored as 0 from n0
+                agg.original_scores = [r.score]
+                doc_map[r.doc_id] = agg
+
+        # Inline scoring
+        kf = float(k)
+        for rank1_idx, r in enumerate(r1):
+            agg = doc_map[r.doc_id]
+            agg.aggregated_score += w1 / (kf + float(rank1_idx + 1))
+
+        for doc_id, agg in doc_map.items():
+            rank = rank0.get(doc_id)
+            if rank is not None:
+                agg.aggregated_score += w0 / (kf + float(rank))
+
+        metrics.score_adjustments = len(doc_map)
+        return list(doc_map.values())
 
     def _relative_score_fusion_aggregation(
         self,
@@ -291,8 +342,6 @@ class SearchResultAggregator:
         metrics: AggregationMetrics,
         weights: dict[str, float] | None = None,
     ) -> list[AggregatedResult]:
-        import numpy as np
-
         if not search_results:
             return []
         weights = weights or dict.fromkeys(search_results, 1.0)
@@ -304,12 +353,11 @@ class SearchResultAggregator:
             if not results:
                 continue
 
-            scores = np.array([r.score for r in results])
-            s_min, s_max = scores.min(), scores.max()
-            denom = (s_max - s_min) if s_max > s_min else 1.0
-            norm_scores = (scores - s_min) / denom
+            raw_scores = [r.score for r in results]
+            s_min, s_max = min(raw_scores), max(raw_scores)
+            denom = s_max - s_min if s_max > s_min else 1.0
             node_norm_scores[node_id] = {
-                r.doc_id: norm_scores[i] for i, r in enumerate(results)
+                r.doc_id: (r.score - s_min) / denom for r in results
             }
 
             for r in results:

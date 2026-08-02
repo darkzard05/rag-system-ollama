@@ -40,12 +40,11 @@
 ## 🛠️ Tech Stack
 <!-- TECH_STACK_START -->
 - **Streamlit**: 1.54.0
-- **LangChain**: 0.3.x (latest)
-- **LangGraph**: 0.2.x (latest)
-- **FlashRank**: 0.2.0 (ONNX Optimized)
-- **PyMuPDF4LLM**: 0.3.4+
-- **Ollama**: 0.6.x
-- **FAISS**: CPU Optimized
+- **LangChain**: 0.3.18
+- **LangGraph**: 0.2.74
+- **PyMuPDF4LLM**: latest
+- **Ollama**: 0.6.1
+- **FastAPI**: 0.133.1
 <!-- TECH_STACK_END -->
 
 ---
@@ -55,16 +54,101 @@
 ```text
 rag-system-ollama/
 ├── src/
-│   ├── cache/          # 💾 CoordCache, VectorCache
-│   ├── common/         # ⚙️ Config (config.yml integration), Utils
-│   ├── core/           # 🧠 LangGraph Engine, Semantic Chunker (Header-aware)
-│   ├── infra/          # 🛠️ Deployment & Error Recovery
-│   ├── main.py         # 🏁 Streamlit Entry Point
-│   ├── services/       # 📊 Performance Monitoring
-│   └── ui/             # 🎨 Streaming UI Components
-├── config.yml          # 📝 Centralized RAG & Model Configuration
-├── scripts/            # 🧪 Benchmarks & Maintenance
-└── tests/              # ✅ Comprehensive Unit (Pytest) & Integration Tests
+│   ├── .model_cache/
+│   ├── api/
+│   ├── cache/
+│   ├── common/
+│   ├── core/
+│   ├── data/
+│   ├── deployments/
+│   ├── infra/
+│   ├── main.py # 🏁 Entry Point
+│   ├── rag_system_ollama.egg-info/
+│   ├── security/
+│   ├── services/
+│   └── ui/
+├── scripts/
+│   ├── .model_cache/
+│   ├── analyze_dom.py
+│   ├── analyze_logs.py
+│   ├── analyze_paths.py
+│   ├── archive/
+│   ├── bench_ui_render.py
+│   ├── bench_ui_render_v2.py
+│   ├── benchmarks/
+│   ├── check_css_presence.py
+│   ├── compare_chunking_logic.py
+│   ├── compare_reranker_perf.py
+│   ├── compare_rerankers.py
+│   ├── compare_rerankers_real_pdf.py
+│   ├── container_dom_test.py
+│   ├── debug_layout.py
+│   ├── deep_dom_analysis.py
+│   ├── diagnose_input.py
+│   ├── diagnose_ui.py
+│   ├── discover_selectors.py
+│   ├── download_bge.py
+│   ├── dump_dom.py
+│   ├── e2e_performance_benchmark.py
+│   ├── eval_grader.py
+│   ├── eval_retrieval.py
+│   ├── evaluate_pipeline.py
+│   ├── evaluate_quality.py
+│   ├── evaluation/
+│   ├── explore_dom.py
+│   ├── find_containers.py
+│   ├── inspect_containers.py
+│   ├── kill_streamlit.py
+│   ├── maintenance/
+│   ├── quick_verify_rag.py
+│   ├── README.md
+│   ├── reverify_dom_task1.py
+│   ├── simple_eval.py
+│   ├── standardize_imports.py
+│   ├── test_chunking_integrity.py
+│   ├── test_container.py
+│   ├── test_embedding_v2.py
+│   ├── test_full_pipeline.py
+│   ├── test_highlight_query_cleaning.py
+│   ├── test_performance_metrics.py
+│   ├── test_real_pdf_chunking.py
+│   ├── test_reranker_logic.py
+│   ├── test_reranker_performance.py
+│   ├── test_self_correction.py
+│   ├── test_shortcircuit.py
+│   ├── validate_config.py
+│   ├── verification/
+│   ├── verify_css_override.py
+│   ├── verify_dom_structure.py
+│   ├── verify_e2e_all.py
+│   ├── verify_final.py
+│   ├── verify_height_fill.py
+│   ├── verify_layout_height_fill.py
+│   ├── verify_layout_scroll_fix.py
+│   ├── verify_metadata_opt.py
+│   ├── verify_reranker_with_pdf.py
+│   ├── verify_section_metadata.py
+│   ├── verify_session_refactor.py
+│   ├── verify_styles.py
+│   ├── verify_ui_scrolling.py
+│   └── visual_qa_automation.py
+├── tests/
+│   ├── conftest.py
+│   ├── data/
+│   ├── e2e/
+│   ├── integration/
+│   ├── performance/
+│   ├── README.md
+│   ├── security/
+│   ├── stability/
+│   ├── test_loop_independence.py
+│   ├── test_p0_1_pdf_handle_leak.py
+│   ├── test_p0_2_session_sync.py
+│   ├── test_rag_save_count.py
+│   ├── test_ui_bridge.py
+│   ├── unit/
+│   ├── utils/
+│   └── verify_context.py
 ```
 <!-- TREE_END -->
 

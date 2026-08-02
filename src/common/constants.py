@@ -20,8 +20,9 @@ class PerformanceConstants(IntEnum):
     # 캐싱
     MODEL_CACHE_TTL_SECONDS = 600  # 10분
 
-    # 메시지 히스토리
-    MAX_MESSAGE_HISTORY = 1000
+
+# 모듈 레벨 상수 (IntEnum 외부에서 직접 import 가능)
+MAX_MESSAGE_HISTORY = 100
 
 
 class ChunkingConstants(IntEnum):
@@ -40,44 +41,6 @@ class ChunkingConstants(IntEnum):
     MIN_MERGE_LEN = 30
     SEMANTIC_WINDOW_SIZE = 3
     SIMILARITY_MERGE_THRESHOLD = 92  # 0.92 * 100 (IntEnum이므로 정수로 관리)
-
-
-class RAGGraphConstants:
-    """RAG 그래프 워크플로우 관련 상수"""
-
-    # 컨텍스트 예산 (토큰 기준 비율)
-    CONTEXT_SAFE_BUDGET_RATIO = 0.6
-
-    # 리랭킹 및 필터링
-    RERANK_MIN_DOCS_GUARANTEE = 3
-    RERANK_DYNAMIC_THRESHOLD_RATIO = 0.6
-
-    # 검색 통합 가중치
-    DEFAULT_BM25_WEIGHT = 0.4
-    DEFAULT_FAISS_WEIGHT = 0.6
-
-
-class RAGScoreConstants:
-    """유사도 및 채점 관련 상수"""
-
-    # 기본 유사도 하한선
-    DEFAULT_MIN_SIMILARITY = 0.35
-
-    # 매우 높은 유사도 (중복 처리용)
-    EXTREME_SIMILARITY_THRESHOLD = 0.95
-
-
-class TimeoutConstants(IntEnum):
-    """타임아웃 관련 상수 (초 단위)"""
-
-    # 검색 작업
-    RETRIEVER_TIMEOUT = 30
-
-    # LLM 응답 생성
-    LLM_TIMEOUT = 900  # 15분 (기존 5분에서 연장)
-
-    # 전체 QA 파이프라인
-    QA_PIPELINE_TIMEOUT = 1200  # 20분 (기존 10분에서 연장)
 
 
 class StringConstants:

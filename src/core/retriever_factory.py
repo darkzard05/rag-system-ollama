@@ -43,6 +43,7 @@ def create_vector_store(
                 vectors = vectors.astype("float32", copy=False)
         else:
             vectors = np.ascontiguousarray(vectors, dtype="float32")
+        logger.info(f"[FAISS] Using pre-computed vectors: {vectors.shape}")
 
     # GPU 자동 감지 및 설정
     use_gpu = False
@@ -57,7 +58,7 @@ def create_vector_store(
                     f"[FAISS GPU] 활성화 (Device: {gpu_device}, Count: {ngpus})"
                 )
     except Exception as e:
-        logger.debug(f"[FAISS GPU] 자동 감지 실패: {e}. CPU 모드로 진행합니다.")
+        logger.warning(f"[FAISS GPU] 자동 감지 실패: {e}. CPU 모드로 진행합니다.")
         use_gpu = False
 
     from common.config import VECTOR_STORE_CONFIG
@@ -69,10 +70,14 @@ def create_vector_store(
     q_threshold = index_params.get("quantization_threshold", 5000)
 
     # GPU 인덱스 및 정규화 전략 최적화
-    # [일관성] 설정에 따라 L2 정규화 수행 (Cosine Similarity 보장)
+    # [최적화] 조건부 L2 정규화 — 이미 정규화된 벡터는 건너뜀
     if use_l2:
-        faiss.normalize_L2(vectors)
-        logger.debug("[FAISS] 모든 벡터에 대한 L2 정규화 완료 (Cosine Similarity 보장)")
+        norms = np.linalg.norm(vectors, axis=1)
+        if np.any(np.abs(norms - 1.0) > 1e-3):
+            faiss.normalize_L2(vectors)
+            logger.debug("[FAISS] L2 정규화 수행 완료")
+        else:
+            logger.debug("[FAISS] 벡터가 이미 정규화됨 — 건너뜀")
 
     # [최적화] 문서 규모 및 벤치마크 결과에 따른 적응형 인덱스 전략 (Adaptive Strategy)
     chunk_count = len(docs)

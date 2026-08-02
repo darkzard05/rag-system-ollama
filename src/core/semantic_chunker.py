@@ -7,12 +7,13 @@
 """
 
 import asyncio
-import hashlib
+import concurrent.futures
 import logging
 import re
 from typing import TYPE_CHECKING, Any, cast
 
 import numpy as np
+import xxhash
 from langchain_core.documents import Document
 from langchain_core.embeddings import Embeddings
 
@@ -47,6 +48,14 @@ class EmbeddingBasedSemanticChunker:
     문장 단위로 분할 후, 임베딩 유사도 기반으로 의미 경계를 탐지하여
     일관성 있는 청크를 생성합니다.
     """
+
+    # 복합 헤더 패턴 (Markdown # + 대문자 섹션명)
+    HEADER_PATTERN = re.compile(
+        r"^(\s*#{1,6}\s+.+|\d+\s+[A-Z]{2,}.*|[A-Z]{3,}(\s+[A-Z]{3,})*)$",
+        re.MULTILINE,
+    )
+    # 간단 헤더 패턴 (breakpoint 탐지용)
+    HEADER_SIMPLE = re.compile(r"^\s*#{1,6}\s+.+", re.MULTILINE)
 
     def __init__(
         self,
@@ -204,7 +213,7 @@ class EmbeddingBasedSemanticChunker:
             )
 
     async def _get_embeddings(
-        self, texts: list[str], normalize: bool = True
+        self, texts: list[str], normalize: bool = False
     ) -> np.ndarray:
         """
         텍스트 리스트의 임베딩을 생성합니다 (배치 처리 및 캐싱 강화).
@@ -215,24 +224,36 @@ class EmbeddingBasedSemanticChunker:
         all_results: list[np.ndarray | None] = [None] * len(texts)
         missing_indices: list[int] = []
         missing_texts: list[str] = []
+        text_to_output_indices: dict[str, list[int]] = {}
 
         # 1. 정제 및 캐시 확인
         for i, text in enumerate(texts):
             norm_text = " ".join(text.split())
-            cache_key = f"emb:{self.model_name}:{hashlib.sha256(norm_text.encode()).hexdigest()[:32]}"
+            cache_key = (
+                f"emb:{self.model_name}:{xxhash.xxh64(norm_text.encode()).hexdigest()}"
+            )
 
-            cached_vec = await self.cache_manager.get(cache_key)
-            if cached_vec is not None:
+            cached_raw = await self.cache_manager.get(cache_key)
+            if cached_raw is not None:
+                if isinstance(cached_raw, dict) and "vector" in cached_raw:
+                    cached_vec = cached_raw["vector"]
+                else:
+                    cached_vec = cached_raw
                 all_results[i] = np.array(cached_vec, dtype="float32")
             else:
+                if norm_text not in text_to_output_indices:
+                    missing_texts.append(norm_text)
+                text_to_output_indices.setdefault(norm_text, []).append(i)
                 missing_indices.append(i)
-                missing_texts.append(norm_text)
 
-        # 2. 누락분 배치 임베딩 수행
+        # 2. 누락분 배치 임베딩 수행 (캐시 저장은 모든 배치 성공 후 단일 패스)
         if missing_texts:
             logger.debug(
                 f"[Chunker] {len(missing_texts)}개 문장 신규 임베딩 생성 중 (Batch Size: {self.batch_size})..."
             )
+
+            # [수정] 배치 루프 동안 메모리에만 수집, 캐시 저장은 루프 이후 단일 패스로 수행
+            newly_embedded: list[tuple[int, str, np.ndarray]] = []
 
             for b_idx in range(0, len(missing_texts), self.batch_size):
                 batch = missing_texts[b_idx : b_idx + self.batch_size]
@@ -244,21 +265,14 @@ class EmbeddingBasedSemanticChunker:
                         self.embedder.embed_documents, batch
                     )
 
-                    for idx, vec in zip(batch_indices, batch_vecs, strict=False):
+                    for batch_text, vec in zip(batch, batch_vecs, strict=False):
                         vec_np = np.array(vec, dtype="float32")
-                        all_results[idx] = vec_np
+                        for output_idx in text_to_output_indices.get(batch_text, []):
+                            all_results[output_idx] = vec_np
+                            newly_embedded.append(
+                                (output_idx, texts[output_idx], vec_np)
+                            )
 
-                        # 캐시 저장
-                        norm_text = texts[idx]
-                        cache_key = f"emb:{self.model_name}:{hashlib.sha256(norm_text.encode()).hexdigest()[:32]}"
-                        await asyncio.wait_for(
-                            self.cache_manager.set(cache_key, vec_np.tolist()),
-                            timeout=30.0,
-                        )
-
-                except asyncio.TimeoutError:
-                    logger.error(f"[Chunker] 배치 {b_idx} 캐시 저장 타임아웃")
-                    raise
                 except Exception as e:
                     logger.error(
                         f"[Chunker] 배치 {b_idx} 임베딩 생성 중 오류 발생: {e}",
@@ -268,6 +282,23 @@ class EmbeddingBasedSemanticChunker:
                     for idx in batch_indices:
                         all_results[idx] = None
                     raise
+
+            # [수정] 모든 배치 성공 후 단일 패스로 캐시 저장 (부분 캐시 저장 방지)
+            try:
+                for norm_text, vec_np in {
+                    text: vec for _, text, vec in newly_embedded
+                }.items():
+                    cache_key = f"emb:{self.model_name}:{xxhash.xxh64(norm_text.encode()).hexdigest()}"
+                    await asyncio.wait_for(
+                        self.cache_manager.set(
+                            cache_key,
+                            {"vector": vec_np.tolist(), "cache_version": "1.0"},
+                        ),
+                        timeout=30.0,
+                    )
+            except asyncio.TimeoutError:
+                logger.error("[Chunker] 캐시 저장 타임아웃 (일부 항목 미저장 가능)")
+                raise
 
         # 3. [고도화] 결과 행렬 조립 및 차원 불일치 방어
         # 모든 결과가 채워졌는지 확인하고, 차원이 일치하는지 검사
@@ -303,23 +334,6 @@ class EmbeddingBasedSemanticChunker:
                 where=norms > 1e-9,
             )
         return embeddings_matrix
-
-    def _calculate_similarities(self, normalized_embeddings: np.ndarray) -> list[float]:
-        """
-        인접 문장 간의 코사인 유사도를 계산합니다.
-        [최적화] 이미 정규화된 벡터를 사용하여 내적(Dot Product)만 수행합니다.
-        einsum을 사용하여 루프 없이 벡터화된 연산을 수행합니다.
-        """
-        if len(normalized_embeddings) < 2:
-            return []
-
-        # [최적화] einsum을 사용하여 인접 행 간의 내적을 한 번에 계산
-        # (n-1, d) 와 (n-1, d) 의 각 행끼리 곱하고 합산
-        similarities = np.einsum(
-            "ij,ij->i", normalized_embeddings[:-1], normalized_embeddings[1:]
-        )
-
-        return similarities.tolist()
 
     def _find_breakpoints(
         self, distances: list[float], sentences: list[dict] | None = None
@@ -363,12 +377,11 @@ class EmbeddingBasedSemanticChunker:
         breakpoints = (np.where(dist_array > threshold)[0] + 1).tolist()
 
         # 2. [고도화] 마크다운 헤더 감지 기반 강제 분할
-        header_pattern = re.compile(r"^\s*#{1,6}\s+.+", re.MULTILINE)
         if sentences:
             header_bps = []
             for i, s in enumerate(sentences):
                 # 문장의 시작이 헤더 패턴인 경우 (첫 문장 제외)
-                if i > 0 and header_pattern.match(s["text"].strip()):
+                if i > 0 and self.HEADER_SIMPLE.match(s["text"].strip()):
                     header_bps.append(i)
 
             if header_bps:
@@ -529,18 +542,22 @@ class EmbeddingBasedSemanticChunker:
         # [최적화] 너무 짧은 문장 병합 (오프셋 유지)
         min_merge_len = ChunkingConstants.MIN_MERGE_LEN.value
         # [수정] 헤더 감지 정규식 강화: # 패턴 또는 대문자 시작 섹션 (1 INTRODUCTION 등)
-        header_pattern = re.compile(
-            r"^(\s*#{1,6}\s+.+|\d+\s+[A-Z]{2,}.*|[A-Z]{3,}(\s+[A-Z]{3,})*)$",
-            re.MULTILINE,
-        )
+        # [최적화] 클래스 상수 HEADER_PATTERN 사용 (재컴파일 방지)
 
         sentences = []
         if raw_sentences:
+            # [최적화] 병합 전 1회만 헤더 여부를 계산하여 캐싱
+            for raw_s in raw_sentences:
+                raw_s["is_header"] = bool(
+                    self.HEADER_PATTERN.match(raw_s["text"].strip())
+                )
+
             current_s = raw_sentences[0]
             for s in raw_sentences[1:]:
                 # [수정] 현재 문장이 헤더거나, 다음 문장이 헤더인 경우 병합 제외 (Clean Section Preservation)
-                is_curr_header = bool(header_pattern.match(current_s["text"].strip()))
-                is_next_header = bool(header_pattern.match(s["text"].strip()))
+                # [최적화] 미리 캐싱된 is_header 값 재사용 (정규식 중복 호출 제거)
+                is_curr_header = current_s.get("is_header", False)
+                is_next_header = s.get("is_header", False)
 
                 can_merge = (
                     not is_curr_header  # ✅ 현재 문장이 헤더면 절대 합치지 않음
@@ -554,10 +571,18 @@ class EmbeddingBasedSemanticChunker:
                     current_s["text"] += " " + s["text"]
                     current_s["end"] = s["end"]
                     current_s["is_hard_split"] = s.get("is_hard_split", False)
+                    # 병합된 문장은 헤더가 아님 (텍스트가 변경되었으므로)
+                    current_s["is_header"] = False
                 else:
                     sentences.append(current_s)
                     current_s = s
             sentences.append(current_s)
+
+        # [최적화] 헤더 위치 미리 캐싱 (O(1) lookup용) — 이미 위에서 계산 완료
+
+        header_indices = {
+            i for i, s in enumerate(sentences) if s.get("is_header", False)
+        }
 
         if len(sentences) <= self.buffer_size:
             # 벡터가 없으므로 계산 필요
@@ -604,10 +629,6 @@ class EmbeddingBasedSemanticChunker:
         all_bps = breakpoints + [len(sentences)]
 
         current_header = "Front Matter"  # [수정] 기본값
-        header_pattern = re.compile(
-            r"^(\s*#{1,6}\s+.+|\d+\s+[A-Z]{2,}.*|[A-Z]{3,}(\s+[A-Z]{3,})*)$",
-            re.MULTILINE,
-        )
 
         # [추가] 헤더 병합용 상태
         pending_header = ""
@@ -620,42 +641,40 @@ class EmbeddingBasedSemanticChunker:
                 continue
 
             # [고도화] 새로운 헤더로 시작하는지 확인 (오버랩 방지용)
-            is_new_header_start = bool(
-                header_pattern.match(sentences[group_start]["text"].strip())
-            )
+            is_new_header_start = sentences[group_start].get("is_header", False)
 
             # Overlap 적용: 헤더로 시작하는 경우 오버랩 생략 (Clean Section Start)
             actual_start = group_start
             if i > 0 and not is_new_header_start:
                 actual_start = max(0, group_start - self.chunk_overlap)
 
-            # [핵심] 현재 청크의 헤더 섹션 결정
-            for s in sentences[start_idx:group_end]:
+            # [핵심] 현재 청크의 헤더 섹션 결정 (미리 캐싱된 header_indices 사용)
+            for s_idx in range(start_idx, group_end):
+                if s_idx not in header_indices:  # O(1) set lookup
+                    continue
+                s = sentences[s_idx]
                 text_strip = s["text"].strip()
-                h_match = header_pattern.match(text_strip)
+                new_h = self._clean_section_title(text_strip)
 
-                if h_match:
-                    new_h = self._clean_section_title(text_strip)
+                # [지능형 병합] 전치사나 'OF' 등으로 끝나면 다음 헤더와 합침
+                incomplete_markers = ["OF", "AND", "WITH", "IN", "FOR", "THE", "A"]
+                if (
+                    any(new_h.upper().endswith(w) for w in incomplete_markers)
+                    and len(new_h) < 100
+                ):
+                    pending_header = new_h + " "
+                    continue
 
-                    # [지능형 병합] 전치사나 'OF' 등으로 끝나면 다음 헤더와 합침
-                    incomplete_markers = ["OF", "AND", "WITH", "IN", "FOR", "THE", "A"]
-                    if (
-                        any(new_h.upper().endswith(w) for w in incomplete_markers)
-                        and len(new_h) < 100
-                    ):
-                        pending_header = new_h + " "
-                        continue
+                if pending_header:
+                    new_h = (pending_header + new_h).strip()
+                    pending_header = ""
 
-                    if pending_header:
-                        new_h = (pending_header + new_h).strip()
-                        pending_header = ""
-
-                    # 첫 번째 거대한 헤더는 제목으로 처리
-                    if is_first_header and len(new_h) > 10:
-                        current_header = f"TITLE: {new_h}"
-                        is_first_header = False
-                    else:
-                        current_header = new_h
+                # 첫 번째 거대한 헤더는 제목으로 처리
+                if is_first_header and len(new_h) > 10:
+                    current_header = f"TITLE: {new_h}"
+                    is_first_header = False
+                else:
+                    current_header = new_h
 
             merged_text = " ".join(
                 [s["text"] for s in sentences[actual_start:group_end]]
@@ -679,6 +698,46 @@ class EmbeddingBasedSemanticChunker:
         # 7. 크기 최적화 및 중복 제거
         optimized_chunks = self._optimize_chunk_sizes(chunks)
         return self._prune_duplicates(optimized_chunks)
+
+    def _extract_metadata_for_chunk(
+        self, chunk: dict[str, Any], doc_ranges: list[dict[str, Any]]
+    ) -> dict[str, Any]:
+        """
+        청크에 대한 메타데이터를 추출하고 병합합니다.
+        """
+        c_start = chunk["start"]
+        c_end = chunk["end"]
+
+        overlapping_pages = []
+        merged_metadata: dict[str, Any] = {}
+
+        for doc_range in doc_ranges:
+            # 범위 겹침 확인: [start1, end1] 과 [start2, end2]
+            if max(c_start, doc_range["start"]) < min(c_end, doc_range["end"]):
+                # [수정] Mypy 타입 추론 강화를 위해 cast 사용
+                metadata = cast(dict[str, Any], doc_range["metadata"])
+                page = metadata.get("page")
+                if page and page not in overlapping_pages:
+                    overlapping_pages.append(page)
+
+                # 기본 메타데이터는 첫 번째 겹치는 문서에서 가져오되, 페이지 정보는 업데이트
+                if not merged_metadata:
+                    merged_metadata = metadata.copy()
+
+        if overlapping_pages:
+            merged_metadata["pages"] = sorted(overlapping_pages)
+            # 하위 호환성을 위해 단일 page 필드는 첫 페이지로 유지
+            merged_metadata["page"] = overlapping_pages[0]
+            # 다중 페이지 여부 표시
+            merged_metadata["is_cross_page"] = len(overlapping_pages) > 1
+
+        # [핵심 수정] 추출된 섹션 정보를 메타데이터에 주입
+        merged_metadata["current_section"] = chunk.get("current_section", "일반 본문")
+
+        merged_metadata["start_index"] = c_start
+        merged_metadata["end_index"] = c_end
+
+        return merged_metadata
 
     async def split_documents(
         self, docs: list["Document"]
@@ -729,48 +788,20 @@ class EmbeddingBasedSemanticChunker:
         final_docs = []
         final_vectors = []
 
-        for chunk in chunk_dicts:
-            c_start = chunk["start"]
-            c_end = chunk["end"]
-            c_text = chunk["text"]
-            c_vector = chunk["vector"]
-
-            # [개선] 청크 범위에 걸쳐 있는 모든 원본 문서(페이지) 찾기
-            overlapping_pages = []
-            merged_metadata: dict[str, Any] = {}
-
-            for doc_range in doc_ranges:
-                # 범위 겹침 확인: [start1, end1] 과 [start2, end2]
-                if max(c_start, doc_range["start"]) < min(c_end, doc_range["end"]):
-                    # [수정] Mypy 타입 추론 강화를 위해 cast 사용
-                    metadata = cast(dict[str, Any], doc_range["metadata"])
-                    page = metadata.get("page")
-                    if page and page not in overlapping_pages:
-                        overlapping_pages.append(page)
-
-                    # 기본 메타데이터는 첫 번째 겹치는 문서에서 가져오되, 페이지 정보는 업데이트
-                    if not merged_metadata:
-                        merged_metadata = metadata.copy()
-
-            if overlapping_pages:
-                merged_metadata["pages"] = sorted(overlapping_pages)
-                # 하위 호환성을 위해 단일 page 필드는 첫 페이지로 유지
-                merged_metadata["page"] = overlapping_pages[0]
-                # 다중 페이지 여부 표시
-                merged_metadata["is_cross_page"] = len(overlapping_pages) > 1
-
-            # [핵심 수정] 추출된 섹션 정보를 메타데이터에 주입
-            merged_metadata["current_section"] = chunk.get(
-                "current_section", "일반 본문"
+        with concurrent.futures.ThreadPoolExecutor() as executor:
+            # Run metadata extraction in parallel
+            results = list(
+                executor.map(
+                    lambda chunk: self._extract_metadata_for_chunk(chunk, doc_ranges),
+                    chunk_dicts,
+                )
             )
 
-            final_docs.append(Document(page_content=c_text, metadata=merged_metadata))
-
-            # [수정] 오프셋 정보 명시적 저장
-            final_docs[-1].metadata["start_index"] = c_start
-            final_docs[-1].metadata["end_index"] = c_end
-
-            final_vectors.append(c_vector)
+        for chunk, merged_metadata in zip(chunk_dicts, results, strict=False):
+            final_docs.append(
+                Document(page_content=chunk["text"], metadata=merged_metadata)
+            )
+            final_vectors.append(chunk["vector"])
 
         logger.info(
             f"의미론적 문서 분할 완료: {len(docs)}개 원본 문서 -> {len(final_docs)}개 청크 생성 (벡터 포함)"

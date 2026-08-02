@@ -1,0 +1,294 @@
+@charset "UTF-8";
+
+:root {
+    --spacing-xs: 4px;
+    --spacing-sm: 8px;
+    --spacing-md: 16px;
+    --spacing-lg: 24px;
+    --spacing-xl: 32px;
+    --sidebar-width: 300px;
+}
+
+.stApp { max-width: 100%; width: 100%; height: 100vh; height: 100dvh; overflow: hidden; margin: 0; }
+
+[data-testid="stMainBlockContainer"] {
+    height: 100vh !important;
+    height: 100dvh !important;
+    display: flex !important;
+    flex-direction: column !important;
+    overflow: hidden !important;
+    position: relative !important;
+    box-sizing: border-box !important;
+    padding-top: var(--header-h, 60px) !important;
+    padding-bottom: 0 !important;
+    padding-left: 0 !important;
+    padding-right: 0 !important;
+}
+
+[data-testid="stMainBlockContainer"] > [data-testid="stVerticalBlock"] {
+    flex: 1 !important;
+    min-height: 0 !important;
+    min-width: 0 !important;
+    gap: 0 !important;
+    row-gap: 0 !important;
+    display: flex !important;
+    flex-direction: column !important;
+}
+
+/* Content row layout wrapper — fills all remaining vertical space.
+   NOTE: stLayoutWrapper is NOT :first-child in stVerticalBlock (zero-height stElementContainer siblings
+   precede it). Use a generic selector that targets any stLayoutWrapper at this level. */
+[data-testid="stMainBlockContainer"] > [data-testid="stVerticalBlock"]
+> [data-testid="stLayoutWrapper"] {
+    flex: 1 !important;
+    min-height: 0 !important;
+    min-width: 0 !important;
+    overflow: hidden !important;
+    display: flex !important;
+    flex-direction: column !important;
+}
+
+/* Inner stVerticalBlock between stLayoutWrapper and stHorizontalBlock -
+   must be a flex column so stHorizontalBlock can take flex:1. */
+[data-testid="stMainBlockContainer"] > [data-testid="stVerticalBlock"]
+> [data-testid="stLayoutWrapper"] > [data-testid="stVerticalBlock"] {
+    flex: 1 !important;
+    min-height: 0 !important;
+    display: flex !important;
+    flex-direction: column !important;
+}
+
+[data-testid="stMainBlockContainer"] > [data-testid="stVerticalBlock"]
+> [data-testid="stLayoutWrapper"] > [data-testid="stVerticalBlock"]
+> [data-testid="stHorizontalBlock"] {
+    flex: 1 !important;
+    min-height: 0 !important;
+}
+
+[data-testid="stHorizontalBlock"] {
+    min-height: 0 !important;
+    flex-wrap: nowrap !important;
+    gap: 0.25rem !important;
+    overflow: hidden !important;
+}
+
+[data-testid="stColumn"] {
+    flex: 1 1 0px !important;
+    min-width: 0 !important;
+    display: flex !important;
+    flex-direction: column !important;
+    min-height: 0 !important;
+    position: relative !important;
+}
+
+[data-testid="stColumn"] > [data-testid="stVerticalBlock"] {
+    flex: 1 !important;
+    min-height: 0 !important;
+    min-width: 0 !important;
+    height: 100% !important;
+    overflow: hidden !important;
+    gap: 0 !important;
+    row-gap: 0 !important;
+}
+
+[data-testid="stColumn"] > [data-testid="stVerticalBlock"] > [data-testid="stLayoutWrapper"],
+[data-testid="stColumn"] > [data-testid="stVerticalBlock"] > [data-testid="stElementContainer"] {
+    flex: 1 !important;
+    min-height: 0 !important;
+    min-width: 0 !important;
+    overflow: hidden !important;
+}
+
+[data-testid="stColumn"] > [data-testid="stVerticalBlock"] > [data-testid="stLayoutWrapper"] > [data-testid="stVerticalBlock"],
+[data-testid="stColumn"] > [data-testid="stVerticalBlock"] > [data-testid="stElementContainer"] > [data-testid="stVerticalBlock"] {
+    flex: 1 !important;
+    min-height: 0 !important;
+    overflow: hidden !important;
+    display: flex !important;
+    flex-direction: column !important;
+    gap: 0 !important;
+    row-gap: 0 !important;
+}
+
+/* Content row horizontal block — fills remaining space */
+[data-testid="stMainBlockContainer"] > [data-testid="stVerticalBlock"]
+> [data-testid="stLayoutWrapper"]:first-child > [data-testid="stHorizontalBlock"] {
+    flex: 1 !important;
+    min-height: 0 !important;
+    overflow: hidden !important;
+}
+
+[data-testid="stMainBlockContainer"] [data-testid="stColumn"]:first-child
+> [data-testid="stVerticalBlock"] > [data-testid="stLayoutWrapper"]:first-child
+> [data-testid="stVerticalBlock"],
+[data-testid="stMainBlockContainer"] [data-testid="stColumn"]:first-child
+> [data-testid="stVerticalBlock"] > [data-testid="stElementContainer"]:first-child {
+    flex: 1 !important;
+    min-height: 0 !important;
+    overflow-y: auto !important;
+    overflow-x: hidden !important;
+    padding-bottom: 0.5rem !important;
+}
+
+/* PDF controls bar: auto-height at bottom of PDF column, separated from viewer above.
+   @st.fragment wraps its output in stElementContainer, so we handle both stLayoutWrapper
+   and stElementContainer variants for the :not(:first-child) (i.e., the controls). */
+[data-testid="stMainBlockContainer"] [data-testid="stColumn"]:first-child
+> [data-testid="stVerticalBlock"] > [data-testid="stLayoutWrapper"]:not(:first-child),
+[data-testid="stMainBlockContainer"] [data-testid="stColumn"]:first-child
+> [data-testid="stVerticalBlock"] > [data-testid="stElementContainer"]:not(:first-child) {
+    flex: 0 0 auto !important;
+    overflow: visible !important;
+    border-top: 1px solid color-mix(in srgb, var(--border-color, #ccc) 25%, transparent) !important;
+    padding-top: 8px !important;
+    margin-top: 4px !important;
+    background: color-mix(in srgb, var(--background-color) 96%, var(--primary-color) 4%) !important;
+}
+
+/* Chat column (last child) — flex layout: scrollable messages + sticky input.
+   The stVerticalBlock inside the chat column hosts both the message content
+   (flex: 1, scrollable) and the chat form (flex-shrink: 0, sticky bottom). */
+
+/* Messages wrappers: fill space and scroll independently */
+[data-testid="stMainBlockContainer"] [data-testid="stColumn"]:last-child
+> [data-testid="stVerticalBlock"] > [data-testid="stLayoutWrapper"] {
+    flex: 1 !important;
+    min-height: 0 !important;
+    overflow-y: auto !important;
+}
+
+[data-testid="stMainBlockContainer"] [data-testid="stColumn"]:last-child
+> [data-testid="stVerticalBlock"] > [data-testid="stElementContainer"]:not(:has(> form[data-testid="stForm"])) {
+    flex: 1 !important;
+    min-height: 0 !important;
+    overflow-y: auto !important;
+}
+
+/* st.chat_input: sticky at the very bottom of the page, full width */
+[data-testid="stChatInput"] {
+    position: sticky !important;
+    bottom: 0 !important;
+    z-index: 1000 !important;
+    background-color: var(--background-color) !important;
+    border-top: 1px solid color-mix(in srgb, var(--border-color, #ccc) 30%, transparent) !important;
+}
+
+/* Chat Input Focus Enhancement */
+[data-testid="stChatInput"]:focus-within {
+    border-color: var(--primary-color) !important;
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--primary-color) 20%, transparent) !important;
+}
+
+/* Chat Input Disabled State */
+[data-testid="stChatInput"]:has(textarea:disabled) {
+    opacity: 0.6 !important;
+}
+
+/* Kill Streamlit's default bottom padding on the sticky bottom container (3.5rem gap) */
+div[data-testid="stBottomBlockContainer"] {
+    padding-bottom: 0 !important;
+}
+
+[data-testid="stMainBlockContainer"] [data-testid="stColumn"] div,
+[data-testid="stMainBlockContainer"] p {
+    word-break: keep-all;
+    overflow-wrap: break-word;
+}
+
+/* Code blocks: prevent long lines from breaking layout */
+[data-testid="stMainBlockContainer"] pre {
+    overflow-x: auto !important;
+    white-space: pre !important;
+}
+[data-testid="stMainBlockContainer"] pre code {
+    white-space: pre !important;
+    word-break: normal !important;
+}
+
+/* stMain padding (Streamlit default: ~6rem) compounds with our padding-top to create a
+   bottom gap. Zero it out — stMainBlockContainer handles header offset via padding-top. */
+[data-testid="stMain"] {
+    overflow: hidden !important;
+    padding: 0 !important;
+}
+
+[data-testid="stSidebarCollapseButton"] {
+    z-index: 100000 !important;
+    visibility: visible !important;
+    opacity: 1 !important;
+    background-color: color-mix(in srgb, var(--background-color), transparent 20%);
+    box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+    border-radius: 50%;
+}
+
+header[data-testid="stHeader"] {
+    background: var(--background-color) !important;
+    z-index: 99999 !important;
+    display: flex !important;
+    border-bottom: 1px solid color-mix(in srgb, var(--border-color, #ccc) 30%, transparent);
+}
+.stAppDeployButton { display: none !important; }
+
+[data-testid="stChatMessage"] div[data-testid="stVerticalBlock"] { gap: 0px !important; }
+[data-testid="stChatMessage"] {
+    padding-top: var(--spacing-sm);
+    padding-bottom: var(--spacing-sm);
+}
+
+/* thought-expander, streaming-pulse, perf-table 등은 네이티브 컴포넌트(st.expander, st.status, st.caption)로 대체됨.
+   커스텀 HTML 기반 스타일 제거 완료 */
+
+/* Latest chat message: subtle entrance animation */
+[data-testid="stChatMessage"]:last-child {
+    animation: msgFadeIn 0.3s ease-out;
+}
+@keyframes msgFadeIn {
+    from { opacity: 0; transform: translateY(6px); }
+    to   { opacity: 1; transform: translateY(0); }
+}
+
+/* Popover body: prevent overflow on narrow screens */
+[data-testid="stPopoverBody"] {
+    max-width: 360px;
+}
+
+@media (max-width: 768px) {
+    .stApp, [data-testid="stAppViewContainer"] {
+        height: auto !important;
+        overflow: visible !important;
+    }
+    [data-testid="stMainBlockContainer"] {
+        height: auto !important;
+        display: flex !important;
+        flex-direction: column !important;
+        padding-top: 0 !important;
+    }
+    [data-testid="stHorizontalBlock"] {
+        flex-wrap: wrap !important;
+        height: auto !important;
+        overflow: visible !important;
+    }
+    [data-testid="stColumn"] {
+        display: flex !important;
+        flex-direction: column !important;
+        height: 50vh !important;
+        overflow-y: auto !important;
+    }
+    [data-testid="stColumn"] > [data-testid="stVerticalBlock"]
+    > [data-testid="stLayoutWrapper"] > [data-testid="stVerticalBlock"] {
+        max-height: none !important;
+        overflow-y: visible !important;
+        padding-bottom: 1rem !important;
+    }
+    /* Mobile: chat input goes fixed full-width bottom */
+    [data-testid="stChatInput"] {
+        position: fixed !important;
+        bottom: 0 !important;
+        left: 0 !important;
+        width: 100% !important;
+        z-index: 1000 !important;
+    }
+}
+
+/* 문서 컨텍스트/빌드 배너는 통합 타임라인 내 네이티브 컴포넌트로 대체됨.
+   (st.chat_message + st.status) - 커스텀 CSS 제거 완료 */

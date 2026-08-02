@@ -268,6 +268,8 @@ class CacheSecurityManager:
     ) -> CacheMetadata:
         import sys
 
+        import faiss
+
         file_hash = self.compute_file_hash(file_path)
         integrity_hmac = None
         if self.hmac_secret:
@@ -275,7 +277,7 @@ class CacheSecurityManager:
                 file_data = f.read()
             integrity_hmac = self.compute_integrity_hmac(file_data)
 
-        return CacheMetadata(
+        metadata = CacheMetadata(
             file_hash=file_hash,
             integrity_hmac=integrity_hmac,
             created_at=datetime.now(timezone.utc).isoformat(),
@@ -283,6 +285,8 @@ class CacheSecurityManager:
             python_version=f"{sys.version_info.major}.{sys.version_info.minor}",
             description=description,
         )
+        metadata.faiss_version = faiss.__version__
+        return metadata
 
 
 # ============================================================================

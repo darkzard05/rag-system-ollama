@@ -1,153 +1,71 @@
 """
-채팅 인터페이스 및 스트리밍 응답 관련 컴포넌트 - Native Streaming Refactored
+채팅 인터페이스 컴포넌트 - 통합 타임라인 버전.
+
+모든 이벤트(문서 업로드, 분석 진행, 대화 메시지, 생각 과정)를
+단일 연대기순 타임라인으로 렌더링합니다.
 """
 
-import asyncio
 import contextlib
 import html
 import logging
-import queue
-import re
-import threading
-from typing import Any, TypedDict
+from collections.abc import Callable
+from typing import Any
 
 import streamlit as st
 
-from api.streaming_handler import get_streaming_handler
-from common.config import (
-    MSG_CHAT_GUIDE,
-    MSG_CHAT_INPUT_PLACEHOLDER,
-    MSG_THINKING,
-)
+from common.config import MSG_CHAT_GUIDE
 from common.utils import (
     apply_tooltips_to_response,
-    extract_annotations_from_docs,
-    format_error_message,
     normalize_latex_delimiters,
 )
 from core.session import SessionManager
+from ui.widget_keys import cancel_rebuild_key, jump_key
 
 logger = logging.getLogger(__name__)
 
 
-class ChatState(TypedDict):
-    full_response: str
-    full_thought: str
-    retrieved_docs: list[Any]
-    performance: dict[str, Any]
-    thinking_start_time: float
-    thinking_end_time: float
+def _handle_page_jump(p: int) -> None:
+    """참조 페이지 이동 버튼 콜백입니다."""
+    SessionManager.set("pdf_target_page", p)
+    SessionManager.set("current_page", p)
+    st.toast(f"📄 {p}페이지로 이동 중...", icon="📄")
+    # 뷰어 fragment는 별도 @st.fragment이므로, 상태 변경을 반영하려면
+    # 전체 리런이 필요하다 (fragment 간 자동 재실행 없음).
+    st.rerun()
 
 
-def _sync_stream_generator(query: str, model_name: str, session_id: str):
-    """비동기 스트림을 동기 Streamlit 환경에서 소비하기 위한 브릿지 제너레이터"""
-    q = queue.Queue()
+def _render_references_popover(
+    msg_id: str,
+    documents: list[Any] | None,
+    on_page_jump: Callable[[int], None] | None = None,
+) -> None:
+    """참조 페이지 popover와 페이지 이동 버튼을 렌더링합니다."""
+    with st.popover("📑 참조 페이지", use_container_width=False):
+        if not documents:
+            return
 
-    def bg_task():
-        async def run():
-            try:
-                from core.rag_core import RAGOrchestrator
-                from core.session.context import set_session_id
-                from core.session.store import session_store
+        extracted_pages: set[int] = set()
+        for d in documents:
+            meta = (
+                getattr(d, "metadata", {})
+                if hasattr(d, "metadata")
+                else d.get("metadata", {})
+            )
+            with contextlib.suppress(ValueError, TypeError):
+                extracted_pages.add(int(meta.get("page", 1)))
 
-                set_session_id(session_id)
-                sid = session_id or "default"
-                state = session_store.load_state(sid)
-                rag_sys = RAGOrchestrator(state=state, store=session_store)
-                event_generator = await rag_sys.astream(query, model_name=model_name)
-                handler = get_streaming_handler()
-                event_stream = handler.stream_graph_events(event_generator)
-
-                async for chunk in event_stream:
-                    q.put(("chunk", chunk))
-            except Exception as e:
-                q.put(("error", e))
-            finally:
-                q.put(("done", None))
-
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        try:
-            loop.run_until_complete(run())
-        except Exception as e:
-            logger.error(f"[CHAT] 백그라운드 작업 오류: {e}", exc_info=True)
-        finally:
-            loop.close()
-
-    t = threading.Thread(
-        target=bg_task, daemon=True, name=f"chat-stream-{session_id[-12:]}"
-    )
-    t.start()
-
-    try:
-        while True:
-            try:
-                # 타임아웃 추가 (30초)로 무한 루프 방지
-                msg_type, data = q.get(timeout=30)
-                if msg_type == "done":
-                    break
-                elif msg_type == "error":
-                    raise data
-                else:
-                    yield data
-            except queue.Empty:
-                logger.error(
-                    "[CHAT] 스트리밍 타임아웃: 백그라운드 작업이 응답하지 않음"
-                )
-                break
-            except Exception as e:
-                logger.error(f"[CHAT] 스트리밍 오류: {e}")
-                break
-    finally:
-        if t.is_alive():
-            logger.debug(f"[CHAT] Stream thread cleanup: {t.name}")
-
-
-def _clean_response_redundancy(text: str) -> str:
-    if not text:
-        return text
-    clean_patterns = [
-        r"^#{1,4}\s*(?:답변|결과|분석 결과|Response|Answer|Result)[:\s]*",
-        r"^\**\s*(?:답변|결과|분석 결과|Response|Answer|Result)[:\s]*\**\s*",
-    ]
-    result = text.strip()
-    for pattern in clean_patterns:
-        result = re.sub(pattern, "", result, flags=re.IGNORECASE | re.MULTILINE).strip()
-    return result
-
-
-def _get_performance_status(total_time: float, tps: float) -> dict[str, dict[str, str]]:
-    """수치에 따른 성능 상태와 클래스명을 반환합니다."""
-    # Latency (Total Time)
-    if total_time < 1.5:
-        latency = {"label": "✨ Excellent", "class": "status-excellent"}
-    elif total_time < 3.5:
-        latency = {"label": "🟢 Stable", "class": "status-stable"}
-    else:
-        latency = {"label": "⚠️ Poor", "class": "status-poor"}
-
-    # TPS (Tokens per second)
-    if tps > 40:
-        throughput = {"label": "🚀 Fast", "class": "status-excellent"}
-    elif tps > 20:
-        throughput = {"label": "🟢 Normal", "class": "status-stable"}
-    else:
-        throughput = {"label": "🐢 Slow", "class": "status-poor"}
-
-    return {"latency": latency, "throughput": throughput}
-
-
-def _render_thought_expander(thought: str, is_open: bool = False) -> str:
-    """생각 과정(Thought)을 위한 HTML expander를 렌더링합니다."""
-    escaped_thought = html.escape(thought)
-    summary = "🤔 생각 과정" if is_open else f"{MSG_THINKING[:-3]} 완료"
-    open_attr = " open" if is_open else ""
-    return f"""
-    <details class="thought-expander"{open_attr}>
-        <summary>{summary}</summary>
-        <div class="thought-container">{escaped_thought}</div>
-    </details>
-    """
+        pages = sorted(extracted_pages)
+        if not pages:
+            return
+        cols = st.columns(min(len(pages), 5))
+        for idx, p in enumerate(pages):
+            clicked = cols[idx % len(cols)].button(
+                f"{p}p",
+                key=jump_key(msg_id, p, idx),
+                use_container_width=True,
+            )
+            if clicked and on_page_jump is not None:
+                on_page_jump(p)
 
 
 def render_message(
@@ -162,7 +80,7 @@ def render_message(
     msg_index: int = 0,
     is_latest: bool = False,
     **kwargs,
-):
+) -> None:
     """메시지를 렌더링하는 통합 엔진."""
     avatar_icon = "🤖" if role == "assistant" else "👤"
     msg_id = kwargs.get("msg_id", f"msg_{msg_index}")
@@ -172,14 +90,22 @@ def render_message(
         if wrap_in_container
         else st.container()
     ):
-        if thought and thought.strip():
-            st.markdown(_render_thought_expander(thought), unsafe_allow_html=True)
+        # 생각 과정 표시 (완료된 메시지는 네이티브 expander 사용)
+        if thought and thought.strip() and msg_type != "streaming":
+            with st.expander("🤔 생각 과정", expanded=False):
+                st.markdown(thought)
 
+        # 오류 메시지는 st.error로 표시하고 본문 렌더링을 생략한다
+        error = kwargs.get("error")
+        if error:
+            st.error(str(error))
+            return
+
+        # 본문 내용
         if processed_content:
             st.markdown(processed_content, unsafe_allow_html=True)
         else:
             display_text = content
-            # assistant 메시지면서 processed_content가 없는 경우(주로 과거 메시지) 보안을 위해 escape 처리
             if role == "assistant":
                 display_text = html.escape(display_text)
 
@@ -188,126 +114,191 @@ def render_message(
                 display_text = apply_tooltips_to_response(display_text, documents)
             st.markdown(display_text, unsafe_allow_html=(role == "assistant"))
 
-        if role == "assistant" and (metrics or documents):
-            with st.popover("ℹ️ 상세 정보 및 참조", use_container_width=False):
-                if metrics:
-                    total = metrics.get("total_time", 0)
-                    tps = metrics.get("tps", metrics.get("tokens_per_second", 0))
-                    in_tok = metrics.get("input_token_count", 0)
-                    out_tok = metrics.get(
-                        "token_count", metrics.get("output_token_count", 0)
-                    )
+        # 완료된 어시스턴트 메시지의 하단 정보
+        if role == "assistant" and msg_type == "general":
+            # 참조 페이지
+            if documents and is_latest:
+                _render_references_popover(
+                    msg_id, documents, on_page_jump=_handle_page_jump
+                )
 
-                    # 성능 상태 판별
-                    status = _get_performance_status(total, tps)
-
-                    st.markdown("**📊 성능 지표**")
-
-                    perf_html = f"""
-                    <table class="perf-table">
-                        <tr class="perf-row">
-                            <td class="perf-label">⏱️ 응답 지연</td>
-                            <td class="perf-value">{total:.1f}s</td>
-                            <td class="perf-status {status["latency"]["class"]}">{status["latency"]["label"]}</td>
-                        </tr>
-                        <tr class="perf-row">
-                            <td class="perf-label">⚡ 생성 속도</td>
-                            <td class="perf-value">{tps:.1f} t/s</td>
-                            <td class="perf-status {status["throughput"]["class"]}">{status["throughput"]["label"]}</td>
-                        </tr>
-                        <tr class="perf-row">
-                            <td class="perf-label">🎟️ 토큰 사용</td>
-                            <td class="perf-value">{in_tok} / {out_tok}</td>
-                            <td class="perf-status">{in_tok + out_tok} total</td>
-                        </tr>
-                    </table>
-                    """
-                    st.markdown(perf_html, unsafe_allow_html=True)
-
-                if documents:
-                    extracted_pages = set()
-                    for d in documents:
-                        meta = (
-                            getattr(d, "metadata", {})
-                            if hasattr(d, "metadata")
-                            else d.get("metadata", {})
-                        )
-                        p = meta.get("page", 1)
-                        with contextlib.suppress(ValueError, TypeError):
-                            extracted_pages.add(int(p))
-
-                    pages = sorted(extracted_pages)
-                    if pages:
-                        st.divider()
-                        st.caption("**📑 참조 페이지로 이동:**")
-                        cols = st.columns(min(len(pages), 5))
-                        for idx, p in enumerate(pages):
-                            if cols[idx % len(cols)].button(
-                                f"{p}p",
-                                key=f"jump_{msg_id}_{p}_{idx}",
-                                use_container_width=True,
-                            ):
-                                SessionManager.set("pdf_target_page", p)
-                                SessionManager.set("current_page", p)
-                                st.rerun()
+            # 성능 지표
+            if metrics:
+                total_time = metrics.get("total_time", 0)
+                retrieved = metrics.get("retrieved_chunks", 0)
+                model = (
+                    kwargs.get("model", "")
+                    or SessionManager.get("last_selected_model", "")
+                    or "model"
+                )
+                st.caption(f"⚡ {total_time:.1f}s · 🔍 {retrieved} chunks · 🤖 {model}")
 
 
-@st.fragment(run_every=1.0)
-def _render_build_status_in_chat(sid: str):
-    """문서 분석 진행 상황을 채팅창 상단에 표시합니다."""
+def _cancel_rebuild(sid: str) -> None:
+    """문서 분석 재구축 취소 요청 콜백입니다."""
+    SessionManager.set("rebuild_cancelled", True, session_id=sid)
+    st.rerun()
+
+
+def _render_guidance_panel() -> None:
+    """빈 대화 상태의 단일 가이드 메시지를 렌더링합니다."""
+    st.chat_message("system", avatar="⚙️").markdown(MSG_CHAT_GUIDE)
+
+
+def _render_doc_context_inline(sid: str) -> None:
+    """문서 컨텍스트를 타임라인 첫 메시지로 렌더링합니다 (네이티브)."""
+    file_name = str(SessionManager.get("last_uploaded_file_name", "", sid) or "")
+    if not file_name:
+        pdf_path = str(SessionManager.get("pdf_file_path", "", sid) or "")
+        if pdf_path:
+            file_name = pdf_path.replace("\\", "/").rsplit("/", 1)[-1]
+    if not file_name:
+        return
+
     is_building = bool(SessionManager.get("is_building_rag", False, sid))
+    is_ready = SessionManager.is_ready_for_chat(session_id=sid)
+    has_error = bool(SessionManager.get("pdf_processing_error", "", sid))
 
-    if is_building:
-        status_msg = SessionManager.get("rebuild_status", "문서 분석 중...", sid)
-        with st.status(f"⏳ {status_msg}", expanded=True):
-            logs = SessionManager.get("status_logs", [], sid)
-            if logs:
-                for log in logs[-3:]:
-                    st.caption(f"▹ {log}")
-            else:
-                st.write("파이프라인 구축을 시작합니다...")
+    doc_stats = SessionManager.get("doc_stats", {}, sid) or {}
+    doc_loaded = bool(SessionManager.get("pdf_processed", False, sid))
+    cache_tag = ""
+    if doc_loaded and doc_stats:
+        cache_tag = " [캐시]" if doc_stats.get("cache_used") else " [신규]"
 
-            # Cancel button for rebuild
-            col1, col2 = st.columns([3, 1])
-            with col2:
-                if st.button(
-                    "❌ 취소",
-                    key=f"cancel_rebuild_{sid}",
-                    type="secondary",
-                    use_container_width=True,
-                ):
-                    SessionManager.set("rebuild_cancelled", True, session_id=sid)
-                    st.rerun()
-
-        rebuild_done = bool(SessionManager.get("rebuild_done", False, sid))
-        if rebuild_done:
-            SessionManager.set("is_building_rag", False, sid)
-            st.rerun(scope="app")
+    with st.chat_message("system", avatar="📄"):
+        if is_building:
+            st.caption(f"📎 {file_name} · 분석 중...{cache_tag}")
+            # 진행 상황은 메시지 루프에서 build_progress 타입으로 처리
+        elif has_error:
+            st.caption(f"📎 {file_name} · 오류 발생{cache_tag}")
+        elif is_ready:
+            st.caption(f"📎 {file_name} · 준비 완료{cache_tag}")
+        else:
+            st.caption(f"📎 {file_name} · 대기 중{cache_tag}")
 
 
-def render_chat_interface():
+@st.fragment(run_every=2.0)
+def _render_unified_timeline(current_sid: str) -> None:
+    """
+    통합 타임라인 렌더링 (단일 패스).
+    메시지 리스트에 저장된 모든 타입의 메시지를 시간 순서대로 렌더링.
+    """
     messages = SessionManager.get_messages() or []
-    current_sid = SessionManager.get_session_id()
-    is_generating = bool(SessionManager.get("is_generating_answer", False, current_sid))
-    model_name = SessionManager.get("last_selected_model", session_id=current_sid)
 
-    _render_build_status_in_chat(current_sid)
-
+    # 빈 대화일 때: 문서 컨텍스트가 있으면 표시, 없으면 가이드
     if not messages:
-        st.chat_message("system", avatar="⚙️").markdown(MSG_CHAT_GUIDE)
+        if SessionManager.get("last_uploaded_file_name", "", current_sid):
+            _render_doc_context_inline(current_sid)
+        else:
+            _render_guidance_panel()
+        return
+
+    # 문서 컨텍스트가 있고 메시지가 있으면, 첫 메시지로 문서 상태 표시
+    has_doc_context = bool(
+        SessionManager.get("last_uploaded_file_name", "", current_sid)
+    )
+    doc_rendered = False
 
     for i, msg in enumerate(messages):
         role = msg.get("role", "user")
         content = msg.get("content", "")
+        mtype = msg.get("msg_type", "general")
+        is_latest = i == len(messages) - 1
 
-        if (
-            role == "system"
-            or msg.get("msg_type") == "log"
-            or content == "READY_FOR_QUERY"
-        ):
+        # 시스템/로그 메시지 처리
+        if role == "system":
+            if mtype == "build_progress":
+                # 빌드 진행 상황
+                progress = msg.get("progress", 0)
+                status_text = msg.get("status", "진행 중...")
+
+                # 상태를 생성 시점에 결정한다. (2초 폴링이 매번
+                # running 상태로 생성 후 complete로 전환하면 깜빡임이 발생)
+                if msg.get("error"):
+                    label, state, expanded = "❌ 분석 실패/취소", "error", True
+                elif progress >= 100 or msg.get("done"):
+                    label, state, expanded = "✅ 분석 완료", "complete", False
+                else:
+                    label, state, expanded = (
+                        f"문서 분석 중: {status_text}",
+                        "running",
+                        True,
+                    )
+
+                with (
+                    st.chat_message("system", avatar="🔄"),
+                    st.status(label, expanded=expanded, state=state),
+                ):
+                    st.progress(progress / 100)
+                    st.caption(f"{progress}% 완료")
+                    if state == "running" and msg.get("cancelable", True):
+                        st.button(
+                            "분석 취소",
+                            key=cancel_rebuild_key(current_sid),
+                            on_click=_cancel_rebuild,
+                            args=(current_sid,),
+                            use_container_width=True,
+                        )
+
+                    # 진행 로그 표시
+                    if msg.get("logs"):
+                        with st.expander("진행 로그", expanded=False):
+                            for log in msg.get("logs", [])[-10:]:
+                                st.text(f"▹ {log}")
+                continue
+
+            elif mtype == "build_error":
+                # 빌드 에러
+                with st.chat_message("system", avatar="❌"):
+                    st.error(msg.get("error", "알 수 없는 오류"))
+                continue
+
+            elif mtype == "log":
+                # 상태 로그 (작은 캡션으로)
+                st.caption(f"ℹ️ {content}")
+                continue
+
+            # 일반 시스템 메시지 (문서 업로드 알림 등)
+            if not doc_rendered and has_doc_context:
+                _render_doc_context_inline(current_sid)
+                doc_rendered = True
+
+            with st.chat_message("system", avatar="⚙️"):
+                st.markdown(content)
             continue
 
-        is_latest = (i == len(messages) - 1) and not is_generating
+        # READY_FOR_QUERY 같은 내부 메시지는 스킵
+        if content == "READY_FOR_QUERY":
+            continue
+
+        # 스트리밍 중인 메시지
+        if mtype == "streaming":
+            # 스트리밍 중 오류가 실린 메시지는 즉시 표면화
+            if msg.get("error"):
+                with st.chat_message("assistant", avatar="🤖"):
+                    st.error(str(msg.get("error")))
+                continue
+            status_text = msg.get("status", "생성 중...")
+            thought = msg.get("thought", "")
+
+            with st.chat_message("assistant", avatar="🤖"):
+                # 실시간 상태 표시
+                with st.status(
+                    f"🤔 {status_text}", expanded=True, state="running"
+                ) as status:
+                    if thought:
+                        status.write(thought)
+
+                # 스트리밍 내용 표시 (커서 포함)
+                display_content = msg.get("content", "")
+                if display_content:
+                    display_content = normalize_latex_delimiters(
+                        html.escape(display_content)
+                    )
+                    st.markdown(display_content + " ▌", unsafe_allow_html=True)
+            continue
+
+        # 일반 완료된 메시지 (사용자/어시스턴트)
         render_message(
             role=role,
             content=content,
@@ -315,111 +306,57 @@ def render_chat_interface():
             documents=msg.get("documents"),
             metrics=msg.get("metrics"),
             processed_content=msg.get("processed_content"),
+            msg_type=mtype,
             msg_index=i,
             msg_id=msg.get("msg_id"),
             is_latest=is_latest,
+            error=msg.get("error"),
         )
 
-    if is_generating and messages and messages[-1].get("role") == "user":
-        query = messages[-1]["content"]
 
-        with st.chat_message("assistant", avatar="🤖"):
-            stream_placeholder = st.empty()
+# ---------------------------------------------------------------------------
+# 메인 렌더링
+# ---------------------------------------------------------------------------
 
-            content_acc = ""
-            thought_acc = ""
-            docs_acc = []
-            perf_acc = {}
-            current_status = ""
 
-            try:
-                for chunk in _sync_stream_generator(query, model_name, current_sid):
-                    if chunk.status:
-                        # [개선] 상태 메시지에 streaming-pulse 클래스 적용하여 레이아웃 점프 방지
-                        escaped_status = html.escape(chunk.status)
-                        current_status = f"<div class='streaming-pulse'>⏳ {escaped_status}</div>\n\n"
-                    if chunk.metadata and "documents" in chunk.metadata:
-                        docs_acc = chunk.metadata["documents"]
-                    if chunk.performance:
-                        perf_acc = chunk.performance
-                    if chunk.thought:
-                        thought_acc += chunk.thought
-                    if chunk.content:
-                        content_acc += chunk.content
+def render_chat_messages_area() -> None:
+    """Renders the chat column: unified timeline + sticky input."""
+    current_sid = SessionManager.get_session_id()
 
-                    display_text = normalize_latex_delimiters(html.escape(content_acc))
-                    thought_html = (
-                        _render_thought_expander(thought_acc, is_open=True)
-                        if thought_acc
-                        else ""
-                    )
+    # 통합 타임라인 fragment (단일 진입점, 2초 폴링)
+    _render_unified_timeline(current_sid)
 
-                    stream_placeholder.markdown(
-                        f"{current_status}{thought_html}{display_text} ▌",
-                        unsafe_allow_html=True,
-                    )
 
-                final_content = _clean_response_redundancy(content_acc)
-                processed_content = apply_tooltips_to_response(
-                    html.escape(final_content), docs_acc
-                )
-
-                thought_html_final = (
-                    _render_thought_expander(thought_acc) if thought_acc else ""
-                )
-
-                stream_placeholder.markdown(
-                    f"{thought_html_final}{processed_content}",
-                    unsafe_allow_html=True,
-                )
-
-                SessionManager.add_message(
-                    role="assistant",
-                    content=final_content,
-                    thought=thought_acc,
-                    documents=docs_acc,
-                    metrics=perf_acc,
-                    processed_content=processed_content,
-                    session_id=current_sid,
-                )
-
-                if docs_acc:
-                    annotations = extract_annotations_from_docs(docs_acc)
-                    SessionManager.set("pdf_annotations", annotations, current_sid)
-                    try:
-                        target_p = getattr(docs_acc[0], "metadata", {}).get("page")
-                        if target_p:
-                            SessionManager.set(
-                                "pdf_target_page", int(target_p), current_sid
-                            )
-                            SessionManager.set(
-                                "current_page", int(target_p), current_sid
-                            )
-                    except (ValueError, TypeError, IndexError, AttributeError):
-                        pass
-
-            except Exception as e:
-                logger.error(f"Streaming error: {e}", exc_info=True)
-                error_msg = format_error_message(e)
-                stream_placeholder.error(error_msg)
-                SessionManager.add_message(
-                    "assistant", error_msg, session_id=current_sid
-                )
-            finally:
-                SessionManager.set("is_generating_answer", False, current_sid)
-                st.rerun()
+def _resolve_chat_input_state(sid: str) -> tuple[str, bool]:
+    """채팅 입력의 placeholder/disabled 상태를 결정하는 순수 함수입니다."""
+    is_generating = bool(SessionManager.get("is_generating_answer", False, sid))
+    is_ready = SessionManager.is_ready_for_chat(session_id=sid)
 
     if is_generating:
-        input_placeholder = "AI가 답변 생성 중입니다..."
-    elif not messages:
-        input_placeholder = MSG_CHAT_INPUT_PLACEHOLDER
-    else:
-        input_placeholder = "추가 질문을 입력하세요..."
+        return "AI가 답변 생성 중입니다...", True
+    if not is_ready:
+        return MSG_CHAT_GUIDE, True
+    return "추가 질문을 입력하세요...", False
+
+
+def render_chat_input_area() -> None:
+    """Renders the native st.chat_input() at the bottom of the chat column."""
+    current_sid = SessionManager.get_session_id()
+    input_placeholder, input_disabled = _resolve_chat_input_state(current_sid)
+
     user_query = st.chat_input(
-        input_placeholder, disabled=is_generating, key="main_chat_input"
+        input_placeholder, disabled=input_disabled, key="main_chat_input"
     )
 
-    if user_query and not is_generating:
-        SessionManager.add_message("user", user_query, session_id=current_sid)
-        SessionManager.set("is_generating_answer", True, current_sid)
-        st.rerun()
+    if user_query and not input_disabled:
+        query_text = user_query.strip()
+        if query_text:
+            SessionManager.add_message("user", query_text, session_id=current_sid)
+            SessionManager.set("is_generating_answer", True, current_sid)
+            model_name = (
+                SessionManager.get("last_selected_model", session_id=current_sid) or ""
+            )
+            from ui.components.streaming import start_streaming_turn
+
+            start_streaming_turn(current_sid, query_text, model_name)
+            st.rerun()

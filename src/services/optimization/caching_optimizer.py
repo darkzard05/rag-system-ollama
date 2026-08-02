@@ -236,8 +236,10 @@ class MemoryCache(CacheBackend[T]):
             estimated_bytes = sys.getsizeof(new_value)
             if isinstance(new_value, (str, bytes)):
                 estimated_bytes = len(new_value)
-            elif hasattr(new_value, "__len__"):
+            elif isinstance(new_value, (list, dict, set, tuple)):
                 estimated_bytes = len(new_value) * 8  # 대략적인 포인터 크기
+            else:
+                estimated_bytes = 1024
         except Exception:
             estimated_bytes = 1024  # 폴백: 1KB
 
@@ -286,14 +288,64 @@ class SemanticCache(CacheBackend[T]):
         self.cache: dict[str, CacheEntry] = {}
         self.lock = RLock()
         self.stats = CacheStatistics()
+        self._cached_matrix: np.ndarray | None = None
+        self._cached_keys: list[str] = []
 
     @property
     def cache_size(self) -> int:
         """캐시 크기"""
         return len(self.cache)
 
+    def _update_matrix(self, key: str | None = None, action: str = "add") -> None:
+        """캐시된 행렬 업데이트 (증분 방식)"""
+        if action == "add" and key is not None:
+            self._cached_keys.append(key)
+            new_embedding = self.embeddings[key]
+            if self._cached_matrix is None:
+                self._cached_matrix = np.array([new_embedding])
+            else:
+                self._cached_matrix = np.vstack([self._cached_matrix, new_embedding])
+        elif action == "remove" and key is not None:
+            try:
+                idx = self._cached_keys.index(key)
+                self._cached_keys.pop(idx)
+                if self._cached_matrix is not None:
+                    self._cached_matrix = np.delete(self._cached_matrix, idx, axis=0)
+                    if self._cached_matrix.size == 0:
+                        self._cached_matrix = None
+            except ValueError:
+                pass
+        else:
+            self._cached_keys = list(self.embeddings.keys())
+            if not self._cached_keys:
+                self._cached_matrix = None
+            else:
+                self._cached_matrix = np.array(
+                    [self.embeddings[k] for k in self._cached_keys]
+                )
+
+    async def _embed(self, text: str) -> np.ndarray:
+        """텍스트 임베딩"""
+        if self.embedding_model is not None and hasattr(
+            self.embedding_model, "embed_query"
+        ):
+            embedding = await self.embedding_model.embed_query(text)
+            return np.array(embedding)
+
+        hash_obj = hashlib.sha256(text.encode())
+        hash_int = int(hash_obj.hexdigest(), 16)
+        np.random.seed(hash_int % (2**32))
+        return np.random.randn(384)
+
+    def get_stats(self) -> CacheStatistics:
+        """통계 조회"""
+        with self.lock:
+            self.stats.cache_size = len(self.cache)
+            self.stats.update_hit_rate()
+            return self.stats
+
     async def get(
-        self, query: str, similarity_threshold: float | None = None
+        self, key: str, similarity_threshold: float | None = None
     ) -> T | None:
         """
         의미적으로 유사한 항목 조회 (NumPy 벡터화 최적화)
@@ -306,23 +358,25 @@ class SemanticCache(CacheBackend[T]):
 
             try:
                 # 쿼리 임베딩
-                query_embedding = await self._embed(query)
+                query_embedding = await self._embed(key)
                 query_embedding = query_embedding / (
                     np.linalg.norm(query_embedding) + 1e-10
                 )
 
-                # [최적화] 모든 캐시된 벡터를 하나의 행렬로 구성하여 한 번에 행렬 연산 수행
-                keys = list(self.embeddings.keys())
-                # 이미 정규화된 상태로 저장되어 있다고 가정 (set에서 처리)
-                cached_matrix = np.array([self.embeddings[k] for k in keys])
+                # [최적화] 캐시된 행렬 사용
+                if self._cached_matrix is None:
+                    self._update_matrix()
+
+                if self._cached_matrix is None:
+                    return None
 
                 # 코사인 유사도 계산 (행렬-벡터 내적)
-                similarities = np.dot(cached_matrix, query_embedding)
+                similarities = np.dot(self._cached_matrix, query_embedding)
 
                 # 가장 유사한 항목 찾기
                 max_idx = np.argmax(similarities)
                 best_similarity = similarities[max_idx]
-                best_match = keys[max_idx]
+                best_match = self._cached_keys[max_idx]
 
                 # 임계값 이상인 경우 반환
                 if best_similarity >= threshold:
@@ -340,7 +394,7 @@ class SemanticCache(CacheBackend[T]):
                 self.stats.total_misses += 1
                 return None
 
-    async def set(self, query: str, value: T, ttl_seconds: float = 0) -> None:
+    async def set(self, key: str, value: T, ttl_seconds: float = 0) -> None:
         """값 저장 및 벡터 정규화"""
         with self.lock:
             try:
@@ -349,11 +403,11 @@ class SemanticCache(CacheBackend[T]):
                 if len(self.cache) >= self.max_entries:
                     self._evict_oldest()
 
-                cache_key = hashlib.sha256(query.encode()).hexdigest()[:16]
+                cache_key = hashlib.sha256(key.encode()).hexdigest()[:16]
 
                 query_embedding = None
                 if self.embedding_model:
-                    query_embedding = await self._embed(query)
+                    query_embedding = await self._embed(key)
                     # [최적화] 저장 시 미리 정규화하여 get 단계의 연산 감소
                     norm = np.linalg.norm(query_embedding)
                     if norm > 0:
@@ -365,12 +419,13 @@ class SemanticCache(CacheBackend[T]):
                     created_at=time.time(),
                     accessed_at=time.time(),
                     ttl_seconds=ttl,
-                    metadata={"query": query[:100]},
+                    metadata={"query": key[:100]},
                 )
 
                 self.cache[cache_key] = entry
                 if query_embedding is not None:
                     self.embeddings[cache_key] = query_embedding
+                    self._update_matrix()  # 행렬 업데이트
                 self.stats.cache_size = len(self.cache)
 
             except Exception as e:
@@ -383,6 +438,7 @@ class SemanticCache(CacheBackend[T]):
                 del self.cache[key]
             if key in self.embeddings:
                 del self.embeddings[key]
+                self._update_matrix()  # 행렬 업데이트
             self.stats.cache_size = len(self.cache)
 
     async def clear(self) -> None:
@@ -390,39 +446,10 @@ class SemanticCache(CacheBackend[T]):
         with self.lock:
             self.cache.clear()
             self.embeddings.clear()
+            self._cached_matrix = None
+            self._cached_keys = []
             self.stats.cache_size = 0
             logger.info("[SemanticCache] 캐시 전체 삭제")
-
-    def get_stats(self) -> CacheStatistics:
-        """통계 조회"""
-        with self.lock:
-            self.stats.cache_size = len(self.cache)
-            self.stats.update_hit_rate()
-            return self.stats
-
-    async def _embed(self, text: str) -> np.ndarray:
-        """텍스트 임베딩"""
-        # 실제 구현에서는 임베딩 모델 사용
-        # 현재는 간단한 시뮬레이션
-        if hasattr(self.embedding_model, "embed_query"):
-            embedding = await self.embedding_model.embed_query(text)
-            return np.array(embedding)
-
-        # 폴백: 간단한 해시 기반 벡터
-        hash_obj = hashlib.sha256(text.encode())
-        hash_int = int(hash_obj.hexdigest(), 16)
-        np.random.seed(hash_int % (2**32))
-        return np.random.randn(384)
-
-    def _cosine_similarity(self, vec1: np.ndarray, vec2: np.ndarray) -> float:
-        """코사인 유사도 계산"""
-        norm1 = np.linalg.norm(vec1)
-        norm2 = np.linalg.norm(vec2)
-
-        if norm1 == 0 or norm2 == 0:
-            return 0.0
-
-        return float(np.dot(vec1, vec2) / (norm1 * norm2))
 
     def _evict_oldest(self) -> None:
         """가장 오래된 항목 제거"""
@@ -434,6 +461,7 @@ class SemanticCache(CacheBackend[T]):
         del self.cache[oldest_key]
         if oldest_key in self.embeddings:
             del self.embeddings[oldest_key]
+            self._update_matrix()  # 행렬 업데이트
 
         self.stats.total_evictions += 1
         logger.debug(f"[SemanticCache] 가장 오래된 항목 제거: {oldest_key}")
@@ -514,6 +542,8 @@ class DiskCache(CacheBackend[T]):
 
             except Exception as e:
                 logger.error(f"[DiskCache] 로드 오류: {e}")
+                # 손상된 캐시 파일 정리 (포맷 불일치/부분 쓰기 등)
+                self._delete_file(cache_file)
                 self.stats.total_misses += 1
                 return None
 
@@ -537,9 +567,9 @@ class DiskCache(CacheBackend[T]):
                     ttl_seconds=ttl_seconds if ttl_seconds > 0 else 86400.0,
                 )
 
-                # 1. 파일 저장
+                # 1. 파일 저장 — 클래스 식별자 문제를 피해, 직렬화는 기본 dict로 수행합니다.
                 with open(cache_file, "wb") as f:
-                    pickle.dump(entry, f)
+                    pickle.dump(entry.__dict__, f)
 
                 # 2. 파일 권한 강제 적용
                 self.security_manager.enforce_file_permissions(str(cache_file))

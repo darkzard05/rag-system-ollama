@@ -1,74 +1,31 @@
 """
-Comprehensive thread safety tests for RAG system.
+Comprehensive thread safety tests for SessionManager.
 
 Tests for:
 - Concurrent read/write operations
-- Race condition detection
+- Race condition detection (atomic read-modify-write)
 - Deadlock prevention
-- Lock timeout handling
-- Atomic operations
+- Per-session lock isolation
+- Atomic multi-key updates
 """
 
-import os
+import logging
 import sys
 import threading
 import time
 import unittest
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from pathlib import Path
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
+ROOT_DIR = Path(__file__).parent.parent.parent.absolute()
+SRC_DIR = ROOT_DIR / "src"
 
-import streamlit as st
+if str(SRC_DIR) not in sys.path:
+    sys.path.insert(0, str(SRC_DIR))
 
-from core.thread_safe_session import ThreadSafeSessionManager
+from core.session import SessionManager  # noqa: E402
 
-# 전역 관리자 인스턴스 생성 (get_thread_safe_manager 대체용)
-_manager = ThreadSafeSessionManager()
-
-
-def get_thread_safe_manager():
-    return _manager
-
-
-# 테스트용 ts_xxx 함수 매핑 (인스턴스 메서드 사용)
-def ts_get(key, default=None):
-    return _manager.get(key, default)
-
-
-def ts_set(key, value):
-    return _manager.set_inst(key, value)
-
-
-def ts_delete(key):
-    return _manager.delete(key)
-
-
-def ts_exists(key):
-    return _manager.exists(key)
-
-
-def ts_atomic_read(keys):
-    return _manager.atomic_read(keys)
-
-
-def ts_atomic_update(update_func):
-    return _manager.atomic_update(update_func)
-
-
-from common.logging_config import get_logger
-
-logger = get_logger(__name__)
-
-
-# ============================================================================
-# Test Utilities
-# ============================================================================
-
-
-def init_streamlit_session():
-    """Initialize Streamlit session state if not already done."""
-    if not hasattr(st.session_state, "_initialized"):
-        st.session_state._initialized = False
+logger = logging.getLogger(__name__)
 
 
 # ============================================================================
@@ -77,56 +34,55 @@ def init_streamlit_session():
 
 
 class TestBasicOperations(unittest.TestCase):
-    """Test basic thread-safe operations."""
+    """Test basic session operations."""
 
     def setUp(self):
-        """Set up test fixtures."""
-        init_streamlit_session()
-        st.session_state.clear()
-        self.manager = ThreadSafeSessionManager(lock_timeout=5.0)
+        SessionManager.reset()
 
     def test_set_and_get(self):
         """Test basic set and get operations."""
-        self.manager.set("test_key", "test_value")
-        value = self.manager.get("test_key")
-
-        assert value == "test_value"
-        logger.info("✓ Set and get operation verified")
+        SessionManager.set_session_id("basic")
+        SessionManager.init_session()
+        SessionManager.set("test_key", "test_value")
+        assert SessionManager.get("test_key") == "test_value"
 
     def test_get_with_default(self):
         """Test get with default value."""
-        value = self.manager.get("nonexistent", default="default_value")
-
-        assert value == "default_value"
-        logger.info("✓ Get with default verified")
+        SessionManager.set_session_id("basic_default")
+        assert SessionManager.get("nonexistent", default="default_value") == (
+            "default_value"
+        )
 
     def test_delete(self):
         """Test delete operation."""
-        self.manager.set("temp_key", "temp_value")
-        assert self.manager.exists("temp_key")
+        SessionManager.set_session_id("basic_delete")
+        SessionManager.set("temp_key", "temp_value")
+        assert SessionManager.get("temp_key") == "temp_value"
 
-        self.manager.delete("temp_key")
-        assert not self.manager.exists("temp_key")
-        logger.info("✓ Delete operation verified")
+        SessionManager.delete("temp_key")
+        assert SessionManager.get("temp_key") is None
 
-    def test_exists(self):
-        """Test exists check."""
-        self.manager.set("exists_key", "value")
+    def test_multi_key_set(self):
+        """Test atomic multi-key update via kwargs."""
+        SessionManager.set_session_id("basic_multi")
+        SessionManager.set(key1="value1", key2="value2")
+        assert SessionManager.get("key1") == "value1"
+        assert SessionManager.get("key2") == "value2"
 
-        assert self.manager.exists("exists_key")
-        assert not self.manager.exists("nonexistent")
-        logger.info("✓ Exists check verified")
+    def test_message_accumulation(self):
+        """Test message and status log accumulation."""
+        SessionManager.set_session_id("basic_msgs")
+        SessionManager.add_message("user", "hello")
+        SessionManager.add_status_log("로그 기록")
+        assert len(SessionManager.get_messages()) == 1
+        assert "로그 기록" in SessionManager.get("status_logs")
 
-    def test_clear_all(self):
-        """Test clear all operation."""
-        self.manager.set("key1", "value1")
-        self.manager.set("key2", "value2")
-
-        self.manager.clear_all()
-
-        assert not self.manager.exists("key1")
-        assert not self.manager.exists("key2")
-        logger.info("✓ Clear all operation verified")
+    def test_delete_session(self):
+        """Test delete_session removes the session."""
+        SessionManager.init_session(session_id="basic_clear")
+        SessionManager.set("key1", "value1", session_id="basic_clear")
+        assert SessionManager.delete_session("basic_clear")
+        assert not SessionManager.delete_session("basic_clear")
 
 
 # ============================================================================
@@ -138,17 +94,15 @@ class TestConcurrentAccess(unittest.TestCase):
     """Test thread-safe concurrent access."""
 
     def setUp(self):
-        """Set up test fixtures."""
-        init_streamlit_session()
-        st.session_state.clear()
-        self.manager = ThreadSafeSessionManager(lock_timeout=5.0)
+        SessionManager.reset()
 
     def test_concurrent_writes(self):
         """Test concurrent write operations."""
+        sid = "conc_write"
+        SessionManager.init_session(session_id=sid)
 
-        def write_value(i):
-            self.manager.set(f"key_{i}", f"value_{i}")
-            time.sleep(0.001)  # Simulate some work
+        def write_value(i: int):
+            SessionManager.set(f"key_{i}", f"value_{i}", session_id=sid)
 
         with ThreadPoolExecutor(max_workers=10) as executor:
             futures = [executor.submit(write_value, i) for i in range(100)]
@@ -157,21 +111,18 @@ class TestConcurrentAccess(unittest.TestCase):
 
         # Verify all values were written
         for i in range(100):
-            value = self.manager.get(f"key_{i}")
-            assert value == f"value_{i}"
-
-        logger.info("✓ Concurrent writes verified (100 threads)")
+            value = SessionManager.get(f"key_{i}", session_id=sid)
+            assert value == f"value_{i}", f"key_{i} 값 손실: {value}"
 
     def test_concurrent_reads(self):
         """Test concurrent read operations."""
-        # Set initial value
-        self.manager.set("shared_key", "shared_value")
+        sid = "conc_read"
+        SessionManager.set("shared_key", "shared_value", session_id=sid)
 
         results = []
 
         def read_value():
-            value = self.manager.get("shared_key")
-            results.append(value)
+            results.append(SessionManager.get("shared_key", session_id=sid))
 
         with ThreadPoolExecutor(max_workers=20) as executor:
             futures = [executor.submit(read_value) for _ in range(200)]
@@ -181,25 +132,44 @@ class TestConcurrentAccess(unittest.TestCase):
         # All reads should return same value
         assert len(results) == 200
         assert all(v == "shared_value" for v in results)
-        logger.info("✓ Concurrent reads verified (200 threads)")
+
+    def test_concurrent_add_message(self):
+        """Test concurrent add_message (atomic read-modify-write).
+
+        add_message은 세션별 락 아래에서 append를 수행하므로
+        동시에 50개를 추가해도 하나도 유실되지 않아야 합니다.
+        """
+        sid = "conc_msg"
+        SessionManager.init_session(session_id=sid)
+
+        def add_message(i: int):
+            SessionManager.add_message("user", f"msg {i}", session_id=sid)
+
+        with ThreadPoolExecutor(max_workers=10) as executor:
+            futures = [executor.submit(add_message, i) for i in range(50)]
+            for future in as_completed(futures):
+                future.result()
+
+        messages = SessionManager.get_messages(session_id=sid)
+        assert len(messages) == 50, f"메시지 유실: {len(messages)}/50"
 
     def test_concurrent_read_write_mix(self):
         """Test mixed concurrent read and write operations."""
-        # Initialize with some values
+        sid = "conc_mix"
         for i in range(10):
-            self.manager.set(f"key_{i}", i)
+            SessionManager.set(f"key_{i}", i, session_id=sid)
 
         read_count = [0]
         write_count = [0]
 
-        def mixed_operation(idx):
+        def mixed_operation(idx: int):
             if idx % 2 == 0:
                 # Read operation
-                self.manager.get(f"key_{idx % 10}")
+                SessionManager.get(f"key_{idx % 10}", session_id=sid)
                 read_count[0] += 1
             else:
                 # Write operation
-                self.manager.set(f"key_{idx % 10}", idx)
+                SessionManager.set(f"key_{idx % 10}", idx, session_id=sid)
                 write_count[0] += 1
 
         with ThreadPoolExecutor(max_workers=15) as executor:
@@ -208,17 +178,19 @@ class TestConcurrentAccess(unittest.TestCase):
                 future.result()
 
         logger.info(
-            f"✓ Mixed operations verified ({read_count[0]} reads, {write_count[0]} writes)"
+            "Mixed operations verified (%d reads, %d writes)",
+            read_count[0],
+            write_count[0],
         )
 
     def test_concurrent_delete(self):
         """Test concurrent delete operations."""
-        # Set initial values
+        sid = "conc_del"
         for i in range(50):
-            self.manager.set(f"delete_key_{i}", f"value_{i}")
+            SessionManager.set(f"delete_key_{i}", f"value_{i}", session_id=sid)
 
-        def delete_value(i):
-            self.manager.delete(f"delete_key_{i}")
+        def delete_value(i: int):
+            SessionManager.delete(f"delete_key_{i}", session_id=sid)
 
         with ThreadPoolExecutor(max_workers=10) as executor:
             futures = [executor.submit(delete_value, i) for i in range(50)]
@@ -227,9 +199,7 @@ class TestConcurrentAccess(unittest.TestCase):
 
         # Verify all values were deleted
         for i in range(50):
-            assert not self.manager.exists(f"delete_key_{i}")
-
-        logger.info("✓ Concurrent deletes verified (50 threads)")
+            assert SessionManager.get(f"delete_key_{i}", session_id=sid) is None
 
 
 # ============================================================================
@@ -241,75 +211,58 @@ class TestRaceConditions(unittest.TestCase):
     """Test race condition prevention."""
 
     def setUp(self):
-        """Set up test fixtures."""
-        init_streamlit_session()
-        st.session_state.clear()
-        self.manager = ThreadSafeSessionManager(lock_timeout=5.0)
+        SessionManager.reset()
 
-    def test_counter_race_condition(self):
-        """Test counter increment race condition prevention."""
-        self.manager.set("counter", 0)
+    def test_shared_lock_identity(self):
+        """같은 세션은 동일한 락을 공유하고 다른 세션은 별도의 락을 가집니다."""
+        lock_a1 = SessionManager._acquire_lock("race_sid_a")
+        lock_a2 = SessionManager._acquire_lock("race_sid_a")
+        lock_b = SessionManager._acquire_lock("race_sid_b")
+
+        assert lock_a1 is lock_a2
+        assert lock_a1 is not lock_b
+
+    def test_get_set_race_condition(self):
+        """get+set 조합은 원자적이지 않음 (약한 테스트).
+
+        신규 SessionManager의 원자적 연산은 add_message/add_status_log와
+        같은 내부 락 기반 read-modify-write입니다.
+        """
+        sid = "race_counter"
+        SessionManager.set("counter", 0, session_id=sid)
 
         def increment():
-            # This is a weak test - ideally would use atomic_update
-            current = self.manager.get("counter", 0)
+            current = SessionManager.get("counter", 0, session_id=sid)
             time.sleep(0.0001)  # Create race window
-            self.manager.set("counter", current + 1)
+            SessionManager.set("counter", current + 1, session_id=sid)
 
         with ThreadPoolExecutor(max_workers=5) as executor:
             futures = [executor.submit(increment) for _ in range(100)]
             for future in as_completed(futures):
                 future.result()
 
-        # Note: Without atomic_update, final count may be less than 100
-        final_count = self.manager.get("counter", 0)
-        logger.info(f"✓ Counter race condition test: final count = {final_count}/100")
+        # Note: get+set은 원자적이지 않으므로 최종 값은 100보다 작을 수 있음
+        final_count = SessionManager.get("counter", 0, session_id=sid)
+        logger.info("Counter race condition test: final count = %d/100", final_count)
 
-    def test_atomic_counter(self):
-        """Test atomic counter increment prevents race conditions."""
-        self.manager.set("atomic_counter", 0)
+    def test_atomic_add_status_log(self):
+        """add_status_log는 세션별 락 아래에서 원자적으로 수행됩니다.
 
-        def atomic_increment():
-            def update_func(state):
-                current = state.get("atomic_counter", 0)
-                return {"atomic_counter": current + 1}
+        (status_logs는 최대 30개로 유지되므로 캡 미만인 30개를 동시 추가)
+        """
+        sid = "race_log"
+        SessionManager.init_session(session_id=sid)
 
-            self.manager.atomic_update(update_func)
-
-        with ThreadPoolExecutor(max_workers=5) as executor:
-            futures = [executor.submit(atomic_increment) for _ in range(100)]
-            for future in as_completed(futures):
-                future.result()
-
-        final_count = self.manager.get("atomic_counter", 0)
-        assert final_count == 100
-        logger.info(f"✓ Atomic counter verified: {final_count}")
-
-    def test_dictionary_update_race_condition(self):
-        """Test dictionary update race condition prevention."""
-        self.manager.set("dict_data", {"count": 0, "users": []})
-
-        def update_dict(user_id):
-            def update_func(state):
-                data = state.get("dict_data", {}).copy()
-                data["count"] = data.get("count", 0) + 1
-                if "users" not in data:
-                    data["users"] = []
-                data["users"].append(user_id)
-                return {"dict_data": data}
-
-            self.manager.atomic_update(update_func)
+        def add_log(i: int):
+            SessionManager.add_status_log(f"log {i}", session_id=sid)
 
         with ThreadPoolExecutor(max_workers=10) as executor:
-            futures = [executor.submit(update_dict, i) for i in range(50)]
+            futures = [executor.submit(add_log, i) for i in range(30)]
             for future in as_completed(futures):
                 future.result()
 
-        final_data = self.manager.get("dict_data", {})
-        assert final_data.get("count") == 50
-        logger.info(
-            f"✓ Dictionary update race condition: count = {final_data.get('count')}"
-        )
+        logs = SessionManager.get("status_logs", session_id=sid)
+        assert len(logs) == 30, f"상태 로그 유실: {len(logs)}/30"
 
 
 # ============================================================================
@@ -321,42 +274,34 @@ class TestDeadlockPrevention(unittest.TestCase):
     """Test deadlock prevention mechanisms."""
 
     def setUp(self):
-        """Set up test fixtures."""
-        init_streamlit_session()
-        st.session_state.clear()
-        self.manager = ThreadSafeSessionManager(lock_timeout=5.0)
+        SessionManager.reset()
 
-    def test_no_deadlock_in_nested_operations(self):
-        """Test that RLock prevents deadlock in nested operations."""
-        self.manager.set("test_key", "initial_value")
+    def test_no_deadlock_in_sequential_operations(self):
+        """동일 세션에 대한 get/set 연속 호출이 데드락을 일으키지 않아야 합니다."""
+        sid = "deadlock_seq"
+        SessionManager.set("test_key", "initial_value", session_id=sid)
 
-        def nested_operation():
-            # First acquisition
-            value1 = self.manager.get("test_key")
-
-            # Nested operation (would deadlock with regular Lock)
-            self.manager.set("test_key", value1 + "_modified")
-
-            # Another read (nested)
-            value2 = self.manager.get("test_key")
-
+        def sequential_operation():
+            value1 = SessionManager.get("test_key", session_id=sid)
+            SessionManager.set("test_key", value1 + "_modified", session_id=sid)
+            value2 = SessionManager.get("test_key", session_id=sid)
             assert "_modified" in value2
 
-        thread = threading.Thread(target=nested_operation)
+        thread = threading.Thread(target=sequential_operation)
         thread.start()
-        thread.join(timeout=2.0)
+        thread.join(timeout=5.0)
 
         assert not thread.is_alive(), "Thread should complete (no deadlock)"
-        logger.info("✓ No deadlock in nested operations")
 
     def test_no_deadlock_under_lock_contention(self):
-        """Test system remains responsive under high lock contention."""
+        """System remains responsive under high lock contention."""
+        sid = "deadlock_contention"
         start_time = time.time()
 
         def heavy_contention():
             for _ in range(100):
-                self.manager.set("contested_key", "value")
-                self.manager.get("contested_key")
+                SessionManager.set("contested_key", "value", session_id=sid)
+                SessionManager.get("contested_key", session_id=sid)
 
         with ThreadPoolExecutor(max_workers=10) as executor:
             futures = [executor.submit(heavy_contention) for _ in range(10)]
@@ -365,80 +310,34 @@ class TestDeadlockPrevention(unittest.TestCase):
 
         elapsed = time.time() - start_time
         assert elapsed < 10.0, "High contention should complete within 10 seconds"
-        logger.info(f"✓ No deadlock under contention (completed in {elapsed:.2f}s)")
+        logger.info("No deadlock under contention (%.2fs)", elapsed)
 
-    def test_lock_timeout_mechanism(self):
-        """Test lock timeout detection."""
-        # Create manager with very short timeout
-        short_timeout_manager = ThreadSafeSessionManager(lock_timeout=0.1)
+    def test_per_session_lock_isolation(self):
+        """다른 세션의 락은 서로 블록하지 않습니다."""
+        sid_a = "deadlock_iso_a"
+        sid_b = "deadlock_iso_b"
 
-        short_timeout_manager.get_stats()
+        def hold_lock(session_id: str, hold_seconds: float):
+            SessionManager.init_session(session_id=session_id)
+            with SessionManager._acquire_lock(session_id):
+                time.sleep(hold_seconds)
 
-        # Try operations (may hit timeout under extreme conditions)
-        for _ in range(1000):
-            short_timeout_manager.set("timeout_test", "value")
+        start_time = time.time()
+        t1 = threading.Thread(target=hold_lock, args=(sid_a, 0.5))
+        t2 = threading.Thread(target=hold_lock, args=(sid_b, 0.1))
 
-        stats_after = short_timeout_manager.get_stats()
+        t1.start()
+        time.sleep(0.05)
+        t2.start()
 
-        # Should have minimal or no timeout failures
-        failed = stats_after["failed_acquisitions"]
-        logger.info(f"✓ Lock timeout mechanism: {failed} timeouts detected")
+        t1.join(timeout=5)
+        t2.join(timeout=5)
+        elapsed = time.time() - start_time
 
-
-# ============================================================================
-# Batch Operation Tests
-# ============================================================================
-
-
-class TestBatchOperations(unittest.TestCase):
-    """Test batch operations for atomicity."""
-
-    def setUp(self):
-        """Set up test fixtures."""
-        init_streamlit_session()
-        st.session_state.clear()
-        self.manager = ThreadSafeSessionManager(lock_timeout=5.0)
-
-    def test_get_multiple(self):
-        """Test getting multiple values atomically."""
-        self.manager.set("key1", "value1")
-        self.manager.set("key2", "value2")
-        self.manager.set("key3", "value3")
-
-        values = self.manager.get_multiple(["key1", "key2", "key3"])
-
-        assert values["key1"] == "value1"
-        assert values["key2"] == "value2"
-        assert values["key3"] == "value3"
-        logger.info("✓ Get multiple operations verified")
-
-    def test_set_multiple(self):
-        """Test setting multiple values atomically."""
-        data = {
-            "batch_key1": "batch_value1",
-            "batch_key2": "batch_value2",
-            "batch_key3": "batch_value3",
-        }
-
-        success = self.manager.set_multiple(data)
-
-        assert success
-        for key, value in data.items():
-            assert self.manager.get(key) == value
-        logger.info("✓ Set multiple operations verified")
-
-    def test_atomic_read_consistency(self):
-        """Test atomic read consistency."""
-        self.manager.set("read_key1", "value1")
-        self.manager.set("read_key2", "value2")
-
-        # Read should be consistent (no partial updates visible)
-        values = self.manager.atomic_read(["read_key1", "read_key2"])
-
-        assert len(values) == 2
-        assert "read_key1" in values
-        assert "read_key2" in values
-        logger.info("✓ Atomic read consistency verified")
+        assert not t1.is_alive()
+        assert not t2.is_alive()
+        # 전역 락이었다면 0.6초 이상, 세션별 락이면 약 0.5초 이내
+        assert elapsed < 0.6
 
 
 # ============================================================================
@@ -450,41 +349,40 @@ class TestStatistics(unittest.TestCase):
     """Test statistics and monitoring."""
 
     def setUp(self):
-        """Set up test fixtures."""
-        init_streamlit_session()
-        st.session_state.clear()
-        self.manager = ThreadSafeSessionManager(lock_timeout=5.0)
+        SessionManager.reset()
 
     def test_statistics_tracking(self):
         """Test statistics are properly tracked."""
-        self.manager.set("stat_key", "value")
-        self.manager.get("stat_key")
-        self.manager.delete("stat_key")
+        sid = "stats"
+        SessionManager.init_session(session_id=sid)
+        SessionManager.set("stat_key", "value", session_id=sid)
+        SessionManager.add_message("user", "hi", session_id=sid)
 
-        stats = self.manager.get_stats()
+        stats = SessionManager.get_stats()
 
-        assert "session_keys" in stats
-        assert "failed_acquisitions" in stats
-        logger.info(f"✓ Statistics tracked: {stats}")
+        assert stats["active_sessions"] == 1
+        assert stats["total_messages"] == 1
 
-    def test_health_check(self):
-        """Test health check mechanism."""
-        self.manager.set("health_key", "value")
+    def test_stats_after_delete_session(self):
+        """Test statistics reflect session deletion."""
+        sid = "stats_del"
+        SessionManager.init_session(session_id=sid)
+        SessionManager.set("key", "value", session_id=sid)
+        SessionManager.delete_session(sid)
 
-        is_healthy = self.manager.is_healthy()
+        stats = SessionManager.get_stats()
+        assert stats["active_sessions"] == 0
 
-        assert is_healthy
-        logger.info("✓ Health check verified")
+    def test_cleanup_expired_sessions(self):
+        """Test expired session cleanup."""
+        sid = "stats_expired"
+        SessionManager.init_session(session_id=sid)
+        SessionManager._fallback_sessions[sid]["last_accessed"] = time.time() - 7200
 
-    def test_stats_reset(self):
-        """Test statistics reset."""
-        self.manager.set("key", "value")
-        self.manager.reset_stats()
+        SessionManager.cleanup_expired_sessions(max_idle_seconds=3600)
 
-        stats = self.manager.get_stats()
-
-        assert stats["failed_acquisitions"] == 0
-        logger.info("✓ Statistics reset verified")
+        stats = SessionManager.get_stats()
+        assert stats["active_sessions"] == 0
 
 
 # ============================================================================
@@ -492,37 +390,38 @@ class TestStatistics(unittest.TestCase):
 # ============================================================================
 
 
-class TestConvenienceFunctions(unittest.TestCase):
-    """Test convenience functions."""
+class TestSessionScopedHelpers(unittest.TestCase):
+    """세션 ID 기반 헬퍼 함수 (API 계층 사용 방식 모사)."""
+
+    SID = "helper_sid"
 
     def setUp(self):
-        """Set up test fixtures."""
-        init_streamlit_session()
-        st.session_state.clear()
+        SessionManager.reset()
+        SessionManager.init_session(session_id=self.SID)
 
-    def test_convenience_set_get(self):
-        """Test convenience functions for set/get."""
-        ts_set("conv_key", "conv_value")
-        value = ts_get("conv_key")
+    def ts_get(self, key, default=None):
+        return SessionManager.get(key, default, session_id=self.SID)
 
-        assert value == "conv_value"
-        logger.info("✓ Convenience set/get verified")
+    def ts_set(self, key, value):
+        return SessionManager.set(key, value, session_id=self.SID)
 
-    def test_convenience_exists(self):
-        """Test convenience function for exists."""
-        ts_set("exist_key", "value")
+    def ts_delete(self, key):
+        return SessionManager.delete(key, session_id=self.SID)
 
-        assert ts_exists("exist_key")
-        assert not ts_exists("nonexistent")
-        logger.info("✓ Convenience exists verified")
+    def test_helper_set_get(self):
+        """Test session-scoped helpers for set/get."""
+        self.ts_set("conv_key", "conv_value")
+        assert self.ts_get("conv_key") == "conv_value"
 
-    def test_convenience_delete(self):
-        """Test convenience function for delete."""
-        ts_set("del_key", "value")
-        ts_delete("del_key")
+    def test_helper_delete(self):
+        """Test session-scoped helper for delete."""
+        self.ts_set("del_key", "value")
+        self.ts_delete("del_key")
+        assert self.ts_get("del_key") is None
 
-        assert not ts_exists("del_key")
-        logger.info("✓ Convenience delete verified")
+    def test_helper_default(self):
+        """Test session-scoped helper with default value."""
+        assert self.ts_get("nonexistent", "default_value") == "default_value"
 
 
 def run_thread_safety_tests():
@@ -535,9 +434,8 @@ def run_thread_safety_tests():
     suite.addTests(loader.loadTestsFromTestCase(TestConcurrentAccess))
     suite.addTests(loader.loadTestsFromTestCase(TestRaceConditions))
     suite.addTests(loader.loadTestsFromTestCase(TestDeadlockPrevention))
-    suite.addTests(loader.loadTestsFromTestCase(TestBatchOperations))
     suite.addTests(loader.loadTestsFromTestCase(TestStatistics))
-    suite.addTests(loader.loadTestsFromTestCase(TestConvenienceFunctions))
+    suite.addTests(loader.loadTestsFromTestCase(TestSessionScopedHelpers))
 
     # Run tests with verbose output
     runner = unittest.TextTestRunner(verbosity=2)
@@ -558,5 +456,4 @@ def run_thread_safety_tests():
 
 
 if __name__ == "__main__":
-    success = run_thread_safety_tests()
-    sys.exit(0 if success else 1)
+    sys.exit(0 if run_thread_safety_tests() else 1)

@@ -6,6 +6,7 @@ from streamlit.testing.v1 import AppTest
 # 프로젝트 루트를 경로에 추가
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
 
+
 class TestChatUI(unittest.TestCase):
     def test_page_jump_button_generation(self):
         """
@@ -43,37 +44,48 @@ render_message(
     content=content, 
     documents=documents, 
     metrics=metrics, 
-    msg_index=msg_index
+    msg_index=msg_index,
+    is_latest=True,
 )
 """
         with open("temp_test_ui.py", "w", encoding="utf-8") as f:
             f.write(script_content)
-            
+
         try:
-            # AppTest를 사용하여 스크립트 실행
-            at = AppTest.from_file("temp_test_ui.py").run()
-            
+            # AppTest를 사용하여 스크립트 실행.
+            # 기본 3s 타임아웃은 무거운 임포트 체인 + 팝오버 렌더 경로에
+            # 비해 빠듯하여(이 환경에서 재현 확인) 명시적 타임아웃을 부여한다.
+            at = AppTest.from_file("temp_test_ui.py").run(timeout=60)
+
             # 1. 버튼들 확인 (숫자만 포함된 라벨)
             button_labels = [b.label for b in at.button]
-            
+
             print(f"발견된 버튼 라벨: {button_labels}")
-            
+
             # 'p'가 포함된 숫자 라벨 확인
             self.assertIn("1p", button_labels, "1p 버튼이 없습니다.")
-            self.assertIn("12p", button_labels, "12p 버튼이 없습니다.")            
+            self.assertIn("12p", button_labels, "12p 버튼이 없습니다.")
             # 2. 버튼 키 접두사 확인 (12p 버튼)
             jump_button_12 = next(b for b in at.button if b.label == "12p")
-            self.assertTrue(jump_button_12.key.startswith("jump_msg_0_12_"), f"버튼 키 오류: {jump_button_12.key}")
-            
+            self.assertTrue(
+                jump_button_12.key.startswith("jump_msg_0_12_"),
+                f"버튼 키 오류: {jump_button_12.key}",
+            )
+
             # 3. CSS 제거 확인 (기존 스타일 코드가 없는지)
-            style_markdowns = [m for m in at.markdown if "white-space: nowrap !important" in m.value]
-            self.assertEqual(len(style_markdowns), 0, "버튼 스타일 CSS가 여전히 존재합니다.")
-            
+            style_markdowns = [
+                m for m in at.markdown if "white-space: nowrap !important" in m.value
+            ]
+            self.assertEqual(
+                len(style_markdowns), 0, "버튼 스타일 CSS가 여전히 존재합니다."
+            )
+
             print("✅ UI 버튼 숫자 표기 및 CSS 제거 테스트 통과")
-            
+
         finally:
             if os.path.exists("temp_test_ui.py"):
                 os.remove("temp_test_ui.py")
+
 
 if __name__ == "__main__":
     unittest.main()

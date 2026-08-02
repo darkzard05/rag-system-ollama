@@ -4,7 +4,7 @@
 
 ## 1. 분석된 문제점 요약
 
-1.  **[병목] 빈번한 모델 재로드:** `ModelManager`와 `RAGSystem`이 이벤트 루프 변경 시마다 캐시를 초기화함. Streamlit 백그라운드 스레드와 UI 스레드 간의 루프 ID 차이로 인해 불필요한 모델 로딩이 반복 발생.
+1.  **[병목] 빈번한 모델 재로드:** `ModelManager`와 `RAGOrchestrator`이 이벤트 루프 변경 시마다 캐시를 초기화함. Streamlit 백그라운드 스레드와 UI 스레드 간의 루프 ID 차이로 인해 불필요한 모델 로딩이 반복 발생.
 2.  **[병목] 리랭커 모델 성능:** `ms-marco-MultiBERT-L-12` 모델이 CPU 환경에서 느림 (~10s/query).
 3.  **[결함] PyMuPDF4LLM 충돌:** 특정 PDF에서 `'NoneType' object has no attribute 'tables'` 에러로 인해 표준 추출 모드로 폴백됨.
 4.  **[병목] 보안 기반 캐시 삭제:** `VectorStoreCache` 및 `DiskCache`의 보안 검증이 엄격하여 윈도우 환경이나 재시작 시 캐시가 자주 삭제됨.
@@ -14,7 +14,7 @@
 
 ### 단계 1: 리소스 라이프사이클 최적화 (가장 시급)
 - **ModelManager 수정:** 이벤트 루프 변경 시 `_instances` (모델 객체)는 유지하고, 루프 종속적인 `_locks`, `_inference_semaphore`, `_async_client`만 초기화하도록 변경.
-- **RAGSystem 수정:** 그래프 엔진 재빌드 로직을 완화하거나, 루프 독립적인 방식으로 개선.
+- **RAGOrchestrator 수정:** 그래프 엔진 재빌드 로직을 완화하거나, 루프 독립적인 방식으로 개선.
 
 ### 단계 2: 리랭커 최적화
 - **모델 검토:** 다국어 지원을 유지하면서 더 가벼운 모델(예: `paraphrase-multilingual-MiniLM-L12-v2`의 FlashRank 버전 등)이 있는지 확인하거나, 기본값을 더 빠른 모델로 변경 제안.

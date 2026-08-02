@@ -89,7 +89,19 @@ auth_manager = AuthenticationManager()
 TEST_USER = "admin"
 TEST_API_KEY = os.getenv("TEST_API_KEY")
 
-auth_manager.register_user(TEST_USER, "admin_user", "admin123")
+_env_password = os.getenv("TEST_ADMIN_PASSWORD")
+if _env_password:
+    TEST_PASSWORD = _env_password
+    logger.info("[Security] 환경변수에서 관리자 비밀번호 로드 완료")
+else:
+    TEST_PASSWORD = "admin"
+    logger.warning(
+        "[Security] TEST_ADMIN_PASSWORD 미설정 — 개발용 기본 비밀번호('admin') 사용. "
+        "프로덕션 환경에서는 반드시 환경변수를 설정하세요."
+    )
+
+auth_manager.register_user(TEST_USER, "admin_user", TEST_PASSWORD)
+
 if TEST_API_KEY:
     # 지정된 키로 등록 (CI용, 30일 만료)
     auth_manager.register_fixed_api_key(TEST_USER, TEST_API_KEY, expires_in=2592000)
@@ -97,7 +109,6 @@ if TEST_API_KEY:
 else:
     # 무작위 키 생성 (일반 실행 모드, 24시간 만료)
     TEST_API_KEY = auth_manager.create_api_key(TEST_USER, expires_in=86400)
-    # [보안] API 키를 로그에 직접 노출하지 않음
     logger.info(
         "[Security] 시스템 보호 활성화. 24시간 유효한 API Key가 생성되었습니다."
     )
@@ -223,7 +234,7 @@ async def upload_document(
 
             # [중요] RAGSystem 클래스를 통해 세션 격리 보장
             rag_sys = RAGSystem(session_id=session_id)
-            msg, cache_used = await rag_sys.load_document(
+            msg, cache_used = await rag_sys.build_pipeline(
                 file_path=tmp_path,
                 file_name=file.filename,
                 embedder=embedder,
@@ -246,13 +257,19 @@ async def upload_document(
             if os.path.exists(tmp_path):
                 os.unlink(tmp_path)
 
-    except Exception as e:
+    except (OSError, ValueError) as e:
         logger.error(f"업로드 오류 (Session: {session_id}): {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        raise HTTPException(
+            status_code=500, detail="문서 업로드 처리 중 오류가 발생했습니다."
+        ) from e
 
 
 @app.post("/api/v1/query", response_model=QueryResponse)
-async def query_rag(request: QueryRequest, user_id: str = Depends(verify_token)):
+async def query_rag(
+    request: QueryRequest,
+    user_id: str = Depends(verify_token),
+    _session_ctx: str = Depends(get_session_context),
+):
     """
     인증된 세션 컨텍스트에서 질의를 수행합니다.
     """
@@ -283,9 +300,11 @@ async def query_rag(request: QueryRequest, user_id: str = Depends(verify_token))
             answer=result["response"], sources=sources, execution_time_ms=execution_time
         )
 
-    except Exception as e:
+    except (RuntimeError, ValueError, KeyError) as e:
         logger.error(f"질의 오류 (Session: {sid}): {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        raise HTTPException(
+            status_code=500, detail="질의 처리 중 오류가 발생했습니다."
+        ) from e
 
 
 @app.post("/api/v1/stream_query")
@@ -293,6 +312,7 @@ async def stream_query_rag(
     request: QueryRequest,
     fastapi_request: Request,
     user_id: str = Depends(verify_token),
+    _session_ctx: str = Depends(get_session_context),
 ):
     """
     인증된 세션에 대해 실시간 스트리밍(SSE) 응답을 제공합니다.
@@ -300,7 +320,10 @@ async def stream_query_rag(
     sid = request.session_id or "default"
     SessionManager.init_session(session_id=sid)
 
-    if SessionManager.get("last_uploaded_file_name", session_id=sid) is None:
+    file_name = SessionManager.get("last_uploaded_file_name", session_id=sid)
+    logger.debug(f"[TEST] Session ID: {sid}, last_uploaded_file_name: {file_name}")
+
+    if file_name is None:
         raise HTTPException(status_code=400, detail="먼저 문서를 업로드해주세요.")
 
     rag_app = SessionManager.get("rag_engine", session_id=sid)
@@ -322,9 +345,7 @@ async def stream_query_rag(
         try:
             # RAGSystem이 직접 생성한 스트림 이벤트를 핸들러에 전달
             async for chunk in handler.stream_graph_events(
-                await rag_sys.astream_events(
-                    request.query, model_name=request.model_name
-                ),
+                rag_sys.astream(request.query, model_name=request.model_name),
                 adaptive_controller=controller,
             ):
                 # 클라이언트 연결 끊김 확인 (자원 보호)
@@ -363,7 +384,7 @@ async def stream_query_rag(
                     yield sse_handler.format_sse_event("sources", {"documents": docs})
 
             yield sse_handler.format_sse_event("end", {"status": "done"})
-        except Exception as e:
+        except (RuntimeError, ValueError, ConnectionError) as e:
             logger.error(f"Streaming error (Session: {sid}): {e}")
             yield sse_handler.format_sse_error(str(e))
 

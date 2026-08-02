@@ -13,7 +13,6 @@ from langchain_core.callbacks.manager import adispatch_custom_event
 from langchain_core.documents import Document
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_core.runnables import RunnableConfig
-from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import StreamWriter
 from pydantic import BaseModel, Field
@@ -22,12 +21,55 @@ from api.schemas import AggregatedSearchResult, GraphState
 from common.config import (
     ANALYSIS_PROTOCOL,
     GRADING_CONFIG,
-    REWRITING_CONFIG,
 )
 from common.utils import fast_hash
+from core.model_loader import ModelManager
 from core.session import SessionManager
 
 logger = logging.getLogger(__name__)
+
+
+def _get_session_id(config: RunnableConfig | None = None) -> str:
+    """Extract session_id from RunnableConfig or fall back to current context."""
+    if config and "configurable" in config:
+        sid = config["configurable"].get("session_id")
+        if sid:
+            return sid
+    return SessionManager.get_session_id()
+
+
+class _GraphCache:
+    """컴파일된 그래프와 빌드 락을 안전하게 캡슐화합니다."""
+
+    def __init__(self) -> None:
+        self._compiled: Any = None
+        self._lock: asyncio.Lock | None = None
+
+    def get_lock(self) -> asyncio.Lock:
+        """지연 초기화된 그래프 빌드 락을 반환합니다."""
+        if self._lock is None:
+            self._lock = asyncio.Lock()
+        return self._lock
+
+    @property
+    def compiled(self) -> Any:
+        return self._compiled
+
+    @compiled.setter
+    def compiled(self, value: Any) -> None:
+        self._compiled = value
+
+    def invalidate(self) -> None:
+        """컴파일된 그래프를 무효화하여 다음 build_graph() 호출 시 재컴파일합니다."""
+        self._compiled = None
+
+
+_graph_cache = _GraphCache()
+
+
+def invalidate_graph_cache() -> None:
+    """Force recompilation of the LangGraph on the next build_graph() call."""
+    _graph_cache.invalidate()
 
 
 def get_state_attr(state: Any, key: str, default: Any = None) -> Any:
@@ -35,6 +77,14 @@ def get_state_attr(state: Any, key: str, default: Any = None) -> Any:
     if isinstance(state, dict):
         return state.get(key, default)
     return getattr(state, key, default)
+
+
+async def _safe_invoke(llm: Any, prompt: str, config: dict) -> Any:
+    """Safely invoke an LLM with async fallback."""
+    res = llm.ainvoke(prompt, config=config)
+    if asyncio.iscoroutine(res):
+        return await res
+    return res
 
 
 async def preprocess(
@@ -101,7 +151,9 @@ async def retrieve_and_rerank(
         logger.info(
             f"[RAG] [RETRIEVE] 재구성된 쿼리 사용: '{query}' (Retry: {get_state_attr(state, 'retry_count')})"
         )
-        SessionManager.add_status_log(f"재구성된 쿼리로 검색 시도: {query}")
+        SessionManager.add_status_log(
+            f"재구성된 쿼리로 검색 시도: {query}", session_id=_get_session_id(config)
+        )
     else:
         logger.info(f"[RAG] [RETRIEVE] 원본 쿼리 기반 검색 시작: '{query}'")
 
@@ -111,7 +163,9 @@ async def retrieve_and_rerank(
         await adispatch_custom_event(
             "graph_status", {"status": "관련 지식 탐색 중..."}, config=config
         )
-    SessionManager.add_status_log(f"지식 탐색 중: {query}")
+    SessionManager.add_status_log(
+        f"지식 탐색 중: {query}", session_id=_get_session_id(config)
+    )
 
     bm25 = cfg.get("bm25_retriever")
     faiss = cfg.get("faiss_retriever")
@@ -133,17 +187,21 @@ async def retrieve_and_rerank(
     )
 
     all_docs = []
+    doc_map: dict[str, Document] = {}
     for source, res in results.items():
         for doc in res:
+            doc_id = doc.metadata.get("doc_id", fast_hash(doc.page_content))
             all_docs.append(
                 AggregatedSearchResult(
-                    doc_id=doc.metadata.get("doc_id", fast_hash(doc.page_content)),
+                    doc_id=doc_id,
                     content=doc.page_content,
                     score=doc.metadata.get("score", 0.5),
                     node_id=source,
                     metadata=doc.metadata,
                 )
             )
+            if doc_id not in doc_map:
+                doc_map[doc_id] = doc
 
     from common.config import ENSEMBLE_WEIGHTS
 
@@ -171,15 +229,18 @@ async def retrieve_and_rerank(
         score_gap = top_1_score - top_10_score
 
         # Gap이 0.5 이상이면 상위 그룹이 명확하므로 후보군을 12개로 제한
-        dynamic_top_k = 12 if score_gap > 0.5 else 25
+        dynamic_top_k = 12 if score_gap > 0.5 else 18
         logger.info(
             f"[RAG] [RETRIEVE] Dynamic Top-K 적용: {dynamic_top_k} (Score Gap: {score_gap:.3f})"
         )
     else:
-        dynamic_top_k = 25
+        dynamic_top_k = 12
 
     final_docs = [
-        Document(page_content=r.content, metadata=r.metadata)
+        doc_map.get(
+            r.doc_id,
+            Document(page_content=r.content, metadata=r.metadata),
+        )
         for r in aggregated[:dynamic_top_k]
     ]
 
@@ -188,18 +249,23 @@ async def retrieve_and_rerank(
         logger.warning(
             f"[RAG] [RETRIEVE] 검색 결과가 전혀 없습니다 (Query Length: {q_len})"
         )
-        SessionManager.add_status_log("검색된 문서가 없습니다.")
+        SessionManager.add_status_log(
+            "검색된 문서가 없습니다.", session_id=_get_session_id(config)
+        )
         return {"relevant_docs": []}
 
-    from core.reranker import DistributedReranker, RerankerStrategy
+    from core.async_reranker import get_async_reranker
 
-    reranker = DistributedReranker()
-    ranked_docs, _ = reranker.rerank(
-        final_docs,
-        query_text=query,
-        strategy=RerankerStrategy.SEMANTIC_FLASH,
-        top_k=GRADING_CONFIG.get("top_k", 5),
-    )
+    reranker = await get_async_reranker()
+    rerank_top_k = min(GRADING_CONFIG.get("top_k", 5), len(final_docs))
+    if len(query or "") < 6:
+        ranked_docs = final_docs[:rerank_top_k]
+    else:
+        ranked_docs, _ = await reranker.rerank(
+            final_docs,
+            query=query,
+            top_k=rerank_top_k,
+        )
     logger.info(
         f"[RAG] [RETRIEVE] 리랭킹 선별 완료: {len(final_docs)}개 후보 중 {len(ranked_docs)}개 최종 선별"
     )
@@ -207,7 +273,9 @@ async def retrieve_and_rerank(
     from typing import cast
 
     context_docs = cast(list[Document], ranked_docs)
-    merged_context_docs = _merge_adjacent_chunks(context_docs, max_tokens=800)
+    merged_context_docs = await asyncio.to_thread(
+        _merge_adjacent_chunks, context_docs, max_tokens=800
+    )
     logger.info(
         f"[RAG] [RETRIEVE] 하이브리드 검색 및 문맥 보강 완료: 최종 {len(merged_context_docs)}개 섹션 구성"
     )
@@ -215,31 +283,28 @@ async def retrieve_and_rerank(
     return {"relevant_docs": merged_context_docs}
 
 
-class GradeResponse(BaseModel):
-    """문서의 질문 관련성 평가 결과"""
+class UnifiedGradeRewriteResponse(BaseModel):
+    """문서 평가 + 쿼리 재구성을 단일 호출로 통합."""
 
+    action: str = Field(description="'generate' 또는 'rewrite'")
     is_relevant: bool = Field(
         description="문서가 질문에 답변하기에 충분한 정보를 포함하고 있는지 여부"
     )
     relevant_entities: list[str] = Field(
         default_factory=list,
-        description="질문과 관련된 문서 내 핵심 키워드나 고유 명사 목록 (예: 모델명, 기술 용어)",
+        description="질문과 관련된 문서 내 핵심 키워드나 고유 명사 목록",
     )
-    reason: str = Field(
-        description="결정에 대한 구체적인 근거 (특히 용어 일치 및 문서 맥락 우선 고려 여부 포함)"
+    reason: str = Field(description="결정에 대한 구체적인 근거")
+    optimized_query: str | None = Field(
+        default=None,
+        description="rewrite 시에만 채울 최적화된 검색어",
     )
-
-
-class RewriteResponse(BaseModel):
-    """검색 쿼리 재구성 결과"""
-
-    optimized_query: str = Field(description="검색 엔진에 최적화된 새로운 검색어")
 
 
 async def grade_documents(
     state: GraphState, config: RunnableConfig, *, writer: StreamWriter
 ) -> dict[str, Any]:
-    """검색된 문서들의 관련성을 LLM으로 평가합니다 (견고한 파싱 적용)."""
+    """검색된 문서들의 관련성을 LLM으로 평가하고, 부적절 시 재검색 쿼리를 동시에 생성합니다."""
     if (
         get_state_attr(state, "is_cached")
         or get_state_attr(state, "intent") == "general"
@@ -258,7 +323,7 @@ async def grade_documents(
         logger.info("[RAG] [GRADE] 문서가 없어 즉시 재구성 단계로 이동")
         return {"intent": "transform"}
 
-    # [최적화] Short-circuit: 리랭킹 점수가 충분히 높으면 LLM 검증 생략
+    # Short-circuit: 리랭킹 점수가 충분히 높으면 LLM 검증 생략
     max_rerank_score = max(
         (d.metadata.get("rerank_score", 0.0) for d in docs), default=0.0
     )
@@ -267,7 +332,8 @@ async def grade_documents(
             f"[RAG] [GRADE] Short-circuit 활성화 (Max Rerank Score: {max_rerank_score:.3f} >= 0.85)"
         )
         SessionManager.add_status_log(
-            "신뢰도 높은 지식이 발견되어 즉시 답변 생성을 시작합니다."
+            "신뢰도 높은 지식이 발견되어 즉시 답변 생성을 시작합니다.",
+            session_id=_get_session_id(config),
         )
         return {"intent": "generate"}
 
@@ -288,10 +354,17 @@ async def grade_documents(
         [f"DOC {i + 1}: {d.page_content}" for i, d in enumerate(test_docs)]
     )
 
-    grade_prompt = (
-        f"{GRADING_CONFIG.get('instruction', '')}\n"
-        '출력은 반드시 JSON 형식이어야 합니다. (예: {"is_relevant": true, "relevant_entities": ["A", "B"], "reason": "..."})\n\n'
-        f"{GRADING_CONFIG.get('template', '').format(query=query, context_text=context_text)}"
+    # 통합 프롬프트: 평가 + 재작성 동시 지시
+    unified_prompt = (
+        "당신은 문서 관련성 평가자이자 검색 쿼리 최적화 전문가입니다.\n\n"
+        f"[질문]\n{query}\n\n"
+        f"[검색된 문서 (상위 3개)]\n{context_text}\n\n"
+        "[작업]\n"
+        "1. 위 문서들이 질문에 답하기에 충분한지 평가하세요 (is_relevant: true/false)\n"
+        "2. 충분하지 않다면, 더 나은 검색 결과를 위한 최적화된 쿼리를 작성하세요 (optimized_query)\n"
+        "3. 판단 근거(reason)와 관련 엔티티(relevant_entities)도 포함하세요.\n\n"
+        '출력은 반드시 JSON 형식이어야 합니다. (예: {"action": "generate", "is_relevant": true, '
+        '"relevant_entities": ["A"], "reason": "...", "optimized_query": null})'
     )
 
     call_config = (
@@ -304,124 +377,74 @@ async def grade_documents(
         if llm is None:
             raise ValueError("LLM is not initialized")
 
-        async def safe_invoke(invokable, prompt, config):
-            res = invokable.ainvoke(prompt, config=config)
-            if asyncio.iscoroutine(res):
-                return await res
-            return res
-
+        # JSON 모드 강제 (구조화 출력 대신) — 단일 호출로 완성
         try:
-            structured_llm = llm.with_structured_output(GradeResponse)
-            result = await safe_invoke(structured_llm, grade_prompt, call_config)
-        except Exception as e:
-            logger.debug(f"[RAG] [GRADE] 표준 구조화 출력 실패, 수동 파싱 시도: {e}")
-            raw_res = await safe_invoke(llm, grade_prompt, call_config)
-            content = raw_res.content if hasattr(raw_res, "content") else str(raw_res)
-
-            match = re.search(r"\{.*\}", content, re.DOTALL)
+            async with ModelManager.inference_session():
+                json_llm = llm.bind(response_format={"type": "json_object"})
+                result = await _safe_invoke(json_llm, unified_prompt, call_config)
+            content = result.content if hasattr(result, "content") else str(result)
+            data = json.loads(content)
+            parsed = UnifiedGradeRewriteResponse(**data)
+        except (json.JSONDecodeError, ValueError, TypeError) as e:
+            logger.debug(f"[RAG] [GRADE] JSON 모드 실패, 수동 파싱 시도: {e}")
+            async with ModelManager.inference_session():
+                raw_res = await _safe_invoke(llm, unified_prompt, call_config)
+            raw_content = (
+                raw_res.content if hasattr(raw_res, "content") else str(raw_res)
+            )
+            match = re.search(r"\{.*\}", raw_content, re.DOTALL)
             if match:
-                try:
-                    data = json.loads(match.group())
-                    result = GradeResponse(**data)
-                except Exception as parse_err:
-                    logger.warning(f"[RAG] [GRADE] JSON 파싱 실패: {parse_err}")
-                    raise ValueError("JSON Parsing Error") from parse_err
+                data = json.loads(match.group())
+                parsed = UnifiedGradeRewriteResponse(**data)
             else:
                 raise ValueError("JSON 패턴을 찾을 수 없습니다.") from None
 
-        if result and getattr(result, "is_relevant", False):
-            logger.info(f"[RAG] [GRADE] 관련성 확인: YES ({result.reason})")
-            SessionManager.add_status_log("검색된 지식의 관련성이 확인되었습니다.")
+        if parsed.action == "generate" or parsed.is_relevant:
+            logger.info(f"[RAG] [GRADE] 관련성 확인: YES ({parsed.reason})")
+            SessionManager.add_status_log(
+                "검색된 지식의 관련성이 확인되었습니다.",
+                session_id=_get_session_id(config),
+            )
             return {"intent": "generate"}
         else:
-            logger.info(f"[RAG] [GRADE] 관련성 확인: NO ({result.reason})")
-            SessionManager.add_status_log(
-                "검색 결과가 부적합하여 질문 재구성을 시도합니다."
+            optimized = parsed.optimized_query or query
+            logger.info(
+                f"[RAG] [GRADE] 관련성 확인: NO → 재작성: {optimized} ({parsed.reason})"
             )
-            return {"intent": "transform"}
+            SessionManager.add_status_log(
+                "검색 결과가 부적합하여 질문 재구성을 시도합니다.",
+                session_id=_get_session_id(config),
+            )
+            return {
+                "intent": "transform",
+                "search_queries": [optimized],
+                "retry_count": retry_count + 1,
+            }
 
-    except Exception as e:
-        logger.warning(f"[RAG] [GRADE] 모든 파싱 시도 실패, 기본값(YES) 적용: {e}")
-        return {"intent": "generate"}
+    except (RuntimeError, ValueError, json.JSONDecodeError) as e:
+        logger.warning(f"[RAG] [GRADE] 평가 실패, 기본값(NO) 적용하여 재구성 시도: {e}")
+        return {"intent": "transform", "retry_count": retry_count + 1}
 
 
 async def rewrite_query(
     state: GraphState, config: RunnableConfig, *, writer: StreamWriter
 ) -> dict[str, Any]:
-    """검색에 더 최적화된 형태로 질문을 재구성합니다 (견고한 파싱 적용)."""
+    """grade_documents에서 이미 재작성된 쿼리를 전달합니다. (LLM 호출 없음)"""
     MAX_REWRITE_RETRIES = 3
+    search_queries = get_state_attr(state, "search_queries")
+    retry_count = get_state_attr(state, "retry_count", 0)
+
+    if search_queries:
+        new_query = search_queries[-1]
+        logger.info(f"[RAG] [REWRITE] 전달받은 재구성 쿼리 사용: '{new_query}'")
+        # retry_count는 grade_documents가 이미 +1을 적용했으므로 순수 passthrough만 한다.
+        # (리듀서 operator.add로 합산되므로 여기서 값을 내려보내면 재시도 예산이 이중 소진됨)
+        return {}
+
+    # 폴백: grade_documents에서 쿼리 생성 실패 시 원본 유지
     query = get_state_attr(state, "input")
-    cfg = config.get("configurable", {})
-    llm = cfg.get("llm")
-
-    import json
-    import re
-
-    if llm is None:
-        logger.error("[RAG] [REWRITE] LLM 로드 실패")
-        return {
-            "search_queries": [query],
-            "retry_count": min(
-                get_state_attr(state, "retry_count", 0) + 1, MAX_REWRITE_RETRIES
-            ),
-        }
-
-    if writer is not None:
-        await adispatch_custom_event(
-            "graph_status", {"status": "검색 쿼리 최적화 중..."}, config=config
-        )
-
-    rewrite_prompt = (
-        f"{REWRITING_CONFIG.get('instruction', '')}\n"
-        '출력은 반드시 JSON 형식이어야 합니다. (예: {"optimized_query": "..."})\n\n'
-        f"{REWRITING_CONFIG.get('template', '').format(query=query)}"
-    )
-
-    call_config = (
-        {"configurable": {**cfg, "messages": []}}
-        if cfg
-        else {"configurable": {"messages": []}}
-    )
-
-    try:
-
-        async def safe_invoke(invokable, prompt, config):
-            res = invokable.ainvoke(prompt, config=config)
-            if asyncio.iscoroutine(res):
-                return await res
-            return res
-
-        try:
-            structured_llm = llm.with_structured_output(RewriteResponse)
-            result = await safe_invoke(structured_llm, rewrite_prompt, call_config)
-        except Exception as e:
-            logger.debug(f"[RAG] [REWRITE] 표준 구조화 출력 실패, 수동 파싱 시도: {e}")
-            raw_res = await safe_invoke(llm, rewrite_prompt, call_config)
-            content = raw_res.content if hasattr(raw_res, "content") else str(raw_res)
-            match = re.search(r"\{.*\}", content, re.DOTALL)
-            if match:
-                try:
-                    data = json.loads(match.group())
-                    result = RewriteResponse(**data)
-                except Exception as parse_err:
-                    logger.warning(f"[RAG] [REWRITE] JSON 파싱 실패: {parse_err}")
-                    raise ValueError("JSON Parsing Error") from parse_err
-            else:
-                raise ValueError("JSON 패턴 미검출") from None
-
-        new_query = getattr(result, "optimized_query", query).strip().strip('"')
-        logger.info(f"[RAG] [REWRITE] 쿼리 재구성: '{query}' -> '{new_query}'")
-
-        current_retry = get_state_attr(state, "retry_count", 0)
-        return {
-            "search_queries": [new_query],
-            "retry_count": min(current_retry + 1, MAX_REWRITE_RETRIES),
-        }
-
-    except Exception as e:
-        logger.warning(f"[RAG] [REWRITE] 모든 시도 실패, 원본 유지: {e}")
-        current_retry = get_state_attr(state, "retry_count", 0)
-        return {"retry_count": min(current_retry + 1, MAX_REWRITE_RETRIES)}
+    logger.info(f"[RAG] [REWRITE] 재검색 쿼리 없음, 원본 유지: '{query}'")
+    return {"retry_count": min(retry_count + 1, MAX_REWRITE_RETRIES)}
 
 
 def format_context(docs: list[Document]) -> str:
@@ -430,7 +453,7 @@ def format_context(docs: list[Document]) -> str:
     for _i, d in enumerate(docs):
         section = d.metadata.get("current_section", "일반 본문")
         page = d.metadata.get("page", "?")
-        context += f"### [섹션: {section}] (P{page})\n{d.page_content}\n\n"
+        context += f"[{section}, p.{page}]\n{d.page_content}\n\n"
     return context
 
 
@@ -447,9 +470,15 @@ async def generate(
         await adispatch_custom_event(
             "graph_status", {"status": "답변 논리 설계 및 생성 중..."}, config=config
         )
-    SessionManager.add_status_log("답변 논리 설계 및 생성 시작")
+    SessionManager.add_status_log(
+        "답변 논리 설계 및 생성 시작", session_id=_get_session_id(config)
+    )
 
-    docs = get_state_attr(state, "relevant_docs")
+    docs = get_state_attr(state, "relevant_docs") or []
+    logger.info(f"[RAG] [GENERATE] 관련 문서 수: {len(docs) if docs else 0}")
+    if docs:
+        for i, d in enumerate(docs):
+            logger.info(f"[RAG] [GENERATE] 문서 {i} 길이: {len(d.page_content)}")
     if not docs and get_state_attr(state, "intent") != "general":
         logger.info("[RAG] [GENERATE] 관련 문서 없음 -> 사용자 안내 메시지 생성")
         no_info_msg = "제공된 문서에서 질문과 관련된 정보를 찾을 수 없습니다. 다른 질문을 입력하거나 문서 내용을 확인해 주세요."
@@ -461,12 +490,12 @@ async def generate(
 
     context = format_context(docs) if docs else "일상적인 대화입니다."
 
-    sys_msg = SystemMessage(content="전문 문서 분석가로서 한국어로 답변하세요.")
+    sys_msg = SystemMessage(
+        content="전문 문서 분석가입니다. 사용자의 질문 언어에 맞추어 답변하십시오."
+    )
     human_msg = HumanMessage(
         content=f"{ANALYSIS_PROTOCOL}\n\n[Context]\n{context}\n\n[Question]\n{get_state_attr(state, 'input')}"
     )
-
-    from core.model_loader import ModelManager
 
     full_response = ""
     full_thought = ""
@@ -585,8 +614,24 @@ def _merge_adjacent_chunks(
     return merged_docs
 
 
-def build_graph() -> Any:
-    """자가 교정형 RAG 워크플로우를 구성합니다."""
+async def build_graph() -> Any:
+    """자가 교정형 RAG 워크플로우를 구성합니다.
+
+    [최적화] asyncio.Lock을 사용하여 동시 빌드 요청 시 이중 컴파일을 방지합니다.
+    """
+    logger.info("[RAG] [GRAPH] build_graph() 호출됨")
+    if _graph_cache.compiled is not None:
+        logger.info("[RAG] [GRAPH] 캐시된 그래프 반환")
+        return _graph_cache.compiled
+
+    lock = _graph_cache.get_lock()
+    async with lock:
+        # Double-check after acquiring lock (다른 세션이 이미 빌드 완료했을 수 있음)
+        if _graph_cache.compiled is not None:
+            logger.info("[RAG] [GRAPH] 락 획득 후 캐시된 그래프 반환")
+            return _graph_cache.compiled
+
+        logger.info("[RAG] [GRAPH] 그래프 재구성 시작")
     workflow = StateGraph(GraphState)
 
     # 노드 등록
@@ -611,7 +656,9 @@ def build_graph() -> Any:
 
     workflow.add_conditional_edges(
         "grade_documents",
-        lambda s: get_state_attr(s, "intent"),
+        lambda s: get_state_attr(
+            s, "intent", "generate"
+        ),  # default to generate on unknown
         {"generate": "generate", "transform": "rewrite_query"},
     )
 
@@ -624,9 +671,9 @@ def build_graph() -> Any:
         category=DeprecationWarning,
         message=".*allowed_objects.*",
     )
-    # NOTE: Intentionally using InMemorySaver (not SqliteSaver) to avoid
-    # file-path isolation, check_same_thread, and connection cleanup issues.
-    # If persistence is needed, use per-session tempfile paths and context managers.
+    from langgraph.checkpoint.memory import InMemorySaver
+
     memory = InMemorySaver()
 
-    return workflow.compile(checkpointer=memory)
+    _graph_cache.compiled = workflow.compile(checkpointer=memory)
+    return _graph_cache.compiled

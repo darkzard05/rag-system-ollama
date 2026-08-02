@@ -1,5 +1,4 @@
 import asyncio
-import io
 import sys
 import time
 from pathlib import Path
@@ -13,10 +12,6 @@ from common.config import OLLAMA_MODEL_NAME
 from common.utils import apply_tooltips_to_response
 from core.graph_builder import build_graph
 from core.model_loader import load_llm
-
-# Windows 인코딩 대응
-if sys.platform == "win32":
-    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8")
 
 
 async def test_e2e_generation_to_display_flow():

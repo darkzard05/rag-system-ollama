@@ -1,37 +1,32 @@
-import yaml
-import sys
 import os
+import sys
 
-# Add src to sys.path so we can import common.schemas
-
+# Add src to sys.path so we can import common.config
+sys.path.insert(
+    0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "src")
+)
 
 try:
-    from common.schemas import AppConfig
+    from common.config import CONFIG_PATH, _load_config
 except ImportError as e:
-    print(f"Error importing AppConfig from common.schemas: {e}")
+    print(f"Error importing common.config: {e}")
     sys.exit(1)
 
+
 def validate():
-    config_path = "config.yml"
-    if not os.path.exists(config_path):
-        print(f"Error: {config_path} not found.")
+    if not CONFIG_PATH.exists():
+        print(f"Error: {CONFIG_PATH} not found.")
         sys.exit(1)
 
-    print(f"Loading {config_path}...")
-    with open(config_path, 'r', encoding='utf-8') as f:
-        try:
-            config_dict = yaml.safe_load(f)
-        except yaml.YAMLError as e:
-            print(f"Error parsing YAML: {e}")
-            sys.exit(1)
-
-    print("Validating against AppConfig schema (src/common/schemas.py)...")
+    print(f"Loading {CONFIG_PATH}...")
     try:
-        AppConfig(**config_dict)
+        config = _load_config()
         print("✅ 설정 검증 성공")
+        print(f"   - 로드된 설정 항목 수: {len(config)}")
     except Exception as e:
         print(f"❌ 설정 검증 실패:\n{e}")
         sys.exit(1)
+
 
 if __name__ == "__main__":
     validate()

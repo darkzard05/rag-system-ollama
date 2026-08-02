@@ -68,3 +68,44 @@ data/
 
 find_chat_selectors.py
 
+# Commit hygiene — caches & local tool state
+.mypy_cache/
+.opencode/
+.slim/
+.screenshots/
+.streamlit/
+*.egg-info/
+
+# Local data & artifacts
+uploads/
+qa_evidence/
+coverage.xml
+dom_dump.html
+errors.txt
+eval_report.md
+eval_results.json
+retrieval_results.json
+smoke_test.py
+smoke_test_screenshot.png
+test_dummy.pdf
+test_output.txt
+test_write.txt
+streamlit_err.txt
+streamlit_err2.txt
+streamlit_error.txt
+streamlit_log.txt
+streamlit_out.txt
+streamlit_out2.txt
+streamlit_output.txt
+logs/*.log.*
+
+# Root scratch / debug files
+reproduce_issue.py
+inspect_chat_input.py
+test_patch_behavior.py
+test_selectors.py
+verify_preprocessing.py
+checklist.md
+context-notes.md
+.ignore
+

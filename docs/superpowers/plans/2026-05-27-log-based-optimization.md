@@ -5,7 +5,7 @@
 **Goal:** `app.log`에서 발견된 벡터 캐시 보안 위반, 중복 임베딩 수행, 테스트 로그 오염 문제를 해결하여 시스템의 안정성과 인덱싱 성능을 개선합니다.
 
 **Architecture:** 
-1. `RAGSystem` 파이프라인에서 `SemanticChunker`가 반환하는 임베딩 벡터를 `VectorStore` 생성 시 직접 전달하여 중복 계산을 제거합니다.
+1. `RAGOrchestrator` 파이프라인에서 `SemanticChunker`가 반환하는 임베딩 벡터를 `VectorStore` 생성 시 직접 전달하여 중복 계산을 제거합니다.
 2. FAISS 인덱스(디렉토리)에 대한 무결성 검증 방식을 개별 파일 검증으로 세분화하여 `CacheIntegrityError` 오탐을 방지합니다.
 3. 로깅 설정을 보완하여 테스트 환경의 Mock 에러가 운영 로그에 유입되는 것을 차단합니다.
 
@@ -19,7 +19,7 @@
 - Modify: `src/core/rag_core.py`
 - Test: `tests/unit/test_rag_performance.py` (신규 생성)
 
-- [ ] **Step 1: `RAGSystem.build_pipeline` 수정**
+- [ ] **Step 1: `RAGOrchestrator.build_pipeline` 수정**
   - `split_documents`에서 반환되는 두 번째 인자(벡터 리스트)를 변수에 할당하고, 이를 `create_vector_store`에 인자로 전달합니다.
 
 ```python

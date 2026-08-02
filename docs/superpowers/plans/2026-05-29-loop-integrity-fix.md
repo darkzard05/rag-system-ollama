@@ -6,7 +6,7 @@
 
 **Architecture:** 
 1. Enhance `ModelManager` to detect event loop changes and automatically clear/recreate all loop-bound resources (locks, semaphores, clients).
-2. Update `RAGSystem` to invalidate session-cached retrievers when a loop change is detected.
+2. Update `RAGOrchestrator` to invalidate session-cached retrievers when a loop change is detected.
 3. Consolidate loop-awareness logic to prevent redundant checks.
 
 **Tech Stack:** Python, asyncio, LangGraph, LangChain
@@ -51,7 +51,7 @@ Add a mechanism to track the current loop for locks and semaphores.
 - [ ] **Step 3: Call `_ensure_loop_integrity` in all entry points**
 Call it in `get_llm`, `get_embedder`, `get_async_client`, `inference_session`, etc.
 
-### Task 2: Update `RAGSystem` to Invalidate Cached Retrievers
+### Task 2: Update `RAGOrchestrator` to Invalidate Cached Retrievers
 
 **Files:**
 - Modify: `src/core/rag_core.py`

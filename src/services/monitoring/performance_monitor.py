@@ -13,7 +13,6 @@ Features:
 """
 
 import csv
-import json
 import os
 import queue
 import threading
@@ -51,16 +50,7 @@ class OperationType(Enum):
     QUERY_PROCESSING = "query_processing"
     PDF_LOADING = "pdf_loading"
     SEMANTIC_CHUNKING = "semantic_chunking"
-
-
-class MetricType(Enum):
-    """Types of metrics to track."""
-
-    RESPONSE_TIME = "response_time"
-    MEMORY_USAGE = "memory_usage"
-    TOKEN_COUNT = "token_count"
-    ERROR_COUNT = "error_count"
-    THROUGHPUT = "throughput"
+    RAG_PIPELINE_TOTAL = "rag_pipeline_total"
 
 
 @dataclass
@@ -684,60 +674,6 @@ class PerformanceMonitor:
 
             return report
 
-    def print_report(self) -> None:
-        """Print formatted performance report."""
-        report = self.generate_report()
-
-        print("\n" + "=" * 70)
-        print("PERFORMANCE MONITORING REPORT")
-        print("=" * 70)
-        print(f"Timestamp: {report['timestamp']}")
-        print(f"Total Operations: {report['total_operations']}")
-        print()
-
-        # Memory stats
-        print("Memory Usage:")
-        print(f"  Current RSS: {report['memory'].get('current_rss_mb', 0):.2f} MB")
-        print(f"  Min RSS: {report['memory'].get('min_rss_mb', 0):.2f} MB")
-        print(f"  Max RSS: {report['memory'].get('max_rss_mb', 0):.2f} MB")
-        print(f"  Avg RSS: {report['memory'].get('avg_rss_mb', 0):.2f} MB")
-        print()
-
-        # Operation stats
-        print("Operation Performance:")
-        for op_type, op_stats in report["operations"].items():
-            print(f"\n  {op_type}:")
-            print(
-                f"    Total: {op_stats['total']} | Success: {op_stats['successful']} | Failed: {op_stats['failed']}"
-            )
-            print(
-                f"    Duration (s): min={op_stats['duration']['min']:.3f}, "
-                f"avg={op_stats['duration']['avg']:.3f}, "
-                f"p95={op_stats['duration']['p95']:.3f}, "
-                f"p99={op_stats['duration']['p99']:.3f}"
-            )
-            print(
-                f"    Tokens: total={op_stats['tokens']['total']}, avg={op_stats['tokens']['avg']:.1f}"
-            )
-            print(f"    Memory Δ: avg={op_stats['memory_delta_mb']['avg']:.2f} MB")
-
-        print("\n" + "=" * 70)
-
-    def export_metrics_json(self, filepath: str) -> None:
-        """
-        Export metrics to JSON file.
-
-        Args:
-            filepath: Path to export JSON file
-        """
-        try:
-            report = self.generate_report()
-            with open(filepath, "w") as f:
-                json.dump(report, f, indent=2)
-            logger.info(f"Metrics exported to {filepath}")
-        except Exception as e:
-            logger.error(f"Failed to export metrics: {e}")
-
     # ========================================================================
     # Management
     # ========================================================================
@@ -914,13 +850,3 @@ def record_response_time(
 ) -> None:
     """Record response time to global monitor."""
     get_performance_monitor().record_response_time(operation_type, duration_seconds)
-
-
-def get_performance_report() -> dict[str, Any]:
-    """Get performance report from global monitor."""
-    return get_performance_monitor().generate_report()
-
-
-def print_performance_report() -> None:
-    """Print performance report."""
-    get_performance_monitor().print_report()

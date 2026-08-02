@@ -1,4 +1,3 @@
-import os
 import sys
 import threading
 import time
@@ -12,12 +11,15 @@ SRC_DIR = ROOT_DIR / "src"
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
-from core.thread_safe_session import ThreadSafeSessionManager
+from core.session import SessionManager  # noqa: E402
 
 
 class TestPerSessionLock(unittest.TestCase):
+    def setUp(self):
+        SessionManager.reset()
+
     def test_per_session_isolation(self):
-        manager = ThreadSafeSessionManager()
+        manager = SessionManager
 
         def user_task(session_id, sleep_time):
             manager.set_session_id(session_id)
@@ -26,8 +28,10 @@ class TestPerSessionLock(unittest.TestCase):
             with manager._acquire_lock():
                 # Lock을 잡은 상태에서 대기
                 # 만약 global lock이라면 다른 유저가 이 동안 block되어야 함
+                # (새 SessionManager는 public 메서드가 내부적으로 동일 락을
+                #  재획득하므로, 락을 잡은 채 메서드를 호출하지 않고 해제 후 호출)
                 time.sleep(sleep_time)
-                manager.set("done", True)
+            manager.set("done", True)
 
         start_time = time.time()
 
@@ -40,8 +44,12 @@ class TestPerSessionLock(unittest.TestCase):
         time.sleep(0.05)  # t1이 lock을 확실히 잡을 때까지 잠시 대기
         t2.start()
 
-        t1.join()
-        t2.join()
+        t1.join(timeout=5)
+        t2.join(timeout=5)
+
+        # 데드락이 발생하면 스레드가 살아있는 채로 남음
+        assert not t1.is_alive()
+        assert not t2.is_alive()
 
         end_time = time.time()
 

@@ -104,6 +104,7 @@ class PipelineBuilder:
         documents = await load_pdf_docs(
             file_path,
             file_name,
+            on_progress=on_progress,
             session_id=self.session_id,
             file_hash=file_hash,
         )
@@ -120,6 +121,9 @@ class PipelineBuilder:
         if not doc_splits:
             raise InsufficientChunksError()
 
+        if on_progress:
+            on_progress(60)
+
         _check()
 
         # 4–5. 벡터 스토어 및 BM25 리트리버 병렬 생성
@@ -133,6 +137,9 @@ class PipelineBuilder:
         vector_store, bm25_retriever = await asyncio.gather(
             vector_store_future, bm25_future
         )
+
+        if on_progress:
+            on_progress(85)
 
         _check()
 
@@ -180,7 +187,7 @@ class PipelineBuilder:
             on_progress(100)
 
 
-async def prepare_query_config(
+async def prepare_query_config_or_build(
     session_id: str,
     model_name: str | None = None,
     build_fn: Callable[..., Any] | None = None,
@@ -210,21 +217,20 @@ async def prepare_query_config(
         raise VectorStoreError(details={"reason": "파일 해시 없음"})
 
     pdf_file_path = SessionManager.get("pdf_file_path", session_id=session_id)
-    if pdf_file_path:
-        coordinator = get_resource_manager()
-        vector_store, bm25_shared = await coordinator.get_or_build(
-            coordinator.retrievers,
-            file_hash,
-            build_fn=build_fn,
+    coordinator = get_resource_manager()
+    result = coordinator.retrievers.get(file_hash)
+    if result is None and pdf_file_path and build_fn is not None:
+        # build_pipeline internally calls register_retrievers which
+        # stores (vector_store, bm25) in coordinator.retrievers[file_hash].
+        await build_fn(
             file_path=pdf_file_path,
             file_name=SessionManager.get(
                 "last_uploaded_file_name", session_id=session_id
             ),
             embedder=embedder,
         )
-    else:
-        result = get_resource_manager().retrievers.get(file_hash)
-        vector_store, bm25_shared = result if result else (None, None)
+        result = coordinator.retrievers.get(file_hash)
+    vector_store, bm25_shared = result if result else (None, None)
 
     faiss_ret = SessionManager.get("active_faiss_retriever", session_id=session_id)
     if not faiss_ret and vector_store:

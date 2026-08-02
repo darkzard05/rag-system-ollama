@@ -6,6 +6,7 @@ Optimized: 타임아웃 강화 및 로컬 Ollama 통신 안정성 확보.
 from __future__ import annotations
 
 import asyncio
+import itertools
 import logging
 import os
 from collections import OrderedDict
@@ -29,7 +30,6 @@ from common.config import (
     OLLAMA_NUM_PREDICT,
     OLLAMA_TEMPERATURE,
     OLLAMA_TOP_P,
-    RERANKER_MODEL_NAME,
 )
 from common.exceptions import EmbeddingModelError
 from services.monitoring.performance_monitor import (
@@ -153,22 +153,24 @@ class ModelManager:
     @contextlib.asynccontextmanager
     async def inference_session(cls):
         """추론 세마포어를 안전하게 관리하는 비동기 컨텍스트 매니저."""
-        semaphore = cls._get_semaphore()
-        await semaphore.acquire()
-        try:
+        from .resource_manager import get_resource_manager
+
+        async with get_resource_manager().inference_session():
             yield
-        finally:
-            semaphore.release()
 
     @classmethod
     async def acquire_inference_lock(cls):
         """비동기 세마포어를 획득합니다."""
-        await cls._get_semaphore().acquire()
+        from .resource_manager import get_resource_manager
+
+        await get_resource_manager().acquire_inference_lock()
 
     @classmethod
     def release_inference_lock(cls):
         """세마포어를 해제합니다."""
-        cls._get_semaphore().release()
+        from .resource_manager import get_resource_manager
+
+        get_resource_manager().release_inference_lock()
 
     @classmethod
     def _get_from_cache(cls, key: str) -> Any | None:
@@ -252,144 +254,44 @@ class ModelManager:
     @classmethod
     async def get_flashranker(cls, model_name: str | None = None) -> Any:
         """FlashRank 리랭커 모델을 가져오거나 로드합니다 (고속 CPU 리랭킹)"""
-        target_model = model_name or RERANKER_MODEL_NAME
-        async with cls._get_lock("flashrank"):
-            cache_key = f"flashrank_{target_model}"
-            instance = cls._get_from_cache(cache_key)
-            if instance:
-                return instance
+        from .resource_manager import get_resource_manager
 
-            from flashrank import Ranker
-
-            logger.info(f"[MODEL] [LOAD] FlashRank 리랭커 로드 중: {target_model}")
-            instance = Ranker(model_name=target_model, cache_dir=CACHE_DIR)
-            await cls._add_to_cache(cache_key, instance)
-            return instance
+        return await get_resource_manager().get_flashranker(model_name)
 
     @classmethod
     def get_client(cls, host: str):
         """캐싱된 동기 Ollama 클라이언트를 가져옵니다."""
-        import ollama
+        from .resource_manager import get_resource_manager
 
-        # 동기 클라이언트는 락 없이 체크 (가벼움)
-        needs_new = (
-            cls._sync_client is None
-            or str(getattr(cls._sync_client, "base_url", "")) != host
-        )
-        if needs_new:
-            cls._sync_client = ollama.Client(host=host)
-            logger.info(f"[ModelManager] 새 동기 클라이언트 생성 (Host: {host})")
-        return cls._sync_client
+        return get_resource_manager().get_client(host)
 
     @classmethod
     async def get_async_client(cls, host: str):
         """현재 이벤트 루프에 맞는 비동기 클라이언트를 가져옵니다."""
-        from urllib.parse import urlparse
+        from .resource_manager import get_resource_manager
 
-        import ollama
-
-        try:
-            current_loop = asyncio.get_running_loop()
-        except RuntimeError:
-            return ollama.AsyncClient(host=host)
-
-        async with cls._get_lock("client"):
-            # 호스트 정규화 (비교용)
-            def normalize_url(url):
-                if not url:
-                    return ""
-                p = urlparse(str(url))
-                return f"{p.scheme}://{p.netloc}{p.path}".rstrip("/")
-
-            target_host = normalize_url(host)
-            current_host = normalize_url(getattr(cls._async_client, "base_url", ""))
-
-            needs_new = (
-                cls._async_client is None
-                or cls._client_loop != current_loop
-                or current_host != target_host
-            )
-
-            if needs_new:
-                if cls._async_client:
-                    with contextlib.suppress(Exception):
-                        await cls._async_client.close()
-                cls._async_client = ollama.AsyncClient(host=host)
-                cls._client_loop = current_loop
-                logger.info(
-                    f"[ModelManager] 새 비동기 클라이언트 생성 (Host: {host}, Loop: {id(current_loop)})"
-                )
-
-            return cls._async_client
+        return await get_resource_manager().get_async_client(host)
 
     @classmethod
     async def get_embedder(cls, model_name: str | None = None) -> Embeddings:
         """임베딩 모델을 가져오거나 로드합니다 (Thread-safe, LRU 캐시 적용)"""
-        name = model_name or DEFAULT_EMBEDDING_MODEL
-        async with cls._get_lock("embedder"):
-            instance = cls._get_from_cache(name)
-            if instance:
-                return instance
+        from .resource_manager import get_resource_manager
 
-            instance = load_embedding_model(name)
-            await cls._add_to_cache(name, instance)
-            return instance
+        return await get_resource_manager().get_embedder(model_name)
 
     @classmethod
     async def get_llm(cls, model_name: str, **kwargs) -> Any:
         """LLM 클라이언트 인스턴스를 가져오거나 생성합니다 (Single-instance per model, LRU 캐시 적용)."""
-        async with cls._get_lock("llm"):
-            cache_key = f"llm_{model_name}"
-            base_llm = cls._get_from_cache(cache_key)
+        from .resource_manager import get_resource_manager
 
-            if not base_llm:
-                base_llm = load_llm(model_name)
-                await cls._add_to_cache(cache_key, base_llm)
-
-            if not kwargs:
-                return base_llm
-
-            return base_llm.bind(**kwargs)
+        return await get_resource_manager().get_llm(model_name, **kwargs)
 
     @classmethod
     async def clear_vram(cls):
         """[위험] 모든 모델 인스턴스를 제거하고 Ollama 모델을 GPU에서 강제로 내립니다."""
-        async with (
-            cls._get_lock("llm"),
-            cls._get_lock("embedder"),
-            cls._get_lock("flashrank"),
-        ):
-            # 1. Ollama 모델 언로드 (API 호출)
-            try:
-                import ollama
+        from .resource_manager import get_resource_manager
 
-                client = ollama.Client(host=OLLAMA_BASE_URL)
-                # 캐시된 모든 모델에 대해 언로드 시도 (keep_alive=0)
-                for key in list(cls._instances.keys()):
-                    if key.startswith("llm_"):
-                        model_name = key.replace("llm_", "")
-                        # 빈 입력을 keep_alive=0으로 보내면 언로드됨
-                        client.generate(model=model_name, keep_alive=0)
-                        logger.info(f"[ModelManager] Ollama 모델 언로드: {model_name}")
-            except Exception as e:
-                logger.warning(f"[ModelManager] Ollama 언로드 실패: {e}")
-
-            # 2. 인스턴스 참조 제거 및 GC
-            cls._instances.clear()
-            import gc
-
-            gc.collect()
-
-            # 3. PyTorch 캐시 비우기
-            import torch
-
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
-                torch.cuda.ipc_collect()
-
-            logger.info(
-                "[System] [VRAM] 모든 모델 인스턴스 해제 및 GPU 캐시 클리어 완료"
-            )
+        await get_resource_manager().clear_vram()
 
 
 def _fetch_available_models_cached() -> list[str]:
@@ -543,7 +445,7 @@ def load_llm(model_name: str) -> Any:
 
         logger.info(f"[TEST] [MOCK] 가짜 LLM 로드됨 (모델명: {model_name})")
         return GenericFakeChatModel(
-            messages=iter(
+            messages=itertools.cycle(
                 [
                     AIMessage(
                         content="안녕하세요! RAG 시스템 테스트 응답입니다. <thinking>테스트 생각 중...</thinking> 질문에 답변해 드릴게요."
@@ -567,8 +469,3 @@ def load_llm(model_name: str) -> Any:
             # timeout 및 기타 추가 인자는 딕셔너리로 안전하게 전달하거나
             # ChatOllama 규격에 맞게 조정
         )
-
-
-def is_embedding_model_cached(model_name: str) -> bool:
-    cache_path = os.path.join(CACHE_DIR, f"models--{model_name.replace('/', '--')}")
-    return os.path.exists(cache_path)

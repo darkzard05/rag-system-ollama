@@ -4,7 +4,7 @@
 """
 
 import logging
-from collections.abc import Callable
+from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
@@ -172,6 +172,29 @@ class CircuitBreaker:
                 self._on_failure()
                 raise
 
+    async def call_async_stream(self, func: Callable, *args, **kwargs) -> AsyncIterator:
+        """
+        서킷 브레이커로 보호된 async generator 호출.
+        call_async 대신 async for로 소비해야 하는 함수에 사용합니다.
+        """
+        with self.lock:
+            if self.state == CircuitBreakerState.OPEN:
+                if self._should_attempt_reset():
+                    self._change_state(CircuitBreakerState.HALF_OPEN)
+                else:
+                    self.metrics.rejected_requests += 1
+                    logger.warning(f"[CircuitBreaker] {self.service_name} 차단 상태")
+                    raise CircuitBreakerOpen(self.service_name)
+
+        self.metrics.total_requests += 1
+        try:
+            async for item in func(*args, **kwargs):
+                yield item
+            self._on_success()
+        except Exception:
+            self._on_failure()
+            raise
+
     def _on_success(self) -> None:
         """성공 처리"""
         with self.lock:
@@ -338,15 +361,6 @@ class CircuitBreakerRegistry:
                 for name, breaker in breakers.items():
                     metrics[f"session:{sid}:{name}"] = breaker.get_metrics()
             return metrics
-
-    def reset_all(self) -> None:
-        """모든 서킷 브레이커 리셋"""
-        with self.lock:
-            for breaker in self.global_breakers.values():
-                breaker.reset()
-            for session_group in self.session_breakers.values():
-                for breaker in session_group.values():
-                    breaker.reset()
 
 
 # 전역 레지스트리

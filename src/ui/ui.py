@@ -1,371 +1,90 @@
 # src/ui/ui.py
 """
 Streamlit UI 컴포넌트들을 조립하여 전체 레이아웃을 구성하는 메인 UI 파일.
-(하이브리드 레이아웃 전략: Flexbox 기반 가변 높이 및 반응형 칩 레이아웃 적용)
+
+싱글-로우 레이아웃 (개선됨):
+- 컨텐츠 로우: PDF 뷰어(왼쪽) + 채팅 메시지(오른쪽), flex: 1로 viewport 채움
+- PDF 컨트롤은 PDF 열 하단(뷰어 아래)에 위치
+- 채팅 입력은 채팅 열 내부 하단에 고정 (sticky position)
+- 더 이상 절대 위치 오버레이 독이 없음
+- 헤더 높이는 JS로 실시간 감지하여 CSS 변수(--header-h)에 반영
 """
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import streamlit as st
 
-from ui.components.chat import render_chat_interface
+from core.session import SessionManager
+
+_COLUMN_RATIO: list[int] = [42, 58]
 
 
-def inject_custom_css():
-    st.markdown(
+def inject_header_height_script() -> None:
+    """Inject JS to detect Streamlit header height and set CSS variable.
+
+    Uses window.parent.document to reach the parent page from the iframe,
+    bypassing Streamlit's innerHTML sanitization on st.markdown.
+    """
+    import streamlit.components.v1 as components
+
+    components.html(
         """
-<style>
-/* ════════════════════════════════════════════
-   0. GLOBAL VIEWPORT LOCK
-   ════════════════════════════════════════════ */
-.stApp, [data-testid="stAppViewContainer"] {
-    --header-h: 60px;
-    height: 100vh !important;
-    height: 100dvh !important;
-    overflow: hidden !important;
-}
-
-/* ════════════════════════════════════════════
-   1-8. FLEX CHAIN (DOM 검증 기반 7-step)
-   ════════════════════════════════════════════ */
-
-/* 1. Main container: 헤더 제외 높이 + flex 컬럼 */
-/* Streamlit 기본 padding-top(96px), padding-bottom(160px) 제거하여 화면 꽉 채움 */
-[data-testid="stMainBlockContainer"] {
-    height: calc(100vh - var(--header-h, 60px)) !important;
-    height: calc(100dvh - var(--header-h, 60px)) !important;
-    display: flex !important;
-    flex-direction: column !important;
-    overflow: hidden !important;
-    padding-top: var(--header-h, 60px) !important;
-    padding-bottom: 0 !important;
-}
-
-/* 2. stMainBlockContainer의 직계 stVerticalBlock이 flex 공간 채움 (내부 gap 제거) */
-[data-testid="stMainBlockContainer"] > [data-testid="stVerticalBlock"] {
-    flex: 1 !important;
-    min-height: 0 !important;
-    min-width: 0 !important;
-    gap: 0 !important;
-    row-gap: 0 !important;
-}
-
-/* 3. stLayoutWrapper (stMainBlockContainer > stVerticalBlock 내부) */
-[data-testid="stMainBlockContainer"] > [data-testid="stVerticalBlock"] > [data-testid="stLayoutWrapper"] {
-    flex: 1 !important;
-    min-height: 0 !important;
-    min-width: 0 !important;
-    overflow: hidden !important;
-}
-
-/* 4. stHorizontalBlock: fill remaining space */
-[data-testid="stHorizontalBlock"] {
-    height: 100% !important;
-    min-height: 0 !important;
-    flex-wrap: nowrap !important;
-    gap: 0.25rem !important;
-    overflow: hidden !important;
-}
-
-/* 5. stColumn: flex container */
-[data-testid="stColumn"] {
-    flex: 1 1 0px !important;
-    min-width: 0 !important;
-    display: flex !important;
-    flex-direction: column !important;
-    min-height: 0 !important;
-    position: relative !important;
-}
-
-/* 6. Column 내부 1단계 stVerticalBlock: flex 확장 */
-[data-testid="stColumn"] > [data-testid="stVerticalBlock"] {
-    flex: 1 !important;
-    min-height: 0 !important;
-    min-width: 0 !important;
-    overflow: hidden !important;
-}
-
-/* 7. Column 내부 stLayoutWrapper: flex 확장 */
-[data-testid="stColumn"] > [data-testid="stVerticalBlock"] > [data-testid="stLayoutWrapper"] {
-    flex: 1 !important;
-    min-height: 0 !important;
-    min-width: 0 !important;
-    overflow: hidden !important;
-}
-
-/* 8. ★ FLEX CONTAINER: Column 내부 2단계 stVerticalBlock (stLayoutWrapper 내부) */
-[data-testid="stColumn"] > [data-testid="stVerticalBlock"] > [data-testid="stLayoutWrapper"] > [data-testid="stVerticalBlock"] {
-    flex: 1 !important;
-    min-height: 0 !important;
-    overflow: hidden !important;
-    display: flex !important;
-    flex-direction: column !important;
-}
-
-/* 8b. PDF viewer area (inside step 8 flex container) - scrollable */
-[data-testid="stMainBlockContainer"] [data-testid="stColumn"]:first-child
-> [data-testid="stVerticalBlock"] > [data-testid="stLayoutWrapper"]
-> [data-testid="stVerticalBlock"] > [data-testid="stVerticalBlock"] {
-    flex: 1 !important;
-    min-height: 0 !important;
-    overflow-y: auto !important;
-    overflow-x: hidden !important;
-}
-
-/* 8c. PDF controls wrapper - fixed at bottom inside flex container */
-[data-testid="stMainBlockContainer"] [data-testid="stColumn"]:first-child
-> [data-testid="stVerticalBlock"] > [data-testid="stLayoutWrapper"]
-> [data-testid="stVerticalBlock"] > [data-testid="stLayoutWrapper"] {
-    flex-shrink: 0 !important;
-    border-top: 1px solid color-mix(in srgb, var(--border-color, #ccc) 30%, transparent) !important;
-    padding: 0.25rem 0.5rem !important;
-    background-color: color-mix(in srgb, var(--secondary-background-color) 50%, transparent) !important;
-    border-radius: 8px !important;
-    margin: 0.25rem 0 !important;
-}
-
-/* PDF Control Buttons */
-[data-testid="stMainBlockContainer"] [data-testid="stColumn"]:first-child
-> [data-testid="stVerticalBlock"] > [data-testid="stLayoutWrapper"]
-> [data-testid="stVerticalBlock"] > [data-testid="stLayoutWrapper"] button {
-    transition: all 0.2s ease-in-out !important;
-    border-radius: 6px !important;
-}
-
-[data-testid="stMainBlockContainer"] [data-testid="stColumn"]:first-child
-> [data-testid="stVerticalBlock"] > [data-testid="stLayoutWrapper"]
-> [data-testid="stVerticalBlock"] > [data-testid="stLayoutWrapper"] button:hover:not(:disabled) {
-    background-color: color-mix(in srgb, var(--primary-color) 15%, transparent) !important;
-    border-color: var(--primary-color) !important;
-}
-
-[data-testid="stMainBlockContainer"] [data-testid="stColumn"]:first-child
-> [data-testid="stVerticalBlock"] > [data-testid="stLayoutWrapper"]
-> [data-testid="stVerticalBlock"] > [data-testid="stLayoutWrapper"] button:disabled {
-    opacity: 0.4 !important;
-    cursor: not-allowed !important;
-}
-
-/* PDF Page Text — target only the 1st (Page X) and last (of Y) column labels */
-[data-testid="stMainBlockContainer"] [data-testid="stColumn"]:first-child
-> [data-testid="stVerticalBlock"] > [data-testid="stLayoutWrapper"]
-> [data-testid="stVerticalBlock"] > [data-testid="stLayoutWrapper"]
-[data-testid="stColumn"]:first-child div,
-[data-testid="stMainBlockContainer"] [data-testid="stColumn"]:first-child
-> [data-testid="stVerticalBlock"] > [data-testid="stLayoutWrapper"]
-> [data-testid="stVerticalBlock"] > [data-testid="stLayoutWrapper"]
-[data-testid="stColumn"]:last-child div {
-    font-size: 0.85rem !important;
-    font-weight: 600 !important;
-    opacity: 0.8 !important;
-}
-
-/* 8d. Right column (chat): keep overflow-y:auto for chat scrolling */
-[data-testid="stMainBlockContainer"] [data-testid="stColumn"]:last-child
-> [data-testid="stVerticalBlock"] > [data-testid="stLayoutWrapper"]
-> [data-testid="stVerticalBlock"] {
-    overflow-y: auto !important;
-}
-
-/* 9. 우측 컬럼 하단 패딩 (입력창이 메시지 가리지 않도록) */
-[data-testid="stMainBlockContainer"] [data-testid="stColumn"]:last-child
-> [data-testid="stVerticalBlock"] > [data-testid="stLayoutWrapper"]
-> [data-testid="stVerticalBlock"] {
-    padding-bottom: 4rem !important;
-}
-
-/* 10. ★ STICKY CHAT INPUT (inherits column width via sticky; no hardcoded left/width) */
-[data-testid="stChatInput"] {
-    position: sticky !important;
-    bottom: 0 !important;
-    z-index: 1000 !important;
-    background-color: var(--background-color) !important;
-    border-top: 1px solid color-mix(in srgb, var(--border-color, #ccc) 30%, transparent) !important;
-}
-
-/* Chat Input Focus Enhancement */
-[data-testid="stChatInput"]:focus-within {
-    border-color: var(--primary-color) !important;
-    box-shadow: 0 0 0 2px color-mix(in srgb, var(--primary-color) 20%, transparent) !important;
-}
-
-/* Chat Input Disabled State */
-[data-testid="stChatInput"]:has(textarea:disabled) {
-    opacity: 0.6 !important;
-}
-
-/* ════════════════════════════════════════════
-     CJK TYPOGRAPHY (Korean / Japanese / Chinese)
-    ════════════════════════════════════════════ */
-[data-testid="stMainBlockContainer"] [data-testid="stColumn"] div,
-[data-testid="stMainBlockContainer"] p {
-    word-break: keep-all !important;
-    overflow-wrap: break-word !important;
-}
-
-/* ════════════════════════════════════════════
-     11. PDF CONTROLS - STICKY BOTTOM
-   ════════════════════════════════════════════ */
-
-/* 11a. Left column stVerticalBlock bottom padding */
-[data-testid="stMainBlockContainer"] [data-testid="stColumn"]:first-child
-> [data-testid="stVerticalBlock"] {
-    padding-bottom: 3.5rem !important;
-}
-
-/* ════════════════════════════════════════════
-   EXISTING STYLES TO KEEP (thought expander, citation, streaming, etc.)
-   ════════════════════════════════════════════ */
-[data-testid="stMain"] { overflow: hidden !important; }
-[data-testid="stSidebarCollapseButton"] { z-index: 100000 !important; visibility: visible !important; opacity: 1 !important; background-color: color-mix(in srgb, var(--background-color), transparent 20%) !important; }
-    /* Sidebar Logo Styles - Minimalist & Native */
-    .sidebar-logo-container {
-        display: flex !important;
-        align-items: center !important;
-        gap: 12px !important;
-        padding: 0 !important;
-        background: transparent !important;
-        border: none !important;
-        box-shadow: none !important;
-        margin: 0 0 16px 0 !important;
-    }
-    .logo-brand {
-        font-size: 1.2rem !important;
-        font-weight: 700 !important;
-        color: var(--text-color) !important;
-    }
-    .logo-subtitle {
-        font-size: 0.75rem !important;
-        color: var(--primary-color) !important;
-        opacity: 0.8 !important;
-    }
-
-    /* Sidebar Settings Labels - Minimalist & Native */
-    .settings-label {
-        display: block !important;
-        font-size: 0.85rem !important;
-        font-weight: 600 !important;
-        color: var(--text-color) !important;
-        opacity: 0.9 !important;
-        margin: 16px 0 4px 0 !important;
-    }
-    .settings-sublabel {
-        display: block !important;
-        font-size: 0.75rem !important;
-        color: var(--text-color) !important;
-        opacity: 0.6 !important;
-        margin: 0 0 8px 0 !important;
-    }
-
-
-header[data-testid="stHeader"] { background: var(--background-color) !important; z-index: 99999 !important; display: flex !important; border-bottom: 1px solid color-mix(in srgb, var(--border-color, #ccc) 30%, transparent) !important; }
-.stAppDeployButton { display: none !important; }
-details.thought-expander { background-color: var(--secondary-background-color); border: 1px solid color-mix(in srgb, var(--faded-text-color) 30%, transparent); border-radius: 8px; margin: 0 0 6px 0; padding: 8px 12px; }
-details.thought-expander summary { cursor: pointer; font-size: 0.85em; font-weight: 600; color: var(--text-color); display: flex; align-items: center; gap: 8px; }
-details.thought-expander summary::before { content: "\25B6"; font-size: 0.8em; transition: transform 0.2s; }
-details[open].thought-expander summary::before { transform: rotate(90deg); }
-.thought-container { border-left: 3px solid color-mix(in srgb, var(--primary-color) 70%, transparent); padding: 10px 15px; margin-top: 8px; font-size: 0.85em; color: var(--text-color); opacity: 0.85; max-height: 300px; overflow-y: auto; background-color: color-mix(in srgb, var(--background-color) 50%, transparent); border-radius: 0 4px 4px 0; }
-.citation-highlight { background-color: color-mix(in srgb, var(--primary-color) 15%, transparent); border-bottom: 2px dashed var(--primary-color); padding: 0 4px; border-radius: 3px; color: var(--primary-color); cursor: help; display: inline-block; position: relative; }
-.streaming-pulse { animation: pulse 1.5s infinite ease-in-out; min-height: 24px; font-size: 0.9em; color: var(--primary-color); margin-bottom: 4px; }
-@keyframes pulse { 0% { opacity: 0.4; } 50% { opacity: 1; } 100% { opacity: 0.4; } }
-    .perf-table {
-        width: 100%;
-        border-collapse: collapse;
-        font-size: 0.8rem;
-        margin: 4px 0;
-    }
-    .perf-row {
-        display: flex;
-        justify-content: space-between;
-        padding: 2px 0;
-        border-bottom: 1px solid color-mix(in srgb, var(--border-color, #ccc) 20%, transparent);
-    }
-    .perf-label {
-        color: var(--text-color);
-        opacity: 0.7;
-    }
-    .perf-value {
-        font-weight: 600;
-        color: var(--text-color);
-    }
-    .perf-status {
-        font-size: 0.7rem;
-        padding: 1px 4px;
-        border-radius: 4px;
-        font-weight: 700;
-        text-transform: uppercase;
-    }
-    .status-excellent {
-        background-color: color-mix(in srgb, #2ecc71 20%, transparent);
-        color: #2ecc71;
-    }
-    .status-stable {
-        background-color: color-mix(in srgb, #f1c40f 20%, transparent);
-        color: #f1c40f;
-    }
-    .status-poor {
-        background-color: color-mix(in srgb, #e74c3c 20%, transparent);
-        color: #e74c3c;
-    }
-    .perf-details { margin-top: 2px !important; }
-.perf-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(100px, 1fr)); gap: 8px; }
-[data-testid="stChatMessage"] div[data-testid="stVerticalBlock"] { gap: 0px !important; }
-
-/* ════════════════════════════════════════════
-   12. MOBILE RESPONSIVE
-   ════════════════════════════════════════════ */
-@media (max-width: 768px) {
-    .stApp, [data-testid="stAppViewContainer"] {
-        height: auto !important;
-        overflow: visible !important;
-    }
-    [data-testid="stMainBlockContainer"] {
-        height: auto !important;
-        display: block !important;
-    }
-    [data-testid="stHorizontalBlock"] {
-        flex-wrap: wrap !important;
-    }
-    [data-testid="stColumn"] {
-        display: block !important;
-    }
-    [data-testid="stColumn"] > [data-testid="stVerticalBlock"]
-    > [data-testid="stLayoutWrapper"] > [data-testid="stVerticalBlock"] {
-        max-height: none !important;
-        overflow-y: visible !important;
-        padding-bottom: 4rem !important;
-    }
-    [data-testid="stChatInput"] {
-        position: fixed !important;
-        bottom: 0 !important;
-        left: 0 !important;
-        width: 100% !important;
-        z-index: 1000 !important;
-    }
-}
-
-</style>
-""",
-        unsafe_allow_html=True,
+        <script>
+        const doc = window.parent.document;
+        const header = doc.querySelector('[data-testid="stHeader"]');
+        if (header) {
+            const h = header.offsetHeight;
+            doc.documentElement.style.setProperty('--header-h', h + 'px');
+        }
+        window.addEventListener('resize', () => {
+            const h2 = doc.querySelector('[data-testid="stHeader"]')?.offsetHeight || 60;
+            doc.documentElement.style.setProperty('--header-h', h2 + 'px');
+        });
+        if (window.visualViewport) {
+            window.visualViewport.addEventListener('resize', () => {
+                const h3 = doc.querySelector('[data-testid="stHeader"]')?.offsetHeight || 60;
+                doc.documentElement.style.setProperty('--header-h', h3 + 'px');
+            });
+        }
+        </script>
+        """,
+        height=0,
     )
 
 
-def render_left_column():
-    return render_chat_interface()
+def inject_custom_css() -> None:
+    inject_header_height_script()  # set --header-h before CSS that depends on it
+    css_path = Path(__file__).parent / "styles" / "main.css"
+    try:
+        with open(css_path, encoding="utf-8") as f:
+            css_content = f.read()
+        st.markdown(f"<style>{css_content}</style>", unsafe_allow_html=True)
+    except (FileNotFoundError, PermissionError, OSError) as e:
+        st.error(f"Failed to load custom CSS: {e}")
 
 
-def inject_sidebar_closer():
-    """사이드바를 프로그램적으로 닫기 위한 JS 인젝션"""
-    js = """
-    <script>
-        const collapseSidebar = () => {
-            const sidebar = window.parent.document.querySelector('[data-testid="stSidebar"]');
-            const collapseButton = window.parent.document.querySelector('[data-testid="stSidebarCollapseButton"]');
-            if (sidebar && sidebar.getAttribute('aria-expanded') === 'true' && collapseButton) {
-                collapseButton.click();
-            }
-        };
-        setTimeout(collapseSidebar, 500);
-    </script>
+def render_main_content() -> None:
+    """Render the two-column layout with chat input inside the chat column.
+
+    ┌────────────────────────┬──────────────────────────┐
+    │  PDF Viewer            │  Chat Messages           │  ← content row (flex: 1)
+    │  ─── PDF Controls ───  │  ① Context Strip         │
+    │                        │  ② Status Banner         │
+    │                        │  Messages (flex: 1)      │
+    │                        │  ─── Chat Input ───      │  ← sticky bottom inside column
+    └────────────────────────┴──────────────────────────┘
     """
-    st.components.v1.html(js, height=0, width=0)
+    from ui.components.chat import render_chat_input_area, render_chat_messages_area
+    from ui.components.viewer import render_pdf_controls, render_pdf_viewer
+
+    col_pdf, col_chat = st.columns(_COLUMN_RATIO, gap="small")
+    with col_pdf:
+        render_pdf_viewer()
+        has_pdf = bool(SessionManager.get("pdf_file_path"))
+        if has_pdf:
+            render_pdf_controls()
+    with col_chat:
+        render_chat_messages_area()
+        render_chat_input_area()

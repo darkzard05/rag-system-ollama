@@ -44,8 +44,10 @@ async def test_chat_scroll():
         )
 
         # 3. Identify the Chat Column and inject overflow content
-        # Find the chat column (the one containing stTabs) using JS since :has() CSS
-        # is not supported in all Chromium versions
+        # Find the chat column (the one containing stChatInput/stChatMessage) using JS
+        # since :has() CSS is not supported in all Chromium versions, then locate the
+        # actual scroll container (overflow-y: auto child) so the context strip, the
+        # document dock, and the inline composer added by P5 do not break discovery.
         FIND_CHAT_WRAPPER_JS = """
             () => {
                 const mainContainer = document.querySelector('[data-testid="stMainBlockContainer"]');
@@ -53,8 +55,15 @@ async def test_chat_scroll():
                 const cols = mainContainer.querySelectorAll('[data-testid="stColumn"]');
                 for (const col of cols) {
                     if (col.querySelector('[data-testid="stChatInput"], [data-testid="stChatMessage"]')) {
-                        // Flex chain step 6: stColumn > stVerticalBlock > stLayoutWrapper > stVerticalBlock has overflow-y:auto
-                        return col.querySelector(':scope > [data-testid="stVerticalBlock"] > [data-testid="stLayoutWrapper"] > [data-testid="stVerticalBlock"]');
+                        const vb = col.querySelector(':scope > [data-testid="stVerticalBlock"]');
+                        if (!vb) return col;
+                        for (const child of vb.children) {
+                            const cs = getComputedStyle(child);
+                            if (cs.overflowY === 'auto' || cs.overflowY === 'scroll') {
+                                return child;
+                            }
+                        }
+                        return vb;
                     }
                 }
                 return null;

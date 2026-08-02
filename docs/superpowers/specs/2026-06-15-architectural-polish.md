@@ -33,7 +33,7 @@ RAG 시스템의 장기 유지보수성과 안정성을 위해 분산된 리소�
 
 ## 4. 데이터 흐름 (Data Flow)
 1. **Config Load:** `config.yml` -> `AppConfig` (Pydantic Validation) -> Global Variables.
-2. **Resource Request:** `RAGSystem` -> `ModelManager.get_or_build_resource(key, type)` -> (Cache Hit? Yes: Return | No: Build & Cache) -> Return Resource.
+2. **Resource Request:** `RAGOrchestrator` -> `ModelManager.get_or_build_resource(key, type)` -> (Cache Hit? Yes: Return | No: Build & Cache) -> Return Resource.
 
 ## 5. 검증 전략 (Verification Strategy)
 

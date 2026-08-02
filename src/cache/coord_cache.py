@@ -1,89 +1,254 @@
 """
 PDF 단어 좌표(word_coords)를 위한 사이드 캐시 매니저.
-벡터 저장소의 메타데이터 비대화를 방지하기 위해 좌표 데이터를 별도로 저장하고 관리합니다.
+벡터 저장소의 메타데이터 비대화를 방지하기 위해 좌표 데이터를 SQLite에 별도로 저장하고 관리합니다.
 """
 
+import asyncio
+import contextlib
 import logging
-from functools import lru_cache
-from pathlib import Path
+import sqlite3
+import time
+from typing import Any
 
+import aiosqlite
 import orjson
 
 from common.config import PROJECT_ROOT
 
+MAX_CACHE_SIZE_MB = 500
+CACHE_TTL_DAYS = 7
+_EVICTION_INTERVAL_SECONDS = 1800  # 30 minutes
+_CONNECTION_MAX_AGE = 300  # 5분: 연결 최대 생존 시간 (초)
+_CONNECTION_HEALTH_CHECK_INTERVAL = 30  # 30초: 헬스체크 간격
+
 logger = logging.getLogger(__name__)
 
-# 캐시 디렉토리 설정
+# 캐시 디렉토리 및 DB 설정
 COORD_CACHE_DIR = PROJECT_ROOT / ".model_cache" / "coord_cache"
-
-
-@lru_cache(maxsize=128)
-def _load_from_file(file_hash: str, page_num: int) -> list[tuple] | None:
-    """실제 파일 로딩 및 LRU 캐싱을 수행하는 독립 함수 (클래스 외부 정의로 메모리 누수 방지)."""
-    cache_path = COORD_CACHE_DIR / f"{file_hash}_p{page_num}.json"
-    if not cache_path.exists():
-        return None
-
-    try:
-        with open(cache_path, "rb") as f:
-            return orjson.loads(f.read())
-    except Exception as e:
-        logger.error(f"좌표 캐시 로드 실패 ({file_hash}, p{page_num}): {e}")
-        return None
+COORD_CACHE_DB = COORD_CACHE_DIR / "coords.db"
 
 
 class CoordCacheManager:
-    """단어 좌표 데이터를 파일 시스템에 캐싱하고 관리하는 클래스 (싱글톤)."""
+    """단어 좌표 데이터를 SQLite에 캐싱하고 관리하는 클래스 (싱글톤)."""
 
-    _instance = None
+    _instance: "CoordCacheManager | None" = None
 
-    def __new__(cls):
+    def __new__(cls) -> "CoordCacheManager":
         if cls._instance is None:
             cls._instance = super().__new__(cls)
             cls._instance._init_manager()
         return cls._instance
 
-    def _init_manager(self):
-        """매니저 초기화 및 디렉토리 생성."""
+    def _init_manager(self) -> None:
+        """매니저 초기화 및 DB 테이블 생성."""
+        self._conn: aiosqlite.Connection | None = None
+        self._conn_lock = asyncio.Lock()
+        self._conn_created_at: float = 0
+        self._last_health_check: float = 0
+        self._conn_healthy: bool = False
+        self._queue: asyncio.Queue = asyncio.Queue()
+        self._worker_task: asyncio.Task | None = None
+
         if not COORD_CACHE_DIR.exists():
             COORD_CACHE_DIR.mkdir(parents=True, exist_ok=True)
             logger.info(f"좌표 캐시 디렉토리 생성: {COORD_CACHE_DIR}")
 
-    def _get_cache_path(self, file_hash: str, page_num: int) -> Path:
-        """특정 페이지의 캐시 파일 경로를 반환합니다."""
-        return COORD_CACHE_DIR / f"{file_hash}_p{page_num}.json"
+        # 테이블 생성 (동기식으로 초기화)
+        with sqlite3.connect(COORD_CACHE_DB) as conn:
+            _ = conn.execute("""
+                CREATE TABLE IF NOT EXISTS coords (
+                    file_hash TEXT,
+                    page_num INTEGER,
+                    coords BLOB,
+                    created_at REAL,
+                    PRIMARY KEY (file_hash, page_num)
+                )
+            """)
+            _ = conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_created_at ON coords(created_at)"
+            )
+            conn.commit()
 
-    def save_coords(self, file_hash: str, page_num: int, coords: list[tuple]) -> bool:
-        """좌표 데이터를 캐시에 저장합니다."""
+    async def _ensure_worker_started(self) -> None:
+        """백그라운드 워커가 시작되지 않았다면 시작합니다."""
+        if self._worker_task is None:
+            self._worker_task = asyncio.create_task(self._write_behind_worker())
+            logger.info("좌표 캐시 백그라운드 워커 시작됨")
+
+    async def _write_behind_worker(self) -> None:
+        """백그라운드에서 큐의 좌표 데이터를 SQLite에 저장합니다."""
+        while True:
+            try:
+                file_hash, page_num, coords = await self._queue.get()
+                try:
+                    db = await self._get_connection()
+                    await db.execute(
+                        "INSERT OR REPLACE INTO coords (file_hash, page_num, coords, created_at) VALUES (?, ?, ?, ?)",
+                        (file_hash, page_num, orjson.dumps(coords), time.time()),
+                    )
+                    await db.commit()
+                except aiosqlite.Error as e:
+                    logger.error(
+                        f"백그라운드 저장 실패 ({file_hash}, p{page_num}): {e}"
+                    )
+                    self._conn_healthy = False
+                finally:
+                    self._queue.task_done()
+            except asyncio.CancelledError:
+                break
+            except (aiosqlite.Error, OSError) as e:
+                logger.error(f"워커 루프 오류: {e}")
+
+    async def _get_connection(self) -> aiosqlite.Connection:
+        """재사용 가능한 단일 연결을 반환합니다. 지연 검증 + 상태 추적로 SELECT 1 핑을 제거합니다."""
+        now = time.monotonic()
+        async with self._conn_lock:
+            # 1. 기존 연결이 있고, 생존 시간 내이며, 최근 헬스체크 통과 시 즉시 반환
+            if (
+                self._conn is not None
+                and self._conn_healthy
+                and (now - self._conn_created_at) < _CONNECTION_MAX_AGE
+                and (now - self._last_health_check) < _CONNECTION_HEALTH_CHECK_INTERVAL
+            ):
+                return self._conn
+
+            # 2. 연결이 없거나 만료/비정상 → 헬스체크 주기 도래 시에만 SELECT 1 실행
+            if self._conn is not None:
+                if (now - self._last_health_check) >= _CONNECTION_HEALTH_CHECK_INTERVAL:
+                    try:
+                        await self._conn.execute("SELECT 1")
+                        self._conn_healthy = True
+                        self._last_health_check = now
+                        return self._conn
+                    except Exception:
+                        logger.debug("연결 헬스체크 실패, 재연결 시도")
+                        with contextlib.suppress(Exception):
+                            await self._conn.close()
+                        self._conn = None
+                        self._conn_healthy = False
+                else:
+                    # 헬스체크 주기 아님 → 이전 상태 신뢰하고 반환 (낙관적)
+                    return self._conn
+
+            # 3. 새 연결 생성 + WAL 모드
+            self._conn = await aiosqlite.connect(COORD_CACHE_DB)
+            await self._conn.execute("PRAGMA journal_mode=WAL")
+            await self._conn.execute("PRAGMA synchronous=NORMAL")
+            await self._conn.execute("PRAGMA cache_size=-32768")  # 32MB 캐시
+            self._conn_created_at = now
+            self._last_health_check = now
+            self._conn_healthy = True
+            return self._conn
+
+    async def close(self) -> None:
+        """연결을 명시적으로 닫습니다."""
+        async with self._conn_lock:
+            if self._conn is not None:
+                with contextlib.suppress(Exception):
+                    await self._conn.close()
+                self._conn = None
+                self._conn_healthy = False
+
+    async def start_eviction_loop(self) -> None:
+        """백그라운드에서 주기적으로 캐시를 정리합니다."""
+        while True:
+            await asyncio.sleep(_EVICTION_INTERVAL_SECONDS)
+            try:
+                await self._evict_old_entries()
+            except Exception as e:
+                logger.error(f"백그라운드 캐시 정리 중 오류: {e}")
+
+    async def _evict_old_entries(self) -> None:
+        """TTL 및 크기 제한에 따라 오래된 캐시 파일을 정리합니다."""
+        db = await self._get_connection()
+        # 1. TTL 만료 삭제
+        ttl_seconds = CACHE_TTL_DAYS * 86400
+        now = time.time()
+        _ = await db.execute(
+            "DELETE FROM coords WHERE ? - created_at > ?", (now, ttl_seconds)
+        )
+
+        # 2. 크기 제한 (간단한 구현: 전체 크기가 넘으면 오래된 것부터 삭제)
+        # SQLite 파일 크기 확인 (동기 호출을 asyncio 스레드로 위임)
+        size = await asyncio.to_thread(lambda: COORD_CACHE_DB.stat().st_size)
+        if size > MAX_CACHE_SIZE_MB * 1024 * 1024:
+            _ = await db.execute("""
+                DELETE FROM coords WHERE rowid IN (
+                    SELECT rowid FROM coords ORDER BY created_at ASC LIMIT 10
+                )
+            """)
+        await db.commit()
+
+    async def save_coords(
+        self,
+        file_hash: str,
+        page_num: int,
+        coords: list[dict[str, Any]],
+    ) -> bool:
+        """좌표 데이터를 캐시에 저장합니다 (Write-Behind)."""
         if not file_hash or not coords:
             return False
 
-        cache_path = self._get_cache_path(file_hash, page_num)
         try:
-            with open(cache_path, "wb") as f:
-                f.write(orjson.dumps(coords))
+            await self._ensure_worker_started()
+            await self._queue.put((file_hash, page_num, coords))
             return True
         except Exception as e:
-            logger.error(f"좌표 캐시 저장 실패 ({file_hash}, p{page_num}): {e}")
+            logger.error(f"좌표 캐시 큐 삽입 실패 ({file_hash}, p{page_num}): {e}")
             return False
 
-    def get_coords(self, file_hash: str, page_num: int) -> list[tuple] | None:
-        """캐시에서 좌표 데이터를 로드합니다 (LRU 래퍼 호출)."""
-        return _load_from_file(file_hash, page_num)
+    async def get_coords_batch(
+        self, file_hash: str, page_nums: list[int]
+    ) -> dict[int, list[dict[str, Any]]]:
+        """캐시에서 여러 페이지의 좌표 데이터를 한 번에 로드합니다."""
+        if not page_nums:
+            return {}
 
-    def clear_cache(self, file_hash: str | None = None):
-        """특정 파일 또는 전체 캐시를 삭제합니다."""
         try:
-            if file_hash:
-                for p in COORD_CACHE_DIR.glob(f"{file_hash}_p*.json"):
-                    p.unlink()
-            else:
-                for p in COORD_CACHE_DIR.glob("*.json"):
-                    p.unlink()
+            # IN 절을 위한 쿼리 생성
+            placeholders = ",".join(["?"] * len(page_nums))
+            query = f"SELECT page_num, coords FROM coords WHERE file_hash = ? AND page_num IN ({placeholders})"
 
-            # LRU 캐시 초기화
-            _load_from_file.cache_clear()
+            results = {}
+            db = await self._get_connection()
+            async with db.execute(query, (file_hash, *page_nums)) as cursor:
+                async for row in cursor:
+                    results[row[0]] = orjson.loads(row[1])
+            return results
         except Exception as e:
+            logger.error(f"좌표 캐시 배치 로드 실패 ({file_hash}): {e}")
+            self._conn_healthy = False
+            return {}
+
+    async def get_coords(
+        self, file_hash: str, page_num: int
+    ) -> list[dict[str, Any]] | None:
+        """캐시에서 좌표 데이터를 로드합니다."""
+        try:
+            db = await self._get_connection()
+            async with db.execute(
+                "SELECT coords FROM coords WHERE file_hash = ? AND page_num = ?",
+                (file_hash, page_num),
+            ) as cursor:
+                row = await cursor.fetchone()
+                if row:
+                    return orjson.loads(row[0])  # type: ignore
+            return None
+        except Exception as e:
+            logger.error(f"좌표 캐시 로드 실패 ({file_hash}, p{page_num}): {e}")
+            self._conn_healthy = False
+            return None
+
+    async def clear_cache(self, file_hash: str | None = None):
+        """특정 파일 또는 전체 캐시를 삭제합니다 (비동기)."""
+        try:
+            db = await self._get_connection()
+            if file_hash:
+                await db.execute("DELETE FROM coords WHERE file_hash = ?", (file_hash,))
+            else:
+                await db.execute("DELETE FROM coords")
+            await db.commit()
+        except aiosqlite.Error as e:
             logger.error(f"좌표 캐시 삭제 중 오류: {e}")
 
 

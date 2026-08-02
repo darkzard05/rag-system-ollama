@@ -6,6 +6,7 @@ Streamlit 프레임워크를 기반으로 UI를 구성하고 세션 상태를 �
 """
 
 # [Lazy Import용] 런타임에 필요한 모듈들
+import asyncio
 import atexit
 import contextlib
 import logging
@@ -16,16 +17,16 @@ import time
 from pathlib import Path
 from typing import Literal, cast
 
-import nest_asyncio
 import streamlit as st
 
+from common.async_worker import AsyncWorker
 from common.config import (
     DEFAULT_EMBEDDING_MODEL,
     DEFAULT_OLLAMA_MODEL,
 )
 from common.constants import FilePathConstants, StringConstants
 from common.logging_config import setup_logging
-from common.utils import safe_cache_resource, sync_run
+from common.utils import safe_cache_resource
 
 # 1. Streamlit 페이지 설정 (최우선 실행 - 가이드라인 준수)
 st.set_page_config(
@@ -35,7 +36,7 @@ st.set_page_config(
 )
 
 # 2. 로깅 설정 (최상단)
-logger = setup_logging(log_level="DEBUG", log_file=Path("logs/app.log"))
+logger = setup_logging(log_level="INFO", log_file=Path("logs/app.log"))
 
 MAX_FILE_SIZE_MB = StringConstants.MAX_FILE_SIZE_MB
 
@@ -43,17 +44,14 @@ MAX_FILE_SIZE_MB = StringConstants.MAX_FILE_SIZE_MB
 _numexpr_threads = os.cpu_count() or 4
 os.environ.setdefault("NUMEXPR_MAX_THREADS", str(_numexpr_threads))
 
-# 비동기 패치 적용 (Streamlit의 asyncio 루프 충돌 방지)
-nest_asyncio.apply()
+# 비동기 워커 초기화 (서버 인스턴스당 단일 이벤트 루프, nest_asyncio 대체)
+_async_worker = AsyncWorker()
 
-if "current_page" not in st.session_state:
-    st.session_state.current_page = 1
+# current_page / is_generating_answer are initialized via DEFAULT_SESSION_STATE
+# and synced by UIBridge.sync_session(). pdf_target_page is NOT part of
+# DEFAULT_SESSION_STATE, so it must be initialized here.
 if "pdf_target_page" not in st.session_state:
     st.session_state.pdf_target_page = None
-if "is_generating_answer" not in st.session_state:
-    st.session_state.is_generating_answer = False
-if "sidebar_auto_collapsed" not in st.session_state:
-    st.session_state.sidebar_auto_collapsed = False
 
 
 def _check_windows_integrity():
@@ -152,6 +150,10 @@ _init_temp_directory()
 _start_global_background_worker()
 _register_cleanup_handlers()
 
+from cache.coord_cache import coord_cache
+
+_async_worker.submit(coord_cache.start_eviction_loop())
+
 
 async def _bg_rebuild_task(
     session_id: str, file_path: str, file_name: str, embedder_name: str
@@ -170,6 +172,23 @@ async def _bg_rebuild_task(
         "rebuild_status", f"'{file_name}' 분석 중...", session_id=session_id
     )
 
+    # 타임라인에 분석 시작 메시지 추가 (하나의 메시지를 업데이트)
+    import uuid
+
+    build_msg_id = str(uuid.uuid4())
+    SessionManager.set("build_msg_id", build_msg_id, session_id=session_id)
+    SessionManager.add_message(
+        "system",
+        f"📄 '{file_name}' 문서 분석 시작",
+        msg_type="build_progress",
+        msg_id=build_msg_id,
+        progress=0,
+        status="분석 준비 중...",
+        cancelable=True,
+        logs=[],
+        session_id=session_id,
+    )
+
     try:
         embedder = await ModelManager.get_embedder(embedder_name)
 
@@ -181,6 +200,14 @@ async def _bg_rebuild_task(
             SessionManager.add_status_log(
                 "❌ 문서 분석이 취소되었습니다.", session_id=session_id
             )
+            SessionManager.add_message(
+                "system",
+                "문서 분석이 취소되었습니다",
+                msg_type="build_error",
+                msg_id=build_msg_id,
+                error="사용자가 분석을 취소함",
+                session_id=session_id,
+            )
             return
 
         rag_sys = RAGSystem(session_id=session_id)
@@ -189,6 +216,18 @@ async def _bg_rebuild_task(
             SessionManager.set("rebuild_progress", pct, session_id=session_id)
             if msg:
                 SessionManager.set("rebuild_status", msg, session_id=session_id)
+            # 타임라인 진행 메시지 업데이트 (동일 msg_id)
+            SessionManager.add_message(
+                "system",
+                f"📄 '{file_name}' 분석 진행 중",
+                msg_type="build_progress",
+                msg_id=build_msg_id,
+                progress=pct,
+                status=msg or f"진행률 {pct}%",
+                cancelable=True,
+                logs=SessionManager.get("status_logs", [], session_id) or [],
+                session_id=session_id,
+            )
 
         SessionManager.set("rebuild_progress", 0, session_id=session_id)
 
@@ -200,27 +239,86 @@ async def _bg_rebuild_task(
             SessionManager.add_status_log(
                 "❌ 문서 분석이 취소되었습니다.", session_id=session_id
             )
+            SessionManager.add_message(
+                "system",
+                "문서 분석이 취소되었습니다",
+                msg_type="build_error",
+                msg_id=build_msg_id,
+                error="사용자가 분석을 취소함",
+                session_id=session_id,
+            )
             return
+
+        def _is_cancelled() -> bool:
+            return bool(
+                SessionManager.get("rebuild_cancelled", False, session_id=session_id)
+            )
 
         success_message, cache_used = await rag_sys.build_pipeline(
             file_path=file_path,
             file_name=file_name,
             embedder=embedder,
             on_progress=_report_progress,
+            check_cancelled=_is_cancelled,
         )
 
         SessionManager.set("rebuild_progress", 100, session_id=session_id)
         SessionManager.set("pdf_processed", True, session_id=session_id)
+        SessionManager.set("pdf_processing_error", None, session_id=session_id)
+        SessionManager.set(
+            "doc_stats",
+            {
+                "file_name": file_name,
+                "cache_used": bool(cache_used),
+                "embedder": embedder_name,
+            },
+            session_id=session_id,
+        )
         SessionManager.add_status_log(f"✅ {success_message}", session_id=session_id)
+        # 타임라인 진행 메시지 완료 처리 (동일 msg_id)
+        SessionManager.add_message(
+            "system",
+            f"✅ {success_message}",
+            msg_type="build_progress",
+            msg_id=build_msg_id,
+            progress=100,
+            status=success_message,
+            cancelable=False,
+            done=True,
+            logs=[],
+            session_id=session_id,
+        )
         SessionManager.add_message("system", success_message, session_id=session_id)
+    except asyncio.CancelledError:
+        logger.info(
+            f"[MAIN] Rebuild pipeline cancelled mid-build for session {session_id}"
+        )
+        SessionManager.set("rebuild_cancelled", False, session_id=session_id)
+        SessionManager.set("rebuild_progress", 0, session_id=session_id)
+        SessionManager.add_message(
+            "system",
+            "문서 분석이 취소되었습니다",
+            msg_type="build_error",
+            msg_id=build_msg_id,
+            error="비동기 작업 취소됨",
+            session_id=session_id,
+        )
     except Exception as e:
         logger.error(f"Background RAG rebuild error: {e}", exc_info=True)
         error_msg = f"문서 처리 중 오류가 발생했습니다: {str(e)}"
         SessionManager.set("rebuild_error", error_msg, session_id=session_id)
         SessionManager.set("pdf_processing_error", error_msg, session_id=session_id)
         SessionManager.set("rebuild_progress", 0, session_id=session_id)
-        SessionManager.set("pdf_processed", True, session_id=session_id)
-        SessionManager.add_message("system", f"❌ {error_msg}", session_id=session_id)
+        SessionManager.set("pdf_processed", False, session_id=session_id)
+        SessionManager.add_message(
+            "system",
+            "문서 분석 중 오류 발생",
+            msg_type="build_error",
+            msg_id=build_msg_id,
+            error=error_msg,
+            session_id=session_id,
+        )
+        SessionManager.add_message("assistant", error_msg, session_id=session_id)
     finally:
         SessionManager.set("rebuild_done", True, session_id=session_id)
         SessionManager.set("is_building_rag", False, session_id=session_id)
@@ -243,12 +341,16 @@ def _update_qa_chain(session_id: str | None = None) -> None:
         SessionManager.set("llm", llm, session_id=sid)
         SessionManager.add_status_log("✅ 추론 모델 교체 완료", session_id=sid)
     except Exception as e:
+        error_msg = f"QA 체인 업데이트 실패: {e}"
         logger.error(f"QA 업데이트 실패: {e}", exc_info=True)
+        SessionManager.add_status_log(f"❌ {error_msg}", session_id=sid)
+        SessionManager.add_message("assistant", error_msg, session_id=sid)
     finally:
         SessionManager.set("rag_build_complete_flag", True, session_id=sid)
 
 
 def on_file_upload() -> None:
+    from core.document_processor import compute_file_hash
     from core.session import SessionManager
     from infra.notification_system import SystemNotifier
 
@@ -267,14 +369,26 @@ def on_file_upload() -> None:
         )
         return
 
-    if uploaded_file.name != SessionManager.get("last_uploaded_file_name"):
-        st.session_state.sidebar_auto_collapsed = False
+    last_file_name = SessionManager.get("last_uploaded_file_name")
+    last_file_hash = SessionManager.get("file_hash")
+
+    try:
+        # uploaded_file는 BytesIO와 유사한 객체이므로 포인터를 리셋하여 전체 바이트를 계산합니다.
+        uploaded_file.seek(0)
+        file_bytes = uploaded_file.read()
+        uploaded_file.seek(0)
+        uploaded_hash = compute_file_hash("", data=file_bytes)
+    except Exception:
+        uploaded_hash = ""
+
+    if uploaded_file.name != last_file_name or uploaded_hash != last_file_hash:
         SessionManager.set("current_page", 1)
         old_path = SessionManager.get("pdf_file_path")
         if old_path:
             SessionManager.safe_remove_file(old_path)
 
         SessionManager.set("last_uploaded_file_name", uploaded_file.name)
+        SessionManager.set("file_hash", uploaded_hash)
 
         try:
             temp_dir = os.path.abspath(FilePathConstants.TEMP_DIR)
@@ -289,6 +403,10 @@ def on_file_upload() -> None:
             SystemNotifier.success(f"문서 업로드 완료: {uploaded_file.name}")
         except Exception as e:
             SystemNotifier.error("파일 저장 중 오류 발생", details=str(e))
+    else:
+        SystemNotifier.success(
+            f"'{uploaded_file.name}'은(는) 이미 업로드된 동일한 문서입니다."
+        )
 
 
 def on_model_change() -> None:
@@ -333,16 +451,9 @@ def _render_app_layout(available_models: list[str] | None = None) -> None:
             available_models=available_models,
         )
 
-    col_pdf, col_chat = st.columns([1, 1], gap="small")
+    from ui.ui import render_main_content
 
-    with col_pdf, st.container():
-        from ui.components.viewer import render_pdf_column
-
-        render_pdf_column()
-    with col_chat, st.container():
-        from ui.ui import render_left_column
-
-        render_left_column()
+    render_main_content()
 
 
 def _handle_pending_tasks() -> None:
@@ -350,8 +461,13 @@ def _handle_pending_tasks() -> None:
 
     current_sid = SessionManager.get_session_id()
     is_building = bool(SessionManager.get("is_building_rag", False, current_sid))
+    needs_rerun = False
 
-    if SessionManager.get("new_file_uploaded", False, current_sid) and not is_building:
+    if (
+        SessionManager.get("new_file_uploaded", False, current_sid)
+        and not is_building
+        and not SessionManager.get("is_generating_answer", False, current_sid)
+    ):
         SessionManager.set("new_file_uploaded", False, current_sid)
         SessionManager.set("is_building_rag", True, current_sid)
 
@@ -383,10 +499,12 @@ def _handle_pending_tasks() -> None:
             ),
             current_sid,
         )
-        st.rerun()
+        needs_rerun = True
 
     elif (
-        SessionManager.get("needs_rag_rebuild", False, current_sid) and not is_building
+        SessionManager.get("needs_rag_rebuild", False, current_sid)
+        and not is_building
+        and not SessionManager.get("is_generating_answer", False, current_sid)
     ):
         SessionManager.set("needs_rag_rebuild", False, current_sid)
         SessionManager.set("is_building_rag", True, current_sid)
@@ -410,22 +528,26 @@ def _handle_pending_tasks() -> None:
             ),
             current_sid,
         )
-        st.rerun()
+        needs_rerun = True
 
     elif SessionManager.get("needs_qa_chain_update", False, current_sid):
         SessionManager.set("needs_qa_chain_update", False, current_sid)
         _update_qa_chain(current_sid)
+        needs_rerun = True
+
+    if needs_rerun:
         st.rerun()
 
 
 def main() -> None:
     from core.session import SessionManager
+    from ui.bridge import UIBridge
     from ui.ui import inject_custom_css
 
     SessionManager.init_session()
 
-    # UI 렌더 단계에서 Streamlit 상태 동기화 (스레드 안전)
-    SessionManager.sync_to_streamlit()
+    # UI 렌더 단계에서 Streamlit 상태 동기화 (스레드 안전, 인터랙티브 키 보호)
+    UIBridge.sync_session()
 
     if "available_models_list" not in st.session_state:
         st.session_state.available_models_list = [DEFAULT_OLLAMA_MODEL]
