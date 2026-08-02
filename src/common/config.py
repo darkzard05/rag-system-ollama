@@ -61,14 +61,8 @@ OLLAMA_NUM_CTX: int = _get_env(
     "OLLAMA_NUM_CTX", _models_config.get("num_ctx", 4096), int
 )
 OLLAMA_TOP_P: float = _get_env("OLLAMA_TOP_P", _models_config.get("top_p", 0.8), float)
-OLLAMA_TIMEOUT: float = _get_env(
-    "OLLAMA_TIMEOUT", _models_config.get("timeout", 900.0), float
-)
 OLLAMA_KEEP_ALIVE: str = _get_env(
     "OLLAMA_KEEP_ALIVE", _models_config.get("keep_alive", "30m"), str
-)
-OLLAMA_NUM_THREAD: int = _get_env(
-    "OLLAMA_NUM_THREAD", max(1, (os.cpu_count() or 4) // 2), int
 )
 
 MAX_CONCURRENT_INFERENCE: int = _get_env(
@@ -77,11 +71,19 @@ MAX_CONCURRENT_INFERENCE: int = _get_env(
 MAX_CACHED_MODELS: int = _get_env(
     "MAX_CACHED_MODELS", _models_config.get("max_cached_models", 5), int
 )
+MAX_RESOURCE_POOL_SIZE: int = _get_env(
+    "MAX_RESOURCE_POOL_SIZE", _models_config.get("max_resource_pool_size", 10), int
+)
+MAX_RESOURCE_POOL_SIZE_BYTES: int = _get_env(
+    "MAX_RESOURCE_POOL_SIZE_BYTES",
+    _models_config.get("max_resource_pool_size_bytes", 2 * 1024 * 1024 * 1024),  # 2GB
+    int,
+)
 
 # --- 2. 임베딩 설정 (Embeddings) ---
 DEFAULT_EMBEDDING_MODEL: str = os.getenv(
     "DEFAULT_EMBEDDING_MODEL",
-    _models_config.get("default_embedding", "nomic-embed-text"),
+    _models_config.get("default_embedding", "nomic-embed-text-v2-moe"),
 )
 AVAILABLE_EMBEDDING_MODELS: list[str] = [DEFAULT_EMBEDDING_MODEL]
 CACHE_DIR: str = str(PROJECT_ROOT / _models_config.get("cache_dir", ".model_cache"))
@@ -104,11 +106,7 @@ DYNAMIC_WEIGHTING_CONFIG: dict = RETRIEVER_CONFIG.get(
 ENSEMBLE_WEIGHTS: list[float] = RETRIEVER_CONFIG.get("ensemble_weights", [0.4, 0.6])
 
 _reranker_config = _rag_config.get("reranker", {})
-RERANKER_ENABLED: bool = _reranker_config.get("enabled", True)
-RERANKER_MODEL_NAME: str = _reranker_config.get(
-    "model_name", "ms-marco-TinyBERT-L-2-v2"
-)
-RERANKER_CONFIG: dict = _reranker_config
+RERANKER_MODEL_NAME: str = _reranker_config.get("model_name", "ms-marco-MultiBERT-L-12")
 
 TEXT_SPLITTER_CONFIG: dict = _rag_config.get(
     "text_splitter", {"chunk_size": 500, "chunk_overlap": 100}
@@ -126,10 +124,7 @@ VECTOR_STORE_CACHE_DIR: str = str(
 # --- 5. 프롬프트 설정 (Prompts) ---
 _prompts_config = _rag_config.get("prompts") or {}
 ANALYSIS_PROTOCOL: str = _prompts_config.get("analysis_protocol", "")
-QA_SYSTEM_PROMPT: str = _prompts_config.get("qa_system_prompt", "")
-QA_HUMAN_PROMPT: str = _prompts_config.get("qa_human_prompt", "")
 GRADING_CONFIG: dict = _prompts_config.get("grading", {})
-REWRITING_CONFIG: dict = _prompts_config.get("rewriting", {})
 
 # --- 6. 보안 및 캐시 (Security & Global Cache) ---
 _cache_security_config = _config.get("cache_security", {})
@@ -140,11 +135,6 @@ CACHE_HMAC_SECRET: str | None = _get_env(
     "CACHE_HMAC_SECRET", _cache_security_config.get("hmac_secret"), str
 )
 CACHE_TRUSTED_PATHS: list[str] = _cache_security_config.get("trusted_paths", [])
-CACHE_VALIDATION_ON_FAILURE: str = _get_env(
-    "CACHE_VALIDATION_ON_FAILURE",
-    _cache_security_config.get("on_validation_failure", "regenerate"),
-    str,
-)
 CACHE_CHECK_PERMISSIONS: bool = _get_env(
     "CACHE_CHECK_PERMISSIONS",
     _cache_security_config.get("check_permissions", True),
@@ -177,43 +167,15 @@ ENABLE_RESPONSE_CACHE: bool = _get_env(
 
 # --- 7. UI 메시지 (UI) ---
 _ui_config = _config.get("ui", {})
-UI_CONTAINER_HEIGHT: int = _ui_config.get("container_height", 700)
+
+_ui_streaming = _ui_config.get("streaming", {})
+UI_STREAMING_TIMEOUT: int = _ui_streaming.get("timeout_seconds", 30)
+
 _ui_messages = _ui_config.get("messages", {})
-MSG_PREPARING_ANSWER = _ui_messages.get("preparing_answer", "답변 생성 준비 중...")
-MSG_THINKING = _ui_messages.get("thinking", "🤔 생각을 정리하는 중입니다...")
-MSG_NO_THOUGHT_PROCESS = _ui_messages.get(
-    "no_thought_process", "아직 생각 과정이 없습니다."
-)
-MSG_NO_RELATED_INFO = _ui_messages.get(
-    "no_related_info", "관련 정보를 찾을 수 없습니다."
-)
-MSG_SIDEBAR_TITLE = _ui_messages.get("sidebar_title", "⚙️ 설정")
-MSG_PDF_UPLOADER_LABEL = _ui_messages.get("pdf_uploader_label", "PDF 파일 업로드")
-MSG_MODEL_SELECTOR_LABEL = _ui_messages.get("model_selector_label", "LLM 모델 선택")
-MSG_EMBEDDING_SELECTOR_LABEL = _ui_messages.get(
-    "embedding_selector_label", "임베딩 모델 선택"
-)
-MSG_SYSTEM_STATUS_TITLE = _ui_messages.get("system_status_title", "📊 시스템 상태")
-MSG_LOADING_MODELS = _ui_messages.get(
-    "loading_models", "LLM 모델 목록을 불러오는 중..."
-)
-MSG_PDF_VIEWER_TITLE = _ui_messages.get("pdf_viewer_title", "📄 PDF 미리보기")
 MSG_PDF_VIEWER_NO_FILE = _ui_messages.get(
     "pdf_viewer_no_file", "미리볼 PDF가 없습니다."
 )
-MSG_PDF_VIEWER_PREV_BUTTON = _ui_messages.get("pdf_viewer_prev_button", "← 이전")
-MSG_PDF_VIEWER_NEXT_BUTTON = _ui_messages.get("pdf_viewer_next_button", "다음 →")
-MSG_PDF_VIEWER_PAGE_SLIDER = _ui_messages.get("pdf_viewer_page_slider", "페이지 이동")
-MSG_PDF_VIEWER_ERROR = _ui_messages.get("pdf_viewer_error", "PDF 오류: {e}")
-MSG_CHAT_TITLE = _ui_messages.get("chat_title", "💬 채팅")
-MSG_CHAT_INPUT_PLACEHOLDER = _ui_messages.get(
-    "chat_input_placeholder", "PDF 내용에 대해 질문해보세요."
-)
-MSG_CHAT_NO_QA_SYSTEM = _ui_messages.get("chat_no_qa_system", "QA 시스템 미준비")
-MSG_CHAT_GUIDE = _ui_messages.get("chat_guide", "사용 가이드")
-MSG_STREAMING_ERROR = _ui_messages.get("streaming_error", "스트리밍 오류: {e}")
-MSG_GENERIC_ERROR = _ui_messages.get("generic_error", "오류 발생: {error_msg}")
-MSG_RETRY_BUTTON = _ui_messages.get("retry_button", "재시도")
+MSG_CHAT_GUIDE: str = _ui_messages.get("chat_guide", "PDF를 업로드한 후 질문해 보세요")
 _ui_errors = _ui_messages.get("errors", {})
 MSG_ERROR_OLLAMA_NOT_RUNNING = _ui_errors.get(
     "ollama_not_running", "Ollama 서버 연결 실패"

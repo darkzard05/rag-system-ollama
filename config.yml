@@ -14,7 +14,7 @@ models:
 
   # Ollama 모델의 토큰 생성 제한 (기본값: 4096)
   # -1로 설정하면 모델의 기본 설정 또는 무제한(컨텍스트 윈도우까지)으로 생성합니다.
-  ollama_num_predict: -1
+  ollama_num_predict: 512
 
   # Ollama 모델의 온도 설정
   temperature: 0.1
@@ -57,8 +57,6 @@ rag:
 
   # 리트리버 설정
   retriever:
-    max_resource_pool_size: 10
-    max_resource_pool_size_bytes: 1073741824 # 1GB limit for resource pool
     search_type: "similarity"
     search_kwargs:
       k: 25  # 충분한 후보군 확보를 위해 상향
@@ -76,11 +74,8 @@ rag:
 
   # 재순위화(Reranking) 설정
   reranker:
-    enabled: true
     # [수정] 다국어 지원을 위해 모델 교체 (기존 TinyBERT는 영어 전용)
-    model_name: "ms-marco-MultiBERT-L-12" 
-    top_k: 15 # [수정] 문맥 유실 방지를 위해 후보군 확대
-    bypass_threshold: 0.95
+    model_name: "ms-marco-MultiBERT-L-12"
 
   # 텍스트 분할 설정
   text_splitter:
@@ -125,24 +120,12 @@ rag:
       <Core_Guidelines>
       1. [Language]: 사용자의 질문 언어에 맞추어 답변하십시오. (문서 언어와 무관)
       2. [Groundedness]: **절대 원칙**: 제공된 <Context>에 없는 내용은 절대 답변에 포함하지 마십시오. 외부 지식을 사용하면 정보의 신뢰성이 떨어질 수 있습니다. 모르는 내용은 "문서에 관련 정보가 없습니다"라고 답하십시오.
-      3. [Citations]: 모든 정보의 출처를 `[섹션명, p.X]` 형태로 인용하십시오. 가급적 특정 수치나 핵심 명사 바로 뒤에 붙이십시오.
+      3. [Citations]: **필수**: 모든 핵심 정보(수치, 정의, 주장, 비교)는 반드시 `[Section, p.X]` 형태로 인용하십시오. 인용 없는 답변은 불완전한 것으로 간주합니다. 인용은 해당 정보 바로 뒤에 붙이십시오.
       4. [Synthesis]: 흩어져 있는 정보들을 유기적으로 연결하여 질문에 대한 다각도 분석을 수행하십시오. 특히 섹션 간의 관계(원인과 결과, 실험과 결론 등)를 고려하십시오.
+      5. [Output Format]: 답변은 자연스러운 한국어 문장으로 작성하되, 각 문장이나 핵심 문단마다 인용을 포함하십시오.
       </Core_Guidelines>
 
-    # 2. 데이터 구조화 템플릿 (Data Injection)
-    qa_system_prompt: "" # 분석 프로토콜로 통합하여 비워둠
-    qa_human_prompt: |
-      제공된 컨텍스트를 정밀 분석하여 사용자의 질문에 답변하십시오.
-
-      <Context>
-      {context}
-      </Context>
-
-      <Question>
-      {input}
-      </Question>
-
-    # 3. 문서 관련성 평가 (Grading)
+    # 2. 문서 관련성 평가 (Grading)
     grading:
       instruction: |
         당신은 엄격한 RAG 시스템의 문서 평가관입니다. 아래 제공된 문서가 사용자의 질문에 답변하기 위해 실질적인 근거를 포함하고 있는지 판단하세요.
@@ -159,18 +142,6 @@ rag:
         문서:
         {context_text}
 
-    # 4. 질문 재구성 (Rewriting)
-    rewriting:
-      instruction: |
-        사용자의 질문을 분석하여 문서 저장소(RAG)에서 더 정확한 정보를 찾을 수 있도록 구체적인 검색어로 재구성하세요.
-
-        **작성 규칙:**
-        1. 불필요한 수식어는 제거하고, 핵심 키워드와 맥락 위주로 작성하세요.
-        2. 모델명, 프로젝트명, 기술적 약어 및 고유 명사는 검색의 핵심이므로 의미가 변하거나 누락되지 않도록 원형을 보존하거나 명확하게 확장하세요.
-        3. 검색 엔진이 이해하기 쉬운 명사 위주의 구문으로 작성하세요.
-      template: |
-        원본 질문: {query}
-
 
 # --- 평가(Evaluation) 설정 ---
 evaluation:
@@ -182,24 +153,6 @@ evaluation:
   max_workers: 2
 
 
-# --- 정밀 검증 루브릭 설정 (Grading Rubrics) ---
-GRADING_CONFIG:
-  rubrics:
-    sufficiency:
-      name: "근거 충분성"
-      description: "질문에 대해 완전하고 정확한 답변을 생성하기 위해 필요한 핵심 정보가 문서 내에 충분히 포함되어 있는지를 평가합니다."
-      criteria: "단순한 키워드 포함 여부를 넘어, 답변의 논리적 완결성을 뒷받침할 수 있는 구체적인 수치, 정의, 혹은 설명이 존재하는가?"
-    relevance:
-      name: "질문 연관성"
-      description: "문서의 내용이 사용자의 질문 의도 및 핵심 주제와 얼마나 직접적으로 연관되어 있는지를 평가합니다."
-      criteria: "질문에서 요구하는 핵심 엔티티나 개념이 문서의 주된 맥락에서 다뤄지고 있는가? 부수적인 언급에 그치지 않고 실질적인 연관성이 있는가?"
-    consistency:
-      name: "모순 여부"
-      description: "문서 내 정보가 서로 충돌하지 않으며, 질문에 대해 일관된 근거를 제공하는지를 평가합니다."
-      criteria: "동일한 대상에 대해 서로 다른 설명이 존재하거나, 논리적으로 상충하는 내용이 포함되어 답변의 신뢰성을 떨어뜨리지 않는가?"
-  scoring_scale: "0.0 to 1.0"
-  default_threshold: 0.7
-
 # --- 캐시 보안 설정 ---
 
 cache_security:
@@ -207,7 +160,6 @@ cache_security:
   hmac_secret: null
   trusted_paths:
     - ".model_cache"
-  on_validation_failure: "regenerate"
   check_permissions: true
   expected_file_mode: 0o644
   expected_dir_mode: 0o755
@@ -215,52 +167,17 @@ cache_security:
 # --- 전역 캐시 활성화 설정 ---
 global_cache:
   # 벡터 저장소(인덱싱 결과) 캐시 사용 여부
-  enable_vector_cache: false
+  enable_vector_cache: true
   # LLM 답변(Response) 캐시 사용 여부
   enable_response_cache: false
 
 # --- 채팅 UI 설정 ---
 ui:
-  container_height: 700
+  streaming:
+    timeout_seconds: 30
   messages:
-    preparing_answer: "답변 생성 준비 중..."
-    thinking: "🤔 생각을 정리하는 중입니다..."
-    no_thought_process: "아직 생각 과정이 없습니다."
-    no_related_info: |
-      제공된 문서에서 질문에 대한 명확한 정보를 찾기 어렵습니다. 😥
-
-      **다음을 시도해 보세요:**
-      - 질문을 좀 더 명확하게 하거나 다른 키워드를 사용해 보세요.
-      - 좀 더 일반적이거나 넓은 범위의 질문을 해보세요.
-
-    sidebar_title: "⚙️ 설정"
-    pdf_uploader_label: "PDF 파일 업로드"
-    model_selector_label: "추론 모델 선택"
-    embedding_selector_label: "임베딩 모델 선택"
-    system_status_title: "시스템 상태"
-    loading_models: "추론 모델 목록을 불러오는 중..."
-
-    pdf_viewer_title: "📄 PDF 미리보기"
     pdf_viewer_no_file: "미리볼 PDF가 없습니다. 사이드바에서 파일을 업로드해주세요."
-    pdf_viewer_prev_button: "← 이전"
-    pdf_viewer_next_button: "다음 →"
-    pdf_viewer_page_slider: "페이지 이동"
-    pdf_viewer_error: "PDF를 표시하는 중 오류가 발생했습니다: {e}"
-
-    chat_title: "💬 채팅"
-    chat_input_placeholder: "PDF 내용에 대해 질문해보세요."
-    chat_no_qa_system: "QA 시스템이 준비되지 않았습니다. PDF를 먼저 처리해주세요."
-    chat_guide: |
-      **RAG-Chat에 오신 것을 환영합니다!**
-
-      **💡 사용 가이드**
-      - **PDF 업로드:** 좌측 사이드바에서 분석하고 싶은 PDF를 업로드하세요.
-      - **모델 선택:** 로컬 추론 모델을 선택할 수 있습니다.
-      - **질문하기:** 문서 처리가 완료되면, 내용에 대해 자유롭게 질문할 수 있습니다.
-      - **PDF 뷰어:** 우측에서 원본 문서를 함께 보며 대화할 수 있습니다.
-    
-    streaming_error: "스트리밍 답변 생성 중 오류 발생: {e}"
-    generic_error: "오류가 발생했습니다: {error_msg}"
-    retry_button: "재시도"
+    # 빈 대화 상태의 단일 가이드 (Phase B: 가이드 5→1 통합)
+    chat_guide: "PDF를 업로드한 후 질문해 보세요"
     errors:
       ollama_not_running: "Ollama 서버에 연결할 수 없습니다. 서버가 실행 중인지 확인해주세요."
