@@ -345,7 +345,7 @@ async def stream_query_rag(
         try:
             # RAGSystem이 직접 생성한 스트림 이벤트를 핸들러에 전달
             async for chunk in handler.stream_graph_events(
-                rag_sys.astream(request.query, model_name=request.model_name),
+                await rag_sys.astream(request.query, model_name=request.model_name),
                 adaptive_controller=controller,
             ):
                 # 클라이언트 연결 끊김 확인 (자원 보호)

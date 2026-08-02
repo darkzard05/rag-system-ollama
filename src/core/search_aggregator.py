@@ -312,10 +312,10 @@ class SearchResultAggregator:
             doc_map[r.doc_id] = agg
 
         for r in r1:
-            agg = doc_map.get(r.doc_id)
-            if agg:
-                agg.source_nodes.append(n1)
-                agg.original_scores.append(r.score)
+            existing = doc_map.get(r.doc_id)
+            if existing:
+                existing.source_nodes.append(n1)
+                existing.original_scores.append(r.score)
             else:
                 agg = self._create_agg_result(r, score=0.0)
                 agg.source_nodes = [n0, n1]  # will be scored as 0 from n0

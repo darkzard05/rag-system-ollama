@@ -75,3 +75,33 @@ exclude = ["tests"]
 [[tool.mypy.overrides]]
 module = ["requests", "yaml"]
 ignore_missing_imports = true
+
+# ML/헤비 3rd-party: 구현 폐포 분석 생략 (stub/Any 처리)
+# 기본 follow_imports(normal)는 transformers+torch 등 site-packages 전체를
+# 분석해 345MB 캐시 + 5분 타임아웃 유발 → skip으로 전환 (자체 코드 검사는 유지)
+[[tool.mypy.overrides]]
+module = [
+    "IPython",
+    "PIL.*",
+    "aiohttp.*",
+    "bokeh.*",
+    "cryptography.*",
+    "fitz",
+    "huggingface_hub.*",
+    "jinja2.*",
+    "langchain_community.*",
+    "matplotlib.*",
+    "openai.*",
+    "onnx.*",
+    "playwright.*",
+    "prompt_toolkit.*",
+    "pymupdf",
+    "rich.*",
+    "sqlalchemy.*",
+    "streamlit.*",
+    "torch.*",
+    "tornado.*",
+    "transformers.*",
+    "werkzeug.*",
+]
+follow_imports = "skip"

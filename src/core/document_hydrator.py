@@ -72,11 +72,11 @@ async def hydrate_documents(docs: list[Document]) -> None:
 
         # 2. 대상 문서(청크)별 좌표 복원 및 비동기 스레드 파싱
         for file_hash, docs_in_file in file_hash_map.items():
-            page_nums = [
-                doc.metadata.get("page")
-                for doc in docs_in_file
-                if doc.metadata.get("page") is not None
-            ]
+            page_nums: list[int] = []
+            for doc in docs_in_file:
+                page = doc.metadata.get("page")
+                if page is not None:
+                    page_nums.append(page)
             coords_map = await coord_cache.get_coords_batch(file_hash, page_nums)
 
             for doc in docs_in_file:

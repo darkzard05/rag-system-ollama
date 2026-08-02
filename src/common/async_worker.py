@@ -35,6 +35,7 @@ class AsyncWorker:
 
     _instance: AsyncWorker | None = None
     _init_lock = threading.Lock()
+    _initialized: bool = False
 
     def __new__(cls) -> AsyncWorker:
         if cls._instance is None:
