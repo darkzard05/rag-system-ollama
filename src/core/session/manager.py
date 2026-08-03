@@ -6,12 +6,15 @@ UI 스레드와 비동기 스레드 간의 완벽한 데이터 공유를 위해
 전역 폴백 저장소를 주 데이터원으로 사용합니다.
 """
 
+from __future__ import annotations
+
 import copy
 import logging
 import os
 import threading
 import time
 import uuid
+from collections.abc import Set
 from contextvars import ContextVar
 from typing import Any
 
@@ -21,8 +24,8 @@ from common.constants import MAX_MESSAGE_HISTORY
 
 logger = logging.getLogger(__name__)
 _session_id_var: ContextVar[str] = ContextVar("session_id", default="default")
-# 스레드별 세션 ID 캐시: 비-Streamlit 스레드에서 동일 스레드 내 재사용 보장
-_thread_session_map: dict[str, str] = {}
+# 활성 세션 상한: 무분별한 세션 생성(예: API 헤더 남용)으로 인한 무한 성장 방지
+MAX_ACTIVE_SESSIONS = 64
 
 
 class SessionManager:
@@ -74,7 +77,6 @@ class SessionManager:
             cls._fallback_sessions.clear()
             cls._session_locks.clear()
         _session_id_var.set("default")
-        _thread_session_map.clear()
 
     @classmethod
     def _is_streamlit_running(cls) -> bool:
@@ -97,6 +99,12 @@ class SessionManager:
 
     @classmethod
     def get_session_id(cls) -> str:
+        """현재 컨텍스트의 세션 ID를 결정합니다.
+
+        우선순위: 명시적으로 설정된 contextvar → Streamlit 세션 → "default".
+        스레드 이름 기반의 임의 세션 생성은 제거했습니다 (교차 사용자 상태 누출 방지).
+        세션이 필요한 코드는 반드시 session_id를 명시적으로 전달해야 합니다.
+        """
         sid = _session_id_var.get()
         if sid and sid != "default":
             return sid
@@ -114,14 +122,7 @@ class SessionManager:
                     "[SESSION] Streamlit 컨텍스트 조회 실패, 폴백 사용: %s", exc
                 )
 
-        thread_key = threading.current_thread().name
-        if thread_key in _thread_session_map:
-            return _thread_session_map[thread_key]
-
-        thread_sid = f"{thread_key}_{uuid.uuid4().hex[:8]}"
-        _thread_session_map[thread_key] = thread_sid
-        _session_id_var.set(thread_sid)
-        return thread_sid
+        return "default"
 
     @classmethod
     def set_session_id(cls, session_id: str):
@@ -136,6 +137,8 @@ class SessionManager:
 
         with cls._map_lock:
             if sid not in cls._fallback_sessions:
+                if len(cls._fallback_sessions) >= MAX_ACTIVE_SESSIONS:
+                    cls._evict_oldest_session_locked()
                 new_state = cls.DEFAULT_SESSION_STATE.copy()
                 new_state["messages"] = []
                 new_state["status_logs"] = []
@@ -147,6 +150,36 @@ class SessionManager:
             state = cls._fallback_sessions[sid]
             state["last_accessed"] = time.time()
             return state
+
+    @classmethod
+    def _evict_oldest_session_locked(cls) -> None:
+        """가장 오래 사용되지 않은 세션을 퇴출합니다 (_map_lock 보유 중 호출).
+
+        - 답변 생성/스트리밍 중인 세션(is_generating_answer)은 퇴출 대상에서
+          제외합니다. 순수 LRU로 퇴출하면 스트리밍 세션이 도중에 사라집니다.
+        - 잡혀 있는 세션 락을 pop하면 상호배제가 깨지므로, 해제된 락만
+          정리합니다.
+        """
+        oldest_sid: str | None = None
+        oldest_ts = float("inf")
+        for candidate, state in cls._fallback_sessions.items():
+            if candidate == "default":
+                continue
+            if state.get("is_generating_answer"):
+                continue
+            ts = state.get("last_accessed", 0)
+            if ts < oldest_ts:
+                oldest_ts = ts
+                oldest_sid = candidate
+        if oldest_sid is not None:
+            del cls._fallback_sessions[oldest_sid]
+            lock = cls._session_locks.get(oldest_sid)
+            if lock is None or not lock.locked():
+                cls._session_locks.pop(oldest_sid, None)
+            logger.warning(
+                f"[SESSION] 활성 세션 상한({MAX_ACTIVE_SESSIONS}) 도달, "
+                f"가장 오래된 세션 퇴출: {oldest_sid}"
+            )
 
     @classmethod
     def init_session(cls, session_id: str | None = None):
@@ -175,28 +208,39 @@ class SessionManager:
             return
 
         sid = session_id or cls.get_session_id()
-        state = cls._get_state(sid)
 
+        # 상태를 _map_lock 안에서 취득 (퇴출/삭제 경합 제거)
+        with cls._map_lock:
+            state = cls._fallback_sessions.get(sid)
+        if state is None:
+            # 아직 없는 세션이면 생성 (기존 동작 유지)
+            state = cls._get_state(sid)
+
+        # 더티 키와 값을 세션 락 안에서 함께 스냅샷하여 TOCTOU, 부분 읽기,
+        # 별칭(UI가 내부 리스트 공유) 문제를 제거합니다.
+        values: dict[str, Any] = {}
         with cls._acquire_lock(sid):
             if key:
-                dirty = {key} if key in state else set()
+                if key in state:
+                    values[key] = state[key]
             else:
                 dirty = state["_dirty_keys"].copy()
                 state["_dirty_keys"].clear()
+                for k in dirty:
+                    if k in state:
+                        values[k] = state[k]
 
-        if not dirty:
+        if not values:
             return
 
         try:
-            for k in dirty:
-                if k in state:
-                    val = state[k]
-                    if isinstance(val, list):
-                        st.session_state[k] = val[:] if len(val) > 10 else val
-                    elif isinstance(val, dict):
-                        st.session_state[k] = copy.copy(val) if len(val) > 10 else val
-                    else:
-                        st.session_state[k] = val
+            for k, val in values.items():
+                if isinstance(val, list):
+                    st.session_state[k] = val[:]
+                elif isinstance(val, dict):
+                    st.session_state[k] = copy.copy(val)
+                else:
+                    st.session_state[k] = val
         except Exception as e:
             logger.warning(f"[SESSION] Streamlit 동기화 중 오류: {e}")
 
@@ -410,36 +454,46 @@ class SessionManager:
 
     @classmethod
     def delete_session(cls, session_id: str) -> bool:
-        """세션을 삭제하고 무거운 객체의 참조를 명시적으로 해제합니다."""
+        """세션을 삭제하고 무거운 객체의 참조를 명시적으로 해제합니다.
+
+        물리적 파일 삭제는 _map_lock 밖에서 수행하여, Windows 파일 락
+        백오프(sleep) 동안 전역 세션 접근이 블로킹되지 않도록 합니다.
+        """
+        pdf_path = None
         with cls._map_lock:
-            if session_id in cls._fallback_sessions:
-                state = cls._fallback_sessions[session_id]
+            if session_id not in cls._fallback_sessions:
+                return False
+            state = cls._fallback_sessions[session_id]
 
-                # 물리적 파일 삭제
-                pdf_path = state.get("pdf_file_path")
-                if pdf_path:
-                    cls.safe_remove_file(pdf_path)
+            # 물리적 파일 경로만 수집 (실제 삭제는 락 해제 후)
+            pdf_path = state.get("pdf_file_path")
 
-                # 무거운 객체 명시적 참조 해제 (메모리 누수 방지)
-                heavy_keys = [
-                    "rag_engine",
-                    "llm",
-                    "embedder",
-                    "active_faiss_retriever",
-                    "active_bm25_retriever",
-                ]
-                for k in heavy_keys:
-                    if k in state:
-                        state[k] = None
+            # 무거운 객체 명시적 참조 해제 (메모리 누수 방지)
+            heavy_keys = [
+                "rag_engine",
+                "llm",
+                "embedder",
+                "active_faiss_retriever",
+                "active_bm25_retriever",
+            ]
+            for k in heavy_keys:
+                if k in state:
+                    state[k] = None
 
-                del cls._fallback_sessions[session_id]
+            del cls._fallback_sessions[session_id]
 
-                if session_id in cls._session_locks:
+            if session_id in cls._session_locks:
+                # 잡히지 않은 락만 제거. 스트리밍 스레드가 잡고 있는 락을
+                # pop하면 이후 동일 sid에 새 락이 생성되어 상호배제가 깨집니다.
+                lock = cls._session_locks[session_id]
+                if not lock.locked():
                     del cls._session_locks[session_id]
 
-                logger.info(f"[SESSION] 세션 삭제 완료: {session_id}")
-                return True
-        return False
+            logger.info(f"[SESSION] 세션 삭제 완료: {session_id}")
+
+        if pdf_path:
+            cls.safe_remove_file(pdf_path)
+        return True
 
     @classmethod
     def cleanup_expired_sessions(cls, max_idle_seconds: int = 3600):
@@ -474,3 +528,24 @@ class SessionManager:
                     len(s.get("messages", [])) for s in cls._fallback_sessions.values()
                 ),
             }
+
+    @classmethod
+    def get_active_file_hashes(cls) -> Set[str]:
+        """현재 활성 세션들이 참조 중인 문서 해시 집합을 반환합니다."""
+        with cls._map_lock:
+            active: set[str] = set()
+            for state in cls._fallback_sessions.values():
+                file_hash = state.get("file_hash")
+                if isinstance(file_hash, str) and file_hash:
+                    active.add(file_hash)
+            return active
+
+    @classmethod
+    def get_all_pdf_paths(cls) -> list[str]:
+        """모든 활성 세션의 임시 PDF 경로를 반환합니다. (종료 핸들러용)"""
+        with cls._map_lock:
+            return [
+                path
+                for state in cls._fallback_sessions.values()
+                if (path := state.get("pdf_file_path"))
+            ]

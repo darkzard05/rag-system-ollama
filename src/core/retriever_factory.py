@@ -19,6 +19,7 @@ def create_vector_store(
     docs: list[Document],
     embedder: Embeddings,
     vectors: Any = None,
+    session_id: str | None = None,
 ) -> Any:
     """FAISS 벡터 저장소를 생성합니다."""
     import uuid
@@ -102,7 +103,9 @@ def create_vector_store(
         ef_search = 0  # IVF는 nprobe 사용
 
     logger.info(f"[FAISS] 적응형 전략 적용: {index_type} (Chunks: {chunk_count})")
-    SessionManager.add_status_log(f"최적 인덱스 구축 중 ({index_type})")
+    SessionManager.add_status_log(
+        f"최적 인덱스 구축 중 ({index_type})", session_id=session_id
+    )
 
     # 인덱스 생성 (코사인 유사도 기준 INNER_PRODUCT 사용)
     index = faiss.index_factory(d, index_type, faiss.METRIC_INNER_PRODUCT)

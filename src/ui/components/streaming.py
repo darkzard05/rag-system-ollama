@@ -9,19 +9,20 @@
 """
 
 import asyncio
-import contextlib
 import html
 import logging
 import queue
 import threading
 import uuid
-from collections.abc import Awaitable, Iterator
+from collections.abc import Iterator
+from concurrent.futures import CancelledError, Future
 from typing import Any, TypedDict
 
 import streamlit as st
 from streamlit.runtime.scriptrunner import add_script_run_ctx
 
 from api.streaming_handler import StreamChunk, get_streaming_handler
+from common.async_worker import AsyncWorker
 from common.config import UI_STREAMING_TIMEOUT
 from common.utils import apply_tooltips_to_response, extract_annotations_from_docs
 from core.session import SessionManager
@@ -52,6 +53,7 @@ def _spawn_stream_consumer(sid: str, msg_id: str, query: str, model_name: str):
     """별도 스레드에서 스트림 소비 → SessionManager 메시지 직접 업데이트"""
 
     def bg_task():
+        SessionManager.set_session_id(sid)
         try:
             for chunk in stream_chunks(query, model_name, sid):
                 # 세션 락 획득 후 메시지 부분 업데이트
@@ -114,27 +116,24 @@ def _spawn_stream_consumer(sid: str, msg_id: str, query: str, model_name: str):
     t.start()
 
 
-def _run_async_in_thread(coro: Awaitable[Any]) -> Any:
-    """Run an async coroutine in a new event loop (thread-safe)."""
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    try:
-        return loop.run_until_complete(coro)
-    finally:
-        with contextlib.suppress(Exception):
-            loop.run_until_complete(loop.shutdown_asyncgens())
-        with contextlib.suppress(Exception):
-            loop.close()
-
-
 def stream_chunks(
     query: str, model_name: str, session_id: str
 ) -> Iterator[StreamChunk]:
-    """비동기 스트림을 동기 Streamlit 환경에서 소비하기 위한 브릿지 제너레이터"""
+    """비동기 스트림을 동기 Streamlit 환경에서 소비하기 위한 브릿지 제너레이터
+
+    취소 갭: 타임아웃 시 _future.cancel()로 AsyncWorker 태스크를 취소하지만,
+    LangGraph/LLM 내부의 동기 호출 구간에서는 다음 await 지점에서만 취소가
+    반영됩니다. join(2s)이 타임아웃되면 daemon 스레드는 LLM 호출이 끝날 때까지
+    RAG 작업을 계속 실행합니다 (리소스는 rag_core finally에서 해제됨).
+    """
     q: queue.Queue = queue.Queue()
     _stop_event = threading.Event()
+    _future: Future | None = None
 
     def bg_task() -> None:
+        nonlocal _future
+        SessionManager.set_session_id(session_id or "default")
+
         async def run() -> None:
             try:
                 from core.rag_core import RAGSystem
@@ -149,6 +148,8 @@ def stream_chunks(
                     if _stop_event.is_set():
                         break
                     q.put(("chunk", chunk))
+            except asyncio.CancelledError:
+                logger.info("[CHAT] 스트리밍 작업이 취소되었습니다")
             except Exception as e:
                 logger.error(f"[CHAT] RAG 스트림 처리 오류: {e}", exc_info=True)
                 q.put(("error", e))
@@ -156,7 +157,10 @@ def stream_chunks(
                 q.put(("done", None))
 
         try:
-            _run_async_in_thread(run())
+            _future = AsyncWorker().submit(run())
+            _future.result()
+        except CancelledError:
+            logger.info("[CHAT] 스트리밍 작업이 취소되었습니다")
         except Exception as e:
             logger.error(f"[CHAT] 백그라운드 작업 오류: {e}", exc_info=True)
 
@@ -202,9 +206,17 @@ def stream_chunks(
                 raise
     finally:
         _stop_event.set()
+        if _future is not None and not _future.done():
+            _future.cancel()
         if t.is_alive():
             t.join(timeout=2)
-            logger.debug(f"[CHAT] Stream thread cleanup: {t.name}")
+            if t.is_alive():
+                logger.warning(
+                    f"[CHAT] 스트림 스레드가 제한 시간 내 종료되지 않음 "
+                    f"(취소는 다음 await에서만 반영됨): {t.name}"
+                )
+            else:
+                logger.debug(f"[CHAT] Stream thread cleanup: {t.name}")
 
 
 class StreamingResult(TypedDict):

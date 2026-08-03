@@ -1,13 +1,21 @@
 """
 PDF 단어 좌표(word_coords)를 위한 사이드 캐시 매니저.
 벡터 저장소의 메타데이터 비대화를 방지하기 위해 좌표 데이터를 SQLite에 별도로 저장하고 관리합니다.
+
+이벤트 루프 독립성:
+CoordCacheManager는 전용 owner 이벤트 루프 스레드를 보유합니다.
+모든 async 진입점은 호출자 루프와 무관하게 owner 루프로 라우팅되므로,
+AsyncWorker 루프(인덱싱)와 FastAPI 루프(쿼리) 등 서로 다른 루프에서
+동시에 접근해도 "attached to a different loop" 오류가 발생하지 않습니다.
 """
 
 import asyncio
 import contextlib
 import logging
 import sqlite3
+import threading
 import time
+from collections.abc import Coroutine
 from typing import Any
 
 import aiosqlite
@@ -20,6 +28,7 @@ CACHE_TTL_DAYS = 7
 _EVICTION_INTERVAL_SECONDS = 1800  # 30 minutes
 _CONNECTION_MAX_AGE = 300  # 5분: 연결 최대 생존 시간 (초)
 _CONNECTION_HEALTH_CHECK_INTERVAL = 30  # 30초: 헬스체크 간격
+_WRITE_BEHIND_QUEUE_MAX = 5000  # 백그라운드 큐 최대 대기 항목 (메모리 바운드)
 
 logger = logging.getLogger(__name__)
 
@@ -32,6 +41,7 @@ class CoordCacheManager:
     """단어 좌표 데이터를 SQLite에 캐싱하고 관리하는 클래스 (싱글톤)."""
 
     _instance: "CoordCacheManager | None" = None
+    _owner_start_lock = threading.Lock()
 
     _conn: aiosqlite.Connection | None
     _conn_lock: asyncio.Lock
@@ -40,8 +50,11 @@ class CoordCacheManager:
     _conn_healthy: bool
     _queue: asyncio.Queue
     _worker_task: asyncio.Task | None
+    _eviction_task: asyncio.Task | None
     _schema_ready: bool
     _eviction_started: bool
+    _owner_loop: asyncio.AbstractEventLoop | None
+    _owner_thread: threading.Thread | None
 
     def __new__(cls) -> "CoordCacheManager":
         if cls._instance is None:
@@ -51,10 +64,13 @@ class CoordCacheManager:
             cls._instance._conn_created_at = 0
             cls._instance._last_health_check = 0
             cls._instance._conn_healthy = False
-            cls._instance._queue = asyncio.Queue()
+            cls._instance._queue = asyncio.Queue(maxsize=_WRITE_BEHIND_QUEUE_MAX)
             cls._instance._worker_task = None
+            cls._instance._eviction_task = None
             cls._instance._schema_ready = False
             cls._instance._eviction_started = False
+            cls._instance._owner_loop = None
+            cls._instance._owner_thread = None
         return cls._instance
 
     def _create_schema_sync(self) -> None:
@@ -78,6 +94,84 @@ class CoordCacheManager:
             )
             conn.commit()
 
+    # -- owner 이벤트 루프 --------------------------------------------------
+
+    def _ensure_owner_loop(self) -> None:
+        """전용 owner 이벤트 루프 스레드를 1회 시작합니다."""
+        if (
+            self._owner_thread is not None
+            and self._owner_thread.is_alive()
+            and self._owner_loop is not None
+            and self._owner_loop.is_running()
+        ):
+            return
+
+        with self._owner_start_lock:
+            if (
+                self._owner_thread is not None
+                and self._owner_thread.is_alive()
+                and self._owner_loop is not None
+                and self._owner_loop.is_running()
+            ):
+                return
+
+            loop = asyncio.new_event_loop()
+            self._owner_loop = loop
+            ready = threading.Event()
+
+            def _run_loop() -> None:
+                asyncio.set_event_loop(loop)
+                ready.set()
+                loop.run_forever()
+
+            self._owner_thread = threading.Thread(
+                target=_run_loop, daemon=True, name="CoordCacheLoop"
+            )
+            self._owner_thread.start()
+            if not ready.wait(timeout=5):
+                # 스레드 시작 실패: 필드 리셋 후 명확한 예외 (비실행 루프에
+                # run_coroutine_threadsafe를 던지는 사고 방지)
+                self._owner_thread = None
+                self._owner_loop = None
+                raise RuntimeError("좌표 캐시 owner 이벤트 루프 시작 실패")
+            logger.info("좌표 캐시 owner 이벤트 루프 시작됨")
+
+    async def _submit(self, coro: Coroutine[Any, Any, Any]) -> Any:
+        """코루틴을 owner 루프에서 실행합니다. 호출자가 이미 owner 루프면 직접 실행."""
+        self._ensure_owner_loop()
+        assert self._owner_loop is not None
+
+        try:
+            current_loop = asyncio.get_running_loop()
+        except RuntimeError:
+            current_loop = None
+
+        if current_loop is self._owner_loop:
+            return await coro
+        return await asyncio.wrap_future(
+            asyncio.run_coroutine_threadsafe(coro, self._owner_loop)
+        )
+
+    def _stop_owner_loop(self) -> None:
+        """owner 이벤트 루프를 중지하고 스레드를 정리합니다.
+
+        - owner 루프 스레드 자신이 호출하면 join을 생략합니다.
+          (자기 스레드 join 시 RuntimeError 발생)
+        - _owner_start_lock으로 시작(_ensure_owner_loop)과 직렬화하여
+          close() 중 재시작 경합을 방지합니다.
+        """
+        with self._owner_start_lock:
+            loop = self._owner_loop
+            thread = self._owner_thread
+            if loop is not None and loop.is_running():
+                loop.call_soon_threadsafe(loop.stop)
+            if thread is not None and threading.current_thread() is not thread:
+                thread.join(timeout=5)
+            self._owner_thread = None
+            self._owner_loop = None
+
+    # -- 내부 구현 (항상 owner 루프에서 실행) --------------------------------
+
     async def _ensure_schema(self) -> None:
         """첫 DB 접근 시 스키마를 1회 생성하고 eviction 루프를 시작합니다."""
         if self._schema_ready:
@@ -86,7 +180,7 @@ class CoordCacheManager:
         self._schema_ready = True
         if not self._eviction_started:
             self._eviction_started = True
-            asyncio.create_task(self.start_eviction_loop())
+            self._eviction_task = asyncio.create_task(self.start_eviction_loop())
             logger.info("좌표 캐시 eviction 루프 시작됨")
 
     async def _ensure_worker_started(self) -> None:
@@ -161,21 +255,14 @@ class CoordCacheManager:
             self._conn_healthy = True
             return self._conn
 
-    async def close(self) -> None:
-        """연결을 명시적으로 닫습니다."""
-        async with self._conn_lock:
-            if self._conn is not None:
-                with contextlib.suppress(Exception):
-                    await self._conn.close()
-                self._conn = None
-                self._conn_healthy = False
-
     async def start_eviction_loop(self) -> None:
         """백그라운드에서 주기적으로 캐시를 정리합니다."""
         while True:
             await asyncio.sleep(_EVICTION_INTERVAL_SECONDS)
             try:
                 await self._evict_old_entries()
+            except asyncio.CancelledError:
+                break
             except Exception as e:
                 logger.error(f"백그라운드 캐시 정리 중 오류: {e}")
 
@@ -200,6 +287,8 @@ class CoordCacheManager:
             """)
         await db.commit()
 
+    # -- 공개 API (루프 독립) ----------------------------------------------
+
     async def save_coords(
         self,
         file_hash: str,
@@ -211,12 +300,26 @@ class CoordCacheManager:
             return False
 
         try:
-            await self._ensure_worker_started()
-            await self._queue.put((file_hash, page_num, coords))
+            await self._submit(self._save_coords_impl(file_hash, page_num, coords))
             return True
         except Exception as e:
             logger.error(f"좌표 캐시 큐 삽입 실패 ({file_hash}, p{page_num}): {e}")
             return False
+
+    async def _save_coords_impl(
+        self,
+        file_hash: str,
+        page_num: int,
+        coords: list[dict[str, Any]],
+    ) -> None:
+        await self._ensure_worker_started()
+        try:
+            # 큐가 가득 차면 블로킹하지 않고 드롭 (좌표는 재계산 가능한 캐시)
+            self._queue.put_nowait((file_hash, page_num, coords))
+        except asyncio.QueueFull:
+            logger.warning(
+                f"좌표 캐시 큐 가득 참 — 좌표 저장 생략 ({file_hash}, p{page_num})"
+            )
 
     async def get_coords_batch(
         self, file_hash: str, page_nums: list[int]
@@ -225,6 +328,15 @@ class CoordCacheManager:
         if not page_nums:
             return {}
 
+        try:
+            return await self._submit(self._get_coords_batch_impl(file_hash, page_nums))
+        except Exception as e:
+            logger.error(f"좌표 캐시 배치 로드 실패 ({file_hash}): {e}")
+            return {}
+
+    async def _get_coords_batch_impl(
+        self, file_hash: str, page_nums: list[int]
+    ) -> dict[int, list[dict[str, Any]]]:
         try:
             # IN 절을 위한 쿼리 생성
             placeholders = ",".join(["?"] * len(page_nums))
@@ -246,6 +358,15 @@ class CoordCacheManager:
     ) -> list[dict[str, Any]] | None:
         """캐시에서 좌표 데이터를 로드합니다."""
         try:
+            return await self._submit(self._get_coords_impl(file_hash, page_num))
+        except Exception as e:
+            logger.error(f"좌표 캐시 로드 실패 ({file_hash}, p{page_num}): {e}")
+            return None
+
+    async def _get_coords_impl(
+        self, file_hash: str, page_num: int
+    ) -> list[dict[str, Any]] | None:
+        try:
             db = await self._get_connection()
             async with db.execute(
                 "SELECT coords FROM coords WHERE file_hash = ? AND page_num = ?",
@@ -262,6 +383,9 @@ class CoordCacheManager:
 
     async def clear_cache(self, file_hash: str | None = None):
         """특정 파일 또는 전체 캐시를 삭제합니다 (비동기)."""
+        await self._submit(self._clear_cache_impl(file_hash))
+
+    async def _clear_cache_impl(self, file_hash: str | None = None):
         try:
             db = await self._get_connection()
             if file_hash:
@@ -271,6 +395,36 @@ class CoordCacheManager:
             await db.commit()
         except aiosqlite.Error as e:
             logger.error(f"좌표 캐시 삭제 중 오류: {e}")
+
+    async def close(self) -> None:
+        """연결 및 백그라운드 태스크를 정리하고 owner 루프를 종료합니다.
+
+        종료 후 재사용(테스트)을 위해 루프에 바인딩된 프리미티브도
+        초기화합니다. (이전 루프에 묶인 _conn_lock/_queue는 다음 루프에서
+        "different event loop" 오류를 유발합니다)
+        """
+        if self._owner_loop is None:
+            return
+        await self._submit(self._close_impl())
+        self._stop_owner_loop()
+        self._conn_lock = asyncio.Lock()
+        self._queue = asyncio.Queue(maxsize=_WRITE_BEHIND_QUEUE_MAX)
+
+    async def _close_impl(self) -> None:
+        async with self._conn_lock:
+            if self._conn is not None:
+                with contextlib.suppress(Exception):
+                    await self._conn.close()
+                self._conn = None
+                self._conn_healthy = False
+
+        for task in (self._worker_task, self._eviction_task):
+            if task is not None and not task.done():
+                task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await task
+        self._worker_task = None
+        self._eviction_task = None
 
 
 # 싱글톤 인스턴스 노출

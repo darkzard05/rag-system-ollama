@@ -35,6 +35,9 @@ def _get_session_id(config: RunnableConfig | None = None) -> str:
         sid = config["configurable"].get("session_id")
         if sid:
             return sid
+        # config는 전달됐지만 session_id가 누락된 경우 — 전파 버그 신호.
+        # 정상적인 "default" 세션 사용(비 Streamlit 모드)은 조용히 폴백합니다.
+        logger.warning("[GRAPH] config에 session_id 누락 — 암묵적 세션 폴백")
     return SessionManager.get_session_id()
 
 

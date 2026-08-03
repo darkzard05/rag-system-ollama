@@ -50,6 +50,8 @@ reports/test_output.txt
 logs/*.log
 logs/*.csv
 logs/*.json
+# 잘못된 CWD(예: src/에서 실행)로 생성될 수 있는 잔재 로그 디렉터리 방어
+src/logs/
 monitoring/grafana-storage/
 
 # Environment variables

@@ -218,11 +218,36 @@ class RAGSystem:
         return SessionManager.get("status_logs", session_id=self.session_id) or []
 
     def clear_session(self) -> None:
+        """현재 세션만 초기화합니다.
+
+        전역 리소스 풀(모든 세션 공유)을 비우는 clear_all()은 다른 사용자의
+        캐시를 파괴하므로 수행하지 않습니다. 현재 세션의 문서를 참조하는
+        세션이 없을 때에만 해당 문서의 리트리버를 풀에서 제거합니다.
+
+        답변 생성/스트리밍 중에는 초기화를 연기합니다. 도중에 삭제하면
+        백그라운드 스트림 컨슈머의 청크가 새 세션 상태로 섞여 들어갑니다
+        (교차 턴 오염).
+        """
         self._ensure_session_context()
-        try:
-            loop = asyncio.get_running_loop()
-            if loop.is_running():
-                loop.create_task(get_resource_manager().clear_all())
-        except RuntimeError:
-            logger.warning("[RAG] No running event loop for resource pool cleanup")
+        if SessionManager.get(
+            "is_generating_answer", False, session_id=self.session_id
+        ):
+            logger.warning(
+                "[RAG] 답변 생성 중 세션 초기화 요청 — 스트림 종료 후 재시도하세요."
+            )
+            return
+
+        file_hash = SessionManager.get("file_hash", session_id=self.session_id)
         SessionManager.reset_all_state(session_id=self.session_id)
+
+        if file_hash:
+            active_hashes = SessionManager.get_active_file_hashes()
+            if file_hash not in active_hashes:
+                try:
+                    loop = asyncio.get_running_loop()
+                    if loop.is_running():
+                        loop.create_task(
+                            get_resource_manager().unregister_retrievers(file_hash)
+                        )
+                except RuntimeError:
+                    logger.warning("[RAG] No running event loop for retriever cleanup")

@@ -76,7 +76,7 @@ class ResponseCache:
         self.access_log: list[dict[str, Any]] = []
 
     async def get(
-        self, query: str, use_semantic: bool = True
+        self, query: str, session_id: str | None = None, use_semantic: bool = True
     ) -> ResponseCacheEntry | None:
         """
         응답 조회
@@ -87,7 +87,7 @@ class ResponseCache:
             return None
 
         try:
-            cache_key = self._generate_key(query)
+            cache_key = self._generate_key(query, session_id)
 
             # 메모리 캐시 확인
             result = await self.cache_manager.get(cache_key, use_semantic=False)
@@ -115,6 +115,7 @@ class ResponseCache:
         response: str,
         metadata: dict[str, Any] | None = None,
         ttl_hours: int | None = None,
+        session_id: str | None = None,
     ) -> None:
         """
         응답 저장
@@ -125,7 +126,7 @@ class ResponseCache:
             return
 
         try:
-            cache_key = self._generate_key(query)
+            cache_key = self._generate_key(query, session_id)
             ttl_seconds = (ttl_hours or 3) * 3600
 
             entry = ResponseCacheEntry(
@@ -181,12 +182,13 @@ class ResponseCache:
         """통합 통계"""
         return self.cache_manager.get_combined_stats()
 
-    def _generate_key(self, query: str) -> str:
+    def _generate_key(self, query: str, session_id: str | None = None) -> str:
         """캐시 키 생성 (문서 식별자 포함으로 캐시 오염 방지)"""
         from core.session import SessionManager
 
+        sid = session_id or SessionManager.get_session_id()
         # 현재 세션의 문서 식별자(콘텐츠 해시) 가져오기
-        file_hash = SessionManager.get("file_hash", "")
+        file_hash = SessionManager.get("file_hash", "", session_id=sid)
         doc_id = file_hash[:8] if file_hash else "no_doc"
 
         combined_key = f"{doc_id}:{query}"
@@ -304,7 +306,8 @@ class QueryCache:
         """캐시 키 생성 (문서 식별자 포함)"""
         from core.session import SessionManager
 
-        file_hash = SessionManager.get("file_hash", "")
+        sid = SessionManager.get_session_id()
+        file_hash = SessionManager.get("file_hash", "", session_id=sid)
         doc_id = file_hash[:8] if file_hash else "no_doc"
 
         combined_key = f"{doc_id}:{query}"

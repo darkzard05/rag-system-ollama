@@ -24,13 +24,16 @@ from enum import Enum
 from typing import Any
 
 try:
+    from common.config import PROJECT_ROOT
     from common.logging_config import get_logger
 
     logger = get_logger(__name__)
 except ImportError:
     import logging
+    from pathlib import Path
 
     logger = logging.getLogger(__name__)
+    PROJECT_ROOT = Path(__file__).parent.parent.parent.parent
 
 
 def _get_psutil() -> Any:
@@ -359,9 +362,13 @@ class PerformanceMonitor:
         self._operations: list[OperationMetrics] = []
         self._max_operations = 10000
 
-        self.csv_path = os.path.join("logs", "performance_metrics.csv")
-        self.jsonl_path = os.path.join(
-            "logs", "eval", f"qa_history_{datetime.now().strftime('%Y%m')}.jsonl"
+        # [경로 고정] CWD와 무관하게 항상 <루트>/logs/로 수렴
+        self.csv_path = PROJECT_ROOT / "logs" / "performance_metrics.csv"
+        self.jsonl_path = (
+            PROJECT_ROOT
+            / "logs"
+            / "eval"
+            / f"qa_history_{datetime.now().strftime('%Y%m')}.jsonl"
         )
         self._init_csv()
         self._init_jsonl()

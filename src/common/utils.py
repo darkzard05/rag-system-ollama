@@ -8,6 +8,8 @@ import html
 import logging
 import os
 import re
+from collections.abc import Awaitable
+from typing import Any
 
 import streamlit as st
 
@@ -489,7 +491,7 @@ def count_tokens_rough(text: str) -> int:
     return int(rough_count) + 1
 
 
-def run_in_background_worker(coro, session_id: str) -> None:
+def run_in_background_worker(coro: Awaitable[Any], session_id: str) -> None:
     """
     Streamlit 환경에서 코루틴을 AsyncWorker의 전용 이벤트 루프에서 실행하는 백그라운드 워커.
     - run_coroutine_threadsafe로 스레드 안전하게 코루틴 제출
@@ -498,8 +500,13 @@ def run_in_background_worker(coro, session_id: str) -> None:
     from streamlit.runtime.scriptrunner import get_script_run_ctx
 
     from common.async_worker import AsyncWorker
+    from core.session import SessionManager
 
     ctx = get_script_run_ctx()
+
+    async def _with_session() -> Any:
+        SessionManager.set_session_id(session_id)
+        return await coro
 
     def _on_complete(future):
         try:
@@ -519,5 +526,5 @@ def run_in_background_worker(coro, session_id: str) -> None:
             except Exception as e:
                 logger.error(f"Background worker rerun failed: {e}", exc_info=True)
 
-    future = AsyncWorker().submit(coro)
+    future = AsyncWorker().submit(_with_session())
     future.add_done_callback(_on_complete)

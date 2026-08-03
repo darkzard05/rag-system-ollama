@@ -131,7 +131,11 @@ class PipelineBuilder:
             "지식 베이스(Vector Index) 생성 중...", session_id=self.session_id
         )
         vector_store_future = asyncio.to_thread(
-            create_vector_store, doc_splits, embedder, vectors=vectors
+            create_vector_store,
+            doc_splits,
+            embedder,
+            vectors=vectors,
+            session_id=self.session_id,
         )
         bm25_future = asyncio.to_thread(create_bm25_retriever, doc_splits)
         vector_store, bm25_retriever = await asyncio.gather(

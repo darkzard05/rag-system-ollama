@@ -39,7 +39,7 @@ st.set_page_config(
 # 2. 로깅 설정 (최상단, 서버당 1회만 초기화)
 @st.cache_resource
 def _init_logging() -> logging.Logger:
-    return setup_logging(log_level="INFO", log_file=Path("logs/app.log"))
+    return setup_logging(log_level="INFO", log_file=FilePathConstants.LOG_FILE)
 
 
 logger = _init_logging()
@@ -131,12 +131,16 @@ def _init_temp_directory():
 
 
 def _cleanup_current_file():
-    """현재 세션에서 사용 중인 임시 파일을 삭제합니다. (종료 핸들러용)"""
+    """모든 세션에서 사용 중인 임시 파일을 삭제합니다. (종료 핸들러용)
+
+    "default" 세션만 정리하면 다른 세션의 임시 PDF가 남으므로,
+    전체 세션의 경로를 수집하여 삭제합니다.
+    """
     from core.session import SessionManager
 
     try:
-        path = SessionManager.get("pdf_file_path", create=False)
-        if path:
+        paths = SessionManager.get_all_pdf_paths()
+        for path in paths:
             SessionManager.safe_remove_file(path)
     except Exception:
         pass
