@@ -174,7 +174,10 @@ global_cache:
 # --- 채팅 UI 설정 ---
 ui:
   streaming:
-    timeout_seconds: 30
+    # 스트리밍 청크 대기 타임아웃 (초) — 연속 3회 타임아웃 시 실패 처리.
+    # 로컬 Ollama 콜드 스타트(모델 로드/인덱스 빌드) 시 첫 청크까지 오래 걸릴 수
+    # 있으므로 30 → 60초로 상향하여 가짜 타임아웃(최대 180초)을 방지합니다.
+    timeout_seconds: 60
   messages:
     pdf_viewer_no_file: "미리볼 PDF가 없습니다. 사이드바에서 파일을 업로드해주세요."
     # 빈 대화 상태의 단일 가이드 (Phase B: 가이드 5→1 통합)

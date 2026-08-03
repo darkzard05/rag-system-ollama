@@ -23,6 +23,7 @@ from common.async_worker import AsyncWorker
 from common.config import (
     DEFAULT_EMBEDDING_MODEL,
     DEFAULT_OLLAMA_MODEL,
+    MSG_ERROR_OLLAMA_NOT_RUNNING,
 )
 from common.constants import FilePathConstants, StringConstants
 from common.logging_config import setup_logging
@@ -119,6 +120,23 @@ def _get_available_models_cached():
     from core.model_loader import get_available_models
 
     return get_available_models()
+
+
+def _load_available_models() -> list[str]:
+    """Ollama 모델 목록을 동적으로 조회하여 반환합니다.
+
+    get_available_models는 Ollama 미연결 시 기본 모델과 오류 문자열을 함께
+    반환할 수 있으므로, UI에 노출되면 안 되는 오류 문자열은 걸러냅니다.
+    조회가 실패(타임아웃/비정상 종료 등)하면 안전하게 기본 모델로 폴백합니다.
+    """
+    try:
+        models = _get_available_models_cached()
+    except Exception:
+        logger.exception("[SYSTEM] Ollama 모델 목록 조회 실패, 기본 모델로 대체")
+        return [DEFAULT_OLLAMA_MODEL]
+
+    filtered = [m for m in models if m != MSG_ERROR_OLLAMA_NOT_RUNNING]
+    return filtered or [DEFAULT_OLLAMA_MODEL]
 
 
 @safe_cache_resource(show_spinner=False)
@@ -458,6 +476,13 @@ def on_embedding_change() -> None:
         SessionManager.set("needs_rag_rebuild", True)
 
 
+def on_refresh_models() -> None:
+    """Ollama 모델 목록을 재조회하여 사이드바 셀렉터를 갱신합니다."""
+    _get_available_models_cached.clear()
+    st.session_state.available_models_list = _load_available_models()
+    st.rerun()
+
+
 def _render_app_layout(available_models: list[str] | None = None) -> None:
     from core.session import SessionManager
     from ui.components.sidebar import render_settings_content
@@ -468,6 +493,7 @@ def _render_app_layout(available_models: list[str] | None = None) -> None:
             model_selector_callback=on_model_change,
             embedding_selector_callback=on_embedding_change,
             new_chat_callback=on_new_chat,
+            refresh_models_callback=on_refresh_models,
             is_generating=bool(SessionManager.get("is_generating_answer", False)),
             current_file_name=SessionManager.get("last_uploaded_file_name"),
             available_models=available_models,
@@ -591,7 +617,7 @@ def main() -> None:
     UIBridge.sync_session()
 
     if "available_models_list" not in st.session_state:
-        st.session_state.available_models_list = [DEFAULT_OLLAMA_MODEL]
+        st.session_state.available_models_list = _load_available_models()
 
     inject_custom_css()
 

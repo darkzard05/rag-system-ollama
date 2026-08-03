@@ -310,8 +310,9 @@ def apply_tooltips_to_response(
     response_text: str, documents: list | None = None, msg_index: int = 0
 ) -> str:
     """
-    답변 내의 인용구([1], [p.5] 등)를 찾아 문서 정보 툴팁을 입히고
-    클릭 시 해당 PDF 페이지로 이동 및 하이라이트 기능을 활성화합니다.
+    답변 내의 인용구([1], [p.5] 등)에 문서 정보 툴팁을 입힙니다.
+    스팬은 시각적 구분용이며 클릭 동작이 없습니다 (단순 메타데이터).
+    실제 페이지 이동은 네이티브 참조 popover 버튼이 담당합니다.
     """
     if not response_text:
         return response_text
@@ -382,12 +383,14 @@ def apply_tooltips_to_response(
                 html.escape(content).replace("\n", " ").strip()[:300] + "..."
             )
 
-        # [HIGHLIGHT] 인터랙티브 하이라이트 스타일 및 데이터 속성 적용
-        # data-page 속성은 UI에서 클릭 시 해당 페이지로 즉시 이동하는 트리거로 사용됨
+        # 인용 스타일: 색/밑줄로 시각적 구분만 유지한다. 스팬은 클릭
+        # 동작이 없으므로 cursor: pointer를 사용하지 않는다 (죽은 제스처 방지).
+        # 페이지 이동은 네이티브 참조 popover 버튼(documents 기반)이 담당.
+        # data-page는 순수 메타데이터로만 남긴다 (클릭 트리거가 아님).
         return (
             f'<span class="citation-highlight" title="{clean_content}" '
             f'data-page="{target_page}" '
-            f'style="color: #007bff; font-weight: 600; cursor: pointer; text-decoration: underline; text-underline-offset: 3px;">'
+            f'style="color: #007bff; font-weight: 600; text-decoration: underline; text-underline-offset: 3px;">'
             f"{full_match}</span>"
         )
 

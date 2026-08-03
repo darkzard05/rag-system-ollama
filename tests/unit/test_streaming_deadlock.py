@@ -57,6 +57,16 @@ def _wait_for_flag_cleared(sid: str, timeout: float = 5.0) -> None:
     assert SessionManager.get("is_generating_answer", False, sid) is False
 
 
+def _wait_for_pdf_side_effects(sid: str, timeout: float = 5.0) -> None:
+    """PDF 부작용은 플래그 해제 이후 스레드에서 적용되므로 폴링으로 대기합니다."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if SessionManager.get("pdf_annotations", None, session_id=sid) is not None:
+            return
+        time.sleep(0.02)
+    pytest.fail(f"pdf_annotations가 {timeout}s 내에 설정되지 않음 (sid={sid})")
+
+
 def test_consumer_completes_sets_generating_false_no_deadlock():
     """정상 완료: finally 블록이 is_generating_answer를 해제해야 한다.
 
@@ -116,6 +126,41 @@ def test_consumer_error_sets_message_error_and_clears_flag():
     # P0 계약: 원시 예외 문자열은 노출하지 않고 친화적 메시지로 매핑된다
     assert "boom" not in target["error"]
     assert "오류가 발생" in target["error"]
+
+
+def test_consumer_documents_set_pdf_side_effects():
+    """완료 턴: 문서 메타데이터의 page로 pdf_annotations/자동 점프가 반영된다."""
+    sid = "test_stream_deadlock_pdf"
+    SessionManager.reset_all_state(sid)
+    SessionManager.set_session_id(sid)
+    SessionManager.set("is_generating_answer", True, sid)
+    SessionManager.set("pdf_file_path", "dummy.pdf", sid)
+
+    doc = MagicMock()
+    doc.metadata = {"page": 7}
+    fake_chunks = [
+        _fake_chunk(content="정리된 답변입니다.", metadata={"documents": [doc]}),
+    ]
+
+    from ui.components.streaming import start_streaming_turn
+
+    with patch(
+        "ui.components.streaming.stream_chunks",
+        return_value=iter(fake_chunks),
+    ):
+        msg_id = start_streaming_turn(sid, "질문", "test-model")
+
+    _wait_for_flag_cleared(sid)
+    assert SessionManager.get("is_generating_answer", False, sid) is False
+
+    messages = SessionManager.get_messages(session_id=sid)
+    target = next(m for m in messages if m.get("msg_id") == msg_id)
+    assert target["documents"] == [doc]
+    _wait_for_pdf_side_effects(sid)
+    assert SessionManager.get("pdf_annotations", session_id=sid) == []
+    assert SessionManager.get("pdf_target_page", session_id=sid) == 7
+    assert SessionManager.get("current_page", session_id=sid) == 7
+    assert SessionManager.get("generation_cancel", False, sid) is False
 
 
 def test_render_message_shows_error_via_st_error():

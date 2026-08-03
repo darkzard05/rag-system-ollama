@@ -126,8 +126,10 @@ def render_message(
 
         # 완료된 어시스턴트 메시지의 하단 정보
         if role == "assistant" and msg_type == "general":
-            # 참조 페이지
-            if documents and is_latest:
+            # 참조 페이지 popover는 documents가 있는 모든 완료된 어시스턴트
+            # 메시지에 렌더링한다. 버튼 키는 msg_id 기반이므로 이전 답변과
+            # 공존해도 안전하다 (최신 여부(is_latest)와 무관).
+            if documents:
                 _render_references_popover(
                     msg_id, documents, on_page_jump=_handle_page_jump
                 )

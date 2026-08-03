@@ -2,15 +2,17 @@
 
 Phase B에서 성능 지표 popover 렌더링은 제거되었습니다. metrics는 세션 메시지에
 저장된 채 유지되므로, 여기서는 (1) 렌더링 경로가 popover/성능 테이블 HTML을
-더 이상 생성하지 않고, (2) persist_completed_turn이 metrics를 메시지에
-그대로 저장하는지 검증합니다.
+더 이상 생성하지 않고, (2) 스트리밍 소비 스레드가 performance 청크를 메시지
+metrics로 그대로 저장하는지 검증합니다.
 """
 
+import time
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 from core.session import SessionManager
 from ui.components.chat import render_message
-from ui.components.streaming import StreamingResult, persist_completed_turn
+from ui.components.streaming import start_streaming_turn
 
 _METRICS = {
     "total_time": 2.345,
@@ -18,6 +20,34 @@ _METRICS = {
     "input_token_count": 150,
     "token_count": 250,
 }
+
+
+def _fake_chunk(
+    content: str = "",
+    thought: str = "",
+    status: str | None = None,
+    metadata: dict | None = None,
+    performance: dict | None = None,
+) -> SimpleNamespace:
+    """StreamChunk와 동일한 속성을 가진 경량 fake 청크를 생성합니다."""
+    return SimpleNamespace(
+        status=status,
+        thought=thought,
+        content=content,
+        metadata=metadata,
+        performance=performance,
+    )
+
+
+def _wait_for_flag_cleared(sid: str, timeout: float = 5.0) -> None:
+    """is_generating_answer가 False가 될 때까지 폴링합니다 (데드락 감지)."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        raw_state = SessionManager._fallback_sessions.get(sid, {})
+        if raw_state.get("is_generating_answer", True) is False:
+            break
+        time.sleep(0.05)
+    assert SessionManager.get("is_generating_answer", False, sid) is False
 
 
 def _render_with_metrics(role: str = "assistant") -> MagicMock:
@@ -72,26 +102,24 @@ def test_user_role_no_popover_even_with_documents():
     mock_st.popover.assert_not_called()
 
 
-def test_persist_completed_turn_stores_metrics():
-    """metrics는 렌더링만 중단되고 세션 메시지에 그대로 저장됩니다."""
+def test_streaming_chunk_performance_stored_as_metrics():
+    """performance 청크는 렌더링과 무관하게 세션 메시지 metrics에 그대로 저장됩니다."""
     session_id = "metrics_storage"
     SessionManager.reset_all_state(session_id)
+    SessionManager.set("is_generating_answer", True, session_id)
 
-    result: StreamingResult = {
-        "content": "답변 내용입니다.",
-        "thought": "생각 과정",
-        "documents": [],
-        "performance": dict(_METRICS),
-        "processed_content": "답변 내용입니다.",
-        "error": None,
-    }
+    fake_chunks = [
+        _fake_chunk(content="답변 내용입니다.", performance=dict(_METRICS)),
+    ]
+    with patch(
+        "ui.components.streaming.stream_chunks",
+        return_value=iter(fake_chunks),
+    ):
+        start_streaming_turn(session_id, "질문", "test-model")
 
-    with patch("ui.components.streaming.st") as mock_st:
-        mock_st.rerun = MagicMock()
-        persist_completed_turn(session_id, result)
+    _wait_for_flag_cleared(session_id)
 
     messages = SessionManager.get_messages(session_id=session_id)
     assert messages[-1]["role"] == "assistant"
     assert messages[-1]["metrics"] == _METRICS
-    assert SessionManager.get("is_generating_answer", session_id=session_id) is False
-    mock_st.rerun.assert_called_once()
+    assert SessionManager.get("is_generating_answer", False, session_id) is False

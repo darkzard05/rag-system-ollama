@@ -5,7 +5,7 @@
   스레드+큐 브릿지 (3회 연속 타임아웃 가드 포함).
 - start_streaming_turn: streaming 메시지를 타임라인에 추가하고 백그라운드
   스레드에서 청크를 소비·업데이트한다.
-- persist_completed_turn: 완료/오류 결과를 세션에 저장하고 정리.
+- _finalize_pdf_side_effects: 완료 턴의 PDF 주석·자동 페이지 점프를 반영한다.
 """
 
 import asyncio
@@ -16,17 +16,13 @@ import threading
 import uuid
 from collections.abc import Iterator
 from concurrent.futures import CancelledError, Future
-from typing import Any, TypedDict
+from typing import Any
 
-import streamlit as st
 from streamlit.runtime.scriptrunner import add_script_run_ctx
 
 from api.streaming_handler import StreamChunk, get_streaming_handler
 from common.async_worker import AsyncWorker
-from common.config import (
-    MSG_ERROR_OLLAMA_NOT_RUNNING,
-    UI_STREAMING_TIMEOUT,
-)
+from common.config import MSG_ERROR_OLLAMA_NOT_RUNNING, UI_STREAMING_TIMEOUT
 from common.utils import apply_tooltips_to_response, extract_annotations_from_docs
 from core.session import SessionManager
 
@@ -141,12 +137,54 @@ def _spawn_stream_consumer(sid: str, msg_id: str, query: str, model_name: str):
                         )
                         break
                 state["_dirty_keys"].add("messages")
+            # PDF 주석·자동 점프는 세션 락 밖에서 수행한다 (느린 fitz 파싱 방지)
+            _finalize_pdf_side_effects(sid, msg_id)
 
     t = threading.Thread(
         target=bg_task, daemon=True, name=f"stream-consumer-{msg_id[:8]}"
     )
     add_script_run_ctx(t)
     t.start()
+
+
+def _finalize_pdf_side_effects(sid: str, msg_id: str) -> None:
+    """완료된 스트리밍 턴의 PDF 주석·자동 페이지 이동을 반영합니다.
+
+    fitz 기반 좌표 추출(느린 작업)은 세션 락 밖에서 수행하며, 실패해도 턴
+    완료와 is_generating_answer 해제에는 영향을 주지 않습니다.
+    """
+    # 문서가 로드되지 않은 세션은 스킵 (저비용 가드)
+    if not SessionManager.get("pdf_file_path", "", sid):
+        return
+
+    documents: list[Any] = []
+    has_error = False
+    with SessionManager._acquire_lock(sid):
+        state = SessionManager._get_state(sid)
+        for msg in state["messages"]:
+            if msg.get("msg_id") == msg_id:
+                has_error = bool(msg.get("error"))
+                documents = msg.get("documents") or []
+                break
+
+    # 오류 턴 또는 문서 없음 → 주석/점프 생략
+    if has_error or not documents:
+        return
+
+    try:
+        annotations = extract_annotations_from_docs(documents)
+    except (OSError, ValueError, TypeError, RuntimeError) as exc:
+        logger.exception(f"[STREAMING] PDF 주석 추출 실패: {exc}")
+        return
+    SessionManager.set("pdf_annotations", annotations, sid)
+
+    try:
+        target_p = getattr(documents[0], "metadata", {}).get("page")
+        if target_p:
+            SessionManager.set("pdf_target_page", int(target_p), sid)
+            SessionManager.set("current_page", int(target_p), sid)
+    except (ValueError, TypeError, IndexError, AttributeError) as exc:
+        logger.exception(f"[CHAT] 자동 페이지 이동 실패: {exc}")
 
 
 def stream_chunks(
@@ -250,45 +288,3 @@ def stream_chunks(
                 )
             else:
                 logger.debug(f"[CHAT] Stream thread cleanup: {t.name}")
-
-
-class StreamingResult(TypedDict):
-    """한 번의 스트리밍 라운드가 끝난 뒤의 누적/처리 결과입니다."""
-
-    content: str
-    thought: str
-    documents: list[Any]
-    performance: dict[str, Any]
-    processed_content: str | None
-    error: str | None
-
-
-def persist_completed_turn(sid: str, result: StreamingResult) -> None:
-    """스트리밍 완료 후 대화·PDF 상태를 저장하고 정리합니다 (한 번만 호출)."""
-    if result["error"] is not None:
-        SessionManager.add_message("assistant", result["error"], session_id=sid)
-    else:
-        documents = result["documents"]
-        SessionManager.add_message(
-            role="assistant",
-            content=result["content"],
-            thought=result["thought"],
-            documents=documents,
-            metrics=result["performance"],
-            processed_content=result["processed_content"],
-            session_id=sid,
-        )
-
-        if documents:
-            annotations = extract_annotations_from_docs(documents)
-            SessionManager.set("pdf_annotations", annotations, sid)
-            try:
-                target_p = getattr(documents[0], "metadata", {}).get("page")
-                if target_p:
-                    SessionManager.set("pdf_target_page", int(target_p), sid)
-                    SessionManager.set("current_page", int(target_p), sid)
-            except (ValueError, TypeError, IndexError, AttributeError):
-                pass
-
-    SessionManager.set("is_generating_answer", False, sid)
-    st.rerun()

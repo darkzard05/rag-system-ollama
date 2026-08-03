@@ -34,6 +34,7 @@ def render_settings_content(
     model_selector_callback,
     embedding_selector_callback,
     new_chat_callback=None,
+    refresh_models_callback=None,
     is_generating=False,
     current_file_name=None,
     current_embedding_model=None,
@@ -46,6 +47,7 @@ def render_settings_content(
         model_selector_callback,
         embedding_selector_callback,
         new_chat_callback,
+        refresh_models_callback,
         is_generating,
         current_file_name,
         available_models,
@@ -57,6 +59,7 @@ def _render_settings_internal(
     model_selector_callback,
     embedding_selector_callback,
     new_chat_callback,
+    refresh_models_callback,
     is_generating,
     current_file_name,
     available_models,
@@ -102,6 +105,20 @@ def _render_settings_internal(
             on_change=model_selector_callback,
             disabled=is_generating,
         )
+
+        # 모델 새로고침 (Ollama에서 모델 목록 재조회)
+        if (
+            st.button(
+                "↻ 모델 새로고침",
+                use_container_width=True,
+                type="primary",
+                help="Ollama에서 사용 가능한 모델 목록을 다시 불러옵니다.",
+                key="refresh_models_btn",
+                disabled=is_generating,
+            )
+            and refresh_models_callback
+        ):
+            refresh_models_callback()
 
         # 임베딩 선택
         current_emb = (
