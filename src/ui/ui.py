@@ -54,12 +54,18 @@ def inject_header_height_script() -> None:
     )
 
 
-def inject_custom_css() -> None:
-    inject_header_height_script()  # set --header-h before CSS that depends on it
+@st.cache_data(show_spinner=False)
+def _load_css() -> str:
     css_path = Path(__file__).parent / "styles" / "main.css"
+    return css_path.read_text(encoding="utf-8")
+
+
+def inject_custom_css() -> None:
+    if "css_script_injected" not in st.session_state:
+        inject_header_height_script()  # 세션당 1회만 주입 (리스너는 부모 window에 유지)
+        st.session_state.css_script_injected = True
     try:
-        with open(css_path, encoding="utf-8") as f:
-            css_content = f.read()
+        css_content = _load_css()
         st.markdown(f"<style>{css_content}</style>", unsafe_allow_html=True)
     except (FileNotFoundError, PermissionError, OSError) as e:
         st.error(f"Failed to load custom CSS: {e}")

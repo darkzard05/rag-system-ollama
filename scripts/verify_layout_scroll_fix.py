@@ -1,34 +1,39 @@
 """
 Layout Scroll Fix — DOM Verification Script
 
-Verifies that the layout-scroll-fix changes took effect:
-1. stVerticalBlockBorderWrapper exists in DOM (≥2)
-2. stColumn selectors are present
-3. Body overflow is hidden
-4. Containers have correct scroll properties
-5. Border on stVerticalBlockBorderWrapper is hidden
+Verifies that the independent-column-scroll fix took effect (Streamlit 1.54 DOM):
+1. stMainBlockContainer exists
+2. Chat column stVerticalBlock is the single scroll container (overflow-y: auto)
+3. Message wrappers are natural height (no per-message micro-scrollbars)
+4. stChatInput is present (page-level bottom bar)
+5. Body / app overflow is hidden (page lock)
+
+NOTE: older checks for `stVerticalBlockBorderWrapper` were removed — that node
+does not exist in Streamlit 1.54, so the previous script could never pass.
 """
 
 import asyncio
 import sys
-import json
 
 from playwright.async_api import async_playwright
 
 BASE_URL = "http://127.0.0.1:8501"
 TIMEOUT = 30000
 
-CHECKLIST = [
+CHECKS = [
     ("C1: stMainBlockContainer exists", "stMainBlockContainer"),
-    ("C2: stVerticalBlockBorderWrapper in DOM (≥2)", "stVerticalBlockBorderWrapper"),
-    ("C3: stColumn selectors working", "stColumn"),
-    ("C4: stChatInput present", "stChatInput"),
-    ("C5: stChatMessage present", "stChatMessage"),
+    ("C2: stColumn selectors working", "stColumn"),
+    ("C3: chat column stVerticalBlock is the scroller", "chatScroller"),
+    (
+        "C4: message wrappers are natural height (no micro-scrollbars)",
+        "noMicroScrollbars",
+    ),
+    ("C5: stChatInput present", "stChatInput"),
+    ("C6: body overflow hidden (page lock)", "pageLocked"),
 ]
 
 
 async def verify():
-    checks = {}
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True)
         page = await browser.new_page()
@@ -40,92 +45,75 @@ async def verify():
             results = await page.evaluate("""() => {
                 const results = {};
 
-                // C1: stMainBlockContainer
                 const mainBlock = document.querySelectorAll('[data-testid="stMainBlockContainer"]');
                 results.stMainBlockContainer = mainBlock.length;
 
-                // C2: stVerticalBlockBorderWrapper
-                const borderWrappers = document.querySelectorAll(
-                    '[data-testid="stMainBlockContainer"] [data-testid="stVerticalBlockBorderWrapper"]'
+                const columns = document.querySelectorAll('[data-testid="stMainBlockContainer"] [data-testid="stColumn"]');
+                results.stColumn = columns.length;
+
+                const chatColumn = Array.from(columns).find(
+                    (col) => col.querySelector('[data-testid="stChatMessage"]')
                 );
-                results.stVerticalBlockBorderWrapper = borderWrappers.length;
-
-                // Check border is hidden
-                if (borderWrappers.length > 0) {
-                    const style = window.getComputedStyle(borderWrappers[0]);
-                    results.borderHidden = style.borderWidth === '0px' || style.borderStyle === 'none';
-                    results.borderWidth = style.borderWidth;
-                    results.borderStyle = style.borderStyle;
-                    results.boxShadow = style.boxShadow;
+                if (chatColumn) {
+                    const vb = chatColumn.querySelector(':scope > [data-testid="stVerticalBlock"]');
+                    results.chatScroller = vb
+                        ? getComputedStyle(vb).overflowY
+                        : 'NO_VB';
+                    if (vb) {
+                        const offending = Array.from(vb.children).filter((child) => {
+                            const cs = getComputedStyle(child);
+                            return cs.overflowY === 'auto' || cs.overflowY === 'scroll';
+                        });
+                        results.noMicroScrollbars = offending.length === 0;
+                    } else {
+                        results.noMicroScrollbars = false;
+                    }
                 } else {
-                    results.borderHidden = false;
-                    results.borderWidth = 'N/A';
+                    results.chatScroller = 'NO_CHAT_COLUMN';
+                    results.noMicroScrollbars = false;
                 }
 
-                // C3: stColumn
-                const stColumns = document.querySelectorAll('[data-testid="stMainBlockContainer"] [data-testid="stColumn"]');
-                results.stColumn = stColumns.length;
+                results.stChatInput = document.querySelectorAll('[data-testid="stChatInput"]').length;
 
-                // C4: stChatInput
-                const chatInput = document.querySelectorAll('[data-testid="stChatInput"]');
-                results.stChatInput = chatInput.length;
-
-                // C5: stChatMessage
-                const chatMessages = document.querySelectorAll('[data-testid="stChatMessage"]');
-                results.stChatMessage = chatMessages.length;
-
-                // Body overflow
-                const bodyStyle = window.getComputedStyle(document.body);
-                results.bodyOverflowX = bodyStyle.overflowX;
-                results.bodyOverflowY = bodyStyle.overflowY;
-
-                // App viewport overflow
-                const appView = document.querySelector('[data-testid="stAppViewContainer"]');
-                if (appView) {
-                    const appStyle = window.getComputedStyle(appView);
-                    results.appOverflow = appStyle.overflow;
-                }
+                const app = document.querySelector('.stApp');
+                results.pageLocked = app ? getComputedStyle(app).overflow === 'hidden' : false;
 
                 return results;
             }""")
 
             print("\n" + "=" * 50)
-            print("   LAYOUT-SCROLL-FIX DOM VERIFICATION")
+            print("   INDEPENDENT-SCROLL DOM VERIFICATION")
             print("=" * 50)
 
-            # C1
-            c1_ok = results.get("stMainBlockContainer", 0) >= 1
-            print(f"C1: stMainBlockContainer count = {results.get('stMainBlockContainer')} {'✅' if c1_ok else '❌'}")
+            c1 = results.get("stMainBlockContainer", 0) >= 1
+            c2 = results.get("stColumn", 0) >= 2
+            c3 = results.get("chatScroller") in ("auto", "scroll")
+            c4 = results.get("noMicroScrollbars", False)
+            c5 = results.get("stChatInput", 0) >= 1
+            c6 = results.get("pageLocked", False)
 
-            # C2
-            c2_count = results.get("stVerticalBlockBorderWrapper", 0)
-            c2_ok = c2_count >= 2
-            print(f"C2: stVerticalBlockBorderWrapper count = {c2_count} {'✅' if c2_ok else '❌'}")
+            print(
+                f"C1: stMainBlockContainer count = {results.get('stMainBlockContainer')} {'✅' if c1 else '❌'}"
+            )
+            print(
+                f"C2: stColumn count = {results.get('stColumn')} {'✅' if c2 else '❌'}"
+            )
+            print(
+                f"C3: chat scroller overflowY = {results.get('chatScroller')} {'✅' if c3 else '❌'}"
+            )
+            print(
+                f"C4: no per-message micro-scrollbars = {results.get('noMicroScrollbars')} {'✅' if c4 else '❌'}"
+            )
+            print(
+                f"C5: stChatInput count = {results.get('stChatInput')} {'✅' if c5 else '❌'}"
+            )
+            print(
+                f"C6: page locked (.stApp overflow hidden) = {results.get('pageLocked')} {'✅' if c6 else '❌'}"
+            )
 
-            # C2b — border hidden
-            c2b_ok = results.get("borderHidden", False)
-            print(f"C2b: Border hidden? {c2b_ok} {'✅' if c2b_ok else '❌'} (border={results.get('borderWidth')}, style={results.get('borderStyle')})")
-
-            # C3
-            c3_cols = results.get("stColumn", 0)
-            c3_ok = c3_cols >= 2
-            print(f"C3: stColumn count (in main) = {c3_cols} {'✅' if c3_ok else '❌'}")
-
-            # Body overflow
-            body_ox = results.get("bodyOverflowX", "?")
-            body_oy = results.get("bodyOverflowY", "?")
-            body_ok = body_ox in ("hidden", "clip") and body_oy in ("hidden", "clip")
-            print(f"C4: Body overflow = ({body_ox}, {body_oy}) {'✅' if body_ok else '❌'}")
-
-            # Chat elements
-            c5_inp = results.get("stChatInput", 0)
-            c5_msg = results.get("stChatMessage", 0)
-            print(f"C5: stChatInput={c5_inp}, stChatMessage={c5_msg}")
-
-            # Overall
-            all_pass = c1_ok and c2_ok and c2b_ok and c3_ok and body_ok
+            all_pass = c1 and c2 and c3 and c4 and c5 and c6
             verdict = "✅ ALL CHECKS PASSED" if all_pass else "❌ SOME CHECKS FAILED"
-            print("\n" + "=" * 50)
+            print("=" * 50)
             print(f"   VERDICT: {verdict}")
             print("=" * 50)
 

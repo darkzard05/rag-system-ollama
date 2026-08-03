@@ -23,8 +23,6 @@ from datetime import datetime
 from enum import Enum
 from typing import Any
 
-import psutil
-
 try:
     from common.logging_config import get_logger
 
@@ -33,6 +31,16 @@ except ImportError:
     import logging
 
     logger = logging.getLogger(__name__)
+
+
+def _get_psutil() -> Any:
+    """psutil을 첫 사용 시점에 지연 로드합니다 (시작 속도 최적화)."""
+    try:
+        import psutil as _psutil_module
+
+        return _psutil_module
+    except ImportError:
+        return None
 
 
 # ============================================================================
@@ -204,7 +212,7 @@ class MemoryMonitor:
         self._lock = threading.RLock()
         self._max_history = max_history
         self._memory_samples: deque = deque(maxlen=max_history)
-        self._process = psutil.Process()
+        self._process = _get_psutil().Process()
 
     def get_current_usage(self) -> dict[str, float]:
         """

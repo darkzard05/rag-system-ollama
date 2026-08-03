@@ -21,7 +21,12 @@ from services.monitoring.performance_monitor import (
 )
 
 logger = logging.getLogger(__name__)
-monitor = get_performance_monitor()
+
+
+def _get_monitor() -> Any:
+    """성능 모니터를 첫 사용 시점에 지연 초기화합니다."""
+    return get_performance_monitor()
+
 
 # 타입 변수
 T = TypeVar("T")
@@ -665,7 +670,7 @@ class CacheManager:
 
     async def get(self, key: str, use_semantic: bool = False) -> Any | None:
         """값 조회 (L1 -> L2 -> L3)"""
-        with monitor.track_operation(
+        with _get_monitor().track_operation(
             OperationType.QUERY_PROCESSING,
             {"stage": "cache_lookup", "semantic": use_semantic},
         ) as op:

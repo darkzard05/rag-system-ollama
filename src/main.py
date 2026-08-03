@@ -35,8 +35,14 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-# 2. 로깅 설정 (최상단)
-logger = setup_logging(log_level="INFO", log_file=Path("logs/app.log"))
+
+# 2. 로깅 설정 (최상단, 서버당 1회만 초기화)
+@st.cache_resource
+def _init_logging() -> logging.Logger:
+    return setup_logging(log_level="INFO", log_file=Path("logs/app.log"))
+
+
+logger = _init_logging()
 
 MAX_FILE_SIZE_MB = StringConstants.MAX_FILE_SIZE_MB
 
@@ -72,12 +78,11 @@ def _check_windows_integrity():
         return
 
     try:
-        import sys
+        import importlib.util
 
-        if "torch" not in sys.modules:
-            import torch
-
-            _ = torch.tensor([1.0])
+        if importlib.util.find_spec("torch") is None:
+            logger.warning("[SYSTEM] [INTEGRITY] torch 모듈을 찾을 수 없습니다.")
+            return
 
         with contextlib.suppress(ValueError, RuntimeError):
             logger.info("[SYSTEM] [INTEGRITY] Windows 라이브러리 무결성 점검 완료 (OK)")
@@ -149,10 +154,6 @@ def _register_cleanup_handlers():
 _init_temp_directory()
 _start_global_background_worker()
 _register_cleanup_handlers()
-
-from cache.coord_cache import coord_cache
-
-_async_worker.submit(coord_cache.start_eviction_loop())
 
 
 async def _bg_rebuild_task(
@@ -539,10 +540,29 @@ def _handle_pending_tasks() -> None:
         st.rerun()
 
 
+_SPLASH_HTML = """
+<div style="text-align: center; padding: 80px 0;">
+    <div style="font-size: 2rem; font-weight: 700; color: var(--text-color);">
+        GraphRAG-Ollama
+    </div>
+    <div style="font-size: 1rem; color: var(--primary-color); opacity: 0.8; margin-top: 8px;">
+        Local RAG · PDF Chat
+    </div>
+</div>
+"""
+
+
 def main() -> None:
     from core.session import SessionManager
     from ui.bridge import UIBridge
     from ui.ui import inject_custom_css
+
+    # 부트 스플래시: 1차 패스에서 즉시 시각 피드백 후 1회 rerun (2차 패스에서 본 UI 렌더)
+    if not st.session_state.get("_bootstrapped"):
+        st.session_state._bootstrapped = True
+        st.markdown(_SPLASH_HTML, unsafe_allow_html=True)
+        st.status("🔄 앱 초기화 중...", state="running")
+        st.rerun()
 
     SessionManager.init_session()
 

@@ -21,7 +21,11 @@ from services.monitoring.performance_monitor import (
 )
 
 logger = logging.getLogger(__name__)
-monitor = get_performance_monitor()
+
+
+def _get_monitor() -> Any:
+    """성능 모니터를 첫 사용 시점에 지연 초기화합니다."""
+    return get_performance_monitor()
 
 
 def compute_file_hash(file_path: str, data: bytes | None = None) -> str:
@@ -85,7 +89,9 @@ async def load_pdf_docs(
     from common.config import HYDRATION_MODE, PARSING_CONFIG
 
     logger.info(f"[RAG] [LOAD] PDF 분석 시작: {file_name} (Mode: {HYDRATION_MODE})")
-    with monitor.track_operation(OperationType.PDF_LOADING, {"file": file_name}) as op:
+    with _get_monitor().track_operation(
+        OperationType.PDF_LOADING, {"file": file_name}
+    ) as op:
         try:
             SessionManager.add_status_log(
                 "문서 구조 분석 및 마크다운 변환 중",

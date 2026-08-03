@@ -7,7 +7,6 @@ import logging
 import os
 
 import streamlit as st
-from streamlit_pdf_viewer import pdf_viewer
 
 from common.config import MSG_PDF_VIEWER_NO_FILE
 from common.exceptions import PDFProcessingError
@@ -184,6 +183,8 @@ def render_pdf_controls():
 
 def _display_pdf_viewer(pdf_path, current_page, file_hash):
     try:
+        from streamlit_pdf_viewer import pdf_viewer  # lazy: PDF 표시 시에만 import
+
         pdf_bytes = _get_pdf_bytes(pdf_path)
         if not pdf_bytes:
             st.error("⚠️ PDF 데이터를 불러올 수 없습니다.")

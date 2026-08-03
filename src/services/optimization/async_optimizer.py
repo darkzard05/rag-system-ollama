@@ -17,7 +17,12 @@ from services.monitoring.performance_monitor import (
 )
 
 logger = logging.getLogger(__name__)
-monitor = get_performance_monitor()
+
+
+def _get_monitor() -> Any:
+    """성능 모니터를 첫 사용 시점에 지연 초기화합니다."""
+    return get_performance_monitor()
+
 
 # Type aliases
 DocumentList = list[Document]
@@ -94,7 +99,7 @@ class ConcurrentQueryExpander:
             ...     expand_query
             ... )
         """
-        with monitor.track_operation(
+        with _get_monitor().track_operation(
             OperationType.QUERY_PROCESSING,
             {
                 "stage": "concurrent_expansion",
@@ -212,7 +217,7 @@ class ConcurrentDocumentRetriever:
         Returns:
             (검색된 문서 리스트, 통계 딕셔너리)
         """
-        with monitor.track_operation(
+        with _get_monitor().track_operation(
             OperationType.DOCUMENT_RETRIEVAL,
             {"query_count": len(queries), **(metadata or {})},
         ) as op:
@@ -350,7 +355,7 @@ class ConcurrentDocumentReranker:
         Returns:
             (정렬된 문서 리스트, 통계 딕셔너리)
         """
-        with monitor.track_operation(
+        with _get_monitor().track_operation(
             OperationType.RERANKING,
             {"doc_count": len(documents), "query": query, **(metadata or {})},
         ) as op:
@@ -467,7 +472,7 @@ class ConcurrentEmbeddingGenerator:
             (임베딩 리스트, 통계 딕셔너리)
         """
         batch_size = self.config.batch_size_embeddings
-        with monitor.track_operation(
+        with _get_monitor().track_operation(
             OperationType.EMBEDDING_GENERATION,
             {"text_count": len(texts), "batch_size": batch_size, **(metadata or {})},
         ) as op:

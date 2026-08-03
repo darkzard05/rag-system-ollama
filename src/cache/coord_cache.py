@@ -33,27 +33,36 @@ class CoordCacheManager:
 
     _instance: "CoordCacheManager | None" = None
 
+    _conn: aiosqlite.Connection | None
+    _conn_lock: asyncio.Lock
+    _conn_created_at: float
+    _last_health_check: float
+    _conn_healthy: bool
+    _queue: asyncio.Queue
+    _worker_task: asyncio.Task | None
+    _schema_ready: bool
+    _eviction_started: bool
+
     def __new__(cls) -> "CoordCacheManager":
         if cls._instance is None:
             cls._instance = super().__new__(cls)
-            cls._instance._init_manager()
+            cls._instance._conn = None
+            cls._instance._conn_lock = asyncio.Lock()
+            cls._instance._conn_created_at = 0
+            cls._instance._last_health_check = 0
+            cls._instance._conn_healthy = False
+            cls._instance._queue = asyncio.Queue()
+            cls._instance._worker_task = None
+            cls._instance._schema_ready = False
+            cls._instance._eviction_started = False
         return cls._instance
 
-    def _init_manager(self) -> None:
-        """매니저 초기화 및 DB 테이블 생성."""
-        self._conn: aiosqlite.Connection | None = None
-        self._conn_lock = asyncio.Lock()
-        self._conn_created_at: float = 0
-        self._last_health_check: float = 0
-        self._conn_healthy: bool = False
-        self._queue: asyncio.Queue = asyncio.Queue()
-        self._worker_task: asyncio.Task | None = None
-
+    def _create_schema_sync(self) -> None:
+        """DB 디렉토리 및 테이블을 동기로 생성합니다 (스레드 실행용)."""
         if not COORD_CACHE_DIR.exists():
             COORD_CACHE_DIR.mkdir(parents=True, exist_ok=True)
             logger.info(f"좌표 캐시 디렉토리 생성: {COORD_CACHE_DIR}")
 
-        # 테이블 생성 (동기식으로 초기화)
         with sqlite3.connect(COORD_CACHE_DB) as conn:
             _ = conn.execute("""
                 CREATE TABLE IF NOT EXISTS coords (
@@ -68,6 +77,17 @@ class CoordCacheManager:
                 "CREATE INDEX IF NOT EXISTS idx_created_at ON coords(created_at)"
             )
             conn.commit()
+
+    async def _ensure_schema(self) -> None:
+        """첫 DB 접근 시 스키마를 1회 생성하고 eviction 루프를 시작합니다."""
+        if self._schema_ready:
+            return
+        await asyncio.to_thread(self._create_schema_sync)
+        self._schema_ready = True
+        if not self._eviction_started:
+            self._eviction_started = True
+            asyncio.create_task(self.start_eviction_loop())
+            logger.info("좌표 캐시 eviction 루프 시작됨")
 
     async def _ensure_worker_started(self) -> None:
         """백그라운드 워커가 시작되지 않았다면 시작합니다."""
@@ -101,6 +121,7 @@ class CoordCacheManager:
 
     async def _get_connection(self) -> aiosqlite.Connection:
         """재사용 가능한 단일 연결을 반환합니다. 지연 검증 + 상태 추적로 SELECT 1 핑을 제거합니다."""
+        await self._ensure_schema()
         now = time.monotonic()
         async with self._conn_lock:
             # 1. 기존 연결이 있고, 생존 시간 내이며, 최근 헬스체크 통과 시 즉시 반환

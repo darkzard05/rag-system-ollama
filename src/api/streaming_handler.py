@@ -16,7 +16,11 @@ from services.monitoring.performance_monitor import (
 )
 
 logger = logging.getLogger(__name__)
-monitor = get_performance_monitor()
+
+
+def _get_monitor() -> Any:
+    """성능 모니터를 첫 사용 시점에 지연 초기화합니다."""
+    return get_performance_monitor()
 
 
 @dataclass
@@ -355,7 +359,7 @@ class StreamingResponseHandler:
         self.metrics = StreamingMetrics()
         self.chunk_index = 0
 
-        with monitor.track_operation(
+        with _get_monitor().track_operation(
             OperationType.LLM_INFERENCE,
             {"stage": "streaming", "buffer_size": self.buffer.buffer_size},
         ) as op:

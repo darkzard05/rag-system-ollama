@@ -5,8 +5,6 @@
 import logging
 from typing import Any
 
-import numpy as np
-import torch
 from langchain_core.documents import Document
 from langchain_core.embeddings import Embeddings
 
@@ -26,6 +24,8 @@ def create_vector_store(
     import uuid
 
     import faiss
+    import numpy as np
+    import torch
     from langchain_community.docstore.in_memory import InMemoryDocstore
     from langchain_community.vectorstores import FAISS
     from langchain_community.vectorstores.utils import DistanceStrategy

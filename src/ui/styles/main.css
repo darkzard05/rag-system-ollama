@@ -7,6 +7,24 @@
     --spacing-lg: 24px;
     --spacing-xl: 32px;
     --sidebar-width: 300px;
+    /* Streamlit 1.54 injects NO theme CSS variables globally, so the app's
+       var(--background-color) / var(--primary-color) references currently resolve to
+       transparent. Define them here. The app auto-follows the OS color scheme
+       (.streamlit/config.toml deliberately has no [theme]), so mirror Streamlit's
+       default light/dark palette via prefers-color-scheme. */
+    --background-color: #ffffff;
+    --primary-color: #ff4b4b;
+    --border-color: rgba(49, 51, 63, 0.2);
+    --text-color: #31333f;
+}
+
+@media (prefers-color-scheme: dark) {
+    :root {
+        --background-color: #0e1117;
+        --primary-color: #ff4b4b;
+        --border-color: rgba(250, 250, 250, 0.2);
+        --text-color: #fafafa;
+    }
 }
 
 .stApp { max-width: 100%; width: 100%; height: 100vh; height: 100dvh; overflow: hidden; margin: 0; }
@@ -145,32 +163,61 @@
     background: color-mix(in srgb, var(--background-color) 96%, var(--primary-color) 4%) !important;
 }
 
-/* Chat column (last child) — flex layout: scrollable messages + sticky input.
-   The stVerticalBlock inside the chat column hosts both the message content
-   (flex: 1, scrollable) and the chat form (flex-shrink: 0, sticky bottom). */
+/* Chat column (last child) — single-scroller layout.
+   Streamlit renders each st.chat_message as its own stLayoutWrapper /
+   stElementContainer sibling (there is NO single messages wrapper). Therefore the
+   column's stVerticalBlock itself must be the ONE scroll container, with messages
+   laid out at natural height (flex: 0 0 auto). Applying overflow-y:auto to each
+   message wrapper (old approach) created N equal-height slices with per-message
+   micro-scrollbars and clipped content.
+   NOTE: DOM contract pinned to Streamlit 1.54 (see requirements/base.txt). */
 
-/* Messages wrappers: fill space and scroll independently */
 [data-testid="stMainBlockContainer"] [data-testid="stColumn"]:last-child
-> [data-testid="stVerticalBlock"] > [data-testid="stLayoutWrapper"] {
-    flex: 1 !important;
-    min-height: 0 !important;
+> [data-testid="stVerticalBlock"] {
     overflow-y: auto !important;
+    overflow-x: hidden !important;
+    scrollbar-gutter: stable !important;
 }
 
 [data-testid="stMainBlockContainer"] [data-testid="stColumn"]:last-child
-> [data-testid="stVerticalBlock"] > [data-testid="stElementContainer"]:not(:has(> form[data-testid="stForm"])) {
-    flex: 1 !important;
+> [data-testid="stVerticalBlock"] > [data-testid="stLayoutWrapper"],
+[data-testid="stMainBlockContainer"] [data-testid="stColumn"]:last-child
+> [data-testid="stVerticalBlock"] > [data-testid="stElementContainer"] {
+    flex: 0 0 auto !important;
     min-height: 0 !important;
-    overflow-y: auto !important;
+    overflow: visible !important;
 }
 
-/* st.chat_input: sticky at the very bottom of the page, full width */
-[data-testid="stChatInput"] {
+/* st.chat_input renders INLINE at its script position (Streamlit 1.54 DOM contract:
+   nested in a column => position="inline"), wrapped in an stElementContainer that is a
+   DIRECT child of the chat column's scroll container (stVerticalBlock). Sticky must live
+   on this wrapper — it has travel room inside the scrollport. Sticky on the inner
+   [data-testid="stChatInput"] was inert because its containing block (the wrapper) is the
+   same height. margin-top:auto pins the footer when the conversation is short; sticky
+   bottom:0 keeps it in view when content overflows. :has() (not :last-child) so trailing
+   zero-height stElementContainer siblings or injected nodes cannot break the match. */
+[data-testid="stMainBlockContainer"] [data-testid="stColumn"]:last-child
+> [data-testid="stVerticalBlock"]
+> [data-testid="stElementContainer"]:has(> [data-testid="stChatInput"]),
+[data-testid="stMainBlockContainer"] [data-testid="stColumn"]:last-child
+> [data-testid="stVerticalBlock"]
+> [data-testid="stLayoutWrapper"]:has(> [data-testid="stChatInput"]) {
     position: sticky !important;
     bottom: 0 !important;
+    margin-top: auto !important;
+    flex: 0 0 auto !important;
+    min-height: 0 !important;
     z-index: 1000 !important;
     background-color: var(--background-color) !important;
     border-top: 1px solid color-mix(in srgb, var(--border-color, #ccc) 30%, transparent) !important;
+    padding-top: 8px !important;
+}
+
+/* Inner input: not sticky (the wrapper handles pinning). Background kept so the mobile
+   fixed variant (see @media max-width:768px) stays opaque. */
+[data-testid="stChatInput"] {
+    position: static !important;
+    background-color: var(--background-color) !important;
 }
 
 /* Chat Input Focus Enhancement */
@@ -280,6 +327,22 @@ header[data-testid="stHeader"] {
         overflow-y: visible !important;
         padding-bottom: 1rem !important;
     }
+    /* Mobile: neutralize the desktop sticky-wrapper so the input is not double-positioned.
+       The input itself becomes position:fixed (below). */
+    [data-testid="stMainBlockContainer"] [data-testid="stColumn"]:last-child
+    > [data-testid="stVerticalBlock"]
+    > [data-testid="stElementContainer"]:has(> [data-testid="stChatInput"]),
+    [data-testid="stMainBlockContainer"] [data-testid="stColumn"]:last-child
+    > [data-testid="stVerticalBlock"]
+    > [data-testid="stLayoutWrapper"]:has(> [data-testid="stChatInput"]) {
+        position: static !important;
+        margin-top: 0 !important;
+        flex: 0 0 auto !important;
+        z-index: auto !important;
+        background-color: transparent !important;
+        border-top: none !important;
+        padding-top: 0 !important;
+    }
     /* Mobile: chat input goes fixed full-width bottom */
     [data-testid="stChatInput"] {
         position: fixed !important;
@@ -287,6 +350,8 @@ header[data-testid="stHeader"] {
         left: 0 !important;
         width: 100% !important;
         z-index: 1000 !important;
+        background-color: var(--background-color) !important;
+        border-top: 1px solid color-mix(in srgb, var(--border-color, #ccc) 30%, transparent) !important;
     }
 }
 
