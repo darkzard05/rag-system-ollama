@@ -1,6 +1,5 @@
+import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
-
-import pytest
 
 from src.common.utils import run_in_background_worker
 
@@ -23,10 +22,16 @@ class TestRunInBackgroundWorker:
             mock_worker.submit.return_value = mock_future
             mock_worker_cls.return_value = mock_worker
 
-            run_in_background_worker(mock_coro, "test_session")
+            run_in_background_worker(mock_coro(), "test_session")
 
-            mock_worker.submit.assert_called_once_with(mock_coro)
+            # submit은 세션 전파 래퍼 코루틴을 제출해야 한다
+            mock_worker.submit.assert_called_once()
             mock_future.add_done_callback.assert_called_once()
+
+            submitted = mock_worker.submit.call_args[0][0]
+            assert asyncio.iscoroutine(submitted)
+            asyncio.run(submitted)
+            mock_coro.assert_awaited_once()
 
     def test_callback_triggers_rerun_on_success(self):
         mock_ctx = MagicMock()

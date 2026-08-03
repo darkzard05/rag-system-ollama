@@ -18,10 +18,6 @@ from core.session.manager import SessionManager
 def _reset_manager():
     """Reset global SessionManager state between tests."""
     SessionManager.reset()
-    # Clear module-level caches
-    import core.session.manager as mgr_mod
-
-    mgr_mod._thread_session_map.clear()
 
 
 class TestGetAtomicity:

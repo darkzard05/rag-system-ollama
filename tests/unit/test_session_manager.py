@@ -1,16 +1,16 @@
-import asyncio
 import threading
-import os
 import time
-import pytest
-import sys
 from unittest.mock import MagicMock, patch
 
+import pytest
 
 # Mock streamlit before importing SessionManager
 mock_st = MagicMock()
 with patch.dict("sys.modules", {"streamlit": mock_st}):
-    from src.core.session.manager import SessionManager, MAX_MESSAGE_HISTORY
+    from src.core.session.manager import (  # noqa: I001
+        MAX_MESSAGE_HISTORY,
+        SessionManager,
+    )
 
 
 @pytest.fixture(autouse=True)
@@ -55,9 +55,6 @@ def test_session_isolation():
 # --- Streamlit Synchronization Tests ---
 
 
-@pytest.mark.skip(
-    reason="Streamlit session_state proxy mocking is unstable in unit tests"
-)
 @patch("streamlit.runtime.exists", return_value=True)
 @patch("streamlit.runtime.scriptrunner.get_script_run_ctx")
 def test_sync_to_streamlit_copy(mock_get_ctx, mock_exists):
@@ -69,13 +66,15 @@ def test_sync_to_streamlit_copy(mock_get_ctx, mock_exists):
     mock_get_ctx.return_value = mock_ctx
 
     st_session_state = {}
-    mock_st.session_state = st_session_state
 
     test_list = [1, 2, 3]
     sync_key = "messages"
     SessionManager.set(sync_key, test_list, session_id=sid)
 
-    SessionManager.sync_to_streamlit(session_id=sid)
+    # import 순서와 무관하게 동작하도록 st.session_state를 직접 patch
+    # (manager 모듈의 st가 실제 streamlit이든 mock이든 동일하게 동작)
+    with patch("src.core.session.manager.st.session_state", st_session_state):
+        SessionManager.sync_to_streamlit(session_id=sid)
 
     assert sync_key in st_session_state
     assert st_session_state[sync_key] == test_list
