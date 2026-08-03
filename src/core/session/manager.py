@@ -414,7 +414,26 @@ class SessionManager:
         )
 
     @classmethod
+    def reset_conversation(cls, session_id: str | None = None):
+        """대화 상태(메시지 + chat_history 키)만 초기화합니다.
+
+        문서/파이프라인/캐시 상태는 유지하며 채팅 타임라인만 비웁니다.
+        RAG 그래프의 chat_history는 SessionManager의 messages에서 파생되므로
+        (rag_core._get_recent_history) messages를 비우는 것으로 충분하며,
+        만약 별도 chat_history 키가 남아 있으면 함께 제거합니다.
+        """
+        sid = session_id or cls.get_session_id()
+        with cls._acquire_lock(sid):
+            state = cls._get_state(sid)
+            state["messages"] = []
+            if "chat_history" in state:
+                del state["chat_history"]
+            state["_dirty_keys"].add("messages")
+
+    @classmethod
     def reset_for_new_file(cls, session_id: str | None = None):
+        # 새 문서 업로드 시 이전 문서에 대한 대화 내용도 함께 초기화합니다.
+        cls.reset_conversation(session_id)
         cls.set("pdf_processed", False, session_id)
         cls.set("rag_engine", None, session_id)
         cls.set("file_hash", None, session_id)

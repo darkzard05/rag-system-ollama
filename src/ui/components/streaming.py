@@ -23,11 +23,35 @@ from streamlit.runtime.scriptrunner import add_script_run_ctx
 
 from api.streaming_handler import StreamChunk, get_streaming_handler
 from common.async_worker import AsyncWorker
-from common.config import UI_STREAMING_TIMEOUT
+from common.config import (
+    MSG_ERROR_OLLAMA_NOT_RUNNING,
+    UI_STREAMING_TIMEOUT,
+)
 from common.utils import apply_tooltips_to_response, extract_annotations_from_docs
 from core.session import SessionManager
 
 logger = logging.getLogger(__name__)
+
+_GENERIC_STREAMING_MSG = "답변 생성 중 오류가 발생했습니다."
+
+# 원시 예외 서명 → 사용자 친화 메시지 매핑 (config.yml errors 영역 상수 활용)
+_ERROR_SIGNATURES: tuple[tuple[str, str], ...] = (
+    ("connection refused", MSG_ERROR_OLLAMA_NOT_RUNNING),
+    ("connection reset", MSG_ERROR_OLLAMA_NOT_RUNNING),
+    ("cannot connect", MSG_ERROR_OLLAMA_NOT_RUNNING),
+    ("failed to connect", MSG_ERROR_OLLAMA_NOT_RUNNING),
+    ("max retries exceeded", MSG_ERROR_OLLAMA_NOT_RUNNING),
+    ("연결할 수 없", MSG_ERROR_OLLAMA_NOT_RUNNING),
+)
+
+
+def friendly_error_message(exc: Exception) -> str:
+    """원시 예외를 설정 기반 친화적 메시지로 매핑합니다. 스택/원문은 노출하지 않습니다."""
+    text = str(exc).lower()
+    for signature, friendly in _ERROR_SIGNATURES:
+        if signature in text:
+            return friendly
+    return _GENERIC_STREAMING_MSG
 
 
 def start_streaming_turn(sid: str, query: str, model_name: str) -> str:
@@ -44,6 +68,8 @@ def start_streaming_turn(sid: str, query: str, model_name: str) -> str:
         processed_content=None,
         session_id=sid,
     )
+    # 매 턴 시작 시 취소 플래그 초기화
+    SessionManager.set("generation_cancel", False, session_id=sid)
     # 백그라운드 스레드에서 스트리밍 소비 시작
     _spawn_stream_consumer(sid, msg_id, query, model_name)
     return msg_id
@@ -56,6 +82,10 @@ def _spawn_stream_consumer(sid: str, msg_id: str, query: str, model_name: str):
         SessionManager.set_session_id(sid)
         try:
             for chunk in stream_chunks(query, model_name, sid):
+                # 중단 요청 감지 → 누적된 부분 콘텐츠를 그대로 확정 (finally에서 처리)
+                if SessionManager.get("generation_cancel", False, session_id=sid):
+                    logger.info("[CHAT] 사용자가 답변 생성을 중단했습니다.")
+                    break
                 # 세션 락 획득 후 메시지 부분 업데이트
                 with SessionManager._acquire_lock(sid):
                     state = SessionManager._get_state(sid)
@@ -83,7 +113,7 @@ def _spawn_stream_consumer(sid: str, msg_id: str, query: str, model_name: str):
                 state = SessionManager._get_state(sid)
                 for msg in state["messages"]:
                     if msg.get("msg_id") == msg_id:
-                        msg["error"] = str(e)
+                        msg["error"] = friendly_error_message(e)
                         msg["msg_type"] = "general"
                         break
                 # 실패 시에도 is_generating_answer 해제 (락 재진입 금지: set() 대신 직접 수정)
@@ -98,7 +128,10 @@ def _spawn_stream_consumer(sid: str, msg_id: str, query: str, model_name: str):
                 state = SessionManager._get_state(sid)
                 # is_generating_answer를 먼저 해제하여 후속 처리 오류에도 플래그가 남지 않게 함
                 state["is_generating_answer"] = False
-                state["_dirty_keys"].add("is_generating_answer")
+                state["generation_cancel"] = False
+                state["_dirty_keys"].update(
+                    {"is_generating_answer", "generation_cancel"}
+                )
                 for msg in state["messages"]:
                     if msg.get("msg_id") == msg_id:
                         msg["msg_type"] = "general"

@@ -95,10 +95,20 @@ def render_message(
             with st.expander("🤔 생각 과정", expanded=False):
                 st.markdown(thought)
 
-        # 오류 메시지는 st.error로 표시하고 본문 렌더링을 생략한다
+        # 오류 메시지: 부분 답변이 있으면 먼저 본문을 보존하고 오류를 안내한다
         error = kwargs.get("error")
         if error:
-            st.error(str(error))
+            has_content = bool(processed_content or content)
+            if has_content:
+                if processed_content:
+                    st.markdown(processed_content, unsafe_allow_html=True)
+                else:
+                    display_text = (
+                        html.escape(content) if role == "assistant" else content
+                    )
+                    display_text = normalize_latex_delimiters(display_text)
+                    st.markdown(display_text, unsafe_allow_html=(role == "assistant"))
+            st.error(f"⚠️ {error}")
             return
 
         # 본문 내용
@@ -137,6 +147,12 @@ def render_message(
 def _cancel_rebuild(sid: str) -> None:
     """문서 분석 재구축 취소 요청 콜백입니다."""
     SessionManager.set("rebuild_cancelled", True, session_id=sid)
+    st.rerun()
+
+
+def _handle_stop_generation(sid: str) -> None:
+    """스트리밍 중단 요청 콜백입니다. 소비 스레드가 부분 결과를 확정하도록 합니다."""
+    SessionManager.set("generation_cancel", True, session_id=sid)
     st.rerun()
 
 
@@ -296,6 +312,16 @@ def _render_unified_timeline(current_sid: str) -> None:
                         html.escape(display_content)
                     )
                     st.markdown(display_content + " ▌", unsafe_allow_html=True)
+
+                # 중단 버튼 (취소 요청 → 소비 스레드가 누적 부분 콘텐츠를 확정)
+                if not SessionManager.get("generation_cancel", False, current_sid):
+                    st.button(
+                        "⏹ 중단",
+                        key=f"stop_gen_{msg.get('msg_id')}",
+                        on_click=_handle_stop_generation,
+                        args=(current_sid,),
+                        use_container_width=True,
+                    )
             continue
 
         # 일반 완료된 메시지 (사용자/어시스턴트)
@@ -351,12 +377,30 @@ def render_chat_input_area() -> None:
     if user_query and not input_disabled:
         query_text = user_query.strip()
         if query_text:
+            from ui.components.streaming import (
+                friendly_error_message,
+                start_streaming_turn,
+            )
+
             SessionManager.add_message("user", query_text, session_id=current_sid)
             SessionManager.set("is_generating_answer", True, current_sid)
-            model_name = (
-                SessionManager.get("last_selected_model", session_id=current_sid) or ""
-            )
-            from ui.components.streaming import start_streaming_turn
-
-            start_streaming_turn(current_sid, query_text, model_name)
+            try:
+                model_name = (
+                    SessionManager.get("last_selected_model", session_id=current_sid)
+                    or ""
+                )
+                start_streaming_turn(current_sid, query_text, model_name)
+            except Exception as exc:
+                # 보장: 배경 소비자 시작 전 예외가 발생해도 플래그가 남지 않도록
+                # 해제하고, 타임라인에 친화적 오류 메시지를 표면화한다.
+                logger.exception("[CHAT] 답변 생성 시작 실패: %s", exc)
+                SessionManager.set("is_generating_answer", False, current_sid)
+                SessionManager.set("generation_cancel", True, current_sid)
+                SessionManager.add_message(
+                    "assistant",
+                    "",
+                    msg_type="general",
+                    error=friendly_error_message(exc),
+                    session_id=current_sid,
+                )
             st.rerun()

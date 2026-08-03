@@ -33,6 +33,7 @@ def render_settings_content(
     file_uploader_callback,
     model_selector_callback,
     embedding_selector_callback,
+    new_chat_callback=None,
     is_generating=False,
     current_file_name=None,
     current_embedding_model=None,
@@ -44,6 +45,7 @@ def render_settings_content(
         file_uploader_callback,
         model_selector_callback,
         embedding_selector_callback,
+        new_chat_callback,
         is_generating,
         current_file_name,
         available_models,
@@ -54,6 +56,7 @@ def _render_settings_internal(
     file_uploader_callback,
     model_selector_callback,
     embedding_selector_callback,
+    new_chat_callback,
     is_generating,
     current_file_name,
     available_models,
@@ -120,6 +123,21 @@ def _render_settings_internal(
             on_change=embedding_selector_callback,
             disabled=is_generating or (available_models is None),
         )
+
+        # 새 대화 (문서 유지, 대화만 초기화)
+        is_building = bool(SessionManager.get("is_building_rag", False))
+        if (
+            st.button(
+                "새 대화",
+                use_container_width=True,
+                type="primary",
+                help="대화 내용만 초기화하고 문서는 유지합니다.",
+                key="new_chat_btn",
+                disabled=is_generating or is_building,
+            )
+            and new_chat_callback
+        ):
+            new_chat_callback()
 
         # 초기화
         if st.button(

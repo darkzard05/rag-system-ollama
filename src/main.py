@@ -388,6 +388,13 @@ def on_file_upload() -> None:
 
     if uploaded_file.name != last_file_name or uploaded_hash != last_file_hash:
         SessionManager.set("current_page", 1)
+        # 새 문서는 항상 1페이지부터 열이도록 PDF 네비게이션 위젯 상태와
+        # 일회성 점프 키(pdf_target_page)를 초기화합니다. pdf_nav_input_v6는
+        # INTERACTIVE_KEYS에 속해 스냅샷/복원되므로 직접 session_state를
+        # 갱신하여 이전 문서의 마지막 페이지 값이 재사용되지 않게 합니다.
+        st.session_state["pdf_nav_input_v6"] = 1
+        st.session_state.pop("pdf_target_page", None)
+        SessionManager.delete("pdf_target_page")
         old_path = SessionManager.get("pdf_file_path")
         if old_path:
             SessionManager.safe_remove_file(old_path)
@@ -412,6 +419,15 @@ def on_file_upload() -> None:
         SystemNotifier.success(
             f"'{uploaded_file.name}'은(는) 이미 업로드된 동일한 문서입니다."
         )
+
+
+def on_new_chat() -> None:
+    """새 대화 시작: 문서/파이프라인은 유지하고 대화만 초기화합니다."""
+    from core.session import SessionManager
+
+    current_sid = SessionManager.get_session_id()
+    SessionManager.reset_conversation(current_sid)
+    st.rerun()
 
 
 def on_model_change() -> None:
@@ -451,6 +467,7 @@ def _render_app_layout(available_models: list[str] | None = None) -> None:
             file_uploader_callback=on_file_upload,
             model_selector_callback=on_model_change,
             embedding_selector_callback=on_embedding_change,
+            new_chat_callback=on_new_chat,
             is_generating=bool(SessionManager.get("is_generating_answer", False)),
             current_file_name=SessionManager.get("last_uploaded_file_name"),
             available_models=available_models,

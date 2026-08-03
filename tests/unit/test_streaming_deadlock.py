@@ -113,7 +113,9 @@ def test_consumer_error_sets_message_error_and_clears_flag():
     messages = SessionManager.get_messages(session_id=sid)
     target = next(m for m in messages if m.get("msg_id") == msg_id)
     assert target["msg_type"] == "general"
-    assert "boom" in target["error"]
+    # P0 계약: 원시 예외 문자열은 노출하지 않고 친화적 메시지로 매핑된다
+    assert "boom" not in target["error"]
+    assert "오류가 발생" in target["error"]
 
 
 def test_render_message_shows_error_via_st_error():
