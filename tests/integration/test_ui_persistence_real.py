@@ -77,11 +77,3 @@ class TestAppPersistenceFlow(unittest.TestCase):
         assert final_messages[0]["content"] == q1
         assert final_messages[1]["content"] == ans1
         assert final_messages[2]["content"] == q2
-
-        print(
-            "\n✅ [성공] 비동기 동기화 후에도 이전 답변이 완벽하게 유지됨을 확인했습니다."
-        )
-
-
-if __name__ == "__main__":
-    unittest.main()

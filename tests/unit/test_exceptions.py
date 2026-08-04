@@ -279,7 +279,3 @@ class TestExceptionCatching:
                 raise exc
             except PDFProcessingError as e:
                 assert expected_keyword in e.message or expected_keyword in str(e)
-
-
-if __name__ == "__main__":
-    pytest.main([__file__, "-v", "-s"])

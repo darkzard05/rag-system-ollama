@@ -54,7 +54,7 @@ class TestTokenStreamBuffer(unittest.TestCase):
         # 첫 토큰은 즉시 반환됨
         first = buffer.add_token("hello")
         assert first == "hello"
-        
+
         # 이후 토큰은 버퍼링됨
         buffer.add_token(" ")
         buffer.add_token("world")
@@ -457,10 +457,3 @@ class TestIntegration(unittest.TestCase):
 
         assert "id: 1" in sse
         assert "test" in sse
-
-
-if __name__ == "__main__":
-    # pytest로 실행 권장
-    import pytest
-
-    pytest.main([__file__])

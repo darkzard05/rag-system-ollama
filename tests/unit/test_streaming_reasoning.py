@@ -1,4 +1,3 @@
-import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -103,9 +102,3 @@ async def test_generate_streams_thought_and_content(mock_dispatch):
     assert result["thought"] == "I am thinking about the answer."
     assert result["response"] == "The answer is 42."
     assert result["performance"]["input_token_count"] == 10
-
-    print("\n✅ Streaming Reasoning Test Passed!")
-
-
-if __name__ == "__main__":
-    asyncio.run(test_generate_streams_thought_and_content())

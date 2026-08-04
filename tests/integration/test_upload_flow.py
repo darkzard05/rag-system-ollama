@@ -1,14 +1,18 @@
 import os
-import asyncio
-import pytest
 from pathlib import Path
+
+import pytest
+
+from common.config import DEFAULT_EMBEDDING_MODEL, PROJECT_ROOT
 from core.rag_core import RAGSystem
-from core.session import SessionManager
-from common.config import PROJECT_ROOT, DEFAULT_EMBEDDING_MODEL
 from core.resource_manager import get_resource_manager
+from core.session import SessionManager
 
 
 @pytest.mark.asyncio
+@pytest.mark.skipif(
+    os.environ.get("IS_CI_TEST") == "true", reason="실제 임베딩/LLM 모델 필요"
+)
 async def test_upload_flow_persistence_and_summary():
     # 1. Setup
     session_id = "test-upload-flow-verify"
@@ -28,7 +32,6 @@ async def test_upload_flow_persistence_and_summary():
     embedder = await get_resource_manager().get_embedder(DEFAULT_EMBEDDING_MODEL)
 
     # 3. Execute Upload Simulation (Mimicking src/main.py upload handler)
-    print(f"\nTesting upload flow for: {file_name}")
 
     # Simulate the main app's permanent-file save logic:
     # it copies the uploaded file and records the path in session state
@@ -58,13 +61,8 @@ async def test_upload_flow_persistence_and_summary():
 
     # 5. Verification: Analysis Summary
     summary = SessionManager.get("analysis_summary", session_id=session_id)
-    if summary is None:
-        print(
-            "⚠️ Summary not generated (likely missing LLM model), skipping summary assertion."
-        )
-    else:
+    if summary is not None:
         assert len(summary) > 20, f"Summary is too short or empty: {summary}"
-        print(f"✅ Summary verified: {summary[:50]}...")
 
     # 6. Verification: State Persistence
     # Session state (SessionManager) is the persistence layer; re-initializing the
@@ -78,11 +76,3 @@ async def test_upload_flow_persistence_and_summary():
     assert persisted_summary == summary, (
         "Analysis summary must be persisted in session state"
     )
-
-    print(
-        "\n✅ [PASS] Upload flow verification successful: Persistence and Summary are working."
-    )
-
-
-if __name__ == "__main__":
-    asyncio.run(test_upload_flow_persistence_and_summary())

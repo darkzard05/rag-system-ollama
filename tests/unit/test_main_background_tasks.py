@@ -228,7 +228,3 @@ class TestMainBackgroundTasks(unittest.TestCase):
         messages = SessionManager.get_messages(session_id="test_session")
         # 어시스턴트 역할로 에러 메시지가 추가되어야 함 (현재 구현 기준)
         assert any("LLM Load Failed Mock Error" in m["content"] for m in messages)
-
-
-if __name__ == "__main__":
-    unittest.main()

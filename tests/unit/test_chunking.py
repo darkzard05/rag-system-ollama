@@ -2,8 +2,28 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import numpy as np
 import pytest
+from langchain_core.documents import Document
 from src.core.chunking import _postprocess_metadata, split_documents
-from tests.utils.mock_factory import create_mock_document, create_mock_embedder
+
+
+def create_mock_document(
+    content: str = "테스트 문서 내용", metadata: dict = None
+) -> Document:
+    """표준 테스트 문서 객체를 생성합니다."""
+    if metadata is None:
+        metadata = {"page": 1, "file_hash": "test_hash", "has_coordinates": True}
+    return Document(page_content=content, metadata=metadata)
+
+
+def create_mock_embedder():
+    """표준 모킹 임베더를 생성합니다."""
+    mock_embedder = MagicMock()
+    mock_embedder.model = "test-embedding-model"
+    # embed_documents mock
+    mock_embedder.embed_documents.return_value = [[0.1] * 128]
+    # embed_query mock
+    mock_embedder.embed_query.return_value = [0.1] * 128
+    return mock_embedder
 
 
 @pytest.mark.asyncio

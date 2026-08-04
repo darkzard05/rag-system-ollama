@@ -29,8 +29,6 @@ async def test_engine_recompilation_on_loop_change():
     loop1 = asyncio.get_running_loop()
     loop1_id = id(loop1)
 
-    print(f"\nLoop 1 ID: {loop1_id}")
-
     # Simulate a new loop (e.g., a different thread's loop)
     def thread_worker(results):
         new_loop = asyncio.new_event_loop()
@@ -61,12 +59,6 @@ async def test_engine_recompilation_on_loop_change():
 
     loop2_id = results.get("loop2_id")
     engine2 = results.get("engine2")
-    print(f"Loop 2 ID: {loop2_id}")
 
     assert loop1_id != loop2_id
     assert engine1 is not engine2
-    print("✅ Engine re-compiled correctly for new loop.")
-
-
-if __name__ == "__main__":
-    asyncio.run(test_engine_recompilation_on_loop_change())

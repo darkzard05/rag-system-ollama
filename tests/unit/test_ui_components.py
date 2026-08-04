@@ -60,8 +60,6 @@ render_message(
             # 1. 버튼들 확인 (숫자만 포함된 라벨)
             button_labels = [b.label for b in at.button]
 
-            print(f"발견된 버튼 라벨: {button_labels}")
-
             # 'p'가 포함된 숫자 라벨 확인
             self.assertIn("1p", button_labels, "1p 버튼이 없습니다.")
             self.assertIn("12p", button_labels, "12p 버튼이 없습니다.")
@@ -80,12 +78,15 @@ render_message(
                 len(style_markdowns), 0, "버튼 스타일 CSS가 여전히 존재합니다."
             )
 
-            print("✅ UI 버튼 숫자 표기 및 CSS 제거 테스트 통과")
-
         finally:
             if os.path.exists("temp_test_ui.py"):
                 os.remove("temp_test_ui.py")
 
 
-if __name__ == "__main__":
-    unittest.main()
+def test_pdf_viewer_key_includes_page():
+    """페이지가 키에 포함되어 페이지 변경 시 컴포넌트 재마운트가 보장된다."""
+    from ui.widget_keys import pdf_viewer_key
+
+    assert pdf_viewer_key("abc", 1) == "pdf_v8_abc_1"
+    assert pdf_viewer_key("abc", 1) != pdf_viewer_key("abc", 2)
+    assert pdf_viewer_key("abc", 1) != pdf_viewer_key("abd", 1)

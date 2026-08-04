@@ -77,4 +77,3 @@ def test_faiss_reconstruction_without_pickle(temp_cache_dir):
         res = vector_store.similarity_search("hello", k=1)
         assert len(res) == 1
         assert res[0].page_content == "test content"
-        print("✅ Pickle 파일 없이도 FAISS 및 문서 복원 성공!")

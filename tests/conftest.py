@@ -15,13 +15,6 @@ if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
 
-@pytest.fixture(scope="session")
-def test_pdf_path():
-    """Returns the path to the standard test PDF."""
-    path = BASE_DIR / "tests" / "data" / "2201.07520v1.pdf"
-    return str(path)
-
-
 @pytest.fixture
 def mock_llm():
     """Returns a mock LLM for testing."""

@@ -1,90 +1,95 @@
-import concurrent.futures
-import orjson
-from pathlib import Path
-import pytest
-from cache.coord_cache import CoordCacheManager, COORD_CACHE_DIR
+"""
+CoordCacheManager 동시성 검증.
+
+SQLite 기반 좌표 캐시에 대해 동일 키 (file_hash, page_num)로 여러
+save_coords가 동시에 실행되어도 데이터 손상 없이 유효한 좌표 리스트를
+읽을 수 있는지, 그리고 저장한 페이로드가 정확히 왕복되는지 검증합니다.
+모든 public API는 async이며 owner 루프 라우팅으로 루프 독립적입니다.
+"""
+
+import asyncio
+
+from cache.coord_cache import CoordCacheManager
+
+CONCURRENCY_HASH = "test_concurrency_hash"
+ROUND_TRIP_HASH = "test_round_trip_hash"
+PAGE_NUM = 1
+NUM_TASKS = 20
+
+
+async def _concurrent_saves(manager, file_hash, page_num):
+    """동일 키에 대해 여러 save_coords 코루틴을 동시에 실행합니다."""
+    tasks = [
+        asyncio.create_task(manager.save_coords(file_hash, page_num, _task_data(i)))
+        for i in range(NUM_TASKS)
+    ]
+    return await asyncio.gather(*tasks)
+
+
+def _task_data(task_index):
+    """태스크 인덱스 기반 좌표 데이터 (JSON 왕복 후 튜플 → 리스트)."""
+    return [(float(task_index), float(j), 0.0, 0.0, f"w{j}") for j in range(10)]
+
+
+async def _flush_and_get(manager, file_hash, page_num):
+    """write-behind 워커가 DB에 반영할 때까지 폴링 후 좌표를 조회합니다."""
+    for _ in range(200):
+        result = await manager.get_coords(file_hash, page_num)
+        if result is not None:
+            return result
+        await asyncio.sleep(0.05)
+    return None
 
 
 def test_coord_cache_concurrent_writes():
-    """
-    여러 스레드에서 동일한 캐시 파일에 동시에 쓰기를 시도할 때
-    데이터 손상이 발생하지 않고 유효한 JSON이 유지되는지 테스트합니다.
-    """
+    """동일 키 동시 저장 후에도 손상 없는 유효한 좌표 데이터를 읽어야 합니다."""
     manager = CoordCacheManager()
-    file_hash = "test_concurrency_hash"
-    page_num = 1
-
-    # 테스트 전 캐시 삭제
-    manager.clear_cache(file_hash)
-
-    num_threads = 20
-    iterations_per_thread = 50
-
-    def writer(thread_id):
-        for i in range(iterations_per_thread):
-            # 각 스레드가 고유한 데이터를 쓰려고 시도
-            data = [(float(thread_id), float(i), 0.0, 0.0)] * 10
-            manager.save_coords(file_hash, page_num, data)
-
-    with concurrent.futures.ThreadPoolExecutor(max_workers=num_threads) as executor:
-        futures = [executor.submit(writer, t) for t in range(num_threads)]
-        concurrent.futures.wait(futures)
-
-    # 최종 결과 검증
-    cache_path = COORD_CACHE_DIR / f"{file_hash}_p{page_num}.json"
-    assert cache_path.exists(), "캐시 파일이 생성되어야 합니다."
-
+    writer_ids = {float(i) for i in range(NUM_TASKS)}
     try:
-        with open(cache_path, "rb") as f:
-            content = f.read()
-            # 유효한 JSON인지 확인
-            data = orjson.loads(content)
-            assert isinstance(data, list), "데이터는 리스트 형태여야 합니다."
-            assert len(data) == 10, "데이터 길이가 예상과 다릅니다."
-    except Exception as e:
-        pytest.fail(f"동시 쓰기 후 파일이 손상되었습니다: {e}")
+        asyncio.run(manager.clear_cache(CONCURRENCY_HASH))
+        ok_results = asyncio.run(_concurrent_saves(manager, CONCURRENCY_HASH, PAGE_NUM))
+        assert all(ok_results), "모든 동시 저장이 성공해야 합니다."
+
+        data = asyncio.run(_flush_and_get(manager, CONCURRENCY_HASH, PAGE_NUM))
+        assert data is not None, "동시 저장 후 좌표 데이터를 조회할 수 있어야 합니다."
+        assert isinstance(data, list)
+        assert len(data) == 10
+        for entry in data:
+            assert len(entry) >= 4, "좌표 항목은 최소 4개 요소를 가져야 합니다."
+            assert isinstance(entry[0], (int, float))
+            assert isinstance(entry[1], (int, float))
+            assert entry[2] == 0.0
+            assert entry[3] == 0.0
+            assert isinstance(entry[4], str)
+
+        # 모든 좌표가 단일 작성자(task index)의 데이터여야 함 (혼합/손상 방지)
+        first_elements = {entry[0] for entry in data}
+        assert len(first_elements) == 1, (
+            "한 페이로드 내 좌표의 작성자가 일치해야 합니다."
+        )
+        assert first_elements.pop() in writer_ids, (
+            "알 수 없는 작성자 데이터가 있어서는 안 됩니다."
+        )
+    finally:
+        asyncio.run(manager.clear_cache(CONCURRENCY_HASH))
+        asyncio.run(manager.close())
 
 
-def test_coord_cache_concurrent_read_write():
-    """
-    읽기와 쓰기가 동시에 일어날 때 읽기 작업이 손상된 데이터를 읽지 않는지 테스트합니다.
-    """
+def test_coord_cache_round_trip_integrity():
+    """신규 키에 저장한 페이로드가 정확히 동일하게 복원되어야 합니다."""
     manager = CoordCacheManager()
-    file_hash = "test_rw_concurrency_hash"
-    page_num = 1
-    manager.clear_cache(file_hash)
+    page_num = 7
+    payload = [
+        {"x0": 1.0, "y0": 2.0, "x1": 3.0, "y1": 4.0, "word": "round"},
+        {"x0": 5.0, "y0": 6.0, "x1": 7.0, "y1": 8.0, "word": "trip"},
+    ]
+    try:
+        asyncio.run(manager.clear_cache(ROUND_TRIP_HASH))
+        ok = asyncio.run(manager.save_coords(ROUND_TRIP_HASH, page_num, payload))
+        assert ok, "페이로드 저장이 성공해야 합니다."
 
-    stop_event = False
-
-    def writer():
-        nonlocal stop_event
-        i = 0
-        while not stop_event:
-            data = [(float(i), 0.0, 0.0, 0.0)] * 100
-            manager.save_coords(file_hash, page_num, data)
-            i += 1
-
-    def reader():
-        nonlocal stop_event
-        while not stop_event:
-            data = manager.get_coords(file_hash, page_num)
-            if data is not None:
-                # 데이터가 있다면 유효한 형태인지 확인
-                assert isinstance(data, list)
-                assert len(data) == 100
-
-    with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
-        writer_future = executor.submit(writer)
-        reader_futures = [executor.submit(reader) for _ in range(3)]
-
-        # 일정 시간 동안 테스트 수행
-        import time
-
-        time.sleep(2)
-        stop_event = True
-
-        concurrent.futures.wait([writer_future] + reader_futures)
-
-
-if __name__ == "__main__":
-    pytest.main([__file__])
+        data = asyncio.run(_flush_and_get(manager, ROUND_TRIP_HASH, page_num))
+        assert data == payload, "저장한 페이로드가 정확히 동일하게 복원되어야 합니다."
+    finally:
+        asyncio.run(manager.clear_cache(ROUND_TRIP_HASH))
+        asyncio.run(manager.close())

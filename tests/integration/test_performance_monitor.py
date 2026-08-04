@@ -519,39 +519,3 @@ class TestMonitoringIntegration(unittest.TestCase):
         logger.info(
             f"✓ Degradation detected: {stats_fast.avg_duration_seconds:.3f}s → {stats_slow.avg_duration_seconds:.3f}s"
         )
-
-
-def run_performance_monitoring_tests():
-    """Run all performance monitoring tests."""
-    loader = unittest.TestLoader()
-    suite = unittest.TestSuite()
-
-    # Add all test classes
-    suite.addTests(loader.loadTestsFromTestCase(TestResponseTimeTracker))
-    suite.addTests(loader.loadTestsFromTestCase(TestMemoryMonitor))
-    suite.addTests(loader.loadTestsFromTestCase(TestTokenCounter))
-    suite.addTests(loader.loadTestsFromTestCase(TestPerformanceMonitor))
-    suite.addTests(loader.loadTestsFromTestCase(TestReportGeneration))
-    suite.addTests(loader.loadTestsFromTestCase(TestMonitoringIntegration))
-
-    # Run tests with verbose output
-    runner = unittest.TextTestRunner(verbosity=2)
-    result = runner.run(suite)
-
-    # Print summary
-    print("\n" + "=" * 70)
-    print("PERFORMANCE MONITORING TEST SUMMARY")
-    print("=" * 70)
-    print(f"Tests run: {result.testsRun}")
-    print(f"Successes: {result.testsRun - len(result.failures) - len(result.errors)}")
-    print(f"Failures: {len(result.failures)}")
-    print(f"Errors: {len(result.errors)}")
-    print(f"Skipped: {len(result.skipped)}")
-    print("=" * 70)
-
-    return result.wasSuccessful()
-
-
-if __name__ == "__main__":
-    success = run_performance_monitoring_tests()
-    sys.exit(0 if success else 1)

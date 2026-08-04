@@ -72,7 +72,6 @@ RESULTS: list[tuple[str, bool, str]] = []
 
 def record(name: str, passed: bool, detail: str = "") -> None:
     RESULTS.append((name, passed, detail))
-    print(f"  [{'PASS' if passed else 'FAIL'}] {name}: {detail}")
 
 
 def _app_session_id() -> str:
@@ -141,7 +140,6 @@ def test_chat_expander_and_interactive_chat_render() -> None:
     at = AppTest.from_file("src/main.py", default_timeout=300)
     at.run()
     sid = _app_session_id()
-    print(f"AppTest session id: {sid}")
     record("app_initial_run", True, f"initial at.run() ok (sid={sid})")
 
     # ------------------------------------------------------------------
@@ -299,14 +297,6 @@ def test_chat_expander_and_interactive_chat_render() -> None:
     )
     assert d1_ok, f"assistant message not rendered: {rendered!r}"
 
-    # Document which pipeline defect caused the assistant content (if any):
-    if "StopIteration" in asst_content or "알 수 없는 오류" in asst_content:
-        print(
-            "  [NOTE] Q assistant content is the app's formatted error for the "
-            "stub LLM iterator exhaustion (BUG 2, model_loader.py:447-456 + "
-            "graph_builder.py grade retries) -- UI rendered it as a chat message."
-        )
-
     # ASSERT (e): chat input present and ENABLED again after the turn.
     e_ok = _chat_input_ready(at)
     record(
@@ -358,7 +348,4 @@ def test_chat_expander_and_interactive_chat_render() -> None:
     assert thought_found, f"thought expander not rendered: {rendered!r}"
 
     # ------------------------------------------------------------------
-    print("\n===== LANE A ASSERTION SUMMARY =====")
-    for name, passed, detail in RESULTS:
-        print(f"  [{'PASS' if passed else 'FAIL'}] {name}: {detail}")
     assert all(p for _, p, _ in RESULTS), "one or more Lane A assertions failed"

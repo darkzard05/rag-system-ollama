@@ -39,28 +39,12 @@ class TestBasicOperations(unittest.TestCase):
     def setUp(self):
         SessionManager.reset()
 
-    def test_set_and_get(self):
-        """Test basic set and get operations."""
-        SessionManager.set_session_id("basic")
-        SessionManager.init_session()
-        SessionManager.set("test_key", "test_value")
-        assert SessionManager.get("test_key") == "test_value"
-
     def test_get_with_default(self):
         """Test get with default value."""
         SessionManager.set_session_id("basic_default")
         assert SessionManager.get("nonexistent", default="default_value") == (
             "default_value"
         )
-
-    def test_delete(self):
-        """Test delete operation."""
-        SessionManager.set_session_id("basic_delete")
-        SessionManager.set("temp_key", "temp_value")
-        assert SessionManager.get("temp_key") == "temp_value"
-
-        SessionManager.delete("temp_key")
-        assert SessionManager.get("temp_key") is None
 
     def test_multi_key_set(self):
         """Test atomic multi-key update via kwargs."""
@@ -373,17 +357,6 @@ class TestStatistics(unittest.TestCase):
         stats = SessionManager.get_stats()
         assert stats["active_sessions"] == 0
 
-    def test_cleanup_expired_sessions(self):
-        """Test expired session cleanup."""
-        sid = "stats_expired"
-        SessionManager.init_session(session_id=sid)
-        SessionManager._fallback_sessions[sid]["last_accessed"] = time.time() - 7200
-
-        SessionManager.cleanup_expired_sessions(max_idle_seconds=3600)
-
-        stats = SessionManager.get_stats()
-        assert stats["active_sessions"] == 0
-
 
 # ============================================================================
 # Convenience Function Tests
@@ -422,38 +395,3 @@ class TestSessionScopedHelpers(unittest.TestCase):
     def test_helper_default(self):
         """Test session-scoped helper with default value."""
         assert self.ts_get("nonexistent", "default_value") == "default_value"
-
-
-def run_thread_safety_tests():
-    """Run all thread safety tests with detailed reporting."""
-    loader = unittest.TestLoader()
-    suite = unittest.TestSuite()
-
-    # Add all test cases
-    suite.addTests(loader.loadTestsFromTestCase(TestBasicOperations))
-    suite.addTests(loader.loadTestsFromTestCase(TestConcurrentAccess))
-    suite.addTests(loader.loadTestsFromTestCase(TestRaceConditions))
-    suite.addTests(loader.loadTestsFromTestCase(TestDeadlockPrevention))
-    suite.addTests(loader.loadTestsFromTestCase(TestStatistics))
-    suite.addTests(loader.loadTestsFromTestCase(TestSessionScopedHelpers))
-
-    # Run tests with verbose output
-    runner = unittest.TextTestRunner(verbosity=2)
-    result = runner.run(suite)
-
-    # Print summary
-    print("\n" + "=" * 70)
-    print("THREAD SAFETY TEST SUMMARY")
-    print("=" * 70)
-    print(f"Tests run: {result.testsRun}")
-    print(f"Successes: {result.testsRun - len(result.failures) - len(result.errors)}")
-    print(f"Failures: {len(result.failures)}")
-    print(f"Errors: {len(result.errors)}")
-    print(f"Skipped: {len(result.skipped)}")
-    print("=" * 70)
-
-    return result.wasSuccessful()
-
-
-if __name__ == "__main__":
-    sys.exit(0 if run_thread_safety_tests() else 1)

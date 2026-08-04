@@ -545,7 +545,3 @@ class TestPerformance:
         )
         assert save_time < 0.1
         assert load_time < 0.1
-
-
-if __name__ == "__main__":
-    pytest.main([__file__, "-v", "-s"])

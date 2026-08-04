@@ -136,7 +136,3 @@ class TestIntegratedSecurity:
         auth_stats = auth_manager.get_statistics()
 
         assert auth_stats["total_users"] >= 3
-
-
-if __name__ == "__main__":
-    pytest.main([__file__, "-v"])

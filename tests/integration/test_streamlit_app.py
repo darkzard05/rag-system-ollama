@@ -84,9 +84,3 @@ class TestRAGStreamlitUI(unittest.TestCase):
             # 3. 답변 생성 시도 로그 또는 채팅 입력 비활성화 상태 확인
             # (RAG 엔진이 백그라운드에서 동작하므로 입력창이 비활성화되었거나
             # 다음 런타임에 메시지가 추가되는지 확인)
-            print("✅ UI 상호작용 및 기본 렌더링 테스트 통과 (사용자 입력 확인)")
-
-
-if __name__ == "__main__":
-    # 실제 환경에서는 Streamlit 앱이 복잡하므로 일부 기능만 단위 테스트로 실행
-    unittest.main()

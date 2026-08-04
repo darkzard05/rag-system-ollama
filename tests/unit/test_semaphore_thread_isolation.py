@@ -43,9 +43,6 @@ async def test_semaphore_isolation_across_tasks():
     end_time = time.time()
 
     duration = end_time - start_time
-    print(
-        f"\n[TEST] Total duration with asyncio.Semaphore across {num_tasks} tasks: {duration:.2f}s"
-    )
 
     # Verification: Sequential execution means duration >= num_tasks * 1.0
     # In config.yml, max_concurrent_inference is 1.
@@ -64,7 +61,6 @@ async def test_semaphore_isolation_across_tasks():
         else:
             current_concurrent -= 1
 
-    print(f"[TEST] Max concurrent entries detected: {max_concurrent}")
     assert max_concurrent == 1, (
         f"Expected exactly 1 concurrent entry, but found {max_concurrent}"
     )

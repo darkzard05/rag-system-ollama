@@ -5,11 +5,53 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from tests.utils import mock_factory
+from langchain_core.documents import Document
 
 from common.exceptions import EmptyPDFError, PDFProcessingError
 from core.rag_core import RAGSystem
 from core.session import SessionManager
+
+
+def create_mock_document(
+    content: str = "테스트 문서 내용", metadata: dict = None
+) -> Document:
+    """표준 테스트 문서 객체를 생성합니다."""
+    if metadata is None:
+        metadata = {"page": 1, "file_hash": "test_hash", "has_coordinates": True}
+    return Document(page_content=content, metadata=metadata)
+
+
+def create_mock_embedder():
+    """표준 모킹 임베더를 생성합니다."""
+    mock_embedder = MagicMock()
+    mock_embedder.model = "test-embedding-model"
+    # embed_documents mock
+    mock_embedder.embed_documents.return_value = [[0.1] * 128]
+    # embed_query mock
+    mock_embedder.embed_query.return_value = [0.1] * 128
+    return mock_embedder
+
+
+def create_mock_vector_store():
+    """표준 모킹 벡터 스토어를 생성합니다."""
+    mock_vs = MagicMock()
+
+    # as_retriever mock
+    mock_retriever = MagicMock()
+    mock_vs.as_retriever.return_value = mock_retriever
+
+    # similarity_search mock
+    mock_vs.similarity_search.return_value = [create_mock_document()]
+
+    return mock_vs
+
+
+def create_mock_bm25_retriever():
+    """표준 모킹 BM25 리트리버를 생성합니다."""
+    mock_bm25 = MagicMock()
+    mock_bm25.k = 5
+    mock_bm25.get_relevant_documents.return_value = [create_mock_document()]
+    return mock_bm25
 
 
 class TestPipelineEdgeCases:
@@ -30,7 +72,7 @@ class TestPipelineEdgeCases:
     @pytest.fixture
     def mock_embedder(self):
         """표준 모킹 임베더를 제공합니다."""
-        return mock_factory.create_mock_embedder()
+        return create_mock_embedder()
 
     @pytest.mark.asyncio
     async def test_empty_pdf(self, rag_system: RAGSystem, mock_embedder: Any):
@@ -102,8 +144,8 @@ class TestPipelineEdgeCases:
         엣지 케이스 4: 빈 쿼리/질문 처리 검증.
         빈 문자열 전달 시 시스템이 크래시 없이 적절한 응답을 반환하거나 예외를 처리해야 합니다.
         """
-        mock_vs = mock_factory.create_mock_vector_store()
-        mock_bm25 = mock_factory.create_mock_bm25_retriever()
+        mock_vs = create_mock_vector_store()
+        mock_bm25 = create_mock_bm25_retriever()
 
         mock_engine = AsyncMock()
         mock_engine.ainvoke.return_value = {
@@ -137,8 +179,8 @@ class TestPipelineEdgeCases:
         엣지 케이스 5: LLM 타임아웃 시나리오 검증.
         모델 응답 생성 중 타임아웃이 발생했을 때 시스템이 이를 적절히 처리하는지 확인합니다.
         """
-        mock_vs = mock_factory.create_mock_vector_store()
-        mock_bm25 = mock_factory.create_mock_bm25_retriever()
+        mock_vs = create_mock_vector_store()
+        mock_bm25 = create_mock_bm25_retriever()
 
         # astream_events가 asyncio.TimeoutError를 발생시키는 비동기 제너레이터
         async def mock_astream_events_gen(*args, **kwargs):
@@ -182,8 +224,8 @@ class TestPipelineEdgeCases:
         엣지 케이스 6: 매우 긴 쿼리 처리 검증.
         10,000자 이상의 매우 긴 쿼리를 전달했을 때 시스템이 크래시 없이 처리하는지 확인합니다.
         """
-        mock_vs = mock_factory.create_mock_vector_store()
-        mock_bm25 = mock_factory.create_mock_bm25_retriever()
+        mock_vs = create_mock_vector_store()
+        mock_bm25 = create_mock_bm25_retriever()
 
         long_query = "A" * 10001
 

@@ -465,19 +465,3 @@ class TestIntegration(unittest.TestCase):
             assert len(docs) > 0
 
         asyncio.run(_test())
-
-
-if __name__ == "__main__":
-    # 25개 테스트 실행
-    suite = unittest.TestLoader().loadTestsFromModule(__import__(__name__))
-    runner = unittest.TextTestRunner(verbosity=2)
-    result = runner.run(suite)
-
-    print(f"\n{'=' * 60}")
-    print("AsyncIO 최적화 테스트 완료")
-    print(f"{'=' * 60}")
-    print(f"총 테스트: {result.testsRun}")
-    print(f"성공: {result.testsRun - len(result.failures) - len(result.errors)}")
-    print(f"실패: {len(result.failures)}")
-    print(f"에러: {len(result.errors)}")
-    print(f"{'=' * 60}")
