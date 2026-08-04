@@ -3,6 +3,8 @@
 TTL, 세맨틱 캐싱, 캐시 무효화, 스레드 안전성 등 종합 검증
 """
 
+# ruff: noqa: E402
+
 import sys
 from pathlib import Path
 
@@ -18,22 +20,22 @@ from threading import Thread
 import numpy as np
 import pytest
 
+from cache.response_cache import (
+    CacheWarmup,
+    DocumentCache,
+    QueryCache,
+    ResponseCache,
+    get_document_cache,
+    get_query_cache,
+    get_response_cache,
+    reset_caches,
+)
 from services.optimization.caching_optimizer import (
     CacheEntry,
     CacheManager,
     DiskCache,
     MemoryCache,
     SemanticCache,
-)
-from cache.response_cache import (
-    ResponseCache,
-    QueryCache,
-    DocumentCache,
-    CacheWarmup,
-    get_response_cache,
-    get_query_cache,
-    get_document_cache,
-    reset_caches,
 )
 
 logging.basicConfig(level=logging.DEBUG)
@@ -233,6 +235,7 @@ class TestSemanticCache:
         assert len(embedding) > 0
 
     @pytest.mark.asyncio
+    @pytest.mark.xfail(reason="SemanticCache._cosine_similarity() 리팩토링으로 제거됨")
     async def test_cosine_similarity(self):
         """코사인 유사도"""
         cache = SemanticCache()
@@ -400,10 +403,9 @@ class TestQueryCache:
         ]
 
         await cache.set("test query", documents)
-        await cache.get("test query")
+        cached = await cache.get("test query")
 
-        # 저장은 성공했는지 확인
-        assert cache is not None
+        assert cached is not None, "Cached query result should be retrievable"
 
     @pytest.mark.asyncio
     async def test_query_cache_top_k(self):
@@ -414,8 +416,8 @@ class TestQueryCache:
 
         await cache.set("query", documents, top_k=5)
 
-        # 저장이 성공했는지만 확인
-        assert cache is not None
+        cached = await cache.get("query", top_k=5)
+        assert cached is not None, "top_k query should be cached"
 
     @pytest.mark.asyncio
     async def test_query_invalidation(self):
@@ -428,8 +430,10 @@ class TestQueryCache:
         # 무효화 실행
         await cache.invalidate()
 
-        # 무효화 후 상태 확인
-        assert cache is not None
+        result_after_invalidation = await cache.get("query")
+        assert result_after_invalidation is None, (
+            "Cache should be empty after invalidation"
+        )
 
     @pytest.mark.asyncio
     async def test_invalidation_callback(self):
@@ -459,8 +463,8 @@ class TestDocumentCache:
         doc = {"id": "doc1", "title": "Test", "content": "Test content"}
         await cache.set_document("doc1", doc)
 
-        # 저장이 성공했는지만 확인
-        assert cache is not None
+        retrieved = await cache.get_document("doc1")
+        assert retrieved is not None, "Document should be retrievable after set"
 
     @pytest.mark.asyncio
     async def test_chunks_set_and_get(self):
@@ -471,8 +475,8 @@ class TestDocumentCache:
 
         await cache.set_chunks("doc1", chunks)
 
-        # 저장이 성공했는지만 확인
-        assert cache is not None
+        retrieved_chunks = await cache.get_chunks("doc1")
+        assert retrieved_chunks is not None, "Chunks should be retrievable after set"
 
     @pytest.mark.asyncio
     async def test_document_invalidation(self):
@@ -551,8 +555,7 @@ class TestDiskCacheSecurity:
     async def test_disk_cache_integrity(self):
         """무결성 검증 및 변조 감지 테스트"""
         import tempfile
-        import shutil
-        
+
         with tempfile.TemporaryDirectory() as tmp_dir:
             cache_dir = Path(tmp_dir) / "cache"
             cache = DiskCache(cache_dir=str(cache_dir))
@@ -582,7 +585,7 @@ class TestDiskCacheSecurity:
     async def test_disk_cache_metadata_cleanup(self):
         """삭제 시 메타데이터 함께 삭제되는지 확인"""
         import tempfile
-        
+
         with tempfile.TemporaryDirectory() as tmp_dir:
             cache = DiskCache(cache_dir=str(tmp_dir))
             key = "cleanup_test"
@@ -699,8 +702,9 @@ class TestIntegration:
         assert stats is not None
 
     @pytest.mark.asyncio
-    async def test_cache_performance_benefit(self):
+    async def test_cache_performance_benefit(self, monkeypatch):
         """캐시 성능 이점"""
+        monkeypatch.setattr("common.config.ENABLE_RESPONSE_CACHE", True)
         cache = ResponseCache()
 
         query = "expensive query"
@@ -709,10 +713,5 @@ class TestIntegration:
         # 응답 캐싱
         await cache.set(query, response)
 
-        # 캐시 저장이 성공했는지 확인
-        assert cache is not None
-
-
-# 테스트 실행
-if __name__ == "__main__":
-    pytest.main([__file__, "-v", "--tb=short"])
+        cached = await cache.get(query, use_semantic=False)
+        assert cached is not None, "Response should be retrievable from cache"

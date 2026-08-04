@@ -1,56 +1,59 @@
 import asyncio
-import time
+
+import pytest
+
 from core.model_loader import ModelManager
 from core.resource_manager import get_resource_manager
 
 
-async def mock_inference_task(task_id, duration):
-    print(f"[{task_id}] 추론 세션 진입 시도...")
-    start_time = time.time()
-
-    async with ModelManager.inference_session():
-        entry_time = time.time()
-        print(
-            f"[{task_id}] 추론 세션 획득! (대기 시간: {entry_time - start_time:.2f}s)"
-        )
-        # 실제 추론을 흉내내는 지연
-        await asyncio.sleep(duration)
-        print(f"[{task_id}] 추론 완료 및 세션 반환")
-
-    return entry_time
+@pytest.fixture(autouse=True)
+def restore_semaphore():
+    """Restores the inference semaphore after each test."""
+    rc = get_resource_manager()
+    original = rc.inference_semaphore
+    yield
+    rc.inference_semaphore = original
 
 
-async def test_concurrency_control():
-    # 강제로 세마포어를 2로 설정 (테스트용)
-    # ModelManager.inference_session() delegates to ResourceCoordinator
+async def _entry_times(duration: float, count: int = 3) -> list[float]:
+    """Runs `count` inference tasks and returns their entry timestamps."""
+
+    async def mock_inference_task() -> float:
+        start = asyncio.get_event_loop().time()
+        async with ModelManager.inference_session():
+            entry = asyncio.get_event_loop().time()
+            await asyncio.sleep(duration)
+        return entry - start
+
+    return await asyncio.gather(*(mock_inference_task() for _ in range(count)))
+
+
+@pytest.mark.asyncio
+async def test_inference_semaphore_limits_concurrency():
+    """With a semaphore of 2, 3 tasks must run in 2 waves (max overlap of 2)."""
     rc = get_resource_manager()
     rc.inference_semaphore = asyncio.Semaphore(2)
-    print(f"Forced MAX_CONCURRENT_INFERENCE for test: 2")
 
-    tasks = [
-        mock_inference_task(1, 2),
-        mock_inference_task(2, 2),
-        mock_inference_task(3, 2),
-    ]
+    duration = 0.2
+    starts = await _entry_times(duration, count=3)
+    starts.sort()
 
-    print("\n--- 동시 추론 테스트 시작 (Max: 2) ---")
-    results = await asyncio.gather(*tasks)
-    print("--- 동시 추론 테스트 종료 ---\n")
-
-    # 분석: 시작 시간이 겹치는지 확인
-    results.sort()
-    for i in range(len(results) - 1):
-        diff = results[i + 1] - results[i]
-        # 0.1초 미만 차이는 동시 실행으로 간주
-        if diff < 0.1:
-            print(
-                f"Task {i + 1}와 {i + 2}가 동시에 실행되었습니다. (차이: {diff:.2f}s)"
-            )
-        else:
-            print(
-                f"Task {i + 1}와 {i + 2}가 순차적으로 실행되었습니다. (차이: {diff:.2f}s)"
-            )
+    # Third task must wait for the first two slots to free up.
+    assert starts[2] >= starts[1] + duration - 0.05
+    # First two tasks start near-immediately.
+    assert starts[0] < 0.1
+    assert starts[1] < 0.1
 
 
-if __name__ == "__main__":
-    asyncio.run(test_concurrency_control())
+@pytest.mark.asyncio
+async def test_inference_semaphore_serial_when_one():
+    """With a semaphore of 1, all tasks must run serially."""
+    rc = get_resource_manager()
+    rc.inference_semaphore = asyncio.Semaphore(1)
+
+    duration = 0.2
+    starts = await _entry_times(duration, count=3)
+    starts.sort()
+
+    for i in range(2):
+        assert starts[i + 1] >= starts[i] + duration - 0.05

@@ -11,13 +11,11 @@ Tests the full pipeline:
 """
 
 import asyncio
-import gc
 import sys
-import time
 import unittest
 from io import BytesIO
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 # --- 경로 설정 최적화 (CI 및 로컬 공용) ---
 # 파일 위치가 tests/integration/ 에 있으므로 2단계 상위가 루트
@@ -29,7 +27,6 @@ for path in [str(BASE_DIR), str(SRC_DIR)]:
     if path not in sys.path:
         sys.path.insert(0, path)
 
-import psutil
 import pytest
 
 from common.exceptions import (
@@ -133,8 +130,8 @@ class TestDocumentProcessing(unittest.TestCase):
 
     def test_empty_document_handling(self):
         """Test that empty documents are handled properly by build_pipeline."""
-        import tempfile
         import os
+        import tempfile
 
         # 빈 파일 생성
         with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
@@ -155,8 +152,8 @@ class TestDocumentProcessing(unittest.TestCase):
 
     def test_document_chunking(self):
         """Test that documents are processed and chunked via build_pipeline."""
-        import tempfile
         import os
+        import tempfile
 
         # 1. 테스트 PDF 생성
         pdf_data = create_test_pdf()
@@ -182,7 +179,6 @@ class TestDocumentProcessing(unittest.TestCase):
 
                 # 4. 상태 로그 확인 (청킹 완료 로그가 있어야 함)
                 status = self.rag.get_status()
-                has_chunk_log = any("완료" in s or "청크" in s for s in status)
 
                 assert len(status) > 0
                 logger.info(f"✓ Document pipeline verified. Status logs: {len(status)}")
@@ -194,16 +190,6 @@ class TestDocumentProcessing(unittest.TestCase):
         finally:
             if os.path.exists(tmp_path):
                 os.unlink(tmp_path)
-
-    def test_duplicate_chunk_removal(self):
-        """Test that duplicate chunks are removed."""
-        # Create chunks with duplicates
-
-        try:
-            # This would be handled internally by the graph builder
-            logger.info("✓ Duplicate chunk handling logic verified")
-        except Exception as e:
-            logger.warning(f"Duplicate removal test skipped: {e}")
 
 
 class TestRetrieval(unittest.TestCase):
@@ -229,18 +215,6 @@ class TestRetrieval(unittest.TestCase):
         except Exception as e:
             logger.warning(f"Retrieval test skipped: {e}")
 
-    def test_similarity_threshold(self):
-        """Test that similarity threshold filtering works."""
-        threshold = 0.3
-
-        try:
-            # Verify threshold is applied
-            assert threshold >= 0.0
-            assert threshold <= 1.0
-            logger.info(f"✓ Similarity threshold validation: {threshold}")
-        except Exception as e:
-            logger.warning(f"Threshold test skipped: {e}")
-
 
 class TestResponseGeneration(unittest.TestCase):
     """Test LLM response generation."""
@@ -260,54 +234,6 @@ class TestResponseGeneration(unittest.TestCase):
             logger.info("✓ Response generation function exists")
         except Exception as e:
             logger.warning(f"Response generation test skipped: {e}")
-
-    def test_temperature_effect(self):
-        """Test that temperature parameter is valid."""
-        valid_temperatures = [0.0, 0.3, 0.5, 0.7, 1.0]
-
-        for temp in valid_temperatures:
-            assert temp >= 0.0
-            assert temp <= 1.0
-
-        logger.info("✓ Valid temperature range verified: 0.0-1.0")
-
-
-class TestTimeoutHandling(unittest.TestCase):
-    """Test timeout and error handling."""
-
-    def setUp(self):
-        """Set up test fixtures."""
-        try:
-            self.rag = RAGSystem()
-        except Exception as e:
-            self.skipTest(f"RAG system not available: {e}")
-
-    def test_retriever_timeout_config(self):
-        """Test that retriever timeout is configured."""
-        # Should be 30 seconds based on constants
-        expected_timeout = 30
-        assert isinstance(expected_timeout, int)
-        assert expected_timeout > 0
-        logger.info(f"✓ Retriever timeout configured: {expected_timeout}s")
-
-    def test_llm_timeout_config(self):
-        """Test that LLM timeout is configured."""
-        # Should be 300 seconds based on constants
-        expected_timeout = 300
-        assert isinstance(expected_timeout, int)
-        assert expected_timeout > 0
-        logger.info(f"✓ LLM timeout configured: {expected_timeout}s")
-
-    @patch("time.sleep")
-    def test_timeout_error_handling(self, mock_sleep):
-        """Test that timeout errors are handled gracefully."""
-        try:
-            # Simulate a timeout by raising an asyncio.TimeoutError
-            with pytest.raises(TimeoutError):
-                raise TimeoutError("Operation timed out")
-            logger.info("✓ Timeout error handling verified")
-        except Exception as e:
-            logger.warning(f"Timeout handling test skipped: {e}")
 
 
 class TestExceptionHandling(unittest.TestCase):
@@ -363,66 +289,6 @@ class TestExceptionHandling(unittest.TestCase):
         logger.info("✓ EmbeddingModelError verified")
 
 
-class TestMemoryManagement(unittest.TestCase):
-    """Test memory usage and garbage collection."""
-
-    def setUp(self):
-        """Set up test fixtures."""
-        self.process = psutil.Process()
-        self.initial_memory = self.process.memory_info().rss / 1024 / 1024  # MB
-
-    def test_memory_usage_baseline(self):
-        """Test baseline memory usage."""
-        memory_mb = self.initial_memory
-
-        assert memory_mb > 0
-        logger.info(f"✓ Baseline memory usage: {memory_mb:.1f}MB")
-
-    def test_garbage_collection(self):
-        """Test that garbage collection works."""
-        gc.collect()
-
-        current_memory = self.process.memory_info().rss / 1024 / 1024
-        assert current_memory > 0
-        logger.info("✓ Garbage collection completed")
-
-    def test_memory_leak_detection(self):
-        """Test that memory isn't growing excessively."""
-        gc.collect()
-        initial = self.process.memory_info().rss / 1024 / 1024
-
-        # Create some objects
-        test_list = [{"key": f"value_{i}"} for i in range(1000)]
-
-        # Delete them
-        del test_list
-        gc.collect()
-
-        final = self.process.memory_info().rss / 1024 / 1024
-
-        # Memory should not grow significantly
-        growth = final - initial
-        assert growth < 50  # Less than 50MB growth
-        logger.info(f"✓ Memory growth acceptable: {growth:.1f}MB")
-
-
-class TestPerformanceMonitoring(unittest.TestCase):
-    """Test performance metrics and monitoring."""
-
-    def test_response_time_tracking(self):
-        """Test that response times can be tracked."""
-        start_time = time.time()
-
-        # Simulate some work
-        time.sleep(0.1)
-
-        elapsed = time.time() - start_time
-
-        assert elapsed >= 0.1
-        assert elapsed < 1.0  # Should complete quickly
-        logger.info(f"✓ Response time tracking: {elapsed:.3f}s")
-
-
 class TestPipelineIntegration(unittest.TestCase):
     """Test the complete end-to-end pipeline."""
 
@@ -432,11 +298,6 @@ class TestPipelineIntegration(unittest.TestCase):
             self.rag = RAGSystem()
         except Exception as e:
             self.skipTest(f"Pipeline setup failed: {e}")
-
-    def test_pipeline_initialization(self):
-        """Test that the entire pipeline initializes."""
-        assert self.rag is not None
-        logger.info("✓ Pipeline initialization successful")
 
     def test_streaming_events_emission(self):
         """
@@ -493,8 +354,8 @@ class TestPipelineIntegration(unittest.TestCase):
 
     def test_pipeline_error_recovery(self):
         """Test that pipeline handles errors gracefully via build_pipeline."""
-        import tempfile
         import os
+        import tempfile
 
         # 빈 파일로 오류 유도
         with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
@@ -511,90 +372,3 @@ class TestPipelineIntegration(unittest.TestCase):
         finally:
             if os.path.exists(tmp_path):
                 os.unlink(tmp_path)
-
-    @patch("core.graph_builder.build_graph")
-    def test_graph_builder(self, mock_build):
-        """Test that the graph builder creates a valid pipeline."""
-        try:
-            mock_build.return_value = MagicMock()
-            graph = build_graph()
-            assert graph is not None
-            logger.info("✓ Graph builder mock check passed")
-        except Exception as e:
-            logger.warning(f"Graph builder test skipped: {e}")
-
-
-class TestConcurrency(unittest.TestCase):
-    """Test concurrent operations in the RAG system."""
-
-    def test_async_retrieval(self):
-        """Test that async retrieval can be called."""
-
-        async def test_async():
-            await asyncio.sleep(0.01)
-            return "completed"
-
-        try:
-            result = asyncio.run(test_async())
-            assert result == "completed"
-            logger.info("✓ Async operations working")
-        except Exception as e:
-            logger.warning(f"Async test skipped: {e}")
-
-    def test_event_loop_safety(self):
-        """Test that event loop operations are safe."""
-        try:
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-
-            async def simple_task():
-                return True
-
-            result = loop.run_until_complete(simple_task())
-            assert result
-            loop.close()
-
-            logger.info("✓ Event loop safety verified")
-        except Exception as e:
-            logger.warning(f"Event loop test skipped: {e}")
-
-
-def run_integration_tests():
-    """Run all integration tests with detailed reporting."""
-    # Create test suite
-    loader = unittest.TestLoader()
-    suite = unittest.TestSuite()
-
-    # Add all test cases
-    suite.addTests(loader.loadTestsFromTestCase(TestRAGInitialization))
-    suite.addTests(loader.loadTestsFromTestCase(TestDocumentProcessing))
-    suite.addTests(loader.loadTestsFromTestCase(TestRetrieval))
-    suite.addTests(loader.loadTestsFromTestCase(TestResponseGeneration))
-    suite.addTests(loader.loadTestsFromTestCase(TestTimeoutHandling))
-    suite.addTests(loader.loadTestsFromTestCase(TestExceptionHandling))
-    suite.addTests(loader.loadTestsFromTestCase(TestMemoryManagement))
-    suite.addTests(loader.loadTestsFromTestCase(TestPerformanceMonitoring))
-    suite.addTests(loader.loadTestsFromTestCase(TestPipelineIntegration))
-    suite.addTests(loader.loadTestsFromTestCase(TestConcurrency))
-
-    # Run tests with verbose output
-    runner = unittest.TextTestRunner(verbosity=2)
-    result = runner.run(suite)
-
-    # Print summary
-    print("\n" + "=" * 70)
-    print("INTEGRATION TEST SUMMARY")
-    print("=" * 70)
-    print(f"Tests run: {result.testsRun}")
-    print(f"Successes: {result.testsRun - len(result.failures) - len(result.errors)}")
-    print(f"Failures: {len(result.failures)}")
-    print(f"Errors: {len(result.errors)}")
-    print(f"Skipped: {len(result.skipped)}")
-    print("=" * 70)
-
-    return result.wasSuccessful()
-
-
-if __name__ == "__main__":
-    success = run_integration_tests()
-    sys.exit(0 if success else 1)

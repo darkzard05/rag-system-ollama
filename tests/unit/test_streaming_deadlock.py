@@ -157,8 +157,16 @@ def test_consumer_documents_set_pdf_side_effects():
     target = next(m for m in messages if m.get("msg_id") == msg_id)
     assert target["documents"] == [doc]
     _wait_for_pdf_side_effects(sid)
-    assert SessionManager.get("pdf_annotations", session_id=sid) == []
-    assert SessionManager.get("pdf_target_page", session_id=sid) == 7
+    pdf_annotations = SessionManager.get("pdf_annotations", session_id=sid)
+    assert pdf_annotations["file_hash"] is None  # 테스트에서 file_hash 미설정
+    assert pdf_annotations["annotations"] == []  # 좌표 없음 → 주석 없음
+
+    pdf_target = SessionManager.get("pdf_target_page", session_id=sid)
+    assert isinstance(pdf_target, dict)
+    assert pdf_target["page"] == 7
+    assert pdf_target["source"] == "auto"
+    assert isinstance(pdf_target["ts"], float)
+
     assert SessionManager.get("current_page", session_id=sid) == 7
     assert SessionManager.get("generation_cancel", False, sid) is False
 

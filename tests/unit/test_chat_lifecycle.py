@@ -128,7 +128,15 @@ def test_streaming_documents_set_pdf_side_effects():
     assert target["role"] == "assistant"
     assert target["documents"] == [doc]
     _wait_for_pdf_side_effects(session_id)
-    assert SessionManager.get("pdf_annotations", session_id=session_id) == []
-    assert SessionManager.get("pdf_target_page", session_id=session_id) == 7
+    pdf_annotations = SessionManager.get("pdf_annotations", session_id=session_id)
+    assert pdf_annotations["file_hash"] is None  # 테스트에서 file_hash 미설정
+    assert pdf_annotations["annotations"] == []  # 좌표 없음 → 주석 없음
+
+    pdf_target = SessionManager.get("pdf_target_page", session_id=session_id)
+    assert isinstance(pdf_target, dict)
+    assert pdf_target["page"] == 7
+    assert pdf_target["source"] == "auto"
+    assert isinstance(pdf_target["ts"], float)
+
     assert SessionManager.get("current_page", session_id=session_id) == 7
     assert SessionManager.get("is_generating_answer", False, session_id) is False

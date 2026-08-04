@@ -1,6 +1,6 @@
-import asyncio
 import os
 
+import pytest
 from playwright.async_api import async_playwright
 
 BASE_URL = os.environ.get("STREAMLIT_URL", "http://127.0.0.1:8501")
@@ -60,6 +60,8 @@ CHECK_INPUT_PINNED_JS = f"""
 """
 
 
+@pytest.mark.asyncio
+@pytest.mark.e2e
 async def test_chat_scroll():
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True)
@@ -68,9 +70,8 @@ async def test_chat_scroll():
         try:
             await page.goto(BASE_URL, timeout=15000)
         except Exception as e:
-            print(f"Error: Could not connect to app at {BASE_URL}. Is it running? {e}")
             await browser.close()
-            return
+            pytest.skip(f"Streamlit app not running at {BASE_URL} (e2e skipped): {e}")
 
         print("Successfully connected to the app.")
         await page.wait_for_timeout(3000)
@@ -251,7 +252,3 @@ async def test_chat_scroll():
 
         await browser.close()
         print("\nAll independent-scroll tests PASSED successfully!")
-
-
-if __name__ == "__main__":
-    asyncio.run(test_chat_scroll())

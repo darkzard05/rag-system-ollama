@@ -1,8 +1,7 @@
 # tests/stability/test_session_concurrency.py
-import threading
 from concurrent.futures import ThreadPoolExecutor
+
 from src.core.session import SessionManager
-import pytest
 
 
 def test_session_state_concurrency():
@@ -38,5 +37,7 @@ def test_session_state_concurrency():
     # Because our update_task is NOT atomic (get and set are separate locked calls),
     # the final value might not be 1000, but it should be stable.
     final_val = SessionManager.get("counter", session_id=sid)
-    print(f"Final counter value: {final_val} (expected <= 1000 due to non-atomic RMW)")
-    assert final_val > 0
+    assert final_val >= 100, (
+        f"Counter too low: {final_val} (expected >= 100 of 1000 "
+        "increments to survive contention)"
+    )
