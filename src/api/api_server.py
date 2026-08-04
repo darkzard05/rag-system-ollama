@@ -6,10 +6,10 @@ UI와 독립적으로 RAG 기능을 외부 API로 제공합니다.
 import asyncio
 import logging
 import os
-import tempfile
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import Any
 
 from fastapi import (
     Depends,
@@ -21,7 +21,7 @@ from fastapi import (
     Request,
     UploadFile,
 )
-from fastapi.responses import StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from api.schemas import QueryRequest, QueryResponse
@@ -31,6 +31,8 @@ from api.streaming_handler import (
     get_streaming_handler,
 )
 from common.config import AVAILABLE_EMBEDDING_MODELS, DEFAULT_OLLAMA_MODEL
+from common.constants import FilePathConstants
+from core.document_processor import compute_file_hash
 from core.rag_core import RAGSystem
 from core.session import SessionManager
 from security.auth_system import AuthenticationManager
@@ -189,6 +191,64 @@ async def get_session_context(x_session_id: str | None = Header(None)) -> str:
     return sid
 
 
+# --- PDF 서빙 및 참조 좌표 노출 ---
+# 업로드된 PDF를 file_hash 기반으로 보존하는 스토리지 루트
+PDF_STORAGE_DIR = str(FilePathConstants.TEMP_DIR)
+
+
+def _resolve_pdf_path(file_hash: str) -> Path | None:
+    """스토리지 루트 내에서 file_hash와 일치하는 PDF 경로를 반환합니다.
+
+    경로 주입을 방지하기 위해 file_hash를 파일명 안전 문자열로 정규화하고,
+    최종 후보 경로가 항상 스토리지 루트 내부에 위치하는지 검증합니다.
+    """
+    storage = Path(PDF_STORAGE_DIR)
+    if not storage.is_dir():
+        return None
+
+    # 경로 구분자/상대 경로 제거 (path traversal 방지)
+    safe_hash = (file_hash or "").replace("/", "").replace("\\", "").replace("..", "")
+    if not safe_hash:
+        return None
+
+    # 1) 해시 기반 직접 경로 (upload 엔드포인트가 {hash}.pdf 로 저장한 경우)
+    candidate = (storage / safe_hash).with_suffix(".pdf")
+    try:
+        if candidate.is_file() and candidate.resolve().is_relative_to(
+            storage.resolve()
+        ):
+            return candidate
+    except OSError:
+        pass
+
+    # 2) 스캔 폴백: 다른 이름으로 저장된 동일 콘텐츠 파일 검색
+    try:
+        for path in storage.glob("*.pdf"):
+            if compute_file_hash(str(path)) == safe_hash:
+                return path
+    except OSError:
+        return None
+    return None
+
+
+def _doc_to_source(doc: Any, max_chars: int = 200, suffix: str = "") -> dict[str, Any]:
+    """검색 결과 Document를 API 소스 딕셔너리로 직렬화합니다.
+
+    기존 page/content 필드를 유지하면서 좌표 및 해시 메타데이터를
+    존재할 때만 Optional로 노출합니다 (구버전 클라이언트 호환).
+    """
+    metadata = doc.metadata
+    content = doc.page_content[:max_chars]
+    source: dict[str, Any] = {
+        "page": metadata.get("page"),
+        "content": content + suffix,
+    }
+    for key in ("pages", "page_coords", "word_coords", "file_hash"):
+        if metadata.get(key) is not None:
+            source[key] = metadata[key]
+    return source
+
+
 # --- Endpoints ---
 
 
@@ -219,43 +279,43 @@ async def upload_document(
     SessionManager.init_session(session_id=session_id)
 
     try:
-        # 임시 파일 저장
-        suffix = Path(file.filename).suffix if file.filename else ".pdf"
-        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
-            content = await file.read()
-            tmp.write(content)
-            tmp_path = tmp.name
+        # PDF를 file_hash 기반 스토리지에 영구 보존 (PDF 서빙 + 좌표 하이드레이션용)
+        content = await file.read()
+        file_hash = compute_file_hash("", data=content)
+        storage = Path(PDF_STORAGE_DIR)
+        storage.mkdir(parents=True, exist_ok=True)
+        persisted_path = storage / f"{file_hash}.pdf"
+        persisted_path.write_bytes(content)
 
-        try:
-            # [수정] 동적으로 결정된 임베딩 모델 사용 (모델 로딩은 무거우므로 스레드 유지)
-            embedder = await RAGResourceManager.get_embedder(
-                embedding_model, session_id=session_id
-            )
+        # [수정] 동적으로 결정된 임베딩 모델 사용 (모델 로딩은 무거우므로 스레드 유지)
+        embedder = await RAGResourceManager.get_embedder(
+            embedding_model, session_id=session_id
+        )
 
-            # [중요] RAGSystem 클래스를 통해 세션 격리 보장
-            rag_sys = RAGSystem(session_id=session_id)
-            msg, cache_used = await rag_sys.build_pipeline(
-                file_path=tmp_path,
-                file_name=file.filename,
-                embedder=embedder,
-            )
+        # [중요] RAGSystem 클래스를 통해 세션 격리 보장
+        rag_sys = RAGSystem(session_id=session_id)
+        msg, cache_used = await rag_sys.build_pipeline(
+            file_path=str(persisted_path),
+            file_name=file.filename,
+            embedder=embedder,
+        )
 
-            SessionManager.set(
-                "last_uploaded_file_name", file.filename, session_id=session_id
-            )
-            logger.info(
-                f"[API] 문서 인덱싱 완료: {file.filename} (Session: {session_id}, Cache: {cache_used})"
-            )
+        SessionManager.set(
+            "last_uploaded_file_name", file.filename, session_id=session_id
+        )
+        SessionManager.set("file_hash", file_hash, session_id=session_id)
+        SessionManager.set("pdf_file_path", str(persisted_path), session_id=session_id)
+        logger.info(
+            f"[API] 문서 인덱싱 완료: {file.filename} (Session: {session_id}, Cache: {cache_used})"
+        )
 
-            return {
-                "message": msg,
-                "filename": file.filename,
-                "session_id": session_id,
-                "cache_used": cache_used,
-            }
-        finally:
-            if os.path.exists(tmp_path):
-                os.unlink(tmp_path)
+        return {
+            "message": msg,
+            "filename": file.filename,
+            "session_id": session_id,
+            "cache_used": cache_used,
+            "file_hash": file_hash,
+        }
 
     except (OSError, ValueError) as e:
         logger.error(f"업로드 오류 (Session: {session_id}): {e}", exc_info=True)
@@ -289,12 +349,7 @@ async def query_rag(
 
         sources = []
         for doc in result.get("relevant_docs", result.get("documents", [])):
-            sources.append(
-                {
-                    "page": doc.metadata.get("page"),
-                    "content": doc.page_content[:200] + "...",
-                }
-            )
+            sources.append(_doc_to_source(doc, max_chars=200, suffix="..."))
 
         return QueryResponse(
             answer=result["response"], sources=sources, execution_time_ms=execution_time
@@ -375,10 +430,7 @@ async def stream_query_rag(
                 # 3. 메타데이터(문서) 처리
                 if chunk.metadata and "documents" in chunk.metadata:
                     docs = [
-                        {
-                            "page": d.metadata.get("page"),
-                            "content": d.page_content[:100],
-                        }
+                        _doc_to_source(d, max_chars=100)
                         for d in chunk.metadata["documents"]
                     ]
                     yield sse_handler.format_sse_event("sources", {"documents": docs})
@@ -420,3 +472,23 @@ async def get_system_stats(user_id: str = Depends(verify_token)):
             "embedding": AVAILABLE_EMBEDDING_MODELS[0],
         },
     }
+
+
+@app.get("/api/v1/pdf/{file_hash}")
+async def serve_pdf(
+    file_hash: str,
+    user_id: str = Depends(verify_token),
+) -> FileResponse:
+    """file_hash로 저장된 PDF 문서를 반환합니다.
+
+    브라우저 PDF 뷰어에서 #page=N 으로 페이지 이동을 지원합니다.
+    인증이 필요하며, 경로 주입 공격을 방지합니다.
+    """
+    pdf_path = _resolve_pdf_path(file_hash)
+    if pdf_path is None:
+        raise HTTPException(status_code=404, detail="PDF 문서를 찾을 수 없습니다.")
+    return FileResponse(
+        str(pdf_path),
+        media_type="application/pdf",
+        filename=pdf_path.name,
+    )

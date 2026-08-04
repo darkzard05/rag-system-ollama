@@ -74,29 +74,45 @@ async def hydrate_documents(docs: list[Document]) -> None:
         # 2. 대상 문서(청크)별 좌표 복원 및 비동기 스레드 파싱
         for file_hash, docs_in_file in file_hash_map.items():
             page_nums: list[int] = []
+            seen_pages: set[int] = set()
             for doc in docs_in_file:
-                page = doc.metadata.get("page")
-                if page is not None:
-                    page_nums.append(page)
+                pages = doc.metadata.get("pages") or (
+                    [doc.metadata["page"]]
+                    if doc.metadata.get("page") is not None
+                    else []
+                )
+                for page in pages:
+                    if page not in seen_pages:
+                        seen_pages.add(page)
+                        page_nums.append(page)
             coords_map = await coord_cache.get_coords_batch(file_hash, page_nums)
 
             for doc in docs_in_file:
-                page_num = doc.metadata.get("page")
-                if page_num is None:
-                    continue
+                pages = doc.metadata.get("pages") or (
+                    [doc.metadata["page"]]
+                    if doc.metadata.get("page") is not None
+                    else []
+                )
+                page_coords: dict[int, list] = {}
 
-                coords = coords_map.get(page_num)
+                for page_num in pages:
+                    coords = coords_map.get(page_num)
 
-                if not coords:
-                    logger.info(
-                        f"[HYDRATE] 정밀 좌표 추출: {os.path.basename(path)} P{page_num}"
-                    )
-                    chunk_bbox = doc.metadata.get("bbox")
-                    coords = await asyncio.to_thread(
-                        _extract_page_words_sync, path, page_num, chunk_bbox
-                    )
+                    if not coords:
+                        logger.info(
+                            f"[HYDRATE] 정밀 좌표 추출: {os.path.basename(path)} P{page_num}"
+                        )
+                        chunk_bbox = doc.metadata.get("bbox")
+                        coords = await asyncio.to_thread(
+                            _extract_page_words_sync, path, page_num, chunk_bbox
+                        )
+                        if coords:
+                            await coord_cache.save_coords(file_hash, page_num, coords)
+
                     if coords:
-                        await coord_cache.save_coords(file_hash, page_num, coords)
+                        page_coords[page_num] = coords
 
-                if coords:
-                    doc.metadata["word_coords"] = coords
+                doc.metadata["page_coords"] = page_coords
+                if page_coords:
+                    # 첫 페이지 좌표 (하위 호환)
+                    doc.metadata["word_coords"] = page_coords[min(page_coords)]

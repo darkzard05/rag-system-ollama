@@ -5,6 +5,7 @@ PDF 뷰어 및 문서 관련 UI 컴포넌트.
 
 import logging
 import os
+import time
 
 import streamlit as st
 
@@ -58,6 +59,7 @@ def _on_prev_click():
     current = SessionManager.get("current_page", 1)
     new_page = max(1, current - 1)
     SessionManager.set("current_page", new_page)
+    SessionManager.set("manual_nav_ts", time.time())
     st.session_state["pdf_nav_input_v6"] = new_page
 
 
@@ -66,6 +68,7 @@ def _on_next_click(total_pages: int):
     current = SessionManager.get("current_page", 1)
     new_page = min(total_pages, current + 1)
     SessionManager.set("current_page", new_page)
+    SessionManager.set("manual_nav_ts", time.time())
     st.session_state["pdf_nav_input_v6"] = new_page
 
 
@@ -74,6 +77,7 @@ def _on_page_change():
     new_p = st.session_state.get("pdf_nav_input_v6")
     if new_p:
         SessionManager.set("current_page", new_p)
+        SessionManager.set("manual_nav_ts", time.time())
 
 
 def _on_next_click_callback():
@@ -85,7 +89,7 @@ def _on_next_click_callback():
 
 
 # ---------------------------------------------------------------------------
-# PDF state resolution (shared by viewer and controls fragments)
+# PDF state resolution
 # ---------------------------------------------------------------------------
 
 
@@ -95,6 +99,12 @@ def _resolve_pdf_state() -> dict | None:
     Returns dict with keys: pdf_path, file_hash, total_pages, current_page.
     Returns None if no PDF is loaded or PDF is invalid.
     Handles external page navigation (e.g., from chat references via pdf_target_page).
+
+    pdf_target_page는 일회성 점프 토큰이다:
+    - dict {"page": int, "source": "auto"|"manual", "ts": float} 형식.
+    - source=="auto"인데 manual_nav_ts가 토큰의 ts보다 크면 사용자가 더 최근에
+      수동 네비게이션한 것이므로 토큰을 폐기하고 점프하지 않는다.
+    - 레거시 int 값도 수용한다 (source="manual" 취급).
     """
     pdf_path_raw = SessionManager.get("pdf_file_path")
     if not pdf_path_raw:
@@ -108,27 +118,51 @@ def _resolve_pdf_state() -> dict | None:
         return None
 
     # Handle external page navigation (e.g., from chat references)
-    target_page = SessionManager.get("pdf_target_page")
-    if target_page is not None:
-        current_page = min(max(1, int(target_page)), total_pages)
-        SessionManager.set("current_page", current_page)
-        # pdf_target_page는 일회성 소비: 점프 적용 후 키를 삭제하여
-        # 사용자가 수동 네비게이션으로 벗어나도 매 rerun마다 참조 페이지로
-        # 되돌아가지 않도록 보장한다.
-        SessionManager.delete("pdf_target_page")
-        st.session_state.pop("pdf_target_page", None)
-        st.session_state["pdf_nav_input_v6"] = current_page
-    else:
-        if "pdf_nav_input_v6" in st.session_state:
-            current_page = min(
-                max(1, int(st.session_state["pdf_nav_input_v6"])), total_pages
-            )
-            SessionManager.set("current_page", current_page)
+    target = SessionManager.get("pdf_target_page")
+    if target is not None:
+        if isinstance(target, dict):
+            page = target.get("page")
+            source = target.get("source", "manual")
+            ts = float(target.get("ts", 0) or 0)
+        else:  # 레거시 int 형식 호환
+            page = int(target)
+            source = "manual"
+            ts = 0.0
+        if page is None:
+            # 형식 오류 토큰(page 누락): 폴링마다 재평가되지 않도록 폐기한다.
+            SessionManager.delete("pdf_target_page")
+            st.session_state.pop("pdf_target_page", None)
+        elif (
+            source == "auto" and float(SessionManager.get("manual_nav_ts", 0) or 0) > ts
+        ):
+            # 사용자가 자동 점프 토큰 설정 이후 더 최근에 수동 네비게이션함
+            # → 토큰 폐기 (점프 없음), 정상 nav-input 분기로 폴스루.
+            SessionManager.delete("pdf_target_page")
+            st.session_state.pop("pdf_target_page", None)
         else:
-            current_page = min(
-                max(1, SessionManager.get("current_page", 1)), total_pages
-            )
+            current_page = min(max(1, int(page)), total_pages)
+            SessionManager.set("current_page", current_page)
+            # pdf_target_page는 일회성 소비: 점프 적용 후 키를 삭제하여
+            # 사용자가 수동 네비게이션으로 벗어나도 매 rerun마다 참조 페이지로
+            # 되돌아가지 않도록 보장한다.
+            SessionManager.delete("pdf_target_page")
+            st.session_state.pop("pdf_target_page", None)
             st.session_state["pdf_nav_input_v6"] = current_page
+            return {
+                "pdf_path": pdf_path,
+                "file_hash": file_hash,
+                "total_pages": total_pages,
+                "current_page": current_page,
+            }
+
+    if "pdf_nav_input_v6" in st.session_state:
+        current_page = min(
+            max(1, int(st.session_state["pdf_nav_input_v6"])), total_pages
+        )
+        SessionManager.set("current_page", current_page)
+    else:
+        current_page = min(max(1, SessionManager.get("current_page", 1)), total_pages)
+        st.session_state["pdf_nav_input_v6"] = current_page
 
     return {
         "pdf_path": pdf_path,
@@ -139,45 +173,24 @@ def _resolve_pdf_state() -> dict | None:
 
 
 # ---------------------------------------------------------------------------
-# Fragment: PDF 뷰어 (독립 스크롤 영역 — 네비게이션과 분리)
+# Fragment: PDF 뷰어 + 네비게이션 컨트롤 (단일 fragment)
 # ---------------------------------------------------------------------------
 
 
-@st.fragment
-def render_pdf_viewer():
-    """
-    PDF 뷰어를 렌더링하는 fragment (컨트롤 없음).
+@st.fragment(run_every=2.0)
+def render_pdf_area():
+    """PDF 뷰어 + 네비게이션 컨트롤을 렌더링하는 단일 fragment.
 
-    네비게이션 컨트롤과 분리되어 독립적으로 업데이트됩니다.
-    fragment 내부의 위젯 액션은 이 fragment만 재실행하여
-    전체 페이지 리런 없이 PDF를 업데이트합니다.
+    run_every 폴링으로 백그라운드 스트리밍 완료(_finalize_pdf_side_effects)가
+    기록한 pdf_target_page/pdf_annotations를 최대 2초 내에 소비하여 자동 점프와
+    하이라이트를 화면에 반영한다. 뷰어와 컨트롤이 한 fragment이므로 컨트롤
+    클릭도 뷰어를 함께 재실행한다.
     """
     state = _resolve_pdf_state()
     if not state:
         st.info(MSG_PDF_VIEWER_NO_FILE)
         return
-
     _display_pdf_viewer(state["pdf_path"], state["current_page"], state["file_hash"])
-
-
-# ---------------------------------------------------------------------------
-# Fragment: PDF 네비게이션 컨트롤 (하단 컨트롤 바 — 뷰어와 분리)
-# ---------------------------------------------------------------------------
-
-
-@st.fragment
-def render_pdf_controls():
-    """
-    PDF 네비게이션 컨트롤을 렌더링하는 fragment (뷰어 없음).
-
-    PDF 열 하단(뷰어 아래)에 위치하며, 뷰어 fragment와 분리되어
-    독립적으로 업데이트됩니다. 버튼 클릭 시 이 fragment만 재실행되어
-    전체 페이지 리런을 방지합니다.
-    """
-    state = _resolve_pdf_state()
-    if not state:
-        return
-
     _display_pdf_controls(state["current_page"], state["total_pages"])
 
 
@@ -190,8 +203,16 @@ def _display_pdf_viewer(pdf_path, current_page, file_hash):
             st.error("⚠️ PDF 데이터를 불러올 수 없습니다.")
             return
 
-        annotations = SessionManager.get("pdf_annotations", [])
-        viewer_key = pdf_viewer_key(file_hash)
+        raw_annotations = SessionManager.get("pdf_annotations", [])
+        if isinstance(raw_annotations, dict):
+            annotations = (
+                raw_annotations.get("annotations", [])
+                if raw_annotations.get("file_hash") == file_hash
+                else []
+            )
+        else:
+            annotations = raw_annotations  # legacy list 형식 호환
+        viewer_key = pdf_viewer_key(file_hash, current_page)
 
         pdf_viewer(
             input=pdf_bytes,
@@ -199,6 +220,7 @@ def _display_pdf_viewer(pdf_path, current_page, file_hash):
             pages_to_render=[current_page],
             annotations=annotations,
             annotation_outline_size=2,
+            scroll_behavior="instant",
             key=viewer_key,
         )
     except PDFProcessingError as e:

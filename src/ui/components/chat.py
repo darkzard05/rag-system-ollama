@@ -8,6 +8,7 @@
 import contextlib
 import html
 import logging
+import time
 from collections.abc import Callable
 from typing import Any
 
@@ -26,12 +27,33 @@ logger = logging.getLogger(__name__)
 
 def _handle_page_jump(p: int) -> None:
     """참조 페이지 이동 버튼 콜백입니다."""
-    SessionManager.set("pdf_target_page", p)
+    SessionManager.set(
+        "pdf_target_page",
+        {"page": int(p), "source": "manual", "ts": time.time()},
+    )
     SessionManager.set("current_page", p)
     st.toast(f"📄 {p}페이지로 이동 중...", icon="📄")
-    # 뷰어 fragment는 별도 @st.fragment이므로, 상태 변경을 반영하려면
-    # 전체 리런이 필요하다 (fragment 간 자동 재실행 없음).
+    # 전체 리런이 필요하다 (뷰어 fragment가 run_every=2.0으로 폴링 중이어도
+    # popover 점프는 즉시 반영되어야 하므로 st.rerun()으로 전체 재실행).
     st.rerun()
+
+
+def _extract_reference_pages(documents: list[Any]) -> list[int]:
+    """문서 메타데이터에서 참조 페이지 번호 목록을 추출합니다."""
+    pages: set[int] = set()
+    for d in documents:
+        meta = (
+            getattr(d, "metadata", {})
+            if hasattr(d, "metadata")
+            else d.get("metadata", {})
+        )
+        with contextlib.suppress(ValueError, TypeError):
+            page = meta.get("page")
+            if page is not None:
+                pages.add(int(page))
+            for pg in meta.get("pages") or []:
+                pages.add(int(pg))
+    return sorted(pages)
 
 
 def _render_references_popover(
@@ -44,17 +66,7 @@ def _render_references_popover(
         if not documents:
             return
 
-        extracted_pages: set[int] = set()
-        for d in documents:
-            meta = (
-                getattr(d, "metadata", {})
-                if hasattr(d, "metadata")
-                else d.get("metadata", {})
-            )
-            with contextlib.suppress(ValueError, TypeError):
-                extracted_pages.add(int(meta.get("page", 1)))
-
-        pages = sorted(extracted_pages)
+        pages = _extract_reference_pages(documents)
         if not pages:
             return
         cols = st.columns(min(len(pages), 5))
@@ -90,11 +102,6 @@ def render_message(
         if wrap_in_container
         else st.container()
     ):
-        # 생각 과정 표시 (완료된 메시지는 네이티브 expander 사용)
-        if thought and thought.strip() and msg_type != "streaming":
-            with st.expander("🤔 생각 과정", expanded=False):
-                st.markdown(thought)
-
         # 오류 메시지: 부분 답변이 있으면 먼저 본문을 보존하고 오류를 안내한다
         error = kwargs.get("error")
         if error:
@@ -126,6 +133,21 @@ def render_message(
 
         # 완료된 어시스턴트 메시지의 하단 정보
         if role == "assistant" and msg_type == "general":
+            # 완료 요약 + 출처 미리보기 (기본 노출).
+            # 스트리밍 중 st.status 피드백이 완료 시 사라지는 문제를 완화한다.
+            if (content or processed_content or "").strip():
+                if documents:
+                    pages = _extract_reference_pages(documents)
+                    page_txt = " · ".join(f"p.{p}" for p in pages[:4])
+                    if len(pages) > 4:
+                        page_txt += f" 외 {len(pages) - 4}건"
+                    st.caption(
+                        f"✅ 답변 생성 완료 · 📚 참조 {len(documents)}건"
+                        + (f" · {page_txt}" if page_txt else "")
+                    )
+                else:
+                    st.caption("✅ 답변 생성 완료")
+
             # 참조 페이지 popover는 documents가 있는 모든 완료된 어시스턴트
             # 메시지에 렌더링한다. 버튼 키는 msg_id 기반이므로 이전 답변과
             # 공존해도 안전하다 (최신 여부(is_latest)와 무관).
@@ -144,6 +166,16 @@ def render_message(
                     or "model"
                 )
                 st.caption(f"⚡ {total_time:.1f}s · 🔍 {retrieved} chunks · 🤖 {model}")
+
+        # 상세 사고 과정 (LLM reasoning 로그) — 답변·출처 아래, 기본 접힘.
+        if (
+            role == "assistant"
+            and thought
+            and thought.strip()
+            and msg_type != "streaming"
+        ):
+            with st.expander("🧠 상세 사고 과정", expanded=False):
+                st.markdown(thought)
 
 
 def _cancel_rebuild(sid: str) -> None:

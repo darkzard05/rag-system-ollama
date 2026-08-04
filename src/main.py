@@ -55,8 +55,8 @@ os.environ.setdefault("NUMEXPR_MAX_THREADS", str(_numexpr_threads))
 _async_worker = AsyncWorker()
 
 # current_page / is_generating_answer are initialized via DEFAULT_SESSION_STATE
-# and synced by UIBridge.sync_session(). pdf_target_page is NOT part of
-# DEFAULT_SESSION_STATE, so it must be initialized here.
+# and synced by UIBridge.sync_session(). pdf_target_page는 일회성 점프 토큰(dict
+# 또는 None)으로 DEFAULT_SESSION_STATE에 포함되지 않으므로 여기서 초기화한다.
 if "pdf_target_page" not in st.session_state:
     st.session_state.pdf_target_page = None
 
@@ -413,6 +413,7 @@ def on_file_upload() -> None:
         st.session_state["pdf_nav_input_v6"] = 1
         st.session_state.pop("pdf_target_page", None)
         SessionManager.delete("pdf_target_page")
+        SessionManager.set("pdf_annotations", [])
         old_path = SessionManager.get("pdf_file_path")
         if old_path:
             SessionManager.safe_remove_file(old_path)

@@ -428,7 +428,9 @@ class SessionManager:
             state["messages"] = []
             if "chat_history" in state:
                 del state["chat_history"]
+            state["pdf_annotations"] = []
             state["_dirty_keys"].add("messages")
+            state["_dirty_keys"].add("pdf_annotations")
 
     @classmethod
     def reset_for_new_file(cls, session_id: str | None = None):
@@ -447,6 +449,9 @@ class SessionManager:
         cls.set("needs_qa_chain_update", False, session_id)
         cls.set("rag_build_complete_flag", False, session_id)
         cls.set("current_page", 1, session_id)
+        cls.set("pdf_annotations", [], session_id)
+        cls.set("manual_nav_ts", 0, session_id)
+        cls.delete("pdf_target_page", session_id)
         cls.add_status_log("새 문서 분석 시작", session_id)
 
     @classmethod

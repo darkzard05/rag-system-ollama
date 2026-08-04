@@ -16,8 +16,6 @@ from pathlib import Path
 
 import streamlit as st
 
-from core.session import SessionManager
-
 _COLUMN_RATIO: list[int] = [42, 58]
 
 
@@ -83,14 +81,11 @@ def render_main_content() -> None:
     └────────────────────────┴──────────────────────────┘
     """
     from ui.components.chat import render_chat_input_area, render_chat_messages_area
-    from ui.components.viewer import render_pdf_controls, render_pdf_viewer
+    from ui.components.viewer import render_pdf_area
 
     col_pdf, col_chat = st.columns(_COLUMN_RATIO, gap="small")
     with col_pdf:
-        render_pdf_viewer()
-        has_pdf = bool(SessionManager.get("pdf_file_path"))
-        if has_pdf:
-            render_pdf_controls()
+        render_pdf_area()
     with col_chat:
         render_chat_messages_area()
         render_chat_input_area()

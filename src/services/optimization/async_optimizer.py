@@ -571,7 +571,7 @@ class ConcurrentEmbeddingGenerator:
             }
 
             logger.info(
-                f"[Optimizer] [Embedding] 병렬 임베딩 완료: {len(embeddings)} 벡터 생성"
+                f"[Optimizer] [Embedding] 병렬 임베딩 완료: {len(embeddings_result)} 벡터 생성"
             )
 
             op.tokens = sum(len(text.split()) for text in texts)

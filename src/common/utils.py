@@ -80,6 +80,87 @@ def normalize_latex_delimiters(text: str) -> str:
     return text
 
 
+def _build_line_boxes(coords: list, page_val: int, content: str) -> list[dict]:
+    """단일 페이지 좌표에서 줄 단위 하이라이트 박스 annotation 목록 생성."""
+    # [고도화] 연속성 기반 텍스트 매칭 (Sequence Matching)
+    # 1. 청크 텍스트와 PDF 텍스트를 순수 단어 토큰으로 정규화
+    content_tokens = re.findall(r"[\w\d]+", content)
+    if not content_tokens:
+        return []
+
+    pdf_tokens = [re.sub(r"[^\w\d]", "", str(c[4]).lower()) for c in coords]
+
+    # 2. PDF 단어 리스트에서 현재 청크가 시작되는 최적의 지점 검색 (Sliding Window)
+    best_start = -1
+    max_match = 0
+    window_size = min(20, len(content_tokens))  # 시작 부분 20단어로 지점 탐색
+
+    for j in range(len(pdf_tokens) - len(content_tokens) + 1):
+        current_match = 0
+        for k in range(window_size):
+            if pdf_tokens[j + k] == content_tokens[k]:
+                current_match += 1
+
+        if current_match > max_match:
+            max_match = current_match
+            best_start = j
+
+        # 80% 이상 일치하면 즉시 시작점으로 확정 (성능 최적화)
+        if current_match >= window_size * 0.8:
+            best_start = j
+            break
+
+    # 3. 매칭된 지점부터 청크 길이만큼의 좌표만 추출
+    if best_start != -1:
+        # 청크 텍스트 내의 실제 단어 개수만큼 좌표를 가져옴
+        filtered_coords = coords[best_start : best_start + len(content_tokens)]
+    else:
+        # 매칭 실패 시에만 기존의 루즈한 필터링으로 폴백 (최소 가시성)
+        filtered_coords = [
+            c
+            for c in coords
+            if re.sub(r"[^\w\d]", "", str(c[4]).lower()) in content_tokens[:50]
+        ]
+
+    if not filtered_coords:
+        return []
+
+    # 4. 줄 단위 그룹화 및 박스 생성
+    lines: dict[int, list] = {}
+    for c in filtered_coords:
+        y_key = round(c[1] / 8) * 8
+        if y_key not in lines:
+            lines[y_key] = []
+        lines[y_key].append(c)
+
+    annotations: list[dict] = []
+    for y_key in sorted(lines.keys()):
+        line_coords = lines[y_key]
+        x_min = min(c[0] for c in line_coords)
+        y_min = min(c[1] for c in line_coords)
+        x_max = max(c[2] for c in line_coords)
+        y_max = max(c[3] for c in line_coords)
+
+        if x_max > x_min and y_max > y_min:
+            annotations.append(
+                {
+                    "page": page_val,
+                    "x": x_min,
+                    "y": y_min,
+                    "width": x_max - x_min,
+                    "height": y_max - y_min,
+                    "color": "red",
+                }
+            )
+
+    if annotations:
+        logger.debug(
+            f"[HIGHLIGHT] Page {page_val}: Found chunk sequence at index {best_start}, created {len(annotations)} line boxes"
+        )
+
+    return annotations
+
+
 def extract_annotations_from_docs(documents: list) -> list[dict]:
     """
     검색된 문서들의 메타데이터에서 좌표 정보를 추출하여
@@ -97,8 +178,6 @@ def extract_annotations_from_docs(documents: list) -> list[dict]:
             if hasattr(doc, "metadata")
             else doc.get("metadata", {})
         )
-        page_val = int(meta.get("page", 1))
-        all_coords = meta.get("word_coords", [])
         content = (
             getattr(doc, "page_content", "")
             if hasattr(doc, "page_content")
@@ -106,196 +185,132 @@ def extract_annotations_from_docs(documents: list) -> list[dict]:
         ).lower()
         file_path = meta.get("file_path") or meta.get("source")
 
-        # [고도화] On-demand 좌표 추출 (Strategy C)
-        # 메타데이터에 좌표가 없으면 PDF 파일에서 실시간으로 검색합니다.
-        if not all_coords and file_path and os.path.exists(file_path):
-            try:
-                import fitz
+        # 다중 페이지 청크: 페이지별 좌표(page_coords)로 줄 단위 하이라이트 생성
+        page_coords = meta.get("page_coords")  # dict[int, list] | None
+        if page_coords:
+            for page_val, coords in sorted(page_coords.items()):
+                if coords:
+                    annotations.extend(
+                        _build_line_boxes(coords, int(page_val), content)
+                    )
+        else:
+            # 기존 단일 페이지 경로 (word_coords 또는 on-demand fitz)
+            page_val = int(meta.get("page", 1))
+            all_coords = meta.get("word_coords", [])
 
-                with fitz.open(file_path) as pdf:
-                    page = pdf[page_val - 1]
-                    textpage = page.get_textpage()
+            # [고도화] On-demand 좌표 추출 (Strategy C)
+            # 메타데이터에 좌표가 없으면 PDF 파일에서 실시간으로 검색합니다.
+            if not all_coords and file_path and os.path.exists(file_path):
+                try:
+                    import fitz
 
-                    # [고도화] 개선된 검색 쿼리 전처리 로직 (Strategy C 기반)
-                    # 1. HTML 태그 제거 (예: <img src="...">)
-                    text = re.sub(r"<[^>]+>", " ", content)
+                    with fitz.open(file_path) as pdf:
+                        page = pdf[page_val - 1]
+                        textpage = page.get_textpage()
 
-                    # 2. 마크다운 및 특수문자 제거 (기존보다 강화, 따옴표 포함)
-                    text = re.sub(r"[#*`_~\[\]()\"']", "", text)
+                        # [고도화] 개선된 검색 쿼리 전처리 로직 (Strategy C 기반)
+                        # 1. HTML 태그 제거 (예: <img src="...">)
+                        text = re.sub(r"<[^>]+>", " ", content)
 
-                    # 3. 연속 공백 제거 및 앞뒤 공백 제거
-                    text = re.sub(r"\s+", " ", text).strip()
+                        # 2. 마크다운 및 특수문자 제거 (기존보다 강화, 따옴표 포함)
+                        text = re.sub(r"[#*`_~\[\]()\"']", "", text)
 
-                    # 4. 소문자 변환
-                    clean_content = text.lower()
+                        # 3. 연속 공백 제거 및 앞뒤 공백 제거
+                        text = re.sub(r"\s+", " ", text).strip()
 
-                    # 5. 문장 분리 (줄바꿈 포함)
-                    raw_sentences = re.split(r"[.!?\n]", clean_content)
+                        # 4. 소문자 변환
+                        clean_content = text.lower()
 
-                    sentences = []
-                    for s in raw_sentences:
-                        s = s.strip()
+                        # 5. 문장 분리 (줄바꿈 포함)
+                        raw_sentences = re.split(r"[.!?\n]", clean_content)
 
-                        # [필터링 1] 최소 길이 상향 (8 -> 20)
-                        # 너무 짧은 문장은 오탐지(False Positive)의 원인이 됨
-                        if len(s) < 20:
-                            continue
+                        sentences = []
+                        for s in raw_sentences:
+                            s = s.strip()
 
-                        # [필터링 2] 숫자나 특수문자로만 구성된 쓰레기 데이터 제거
-                        if re.match(r"^[\d\s\W]+$", s):
-                            continue
-
-                        # [필터링 3] 표/그림 캡션 등 불필요한 메타데이터 제거 (휴리스틱)
-                        # 예: "table 1", "figure 3", "page 10" 등으로 시작하는 경우
-                        if re.match(r"^(table|figure|fig\.|tab\.)\s*\d+", s):
-                            continue
-
-                        # [필터링 4] 참고문헌 패턴 (예: [1], (2020)) 등으로 시작하는 경우
-                        if re.match(r"^[\(\[]\s*\d+\s*[\)\]]", s):
-                            continue
-
-                        sentences.append(s)
-
-                    if not sentences and clean_content:
-                        # 폴백: 필터링 결과가 없으면 첫 150자 사용
-                        sentences = [clean_content[:150].strip()]
-
-                    doc_quads = []
-                    # [최적화] TextPage를 사용하여 고속 검색
-                    for search_query in sentences:
-                        if not search_query:
-                            continue
-
-                        logger.info(
-                            f"[HIGHLIGHT] Searching query on page {page_val}: '{search_query}'"
-                        )
-
-                        # [개선] 긴 문장 검색은 실패 확률이 높으므로 40자씩 끊어서 검색 (Overlapping Search)
-                        chunk_len = 40
-                        overlap = 10
-                        for i in range(0, len(search_query), chunk_len - overlap):
-                            part = search_query[i : i + chunk_len].strip()
-                            if len(part) < 12:
+                            # [필터링 1] 최소 길이 상향 (8 -> 20)
+                            # 너무 짧은 문장은 오탐지(False Positive)의 원인이 됨
+                            if len(s) < 20:
                                 continue
-                            quads = page.search_for(part, textpage=textpage)
-                            if quads:
-                                doc_quads.extend(quads)
 
-                    if doc_quads:
-                        # [핵심 개선] 줄 단위 병합 로직 (Line Merging)
-                        on_demand_lines: dict[float, list] = {}
-                        for q in doc_quads:
-                            y_key = round(q.y0 / 5) * 5
-                            if y_key not in on_demand_lines:
-                                on_demand_lines[y_key] = []
-                            on_demand_lines[y_key].append(q)
+                            # [필터링 2] 숫자나 특수문자로만 구성된 쓰레기 데이터 제거
+                            if re.match(r"^[\d\s\W]+$", s):
+                                continue
 
-                        for y_key in sorted(on_demand_lines.keys()):
-                            group = on_demand_lines[y_key]
-                            x_min = min(r.x0 for r in group)
-                            y_min = min(r.y0 for r in group)
-                            x_max = max(r.x1 for r in group)
-                            y_max = max(r.y1 for r in group)
+                            # [필터링 3] 표/그림 캡션 등 불필요한 메타데이터 제거 (휴리스틱)
+                            # 예: "table 1", "figure 3", "page 10" 등으로 시작하는 경우
+                            if re.match(r"^(table|figure|fig\.|tab\.)\s*\d+", s):
+                                continue
 
-                            annotations.append(
-                                {
-                                    "page": page_val,
-                                    "x": x_min,
-                                    "y": y_min,
-                                    "width": x_max - x_min,
-                                    "height": y_max - y_min,
-                                    "color": "red",
-                                    "thickness": 2,
-                                }
+                            # [필터링 4] 참고문헌 패턴 (예: [1], (2020)) 등으로 시작하는 경우
+                            if re.match(r"^[\(\[]\s*\d+\s*[\)\]]", s):
+                                continue
+
+                            sentences.append(s)
+
+                        if not sentences and clean_content:
+                            # 폴백: 필터링 결과가 없으면 첫 150자 사용
+                            sentences = [clean_content[:150].strip()]
+
+                        doc_quads = []
+                        # [최적화] TextPage를 사용하여 고속 검색
+                        for search_query in sentences:
+                            if not search_query:
+                                continue
+
+                            logger.info(
+                                f"[HIGHLIGHT] Searching query on page {page_val}: '{search_query}'"
                             )
-                        continue
-            except Exception as e:
-                logger.error(f"[HIGHLIGHT] On-demand search failed: {e}")
-        else:
-            logger.debug(
-                f"[HIGHLIGHT] Conditions not met: coords={len(all_coords)}, path_exists={os.path.exists(file_path) if file_path else 'N/A'}"
-            )
 
-        if not all_coords:
-            continue
+                            # [개선] 긴 문장 검색은 실패 확률이 높으므로 40자씩 끊어서 검색 (Overlapping Search)
+                            chunk_len = 40
+                            overlap = 10
+                            for i in range(0, len(search_query), chunk_len - overlap):
+                                part = search_query[i : i + chunk_len].strip()
+                                if len(part) < 12:
+                                    continue
+                                quads = page.search_for(part, textpage=textpage)
+                                if quads:
+                                    doc_quads.extend(quads)
 
-        # [고도화] 연속성 기반 텍스트 매칭 (Sequence Matching)
-        # 1. 청크 텍스트와 PDF 텍스트를 순수 단어 토큰으로 정규화
-        content_tokens = re.findall(r"[\w\d]+", content)
-        if not content_tokens:
-            continue
+                        if doc_quads:
+                            # [핵심 개선] 줄 단위 병합 로직 (Line Merging)
+                            on_demand_lines: dict[float, list] = {}
+                            for q in doc_quads:
+                                y_key = round(q.y0 / 5) * 5
+                                if y_key not in on_demand_lines:
+                                    on_demand_lines[y_key] = []
+                                on_demand_lines[y_key].append(q)
 
-        pdf_tokens = [re.sub(r"[^\w\d]", "", str(c[4]).lower()) for c in all_coords]
+                            for y_key in sorted(on_demand_lines.keys()):
+                                group = on_demand_lines[y_key]
+                                x_min = min(r.x0 for r in group)
+                                y_min = min(r.y0 for r in group)
+                                x_max = max(r.x1 for r in group)
+                                y_max = max(r.y1 for r in group)
 
-        # 2. PDF 단어 리스트에서 현재 청크가 시작되는 최적의 지점 검색 (Sliding Window)
-        best_start = -1
-        max_match = 0
-        window_size = min(20, len(content_tokens))  # 시작 부분 20단어로 지점 탐색
-
-        for j in range(len(pdf_tokens) - len(content_tokens) + 1):
-            current_match = 0
-            for k in range(window_size):
-                if pdf_tokens[j + k] == content_tokens[k]:
-                    current_match += 1
-
-            if current_match > max_match:
-                max_match = current_match
-                best_start = j
-
-            # 80% 이상 일치하면 즉시 시작점으로 확정 (성능 최적화)
-            if current_match >= window_size * 0.8:
-                best_start = j
-                break
-
-        # 3. 매칭된 지점부터 청크 길이만큼의 좌표만 추출
-        if best_start != -1:
-            # 청크 텍스트 내의 실제 단어 개수만큼 좌표를 가져옴
-            filtered_coords = all_coords[best_start : best_start + len(content_tokens)]
-        else:
-            # 매칭 실패 시에만 기존의 루즈한 필터링으로 폴백 (최소 가시성)
-            filtered_coords = [
-                c
-                for c in all_coords
-                if re.sub(r"[^\w\d]", "", str(c[4]).lower()) in content_tokens[:50]
-            ]
-
-        if not filtered_coords:
-            continue
-
-        # 4. 줄 단위 그룹화 및 박스 생성
-        lines: dict[int, list] = {}
-        for c in filtered_coords:
-            y_key = round(c[1] / 8) * 8
-            if y_key not in lines:
-                lines[y_key] = []
-            lines[y_key].append(c)
-
-        doc_anno_count = 0
-        for y_key in sorted(lines.keys()):
-            line_coords = lines[y_key]
-            x_min = min(c[0] for c in line_coords)
-            y_min = min(c[1] for c in line_coords)
-            x_max = max(c[2] for c in line_coords)
-            y_max = max(c[3] for c in line_coords)
-
-            if x_max > x_min and y_max > y_min:
-                annotations.append(
-                    {
-                        "page": page_val,
-                        "x": x_min,
-                        "y": y_min,
-                        "width": x_max - x_min,
-                        "height": y_max - y_min,
-                        "color": "red",
-                        "thickness": 2,
-                    }
+                                annotations.append(
+                                    {
+                                        "page": page_val,
+                                        "x": x_min,
+                                        "y": y_min,
+                                        "width": x_max - x_min,
+                                        "height": y_max - y_min,
+                                        "color": "red",
+                                    }
+                                )
+                            continue
+                except Exception as e:
+                    logger.error(f"[HIGHLIGHT] On-demand search failed: {e}")
+            else:
+                logger.debug(
+                    f"[HIGHLIGHT] Conditions not met: coords={len(all_coords)}, path_exists={os.path.exists(file_path) if file_path else 'N/A'}"
                 )
-                doc_anno_count += 1
 
-        if doc_anno_count > 0:
-            logger.debug(
-                f"[HIGHLIGHT] Page {page_val}: Found chunk sequence at index {best_start}, created {doc_anno_count} line boxes"
-            )
+            if not all_coords:
+                continue
+
+            annotations.extend(_build_line_boxes(all_coords, page_val, content))
 
     if annotations:
         pages = sorted({a["page"] for a in annotations})
