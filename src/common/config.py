@@ -107,6 +107,7 @@ ENSEMBLE_WEIGHTS: list[float] = RETRIEVER_CONFIG.get("ensemble_weights", [0.4, 0
 
 _reranker_config = _rag_config.get("reranker", {})
 RERANKER_MODEL_NAME: str = _reranker_config.get("model_name", "ms-marco-MultiBERT-L-12")
+RERANKER_ENGINE: str = _reranker_config.get("engine", "auto")
 
 TEXT_SPLITTER_CONFIG: dict = _rag_config.get(
     "text_splitter", {"chunk_size": 500, "chunk_overlap": 100}

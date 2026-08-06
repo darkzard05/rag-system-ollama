@@ -12,6 +12,8 @@ import numpy as np
 from langchain_core.documents import Document
 from langchain_core.embeddings import Embeddings
 
+from common.config import RERANKER_ENGINE
+
 logger = logging.getLogger(__name__)
 
 # Module-level document embedding cache: text_hash → embedding_vector list
@@ -129,16 +131,76 @@ class AsyncSemanticReranker:
         return np.dot(doc_norms, query_norm)
 
 
+class AsyncCrossEncoderReranker:
+    """FlashRank 크로스-인코더 리랭커 (ONNX, CPU).
+
+    쿼리-문서 쌍을 직접 스코어링해 bi-encoder 임베딩 재정렬보다 정확도가 높습니다.
+    FlashRank 로드/추론 중 예외 발생 시 AsyncSemanticReranker로 폴백합니다.
+    """
+
+    async def rerank(
+        self,
+        documents: list[Document],
+        query: str,
+        top_k: int = 10,
+    ) -> tuple[list[Document], list[float]]:
+        """FlashRank로 문서들을 재순위화합니다 (실패 시 bi-encoder 폴백)."""
+        if not documents:
+            return [], []
+
+        try:
+            from flashrank import RerankRequest
+
+            from core.model_loader import ModelManager
+
+            ranker = await ModelManager.get_flashranker()
+            request = RerankRequest(
+                query=query,
+                passages=[
+                    {"id": i, "text": doc.page_content}
+                    for i, doc in enumerate(documents)
+                ],
+            )
+            results = await asyncio.to_thread(ranker.rerank, request)
+            ranked = sorted(
+                ((documents[p["id"]], float(p["score"])) for p in results),
+                key=lambda item: item[1],
+                reverse=True,
+            )[:top_k]
+            ranked_docs = [doc for doc, _ in ranked]
+            ranked_scores = [score for _, score in ranked]
+            for doc, score in zip(ranked_docs, ranked_scores, strict=False):
+                doc.metadata["rerank_score"] = score
+            return ranked_docs, ranked_scores
+        except Exception:
+            logger.warning(
+                "[RERANK] FlashRank 리랭킹 실패 — AsyncSemanticReranker로 폴백",
+                exc_info=True,
+            )
+            from core.model_loader import ModelManager
+
+            embedder = await ModelManager.get_embedder()
+            semantic_reranker = AsyncSemanticReranker(embedder)
+            return await semantic_reranker.rerank(documents, query, top_k)
+
+
 # 전역 인스턴스 (지연 초기화)
-_async_reranker: AsyncSemanticReranker | None = None
+_async_reranker: AsyncSemanticReranker | AsyncCrossEncoderReranker | None = None
 
 
-async def get_async_reranker() -> AsyncSemanticReranker:
-    """글로벌 AsyncSemanticReranker 인스턴스를 반환합니다."""
+async def get_async_reranker() -> AsyncSemanticReranker | AsyncCrossEncoderReranker:
+    """RERANKER_ENGINE 설정에 따라 전역 리랭커 인스턴스를 반환합니다.
+
+    - "semantic": bi-encoder (AsyncSemanticReranker, 기존 동작)
+    - "auto"/"flashrank": FlashRank 크로스-인코더 (실패 시 semantic 폴백)
+    """
     global _async_reranker  # noqa: PLW0603
     if _async_reranker is None:
-        from core.model_loader import ModelManager
+        if RERANKER_ENGINE == "semantic":
+            from core.model_loader import ModelManager
 
-        embedder = await ModelManager.get_embedder()
-        _async_reranker = AsyncSemanticReranker(embedder)
+            embedder = await ModelManager.get_embedder()
+            _async_reranker = AsyncSemanticReranker(embedder)
+        else:
+            _async_reranker = AsyncCrossEncoderReranker()
     return _async_reranker

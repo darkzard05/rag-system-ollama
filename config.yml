@@ -74,6 +74,9 @@ rag:
   reranker:
     # [수정] 다국어 지원을 위해 모델 교체 (기존 TinyBERT는 영어 전용)
     model_name: "ms-marco-MultiBERT-L-12"
+    # 리랭커 엔진 선택: auto(FlashRank 크로스-인코더 시도 → 실패 시 bi-encoder 폴백) /
+    # flashrank(FlashRank 강제) / semantic(bi-encoder 강제, 기존 동작)
+    engine: "auto"
 
   # 텍스트 분할 설정
   text_splitter:
