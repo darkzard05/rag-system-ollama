@@ -2,11 +2,19 @@
 Shared pytest fixtures for RAG System tests.
 """
 
+import os
 import sys
+import tempfile
 import uuid
 from pathlib import Path
 
 import pytest
+
+# per-process isolation: 모듈 레벨 auth_manager/기본 AuthenticationManager 가
+# 실제 .model_cache 파일을 건드리지 않도록 임시 디렉터리로 격리합니다.
+_AUTH_TEST_DIR = tempfile.mkdtemp(prefix="rag_ollama_auth_")
+os.environ["AUTH_STATE_FILE"] = os.path.join(_AUTH_TEST_DIR, "auth_state.json")
+os.environ["AUTH_SECRET_FILE"] = os.path.join(_AUTH_TEST_DIR, ".jwt_secret")
 
 # Add src to sys.path
 BASE_DIR = Path(__file__).parent.parent.absolute()

@@ -7,14 +7,19 @@ import base64
 import hashlib
 import hmac
 import json
+import logging
 import os
 import secrets
 import time
 import uuid
+from contextlib import suppress
 from dataclasses import dataclass, field
 from enum import Enum
+from pathlib import Path
 from threading import RLock
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 
 class TokenType(Enum):
@@ -66,6 +71,20 @@ class Session:
         return self.is_active and time.time() < self.expires_at
 
 
+def _token_to_dict(t: Token) -> dict[str, Any]:
+    """Token 을 JSON 직렬화 가능한 dict 로 변환합니다."""
+    d = t.__dict__.copy()
+    d["token_type"] = t.token_type.value
+    return d
+
+
+def _token_from_dict(d: dict[str, Any]) -> Token:
+    """직렬화된 dict 로부터 Token 을 복원합니다."""
+    d = dict(d)
+    d["token_type"] = TokenType(d["token_type"])
+    return Token(**d)
+
+
 class PasswordHasher:
     """비밀번호 해싱"""
 
@@ -102,10 +121,36 @@ class PasswordHasher:
 class SimpleJWT:
     """간단한 JWT 토큰 생성/검증"""
 
-    def __init__(self, secret_key: str | None = None):
+    def __init__(self, secret_key: str | None = None, secret_file: str | None = None):
         self.secret_key = (
-            secret_key or os.getenv("JWT_SECRET_KEY") or secrets.token_urlsafe(32)
+            secret_key
+            or os.getenv("JWT_SECRET_KEY")
+            or self._load_or_create_secret(secret_file)
         )
+
+    @staticmethod
+    def _load_or_create_secret(secret_file: str | None) -> str:
+        """시크릿 파일을 로드하거나 생성합니다 (없으면 무작위 키 반환)."""
+        if not secret_file:
+            return secrets.token_urlsafe(32)
+        path = Path(secret_file)
+        try:
+            if path.exists() and path.stat().st_size > 0:
+                content = path.read_text(encoding="utf-8").strip()
+                if content:
+                    return content
+
+            path.parent.mkdir(parents=True, exist_ok=True)
+            secret = secrets.token_urlsafe(32)
+            tmp_path = path.with_suffix(path.suffix + ".tmp")
+            with open(tmp_path, "w", encoding="utf-8") as f:
+                f.write(secret)
+            os.replace(tmp_path, path)
+            with suppress(OSError):
+                os.chmod(path, 0o600)
+            return secret
+        except OSError:
+            return secrets.token_urlsafe(32)
 
     def create_token(self, user_id: str, expires_in: int = 3600) -> str:
         """토큰 생성"""
@@ -115,6 +160,7 @@ class SimpleJWT:
             "user_id": user_id,
             "iat": int(time.time()),
             "exp": int(time.time()) + expires_in,
+            "jti": str(uuid.uuid4()),
         }
 
         # 헤더와 페이로드 인코딩
@@ -175,20 +221,94 @@ class SimpleJWT:
 class AuthenticationManager:
     """인증 관리자"""
 
-    def __init__(self):
+    def __init__(self, state_file: str | None = None, secret_file: str | None = None):
+        self._state_file = (
+            state_file
+            or os.getenv("AUTH_STATE_FILE")
+            or str(Path(".model_cache") / "auth_state.json")
+        )
+        self._secret_file = (
+            secret_file
+            or os.getenv("AUTH_SECRET_FILE")
+            or str(Path(".model_cache") / ".jwt_secret")
+        )
         self._users: dict[
             str, dict[str, Any]
         ] = {}  # user_id -> {password_hash, salt, ...}
         self._tokens: dict[str, Token] = {}
+        self._tokens_by_string: dict[str, Token] = {}  # token_string -> Token
         self._sessions: dict[str, Session] = {}
         self._api_keys: dict[str, Token] = {}  # api_key_string -> Token object
         self._failed_logins: dict[str, list[float]] = {}  # user_id -> [timestamps]
+        self._deny_list: set[str] = set()
         self._lock = RLock()
         self._max_failed_attempts = 5
         self._lockout_duration = 900  # 15분
-        self._jwt = SimpleJWT()
+        self._load_state()
+        self._jwt = SimpleJWT(secret_file=self._secret_file)
 
-    def register_user(self, user_id: str, username: str, password: str) -> bool:
+    def _load_state(self) -> None:
+        """디스크에서 인증 상태를 복원합니다 (실패 시 무시)."""
+        path = Path(self._state_file)
+        try:
+            with open(path, encoding="utf-8") as f:
+                data = json.load(f)
+        except (OSError, json.JSONDecodeError):
+            return
+
+        users = data.get("users") or {}
+        if isinstance(users, dict):
+            self._users = users
+
+        sessions = data.get("sessions") or {}
+        restored_sessions: dict[str, Session] = {}
+        for sid, s in sessions.items():
+            try:
+                session = Session(**s)
+            except TypeError:
+                continue
+            if session.is_valid():
+                restored_sessions[sid] = session
+        self._sessions = restored_sessions
+
+        api_keys = data.get("api_keys") or {}
+        restored_keys: dict[str, Token] = {}
+        for key, t in api_keys.items():
+            try:
+                restored_keys[key] = _token_from_dict(t)
+            except (TypeError, ValueError):
+                continue
+        self._api_keys = restored_keys
+
+        self._deny_list = set(data.get("deny_list", []))
+
+    def _save_state(self) -> None:
+        """인증 상태를 디스크에 원자적으로 저장합니다 (실패 시 경고만)."""
+        try:
+            payload = {
+                "users": self._users,
+                "sessions": {sid: s.__dict__ for sid, s in self._sessions.items()},
+                "api_keys": {
+                    key: _token_to_dict(t) for key, t in self._api_keys.items()
+                },
+                "deny_list": sorted(self._deny_list),
+            }
+            path = Path(self._state_file)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            tmp_path = path.with_suffix(path.suffix + ".tmp")
+            with open(tmp_path, "w", encoding="utf-8") as f:
+                json.dump(payload, f, ensure_ascii=False)
+            os.replace(tmp_path, path)
+        except OSError as e:
+            logger.warning("auth state 저장 실패 (%s): %s", self._state_file, e)
+
+    def register_user(
+        self,
+        user_id: str,
+        username: str,
+        password: str,
+        role: str = "user",
+    ) -> bool:
         """사용자 등록"""
         with self._lock:
             if user_id in self._users:
@@ -200,11 +320,13 @@ class AuthenticationManager:
                 "username": username,
                 "password_hash": password_hash,
                 "salt": salt,
+                "role": role,
                 "created_at": time.time(),
                 "last_login": None,
                 "is_active": True,
             }
 
+            self._save_state()
             return True
 
     def authenticate(
@@ -251,6 +373,7 @@ class AuthenticationManager:
                 expires_at=time.time() + 3600,
             )
             self._tokens[access_token.token_id] = access_token
+            self._tokens_by_string[access_token_str] = access_token
 
             # 세션 생성
             session = Session(
@@ -261,7 +384,35 @@ class AuthenticationManager:
             )
             self._sessions[session.session_id] = session
 
+            self._save_state()
             return access_token_str, session.session_id
+
+    def is_admin(self, user_id: str) -> bool:
+        """관리자 역할 여부"""
+        with self._lock:
+            user_data = self._users.get(user_id)
+            return bool(user_data and user_data.get("role") == "admin")
+
+    def authenticate_by_username(
+        self,
+        username: str,
+        password: str,
+        ip_address: str | None = None,
+        user_agent: str | None = None,
+    ) -> tuple[str, str] | None:
+        """사용자 이름 기반 인증 (로그인 엔드포인트용)"""
+        with self._lock:
+            user_id = next(
+                (
+                    uid
+                    for uid, u in self._users.items()
+                    if u.get("username") == username
+                ),
+                None,
+            )
+        if user_id is None:
+            return None
+        return self.authenticate(user_id, password, ip_address, user_agent)
 
     def _is_user_locked(self, user_id: str) -> bool:
         """사용자 잠금 여부"""
@@ -289,8 +440,11 @@ class AuthenticationManager:
             del self._failed_logins[user_id]
 
     def verify_token(self, token_string: str) -> str | None:  # user_id
-        """토큰 검증"""
+        """토큰 검증 (지속된 deny-list 를 무효화의 근거로 사용)"""
         with self._lock:
+            if token_string in self._deny_list:
+                return None
+
             payload = self._jwt.verify_token(token_string)
 
             if not payload:
@@ -302,6 +456,17 @@ class AuthenticationManager:
                 return None
 
             return user_id
+
+    def revoke_token(self, token_string: str) -> bool:
+        """JWT 접근 토큰 또는 API 키를 명시적으로 무효화합니다."""
+        with self._lock:
+            if token_string in self._deny_list:
+                return True
+            if self._jwt.verify_token(token_string) is not None:
+                self._deny_list.add(token_string)
+                self._save_state()
+                return True
+            return self.revoke_api_key(token_string)
 
     def create_api_key(self, user_id: str, expires_in: int | None = None) -> str:
         """API 키 생성"""
@@ -320,6 +485,7 @@ class AuthenticationManager:
             )
             self._api_keys[api_key_str] = api_key_token
 
+            self._save_state()
             return api_key_str
 
     def register_fixed_api_key(
@@ -338,6 +504,7 @@ class AuthenticationManager:
                 expires_at=expires_at,
             )
             self._api_keys[api_key_str] = api_key_token
+            self._save_state()
             return True
 
     def verify_api_key(self, api_key: str) -> str | None:  # user_id
@@ -360,6 +527,7 @@ class AuthenticationManager:
         with self._lock:
             if api_key in self._api_keys:
                 del self._api_keys[api_key]
+                self._save_state()
                 return True
             return False
 
@@ -383,13 +551,22 @@ class AuthenticationManager:
             return True
 
     def logout(self, session_id: str) -> bool:
-        """로그아웃"""
+        """로그아웃 (세션 비활성화 + 연결된 접근 토큰 무효화)"""
         with self._lock:
-            if session_id in self._sessions:
-                session = self._sessions[session_id]
-                session.is_active = False
-                return True
-            return False
+            session = self._sessions.get(session_id)
+            if not session:
+                return False
+
+            session.is_active = False
+
+            linked = self._tokens.get(session.token_id)
+            if linked is not None:
+                linked.is_valid = False
+                if linked.token_string:
+                    self._deny_list.add(linked.token_string)
+
+            self._save_state()
+            return True
 
     def change_password(
         self, user_id: str, old_password: str, new_password: str
@@ -412,6 +589,25 @@ class AuthenticationManager:
             user_data["password_hash"] = new_hash
             user_data["salt"] = new_salt
 
+            self._save_state()
+            return True
+
+    def upsert_admin_credentials(
+        self, user_id: str, username: str, password: str
+    ) -> bool:
+        """관리자 계정 생성/비밀번호 갱신 (부트스트랩 전용, 멱등)."""
+        with self._lock:
+            password_hash, salt = PasswordHasher.hash_password(password)
+            self._users[user_id] = {
+                "username": username,
+                "password_hash": password_hash,
+                "salt": salt,
+                "role": "admin",
+                "created_at": time.time(),
+                "last_login": None,
+                "is_active": True,
+            }
+            self._save_state()
             return True
 
     def get_statistics(self) -> dict[str, Any]:

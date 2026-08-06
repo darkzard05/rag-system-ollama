@@ -47,7 +47,12 @@ def mock_rag_resources():
 def mock_session_manager():
     """SessionManager 상태 모킹"""
     # api_server 모듈 객체의 속성을 직접 패치하여 확실하게 적용
-    with patch.object(api_server, "SessionManager") as mock_sm:
+    with (
+        patch.object(api_server, "SessionManager") as mock_sm,
+        patch.object(
+            api_server.RAGSystem, "astream", new_callable=AsyncMock
+        ) as mock_astream,
+    ):
         # Mock QA Chain (LangChain Runnable)
         mock_chain = MagicMock()
 
@@ -79,6 +84,25 @@ def mock_session_manager():
                 await asyncio.sleep(0.01)
 
         mock_chain.astream_events = async_gen
+
+        async def astream_impl(query: str, model_name: str | None = None):
+            async def _stream():
+                async for event in async_gen():
+                    if event["event"] == "on_custom_event":
+                        yield ("custom", {"content": event["data"].get("chunk", "")})
+                    elif event["event"] == "on_chain_end":
+                        yield (
+                            "custom",
+                            {
+                                "documents": event["data"]
+                                .get("output", {})
+                                .get("documents", [])
+                            },
+                        )
+
+            return _stream()
+
+        mock_astream.side_effect = astream_impl
 
         # get 메서드의 동작 정의
         def get_side_effect(key, default=None, **kwargs):

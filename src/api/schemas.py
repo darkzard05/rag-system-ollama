@@ -75,6 +75,28 @@ class QueryResponse(BaseModel):
     execution_time_ms: float
 
 
+class LoginRequest(BaseModel):
+    """로그인 요청 스키마"""
+
+    username: str
+    password: str
+
+
+class LogoutRequest(BaseModel):
+    """로그아웃 요청 스키마 (세션 ID는 선택)"""
+
+    session_id: str | None = None
+
+
+class TokenResponse(BaseModel):
+    """인증 토큰 응답 스키마"""
+
+    access_token: str
+    token_type: str = "bearer"
+    expires_in: int = 3600
+    session_id: str | None = None
+
+
 class AggregatedSearchResult(BaseModel):
     """통합 검색 결과 스키마 (Graph 내부용)"""
 

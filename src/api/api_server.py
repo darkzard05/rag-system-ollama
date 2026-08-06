@@ -6,6 +6,9 @@ UI와 독립적으로 RAG 기능을 외부 API로 제공합니다.
 import asyncio
 import logging
 import os
+import secrets
+import sys
+import threading
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -24,7 +27,13 @@ from fastapi import (
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
-from api.schemas import QueryRequest, QueryResponse
+from api.schemas import (
+    LoginRequest,
+    LogoutRequest,
+    QueryRequest,
+    QueryResponse,
+    TokenResponse,
+)
 from api.streaming_handler import (
     ServerSentEventsHandler,
     get_adaptive_controller,
@@ -32,6 +41,7 @@ from api.streaming_handler import (
 )
 from common.config import AVAILABLE_EMBEDDING_MODELS, DEFAULT_OLLAMA_MODEL
 from common.constants import FilePathConstants
+from common.exceptions import PDFProcessingError
 from core.document_processor import compute_file_hash
 from core.rag_core import RAGSystem
 from core.session import SessionManager
@@ -53,6 +63,8 @@ async def lifespan(app: FastAPI):
                 # 세션 정리 및 보안 감사 수행
                 await asyncio.to_thread(SessionManager.cleanup_expired_sessions, 3600)
                 await asyncio.to_thread(SessionManager.perform_security_audit)
+                await asyncio.to_thread(_sweep_stale_owners)
+                await asyncio.to_thread(_sweep_expired_library_files)
         except asyncio.CancelledError:
             logger.info("[API] 세션 정리 태스크 종료 중...")
 
@@ -71,7 +83,7 @@ async def lifespan(app: FastAPI):
     # [추가] 서버 종료 시 VRAM 명시적 해제
     from core.model_loader import ModelManager
 
-    ModelManager.clear_vram()
+    await ModelManager.clear_vram()
 
     logger.info("[API] 서버 종료 및 리소스 정리 완료")
 
@@ -89,31 +101,133 @@ auth_manager = AuthenticationManager()
 
 # [임시] 테스트용 유저 및 API 키 등록 (CI 환경 호환성 위해 환경 변수 지원)
 TEST_USER = "admin"
-TEST_API_KEY = os.getenv("TEST_API_KEY")
 
-_env_password = os.getenv("TEST_ADMIN_PASSWORD")
-if _env_password:
-    TEST_PASSWORD = _env_password
-    logger.info("[Security] 환경변수에서 관리자 비밀번호 로드 완료")
-else:
-    TEST_PASSWORD = "admin"
-    logger.warning(
-        "[Security] TEST_ADMIN_PASSWORD 미설정 — 개발용 기본 비밀번호('admin') 사용. "
-        "프로덕션 환경에서는 반드시 환경변수를 설정하세요."
-    )
 
-auth_manager.register_user(TEST_USER, "admin_user", TEST_PASSWORD)
+def _bootstrap_credentials(auth_manager: AuthenticationManager) -> tuple[str, str]:
+    """관리자 비밀번호/API 키를 준비하고 민감 정보를 콘솔(stderr)에 1회 출력합니다 (파일 로거 금지)."""
+    env_password = os.getenv("TEST_ADMIN_PASSWORD")
+    if env_password:
+        password = env_password
+    else:
+        password = secrets.token_urlsafe(12)
+        print(
+            f"[Security] 관리자 비밀번호 자동 생성 (로그인용): {password}",
+            file=sys.stderr,
+        )
+    auth_manager.upsert_admin_credentials(TEST_USER, "admin_user", password)
 
-if TEST_API_KEY:
-    # 지정된 키로 등록 (CI용, 30일 만료)
-    auth_manager.register_fixed_api_key(TEST_USER, TEST_API_KEY, expires_in=2592000)
-    logger.info("[Security] 고정 API 키 활성화 (CI/Test 모드, 30일 유효)")
-else:
-    # 무작위 키 생성 (일반 실행 모드, 24시간 만료)
-    TEST_API_KEY = auth_manager.create_api_key(TEST_USER, expires_in=86400)
-    logger.info(
-        "[Security] 시스템 보호 활성화. 24시간 유효한 API Key가 생성되었습니다."
-    )
+    env_api_key = os.getenv("TEST_API_KEY")
+    if env_api_key:
+        auth_manager.register_fixed_api_key(TEST_USER, env_api_key, expires_in=2592000)
+        api_key = env_api_key
+    else:
+        api_key = auth_manager.create_api_key(TEST_USER, expires_in=86400)
+        print(f"[Security] API Key 생성됨 (Bearer 인증용): {api_key}", file=sys.stderr)
+    return password, api_key
+
+
+TEST_PASSWORD, TEST_API_KEY = _bootstrap_credentials(auth_manager)
+
+
+# --- 세션/파일 소유권 레지스트리 ---
+# session_id/file_hash -> (소유 user_id, 바인딩 시각 epoch).
+# 값 타입: 바인딩 시각을 포함한 tuple로 확장 (stale 항목 스윕용).
+#
+# 소유권 정책 (명시적 결정):
+# - FILES: fail-closed. 미등록(unbound) 파일이거나 다른 사용자가 소유한 파일이면 403.
+#   UI 업로드 PDF(src/main.py)는 동일 temp 디렉터리에 저장되지만 절대 바인딩되지 않으며,
+#   UI/API는 별도 프로세스라 메모리 레지스트리를 공유할 수 없다. 따라서 fail-closed로
+#   미등록 파일을 API 서빙 불가(403) 처리하여 크로스 유저 /pdf/{hash} 구멍을 차단한다.
+#   UI는 PDF를 로컬 렌더링(streamlit-pdf-viewer)하며 /api/v1/pdf 를 호출하지 않으므로 UX 손실이 없다.
+# - SESSIONS: fail-open (레거시). 미등록 세션은 모든 인증 사용자에게 접근 허용(shared-legacy).
+#   /login 생성 세션은 업로드 전 질의(400 플로우)가 가능해야 하며, 문서 접근은 파일 소유권이 관장한다.
+_OWNER_TTL_SECONDS = 7 * 24 * 3600
+# PDF 라이브러리 보존 기간: 세션 정리와 분리되어 오래된 업로드 파일을 수거
+_PDF_RETENTION_DAYS = 30
+
+# 입력 경계
+MAX_PDF_SIZE_BYTES = 50 * 1024 * 1024  # 50MB
+MAX_QUERY_LENGTH = 4000
+MAX_SESSION_ID_LENGTH = 64
+
+_session_owners: dict[str, tuple[str, float]] = {}
+_file_owners: dict[str, tuple[str, float]] = {}
+_owners_lock = threading.RLock()
+
+
+def _bind_session_owner(session_id: str, user_id: str) -> None:
+    with _owners_lock:
+        if session_id not in _session_owners:
+            _session_owners[session_id] = (user_id, time.time())
+
+
+def _require_session_owner(session_id: str, user_id: str) -> None:
+    with _owners_lock:
+        entry = _session_owners.get(session_id)
+    owner = entry[0] if entry else None
+    # fail-open 유지: 미등록 세션(owner None)은 모든 인증 사용자에게 접근 허용.
+    if owner is not None and owner != user_id:
+        raise HTTPException(
+            status_code=403, detail="다른 사용자의 세션에 접근할 수 없습니다."
+        )
+
+
+def _validate_session_id(session_id: str) -> None:
+    """세션 ID 입력 경계 검증 (과도한 길이의 입력 거부)."""
+    if len(session_id) > MAX_SESSION_ID_LENGTH:
+        raise HTTPException(
+            status_code=400,
+            detail=f"세션 ID는 {MAX_SESSION_ID_LENGTH}자 이하여야 합니다.",
+        )
+
+
+def _bind_file_owner(file_hash: str, user_id: str) -> None:
+    with _owners_lock:
+        if file_hash not in _file_owners:
+            _file_owners[file_hash] = (user_id, time.time())
+
+
+def _require_file_owner(file_hash: str, user_id: str) -> None:
+    with _owners_lock:
+        entry = _file_owners.get(file_hash)
+    owner = entry[0] if entry else None
+    # fail-closed: 미등록(unbound) 또는 타인 소유 파일은 403.
+    if owner is None or owner != user_id:
+        raise HTTPException(status_code=403, detail="문서에 접근할 권한이 없습니다.")
+
+
+def _sweep_stale_owners() -> None:
+    """만료되었거나 디스크에서 삭제된 소유권 항목을 제거합니다.
+
+    - 세션: TTL(_OWNER_TTL_SECONDS)을 초과한 바인딩 제거
+    - 파일: TTL 초과 또는 스토리지에 PDF 파일이 존재하지 않는 항목 제거
+    """
+    now = time.time()
+    with _owners_lock:
+        for session_id, entry in list(_session_owners.items()):
+            if now - entry[1] > _OWNER_TTL_SECONDS:
+                del _session_owners[session_id]
+        storage = Path(PDF_STORAGE_DIR)
+        for file_hash, entry in list(_file_owners.items()):
+            stale = now - entry[1] > _OWNER_TTL_SECONDS
+            if stale or not (storage / f"{file_hash}.pdf").exists():
+                del _file_owners[file_hash]
+
+
+def _sweep_expired_library_files() -> None:
+    """보존 기간(_PDF_RETENTION_DAYS)을 초과한 PDF 라이브러리 파일과 그 소유권 항목을 제거합니다."""
+    storage = Path(PDF_STORAGE_DIR)
+    if not storage.is_dir():
+        return
+    cutoff = time.time() - _PDF_RETENTION_DAYS * 24 * 3600
+    for path in storage.glob("*.pdf"):
+        try:
+            if path.stat().st_mtime < cutoff:
+                path.unlink()
+                with _owners_lock:
+                    _file_owners.pop(path.stem, None)
+        except OSError:
+            continue
 
 
 async def verify_token(
@@ -131,6 +245,36 @@ async def verify_token(
             headers={"WWW-Authenticate": "Bearer"},
         )
     return user_id
+
+
+@app.post("/api/v1/login")
+async def login(request: LoginRequest) -> TokenResponse:
+    """사용자 이름/비밀번호로 접근 토큰을 발급합니다."""
+    result = auth_manager.authenticate_by_username(request.username, request.password)
+    if result is None:
+        raise HTTPException(
+            status_code=401, detail="사용자 이름 또는 비밀번호가 올바르지 않습니다."
+        )
+    access_token, session_id = result
+    return TokenResponse(
+        access_token=access_token,
+        token_type="bearer",
+        expires_in=3600,
+        session_id=session_id,
+    )
+
+
+@app.post("/api/v1/logout")
+async def logout(
+    request: LogoutRequest | None = None,
+    credentials: HTTPAuthorizationCredentials = Depends(auth_scheme),
+):
+    """현재 접근 토큰을 무효화하고, 제공된 세션을 비활성화합니다."""
+    if not auth_manager.revoke_token(credentials.credentials):
+        raise HTTPException(status_code=401, detail="유효하지 않은 토큰입니다.")
+    if request and request.session_id:
+        auth_manager.logout(request.session_id)
+    return {"message": "로그아웃되었습니다."}
 
 
 # --- 싱글톤 리소스 관리 (중앙 ModelManager 위임) ---
@@ -193,7 +337,7 @@ async def get_session_context(x_session_id: str | None = Header(None)) -> str:
 
 # --- PDF 서빙 및 참조 좌표 노출 ---
 # 업로드된 PDF를 file_hash 기반으로 보존하는 스토리지 루트
-PDF_STORAGE_DIR = str(FilePathConstants.TEMP_DIR)
+PDF_STORAGE_DIR = str(FilePathConstants.TEMP_DIR / "pdf_library")
 
 
 def _resolve_pdf_path(file_hash: str) -> Path | None:
@@ -272,16 +416,35 @@ async def upload_document(
     """
     인증된 사용자의 PDF 문서를 업로드하고 해당 세션에 인덱싱합니다.
     """
+    _validate_session_id(session_id)
+
     if not file.filename or not file.filename.endswith(".pdf"):
         raise HTTPException(status_code=400, detail="PDF 파일만 업로드 가능합니다.")
+
+    # 다른 사용자가 소유한 세션으로의 업로드를 차단 (교차 사용자 내용 주입 방지)
+    _require_session_owner(session_id, user_id)
+    # [TOCTOU 방지] 소유권 바인딩을 핸들러 최상단으로 이동: 첫 업로드가 진행되는 동안
+    # 다른 사용자의 동일 세션 업로드가 교차 주입되는 경합을 차단한다.
+    _bind_session_owner(session_id, user_id)
 
     # 명시적으로 세션 초기화 (최적화: 직접 호출)
     SessionManager.init_session(session_id=session_id)
 
     try:
         # PDF를 file_hash 기반 스토리지에 영구 보존 (PDF 서빙 + 좌표 하이드레이션용)
-        content = await file.read()
+        # [입력 경계] 파일 크기 제한: 메모리 고갈 방지를 위해 청크 단위로 읽으며 상한을 초과하면 거부
+        content = b""
+        total = 0
+        while chunk := await file.read(1024 * 1024):  # 1MB 청크
+            total += len(chunk)
+            if total > MAX_PDF_SIZE_BYTES:
+                raise HTTPException(
+                    status_code=413, detail="파일 크기가 50MB를 초과합니다."
+                )
+            content += chunk
         file_hash = compute_file_hash("", data=content)
+        # [TOCTOU 방지] 파일 소유권 바인딩을 파일 저장 직전으로 이동.
+        _bind_file_owner(file_hash, user_id)
         storage = Path(PDF_STORAGE_DIR)
         storage.mkdir(parents=True, exist_ok=True)
         persisted_path = storage / f"{file_hash}.pdf"
@@ -305,6 +468,9 @@ async def upload_document(
         )
         SessionManager.set("file_hash", file_hash, session_id=session_id)
         SessionManager.set("pdf_file_path", str(persisted_path), session_id=session_id)
+        SessionManager.set(
+            "pdf_library_path", str(persisted_path), session_id=session_id
+        )
         logger.info(
             f"[API] 문서 인덱싱 완료: {file.filename} (Session: {session_id}, Cache: {cache_used})"
         )
@@ -334,7 +500,13 @@ async def query_rag(
     인증된 세션 컨텍스트에서 질의를 수행합니다.
     """
     sid = request.session_id or "default"
+    _validate_session_id(sid)
+    if len(request.query) > MAX_QUERY_LENGTH:
+        raise HTTPException(
+            status_code=400, detail=f"질문은 {MAX_QUERY_LENGTH}자 이하여야 합니다."
+        )
     SessionManager.init_session(session_id=sid)
+    _require_session_owner(sid, user_id)
 
     if SessionManager.get("last_uploaded_file_name", session_id=sid) is None:
         raise HTTPException(status_code=400, detail="먼저 문서를 업로드해주세요.")
@@ -373,7 +545,13 @@ async def stream_query_rag(
     인증된 세션에 대해 실시간 스트리밍(SSE) 응답을 제공합니다.
     """
     sid = request.session_id or "default"
+    _validate_session_id(sid)
+    if len(request.query) > MAX_QUERY_LENGTH:
+        raise HTTPException(
+            status_code=400, detail=f"질문은 {MAX_QUERY_LENGTH}자 이하여야 합니다."
+        )
     SessionManager.init_session(session_id=sid)
+    _require_session_owner(sid, user_id)
 
     file_name = SessionManager.get("last_uploaded_file_name", session_id=sid)
     logger.debug(f"[TEST] Session ID: {sid}, last_uploaded_file_name: {file_name}")
@@ -436,7 +614,7 @@ async def stream_query_rag(
                     yield sse_handler.format_sse_event("sources", {"documents": docs})
 
             yield sse_handler.format_sse_event("end", {"status": "done"})
-        except (RuntimeError, ValueError, ConnectionError) as e:
+        except (RuntimeError, ValueError, ConnectionError, PDFProcessingError) as e:
             logger.error(f"Streaming error (Session: {sid}): {e}")
             yield sse_handler.format_sse_error(str(e))
 
@@ -453,17 +631,22 @@ async def stream_query_rag(
 
 @app.delete("/api/v1/session/{session_id}")
 async def delete_session(session_id: str, user_id: str = Depends(verify_token)):
-    """특정 세션의 데이터를 삭제하고 메모리를 해제합니다."""
+    """특정 세션의 데이터를 삭제하고 메모리를 해제합니다. (소유자만 가능)"""
+    _validate_session_id(session_id)
+    _require_session_owner(session_id, user_id)
     success = SessionManager.delete_session(session_id)
     if not success:
         raise HTTPException(status_code=404, detail="세션을 찾을 수 없습니다.")
+    with _owners_lock:
+        _session_owners.pop(session_id, None)
     return {"message": f"Session {session_id} deleted successfully"}
 
 
 @app.get("/api/v1/admin/stats")
 async def get_system_stats(user_id: str = Depends(verify_token)):
-    """시스템 전체 통계 및 세션 정보를 반환합니다."""
-    # admin 유저만 접근 가능하도록 추가 검증 가능
+    """시스템 전체 통계 및 세션 정보를 반환합니다. (관리자 전용)"""
+    if not auth_manager.is_admin(user_id):
+        raise HTTPException(status_code=403, detail="관리자만 접근할 수 있습니다.")
     return {
         "session_stats": SessionManager.get_stats(),
         "auth_stats": auth_manager.get_statistics(),
@@ -484,9 +667,12 @@ async def serve_pdf(
     브라우저 PDF 뷰어에서 #page=N 으로 페이지 이동을 지원합니다.
     인증이 필요하며, 경로 주입 공격을 방지합니다.
     """
+    # resolve-first: 파일이 존재하지 않으면 소유권 검사 이전에 404 (unbound 여부와 무관).
     pdf_path = _resolve_pdf_path(file_hash)
     if pdf_path is None:
         raise HTTPException(status_code=404, detail="PDF 문서를 찾을 수 없습니다.")
+    # fail-closed: 미등록(unbound)/타인 소유 파일은 403.
+    _require_file_owner(file_hash, user_id)
     return FileResponse(
         str(pdf_path),
         media_type="application/pdf",

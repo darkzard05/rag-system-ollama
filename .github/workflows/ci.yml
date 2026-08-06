@@ -137,11 +137,18 @@ jobs:
         python -m pytest tests/integration/test_streaming_response.py
         python -m pytest tests/security/test_cache_security.py
         python -m pytest tests/integration/test_caching_system.py
+        python -m pytest tests/integration/test_api_auth_login.py
+        python -m pytest tests/integration/test_api_pdf_serving.py
+        python -m pytest tests/integration/test_global_exception_handler.py
+        python -m pytest tests/integration/test_ownership_hardening.py
+        python -m pytest tests/integration/test_pdf_library_retention.py
+        python -m pytest tests/integration/test_stream_error_isolation.py
+        python -m pytest tests/integration/test_api_endpoints.py
       shell: bash
         
     - name: Run Unit Tests with Coverage
       run: |
-        python -m pytest --cov=src --cov-report=term --cov-report=xml --disable-warnings tests/unit/
+        python -m pytest --cov=src --cov-report=term --cov-report=xml --disable-warnings --cov-fail-under=55 tests/unit/
       shell: bash
 
     - name: Upload Test Logs

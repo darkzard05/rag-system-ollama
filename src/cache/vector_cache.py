@@ -13,7 +13,12 @@ import orjson
 from langchain_core.documents import Document
 from langchain_core.embeddings import Embeddings
 
-from common.config import RETRIEVER_CONFIG, VECTOR_STORE_CACHE_DIR
+from common.config import (
+    RETRIEVER_CONFIG,
+    SEMANTIC_CHUNKER_CONFIG,
+    TEXT_SPLITTER_CONFIG,
+    VECTOR_STORE_CACHE_DIR,
+)
 from common.text_utils import bm25_tokenizer
 from common.utils import fast_hash
 from security.cache_security import (
@@ -51,6 +56,28 @@ def _build_cache_payloads(
     }
 
 
+def _build_config_signature(embedding_model_name: str) -> str:
+    """청킹/파싱 설정 기반의 안정적인 캐시 키 서명을 생성합니다.
+
+    임베딩 모델명, 청크 크기/중첩, 분할 구분자, 의미론적 분할 사용 여부가
+    바뀌면 서로 다른 캐시 디렉터리를 사용하도록 하여 오래된 설정으로 생성된
+    청크가 재사용되지 않도록 보장합니다. (설정 변경 시 일회성 캐시 재구축)
+    """
+    splitter = TEXT_SPLITTER_CONFIG
+    semantic = SEMANTIC_CHUNKER_CONFIG
+    payload = orjson.dumps(
+        {
+            "embedding_model": str(embedding_model_name),
+            "chunk_size": splitter.get("chunk_size"),
+            "chunk_overlap": splitter.get("chunk_overlap"),
+            "separators": list(splitter.get("separators") or []),
+            "semantic_chunker_enabled": semantic.get("enabled", False),
+        },
+        option=orjson.OPT_SORT_KEYS,
+    )
+    return fast_hash(payload.decode())
+
+
 class VectorStoreCache:
     """
     벡터 저장소와 관련 컴포넌트를 디스크에 캐싱하고 로드합니다.
@@ -67,7 +94,7 @@ class VectorStoreCache:
         from core.document_processor import compute_file_hash
 
         self.file_hash = file_hash or compute_file_hash(file_path)
-        cache_key = fast_hash(embedding_model_name)
+        cache_key = _build_config_signature(embedding_model_name)
         self.cache_dir = os.path.join(cache_dir, f"{self.file_hash}_{cache_key}")
         self.doc_splits_path = os.path.join(self.cache_dir, "doc_splits.json")
         self.faiss_index_path = os.path.join(self.cache_dir, "faiss_index")
@@ -84,6 +111,7 @@ class VectorStoreCache:
         from security.cache_security import get_security_manager
 
         self.security_manager = get_security_manager()
+        self._cache_invalid = False
 
     def _get_cache_paths(self):
         cache_dir = self.cache_dir
@@ -93,16 +121,6 @@ class VectorStoreCache:
             os.path.join(cache_dir, "faiss_index"),
             os.path.join(cache_dir, "bm25_docs.json"),
         )
-
-    def _purge_cache(self, reason: str):
-        if os.path.exists(self.cache_dir):
-            try:
-                shutil.rmtree(self.cache_dir)
-                logger.critical(
-                    f"[Security] 캐시 강제 삭제됨 ({reason}): {self.cache_dir}"
-                )
-            except Exception as e:
-                logger.error(f"캐시 삭제 실패: {e}")
 
     def _try_load_legacy(self) -> bool:
         """Check if legacy cache dir (pre-fast_hash) exists and re-point paths."""
@@ -157,17 +175,30 @@ class VectorStoreCache:
 
             for path, desc in paths_to_verify:
                 try:
-                    self.security_manager.verify_cache_trust(path)
+                    if not self.security_manager.verify_cache_trust(path):
+                        raise CacheTrustError(f"불신 경로: {path}")
                     if os.path.isfile(path):
-                        self.security_manager.verify_cache_integrity(path)
+                        if os.path.exists(path + ".meta"):
+                            self.security_manager.verify_cache_integrity(path)
+                        else:
+                            logger.debug(
+                                f"[Cache] .meta 없음 - 무결성 검증 생략 (legacy): {path}"
+                            )
                     elif os.path.isdir(path):
                         for f in os.listdir(path):
                             f_path = os.path.join(path, f)
-                            self.security_manager.verify_cache_integrity(f_path)
+                            if os.path.exists(f_path + ".meta"):
+                                self.security_manager.verify_cache_integrity(f_path)
+                            else:
+                                logger.debug(
+                                    f"[Cache] .meta 없음 - 무결성 검증 생략 (legacy): {f_path}"
+                                )
                 except (CacheTrustError, CacheIntegrityError) as e:
-                    self._purge_cache(
-                        reason=f"Security Violation in {desc}: {type(e).__name__}"
+                    logger.critical(
+                        f"[Security] 캐시 무결성 위반 감지 ({desc}: {type(e).__name__}). "
+                        "캐시를 삭제하지 않고 재구축을 유도합니다."
                     )
+                    self._cache_invalid = True
                     return None, None, None
 
             # 1. 문서 조각 로드
@@ -190,17 +221,16 @@ class VectorStoreCache:
                     if stored_faiss_version != faiss.__version__:
                         logger.warning(
                             f"[CACHE] FAISS version mismatch: cached={stored_faiss_version}, "
-                            f"runtime={faiss.__version__}. Purging cache."
+                            f"runtime={faiss.__version__}. 캐시를 삭제하지 않고 재구축합니다."
                         )
-                        self._purge_cache(
-                            reason=f"FAISS version mismatch: {stored_faiss_version} != {faiss.__version__}"
-                        )
+                        self._cache_invalid = True
                         return None, None, None
                 except (json.JSONDecodeError, KeyError, OSError) as e:
                     logger.warning(
-                        f"[CACHE] VERSION.json read failed ({e}), purging cache."
+                        f"[CACHE] VERSION.json read failed ({e}). "
+                        "캐시를 삭제하지 않고 재구축합니다."
                     )
-                    self._purge_cache(reason=f"VERSION.json error: {e}")
+                    self._cache_invalid = True
                     return None, None, None
             else:
                 # Legacy cache without version info — assume compatible
@@ -239,8 +269,10 @@ class VectorStoreCache:
             return doc_splits, vector_store, bm25_retriever
 
         except Exception as e:
-            logger.warning(f"캐시 로드 중 예외 발생: {e}. 캐시를 폐기합니다.")
-            self._purge_cache(reason=f"Load Error: {str(e)}")
+            logger.warning(
+                f"캐시 로드 중 예외 발생: {e}. 캐시를 삭제하지 않고 재구축을 유도합니다."
+            )
+            self._cache_invalid = True
             return None, None, None
 
     def save(
@@ -249,7 +281,7 @@ class VectorStoreCache:
         vector_store: Any,
         bm25_retriever: Any,
     ) -> None:
-        if os.path.exists(self.cache_dir):
+        if os.path.exists(self.cache_dir) and not self._cache_invalid:
             logger.info(f"[Cache] 캐시가 이미 존재함: {self.cache_dir}")
             return
 
@@ -289,7 +321,7 @@ class VectorStoreCache:
 
             version_manifest = {
                 "faiss_version": _faiss.__version__,
-                "schema_version": 1,
+                "schema_version": 2,
                 "python_version": _sys.version,
                 "created_at": _time.time(),
             }
@@ -297,13 +329,44 @@ class VectorStoreCache:
             with open(version_path, "w") as _f:
                 json.dump(version_manifest, _f, indent=2)
 
+            # load()는 .meta가 존재하는 파일만 무결성 검증하므로 모든 아티팩트에 생성.
+            for artifact in os.listdir(stg_faiss_index_path):
+                artifact_path = os.path.join(stg_faiss_index_path, artifact)
+                if os.path.isfile(artifact_path):
+                    meta = self.security_manager.create_metadata_for_file(
+                        artifact_path,
+                        description=f"FAISS cache artifact ({artifact})",
+                    )
+                    self.security_manager.save_cache_metadata(
+                        artifact_path + ".meta", meta
+                    )
+
             # BM25 저장
             with open(stg_bm25_retriever_path, "wb") as f:
                 f.write(payloads["bm25_payload"])
             self.security_manager.enforce_file_permissions(stg_bm25_retriever_path)
+            bm25_meta = self.security_manager.create_metadata_for_file(
+                stg_bm25_retriever_path, description="BM25 retriever cache (JSON)"
+            )
+            self.security_manager.save_cache_metadata(
+                stg_bm25_retriever_path + ".meta", bm25_meta
+            )
 
             # 스테이징 디렉토리를 최종 위치로 이동
-            os.rename(staging_dir, self.cache_dir)
+            if self._cache_invalid and os.path.exists(self.cache_dir):
+                # 비파괴 재구축: 무결성 위반으로 판정된 캐시만 교체 대상.
+                shutil.rmtree(self.cache_dir, ignore_errors=True)
+            try:
+                os.rename(staging_dir, self.cache_dir)
+            except FileExistsError:
+                # 다른 프로세스가 먼저 저장한 경우: 스테이징만 정리하고 종료.
+                logger.info(
+                    "[Cache] 동시 저장 감지 (다른 프로세스가 먼저 저장). 스테이징 제거."
+                )
+                if os.path.exists(staging_dir):
+                    shutil.rmtree(staging_dir)
+                return
+            self._cache_invalid = False
             logger.info(f"[Cache] 벡터 캐시 저장 완료: {self.cache_dir}")
 
         except Exception as e:

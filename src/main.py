@@ -196,9 +196,9 @@ async def _bg_rebuild_task(
     )
 
     # 타임라인에 분석 시작 메시지 추가 (하나의 메시지를 업데이트)
-    import uuid
-
-    build_msg_id = str(uuid.uuid4())
+    # on_file_upload가 만든 자리표시자(msg_id=build_{session_id})를 재사용하여
+    # 빈 대화 깜빡임 없이 진행 상황이 그 위에 업데이트된다.
+    build_msg_id = f"build_{session_id}"
     SessionManager.set("build_msg_id", build_msg_id, session_id=session_id)
     SessionManager.add_message(
         "system",
@@ -405,15 +405,17 @@ def on_file_upload() -> None:
         uploaded_hash = ""
 
     if uploaded_file.name != last_file_name or uploaded_hash != last_file_hash:
-        SessionManager.set("current_page", 1)
+        sid = SessionManager.get_session_id()
+        # [UX] 새 파일 전환: 대화/플래그를 렌더 전(콜백 시점)에 초기화하여
+        # 업로드 직후 불필요한 전체 rerun 없이도 빈 화면 깜빡임이 사라진다.
+        # (reset_for_new_file이 current_page/pdf_annotations/pdf_target_page 초기화 포함)
+        SessionManager.reset_for_new_file(session_id=sid)
         # 새 문서는 항상 1페이지부터 열이도록 PDF 네비게이션 위젯 상태와
         # 일회성 점프 키(pdf_target_page)를 초기화합니다. pdf_nav_input_v6는
         # INTERACTIVE_KEYS에 속해 스냅샷/복원되므로 직접 session_state를
         # 갱신하여 이전 문서의 마지막 페이지 값이 재사용되지 않게 합니다.
         st.session_state["pdf_nav_input_v6"] = 1
         st.session_state.pop("pdf_target_page", None)
-        SessionManager.delete("pdf_target_page")
-        SessionManager.set("pdf_annotations", [])
         old_path = SessionManager.get("pdf_file_path")
         if old_path:
             SessionManager.safe_remove_file(old_path)
@@ -430,6 +432,18 @@ def on_file_upload() -> None:
                 shutil.copyfileobj(uploaded_file, f)
 
             SessionManager.set("pdf_file_path", tmp_path)
+            # [UX] 분석 진행 자리표시자 메시지: _bg_rebuild_task가 동일 msg_id로 업데이트
+            SessionManager.add_message(
+                "system",
+                f"📄 '{uploaded_file.name}' 문서 분석 시작",
+                msg_type="build_progress",
+                msg_id=f"build_{sid}",
+                progress=0,
+                status="분석 준비 중...",
+                cancelable=True,
+                logs=[],
+                session_id=sid,
+            )
             SessionManager.set("new_file_uploaded", True)
             SystemNotifier.success(f"문서 업로드 완료: {uploaded_file.name}")
         except Exception as e:
@@ -529,14 +543,9 @@ def _handle_pending_tasks() -> None:
             or DEFAULT_EMBEDDING_MODEL
         )
 
-        SessionManager.reset_for_new_file(current_sid)
-        SessionManager.set("pdf_file_path", current_file_path, current_sid)
-        SessionManager.set("last_uploaded_file_name", current_file_name, current_sid)
-        SessionManager.set(
-            "last_selected_embedding_model", current_embedding_model, current_sid
-        )
-        SessionManager.set("is_building_rag", True, current_sid)
-
+        # [UX] 리셋/진행 메시지는 on_file_upload가 렌더 전에 이미 수행했으므로
+        # 여기서는 빌드 시작만 한다. (st.rerun 제거: 갱신은 2초 폴링 fragment와
+        # run_in_background_worker의 완료 시 rerun이 담당)
         from common.utils import run_in_background_worker
 
         run_in_background_worker(
@@ -548,7 +557,6 @@ def _handle_pending_tasks() -> None:
             ),
             current_sid,
         )
-        needs_rerun = True
 
     elif (
         SessionManager.get("needs_rag_rebuild", False, current_sid)

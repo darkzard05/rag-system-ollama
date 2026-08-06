@@ -295,13 +295,15 @@ class SessionManager:
     ):
         """단일 또는 다중 세션 데이터를 업데이트합니다."""
         sid = session_id or cls.get_session_id()
-        state = cls._get_state(sid)
 
         updates = kwargs.copy()
         if key is not None:
             updates[key] = value
 
+        # Hold the per-session lock before reading state (mirrors add_message)
+        # to prevent TOCTOU races with concurrent delete_session/reset_all_state.
         with cls._acquire_lock(sid):
+            state = cls._get_state(sid)
             for k, v in updates.items():
                 state[k] = v
                 logger.debug(f"[DEBUG] SessionManager.set: {sid} {k}={v}")
@@ -491,6 +493,10 @@ class SessionManager:
 
             # 물리적 파일 경로만 수집 (실제 삭제는 락 해제 후)
             pdf_path = state.get("pdf_file_path")
+            if pdf_path and state.get("pdf_library_path") == pdf_path:
+                pdf_path = (
+                    None  # PDF 라이브러리 파일은 보존 정책으로 관리 (세션 정리와 분리)
+                )
 
             # 무거운 객체 명시적 참조 해제 (메모리 누수 방지)
             heavy_keys = [

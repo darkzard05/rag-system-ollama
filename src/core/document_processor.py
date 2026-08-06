@@ -3,6 +3,7 @@ PDF 문서 로딩 및 텍스트 추출을 담당하는 모듈.
 PyMuPDF4LLM을 사용하여 초고속으로 구조적 마크다운을 추출하며 RAG 최적화 청킹을 수행합니다.
 """
 
+import asyncio
 import contextlib
 import hashlib
 import logging
@@ -72,6 +73,53 @@ def _extraction_progress_pct(page_number: int, total_pages: int) -> int:
     return round(5 + 40 * (page_number / total_pages))
 
 
+def _extract_markdown_via_thread(
+    file_path: str,
+    *,
+    extract_words: bool,
+    margins: list,
+    table_strategy: str,
+    graphics_limit: int,
+    fontsize_limit: int,
+    ignore_code: bool,
+    write_images: bool,
+) -> list:
+    """PyMuPDF4LLM 마크다운 추출을 워커 스레드에서 실행하기 위한 sync 래퍼.
+
+    fitz Document는 스레드 간 공유가 안전하지 않으므로 파일 경로로 자체 열어 사용합니다.
+    """
+    import pymupdf4llm
+
+    with open_pdf_document(file_path) as doc:
+        try:
+            return pymupdf4llm.to_markdown(
+                doc,
+                page_chunks=True,
+                extract_words=extract_words,
+                table_strategy=table_strategy,
+                graphics_limit=graphics_limit,
+                fontsize_limit=fontsize_limit,
+                ignore_code=ignore_code,
+                write_images=write_images,
+                margins=margins,
+            )
+        except Exception as layout_error:
+            logger.warning(
+                f"[RAG] [PDF] PyMuPDF4LLM 추출 오류 ({layout_error}). 테이블 제외 후 재시도합니다."
+            )
+            return pymupdf4llm.to_markdown(
+                doc,
+                page_chunks=True,
+                extract_words=extract_words,
+                table_strategy="lines",
+                graphics_limit=0,
+                fontsize_limit=fontsize_limit,
+                ignore_code=ignore_code,
+                write_images=False,
+                margins=margins,
+            )
+
+
 async def load_pdf_docs(
     file_path: str,
     file_name: str,
@@ -83,8 +131,6 @@ async def load_pdf_docs(
     """
     PyMuPDF4LLM을 사용하여 문서를 페이지 단위 마크다운으로 변환하고 RAG용 Document 객체 리스트를 생성합니다.
     """
-    import pymupdf4llm
-
     from cache.coord_cache import coord_cache
     from common.config import HYDRATION_MODE, PARSING_CONFIG
 
@@ -111,82 +157,58 @@ async def load_pdf_docs(
                 # 하이드레이션 모드에 관계없이 정밀 하이라이트를 위해 단어 추출 활성화
                 do_extract_words = HYDRATION_MODE != "none"
 
-                chunks = []
                 try:
-                    # 1차 시도: PyMuPDF4LLM 레이아웃 및 테이블 지능형 추출 기법 적용
-                    chunks = pymupdf4llm.to_markdown(
-                        doc,
-                        page_chunks=True,
+                    chunks = await asyncio.to_thread(
+                        _extract_markdown_via_thread,
+                        file_path,
                         extract_words=do_extract_words,
+                        margins=target_margins,
                         table_strategy=table_strategy,
                         graphics_limit=PARSING_CONFIG.get("graphics_limit", 5000),
                         fontsize_limit=PARSING_CONFIG.get("fontsize_limit", 3),
                         ignore_code=PARSING_CONFIG.get("ignore_code", False),
                         write_images=PARSING_CONFIG.get("write_images", False),
-                        margins=target_margins,
                     )
-                except Exception as layout_error:
-                    # 2차 시도: 테이블 추출 문제일 가능성을 고려하여 테이블 제외하고 마크다운 추출 재시도
+                except Exception as second_error:
+                    # 3차 시도: ONNXRuntimeError 등 예측 모델 라이브러리 충돌 시 폴백 안전 장치 가동
                     logger.warning(
-                        f"[RAG] [PDF] PyMuPDF4LLM 추출 오류 ({layout_error}). 테이블 제외 후 재시도합니다."
+                        f"[RAG] [PDF] PyMuPDF4LLM 최종 실패: {second_error}. "
+                        "호환성이 우수한 표준 PyMuPDF(C-Engine) 텍스트 추출 모드로 안전하게 자동 전환합니다."
                     )
-                    try:
-                        chunks = pymupdf4llm.to_markdown(
-                            doc,
-                            page_chunks=True,
-                            extract_words=do_extract_words,
-                            table_strategy="lines",  # "none" 대신 유효한 전략 사용
-                            graphics_limit=0,  # 그래픽 분석 최소화로 충돌 방지
-                            fontsize_limit=PARSING_CONFIG.get("fontsize_limit", 3),
-                            ignore_code=PARSING_CONFIG.get("ignore_code", False),
-                            write_images=False,
-                            margins=target_margins,
+                    SessionManager.add_status_log(
+                        "시스템 호환성 엔진(Classic C-Engine)으로 자동 전환 중...",
+                        session_id=session_id,
+                    )
+
+                    chunks = []
+                    for page_idx in range(total_pages):
+                        page = doc[page_idx]
+                        page_num = page_idx + 1
+
+                        # C-Engine을 통한 안정적인 텍스트 추출
+                        text = page.get_text("text")
+
+                        # 정밀 하이라이팅을 위한 단어 좌표 목록 추출
+                        words = []
+                        if do_extract_words:
+                            try:
+                                raw_words = page.get_text("words")
+                                words = [
+                                    (w[0], w[1], w[2], w[3], w[4]) for w in raw_words
+                                ]
+                            except Exception as word_e:
+                                logger.debug(f"단어 좌표 추출 실패 (스킵): {word_e}")
+
+                        chunks.append(
+                            {
+                                "text": text,
+                                "metadata": {"page": page_num},
+                                "words": words,
+                                "tables": [],
+                            }
                         )
-                    except Exception as second_error:
-                        # 3차 시도: ONNXRuntimeError 등 예측 모델 라이브러리 충돌 시 폴백 안전 장치 가동
-                        logger.warning(
-                            f"[RAG] [PDF] PyMuPDF4LLM 최종 실패: {second_error}. "
-                            "호환성이 우수한 표준 PyMuPDF(C-Engine) 텍스트 추출 모드로 안전하게 자동 전환합니다."
-                        )
-                        SessionManager.add_status_log(
-                            "시스템 호환성 엔진(Classic C-Engine)으로 자동 전환 중...",
-                            session_id=session_id,
-                        )
-
-                        chunks = []
-                        for page_idx in range(total_pages):
-                            page = doc[page_idx]
-                            page_num = page_idx + 1
-
-                            # C-Engine을 통한 안정적인 텍스트 추출
-                            text = page.get_text("text")
-
-                            # 정밀 하이라이팅을 위한 단어 좌표 목록 추출
-                            words = []
-                            if do_extract_words:
-                                try:
-                                    raw_words = page.get_text("words")
-                                    words = [
-                                        (w[0], w[1], w[2], w[3], w[4])
-                                        for w in raw_words
-                                    ]
-                                except Exception as word_e:
-                                    logger.debug(
-                                        f"단어 좌표 추출 실패 (스킵): {word_e}"
-                                    )
-
-                            chunks.append(
-                                {
-                                    "text": text,
-                                    "metadata": {"page": page_num},
-                                    "words": words,
-                                    "tables": [],
-                                }
-                            )
-                            if on_progress:
-                                on_progress(
-                                    _extraction_progress_pct(page_num, total_pages)
-                                )
+                        if on_progress:
+                            on_progress(_extraction_progress_pct(page_num, total_pages))
 
                 if on_progress:
                     on_progress(_extraction_progress_pct(total_pages, total_pages))

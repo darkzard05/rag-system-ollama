@@ -74,6 +74,7 @@ find_chat_selectors.py
 .mypy_cache/
 .opencode/
 .slim/
+.slim/deepwork/
 .screenshots/
 .streamlit/
 *.egg-info/

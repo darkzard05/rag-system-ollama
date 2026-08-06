@@ -217,6 +217,8 @@ class EmbeddingBasedSemanticChunker:
     ) -> np.ndarray:
         """
         텍스트 리스트의 임베딩을 생성합니다 (배치 처리 및 캐싱 강화).
+        [수정] 차원 불일치/None 캐시 벡터는 제거하지 않고 해당 텍스트를
+        재임베딩하여 복구하며, 반환 행렬의 행 수는 항상 입력 텍스트 수와 동일합니다.
         """
         if not texts:
             return np.array([]).reshape(0, 0)
@@ -225,6 +227,7 @@ class EmbeddingBasedSemanticChunker:
         missing_indices: list[int] = []
         missing_texts: list[str] = []
         text_to_output_indices: dict[str, list[int]] = {}
+        newly_embedded: list[tuple[int, str, np.ndarray]] = []
 
         # 1. 정제 및 캐시 확인
         for i, text in enumerate(texts):
@@ -235,16 +238,20 @@ class EmbeddingBasedSemanticChunker:
 
             cached_raw = await self.cache_manager.get(cache_key)
             if cached_raw is not None:
-                if isinstance(cached_raw, dict) and "vector" in cached_raw:
-                    cached_vec = cached_raw["vector"]
-                else:
-                    cached_vec = cached_raw
-                all_results[i] = np.array(cached_vec, dtype="float32")
-            else:
-                if norm_text not in text_to_output_indices:
-                    missing_texts.append(norm_text)
-                text_to_output_indices.setdefault(norm_text, []).append(i)
-                missing_indices.append(i)
+                cached_vec = (
+                    cached_raw["vector"]
+                    if isinstance(cached_raw, dict) and "vector" in cached_raw
+                    else cached_raw
+                )
+                cached_vector = self._as_valid_vector(cached_vec)
+                if cached_vector is not None:
+                    all_results[i] = cached_vector
+                    continue
+
+            if norm_text not in text_to_output_indices:
+                missing_texts.append(norm_text)
+            text_to_output_indices.setdefault(norm_text, []).append(i)
+            missing_indices.append(i)
 
         # 2. 누락분 배치 임베딩 수행 (캐시 저장은 모든 배치 성공 후 단일 패스)
         if missing_texts:
@@ -253,8 +260,6 @@ class EmbeddingBasedSemanticChunker:
             )
 
             # [수정] 배치 루프 동안 메모리에만 수집, 캐시 저장은 루프 이후 단일 패스로 수행
-            newly_embedded: list[tuple[int, str, np.ndarray]] = []
-
             for b_idx in range(0, len(missing_texts), self.batch_size):
                 batch = missing_texts[b_idx : b_idx + self.batch_size]
                 batch_indices = missing_indices[b_idx : b_idx + self.batch_size]
@@ -300,29 +305,29 @@ class EmbeddingBasedSemanticChunker:
                 logger.error("[Chunker] 캐시 저장 타임아웃 (일부 항목 미저장 가능)")
                 raise
 
-        # 3. [고도화] 결과 행렬 조립 및 차원 불일치 방어
-        # 모든 결과가 채워졌는지 확인하고, 차원이 일치하는지 검사
-        valid_vectors: list[np.ndarray] = []
-        expected_dim = None
+        # 3. [수정] 차원 불일치/누락 벡터는 개별 재임베딩으로 복구 (제거하지 않음)
+        expected_dim = self._resolve_expected_dim(all_results, newly_embedded)
+        if expected_dim is None:
+            raise ValueError(
+                "[Chunker] 임베딩 결과가 하나도 없어 벡터 행렬을 구성할 수 없습니다."
+            )
 
         for i, res_vec in enumerate(all_results):
-            if res_vec is None:
-                continue
-
-            if expected_dim is None:
-                expected_dim = res_vec.shape[0]
-
-            if res_vec.shape[0] != expected_dim:
+            if res_vec is None or int(res_vec.shape[0]) != expected_dim:
                 logger.warning(
-                    f"[Chunker] 캐시된 벡터 차원 불일치 감지 (Index: {i}, Dim: {res_vec.shape[0]} != Expected: {expected_dim}). "
-                    "모델 이름이 바뀌었거나 캐시가 오염되었습니다. 해당 항목을 제외합니다."
+                    f"[Chunker] 캐시된 벡터 차원 불일치 감지 (Index: {i}, "
+                    f"Dim: {None if res_vec is None else res_vec.shape[0]} "
+                    f"!= Expected: {expected_dim}). 해당 문장을 재임베딩하여 복구합니다."
                 )
-                continue
+                all_results[i] = await self._reembed_single(texts[i], expected_dim)
 
-            valid_vectors.append(res_vec)
-
-        if not valid_vectors:
-            return np.array([]).reshape(0, 0)
+        # 4. [수정] 행렬 조립 — 행 수는 항상 입력 텍스트 수와 동일해야 함
+        valid_vectors = [cast(np.ndarray, v) for v in all_results]
+        if len(valid_vectors) != len(texts):
+            raise ValueError(
+                f"[Chunker] 임베딩 행렬의 행 수({len(valid_vectors)})가 "
+                f"입력 텍스트 수({len(texts)})와 일치하지 않습니다."
+            )
 
         embeddings_matrix = np.stack(valid_vectors).astype("float32")
         if normalize:
@@ -334,6 +339,60 @@ class EmbeddingBasedSemanticChunker:
                 where=norms > 1e-9,
             )
         return embeddings_matrix
+
+    @staticmethod
+    def _as_valid_vector(cached_vec: Any) -> np.ndarray | None:
+        """캐시된 값이 1차원 벡터로 해석 가능하면 np.ndarray로, 아니면 None을 반환합니다."""
+        try:
+            vec_np = np.asarray(cached_vec, dtype="float32")
+        except (TypeError, ValueError):
+            return None
+        if vec_np.ndim != 1 or vec_np.shape[0] == 0:
+            return None
+        return vec_np
+
+    async def _reembed_single(self, text: str, expected_dim: int) -> np.ndarray:
+        """차원 불일치/None 캐시 벡터에 대해 해당 텍스트를 재임베딩하여 복구합니다."""
+        norm_text = " ".join(text.split())
+        try:
+            vecs = await asyncio.to_thread(self.embedder.embed_documents, [norm_text])
+        except Exception as e:
+            raise ValueError(f"[Chunker] 캐시 벡터 복구 재임베딩 실패: {e}") from e
+        if not vecs:
+            raise ValueError(
+                f"[Chunker] 캐시 벡터 복구 재임베딩 결과가 비어 있습니다: {norm_text[:80]!r}"
+            )
+        vec_np = np.asarray(vecs[0], dtype="float32")
+        if vec_np.ndim != 1 or vec_np.shape[0] != expected_dim:
+            raise ValueError(
+                f"[Chunker] 캐시 벡터 복구 재임베딩 후에도 차원 불일치 "
+                f"(text: {norm_text[:80]!r}, expected dim: {expected_dim}, "
+                f"got: {vec_np.shape})."
+            )
+
+        cache_key = (
+            f"emb:{self.model_name}:{xxhash.xxh64(norm_text.encode()).hexdigest()}"
+        )
+        await asyncio.wait_for(
+            self.cache_manager.set(
+                cache_key, {"vector": vec_np.tolist(), "cache_version": "1.0"}
+            ),
+            timeout=30.0,
+        )
+        return vec_np
+
+    @staticmethod
+    def _resolve_expected_dim(
+        all_results: list[np.ndarray | None],
+        newly_embedded: list[tuple[int, str, np.ndarray]],
+    ) -> int | None:
+        """새로 임베딩된 벡터를 우선, 없으면 캐시 벡터로 표준 차원을 결정합니다."""
+        for _, _, vec in newly_embedded:
+            return int(vec.shape[0])
+        for res_vec in all_results:
+            if res_vec is not None:
+                return int(res_vec.shape[0])
+        return None
 
     def _find_breakpoints(
         self, distances: list[float], sentences: list[dict] | None = None
@@ -589,13 +648,23 @@ class EmbeddingBasedSemanticChunker:
             if sentences:
                 sentence_texts = [s["text"] for s in sentences]
                 embeddings = await self._get_embeddings(sentence_texts)
-                for s, v in zip(sentences, embeddings, strict=False):
+                if embeddings.shape[0] != len(sentence_texts):
+                    raise ValueError(
+                        f"[Chunker] 임베딩 행 수({embeddings.shape[0]})가 "
+                        f"문장 수({len(sentence_texts)})와 일치하지 않습니다."
+                    )
+                for s, v in zip(sentences, embeddings, strict=True):
                     s["vector"] = v
             return sentences
 
         # 2. 개별 문장 임베딩 생성 (캐싱 활용)
         indiv_embeddings = await self._get_embeddings([s["text"] for s in sentences])
-        for s, v in zip(sentences, indiv_embeddings, strict=False):
+        if indiv_embeddings.shape[0] != len(sentences):
+            raise ValueError(
+                f"[Chunker] 임베딩 행 수({indiv_embeddings.shape[0]})가 "
+                f"문장 수({len(sentences)})와 일치하지 않습니다."
+            )
+        for s, v in zip(sentences, indiv_embeddings, strict=True):
             s["vector"] = v
 
         # 3. Buffer 기반 Combined Embeddings 생성
@@ -788,14 +857,22 @@ class EmbeddingBasedSemanticChunker:
         final_docs = []
         final_vectors = []
 
-        with concurrent.futures.ThreadPoolExecutor() as executor:
-            # Run metadata extraction in parallel
-            results = list(
-                executor.map(
-                    lambda chunk: self._extract_metadata_for_chunk(chunk, doc_ranges),
-                    chunk_dicts,
+        def _extract_metadata_batch(
+            chunk_dicts: list[dict], doc_ranges: list[dict]
+        ) -> list[dict]:
+            with concurrent.futures.ThreadPoolExecutor() as executor:
+                return list(
+                    executor.map(
+                        lambda chunk: self._extract_metadata_for_chunk(
+                            chunk, doc_ranges
+                        ),
+                        chunk_dicts,
+                    )
                 )
-            )
+
+        results = await asyncio.to_thread(
+            _extract_metadata_batch, chunk_dicts, doc_ranges
+        )
 
         for chunk, merged_metadata in zip(chunk_dicts, results, strict=False):
             final_docs.append(

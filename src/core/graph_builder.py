@@ -635,48 +635,48 @@ async def build_graph() -> Any:
             return _graph_cache.compiled
 
         logger.info("[RAG] [GRAPH] 그래프 재구성 시작")
-    workflow = StateGraph(GraphState)
+        workflow = StateGraph(GraphState)
 
-    # 노드 등록
-    workflow.add_node("preprocess", preprocess)
-    workflow.add_node("retrieve", retrieve_and_rerank)
-    workflow.add_node("grade_documents", grade_documents)
-    workflow.add_node("rewrite_query", rewrite_query)
-    workflow.add_node("generate", generate)
+        # 노드 등록
+        workflow.add_node("preprocess", preprocess)
+        workflow.add_node("retrieve", retrieve_and_rerank)
+        workflow.add_node("grade_documents", grade_documents)
+        workflow.add_node("rewrite_query", rewrite_query)
+        workflow.add_node("generate", generate)
 
-    # 엣지 설정
-    workflow.add_edge(START, "preprocess")
+        # 엣지 설정
+        workflow.add_edge(START, "preprocess")
 
-    workflow.add_conditional_edges(
-        "preprocess",
-        lambda s: (
-            "generate" if get_state_attr(s, "intent") == "general" else "retrieve"
-        ),
-        {"generate": "generate", "retrieve": "retrieve"},
-    )
+        workflow.add_conditional_edges(
+            "preprocess",
+            lambda s: (
+                "generate" if get_state_attr(s, "intent") == "general" else "retrieve"
+            ),
+            {"generate": "generate", "retrieve": "retrieve"},
+        )
 
-    workflow.add_edge("retrieve", "grade_documents")
+        workflow.add_edge("retrieve", "grade_documents")
 
-    workflow.add_conditional_edges(
-        "grade_documents",
-        lambda s: get_state_attr(
-            s, "intent", "generate"
-        ),  # default to generate on unknown
-        {"generate": "generate", "transform": "rewrite_query"},
-    )
+        workflow.add_conditional_edges(
+            "grade_documents",
+            lambda s: get_state_attr(
+                s, "intent", "generate"
+            ),  # default to generate on unknown
+            {"generate": "generate", "transform": "rewrite_query"},
+        )
 
-    workflow.add_edge("rewrite_query", "retrieve")
-    workflow.add_edge("generate", END)
+        workflow.add_edge("rewrite_query", "retrieve")
+        workflow.add_edge("generate", END)
 
-    # LangChain pending deprecation warning (allowed_objects 기본값 변경 예정) 침묵화
-    warnings.filterwarnings(
-        "ignore",
-        category=DeprecationWarning,
-        message=".*allowed_objects.*",
-    )
-    from langgraph.checkpoint.memory import InMemorySaver
+        # LangChain pending deprecation warning (allowed_objects 기본값 변경 예정) 침묵화
+        warnings.filterwarnings(
+            "ignore",
+            category=DeprecationWarning,
+            message=".*allowed_objects.*",
+        )
+        from langgraph.checkpoint.memory import InMemorySaver
 
-    memory = InMemorySaver()
+        memory = InMemorySaver()
 
-    _graph_cache.compiled = workflow.compile(checkpointer=memory)
-    return _graph_cache.compiled
+        _graph_cache.compiled = workflow.compile(checkpointer=memory)
+        return _graph_cache.compiled

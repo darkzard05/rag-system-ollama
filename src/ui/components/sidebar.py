@@ -76,6 +76,11 @@ def _render_settings_internal(
             on_change=file_uploader_callback,
             disabled=is_generating,
         )
+        # 업로더 on_change 콜백 이후에 세션에서 다시 읽어 rerun 없이도
+        # 새 파일명이 즉시 반영되도록 한다.
+        current_file_name = (
+            SessionManager.get("last_uploaded_file_name") or current_file_name
+        )
         if current_file_name:
             st.caption(f"Current File: :green[{current_file_name}]")
 

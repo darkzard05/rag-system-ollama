@@ -145,21 +145,34 @@
     min-height: 0 !important;
     overflow-y: auto !important;
     overflow-x: hidden !important;
-    padding-bottom: 0.5rem !important;
+    /* Bottom padding ~= pinned control bar height so the last page's bottom edge can
+       scroll clear of the sticky bar instead of being permanently covered. */
+    padding-bottom: 4rem !important;
 }
 
-/* PDF controls bar: auto-height at bottom of PDF column, separated from viewer above.
-   @st.fragment wraps its output in stElementContainer, so we handle both stLayoutWrapper
-   and stElementContainer variants for the :not(:first-child) (i.e., the controls). */
+/* PDF controls bar: auto-height bar pinned to the bottom of the PDF column.
+   Verified DOM contract (Streamlit 1.54, runtime env rag-ollama): @st.fragment runs its
+   body inside st.container() (streamlit/runtime/fragment.py) so the frontend renders
+   the fragment as ONE stLayoutWrapper direct child of the column stVerticalBlock, with the
+   viewer element and the controls nested as siblings inside its inner stVerticalBlock
+   (which the first-child rule above makes the scroll region). Positional :not(:first-child)
+   selectors at column-block depth can never match that shape, so anchor on the controls'
+   OWN wrapper via :has(> stHorizontalBlock) and pin it sticky, mirroring the chat-input
+   recipe (see stChatInput rule below). stLayoutWrapper/stElementContainer variants both
+   kept for DOM-shape robustness. */
 [data-testid="stMainBlockContainer"] [data-testid="stColumn"]:first-child
-> [data-testid="stVerticalBlock"] > [data-testid="stLayoutWrapper"]:not(:first-child),
+[data-testid="stLayoutWrapper"]:has(> [data-testid="stHorizontalBlock"]),
 [data-testid="stMainBlockContainer"] [data-testid="stColumn"]:first-child
-> [data-testid="stVerticalBlock"] > [data-testid="stElementContainer"]:not(:first-child) {
+[data-testid="stElementContainer"]:has(> [data-testid="stHorizontalBlock"]) {
+    position: sticky !important;
+    bottom: 0 !important;
+    z-index: 100 !important;
     flex: 0 0 auto !important;
+    min-height: 0 !important;
+    margin-top: auto !important; /* pins the bar to the bottom when the viewer is short */
     overflow: visible !important;
     border-top: 1px solid color-mix(in srgb, var(--border-color, #ccc) 25%, transparent) !important;
     padding-top: 8px !important;
-    margin-top: 4px !important;
     background: color-mix(in srgb, var(--background-color) 96%, var(--primary-color) 4%) !important;
 }
 
@@ -335,6 +348,20 @@ header[data-testid="stHeader"] {
     [data-testid="stMainBlockContainer"] [data-testid="stColumn"]:last-child
     > [data-testid="stVerticalBlock"]
     > [data-testid="stLayoutWrapper"]:has(> [data-testid="stChatInput"]) {
+        position: static !important;
+        margin-top: 0 !important;
+        flex: 0 0 auto !important;
+        z-index: auto !important;
+        background-color: transparent !important;
+        border-top: none !important;
+        padding-top: 0 !important;
+    }
+    /* Mobile: neutralize the desktop sticky pin for the PDF controls bar; each column is
+       its own 50vh scroller here and the bar flows with the content. */
+    [data-testid="stMainBlockContainer"] [data-testid="stColumn"]:first-child
+    [data-testid="stLayoutWrapper"]:has(> [data-testid="stHorizontalBlock"]),
+    [data-testid="stMainBlockContainer"] [data-testid="stColumn"]:first-child
+    [data-testid="stElementContainer"]:has(> [data-testid="stHorizontalBlock"]) {
         position: static !important;
         margin-top: 0 !important;
         flex: 0 0 auto !important;

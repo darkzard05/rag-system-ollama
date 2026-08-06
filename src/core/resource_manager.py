@@ -397,11 +397,11 @@ class ResourceCoordinator:
                     f"Resource '{key}' not found in {pool.name} and no build_fn provided."
                 )
 
-            res = (
-                await build_fn(*args, **kwargs)
-                if asyncio.iscoroutinefunction(build_fn)
-                else build_fn(*args, **kwargs)
-            )
+            if asyncio.iscoroutinefunction(build_fn):
+                res = await build_fn(*args, **kwargs)
+            else:
+                # [이벤트 루프 차단 방지] 무거운 sync 모델 로드는 워커 스레드에서 실행
+                res = await asyncio.to_thread(build_fn, *args, **kwargs)
             await pool.put(key, res)
             return res
 

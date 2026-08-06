@@ -31,8 +31,10 @@ async def _stream_with_retry(
     base_delay: float = 1.0,
 ) -> AsyncIterator[dict]:
     for attempt in range(max_retries):
+        yielded_any = False
         try:
             async for item in event_stream_factory():
+                yielded_any = True
                 yield item
             return
         except (
@@ -42,6 +44,9 @@ async def _stream_with_retry(
             httpx.RequestError,
             httpx.TimeoutException,
         ) as e:
+            if yielded_any:
+                # 첫 토큰 이후 오류는 재시도하지 않는다 (중복 전송 방지).
+                raise
             if attempt == max_retries - 1:
                 raise
             delay = base_delay * (2**attempt)

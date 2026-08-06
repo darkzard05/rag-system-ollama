@@ -123,10 +123,22 @@ class CacheSecurityManager:
 
         self.security_level = security_level
         self.hmac_secret = hmac_secret
-        self.trusted_paths = [Path(p).resolve() for p in (trusted_paths or [])]
+        self.trusted_paths = [
+            self._resolve_trusted_path(p) for p in (trusted_paths or [])
+        ]
         self.check_permissions = check_permissions
 
         logger.debug(f"CacheSecurityManager 초기화 완료 (Level: {security_level})")
+
+    @staticmethod
+    def _resolve_trusted_path(path: str) -> Path:
+        p = Path(path)
+        if p.is_absolute():
+            return p.resolve()
+        # 상대 경로는 CWD가 아닌 프로젝트 루트 기준으로 해석 (실행 위치 무관)
+        from common.config import PROJECT_ROOT
+
+        return (PROJECT_ROOT / p).resolve()
 
     @staticmethod
     def compute_file_hash(file_path: str, algorithm: str = "sha256") -> str:
@@ -218,6 +230,7 @@ class CacheSecurityManager:
         return True
 
     def is_trusted_path(self, file_path: str) -> bool:
+        # 빈 화이트리스트 = 제한 없음 (의도적; 테스트는 trusted_paths=[]로 구성)
         if not self.trusted_paths:
             return True
         resolved_path = Path(file_path).resolve()
