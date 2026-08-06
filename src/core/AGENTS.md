@@ -14,7 +14,9 @@ Core RAG engine orchestrating document processing, semantic chunking, hybrid ret
 | Document Processing | `src/core/document_processor.py` | PDF loading, text extraction, and hash computation |
 | Model Management | `src/core/model_loader.py` | LLM and Embedding model lifecycle |
 | Resource Pool | `src/core/resource_manager.py` | Global registry for vector stores, retrievers, and inference locks |
-| Reranking | `src/core/async_reranker.py` | Async semantic reranking (FlashRank) |
+| Reranking | `src/core/async_reranker.py` | `AsyncCrossEncoderReranker` (FlashRank cross-encoder with `engine: auto`), falls back to bi-encoder `AsyncSemanticReranker` on failure |
+| Graph State Reducers | `src/api/schemas.py` | `reset_or_append` (`search_queries`) / `reset_or_add` (`retry_count`) turn-boundary reset reducers |
+| Timeline Polling | `src/common/config.py` | `UI_TIMELINE_POLL_SECONDS` timeline fragment poll interval (consumed by `src/ui/components/chat.py`) |
 | Chunking Utils | `src/core/chunking.py` | Low-level document splitting utilities |
 
 ## WHERE TO LOOK

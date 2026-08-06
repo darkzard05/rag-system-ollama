@@ -187,6 +187,33 @@ CI enforces unit coverage ≥55% (`--cov-fail-under=55`) and additionally runs t
 
 ---
 
+## 🎯 Answer Quality & Evaluation
+
+Evaluate retrieval and answer quality end to end with the built-in harness:
+
+```bash
+# Full run: retrieval + generation + judge scoring
+python scripts/eval_quality.py --tag <tag> --testset_n 3
+
+# Retrieval-only: skip the LLM judge for faster iteration
+python scripts/eval_quality.py --tag <tag> --no-llm
+```
+
+Each run writes `reports/eval_quality_<tag>_<ts>.json` and `.md` with per-question metrics (P@1, MRR@5, TTFT, tokens/sec) plus an average judge score.
+
+**Reranking.** The reranker engine is selected in `config.yml` → `rag.reranker.engine`: `auto` (tries the FlashRank cross-encoder, falls back to the bi-encoder `semantic` reranker on failure), `flashrank` (forced), or `semantic` (bi-encoder). When a pipeline is built, the default LLM is preloaded automatically (silently skipped if loading fails).
+
+**Key settings:**
+
+| Key | Default | Purpose |
+|-----|---------|---------|
+| `models.ollama_num_predict` | 2048 | Max generated tokens per answer |
+| `models.num_ctx` | 8192 | Model context window (tokens) |
+| `rag.prompts.grading.min_score_to_skip` | 0.85 | Skip the LLM grade when the max rerank score reaches this |
+| `ui.timeline_poll_seconds` | 1.0 | Timeline fragment auto-refresh interval (seconds) |
+
+---
+
 ## 📄 License
 MIT License - Developed by **darkzard05**.
 **Status:** v3.3.0 | **Last Updated:** 2026-03-12
