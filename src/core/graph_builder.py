@@ -131,6 +131,8 @@ async def preprocess(
         "intent": intent,
         "is_cached": False,
         "search_weights": weights,
+        # 턴 시작 시 이전 턴의 재작성 쿼리 잔재 제거 (reset_or_append 리듀서의 리셋 신호)
+        "search_queries": [],
         "retry_count": 0,
     }
 

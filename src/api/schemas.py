@@ -32,6 +32,28 @@ class PerformanceStats(BaseModel):
         )
 
 
+def reset_or_append(existing: list[str], new: list[str]) -> list[str]:
+    """턴 경계 리셋 기반 리스트 리듀서 (search_queries용).
+
+    - `new`가 비어있으면 `[]`를 반환해 턴 시작 시 이전 턴의 재작성 쿼리 잔재를 제거한다.
+    - `new`에 값이 있으면 `existing + new`를 반환해 동일 턴 내 재작성 쿼리를 누적한다.
+    """
+    if not new:
+        return []
+    return existing + new
+
+
+def reset_or_add(existing: int, new: int) -> int:
+    """턴 경계 리셋 기반 정수 리듀서 (retry_count용).
+
+    - `new == 0`이면 `0`을 반환해 턴 시작 시 이전 턴의 재시도 예산을 리셋한다.
+    - `new != 0`이면 `existing + new`를 반환해 동일 턴 내 재시도 횟수를 누적한다.
+    """
+    if new == 0:
+        return 0
+    return existing + new
+
+
 class GraphState(TypedDict):
     """
     RAG 그래프의 상태를 나타냅니다.
@@ -41,7 +63,7 @@ class GraphState(TypedDict):
     input: str
     chat_history: Annotated[list[BaseMessage], operator.add]
     intent: str | None
-    search_queries: Annotated[list[str], operator.add]
+    search_queries: Annotated[list[str], reset_or_append]
     documents: list[Document]
     relevant_docs: list[Document]
     context: str | None
@@ -50,7 +72,7 @@ class GraphState(TypedDict):
     performance: dict[str, Any] | None
     search_weights: dict[str, float] | None  # 👈 동적 가중치 추가
     is_cached: bool
-    retry_count: Annotated[int, operator.add]
+    retry_count: Annotated[int, reset_or_add]
 
 
 class QueryRequest(BaseModel):
