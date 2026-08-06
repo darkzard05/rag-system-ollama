@@ -138,16 +138,11 @@
 
 [data-testid="stMainBlockContainer"] [data-testid="stColumn"]:first-child
 > [data-testid="stVerticalBlock"] > [data-testid="stLayoutWrapper"]:first-child
-> [data-testid="stVerticalBlock"],
-[data-testid="stMainBlockContainer"] [data-testid="stColumn"]:first-child
-> [data-testid="stVerticalBlock"] > [data-testid="stElementContainer"]:first-child {
+> [data-testid="stVerticalBlock"] {
     flex: 1 !important;
     min-height: 0 !important;
     overflow-y: auto !important;
     overflow-x: hidden !important;
-    /* Bottom padding ~= pinned control bar height so the last page's bottom edge can
-       scroll clear of the sticky bar instead of being permanently covered. */
-    padding-bottom: 4rem !important;
 }
 
 /* PDF controls bar: auto-height bar pinned to the bottom of the PDF column.
@@ -174,6 +169,22 @@
     border-top: 1px solid color-mix(in srgb, var(--border-color, #ccc) 25%, transparent) !important;
     padding-top: 8px !important;
     background: color-mix(in srgb, var(--background-color) 96%, var(--primary-color) 4%) !important;
+}
+
+/* PDF controls bar: one line + alignment (verified :has anchor) */
+[data-testid="stMainBlockContainer"] [data-testid="stColumn"]:first-child
+[data-testid="stLayoutWrapper"]:has(> [data-testid="stHorizontalBlock"])
+[data-testid="stHorizontalBlock"] {
+    flex-wrap: nowrap !important;
+    gap: 0.5rem !important;
+    overflow: visible !important;
+}
+
+[data-testid="stMainBlockContainer"] [data-testid="stColumn"]:first-child
+[data-testid="stLayoutWrapper"]:has(> [data-testid="stHorizontalBlock"])
+[data-testid="stHorizontalBlock"] [data-testid="stColumn"] {
+    flex: 1 1 0 !important;
+    min-width: 0 !important;
 }
 
 /* Chat column (last child) — single-scroller layout.
@@ -356,20 +367,6 @@ header[data-testid="stHeader"] {
         border-top: none !important;
         padding-top: 0 !important;
     }
-    /* Mobile: neutralize the desktop sticky pin for the PDF controls bar; each column is
-       its own 50vh scroller here and the bar flows with the content. */
-    [data-testid="stMainBlockContainer"] [data-testid="stColumn"]:first-child
-    [data-testid="stLayoutWrapper"]:has(> [data-testid="stHorizontalBlock"]),
-    [data-testid="stMainBlockContainer"] [data-testid="stColumn"]:first-child
-    [data-testid="stElementContainer"]:has(> [data-testid="stHorizontalBlock"]) {
-        position: static !important;
-        margin-top: 0 !important;
-        flex: 0 0 auto !important;
-        z-index: auto !important;
-        background-color: transparent !important;
-        border-top: none !important;
-        padding-top: 0 !important;
-    }
     /* Mobile: chat input goes fixed full-width bottom */
     [data-testid="stChatInput"] {
         position: fixed !important;
@@ -379,6 +376,21 @@ header[data-testid="stHeader"] {
         z-index: 1000 !important;
         background-color: var(--background-color) !important;
         border-top: 1px solid color-mix(in srgb, var(--border-color, #ccc) 30%, transparent) !important;
+    }
+    /* PDF controls bar inner columns: never 50vh (scope out of the global column rule) */
+    [data-testid="stMainBlockContainer"] [data-testid="stColumn"]:first-child
+    [data-testid="stLayoutWrapper"]:has(> [data-testid="stHorizontalBlock"])
+    [data-testid="stColumn"] {
+        height: auto !important;
+        min-height: 0 !important;
+        overflow: visible !important;
+    }
+    /* PDF scroll region: zero mobile padding so the bar sits flush (the 1rem at the
+       generic column rule above otherwise reintroduces a 16px gap) */
+    [data-testid="stMainBlockContainer"] [data-testid="stColumn"]:first-child
+    > [data-testid="stVerticalBlock"] > [data-testid="stLayoutWrapper"]:first-child
+    > [data-testid="stVerticalBlock"] {
+        padding-bottom: 0 !important;
     }
 }
 
