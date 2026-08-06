@@ -8,6 +8,7 @@ from __future__ import annotations
 import asyncio
 import copy
 import logging
+import os
 import time
 from collections.abc import Callable
 from typing import Any
@@ -55,6 +56,13 @@ async def _preload_model() -> None:
 
 async def _schedule_model_preload() -> None:
     """모델 프리로드 태스크를 1회만 스케줄링합니다. (이벤트 루프 변경 시 락 재생성)"""
+    # 테스트 환경(CI/유닛)에서는 pytest-asyncio가 테스트마다 이벤트 루프를 교체하므로
+    # 프리로드 태스크가 루프 닫힘 시 모델별 Lock을 잡은 채 좌초되어 후속 테스트가
+    # get_or_build의 Lock.acquire에서 영원히 대기하는 데드락을 유발합니다.
+    # 테스트에서는 프리로드 스케줄을 건너뛰어 태스크 생성 자체를 원천 차단합니다.
+    if os.getenv("IS_CI_TEST") == "true" or os.getenv("IS_UNIT_TEST") == "true":
+        logger.info("[RAG] [PRELOAD] 테스트 환경 — 프리로드 스킵")
+        return
     global _preload_lock, _preload_loop, _preload_scheduled
     current_loop = asyncio.get_running_loop()
     if _preload_lock is not None and _preload_loop is current_loop:

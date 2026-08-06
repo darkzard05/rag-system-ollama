@@ -34,3 +34,12 @@ def mock_llm():
 @pytest.fixture
 def session_context():
     return f"test_session_{uuid.uuid4().hex[:8]}"
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _disable_preload_in_tests():
+    """pytest-asyncio의 함수 스코프 루프 교체로 프리로드 태스크가 락을 잡고 좌초되는 데드락을 차단합니다."""
+    import core.pipeline_builder as pb
+
+    pb._preload_scheduled = True
+    return
