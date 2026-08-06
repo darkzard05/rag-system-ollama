@@ -14,7 +14,7 @@ from typing import Any
 
 import streamlit as st
 
-from common.config import MSG_CHAT_GUIDE
+from common.config import MSG_CHAT_GUIDE, UI_TIMELINE_POLL_SECONDS
 from common.utils import (
     apply_tooltips_to_response,
     normalize_latex_delimiters,
@@ -227,7 +227,7 @@ def _render_doc_context_inline(sid: str) -> None:
             st.caption(f"📎 {file_name} · 대기 중{cache_tag}")
 
 
-@st.fragment(run_every=2.0)
+@st.fragment(run_every=UI_TIMELINE_POLL_SECONDS)
 def _render_unified_timeline(current_sid: str) -> None:
     """
     통합 타임라인 렌더링 (단일 패스).

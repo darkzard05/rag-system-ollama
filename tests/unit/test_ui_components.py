@@ -1,6 +1,7 @@
-import unittest
 import os
 import sys
+import unittest
+
 from streamlit.testing.v1 import AppTest
 
 # 프로젝트 루트를 경로에 추가
@@ -40,10 +41,10 @@ metrics = {"doc_count": 2, "input_token_count": 10, "token_count": 20, "total_ti
 
 # UI 렌더링 호출
 render_message(
-    role=role, 
-    content=content, 
-    documents=documents, 
-    metrics=metrics, 
+    role=role,
+    content=content,
+    documents=documents,
+    metrics=metrics,
     msg_index=msg_index,
     is_latest=True,
 )
@@ -61,22 +62,19 @@ render_message(
             button_labels = [b.label for b in at.button]
 
             # 'p'가 포함된 숫자 라벨 확인
-            self.assertIn("1p", button_labels, "1p 버튼이 없습니다.")
-            self.assertIn("12p", button_labels, "12p 버튼이 없습니다.")
+            assert "1p" in button_labels, "1p 버튼이 없습니다."
+            assert "12p" in button_labels, "12p 버튼이 없습니다."
             # 2. 버튼 키 접두사 확인 (12p 버튼)
             jump_button_12 = next(b for b in at.button if b.label == "12p")
-            self.assertTrue(
-                jump_button_12.key.startswith("jump_msg_0_12_"),
-                f"버튼 키 오류: {jump_button_12.key}",
+            assert jump_button_12.key.startswith("jump_msg_0_12_"), (
+                f"버튼 키 오류: {jump_button_12.key}"
             )
 
             # 3. CSS 제거 확인 (기존 스타일 코드가 없는지)
             style_markdowns = [
                 m for m in at.markdown if "white-space: nowrap !important" in m.value
             ]
-            self.assertEqual(
-                len(style_markdowns), 0, "버튼 스타일 CSS가 여전히 존재합니다."
-            )
+            assert len(style_markdowns) == 0, "버튼 스타일 CSS가 여전히 존재합니다."
 
         finally:
             if os.path.exists("temp_test_ui.py"):
@@ -90,3 +88,32 @@ def test_pdf_viewer_key_includes_page():
     assert pdf_viewer_key("abc", 1) == "pdf_v8_abc_1"
     assert pdf_viewer_key("abc", 1) != pdf_viewer_key("abc", 2)
     assert pdf_viewer_key("abc", 1) != pdf_viewer_key("abd", 1)
+
+
+def test_timeline_fragment_poll_interval_from_config():
+    """타임라인 fragment의 run_every가 config의 UI_TIMELINE_POLL_SECONDS를 사용한다.
+
+    decorator는 모듈 import 시점에 적용되므로, streamlit.fragment를 mock한 뒤
+    chat 모듈을 reload하여 전달된 run_every를 검증한다.
+    """
+    import importlib
+    from unittest.mock import patch
+
+    import streamlit
+
+    from common.config import UI_TIMELINE_POLL_SECONDS
+
+    with patch.object(streamlit, "fragment") as mock_fragment:
+        # decorator가 함수를 그대로 반환하도록 no-op 처리
+        mock_fragment.return_value = lambda func: func
+
+        import ui.components.chat as chat_module
+
+        importlib.reload(chat_module)
+
+        mock_fragment.assert_called_once()
+        _, kwargs = mock_fragment.call_args
+        assert kwargs.get("run_every") == UI_TIMELINE_POLL_SECONDS
+
+    # 원래 fragment 래핑 상태로 복원 (다른 테스트에 영향 방지)
+    importlib.reload(chat_module)

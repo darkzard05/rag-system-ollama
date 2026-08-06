@@ -167,6 +167,8 @@ _ui_config = _config.get("ui", {})
 _ui_streaming = _ui_config.get("streaming", {})
 UI_STREAMING_TIMEOUT: int = _ui_streaming.get("timeout_seconds", 30)
 
+UI_TIMELINE_POLL_SECONDS: float = float(_ui_config.get("timeline_poll_seconds", 1.0))
+
 _ui_messages = _ui_config.get("messages", {})
 MSG_PDF_VIEWER_NO_FILE = _ui_messages.get(
     "pdf_viewer_no_file", "미리볼 PDF가 없습니다."
