@@ -196,8 +196,12 @@ async def test_preload_model_swallows_get_llm_exception(caplog):
 
 
 @pytest.mark.asyncio
-async def test_preload_scheduled_only_once_per_process():
+async def test_preload_scheduled_only_once_per_process(monkeypatch):
     """_register_and_finalize가 두 번 호출되어도 프리로드는 한 번만 스케줄링되는지 검증합니다."""
+    # CI(IS_CI_TEST=true)에서는 _schedule_model_preload의 테스트 환경 가드가 조기 반환하므로
+    # 스케줄링 로직 자체를 검증하려면 가드를 비활성화해야 합니다.
+    monkeypatch.delenv("IS_CI_TEST", raising=False)
+    monkeypatch.delenv("IS_UNIT_TEST", raising=False)
     resource_manager = MagicMock()
     resource_manager.register_retrievers = AsyncMock(return_value=None)
 
