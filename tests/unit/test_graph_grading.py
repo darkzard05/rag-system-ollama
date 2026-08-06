@@ -4,9 +4,16 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from langchain_core.documents import Document
-from api.schemas import GraphState
 
+from common.config import GRADING_CONFIG
 from core.graph_builder import grade_documents
+
+
+class MockWriter:
+    """StreamWriter 대용으로 grade_documents의 writer 인자에 전달합니다."""
+
+    def __call__(self, data: object) -> None:
+        pass
 
 
 def json_response(**fields):
@@ -157,3 +164,65 @@ async def test_grade_documents_is_relevant_false():
         "search_queries": ["DeepSeek-R1 리뷰"],
         "retry_count": 1,
     }
+
+
+def test_min_score_to_skip_loaded_from_config():
+    """config.yml prompts.grading.min_score_to_skip(=0.85)가 GRADING_CONFIG에 로드되는지 검증"""
+    assert GRADING_CONFIG.get("min_score_to_skip") == 0.85
+
+
+@pytest.mark.asyncio
+async def test_grade_documents_short_circuit_above_threshold():
+    """rerank_score가 min_score_to_skip 이상이면 LLM 검증 없이 즉시 generate를 반환하는지 검증"""
+    state = {
+        "input": "DeepSeek-R1 성능",
+        "relevant_docs": [
+            Document(page_content="성능 최고", metadata={"rerank_score": 0.9}),
+        ],
+        "retry_count": 0,
+        "is_cached": False,
+        "intent": "rag",
+    }
+    llm = MagicMock()
+    config = {"configurable": {"llm": llm}}
+
+    result = await grade_documents(state, config, writer=MockWriter())
+    assert result == {"intent": "generate"}
+    # Short-circuit에서는 LLM을 호출하지 않아야 합니다.
+    llm.ainvoke.assert_not_called()
+    llm.bind.assert_not_called()
+
+
+@pytest.mark.asyncio
+@patch("core.graph_builder.adispatch_custom_event", new_callable=AsyncMock)
+async def test_grade_documents_calls_llm_below_threshold(
+    mock_adispatch: AsyncMock,
+):
+    """rerank_score가 min_score_to_skip 미만이면 LLM 검증 경로로 진행해 generate를 반환하는지 검증"""
+    state = {
+        "input": "DeepSeek-R1 성능",
+        "relevant_docs": [
+            Document(page_content="성능 보통", metadata={"rerank_score": 0.5}),
+        ],
+        "retry_count": 0,
+        "is_cached": False,
+        "intent": "rag",
+    }
+
+    mock_llm = MagicMock()
+    json_llm = AsyncMock()
+    mock_llm.bind.return_value = json_llm
+    json_llm.ainvoke.return_value = json_response(
+        action="generate",
+        is_relevant=True,
+        relevant_entities=["DeepSeek-R1"],
+        reason="충분한 정보 포함",
+        optimized_query=None,
+    )
+    config = {"configurable": {"llm": mock_llm}}
+
+    result = await grade_documents(state, config, writer=MockWriter())
+    assert result == {"intent": "generate"}
+    # 임계값 미만이므로 LLM 검증 경로가 실제로 실행되어야 합니다.
+    mock_llm.bind.assert_called_once()
+    json_llm.ainvoke.assert_awaited_once()

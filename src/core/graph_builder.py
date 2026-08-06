@@ -333,9 +333,10 @@ async def grade_documents(
     max_rerank_score = max(
         (d.metadata.get("rerank_score", 0.0) for d in docs), default=0.0
     )
-    if max_rerank_score >= 0.85:
+    min_score_to_skip = GRADING_CONFIG.get("min_score_to_skip", 0.85)
+    if max_rerank_score >= min_score_to_skip:
         logger.info(
-            f"[RAG] [GRADE] Short-circuit 활성화 (Max Rerank Score: {max_rerank_score:.3f} >= 0.85)"
+            f"[RAG] [GRADE] Short-circuit 활성화 (Max Rerank Score: {max_rerank_score:.3f} >= {min_score_to_skip})"
         )
         SessionManager.add_status_log(
             "신뢰도 높은 지식이 발견되어 즉시 답변 생성을 시작합니다.",
