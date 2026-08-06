@@ -58,6 +58,19 @@ async def _stream_with_retry(
             raise
 
 
+def _log_hydration_task_failure(task: asyncio.Task[Any]) -> None:
+    """완료 콜백: 실패한 하이드레이션 태스크의 예외를 소비·기록합니다.
+
+    `t.exception()` 조회가 예외를 소비해 "Task exception was never retrieved"
+    경고를 방지합니다. 예외를 재발생시키지 않습니다 (로그-온리 의미론).
+    """
+    if task.cancelled():
+        return
+    exc = task.exception()
+    if exc is not None:
+        logger.error(f"[RAG] 문서 하이드레이션 실패: {exc}")
+
+
 class RAGSystem:
     """RAG 오케스트레이터: 세션 라이프사이클 및 쿼리 흐름을 관리합니다."""
 
@@ -154,6 +167,9 @@ class RAGSystem:
         file_hash = SessionManager.get("file_hash", session_id=self.session_id)
 
         async def _consumer():
+            # rewrite 루프가 retrieve 노드를 재실행하면 청크가 2회 발생하므로
+            # 단일 변수가 아닌 리스트로 보관해 모든 하이드레이션 태스크를 유지한다.
+            hydration_tasks: list[asyncio.Task[Any]] = []
             try:
 
                 async def _event_factory():
@@ -188,17 +204,23 @@ class RAGSystem:
                             if isinstance(chunk, dict) and "retrieve" in chunk:
                                 docs = chunk["retrieve"].get("relevant_docs", [])
                                 if docs:
-                                    try:
-                                        await hydrate_documents(docs)
-                                    except Exception as task_e:
-                                        logger.error(
-                                            f"[RAG] 문서 하이드레이션 실패: {task_e}"
-                                        )
+                                    task = asyncio.create_task(hydrate_documents(docs))
+                                    task.add_done_callback(_log_hydration_task_failure)
+                                    hydration_tasks.append(task)
                             yield ("updates", chunk)
             except Exception as e:
                 logger.error(f"[RAG] 스트림 에러: {e}", exc_info=True)
                 raise e
             finally:
+                # 하이드레이션은 await가 실패 태스크의 예외를 재발생시키므로
+                # 반드시 try/except로 감싸 로그-온리 실패 의미론을 유지한다.
+                # 완료 대기로 UI 경로의 _finalize_pdf_side_effects가
+                # 좌표 완성 문서를 읽게 보장한다.
+                for t in hydration_tasks:
+                    try:
+                        await t
+                    except (Exception, asyncio.CancelledError) as te:
+                        logger.error(f"[RAG] 문서 하이드레이션 실패: {te}")
                 get_resource_manager().unpin_retrievers(file_hash)
 
         return _consumer()
