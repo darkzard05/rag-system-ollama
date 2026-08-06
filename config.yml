@@ -48,12 +48,10 @@ rag:
   
   # 벡터 저장소 엔진 설정 (FAISS 최적화)
   vector_store:
-    engine: "faiss"
     index_params:
       hnsw_m: 32                  # HNSW 그래프 연결 수 (기본 32)
       quantization_threshold: 5000 # 5000개 이상 문서 시 SQ8 양자화 적용 (메모리 75% 절감)
       use_l2_norm: true           # 코사인 유사도 보장을 위한 L2 정규화 사용 여부
-      distance_strategy: "MAX_INNER_PRODUCT"
 
   # 리트리버 설정
   retriever:
@@ -125,32 +123,11 @@ rag:
       5. [Output Format]: 답변은 자연스러운 한국어 문장으로 작성하되, 각 문장이나 핵심 문단마다 인용을 포함하십시오.
       </Core_Guidelines>
 
-    # 2. 문서 관련성 평가 (Grading)
-    grading:
-      instruction: |
-        당신은 엄격한 RAG 시스템의 문서 평가관입니다. 아래 제공된 문서가 사용자의 질문에 답변하기 위해 실질적인 근거를 포함하고 있는지 판단하세요.
-
-        **판단 원칙:**
-        1. 외부의 일반 상식보다 제공된 문서 내에서 정의된 텍스트와 맥락을 절대적으로 우선하여 판단하세요.
-        2. 질문의 용어가 상식적인 의미와 다르더라도, 문서에서 특정 기술적 정의, 고유 명사, 혹은 모델명 등으로 정의되어 있다면 관련성이 매우 높은 것으로 간주합니다.
-        3. 질문과 문서 내용 간의 용어 일치 여부를 확인할 때 대소문자 차이는 무시하십시오.
-        4. 직접적인 해답이 없더라도 답변 구성을 위한 핵심 배경 정보나 정의가 포함되어 있다면 'YES'로 판단하세요.
-        5. **반드시** 판단의 근거가 된 문서 내 핵심 용어(모델명, 기술적 약어, 고유 명사 등)를 추출하여 `relevant_entities` 리스트에 포함하십시오.
-      template: |
-        질문: {query}
-        ---
-        문서:
-        {context_text}
-
 
 # --- 평가(Evaluation) 설정 ---
 evaluation:
   # 평가에 사용할 Ollama 모델 (Judge)
   judge_model: "qwen3:4b-instruct-2507-q4_K_M"
-  # 평가 타임아웃 (초) - 로컬 모델 속도를 고려하여 넉넉히 설정
-  timeout: 1200
-  # 병렬 처리 수 (로컬 자원 보호를 위해 1 권장, 성능 향상을 위해 2 시도)
-  max_workers: 2
 
 
 # --- 캐시 보안 설정 ---
@@ -168,8 +145,6 @@ cache_security:
 global_cache:
   # 벡터 저장소(인덱싱 결과) 캐시 사용 여부
   enable_vector_cache: true
-  # LLM 답변(Response) 캐시 사용 여부
-  enable_response_cache: false
 
 # --- 채팅 UI 설정 ---
 ui:

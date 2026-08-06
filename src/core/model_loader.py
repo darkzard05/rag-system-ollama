@@ -70,11 +70,6 @@ def _get_psutil():
 logger = logging.getLogger(__name__)
 
 
-def _get_monitor() -> Any:
-    """성능 모니터를 첫 사용 시점에 지연 초기화합니다."""
-    return get_performance_monitor()
-
-
 class ModelManager:
     """
     시스템 전체의 모델 인스턴스를 관리하는 중앙 클래스 (LRU 캐시 적용).
@@ -459,7 +454,7 @@ def load_llm(model_name: str) -> Any:
             )
         )
 
-    with _get_monitor().track_operation(
+    with get_performance_monitor().track_operation(
         OperationType.PDF_LOADING, {"model": model_name}
     ):
         from core.custom_ollama import DeepThinkingChatOllama

@@ -24,11 +24,6 @@ from services.monitoring.performance_monitor import (
 logger = logging.getLogger(__name__)
 
 
-def _get_monitor() -> Any:
-    """성능 모니터를 첫 사용 시점에 지연 초기화합니다."""
-    return get_performance_monitor()
-
-
 def compute_file_hash(file_path: str, data: bytes | None = None) -> str:
     """파일 또는 데이터의 SHA256 해시를 계산합니다."""
     sha256_hash = hashlib.sha256()
@@ -135,7 +130,7 @@ async def load_pdf_docs(
     from common.config import HYDRATION_MODE, PARSING_CONFIG
 
     logger.info(f"[RAG] [LOAD] PDF 분석 시작: {file_name} (Mode: {HYDRATION_MODE})")
-    with _get_monitor().track_operation(
+    with get_performance_monitor().track_operation(
         OperationType.PDF_LOADING, {"file": file_name}
     ) as op:
         try:

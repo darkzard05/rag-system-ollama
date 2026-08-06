@@ -54,16 +54,14 @@
 ```text
 rag-system-ollama/
 ├── src/
-│   ├── .model_cache/
+│   ├── .deepeval/
 │   ├── api/
 │   ├── cache/
 │   ├── common/
 │   ├── core/
 │   ├── data/
-│   ├── deployments/
 │   ├── infra/
 │   ├── main.py # 🏁 Entry Point
-│   ├── rag_system_ollama.egg-info/
 │   ├── security/
 │   ├── services/
 │   └── ui/
@@ -72,28 +70,24 @@ rag-system-ollama/
 │   ├── analyze_dom.py
 │   ├── analyze_logs.py
 │   ├── analyze_paths.py
-│   ├── archive/
 │   ├── bench_ui_render.py
 │   ├── bench_ui_render_v2.py
 │   ├── benchmarks/
 │   ├── check_css_presence.py
 │   ├── compare_chunking_logic.py
-│   ├── compare_reranker_perf.py
-│   ├── compare_rerankers.py
-│   ├── compare_rerankers_real_pdf.py
 │   ├── container_dom_test.py
 │   ├── debug_layout.py
 │   ├── deep_dom_analysis.py
 │   ├── diagnose_input.py
 │   ├── diagnose_ui.py
 │   ├── discover_selectors.py
-│   ├── download_bge.py
 │   ├── dump_dom.py
+│   ├── dump_page.py
 │   ├── e2e_performance_benchmark.py
 │   ├── eval_grader.py
+│   ├── eval_results.json
 │   ├── eval_retrieval.py
 │   ├── evaluate_pipeline.py
-│   ├── evaluate_quality.py
 │   ├── evaluation/
 │   ├── explore_dom.py
 │   ├── find_containers.py
@@ -105,30 +99,28 @@ rag-system-ollama/
 │   ├── reverify_dom_task1.py
 │   ├── simple_eval.py
 │   ├── standardize_imports.py
-│   ├── test_chunking_integrity.py
-│   ├── test_container.py
+│   ├── test_app.py
 │   ├── test_embedding_v2.py
 │   ├── test_full_pipeline.py
 │   ├── test_highlight_query_cleaning.py
-│   ├── test_performance_metrics.py
+│   ├── test_pipeline_direct.py
+│   ├── test_rag_eval.py
 │   ├── test_real_pdf_chunking.py
-│   ├── test_reranker_logic.py
-│   ├── test_reranker_performance.py
 │   ├── test_self_correction.py
-│   ├── test_shortcircuit.py
 │   ├── validate_config.py
 │   ├── verification/
 │   ├── verify_css_override.py
 │   ├── verify_dom_structure.py
 │   ├── verify_e2e_all.py
 │   ├── verify_final.py
+│   ├── verify_fixes.py
 │   ├── verify_height_fill.py
 │   ├── verify_layout_height_fill.py
 │   ├── verify_layout_scroll_fix.py
 │   ├── verify_metadata_opt.py
-│   ├── verify_reranker_with_pdf.py
+│   ├── verify_new_layout.py
+│   ├── verify_phase2.py
 │   ├── verify_section_metadata.py
-│   ├── verify_session_refactor.py
 │   ├── verify_styles.py
 │   ├── verify_ui_scrolling.py
 │   └── visual_qa_automation.py
@@ -137,18 +129,15 @@ rag-system-ollama/
 │   ├── data/
 │   ├── e2e/
 │   ├── integration/
-│   ├── performance/
 │   ├── README.md
 │   ├── security/
+│   ├── smoke_test.py
 │   ├── stability/
 │   ├── test_loop_independence.py
 │   ├── test_p0_1_pdf_handle_leak.py
-│   ├── test_p0_2_session_sync.py
-│   ├── test_rag_save_count.py
 │   ├── test_ui_bridge.py
 │   ├── unit/
-│   ├── utils/
-│   └── verify_context.py
+│   └── utils/
 ```
 <!-- TREE_END -->
 
@@ -174,6 +163,12 @@ streamlit run src/main.py
 
 ---
 
+## 🔐 Authentication & API
+
+The API server bootstraps an admin account: set `TEST_ADMIN_PASSWORD` (else a random password is printed to stderr once). All API routes require a Bearer token (JWT via `/api/v1/login` or an API key). Revocation persists via `AUTH_STATE_FILE`; tokens survive restarts. API uploads are stored in `data/temp/pdf_library` and served at `/api/v1/pdf/{hash}`.
+
+---
+
 ## 🧪 Testing & Verification
 
 We maintain a strict **Zero-Error Policy**. Run the automated verification suite:
@@ -187,6 +182,8 @@ python scripts/test_full_pipeline.py
 # Verify section metadata extraction
 python scripts/verify_section_metadata.py
 ```
+
+CI enforces unit coverage ≥55% (`--cov-fail-under=55`) and additionally runs the auth/ownership/PDF/SSE integration tests (`test_api_auth_login`, `test_api_pdf_serving`, `test_global_exception_handler`, `test_ownership_hardening`, `test_pdf_library_retention`, `test_stream_error_isolation`, `test_api_endpoints`).
 
 ---
 

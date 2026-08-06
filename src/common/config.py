@@ -159,11 +159,6 @@ ENABLE_VECTOR_CACHE: bool = _get_env(
     _config.get("global_cache", {}).get("enable_vector_cache", True),
     lambda x: str(x).lower() == "true",
 )
-ENABLE_RESPONSE_CACHE: bool = _get_env(
-    "ENABLE_RESPONSE_CACHE",
-    _config.get("global_cache", {}).get("enable_response_cache", True),
-    lambda x: str(x).lower() == "true",
-)
 
 # --- 7. UI 메시지 (UI) ---
 _ui_config = _config.get("ui", {})
@@ -185,8 +180,4 @@ MSG_ERROR_OLLAMA_NOT_RUNNING = _ui_errors.get(
 _eval_config = _config.get("evaluation", {})
 EVAL_JUDGE_MODEL: str = _get_env(
     "EVAL_JUDGE_MODEL", _eval_config.get("judge_model", DEFAULT_OLLAMA_MODEL)
-)
-EVAL_TIMEOUT: int = _get_env("EVAL_TIMEOUT", _eval_config.get("timeout", 1800), int)
-EVAL_MAX_WORKERS: int = _get_env(
-    "EVAL_MAX_WORKERS", _eval_config.get("max_workers", 1), int
 )

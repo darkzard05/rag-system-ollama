@@ -15,17 +15,13 @@ from typing import Any, Generic, TypeVar
 
 import numpy as np
 
+from common.utils import fast_hash
 from services.monitoring.performance_monitor import (
     OperationType,
     get_performance_monitor,
 )
 
 logger = logging.getLogger(__name__)
-
-
-def _get_monitor() -> Any:
-    """성능 모니터를 첫 사용 시점에 지연 초기화합니다."""
-    return get_performance_monitor()
 
 
 # 타입 변수
@@ -408,7 +404,7 @@ class SemanticCache(CacheBackend[T]):
                 if len(self.cache) >= self.max_entries:
                     self._evict_oldest()
 
-                cache_key = hashlib.sha256(key.encode()).hexdigest()[:16]
+                cache_key = fast_hash(key)
 
                 query_embedding = None
                 if self.embedding_model:
@@ -670,7 +666,7 @@ class CacheManager:
 
     async def get(self, key: str, use_semantic: bool = False) -> Any | None:
         """값 조회 (L1 -> L2 -> L3)"""
-        with _get_monitor().track_operation(
+        with get_performance_monitor().track_operation(
             OperationType.QUERY_PROCESSING,
             {"stage": "cache_lookup", "semantic": use_semantic},
         ) as op:

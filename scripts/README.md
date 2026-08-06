@@ -9,13 +9,13 @@
 ### Windows (PowerShell)
 ```powershell
 $env:PYTHONPATH="src"
-python scripts/benchmarks/indexing_perf.py
+python scripts/benchmarks/total_rag_perf.py
 ```
 
 ### Linux / macOS
 ```bash
 export PYTHONPATH=src
-python scripts/benchmarks/indexing_perf.py
+python scripts/benchmarks/total_rag_perf.py
 ```
 
 ---
@@ -26,11 +26,11 @@ python scripts/benchmarks/indexing_perf.py
 
 | 도구명 | 용도 | 기대 결과 |
 | :--- | :--- | :--- |
-| **`indexing_perf.py`** | 대량 문서(5,000+) 인덱싱 성능 측정 | 인덱싱 소요 시간 및 메모리 점유율(SQ8 효율) |
+| **`total_rag_perf.py`** | 전체 RAG 파이프라인 E2E 시간 측정 | 첫 토큰 생성 시간(TTFT) 및 전체 응답 시간 |
+| **`total_load_perf.py`** | 문서 로드/인덱싱 시간 측정 | 로드 소요 시간 및 메모리 점유율 |
 | **`embedding_perf.py`** | 임베딩 모델별 생성 속도 비교 | 초당 임베딩 생성 수 (Tokens/sec) |
 | **`parser_perf.py`** | PDF 마크다운 추출 엔진 속도 측정 | 페이지당 텍스트 추출 소요 시간 |
-| **`rag_total_perf.py`** | 전체 RAG 파이프라인 E2E 시간 측정 | 첫 토큰 생성 시간(TTFT) 및 전체 응답 시간 |
-| **`reranker_perf.py`** | 리랭커(FlashRank) 정렬 속도 측정 | 문서 수에 따른 리랭킹 지연 시간 |
+| **`quality_eval.py`** | 리랭커/품질 평가 벤치마크 | 리랭킹 지연 시간 및 품질 지표 |
 
 ---
 
@@ -43,7 +43,7 @@ RAG 시스템의 답변 정확도와 근거성을 정량적으로 평가합니�
 | **`gen_testset.py`** | PDF에서 Q&A 테스트셋 생성 | `python scripts/evaluation/gen_testset.py` |
 | **`quick_eval.py`** | **[핵심]** 데일리 고속 품질 평가 | `python scripts/evaluation/quick_eval.py` |
 | **`compare_configs.py`** | 설정별(가중치 등) 품질 비교 실험 | `python scripts/evaluation/compare_configs.py` |
-| **`evaluate_rag_quality.py`** | RAGAS 기반 상세 지표 산출 | `python scripts/evaluation/evaluate_rag_quality.py` |
+| **`eval_advanced_retrieval.py`** | 검색/리랭킹 상세 지표 산출 | `python scripts/evaluation/eval_advanced_retrieval.py` |
 
 > **Tip:** `quick_eval.py`는 LLM 채점(1-5점)과 의미론적 유사도를 동시에 측정하여 개발 과정에서 가장 빠르게 품질을 확인할 수 있는 도구입니다.
 
@@ -64,8 +64,8 @@ RAG 시스템의 답변 정확도와 근거성을 정량적으로 평가합니�
 1.  **데이터 준비:** 평가할 PDF를 `tests/data/`에 배치.
 2.  **테스트셋 생성:** `gen_testset.py`를 실행하여 질문-정답 쌍(CSV) 생성.
 3.  **기본 품질 확인:** `quick_eval.py`를 실행하여 답변 품질 점수(Score) 확인.
-4.  **성능 확인:** `indexing_perf.py`를 실행하여 메모리 사용량이 허용 범위인지 확인.
-5.  **정밀 분석:** 품질이 낮을 경우 `evaluate_rag_quality.py`로 Faithfulness 등의 지표 상세 분석.
+4.  **성능 확인:** `total_rag_perf.py`를 실행하여 메모리 사용량이 허용 범위인지 확인.
+5.  **정밀 분석:** 품질이 낮을 경우 `eval_advanced_retrieval.py`로 Faithfulness 등의 지표 상세 분석.
 
 ---
 

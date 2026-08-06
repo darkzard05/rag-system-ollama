@@ -5,7 +5,6 @@
 import asyncio
 import logging
 import os
-from typing import Any
 
 import numpy as np
 from langchain_core.documents import Document
@@ -25,11 +24,6 @@ from services.monitoring.performance_monitor import (
 )
 
 logger = logging.getLogger(__name__)
-
-
-def _get_monitor() -> Any:
-    """성능 모니터를 첫 사용 시점에 지연 초기화합니다."""
-    return get_performance_monitor()
 
 
 def _get_optimal_batch_size(embedder: Embeddings) -> int:
@@ -149,7 +143,7 @@ async def split_documents(
         use_semantic = SEMANTIC_CHUNKER_CONFIG.get("enabled", False)
 
         if use_semantic and embedder:
-            with _get_monitor().track_operation(
+            with get_performance_monitor().track_operation(
                 OperationType.SEMANTIC_CHUNKING, {"doc_count": len(docs)}
             ):
                 semantic_chunker = _init_semantic_chunker(embedder)

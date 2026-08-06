@@ -3,7 +3,6 @@ streamlit==1.54.0
 streamlit-pdf-viewer==0.0.30
 pymupdf>=1.25.0
 pymupdf4llm>=0.3.4
-tabulate>=0.9.0
 
 # LangChain & RAG Core
 langchain>=0.3.18
@@ -46,6 +45,5 @@ requests>=2.32.0
 pillow>=12.1.1
 
 # Utilities
-nest-asyncio==1.6.0
 psutil==6.1.1
-streamlit-javascript==0.1.5
+xxhash==3.8.1
