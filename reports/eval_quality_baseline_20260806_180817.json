@@ -1,0 +1,509 @@
+{
+  "meta": {
+    "script": "scripts/eval_quality.py",
+    "tag": "baseline",
+    "timestamp": "2026-08-06T18:11:18",
+    "pdf": "tests/data/2201.07520v1.pdf",
+    "testset_n": 3,
+    "no_llm": false,
+    "model": "qwen3:4b-instruct-2507-q4_K_M",
+    "embedder": "nomic-embed-text-v2-moe",
+    "num_predict": 512,
+    "num_ctx": 4096,
+    "truncation_threshold": 460.8,
+    "timeout_seconds": 180.0,
+    "golden_total": 5,
+    "testset_total": 3
+  },
+  "questions": [
+    {
+      "source": "golden",
+      "row": 1,
+      "query": "CM3 모델이 이미지를 학습할 때 사용하는 구체적인 원리와 토큰화 방식은 뭐야? 기존 DALL-E와는 어떤 차이가 있어?",
+      "ground_truth": null,
+      "degenerate": {
+        "is_degenerate": false,
+        "reason": null,
+        "status": "포함"
+      },
+      "note": null,
+      "skipped_no_llm": false,
+      "retrieval": {
+        "doc_count": 4,
+        "max_rerank_score": 0.5329,
+        "documents": [
+          {
+            "page": 5,
+            "section": "4 ZERO/FEW-SHOT PROMPTING",
+            "rerank_score": 0.5161985158920288
+          },
+          {
+            "page": 6,
+            "section": "4 ZERO/FEW-SHOT PROMPTING",
+            "rerank_score": 0.5328527092933655
+          },
+          {
+            "page": 14,
+            "section": "8 CONCLUSION",
+            "rerank_score": 0.5125980377197266
+          },
+          {
+            "page": 18,
+            "section": "REFERENCE",
+            "rerank_score": 0.5016500949859619
+          }
+        ],
+        "relevant": false,
+        "p_at_1": 0,
+        "mrr_at_5": 0.0
+      },
+      "answer": "CM3 모델이 이미지를 학습할 때 사용하는 구체적인 원리는 **원래 토큰화 방식을 기반으로 한 인공지능 모델의 자동화된 토큰화 방식**을 통해 이루어지며, 이는 DALL-E와는 명확히 다릅니다. CM3는 **원래 토큰화 방식을 기반으로 한 인공지능 모델의 자동화된 토큰화 방식**을 통해 이루어지며, 이는 DALL-E와는 명확히 다릅니다. CM3는 **왼쪽에서 오른쪽 방향의 언어 모델링 목적**(left-to-right language modeling objective)을 사용하지 않고, **원래 토큰화 방식을 기반으로 한 인공지능 모델의 자동화된 토큰화 방식**을 통해 이루어지며, 이는 DALL-E와는 명확히 다릅니다. CM3는 **원래 토큰화 방식을 기반으로 한 인공지능 모델의 자동화된 토큰화 방식**을 통해 이루어지며, 이는 DALL-E와는 명확히 다릅니다. CM3는 **원래 토큰화 방식을 기반으로 한 인공지능 모델의 자동화된 토큰화 방식**을 통해 이루어지며, 이는 DALL-E와는 명확히 다릅니다. CM3는 **원래 토큰화 방식을 기반으로 한 인공지능 모델의 자동화된 토큰화 방식**을 통해 이루어지며, 이는 DALL-E와는 명확히 다릅니다. CM3는 **원래 토큰화 방식을 기반으로 한 인공지능 모델의 자동화된 토큰화 방식**을 통해 이루어지며, 이는 DALL-E와는 명확히 다릅니다. CM3는 **원래 토큰화 방식을 기반으로 한 인공지능 모델의 자동화된 토큰화 방식**을 통해 이루어지며, 이는 DALL-E와는 명확",
+      "answer_chars": 748,
+      "eval_count": 512,
+      "eval_count_missing": false,
+      "ttft": 22.3183,
+      "tps": 57.4834,
+      "truncated": 1,
+      "prompt_tokens_est": 2810,
+      "overflow": 0,
+      "judge": null,
+      "judge_excluded": null,
+      "judge_error": null,
+      "error": null
+    },
+    {
+      "source": "golden",
+      "row": 2,
+      "query": "문서 내에서 언급된 모델의 파라미터 수와 학습 데이터셋의 규모는 어떻게 돼?",
+      "ground_truth": null,
+      "degenerate": {
+        "is_degenerate": false,
+        "reason": null,
+        "status": "포함"
+      },
+      "note": null,
+      "skipped_no_llm": false,
+      "retrieval": {
+        "doc_count": 4,
+        "max_rerank_score": 0.4485,
+        "documents": [
+          {
+            "page": 3,
+            "section": "3 CM3",
+            "rerank_score": 0.4484909176826477
+          },
+          {
+            "page": 4,
+            "section": "3 CM3",
+            "rerank_score": 0.4419519007205963
+          },
+          {
+            "page": 4,
+            "section": "4 ZERO/FEW-SHOT PROMPTING",
+            "rerank_score": 0.38450127840042114
+          },
+          {
+            "page": 19,
+            "section": "REFERENCE",
+            "rerank_score": 0.44725674390792847
+          }
+        ],
+        "relevant": false,
+        "p_at_1": 0,
+        "mrr_at_5": 0.0
+      },
+      "answer": "문서 내에서 언급된 모델의 파라미터 수는 125M, 800M, 2.7B, 및 13B로, 이 중에서 하이퍼파라미터 설정을 위한 기초 모델로서 125M과 800M 모델이 언급되며, 모든 다운스트림 태스크는 2.7B 파라미터 모델(CM3-Medium)과 13B 파라미터 모델(CM3-Large)을 기준으로 평가된다[3 CM3, p.4]. 학습 데이터셋의 규모는 CC-NEWS와 En-Wikipedia의 데이터를 포함하여 총 61백만 문서(45백만 + 16백만)로, 전체 데이터셋의 크기는 843GB이며, 유니크 이미지 수는 25백만개, 토큰 수는 2230억 개로 기술된다[3 CM3, p.3]. 이 데이터셋은 각 소스에서 1만 개의 유니크 문서를 기반으로 테스트 세트를 생성하였으며, 테스트 세트와 트레이닝 세트 간의 중복을 최대한 제거하였다[3 CM3, p.3].",
+      "answer_chars": 425,
+      "eval_count": 301,
+      "eval_count_missing": false,
+      "ttft": 12.4443,
+      "tps": 53.5321,
+      "truncated": 0,
+      "prompt_tokens_est": 2778,
+      "overflow": 0,
+      "judge": null,
+      "judge_excluded": null,
+      "judge_error": null,
+      "error": null
+    },
+    {
+      "source": "golden",
+      "row": 3,
+      "query": "이 논문의 핵심 기여점(Contribution) 3가지만 요약해줘.",
+      "ground_truth": null,
+      "degenerate": {
+        "is_degenerate": false,
+        "reason": null,
+        "status": "포함"
+      },
+      "note": null,
+      "skipped_no_llm": false,
+      "retrieval": {
+        "doc_count": 5,
+        "max_rerank_score": 0.3217,
+        "documents": [
+          {
+            "page": 1,
+            "section": "Front Matter",
+            "rerank_score": 0.29530608654022217
+          },
+          {
+            "page": 7,
+            "section": "4 ZERO/FEW-SHOT PROMPTING",
+            "rerank_score": 0.2797878384590149
+          },
+          {
+            "page": 10,
+            "section": "4 ZERO/FEW-SHOT PROMPTING",
+            "rerank_score": 0.2764814794063568
+          },
+          {
+            "page": 12,
+            "section": "5 FINE-TUNING",
+            "rerank_score": 0.2879467308521271
+          },
+          {
+            "page": 13,
+            "section": "7 RELATED WORK",
+            "rerank_score": 0.32172054052352905
+          }
+        ],
+        "relevant": false,
+        "p_at_1": 0,
+        "mrr_at_5": 0.0
+      },
+      "answer": "이 논문의 핵심 기여점 중 3가지는 다음과 같습니다. 첫째, CM3 모델은 다중 모달성과 인과적 마스킹 기법을 결합하여 이미지와 문장의 상호작용을 효과적으로 모델링하며, 특히 비트리한 문장 생성(예: 아보카도 모양의 소파)을 통해 의미적이고 창의적인 캡션 생성을 가능하게 합니다 [4 ZERO/FEW-SHOT PROMPTING, p.7]. 둘째, CM3-Large 모델은 다양한 데이터 세트(예: AIDA, MSNBC, ACE2004 등)에서 평균 정확도 89.8%를 달성하여 기존 모델들과 비교해도 경쟁력을 갖추며, 특히 AQUAINT 및 CWEB 데이터에서 81.8% 이상의 성능을 보여, 직접 지도 학습 기반 모델들보다 우수한 성능을 발휘합니다 [4 ZERO/FEW-SHOT PROMPTING, p.10]. 셋째, CM3는 위키피디아와 CC-NEWS를 훈련 데이터로 사용함으로써 성별 및 인종 편향을 크게 줄였으며, 특히 CM3-Medium은 거의 편향이 없음을 나타내고, CM3-Large는 훈련 데이터에서 유래한 편향을 일부 보임으로써 모델 크기와 편향 간의 관계를 명확히 보여줍니다 [7 RELATED WORK, p.13].",
+      "answer_chars": 579,
+      "eval_count": 367,
+      "eval_count_missing": false,
+      "ttft": 11.1504,
+      "tps": 45.7326,
+      "truncated": 0,
+      "prompt_tokens_est": 2449,
+      "overflow": 0,
+      "judge": null,
+      "judge_excluded": null,
+      "judge_error": null,
+      "error": null
+    },
+    {
+      "source": "golden",
+      "row": 4,
+      "query": "안녕, 너는 누구니?",
+      "ground_truth": null,
+      "degenerate": {
+        "is_degenerate": true,
+        "reason": "빈 엔티티 (expected_key_entities=[])",
+        "status": "제외됨"
+      },
+      "note": null,
+      "skipped_no_llm": false,
+      "retrieval": {
+        "doc_count": 5,
+        "max_rerank_score": 0.3075,
+        "documents": [
+          {
+            "page": 1,
+            "section": "1 INTRODUCTION",
+            "rerank_score": 0.2588726282119751
+          },
+          {
+            "page": 2,
+            "section": "2 CAUSALLY MASKED OBJECTIVE",
+            "rerank_score": 0.25353866815567017
+          },
+          {
+            "page": 4,
+            "section": "3 CM3",
+            "rerank_score": 0.27256298065185547
+          },
+          {
+            "page": 9,
+            "section": "4 ZERO/FEW-SHOT PROMPTING",
+            "rerank_score": 0.27563732862472534
+          },
+          {
+            "page": 10,
+            "section": "4 ZERO/FEW-SHOT PROMPTING",
+            "rerank_score": 0.3074955344200134
+          }
+        ],
+        "relevant": null,
+        "p_at_1": null,
+        "mrr_at_5": null
+      },
+      "answer": "저는 문서 분석 전문가입니다. 제공된 자료를 기반으로 질문에 답변하려고 합니다. 그러나 \"안녕, 너는 누구니?\"라는 질문은 개인적 정체성에 대한 묻는 것이며, 제공된 <Context>에는 관련된 정보가 없습니다. 따라서 문서에 관련 정보가 없습니다.[Context]",
+      "answer_chars": 148,
+      "eval_count": 75,
+      "eval_count_missing": false,
+      "ttft": 14.7356,
+      "tps": 44.1262,
+      "truncated": 0,
+      "prompt_tokens_est": 2739,
+      "overflow": 0,
+      "judge": null,
+      "judge_excluded": null,
+      "judge_error": null,
+      "error": null
+    },
+    {
+      "source": "golden",
+      "row": 5,
+      "query": "이미지 생성 모델의 최신 트렌드에 대해 알려줘.",
+      "ground_truth": null,
+      "degenerate": {
+        "is_degenerate": false,
+        "reason": null,
+        "status": "포함"
+      },
+      "note": "out-of-doc 스트레스 케이스 (문서 밖 질문, P@1=0 기대)",
+      "skipped_no_llm": false,
+      "retrieval": {
+        "doc_count": 4,
+        "max_rerank_score": 0.4605,
+        "documents": [
+          {
+            "page": 5,
+            "section": "4 ZERO/FEW-SHOT PROMPTING",
+            "rerank_score": 0.4604809284210205
+          },
+          {
+            "page": 6,
+            "section": "4 ZERO/FEW-SHOT PROMPTING",
+            "rerank_score": 0.4195399284362793
+          },
+          {
+            "page": 8,
+            "section": "4 ZERO/FEW-SHOT PROMPTING",
+            "rerank_score": 0.40928220748901367
+          },
+          {
+            "page": 14,
+            "section": "REFERENCE",
+            "rerank_score": 0.4170762300491333
+          }
+        ],
+        "relevant": false,
+        "p_at_1": 0,
+        "mrr_at_5": 0.0
+      },
+      "answer": "문서에 관련 정보가 없습니다.",
+      "answer_chars": 16,
+      "eval_count": 9,
+      "eval_count_missing": false,
+      "ttft": 15.5965,
+      "tps": 55.5096,
+      "truncated": 0,
+      "prompt_tokens_est": 2927,
+      "overflow": 0,
+      "judge": null,
+      "judge_excluded": null,
+      "judge_error": null,
+      "error": null
+    },
+    {
+      "source": "testset",
+      "row": 1,
+      "query": "CM3 모델은 어떤 종류의 모델을 기반으로 하고 있으며, 그 핵심 특징은 무엇인가요?",
+      "ground_truth": "CM3는 구조화된 다중 모달 문서의 대규모 데이터 세트를 기반으로 훈련된 원인 마스킹 생성 모델입니다. 핵심 특징은 왼쪽에서 오른쪽으로 토큰을 생성하면서, 문자열 끝부분에 생성되는 소수의 긴 토큰 스피언을 원래 위치에서 마스킹하지 않고, 그 위치를 제외한 방식으로 처리하는 것입니다.",
+      "degenerate": {
+        "is_degenerate": false,
+        "reason": null,
+        "status": "포함"
+      },
+      "note": null,
+      "skipped_no_llm": false,
+      "retrieval": {
+        "doc_count": 5,
+        "max_rerank_score": 0.5107,
+        "documents": [
+          {
+            "page": 1,
+            "section": "Front Matter",
+            "rerank_score": 0.5107239484786987
+          },
+          {
+            "page": 1,
+            "section": "ABSTRACT",
+            "rerank_score": 0.3993315100669861
+          },
+          {
+            "page": 4,
+            "section": "4 ZERO/FEW-SHOT PROMPTING",
+            "rerank_score": 0.4317134618759155
+          },
+          {
+            "page": 6,
+            "section": "4 ZERO/FEW-SHOT PROMPTING",
+            "rerank_score": 0.4227743148803711
+          },
+          {
+            "page": 9,
+            "section": "4 ZERO/FEW-SHOT PROMPTING",
+            "rerank_score": 0.41165056824684143
+          }
+        ],
+        "relevant": null,
+        "p_at_1": null,
+        "mrr_at_5": null
+      },
+      "answer": "CM3 모델은 구조화된 다모달 문서 집합을 기반으로 훈련된 **원인 마스킹**(causal masking) 기반 생성 모델입니다. 이 모델은 텍스트와 이미지 토큰을 모두 포함할 수 있는 대규모 문서 데이터에서 학습되며, 토큰 생성 과정에서 왼쪽에서 오른쪽으로 순차적으로 토큰을 생성하면서, 문자열 끝부분에 생성되는 일부 긴 토큰 스피언을 원래 위치에서 마스킹하는 방식을 사용합니다 [ABSTRACT, p.1]. 이는 일반적인 원인 마스킹 모델과 마스킹 언어 모델의 혼합 형태를 제공하여, 완전한 생성 모델링을 가능하게 하면서 동시에 양방향 정보 흐름을 가능하게 합니다 [ABSTRACT, p.1].\n\n이러한 원인 마스킹 방식은 CM3 모델의 핵심 특징으로, 단순한 순차적 생성을 넘어 토큰 생성 과정에서 생성된 토큰이 원래 위치에 존재하지 않도록 하여, 생성 과정의 일관성과 의미적 완전성을 보장합니다 [ABSTRACT, p.1]. 또한, 이 방식은 다모달 데이터에서 텍스트와 이미지 토큰을 함께 처리할 수 있는 구조화된 모델을 가능하게 하며, 이는 CM3가 텍스트와 이미지 간의 상호작용을 자연스럽게 학습할 수 있도록 합니다 [ABSTRACT, p.1].",
+      "answer_chars": 591,
+      "eval_count": 379,
+      "eval_count_missing": false,
+      "ttft": 12.573,
+      "tps": 44.0321,
+      "truncated": 0,
+      "prompt_tokens_est": 2440,
+      "overflow": 0,
+      "judge": 4,
+      "judge_excluded": false,
+      "judge_error": null,
+      "error": null
+    },
+    {
+      "source": "testset",
+      "row": 2,
+      "query": "CM3 모델이 훈련된 데이터 세트는 어떤 내용을 포함하며, 그 데이터의 순서는 어떻게 되나요?",
+      "ground_truth": "CM3 모델은 대규모 웹 및 위키백과 기사에서 훈련되며, 각 문서는 원래 HTML 소스에서 나타나는 순서대로 텍스트, 하이퍼텍스트 마크업, 하이퍼링크, 그리고 이미지 토큰(비디오-변형-GAN 기반)을 모두 포함합니다.",
+      "degenerate": {
+        "is_degenerate": false,
+        "reason": null,
+        "status": "포함"
+      },
+      "note": null,
+      "skipped_no_llm": false,
+      "retrieval": {
+        "doc_count": 5,
+        "max_rerank_score": 0.5722,
+        "documents": [
+          {
+            "page": 2,
+            "section": "1 INTRODUCTION",
+            "rerank_score": 0.4952266216278076
+          },
+          {
+            "page": 3,
+            "section": "3 CM3",
+            "rerank_score": 0.5721821784973145
+          },
+          {
+            "page": 12,
+            "section": "4 ZERO/FEW-SHOT PROMPTING",
+            "rerank_score": 0.5023046731948853
+          },
+          {
+            "page": 12,
+            "section": "5 FINE-TUNING",
+            "rerank_score": 0.4760514497756958
+          },
+          {
+            "page": 18,
+            "section": "REFERENCE",
+            "rerank_score": 0.5178055763244629
+          }
+        ],
+        "relevant": null,
+        "p_at_1": null,
+        "mrr_at_5": null
+      },
+      "answer": "CM3 모델이 훈련된 데이터 세트는 공통 콜레스(Common Crawl)에서 수집한 다중 모달 단순화된 HTML 데이터를 기반으로 하며, 이 데이터 세트는 CC-NEWS와 En-Wikipedia 두 개의 데이터 소스를 포함합니다. [1 INTRODUCTION, p.2]  \n\n이 데이터 세트의 구성은 표 1에서 제시된 바와 같이, CC-NEWS는 45백만 문서, 460GB 크기, 18백만 개의 유니크 이미지를 포함하며, En-Wikipedia은 16백만 문서, 383GB 크기, 7백만 개의 유니크 이미지를 포함합니다. 전체 데이터 세트는 61백만 문서, 843GB 크기, 25백만 개의 유니크 이미지를 포함합니다. [3 CM3, p.3]  \n\n데이터의 순서는 HTML 문서 구조를 반영하여, DOM(Document Object Model)을 기반으로 한 트리 구조로 표현되며, 이는 각 문서가 텍스트와 이미지의 조합을 포함한 하이퍼텍스트 형태로 구성된다는 점에서 의미가 있습니다. [3 CM3, p.3]  \n\n따라서 CM3 모델이 훈련된 데이터는 CC-NEWS와 En-Wikipedia의 HTML 기반 하이퍼텍스트 데이터를 포함하며, 이 데이터는 DOM 트리 구조를 통해 조직되어 있습니다. [1 INTRODUCTION, p.2][3 CM3, p.3]",
+      "answer_chars": 646,
+      "eval_count": 356,
+      "eval_count_missing": false,
+      "ttft": 27.3418,
+      "tps": 42.9235,
+      "truncated": 0,
+      "prompt_tokens_est": 2797,
+      "overflow": 0,
+      "judge": 5,
+      "judge_excluded": false,
+      "judge_error": null,
+      "error": null
+    },
+    {
+      "source": "testset",
+      "row": 3,
+      "query": "CM3 모델은 어떤 데이터를 기반으로 훈련되었나요?",
+      "ground_truth": "CM3 모델은 공통 크롤링에서 수집한 거의 테라바이트의 다중 모달 단순화된 HTML 데이터를 기반으로 훈련되었습니다.",
+      "degenerate": {
+        "is_degenerate": false,
+        "reason": null,
+        "status": "포함"
+      },
+      "note": null,
+      "skipped_no_llm": false,
+      "retrieval": {
+        "doc_count": 5,
+        "max_rerank_score": 0.495,
+        "documents": [
+          {
+            "page": 4,
+            "section": "3 CM3",
+            "rerank_score": 0.4288643002510071
+          },
+          {
+            "page": 6,
+            "section": "4 ZERO/FEW-SHOT PROMPTING",
+            "rerank_score": 0.4504520893096924
+          },
+          {
+            "page": 9,
+            "section": "4 ZERO/FEW-SHOT PROMPTING",
+            "rerank_score": 0.4684995114803314
+          },
+          {
+            "page": 10,
+            "section": "4 ZERO/FEW-SHOT PROMPTING",
+            "rerank_score": 0.4713008403778076
+          },
+          {
+            "page": 18,
+            "section": "REFERENCE",
+            "rerank_score": 0.4949629306793213
+          }
+        ],
+        "relevant": null,
+        "p_at_1": null,
+        "mrr_at_5": null
+      },
+      "answer": "문서에 CM3 모델이 어떤 데이터를 기반으로 훈련되었는지에 대한 직접적인 정보가 없습니다. 모델의 훈련 데이터에 관한 설명은 제공된 문맥에서 나타나지 않습니다. 따라서 문서에 관련 정보가 없습니다.[Context]",
+      "answer_chars": 119,
+      "eval_count": 62,
+      "eval_count_missing": false,
+      "ttft": 13.5982,
+      "tps": 43.9604,
+      "truncated": 0,
+      "prompt_tokens_est": 2819,
+      "overflow": 0,
+      "judge": 1,
+      "judge_excluded": false,
+      "judge_error": null,
+      "error": null
+    }
+  ],
+  "aggregates": {
+    "scorable_count": 4,
+    "p_at_1": 0.0,
+    "mrr_at_5": 0.0,
+    "latency_question_count": 7,
+    "avg_ttft": 16.4318,
+    "avg_tps": 49.0248,
+    "avg_answer_chars": 446.2857,
+    "avg_eval_count": 283.7143,
+    "truncated_ratio": 0.1429,
+    "truncated_count": 1,
+    "overflow_ratio": 0.0,
+    "overflow_count": 0,
+    "judge_avg": 3.3333,
+    "judge_count": 3,
+    "eval_count_missing_count": 0,
+    "degenerate": [
+      {
+        "source": "golden",
+        "row": 4,
+        "reason": "빈 엔티티 (expected_key_entities=[])"
+      }
+    ]
+  }
+}
