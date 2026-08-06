@@ -31,6 +31,47 @@ from core.session import SessionManager
 
 logger = logging.getLogger(__name__)
 
+# --- 모델 프리로드 (1회성, 비차단) ---
+# _register_and_finalize 완료 시 기본 Ollama 모델을 백그라운드로 로드하여
+# 첫 쿼리 시 LLM 콜드 스타트 지연을 완화합니다.
+_preload_lock: asyncio.Lock | None = None
+_preload_loop: asyncio.AbstractEventLoop | None = None
+_preload_scheduled: bool = False
+
+
+async def _preload_model() -> None:
+    """기본 Ollama LLM을 프리로드합니다. 실패해도 앱을 중단하지 않으며 태스크 예외를 누출하지 않습니다."""
+    try:
+        from core.model_loader import ModelManager
+
+        await ModelManager.get_llm(DEFAULT_OLLAMA_MODEL)
+        logger.info(f"[RAG] [PRELOAD] 모델 프리로드 완료: {DEFAULT_OLLAMA_MODEL}")
+    except Exception:
+        logger.warning(
+            f"[RAG] [PRELOAD] 모델 프리로드 실패: {DEFAULT_OLLAMA_MODEL}",
+            exc_info=True,
+        )
+
+
+async def _schedule_model_preload() -> None:
+    """모델 프리로드 태스크를 1회만 스케줄링합니다. (이벤트 루프 변경 시 락 재생성)"""
+    global _preload_lock, _preload_loop, _preload_scheduled
+    current_loop = asyncio.get_running_loop()
+    if _preload_lock is not None and _preload_loop is current_loop:
+        lock = _preload_lock
+    else:
+        lock = asyncio.Lock()
+        _preload_lock = lock
+        _preload_loop = current_loop
+    async with lock:
+        if _preload_scheduled:
+            return
+        _preload_scheduled = True
+        try:
+            asyncio.create_task(_preload_model())
+        except Exception:
+            logger.warning("[RAG] [PRELOAD] 프리로드 태스크 생성 실패", exc_info=True)
+
 
 class PipelineBuilder:
     """
@@ -189,6 +230,9 @@ class PipelineBuilder:
 
         if on_progress:
             on_progress(100)
+
+        # 모델 프리로드 (1회성, 비차단 — 첫 쿼리 콜드 스타트 완화)
+        await _schedule_model_preload()
 
 
 async def prepare_query_config_or_build(

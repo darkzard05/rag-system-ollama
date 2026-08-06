@@ -21,8 +21,9 @@ from api.schemas import AggregatedSearchResult, GraphState
 from common.config import (
     ANALYSIS_PROTOCOL,
     GRADING_CONFIG,
+    OLLAMA_NUM_CTX,
 )
-from common.utils import fast_hash
+from common.utils import count_tokens_rough, fast_hash
 from core.model_loader import ModelManager
 from core.session import SessionManager
 
@@ -494,6 +495,35 @@ async def generate(
         return {"response": no_info_msg}
 
     context = format_context(docs) if docs else "일상적인 대화입니다."
+
+    # [CTX 가드] num_ctx 대비 prompt 추정 토큰이 85%를 초과하면 rerank_score가 낮은
+    # 문서부터 제거하여 컨텍스트 초과(overflow)를 방지합니다. (최소 2문서 유지)
+    # chat_history는 generate 프롬프트에 포함되지 않으므로 추정식에서 제외합니다.
+    if docs:
+        query = get_state_attr(state, "input") or ""
+        est = count_tokens_rough(
+            f"{ANALYSIS_PROTOCOL}\n\n[Context]\n{context}\n\n[Question]\n{query}"
+        )
+        token_budget = int(OLLAMA_NUM_CTX * 0.85)
+        if est > token_budget:
+            removed = 0
+            # rerank_score 내림차순(최상위 문서 우선) 사본에서 낮은 점수 문서부터 제거
+            ranked = sorted(
+                docs,
+                key=lambda d: float(d.metadata.get("rerank_score", 0.0)),
+                reverse=True,
+            )
+            while est > token_budget and len(ranked) > 2:
+                ranked.pop()
+                removed += 1
+                context = format_context(ranked)
+                est = count_tokens_rough(
+                    f"{ANALYSIS_PROTOCOL}\n\n[Context]\n{context}\n\n[Question]\n{query}"
+                )
+            # 컨텍스트와 상태에 trim 후 내림차순 결과 반영 (최상위 문서가 앞에 배치)
+            docs = ranked
+            state["relevant_docs"] = ranked
+            logger.info(f"[RAG] [CTX] trimmed {removed} docs, est tokens={est}")
 
     sys_msg = SystemMessage(
         content="전문 문서 분석가입니다. 사용자의 질문 언어에 맞추어 답변하십시오."

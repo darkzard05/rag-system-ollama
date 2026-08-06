@@ -14,13 +14,13 @@ models:
 
   # Ollama 모델의 토큰 생성 제한 (기본값: 4096)
   # -1로 설정하면 모델의 기본 설정 또는 무제한(컨텍스트 윈도우까지)으로 생성합니다.
-  ollama_num_predict: 512
+  ollama_num_predict: 2048
 
   # Ollama 모델의 온도 설정
   temperature: 0.1
 
   # Ollama 모델의 컨텍스트 윈도우 설정
-  num_ctx: 4096
+  num_ctx: 8192
 
   # Ollama 모델의 탑-피 설정
   top_p: 0.8
