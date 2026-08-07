@@ -41,10 +41,21 @@ _preload_scheduled: bool = False
 
 
 async def _preload_model() -> None:
-    """기본 Ollama LLM을 프리로드합니다. 실패해도 앱을 중단하지 않으며 태스크 예외를 누출하지 않습니다."""
+    """임베딩·FlashRank·LLM을 프리로드합니다. 실패해도 앱을 중단하지 않으며 태스크 예외를 누출하지 않습니다."""
     try:
         from core.model_loader import ModelManager
 
+        # 1) 임베더 워밍 — 첫 쿼리 시 임베딩 모델 콜드 스타트(~10s) 방지.
+        # embed_query는 블로킹 HTTP 호출이므로 to_thread로 실행해 이벤트 루프를 막지 않습니다.
+        embedder = await ModelManager.get_embedder(DEFAULT_EMBEDDING_MODEL)
+        await asyncio.to_thread(embedder.embed_query, "warmup")
+        logger.info("[RAG] [PRELOAD] 임베딩 워밍 완료")
+
+        # 2) FlashRank 워밍 — 첫 쿼리 시 리랭커 lazy 로드(~10s) 방지.
+        await ModelManager.get_flashranker()
+        logger.info("[RAG] [PRELOAD] FlashRank 워밍 완료")
+
+        # 3) LLM 프리로드 (기존)
         await ModelManager.get_llm(DEFAULT_OLLAMA_MODEL)
         logger.info(f"[RAG] [PRELOAD] 모델 프리로드 완료: {DEFAULT_OLLAMA_MODEL}")
     except Exception:
