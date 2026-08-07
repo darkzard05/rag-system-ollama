@@ -11,7 +11,7 @@ sys.path.append(str(ROOT_DIR / "src"))
 from src.core.rag_core import RAGSystem
 from src.core.model_loader import ModelManager
 from src.core.session import SessionManager
-from src.common.streaming import StreamingResponseHandler
+from src.api.streaming_handler import StreamingResponseHandler
 from src.common.config import DEFAULT_OLLAMA_MODEL, DEFAULT_EMBEDDING_MODEL
 from src.common.logging_config import setup_logging
 
