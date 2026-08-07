@@ -201,6 +201,9 @@ async def get_async_reranker() -> AsyncSemanticReranker | AsyncCrossEncoderReran
 
             embedder = await ModelManager.get_embedder()
             _async_reranker = AsyncSemanticReranker(embedder)
+            engine = "semantic"
         else:
             _async_reranker = AsyncCrossEncoderReranker()
+            engine = "flashrank"
+        logger.info(f"[RERANK] engine={engine}")
     return _async_reranker

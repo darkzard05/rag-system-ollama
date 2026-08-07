@@ -6,7 +6,7 @@ LangGraph를 사용하여 자가 교정(Self-Correction) RAG 워크플로우를 
 import asyncio
 import copy
 import logging
-import warnings
+import time
 from typing import Any
 
 from langchain_core.callbacks.manager import adispatch_custom_event
@@ -148,6 +148,8 @@ async def retrieve_and_rerank(
     ):
         return {}
 
+    t0 = time.perf_counter()
+
     from core.search_aggregator import AggregationStrategy, SearchResultAggregator
 
     query = get_state_attr(state, "input")
@@ -187,6 +189,8 @@ async def retrieve_and_rerank(
         task_names = list(search_tasks.keys())
         task_results = await asyncio.gather(*search_tasks.values())
         results = dict(zip(task_names, task_results, strict=False))
+
+    search_ms = (time.perf_counter() - t0) * 1000
 
     logger.debug(
         f"[RAG] [RETRIEVE] 검색 결과 확보 (BM25: {len(results.get('bm25', []))}, Vector: {len(results.get('faiss', []))})"
@@ -250,6 +254,8 @@ async def retrieve_and_rerank(
         for r in aggregated[:dynamic_top_k]
     ]
 
+    aggregate_ms = (time.perf_counter() - t0) * 1000
+
     if not final_docs:
         q_len = len(query) if query else 0
         logger.warning(
@@ -272,6 +278,7 @@ async def retrieve_and_rerank(
             query=query,
             top_k=rerank_top_k,
         )
+    rerank_ms = (time.perf_counter() - t0) * 1000
     logger.info(
         f"[RAG] [RETRIEVE] 리랭킹 선별 완료: {len(final_docs)}개 후보 중 {len(ranked_docs)}개 최종 선별"
     )
@@ -284,6 +291,14 @@ async def retrieve_and_rerank(
     )
     logger.info(
         f"[RAG] [RETRIEVE] 하이브리드 검색 및 문맥 보강 완료: 최종 {len(merged_context_docs)}개 섹션 구성"
+    )
+
+    merge_ms = (time.perf_counter() - t0) * 1000
+    total_ms = merge_ms
+    logger.info(
+        f"[RAG] [RETRIEVE][TIMING] search_ms={search_ms:.1f} "
+        f"aggregate_ms={aggregate_ms:.1f} rerank_ms={rerank_ms:.1f} "
+        f"merge_ms={merge_ms:.1f} total_ms={total_ms:.1f}"
     )
 
     return {"relevant_docs": merged_context_docs}
@@ -317,6 +332,8 @@ async def grade_documents(
     ):
         return {}
 
+    grade_start = time.perf_counter()
+
     retry_count = get_state_attr(state, "retry_count", 0)
     if retry_count >= 2:
         logger.info(
@@ -342,6 +359,8 @@ async def grade_documents(
             "신뢰도 높은 지식이 발견되어 즉시 답변 생성을 시작합니다.",
             session_id=_get_session_id(config),
         )
+        grade_ms = (time.perf_counter() - grade_start) * 1000
+        logger.info(f"[RAG] [GRADE][TIMING] grade_ms={grade_ms:.1f} short_circuit=True")
         return {"intent": "generate"}
 
     query = get_state_attr(state, "input")
@@ -412,6 +431,10 @@ async def grade_documents(
                 "검색된 지식의 관련성이 확인되었습니다.",
                 session_id=_get_session_id(config),
             )
+            grade_ms = (time.perf_counter() - grade_start) * 1000
+            logger.info(
+                f"[RAG] [GRADE][TIMING] grade_ms={grade_ms:.1f} short_circuit=False"
+            )
             return {"intent": "generate"}
         else:
             optimized = parsed.optimized_query or query
@@ -422,6 +445,10 @@ async def grade_documents(
                 "검색 결과가 부적합하여 질문 재구성을 시도합니다.",
                 session_id=_get_session_id(config),
             )
+            grade_ms = (time.perf_counter() - grade_start) * 1000
+            logger.info(
+                f"[RAG] [GRADE][TIMING] grade_ms={grade_ms:.1f} short_circuit=False"
+            )
             return {
                 "intent": "transform",
                 "search_queries": [optimized],
@@ -430,6 +457,10 @@ async def grade_documents(
 
     except (RuntimeError, ValueError, json.JSONDecodeError) as e:
         logger.warning(f"[RAG] [GRADE] 평가 실패, 기본값(NO) 적용하여 재구성 시도: {e}")
+        grade_ms = (time.perf_counter() - grade_start) * 1000
+        logger.info(
+            f"[RAG] [GRADE][TIMING] grade_ms={grade_ms:.1f} short_circuit=False"
+        )
         return {"intent": "transform", "retry_count": retry_count + 1}
 
 
@@ -537,6 +568,9 @@ async def generate(
     full_thought = ""
     last_metadata = {}
 
+    gen_start = time.perf_counter()
+    ttft_ms: float | None = None
+
     async with ModelManager.inference_session():
         async for chunk in llm.astream([sys_msg, human_msg], config=config):
             if hasattr(llm, "_convert_chunk_to_thought_and_content"):
@@ -549,6 +583,8 @@ async def generate(
                     chunk.content if hasattr(chunk, "content") else str(chunk)
                 )
                 thought_chunk = ""
+            if content_chunk and ttft_ms is None:
+                ttft_ms = (time.perf_counter() - gen_start) * 1000
             if (content_chunk or thought_chunk) and writer is not None:
                 await adispatch_custom_event(
                     "response_chunk",
@@ -562,6 +598,12 @@ async def generate(
                 full_response += content_chunk
             if hasattr(chunk, "response_metadata") and chunk.response_metadata:
                 last_metadata = chunk.response_metadata
+
+    generate_ms = (time.perf_counter() - gen_start) * 1000
+    logger.info(
+        f"[RAG] [GENERATE][TIMING] generate_ms={generate_ms:.1f} "
+        f"ttft_ms={(ttft_ms or 0.0):.1f} output_chars={len(full_response)}"
+    )
 
     input_tokens = last_metadata.get("prompt_eval_count", 0)
     return {
@@ -701,15 +743,10 @@ async def build_graph() -> Any:
         workflow.add_edge("rewrite_query", "retrieve")
         workflow.add_edge("generate", END)
 
-        # LangChain pending deprecation warning (allowed_objects 기본값 변경 예정) 침묵화
-        warnings.filterwarnings(
-            "ignore",
-            category=DeprecationWarning,
-            message=".*allowed_objects.*",
-        )
         from langgraph.checkpoint.memory import InMemorySaver
+        from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
 
-        memory = InMemorySaver()
+        memory = InMemorySaver(serde=JsonPlusSerializer(pickle_fallback=True))
 
         _graph_cache.compiled = workflow.compile(checkpointer=memory)
         return _graph_cache.compiled
