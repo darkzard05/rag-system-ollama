@@ -9,6 +9,7 @@ import asyncio
 import itertools
 import logging
 import os
+import re
 from collections import OrderedDict
 from typing import TYPE_CHECKING, Any
 
@@ -320,6 +321,18 @@ def _fetch_available_models_cached() -> list[str]:
         return []
 
 
+def _keep_alive_seconds() -> int:
+    """OLLAMA_KEEP_ALIVE(기본 "30m")를 초 단위 정수로 변환.
+
+    OllamaEmbeddings.keep_alive는 ``int | None`` 타입이므로 문자열을 그대로
+    넘기면 pydantic 검증 오류가 발생한다. 파싱 실패 시 1800초(30분)로 폴백한다.
+    """
+    match = re.fullmatch(r"(\d+)m", OLLAMA_KEEP_ALIVE.strip())
+    if match:
+        return int(match.group(1)) * 60
+    return 1800
+
+
 def load_embedding_model(
     embedding_model_name: str | None = None,
 ) -> Any:
@@ -356,6 +369,7 @@ def load_embedding_model(
             result = OllamaEmbeddings(
                 model=clean_model_name,
                 base_url=OLLAMA_BASE_URL,
+                keep_alive=_keep_alive_seconds(),
             )
 
             SessionManager.set("current_embedding_device", "Ollama Backend")
