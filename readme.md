@@ -149,6 +149,8 @@ rag-system-ollama/
 ```powershell
 # Pull the recommended models
 ollama pull qwen3:4b-instruct-2507-q4_K_M
+ollama pull nomic-embed-text-v2-moe  # default embedding model (config.yml: models.default_embedding)
+# Optional (legacy embedding model):
 ollama pull nomic-embed-text
 ```
 
