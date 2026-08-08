@@ -609,20 +609,20 @@ _SPLASH_HTML = """
 
 
 def _ensure_ui_globals() -> None:
-    """Pass-1-safe UI bootstrap: session + bridge sync + custom CSS injection."""
+    """Pass-1-safe UI bootstrap: session init + bridge sync."""
     from core.session import SessionManager
     from ui.bridge import UIBridge
-    from ui.ui import inject_custom_css
 
     SessionManager.init_session()
     UIBridge.sync_session()
-    inject_custom_css()
 
 
 def main() -> None:
     from core.session import SessionManager
+    from ui.ui import inject_custom_css
 
-    _ensure_ui_globals()
+    inject_custom_css()  # light import (ui.ui only); CSS lands in the first frame
+    _ensure_ui_globals()  # heavy session init AFTER css is already streamed
 
     # 부트 스플래시: 1차 패스에서 즉시 시각 피드백 후 1회 rerun (2차 패스에서 본 UI 렌더)
     if not st.session_state.get("_bootstrapped"):
