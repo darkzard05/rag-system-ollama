@@ -39,7 +39,7 @@
 
 ## 🛠️ Tech Stack
 <!-- TECH_STACK_START -->
-- **Streamlit**: 1.54.0
+- **Streamlit**: 1.60.0
 - **LangChain**: 0.3.18
 - **LangGraph**: 0.2.74
 - **PyMuPDF4LLM**: latest
