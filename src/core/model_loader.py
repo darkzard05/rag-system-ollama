@@ -30,6 +30,7 @@ from common.config import (
     OLLAMA_NUM_CTX,
     OLLAMA_NUM_PREDICT,
     OLLAMA_TEMPERATURE,
+    OLLAMA_THINKING,
     OLLAMA_TOP_P,
 )
 from common.exceptions import EmbeddingModelError
@@ -479,6 +480,7 @@ def load_llm(model_name: str) -> Any:
             top_p=OLLAMA_TOP_P,
             num_ctx=OLLAMA_NUM_CTX,
             temperature=OLLAMA_TEMPERATURE,
+            reasoning=OLLAMA_THINKING,
             base_url=OLLAMA_BASE_URL,
             keep_alive=OLLAMA_KEEP_ALIVE,
             # timeout 및 기타 추가 인자는 딕셔너리로 안전하게 전달하거나

@@ -64,6 +64,11 @@ OLLAMA_TOP_P: float = _get_env("OLLAMA_TOP_P", _models_config.get("top_p", 0.8),
 OLLAMA_KEEP_ALIVE: str = _get_env(
     "OLLAMA_KEEP_ALIVE", _models_config.get("keep_alive", "30m"), str
 )
+OLLAMA_THINKING: bool = _get_env(
+    "OLLAMA_THINKING",
+    _models_config.get("thinking", True),
+    lambda x: str(x).lower() == "true",
+)
 
 MAX_CONCURRENT_INFERENCE: int = _get_env(
     "MAX_CONCURRENT_INFERENCE", _models_config.get("max_concurrent_inference", 1), int

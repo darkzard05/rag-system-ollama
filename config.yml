@@ -24,6 +24,9 @@ models:
 
   # Ollama 모델의 탑-피 설정
   top_p: 0.8
+
+  # 사고 과정(reasoning) 추출 활성화 — reasoning 지원 모델(qwen3*/deepseek*)에서만 의미 있음. false로 비활성화 가능
+  thinking: true
   
   # 모델 캐시 디렉터리
   cache_dir: ".model_cache"
