@@ -74,7 +74,10 @@ async def test_chat_scroll():
             pytest.skip(f"Streamlit app not running at {BASE_URL} (e2e skipped): {e}")
 
         print("Successfully connected to the app.")
-        await page.wait_for_timeout(3000)
+        await page.wait_for_selector('[data-testid="stChatInput"]', timeout=60000)
+        # settle: let the chat column's scroll container (stColumn > stVerticalBlock)
+        # and fragment-driven layout finish rendering before asserting geometry.
+        await page.wait_for_timeout(2000)
 
         # 1. Global Lock (main window must not scroll)
         app_style = await page.evaluate(

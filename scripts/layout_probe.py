@@ -621,7 +621,19 @@ async def _upload_leg(
         else "timeout"
     )
 
+    # Final with settle: a transient mid-re-render blip (Streamlit element-diff
+    # during the terminal-state rerun) must not fail the leg. Re-measure until
+    # the full frame passes or 3 attempts (~3s settle); the last measurement is
+    # authoritative, so a genuinely persistent break still fails.
     final = await _measure_chain(page)
+    final_attempts = 1
+    while final_attempts < 3:
+        frame_check = _frame(final, mobile, subset=False)
+        if _frame_ok(frame_check):
+            break
+        await asyncio.sleep(1.5)
+        final = await _measure_chain(page)
+        final_attempts += 1
     png_path = await _save_png(page, out_dir, png_name)
     t0f = _frame(t0, mobile, subset=True)
     t6f = _frame(t6, mobile, subset=True)
