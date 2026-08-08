@@ -30,6 +30,18 @@ class FakeSessionState(dict):
         self[key] = value
 
 
+def _make_test_pdf(text: str = "test") -> bytes:
+    """fitz로 최소한의 유효한 PDF 바이트를 생성합니다 (upload 검증 게이트 통과용)."""
+    import fitz
+
+    doc = fitz.open()
+    page = doc.new_page()
+    page.insert_text((72, 72), text)
+    data = doc.tobytes()
+    doc.close()
+    return data
+
+
 class TestMainBackgroundTasks(unittest.TestCase):
     def setUp(self):
         SessionManager.reset_all_state("test_session")
@@ -70,8 +82,8 @@ class TestMainBackgroundTasks(unittest.TestCase):
         assert any("RAG Build Failed Mock Error" in m["content"] for m in messages)
 
     def test_on_file_upload_same_name_different_hash_triggers_new_analysis(self):
-        old_bytes = b"previous content"
-        new_bytes = b"new content changed"
+        old_bytes = _make_test_pdf("old")
+        new_bytes = _make_test_pdf("new")
 
         SessionManager.set(
             "last_uploaded_file_name", "test.pdf", session_id="test_session"
@@ -116,7 +128,7 @@ class TestMainBackgroundTasks(unittest.TestCase):
             mock_success.assert_called_once()
 
     def test_on_file_upload_same_name_same_hash_skips_rebuild(self):
-        file_bytes = b"same content"
+        file_bytes = _make_test_pdf("same")
         content_hash = compute_file_hash("", data=file_bytes)
 
         SessionManager.set(
@@ -141,6 +153,34 @@ class TestMainBackgroundTasks(unittest.TestCase):
         assert not SessionManager.get("new_file_uploaded", session_id="test_session")
         mock_success.assert_called_once()
         assert "이미 업로드된 동일한 문서" in mock_success.call_args.args[0]
+
+    def test_on_file_upload_rejects_corrupt_pdf_without_mutation(self):
+        garbage_bytes = b"not a pdf"
+        sentinel_path = "sentinel_unreplaced.pdf"
+
+        SessionManager.set("pdf_file_path", sentinel_path, session_id="test_session")
+
+        uploaded = io.BytesIO(garbage_bytes)
+        uploaded.name = "test.pdf"
+        uploaded.type = "application/pdf"
+        uploaded.size = len(garbage_bytes)
+
+        fake_state = FakeSessionState({"pdf_uploader": uploaded})
+        with (
+            patch("main.st.session_state", fake_state),
+            patch("infra.notification_system.SystemNotifier.success") as mock_success,
+        ):
+            on_file_upload()
+
+        # 검증 실패는 st.error 대신 타임라인 메시지로 기록되어야 한다 (레이아웃 유지).
+        messages = SessionManager.get_messages(session_id="test_session")
+        assert any("손상되었거나 읽을 수 없는 PDF" in m["content"] for m in messages)
+        assert not SessionManager.get("new_file_uploaded", session_id="test_session")
+        assert (
+            SessionManager.get("pdf_file_path", session_id="test_session")
+            == sentinel_path
+        )
+        mock_success.assert_not_called()
 
     def test_stream_chunks_times_out_on_hanging_rag_stream(self):
         async def never_returning_astream(*args, **kwargs):
