@@ -7,7 +7,7 @@
     --spacing-lg: 24px;
     --spacing-xl: 32px;
     --sidebar-width: 300px;
-    /* Streamlit 1.54 injects NO theme CSS variables globally, so the app's
+    /* Streamlit 1.60 DOM injects NO theme CSS variables globally, so the app's
        var(--background-color) / var(--primary-color) references currently resolve to
        transparent. Define them here. The app auto-follows the OS color scheme
        (.streamlit/config.toml deliberately has no [theme]), so mirror Streamlit's
@@ -146,7 +146,7 @@
 }
 
 /* PDF controls bar: auto-height bar pinned to the bottom of the PDF column.
-   Verified DOM contract (Streamlit 1.54, runtime env rag-ollama): @st.fragment runs its
+   Verified DOM contract (Streamlit 1.60 DOM, runtime env rag-ollama): @st.fragment runs its
    body inside st.container() (streamlit/runtime/fragment.py) so the frontend renders
    the fragment as ONE stLayoutWrapper direct child of the column stVerticalBlock, with the
    viewer element and the controls nested as siblings inside its inner stVerticalBlock
@@ -194,7 +194,7 @@
    laid out at natural height (flex: 0 0 auto). Applying overflow-y:auto to each
    message wrapper (old approach) created N equal-height slices with per-message
    micro-scrollbars and clipped content.
-   NOTE: DOM contract pinned to Streamlit 1.54 (see requirements/base.txt). */
+   NOTE: DOM contract pinned to Streamlit 1.60 DOM (see requirements/base.txt). */
 
 [data-testid="stMainBlockContainer"] [data-testid="stColumn"]:last-child
 > [data-testid="stVerticalBlock"] {
@@ -212,7 +212,7 @@
     overflow: visible !important;
 }
 
-/* st.chat_input renders INLINE at its script position (Streamlit 1.54 DOM contract:
+/* st.chat_input renders INLINE at its script position (Streamlit 1.60 DOM contract:
    nested in a column => position="inline"), wrapped in an stElementContainer that is a
    DIRECT child of the chat column's scroll container (stVerticalBlock). Sticky must live
    on this wrapper — it has travel room inside the scrollport. Sticky on the inner
