@@ -207,7 +207,13 @@ class StreamingResponseHandler:
                                 chunk_obj, "additional_kwargs", {}
                             )
                             if not thought and additional_kwargs:
-                                thought = additional_kwargs.get("thinking", "")
+                                thought = (
+                                    additional_kwargs.get("reasoning_content")
+                                    or additional_kwargs.get("reasoning")
+                                    or additional_kwargs.get("thinking")
+                                    or additional_kwargs.get("thought")
+                                    or ""
+                                )
 
                             if isinstance(content, list):
                                 actual_content = ""

@@ -6,6 +6,11 @@ from langchain_ollama import ChatOllama
 
 logger = logging.getLogger(__name__)
 
+# reasoning 지원 모델 접두사 허용 목록. Ollama의 think 파라미터를 지원하지 않는
+# 일반 모델에 reasoning=True를 넘기면 요청이 거부될 수 있어, allowlist 외에는
+# reasoning을 ChatOllama에 전달하지 않는다.
+_THINKING_PREFIXES = ("qwen3", "deepseek", "r1")
+
 
 class DeepThinkingChatOllama(ChatOllama):
     """
@@ -14,10 +19,17 @@ class DeepThinkingChatOllama(ChatOllama):
     """
 
     def __init__(self, **kwargs: Any):
-        # [표준] stream_content_blocks 옵션을 활성화하여 사고 과정을 분리해서 받도록 설정
-        # 이 옵션이 켜지면 Ollama API의 reasoning 필드가 content_blocks로 들어옵니다.
-        if "stream_content_blocks" not in kwargs:
-            kwargs["stream_content_blocks"] = True
+        # [F2b] reasoning은 kwargs에서 분리해 처리한다. langchain-ollama 0.3.10에서
+        # reasoning은 Ollama 요청의 'think' 파라미터로 매핑된다 (chat_models.py:680).
+        # 기본값은 True이되 allowlist 외 모델에는 전달하지 않아 think 미지원 모델을 보호한다.
+        reasoning = kwargs.pop("reasoning", None)
+        if reasoning is None:
+            reasoning = True
+        model_name = str(kwargs.get("model", "")).lower()
+        if reasoning is True and any(
+            prefix in model_name for prefix in _THINKING_PREFIXES
+        ):
+            kwargs["reasoning"] = reasoning
         super().__init__(**kwargs)
 
     def _convert_chunk_to_thought_and_content(
@@ -66,9 +78,10 @@ class DeepThinkingChatOllama(ChatOllama):
             content = chunk.content
 
         if not thought:
-            # 레거시 DeepSeek-R1 등에서 사용하던 필드들 체크
+            # reasoning_content가 최신 langchain-ollama(0.3.x)의 키, 나머지는 레거시 폴백
             thought = (
-                chunk.additional_kwargs.get("reasoning")
+                chunk.additional_kwargs.get("reasoning_content")
+                or chunk.additional_kwargs.get("reasoning")
                 or chunk.additional_kwargs.get("thinking")
                 or chunk.additional_kwargs.get("thought")
                 or ""
