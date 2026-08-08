@@ -2,7 +2,7 @@
 # Use: pip install -r requirements-win.txt
 
 # Core UI & Utils
-streamlit==1.54.0
+streamlit==1.60.0
 streamlit-pdf-viewer==0.0.30
 pymupdf>=1.25.0
 pymupdf4llm>=0.3.4
