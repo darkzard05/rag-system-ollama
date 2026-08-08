@@ -91,6 +91,7 @@ def render_message(
     wrap_in_container: bool = True,
     msg_index: int = 0,
     is_latest: bool = False,
+    process: dict | None = None,
     **kwargs,
 ) -> None:
     """메시지를 렌더링하는 통합 엔진."""
@@ -167,15 +168,55 @@ def render_message(
                 )
                 st.caption(f"⚡ {total_time:.1f}s · 🔍 {retrieved} chunks · 🤖 {model}")
 
-        # 상세 사고 과정 (LLM reasoning 로그) — 답변·출처 아래, 기본 접힘.
+        # 상세 사고 과정/답변 프로세스 (LLM reasoning 로그 + 파이프라인 진행
+        # 구조) — 답변·출처 아래, 기본 접힘.
         if (
             role == "assistant"
-            and thought
-            and thought.strip()
             and msg_type != "streaming"
+            and (
+                (thought and thought.strip())
+                or bool(
+                    process
+                    and (
+                        process.get("steps")
+                        or process.get("sections")
+                        or process.get("top_scores")
+                        or process.get("perf")
+                    )
+                )
+            )
         ):
             with st.expander("🧠 상세 사고 과정", expanded=False):
-                st.markdown(thought)
+                process = process or {}
+                steps = process.get("steps") or []
+                sections = process.get("sections") or []
+                top_scores = process.get("top_scores") or []
+                perf = process.get("perf") or {}
+
+                if steps:
+                    st.markdown(" · ".join(steps))
+                if sections:
+                    st.caption("📚 " + " · ".join(sections))
+                if top_scores:
+                    st.caption(
+                        "🏷 "
+                        + ", ".join(
+                            f"{s['section']} {s['score']:.3f}" for s in top_scores
+                        )
+                    )
+                parts = []
+                if isinstance(perf.get("total_time"), (int, float)):
+                    parts.append(f"{perf['total_time']:.1f}s")
+                if isinstance(perf.get("tps"), (int, float)):
+                    parts.append(f"{perf['tps']:.1f} tok/s")
+                if perf.get("input_token_count") is not None:
+                    parts.append(f"{perf['input_token_count']} tok")
+                if parts:
+                    st.caption("⚡ " + " · ".join(parts))
+
+                if thought and thought.strip():
+                    st.markdown("**사고 과정**")
+                    st.markdown(thought)
 
 
 def _cancel_rebuild(sid: str) -> None:
@@ -338,6 +379,19 @@ def _render_unified_timeline(current_sid: str) -> None:
                 ) as status:
                     if thought:
                         status.write(thought)
+                    # ui.components 내부 순환 의존을 피하기 위해 lazy import
+                    # (모듈 레벨로 올리지 말 것 — chat.py:456과 동일한 이유).
+                    process_steps = msg.get("process_steps", [])
+                    if process_steps:
+                        from ui.components.streaming import _build_process
+
+                        process = _build_process(msg)
+                        if process.get("steps"):
+                            status.write(" · ".join(process["steps"]))
+                    # 빈 박스 방지: thought·단계가 모두 없어도 "준비 중..."
+                    # placeholder로 본문이 절대 비어 보이지 않게 한다.
+                    if not thought and not process_steps:
+                        status.caption("준비 중...")
 
                 # 스트리밍 내용 표시 (커서 포함)
                 display_content = msg.get("content", "")
@@ -371,6 +425,7 @@ def _render_unified_timeline(current_sid: str) -> None:
             msg_id=msg.get("msg_id"),
             is_latest=is_latest,
             error=msg.get("error"),
+            process=msg.get("process"),
         )
 
 
