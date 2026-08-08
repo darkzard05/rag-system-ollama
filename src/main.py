@@ -372,6 +372,22 @@ def _update_qa_chain(session_id: str | None = None) -> None:
         SessionManager.set("rag_build_complete_flag", True, session_id=sid)
 
 
+def _post_upload_error(error_msg: str, session_id: str | None = None) -> None:
+    """업로드 검증 실패를 타임라인 메시지로 전달합니다 (메인 레벨 요소 삽입 금지).
+
+    on_file_upload는 _render_app_layout보다 먼저 실행되므로 st.error(...)는
+    메인 블록 상단(두 컬럼 위)에 렌더되어 채팅 스크롤러를 아래로 밀어낸다.
+    실패 메시지는 세션 상태에 기록하고 chat 컬럼 내부의 타임라인 fragment가
+    렌더링하도록 해 레이아웃을 그대로 유지한다. (QA-실패 패턴과 동일)
+    """
+    from core.session import SessionManager
+
+    sid = session_id or SessionManager.get_session_id()
+    # error_msg는 이미 "❌ " 접두사를 포함하므로 중복해서 붙이지 않는다.
+    SessionManager.add_status_log(error_msg, session_id=sid)
+    SessionManager.add_message("assistant", error_msg, session_id=sid)
+
+
 def on_file_upload() -> None:
     from core.document_processor import compute_file_hash
     from core.session import SessionManager
@@ -382,12 +398,14 @@ def on_file_upload() -> None:
         return
 
     if uploaded_file.type != "application/pdf":
-        st.error("❌ 올바른 PDF 파일이 아닙니다. PDF 형식의 파일을 업로드해주세요.")
+        _post_upload_error(
+            "❌ 올바른 PDF 파일이 아닙니다. PDF 형식의 파일을 업로드해주세요."
+        )
         return
 
     file_size_mb = uploaded_file.size / (1024 * 1024)
     if file_size_mb > MAX_FILE_SIZE_MB:
-        st.error(
+        _post_upload_error(
             f"❌ 파일 크기가 너무 큽니다 ({file_size_mb:.2f} MB). {MAX_FILE_SIZE_MB}MB 이하의 파일을 업로드해주세요."
         )
         return
@@ -395,6 +413,7 @@ def on_file_upload() -> None:
     last_file_name = SessionManager.get("last_uploaded_file_name")
     last_file_hash = SessionManager.get("file_hash")
 
+    file_bytes = b""
     try:
         # uploaded_file는 BytesIO와 유사한 객체이므로 포인터를 리셋하여 전체 바이트를 계산합니다.
         uploaded_file.seek(0)
@@ -403,6 +422,25 @@ def on_file_upload() -> None:
         uploaded_hash = compute_file_hash("", data=file_bytes)
     except Exception:
         uploaded_hash = ""
+
+    # [확장자 위조 방지] .pdf 확장자지만 실제로는 PDF가 아닌 바이트를 차단한다.
+    # 손상된 파일이 temp에 복사되거나 빌드가 시작되면 뷰어/파이프라인이 크래시
+    # 하므로, 여기서 즉시 검증하고 실패 시 아무 상태도 바꾸지 않는다.
+    try:
+        import fitz  # lazy import: 검증이 필요한 시점에만 로드
+
+        if not file_bytes:
+            raise ValueError("PDF 파일이 비어 있습니다.")
+        with fitz.open(stream=file_bytes, filetype="pdf") as upload_doc:
+            page_count = len(upload_doc)
+        if page_count < 1:
+            raise ValueError("PDF 파일에 페이지가 없습니다.")
+    except Exception as e:
+        logger.warning(f"손상되었거나 읽을 수 없는 PDF 업로드 차단: {e}")
+        _post_upload_error(
+            "❌ 손상되었거나 읽을 수 없는 PDF 파일입니다. 올바른 PDF 파일을 업로드해주세요."
+        )
+        return
 
     if uploaded_file.name != last_file_name or uploaded_hash != last_file_hash:
         sid = SessionManager.get_session_id()

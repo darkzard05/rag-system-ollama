@@ -34,19 +34,28 @@ def _get_pdf_bytes(pdf_path: str) -> bytes:
 
 
 @safe_cache_data(ttl=300, show_spinner=False)
-def _get_pdf_total_pages(pdf_path: str) -> int:
+def _get_pdf_total_pages(pdf_path: str) -> int | None:
+    """PDF 총 페이지 수 반환. 열 수 없으면 None (절대 raise하지 않음).
+
+    st.cache_data 캐시 계층은 캐시 함수가 raise한 예외를 재전파하므로
+    손상된 PDF가 스크립트를 죽이지 않도록 반드시 여기서 소화한다.
+    """
     import fitz
 
     if not os.path.exists(pdf_path):
-        return 0
+        return None
     try:
         with fitz.open(pdf_path) as doc:
             return len(doc)
+    except PDFProcessingError as e:
+        logger.error(f"PDF 페이지 수 조회 실패: {e}")
+        return None
     except (RuntimeError, ValueError) as e:
         logger.error(f"PDF 페이지 수 조회 실패: {e}")
-        raise PDFProcessingError(
-            "PDF 페이지 수 조회 실패", details={"error": str(e)}
-        ) from e
+        return None
+    except Exception as e:
+        logger.error(f"PDF 페이지 수 조회 실패: {e}", exc_info=True)
+        return None
 
 
 # ---------------------------------------------------------------------------
@@ -85,6 +94,8 @@ def _on_next_click_callback():
     pdf_path = SessionManager.get("pdf_file_path", "")
     if pdf_path:
         total = _get_pdf_total_pages(os.path.abspath(pdf_path))
+        if not total:
+            return
         _on_next_click(total)
 
 
@@ -113,8 +124,15 @@ def _resolve_pdf_state() -> dict | None:
     pdf_path = os.path.abspath(pdf_path_raw)
     file_hash = SessionManager.get("file_hash", "none")
 
-    total_pages = _get_pdf_total_pages(pdf_path)
-    if total_pages == 0:
+    # 캐시 계층(st.cache_data)이 예외를 재전파할 수 있으므로 호출부에서도
+    # 이중 안전망을 둔다. get_pdf_total_pages 자체는 raise하지 않는다.
+    try:
+        total_pages = _get_pdf_total_pages(pdf_path)
+    except Exception as e:
+        logger.error(f"PDF 페이지 수 조회 중 오류: {e}", exc_info=True)
+        total_pages = None
+
+    if not total_pages:
         return None
 
     # Handle external page navigation (e.g., from chat references)
@@ -185,13 +203,30 @@ def render_pdf_area():
     기록한 pdf_target_page/pdf_annotations를 최대 2초 내에 소비하여 자동 점프와
     하이라이트를 화면에 반영한다. 뷰어와 컨트롤이 한 fragment이므로 컨트롤
     클릭도 뷰어를 함께 재실행한다.
+
+    손상/지원 불가 PDF는 스크립트를 죽이지 않고 뷰어 영역 안에서 오류로
+    격리하여 렌더링한다. 어떤 예외도 이 함수 밖으로 새어나가지 않는다.
     """
-    state = _resolve_pdf_state()
-    if not state:
-        st.info(MSG_PDF_VIEWER_NO_FILE)
-        return
-    _display_pdf_viewer(state["pdf_path"], state["current_page"], state["file_hash"])
-    _display_pdf_controls(state["current_page"], state["total_pages"])
+    try:
+        state = _resolve_pdf_state()
+        if state is None:
+            pdf_path = SessionManager.get("pdf_file_path")
+            if pdf_path and os.path.exists(os.path.abspath(str(pdf_path))):
+                st.error(
+                    "⚠️ PDF 파일을 열 수 없습니다. 파일이 손상되었거나 지원되지 않는 형식입니다."
+                )
+            else:
+                st.info(MSG_PDF_VIEWER_NO_FILE)
+            return
+        _display_pdf_viewer(
+            state["pdf_path"], state["current_page"], state["file_hash"]
+        )
+        _display_pdf_controls(state["current_page"], state["total_pages"])
+    except Exception as e:
+        logger.error(f"PDF 뷰어 영역 오류: {e}", exc_info=True)
+        st.error(
+            "⚠️ PDF 파일을 열 수 없습니다. 파일이 손상되었거나 지원되지 않는 형식입니다."
+        )
 
 
 def _display_pdf_viewer(pdf_path, current_page, file_hash):
