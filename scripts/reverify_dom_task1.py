@@ -3,6 +3,7 @@ import json
 import logging
 import sys
 from pathlib import Path
+
 from playwright.async_api import TimeoutError, async_playwright
 
 # Configure logging
@@ -17,6 +18,7 @@ logger = logging.getLogger(__name__)
 BASE_URL = "http://127.0.0.1:8501"
 TIMEOUT = 30000  # 30 seconds
 EVIDENCE_FILE = Path(".omo/evidence/task-1-dom-reverify.txt")
+
 
 async def collect_dom_metrics(page):
     logger.info("Collecting DOM metrics for Task 1...")
@@ -54,16 +56,16 @@ async def collect_dom_metrics(page):
             const root = document.querySelector('[data-testid="stMainBlockContainer"]');
             const tree = root ? getElementMetrics(root) : null;
 
-            // Trace the specific 7-step chain claim
-            // stMainBlockContainer > stVerticalBlock > stLayoutWrapper > stHorizontalBlock > stColumn > stVerticalBlock > stLayoutWrapper > stVerticalBlock(scrollable)
+            // Trace the measured 1.60 chain (probe links record:
+            // .omo/evidence/fix-first-run-upload-layout-collapse/post-fix3/layout-probe.json)
+            // stMainBlockContainer > stVerticalBlock > stLayoutWrapper > stHorizontalBlock > stColumn > stVerticalBlock(scrollable)
             const chain = [];
             let current = root;
             const targetChain = [
-                'stMainBlockContainer', 'stVerticalBlock', 'stLayoutWrapper', 
-                'stHorizontalBlock', 'stColumn', 'stVerticalBlock', 
-                'stLayoutWrapper', 'stVerticalBlock'
+                'stMainBlockContainer', 'stVerticalBlock', 'stLayoutWrapper',
+                'stHorizontalBlock', 'stColumn', 'stVerticalBlock'
             ];
-            
+
             // This is a simplified trace. In reality, we should search for the path.
             function findPath(el, targetIdx, path) {
                 if (!el) return null;
@@ -82,7 +84,7 @@ async def collect_dom_metrics(page):
                 }
                 return null;
             }
-            
+
             const actualChain = findPath(root, 0, []);
 
             return { tree, actualChain };
@@ -174,6 +176,7 @@ async def collect_dom_metrics(page):
         logger.error(f"Error collecting metrics: {e}")
         raise e
 
+
 async def main():
     # Ensure evidence directory exists
     EVIDENCE_FILE.parent.mkdir(parents=True, exist_ok=True)
@@ -182,7 +185,9 @@ async def main():
         logger.info(f"Launching browser and navigating to {BASE_URL}...")
         try:
             browser = await p.chromium.launch(headless=True)
-            context = await browser.new_context(viewport={"width": 1920, "height": 1080})
+            context = await browser.new_context(
+                viewport={"width": 1920, "height": 1080}
+            )
             page = await context.new_page()
 
             try:
@@ -222,10 +227,16 @@ async def main():
                 f.write("\n\n")
 
                 f.write("--- 6. Chain Verification ---\n")
-                f.write("Claimed Chain: stMainBlockContainer > stVerticalBlock > stLayoutWrapper > stHorizontalBlock > stColumn > stVerticalBlock > stLayoutWrapper > stVerticalBlock(scrollable)\n")
+                f.write(
+                    "Claimed Chain: stMainBlockContainer > stVerticalBlock > stLayoutWrapper > stHorizontalBlock > stColumn > stVerticalBlock(scrollable)\n"
+                )
                 if metrics["actualChain"]:
-                    f.write(f"Actual Found Chain: {' > '.join(metrics['actualChain'])}\n")
-                    match = "MATCH" if len(metrics["actualChain"]) >= 8 else "DISCREPANCY"
+                    f.write(
+                        f"Actual Found Chain: {' > '.join(metrics['actualChain'])}\n"
+                    )
+                    match = (
+                        "MATCH" if len(metrics["actualChain"]) >= 6 else "DISCREPANCY"
+                    )
                     f.write(f"Result: {match}\n")
                 else:
                     f.write("Actual Found Chain: NOT FOUND\n")
@@ -238,6 +249,7 @@ async def main():
         except Exception as e:
             logger.error(f"❌ FAIL: An unexpected error occurred: {e}")
             sys.exit(1)
+
 
 if __name__ == "__main__":
     asyncio.run(main())

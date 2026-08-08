@@ -1,7 +1,7 @@
 """
 Layout Scroll Fix — DOM Verification Script
 
-Verifies that the independent-column-scroll fix took effect (Streamlit 1.54 DOM):
+Verifies that the independent-column-scroll fix took effect (Streamlit 1.60 DOM):
 1. stMainBlockContainer exists
 2. Chat column stVerticalBlock is the single scroll container (overflow-y: auto)
 3. Message wrappers are natural height (no per-message micro-scrollbars)
@@ -9,7 +9,7 @@ Verifies that the independent-column-scroll fix took effect (Streamlit 1.54 DOM)
 5. Body / app overflow is hidden (page lock)
 
 NOTE: older checks for `stVerticalBlockBorderWrapper` were removed — that node
-does not exist in Streamlit 1.54, so the previous script could never pass.
+does not exist in Streamlit 1.60, so the previous script could never pass.
 """
 
 import asyncio
