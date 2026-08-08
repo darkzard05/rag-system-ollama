@@ -514,12 +514,20 @@ def _evaluate_mobile(measure: dict[str, Any]) -> dict[str, Any]:
 
 
 async def _capture_splash(page: Page, out_dir: Path, deadline: float) -> dict[str, Any]:
-    """Record the pass-1 splash frame as soon as the main block exists.
+    """Record the pass-1 splash frame - the LAST pre-gate sample, not the first.
 
     Splash = ``stMainBlockContainer`` present while ``stChatInput`` is still
-    absent (polling every 500 ms up to the boot deadline). ``passed`` asserts
-    the container exists with content height > 0.
+    absent (polling every ``POLL_INTERVAL_S`` up to the boot deadline). The
+    very first frame with the main block can be an unstyled Streamlit skeleton
+    (``display: block``, content height 0) captured before the app script has
+    emitted its first element and before custom CSS applied; the last pass-1
+    sample taken before the pass-2 gate is the styled frame, so that one is
+    saved and asserted. ``passed`` asserts the saved sample's content height
+    is > 0; the warm/skip case (chat input already present on the very first
+    sample) is not an assertion subject.
     """
+    last_pass1: dict[str, Any] | None = None
+    first_sample = True
     while time.monotonic() < deadline:
         try:
             splash = await page.evaluate(SPLASH_MEASURE_JS)
@@ -529,23 +537,44 @@ async def _capture_splash(page: Page, out_dir: Path, deadline: float) -> dict[st
         if splash is None:
             await asyncio.sleep(POLL_INTERVAL_S)
             continue
-        if not splash["hasChatInput"]:
-            json_path = _save_json(out_dir, "splash.json", splash)
-            png_path = await _save_png(page, out_dir, "splash.png")
+        if splash["hasChatInput"]:
+            if first_sample:
+                return {
+                    "splash": splash,
+                    "captured": False,
+                    "passed": None,
+                    "note": "chat input already present (warm/skipped pass-1)",
+                }
+            if last_pass1 is not None:
+                json_path = _save_json(out_dir, "splash.json", last_pass1)
+                png_path = await _save_png(page, out_dir, "splash.png")
+                return {
+                    "splash": last_pass1,
+                    "captured": True,
+                    "passed": (last_pass1["stMainBlockContainer"]["contentHeight"] > 0),
+                    "exists": bool(last_pass1["stMainBlockContainer"]["exists"]),
+                    "jsonFile": json_path.name,
+                    "pngFile": png_path.name,
+                }
             return {
                 "splash": splash,
-                "captured": True,
-                "passed": splash["stMainBlockContainer"]["contentHeight"] > 0,
-                "exists": bool(splash["stMainBlockContainer"]["exists"]),
-                "jsonFile": json_path.name,
-                "pngFile": png_path.name,
+                "captured": False,
+                "passed": None,
+                "note": "chat input present before any pass-1 sample",
             }
+        last_pass1 = splash
+        first_sample = False
+        await asyncio.sleep(POLL_INTERVAL_S)
+    if last_pass1 is not None:
+        json_path = _save_json(out_dir, "splash.json", last_pass1)
+        png_path = await _save_png(page, out_dir, "splash.png")
         return {
-            "splash": splash,
-            "captured": False,
-            "passed": splash["stMainBlockContainer"]["contentHeight"] > 0,
-            "exists": bool(splash["stMainBlockContainer"]["exists"]),
-            "note": "chat input already present (warm/skipped pass-1)",
+            "splash": last_pass1,
+            "captured": True,
+            "passed": last_pass1["stMainBlockContainer"]["contentHeight"] > 0,
+            "exists": bool(last_pass1["stMainBlockContainer"]["exists"]),
+            "jsonFile": json_path.name,
+            "pngFile": png_path.name,
         }
     return {
         "captured": False,
