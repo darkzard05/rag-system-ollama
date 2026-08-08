@@ -608,10 +608,21 @@ _SPLASH_HTML = """
 """
 
 
-def main() -> None:
+def _ensure_ui_globals() -> None:
+    """Pass-1-safe UI bootstrap: session + bridge sync + custom CSS injection."""
     from core.session import SessionManager
     from ui.bridge import UIBridge
     from ui.ui import inject_custom_css
+
+    SessionManager.init_session()
+    UIBridge.sync_session()
+    inject_custom_css()
+
+
+def main() -> None:
+    from core.session import SessionManager
+
+    _ensure_ui_globals()
 
     # 부트 스플래시: 1차 패스에서 즉시 시각 피드백 후 1회 rerun (2차 패스에서 본 UI 렌더)
     if not st.session_state.get("_bootstrapped"):
@@ -620,15 +631,8 @@ def main() -> None:
         st.status("🔄 앱 초기화 중...", state="running")
         st.rerun()
 
-    SessionManager.init_session()
-
-    # UI 렌더 단계에서 Streamlit 상태 동기화 (스레드 안전, 인터랙티브 키 보호)
-    UIBridge.sync_session()
-
     if "available_models_list" not in st.session_state:
         st.session_state.available_models_list = _load_available_models()
-
-    inject_custom_css()
 
     if SessionManager.get("pdf_file_path") and not SessionManager.get("pdf_processed"):
         SessionManager.set("is_generating_answer", False)

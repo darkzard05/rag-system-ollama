@@ -30,21 +30,27 @@ def inject_header_height_script() -> None:
     components.html(
         """
         <script>
-        const doc = window.parent.document;
-        const header = doc.querySelector('[data-testid="stHeader"]');
-        if (header) {
-            const h = header.offsetHeight;
-            doc.documentElement.style.setProperty('--header-h', h + 'px');
-        }
-        window.addEventListener('resize', () => {
-            const h2 = doc.querySelector('[data-testid="stHeader"]')?.offsetHeight || 60;
-            doc.documentElement.style.setProperty('--header-h', h2 + 'px');
-        });
-        if (window.visualViewport) {
-            window.visualViewport.addEventListener('resize', () => {
-                const h3 = doc.querySelector('[data-testid="stHeader"]')?.offsetHeight || 60;
-                doc.documentElement.style.setProperty('--header-h', h3 + 'px');
+        try {
+            const doc = window.parent.document;
+            // Pass-1 fail-safe: apply the 60px fallback before the header even exists.
+            doc.documentElement.style.setProperty('--header-h', '3.75rem');
+            const header = doc.querySelector('[data-testid="stHeader"]');
+            if (header) {
+                const h = header.offsetHeight;
+                doc.documentElement.style.setProperty('--header-h', h + 'px');
+            }
+            window.addEventListener('resize', () => {
+                const h2 = doc.querySelector('[data-testid="stHeader"]')?.offsetHeight || 60;
+                doc.documentElement.style.setProperty('--header-h', h2 + 'px');
             });
+            if (window.visualViewport) {
+                window.visualViewport.addEventListener('resize', () => {
+                    const h3 = doc.querySelector('[data-testid="stHeader"]')?.offsetHeight || 60;
+                    doc.documentElement.style.setProperty('--header-h', h3 + 'px');
+                });
+            }
+        } catch (e) {
+            // Best-effort: layout defaults remain intact if the parent frame is unreachable.
         }
         </script>
         """,
