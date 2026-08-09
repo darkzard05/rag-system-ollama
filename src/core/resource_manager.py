@@ -23,8 +23,10 @@ from common.config import (
     MAX_RESOURCE_POOL_SIZE,
     MAX_RESOURCE_POOL_SIZE_BYTES,
     OLLAMA_BASE_URL,
+    OLLAMA_TIMEOUT,
     RERANKER_MODEL_NAME,
 )
+from common.exceptions import LLMInferenceError
 
 T = TypeVar("T")
 P = ParamSpec("P")
@@ -323,13 +325,32 @@ class ResourceCoordinator:
         except RuntimeError:
             self._semaphore_loop = None
 
-    async def acquire_inference_lock(self) -> None:
-        """LLM 추론을 위한 세마포어 락을 획득합니다."""
+    async def acquire_inference_lock(self, timeout: float | None = None) -> None:
+        """LLM 추론을 위한 세마포어 락을 획득합니다.
+
+        timeout(초) 내에 획득하지 못하면 LLMInferenceError(reason="timeout")를
+        발생시킵니다. 기본값은 config의 OLLAMA_TIMEOUT입니다.
+        """
         loop = asyncio.get_running_loop()
         if self._inference_semaphore is None or self._semaphore_loop is not loop:
             self._inference_semaphore = asyncio.Semaphore(MAX_CONCURRENT_INFERENCE)
             self._semaphore_loop = loop
-        await self._inference_semaphore.acquire()
+        wait_seconds = timeout if timeout is not None else OLLAMA_TIMEOUT
+        if wait_seconds is None or wait_seconds <= 0:
+            await self._inference_semaphore.acquire()
+            return
+        try:
+            await asyncio.wait_for(
+                self._inference_semaphore.acquire(), timeout=wait_seconds
+            )
+        except asyncio.TimeoutError as e:
+            raise LLMInferenceError(
+                reason="timeout",
+                details={
+                    "operation": "acquire_inference_lock",
+                    "timeout_seconds": wait_seconds,
+                },
+            ) from e
 
     def release_inference_lock(self) -> None:
         """획득한 LLM 추론 락을 해제합니다."""
@@ -337,12 +358,12 @@ class ResourceCoordinator:
             self._inference_semaphore.release()
 
     @asynccontextmanager
-    async def inference_session(self):
+    async def inference_session(self, timeout: float | None = None):
         """
         LLM 추론을 위한 컨텍스트 매니저입니다.
         진입 시 락을 획득하고, 종료 시 자동으로 락을 해제합니다.
         """
-        await self.acquire_inference_lock()
+        await self.acquire_inference_lock(timeout)
         try:
             yield
         finally:

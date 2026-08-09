@@ -30,6 +30,14 @@ class DeepThinkingChatOllama(ChatOllama):
             prefix in model_name for prefix in _THINKING_PREFIXES
         ):
             kwargs["reasoning"] = reasoning
+        # [R1b-01] timeout을 별도 kwargs로 받아 ollama httpx 클라이언트에 주입한다.
+        # ChatOllama의 최상위 'timeout' 필드는 존재하지 않아 무시되므로, Client/AsyncClient
+        # 생성자에 전달되는 client_kwargs로 라우팅해야 실제 HTTP 타임아웃이 적용된다.
+        timeout = kwargs.pop("timeout", None)
+        if timeout is not None:
+            client_kwargs = dict(kwargs.get("client_kwargs") or {})
+            client_kwargs["timeout"] = timeout
+            kwargs["client_kwargs"] = client_kwargs
         super().__init__(**kwargs)
 
     def _convert_chunk_to_thought_and_content(

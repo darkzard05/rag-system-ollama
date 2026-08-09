@@ -73,6 +73,11 @@ OLLAMA_THINKING: bool = _get_env(
 MAX_CONCURRENT_INFERENCE: int = _get_env(
     "MAX_CONCURRENT_INFERENCE", _models_config.get("max_concurrent_inference", 1), int
 )
+# Ollama HTTP 요청 및 추론 세마포어 획득 타임아웃 (초 단위). 0 이하 또는 None이면
+# 타임아웃을 적용하지 않는다.
+OLLAMA_TIMEOUT: float | None = _get_env(
+    "OLLAMA_TIMEOUT", _models_config.get("timeout", 120), float
+)
 MAX_CACHED_MODELS: int = _get_env(
     "MAX_CACHED_MODELS", _models_config.get("max_cached_models", 5), int
 )

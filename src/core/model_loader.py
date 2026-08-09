@@ -31,6 +31,7 @@ from common.config import (
     OLLAMA_NUM_PREDICT,
     OLLAMA_TEMPERATURE,
     OLLAMA_THINKING,
+    OLLAMA_TIMEOUT,
     OLLAMA_TOP_P,
 )
 from common.exceptions import EmbeddingModelError
@@ -483,6 +484,5 @@ def load_llm(model_name: str) -> Any:
             reasoning=OLLAMA_THINKING,
             base_url=OLLAMA_BASE_URL,
             keep_alive=OLLAMA_KEEP_ALIVE,
-            # timeout 및 기타 추가 인자는 딕셔너리로 안전하게 전달하거나
-            # ChatOllama 규격에 맞게 조정
+            timeout=OLLAMA_TIMEOUT,
         )

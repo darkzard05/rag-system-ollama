@@ -43,6 +43,9 @@ models:
   # 최대 동시 추론 수 (VRAM 보호를 위한 전역 세마포어 값)
   max_concurrent_inference: 1
 
+  # Ollama HTTP 요청 및 추론 세마포어 획득 타임아웃 (초)
+  timeout: 120
+
 
 # --- RAG 파이프라인 설정 ---
 rag:
