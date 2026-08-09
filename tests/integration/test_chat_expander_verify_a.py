@@ -44,9 +44,10 @@ Known pipeline defects surfaced by this full-flow run (both now FIXED):
   indirectly via session state (assistant message presence and the
   `is_generating_answer` flag).
 - The stub LLM never emits a "thought" (graph_builder.py:510-515 fallback), so
-  the real-pipeline answer cannot carry the `<details class="thought-expander">`
-  HTML; the thought expander rendering path (chat.py:213-214) is therefore
-  verified with a message-store injection as the closest observable equivalent.
+  the real-pipeline answer cannot carry a non-empty thought. The native
+  reasoning expander ("🧠 상세 사고 과정", chat.py:189, guarded by a
+  content-based gate) is therefore exercised with a message-store injection
+  carrying a thought as the closest observable equivalent.
 """
 
 import os
@@ -63,7 +64,6 @@ sys.path.append(os.path.join(os.getcwd(), "src"))
 from core.session import SessionManager  # noqa: E402
 
 PDF_PATH = os.path.join("tests", "data", "2201.07520v1.pdf")
-THOUGHT_MARKER = '<details class="thought-expander">'
 ANALYSIS_WALL_TIMEOUT = 240  # seconds
 ANSWER_WALL_TIMEOUT = 300  # seconds
 
@@ -312,10 +312,10 @@ def test_chat_expander_and_interactive_chat_render() -> None:
     assert f_ok, f"uncaught exceptions: {[e.value for e in at.exception]}"
 
     # ------------------------------------------------------------------
-    # ASSERT (d2): thought expander HTML renders inside an assistant message.
-    # Real-pipeline thought is always empty with the stub LLM
-    # (graph_builder.py:510-515), so the renderer is exercised with a stored
-    # message carrying a thought (closest observable equivalent).
+    # ASSERT (d2): native reasoning expander ("🧠 상세 사고 과정") renders
+    # inside an assistant message. Real-pipeline thought is always empty with
+    # the stub LLM (graph_builder.py:510-515), so the renderer is exercised
+    # with a stored message carrying a thought (closest observable equivalent).
     # ------------------------------------------------------------------
     SessionManager.add_message(
         "assistant",
@@ -324,28 +324,13 @@ def test_chat_expander_and_interactive_chat_render() -> None:
         session_id=sid,
     )
     _run_until_settled(at)
-    rendered = _rendered_messages(at)
-    thought_found = any(
-        m["name"] == "assistant" and any(THOUGHT_MARKER in md for md in m["markdowns"])
-        for m in rendered
-    )
-    thought_sample = next(
-        (
-            md
-            for m in rendered
-            if m["name"] == "assistant"
-            for md in m["markdowns"]
-            if THOUGHT_MARKER in md
-        ),
-        "",
-    )
+    thought_found = any(e.label == "🧠 상세 사고 과정" for e in at.expander)
     record(
-        "d2_thought_expander_html_rendered",
+        "d2_thought_expander_rendered",
         thought_found,
-        f'<details class="thought-expander"> found in assistant markdown '
-        f"({thought_sample[:60]!r}...)",
+        f"native expander label '🧠 상세 사고 과정' present: {thought_found}",
     )
-    assert thought_found, f"thought expander not rendered: {rendered!r}"
+    assert thought_found, f"thought expander not rendered: {at.expander!r}"
 
     # ------------------------------------------------------------------
     assert all(p for _, p, _ in RESULTS), "one or more Lane A assertions failed"

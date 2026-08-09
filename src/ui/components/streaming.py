@@ -51,6 +51,75 @@ def friendly_error_message(exc: Exception) -> str:
     return _GENERIC_STREAMING_MSG
 
 
+def _build_process(msg: dict[str, Any]) -> dict[str, Any]:
+    """스트리밍 중 누적한 단계·문서·지표를 요약 사전으로 변환합니다.
+
+    완료 시점(finally)에서 소비 스레드가 세션 락을 보유한 채 호출되므로 순수
+    함수여야 하며, msg를 변경하거나 I/O/SessionManager를 호출하지 않습니다.
+    """
+    steps: list[str] = []
+    for step in msg.get("process_steps") or []:
+        if not steps or steps[-1] != step:
+            steps.append(step)
+    steps = steps[-10:]
+
+    documents = msg.get("documents") or []
+
+    sections: list[str] = []
+    seen_sections: set[str] = set()
+    for d in documents:
+        meta = (
+            getattr(d, "metadata", {})
+            if hasattr(d, "metadata")
+            else d.get("metadata", {})
+        )
+        section = meta.get("current_section")
+        if section and section not in seen_sections:
+            seen_sections.add(section)
+            sections.append(section)
+            if len(sections) == 5:
+                break
+
+    top_scores: list[dict[str, Any]] = []
+    for d in documents:
+        meta = (
+            getattr(d, "metadata", {})
+            if hasattr(d, "metadata")
+            else d.get("metadata", {})
+        )
+        if (score := meta.get("rerank_score")) is None:
+            continue
+        try:
+            top_scores.append(
+                {
+                    "section": meta.get("current_section", ""),
+                    "score": round(float(score), 3),
+                }
+            )
+        except (TypeError, ValueError):
+            continue
+    top_scores.sort(key=lambda s: s["score"], reverse=True)
+    top_scores = top_scores[:3]
+
+    metrics = msg.get("metrics") or {}
+    _ALLOWED_METRIC_KEYS = {
+        "total_time",
+        "tps",
+        "input_token_count",
+        "token_count",
+        "relevant_docs_count",
+    }
+    perf = {k: v for k, v in metrics.items() if k in _ALLOWED_METRIC_KEYS}
+
+    return {
+        "steps": steps,
+        "retrieved_count": len(documents),
+        "sections": sections,
+        "top_scores": top_scores,
+        "perf": perf,
+    }
+
+
 def start_streaming_turn(sid: str, query: str, model_name: str) -> str:
     """스트리밍 시작: 빈 streaming 메시지 생성 후 msg_id 반환"""
     msg_id = str(uuid.uuid4())
@@ -92,6 +161,7 @@ def _spawn_stream_consumer(sid: str, msg_id: str, query: str, model_name: str):
                         if msg.get("msg_id") == msg_id:
                             if chunk.status:
                                 msg["status"] = chunk.status
+                                msg.setdefault("process_steps", []).append(chunk.status)
                             if chunk.thought:
                                 msg["thought"] = msg.get("thought", "") + chunk.thought
                             if chunk.content:
@@ -136,6 +206,7 @@ def _spawn_stream_consumer(sid: str, msg_id: str, query: str, model_name: str):
                             html.escape(msg.get("content", "")),
                             msg.get("documents", []),
                         )
+                        msg["process"] = _build_process(msg)
                         break
                 state["_dirty_keys"].add("messages")
             # PDF 주석·자동 점프는 세션 락 밖에서 수행한다 (느린 fitz 파싱 방지)
