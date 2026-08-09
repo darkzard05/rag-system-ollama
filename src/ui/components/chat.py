@@ -14,7 +14,7 @@ from typing import Any
 
 import streamlit as st
 
-from common.config import MSG_CHAT_GUIDE, UI_TIMELINE_POLL_SECONDS
+from common.config import DEFAULT_OLLAMA_MODEL, MSG_CHAT_GUIDE, UI_TIMELINE_POLL_SECONDS
 from common.utils import (
     apply_tooltips_to_response,
     normalize_latex_delimiters,
@@ -160,11 +160,15 @@ def render_message(
             # 성능 지표
             if metrics:
                 total_time = metrics.get("total_time", 0)
-                retrieved = metrics.get("retrieved_chunks", 0)
+                # 성능 메트릭에 검색 청크 수 키가 없으므로 메시지에 실린 documents
+                # 길이(실제 답변에 사용된 청크 수)를 우선 사용한다.
+                retrieved = (
+                    len(documents) if documents else metrics.get("retrieved_chunks", 0)
+                )
                 model = (
                     kwargs.get("model", "")
                     or SessionManager.get("last_selected_model", "")
-                    or "model"
+                    or DEFAULT_OLLAMA_MODEL
                 )
                 st.caption(f"⚡ {total_time:.1f}s · 🔍 {retrieved} chunks · 🤖 {model}")
 
