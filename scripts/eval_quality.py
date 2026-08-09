@@ -5,10 +5,12 @@ GraphRAG-Ollama 시스템의 답변 품질 측정 스크립트. baseline(Wave 0)
 
 측정 항목:
   (a) retrieval P@1/MRR@5 - tests/data/golden_set.json (퇴화 질문 제외 규칙 적용)
+      + context_recall: golden_set.json required_chunks 근거 청크 포함 비율 (R4-06)
   (b) TTFT/TPS            - RAGSystem.astream 직접 소비 + stream_graph_events
   (c) 답변 길이           - 응답 문자열 길이(문자) + Ollama 실측 eval_count
   (d) 잘림 감지           - eval_count >= OLLAMA_NUM_PREDICT * 0.9
   (e) 1-5점 judge         - tests/data/testset_2201.csv 상위 N행
+      + faithfulness: SCORE_PROMPT [Context] 근거성 판정 (R4-06 최소 구현)
   (f) prompt 토큰 초과    - count_tokens_rough(protocol+context+질문) > OLLAMA_NUM_CTX
 
 측정 정의 (Todo 1 사양):
@@ -59,6 +61,7 @@ from src.common.config import (
     ANALYSIS_PROTOCOL,
     DEFAULT_EMBEDDING_MODEL,
     DEFAULT_OLLAMA_MODEL,
+    EVAL_JUDGE_MODEL,
     OLLAMA_NUM_CTX,
     OLLAMA_NUM_PREDICT,
 )
@@ -76,18 +79,20 @@ GOLDEN_SET_PATH = ROOT_DIR / "tests" / "data" / "golden_set.json"
 TESTSET_PATH = ROOT_DIR / "tests" / "data" / "testset_2201.csv"
 DEFAULT_PDF = "tests/data/2201.07520v1.pdf"
 
-# quick_eval.py:20-33의 SCORE_PROMPT 패턴 (judge LLM)
+# quick_eval.py:20-33의 SCORE_PROMPT 패턴 + [Context] 근거성(faithfulness) 판정 (R4-06)
 SCORE_PROMPT = """
-당신은 RAG 시스템 평가 전문가입니다. 아래 [질문], [정답], [모델 답변]을 비교하여 답변의 품질을 1점에서 5점 사이로 평가하세요.
+당신은 RAG 시스템 평가 전문가입니다. 아래 [질문], [정답], [모델 답변], [Context]를 비교하여 답변의 품질과 근거성을 1점에서 5점 사이로 평가하세요.
 
 [질문]: {question}
 [정답]: {ground_truth}
 [모델 답변]: {answer}
+[Context]: {context}
 
 [평가 기준]:
-- 5점: 답변이 정답과 의미적으로 완벽하게 일치하며 정확함.
+- 5점: 답변이 정답과 의미적으로 완벽하게 일치하며 정확하고, 답변의 모든 주장이 제공된 Context에 근거함.
 - 3점: 답변의 핵심은 맞지만 세부 정보가 부족하거나 약간의 노이즈가 있음.
 - 1점: 답변이 틀렸거나 질문과 관련이 없음.
+- 근거성(Faithfulness): 답변의 모든 주장이 제공된 Context에 근거하는지 1-5점으로 함께 평가하세요. Context에 없는 주장을 포함하면 감점합니다.
 
 결과는 반드시 숫자 하나(예: 5)만 출력하세요. 설명은 생략하세요.
 """
@@ -102,6 +107,7 @@ class QuestionSpec:
     query: str
     entities: tuple[str, ...] = ()
     ground_truth: str | None = None
+    required_chunks: tuple[str, ...] = ()  # context_recall 근거 청크 키워드 (R4-06)
 
 
 # --- 데이터 로드 ---
@@ -115,6 +121,7 @@ def _load_golden() -> list[QuestionSpec]:
             row=idx,
             query=item["query"],
             entities=tuple(item.get("expected_key_entities") or []),
+            required_chunks=tuple(item.get("required_chunks") or []),
         )
         for idx, item in enumerate(raw, start=1)
     ]
@@ -225,10 +232,64 @@ async def _consume_stream(rag: RAGSystem, query: str, no_llm: bool) -> dict[str,
     }
 
 
+# 한국어 엔티티 -> 영문 동의어/어간 맵 (R4-01 수정).
+# golden_set.json의 expected_key_entities가 한국어인데 PDF 텍스트가 영문이어서
+# 부분문자열 매칭이 구조적으로 실패(P@1/MRR@5 영구 0)했던 결함을 교정한다.
+_ENTITY_SYNONYM_MAP: dict[str, tuple[str, ...]] = {
+    "토큰화": ("tokeniz", "token"),
+    "토큰": ("token",),
+    "검색": ("retriev", "search"),
+    "임베딩": ("embed",),
+    "청크": ("chunk",),
+    "정렬": ("sort", "rank"),
+    "파라미터": ("parameter", "param"),
+    "데이터셋": ("dataset", "data set", "data source", "corpus"),
+    "규모": ("size", "scale", "million", "billion"),
+    "기여점": ("contribut",),
+    "요약": ("summari", "summary"),
+    "이미지": ("image",),
+    "이미지 학습": ("image token", "image model", "image generat", "image train"),
+    "이미지 생성": ("image generat", "image synthes", "text-to-image"),
+    "학습": ("train", "learn"),
+    "모델": ("model",),
+    "생성": ("generat",),
+    "트렌드": ("trend", "recent", "latest", "state-of-the-art"),
+}
+
+
+def _normalize_match(text: str) -> str:
+    """공백·하이픈·언더스코어를 제거한 소문자 텍스트 (근접 판정용)."""
+    return re.sub(r"[\s\-_]+", "", text.lower())
+
+
+def _entity_match(text_lower: str, text_norm: str, entity: str) -> bool:
+    """단일 엔티티가 문서 텍스트에 존재하는지 판정 (원문 + 동의어/어간 맵).
+
+    대소문자 하강 후 부분문자열 매칭을 시도하고, 실패 시 공백/하이픈을
+    무시한 근접 판정(_normalize_match)까지 허용한다.
+    """
+    entity_clean = entity.strip().lower()
+    if not entity_clean:
+        return False
+    candidates = (entity_clean,) + _ENTITY_SYNONYM_MAP.get(entity_clean, ())
+    if any(cand and cand in text_lower for cand in candidates):
+        return True
+    entity_norm = _normalize_match(entity_clean)
+    if entity_norm and entity_norm in text_norm:
+        return True
+    return any(cand and _normalize_match(cand) in text_norm for cand in candidates)
+
+
 def _doc_relevant(doc: Any, entities: tuple[str, ...]) -> bool:
-    """문서의 page_content가 모든 엔티티 문자열을 포함하면 관련 판정."""
-    text = doc.page_content
-    return all(e in text for e in entities)
+    """문서의 page_content가 모든 엔티티와 매칭되면 관련 판정 (R4-01 수정).
+
+    영어 PDF 텍스트와 한국어 엔티티 사이의 언어 갭을 _ENTITY_SYNONYM_MAP과
+    대소문자/공백/하이픈 정규화로 메운다. 모든 엔티티가 매칭되어야 관련이다.
+    """
+    text = getattr(doc, "page_content", "") or ""
+    text_lower = text.lower()
+    text_norm = _normalize_match(text)
+    return all(_entity_match(text_lower, text_norm, e) for e in entities)
 
 
 def _mrr_at_5(relevance: list[bool]) -> float:
@@ -237,6 +298,25 @@ def _mrr_at_5(relevance: list[bool]) -> float:
         if is_rel:
             return round(1.0 / rank, 4)
     return 0.0
+
+
+def _chunk_recalled(docs: list[Any], phrase: str) -> bool:
+    """필수 근거 청크 키워드가 검색된 문서 중 하나에 포함되면 recall 판정 (R4-06).
+
+    context_recall의 분모(golden_set.json required_chunks) 기준으로, 검색 결과
+    상위 문서에 해당 근거 청크가 포함된 비율을 측정한다.
+    """
+    phrase_clean = phrase.strip().lower()
+    if not phrase_clean:
+        return False
+    phrase_norm = _normalize_match(phrase_clean)
+    for doc in docs:
+        text = getattr(doc, "page_content", "") or ""
+        if phrase_clean in text.lower():
+            return True
+        if phrase_norm and phrase_norm in _normalize_match(text):
+            return True
+    return False
 
 
 def _estimate_prompt_tokens(query: str, docs: list[Any]) -> int:
@@ -279,6 +359,7 @@ def _empty_record(
         "prompt_tokens_est": 0,
         "overflow": 0,
         "judge": None,
+        "faithfulness": None,
         "judge_excluded": None,
         "judge_error": None,
         "error": None,
@@ -313,10 +394,18 @@ def _assemble_measurement(
         retrieval["relevant"] = any(relevance)
         retrieval["p_at_1"] = 1 if (relevance and relevance[0]) else 0
         retrieval["mrr_at_5"] = _mrr_at_5(relevance)
+        if q.required_chunks:
+            recalled = sum(
+                1 for phrase in q.required_chunks if _chunk_recalled(docs, phrase)
+            )
+            retrieval["context_recall"] = round(recalled / len(q.required_chunks), 4)
+        else:
+            retrieval["context_recall"] = None
     else:
         retrieval["relevant"] = None
         retrieval["p_at_1"] = None
         retrieval["mrr_at_5"] = None
+        retrieval["context_recall"] = None
 
     eval_count = measured["eval_count"]
     prompt_est = _estimate_prompt_tokens(q.query, docs)
@@ -342,15 +431,24 @@ def _assemble_measurement(
 
 
 async def _judge(
-    score_chain: Any, question: str, ground_truth: str, answer: str
+    score_chain: Any,
+    question: str,
+    ground_truth: str,
+    answer: str,
+    context: str,
 ) -> int | None:
-    """SCORE_PROMPT 패턴 1-5점 판정. 파싱 실패 시 None (판정 제외).
+    """SCORE_PROMPT 패턴 1-5점 판정 (Context 근거성 포함). 파싱 실패 시 None (판정 제외).
 
     bare except 금지 - 구체 예외 (json.JSONDecodeError, ValueError, TypeError)만.
     """
     try:
         score_str = await score_chain.ainvoke(
-            {"question": question, "ground_truth": ground_truth, "answer": answer}
+            {
+                "question": question,
+                "ground_truth": ground_truth,
+                "answer": answer,
+                "context": context,
+            }
         )
         match = re.search(r"[1-5]", str(score_str))
         if match is None:
@@ -390,9 +488,14 @@ async def _run_question(
         rec["judge_excluded"] = True
         rec["judge_error"] = "--no-llm 모드 (generation/judge 생략)"
     elif q.source == "testset" and q.ground_truth and score_chain is not None:
+        judge_docs = list(measured["documents"])[:5]
+        context = format_context(judge_docs) if judge_docs else "일상적인 대화입니다."
         try:
-            score = await _judge(score_chain, q.query, q.ground_truth, rec["answer"])
+            score = await _judge(
+                score_chain, q.query, q.ground_truth, rec["answer"], context
+            )
             rec["judge"] = score
+            rec["faithfulness"] = score  # [Context] 근거성 판정 점수 (R4-06 최소 구현)
             rec["judge_excluded"] = score is None
             if score is None:
                 rec["judge_error"] = "judge 파싱 실패 (판정 제외)"
@@ -425,6 +528,11 @@ def _aggregate(results: list[dict[str, Any]]) -> dict[str, Any]:
 
     p_at_1_values = [r["retrieval"]["p_at_1"] for r in golden_scorable]
     mrr_values = [r["retrieval"]["mrr_at_5"] for r in golden_scorable]
+    context_recall_values = [
+        r["retrieval"]["context_recall"]
+        for r in golden_scorable
+        if r["retrieval"].get("context_recall") is not None
+    ]
     ttft_values = [r["ttft"] for r in executed if r["ttft"] is not None]
     tps_values = [r["tps"] for r in executed if r["tps"] is not None]
     eval_counts = [r["eval_count"] for r in executed if r["eval_count"] is not None]
@@ -433,6 +541,9 @@ def _aggregate(results: list[dict[str, Any]]) -> dict[str, Any]:
         1 for r in executed if r["eval_count"] is not None and r["truncated"]
     )
     judge_values = [r["judge"] for r in results if r["judge"] is not None]
+    faithfulness_values = [
+        r["faithfulness"] for r in results if r["faithfulness"] is not None
+    ]
     degenerate = [
         {
             "source": r["source"],
@@ -447,6 +558,8 @@ def _aggregate(results: list[dict[str, Any]]) -> dict[str, Any]:
         "scorable_count": len(golden_scorable),
         "p_at_1": _mean([float(v) for v in p_at_1_values]),
         "mrr_at_5": _mean([float(v) for v in mrr_values]),
+        "context_recall": _mean([float(v) for v in context_recall_values]),
+        "context_recall_count": len(context_recall_values),
         "latency_question_count": len(executed),
         "avg_ttft": _mean(ttft_values),
         "avg_tps": _mean(tps_values),
@@ -460,6 +573,8 @@ def _aggregate(results: list[dict[str, Any]]) -> dict[str, Any]:
         "overflow_count": sum(1 for r in executed if r["overflow"]),
         "judge_avg": _mean([float(v) for v in judge_values]),
         "judge_count": len(judge_values),
+        "faithfulness_avg": _mean([float(v) for v in faithfulness_values]),
+        "faithfulness_count": len(faithfulness_values),
         "eval_count_missing_count": sum(1 for r in executed if r["eval_count_missing"]),
         "degenerate": degenerate,
     }
@@ -486,6 +601,7 @@ def _render_markdown(report: dict[str, Any]) -> str:
         f"| scorable_count (golden, 퇴화 제외) | {agg['scorable_count']} |",
         f"| P@1 | {agg['p_at_1']} |",
         f"| MRR@5 | {agg['mrr_at_5']} |",
+        f"| context_recall (golden) | {agg['context_recall']} ({agg['context_recall_count']}건) |",
         f"| latency_question_count | {agg['latency_question_count']} |",
         f"| avg TTFT (s) | {agg['avg_ttft']} |",
         f"| avg TPS | {agg['avg_tps']} |",
@@ -494,12 +610,13 @@ def _render_markdown(report: dict[str, Any]) -> str:
         f"| truncated ratio | {agg['truncated_ratio']} ({agg['truncated_count']}건) |",
         f"| overflow ratio | {agg['overflow_ratio']} ({agg['overflow_count']}건) |",
         f"| judge avg (1-5) | {agg['judge_avg']} ({agg['judge_count']}건) |",
+        f"| faithfulness avg (1-5) | {agg['faithfulness_avg']} ({agg['faithfulness_count']}건) |",
         f"| eval_count missing | {agg['eval_count_missing_count']}건 |",
         "",
         "## Per-Question",
         "",
-        "| source | row | query | status | P@1 | MRR@5 | TTFT(s) | TPS | eval_count | truncated | overflow | judge | max_rerank | note |",
-        "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+        "| source | row | query | status | P@1 | MRR@5 | ctx_recall | TTFT(s) | TPS | eval_count | truncated | overflow | judge | faithfulness | max_rerank | note |",
+        "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
     ]
     for r in report["questions"]:
         st = (
@@ -512,20 +629,24 @@ def _render_markdown(report: dict[str, Any]) -> str:
         retrieval = r["retrieval"] or {}
         query = r["query"].replace("|", "\\|").replace("\n", " ")
         lines.append(
-            "| {source} | {row} | {query} | {status} | {p1} | {mrr} | {ttft} | {tps} | "
-            "{eval_count} | {truncated} | {overflow} | {judge} | {max_rerank} | {note} |".format(
+            "| {source} | {row} | {query} | {status} | {p1} | {mrr} | {ctx_recall} | "
+            "{ttft} | {tps} | "
+            "{eval_count} | {truncated} | {overflow} | {judge} | {faithfulness} | "
+            "{max_rerank} | {note} |".format(
                 source=r["source"],
                 row=r["row"],
                 query=query[:60],
                 status=st,
                 p1=retrieval.get("p_at_1", ""),
                 mrr=retrieval.get("mrr_at_5", ""),
+                ctx_recall=retrieval.get("context_recall", ""),
                 ttft=r["ttft"] if r["ttft"] is not None else "",
                 tps=r["tps"] if r["tps"] is not None else "",
                 eval_count=r["eval_count"] if r["eval_count"] is not None else "",
                 truncated=r["truncated"],
                 overflow=r["overflow"],
                 judge=r["judge"] if r["judge"] is not None else "",
+                faithfulness=r["faithfulness"] if r["faithfulness"] is not None else "",
                 max_rerank=retrieval.get("max_rerank_score", ""),
                 note=(r["note"] or "")[:40],
             )
@@ -582,7 +703,10 @@ async def _run_eval(args: argparse.Namespace) -> dict[str, Any]:
 
     score_chain: Any | None = None
     if not args.no_llm and testset:
-        judge_llm = await ModelManager.get_llm(DEFAULT_OLLAMA_MODEL)
+        # R4-05: evaluation.judge_model(EVAL_JUDGE_MODEL)을 생성기와 분리해 로드.
+        # judge는 결정적 판정을 위해 온도 0.0을 명시한다.
+        judge_llm = await ModelManager.get_llm(EVAL_JUDGE_MODEL, temperature=0.0)
+        print(f"  judge model={EVAL_JUDGE_MODEL} (temperature=0.0, 생성기와 분리)")
         score_chain = (
             ChatPromptTemplate.from_template(SCORE_PROMPT)
             | judge_llm
@@ -606,6 +730,7 @@ async def _run_eval(args: argparse.Namespace) -> dict[str, Any]:
             "no_llm": args.no_llm,
             "model": DEFAULT_OLLAMA_MODEL,
             "embedder": DEFAULT_EMBEDDING_MODEL,
+            "judge_model": EVAL_JUDGE_MODEL,
             "num_predict": OLLAMA_NUM_PREDICT,
             "num_ctx": OLLAMA_NUM_CTX,
             "truncation_threshold": round(OLLAMA_NUM_PREDICT * TRUNCATION_RATIO, 1),

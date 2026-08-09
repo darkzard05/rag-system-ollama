@@ -1,15 +1,18 @@
 [
     {
         "query": "CM3 모델이 이미지를 학습할 때 사용하는 구체적인 원리와 토큰화 방식은 뭐야? 기존 DALL-E와는 어떤 차이가 있어?",
-        "expected_key_entities": ["CM3", "토큰화", "DALL-E", "이미지 학습"]
+        "expected_key_entities": ["CM3", "토큰화", "DALL-E", "이미지 학습"],
+        "required_chunks": ["causally masked", "image tokens", "VQVAE-GAN", "tokenize"]
     },
     {
         "query": "문서 내에서 언급된 모델의 파라미터 수와 학습 데이터셋의 규모는 어떻게 돼?",
-        "expected_key_entities": ["파라미터", "데이터셋", "규모"]
+        "expected_key_entities": ["파라미터", "데이터셋", "규모"],
+        "required_chunks": ["parameters", "dataset", "13B", "terabyte"]
     },
     {
         "query": "이 논문의 핵심 기여점(Contribution) 3가지만 요약해줘.",
-        "expected_key_entities": ["기여점", "Contribution", "요약"]
+        "expected_key_entities": ["기여점", "Contribution", "요약"],
+        "required_chunks": ["contributions include", "zero-shot summarization", "entity linking"]
     },
     {
         "query": "안녕, 너는 누구니?",
@@ -17,6 +20,7 @@
     },
     {
         "query": "이미지 생성 모델의 최신 트렌드에 대해 알려줘.",
-        "expected_key_entities": ["트렌드", "이미지 생성"]
+        "expected_key_entities": ["트렌드", "이미지 생성"],
+        "required_chunks": []
     }
 ]

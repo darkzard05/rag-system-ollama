@@ -1,21 +1,25 @@
 import asyncio
+import logging
 import os
+import re
 import sys
-import pandas as pd
-import numpy as np
-from pathlib import Path
 from datetime import datetime
-from langchain_ollama import ChatOllama, OllamaEmbeddings
-from langchain_core.prompts import ChatPromptTemplate
-from langchain_core.output_parsers import StrOutputParser
+from pathlib import Path
 
-# 프로젝트 루트 설정
+import numpy as np
+import pandas as pd
+from langchain_core.output_parsers import StrOutputParser
+from langchain_core.prompts import ChatPromptTemplate
+
+# ruff: noqa: E402 - sys.path 부트스트랩 이후 임포트 (scripts 표준 패턴)
 ROOT_DIR = Path(__file__).parent.parent.parent.absolute()
 sys.path.append(str(ROOT_DIR / "src"))
 
-from core.rag_core import RAGSystem
+from common.config import DEFAULT_EMBEDDING_MODEL, DEFAULT_OLLAMA_MODEL
 from core.model_loader import ModelManager
-from common.config import DEFAULT_OLLAMA_MODEL, OLLAMA_BASE_URL, DEFAULT_EMBEDDING_MODEL
+from core.rag_core import RAGSystem
+
+logger = logging.getLogger(__name__)
 
 SCORE_PROMPT = """
 당신은 RAG 시스템 평가 전문가입니다. 아래 [질문], [정답], [모델 답변]을 비교하여 답변의 품질을 1점에서 5점 사이로 평가하세요.
@@ -32,63 +36,130 @@ SCORE_PROMPT = """
 결과는 반드시 숫자 하나(예: 5)만 출력하세요. 설명은 생략하세요.
 """
 
+
 async def run_quick_evaluation(pdf_path: str, testset_csv: str):
     print("--- [Quick Eval] 통합 품질 평가 시작 ---")
-    
+
     # 1. RAG 준비
     session_id = "eval_" + str(int(datetime.now().timestamp()))
     rag_sys = RAGSystem(session_id=session_id)
     embedder = await ModelManager.get_embedder(DEFAULT_EMBEDDING_MODEL)
-    
+
     print("1. RAG 파이프라인 구축 중...")
     await rag_sys.build_pipeline(pdf_path, os.path.basename(pdf_path), embedder)
-    
+
     # 2. 테스트셋 로드 및 추론
     df = pd.read_csv(testset_csv)
     print("2. 총 " + str(len(df)) + "개 질문에 대해 추론 시작...")
-    
-    eval_llm = ChatOllama(model=DEFAULT_OLLAMA_MODEL, base_url=OLLAMA_BASE_URL, temperature=0)
-    eval_embeddings = OllamaEmbeddings(model=DEFAULT_EMBEDDING_MODEL, base_url=OLLAMA_BASE_URL)
-    score_chain = ChatPromptTemplate.from_template(SCORE_PROMPT) | eval_llm | StrOutputParser()
+
+    # [R4-07 수정] 직접 ChatOllama/OllamaEmbeddings 생성 대신 ModelManager 경유
+    # (config.yml temperature/num_ctx/num_predict 준수, 리소스 풀 공유)
+    eval_llm = await ModelManager.get_llm(DEFAULT_OLLAMA_MODEL, temperature=0.0)
+    eval_embeddings = await ModelManager.get_embedder(DEFAULT_EMBEDDING_MODEL)
+    score_chain = (
+        ChatPromptTemplate.from_template(SCORE_PROMPT) | eval_llm | StrOutputParser()
+    )
 
     results = []
     # 시간 절약을 위해 3개만 샘플링하여 검증
-    sample_df = df.head(3) 
-    
-    for i, row in sample_df.iterrows():
-        query = row['question']
-        gt = row['ground_truth']
-        
+    sample_df = df.head(3)
+    total = len(sample_df)
+
+    for seq, (_, row) in enumerate(sample_df.iterrows(), start=1):
+        query = row["question"]
+        gt = row["ground_truth"]
+
         # [리팩토링 반영] 모델 이름만 전달
         resp = await rag_sys.aquery(query, model_name=DEFAULT_OLLAMA_MODEL)
         answer = resp.get("output", resp.get("response", ""))
-        
-        # 채점
-        try:
-            score_str = await score_chain.ainvoke({"question": query, "ground_truth": gt, "answer": answer})
-            import re
-            match = re.search(r'[1-5]', score_str)
-            score = int(match.group()) if match else 3
-        except: score = 3
-        
-        # 유사도
-        try:
-            v1, v2 = eval_embeddings.embed_query(str(gt)), eval_embeddings.embed_query(str(answer))
-            sim = np.dot(v1, v2) / (np.linalg.norm(v1) * np.linalg.norm(v2))
-        except: sim = 0.5
-        
-        results.append({
-            "question": query, "ground_truth": gt, "answer": answer,
-            "score": score, "similarity": round(float(sim), 4)
-        })
-        print("[" + str(i+1) + "/3] Score: " + str(score) + ", Sim: " + str(round(float(sim), 2)))
 
-    # 결과 리포트 출력
+        # 채점 (R4-07: bare except 기본값 대입 금지 - 실패 시 해당 샘플 누락 표기)
+        score = None
+        score_error = None
+        try:
+            score_str = await score_chain.ainvoke(
+                {"question": query, "ground_truth": gt, "answer": answer}
+            )
+            match = re.search(r"[1-5]", score_str)
+            if match is None:
+                raise ValueError("judge 응답에서 1-5 점수 미발견")
+            score = int(match.group())
+        except Exception as exc:  # noqa: BLE001 - 호출/파싱 실패는 샘플 스킵
+            score_error = "judge 측정 실패: " + str(exc)
+            logger.warning("[Quick Eval] 샘플 %s score 측정 건너뜀: %s", seq, exc)
+
+        # 유사도 (R4-07: bare except 기본값 대입 금지 - 실패 시 해당 샘플 누락 표기)
+        sim = None
+        sim_error = None
+        try:
+            v1, v2 = (
+                eval_embeddings.embed_query(str(gt)),
+                eval_embeddings.embed_query(str(answer)),
+            )
+            sim = float(np.dot(v1, v2) / (np.linalg.norm(v1) * np.linalg.norm(v2)))
+        except Exception as exc:  # noqa: BLE001 - 임베딩/수치 실패는 샘플 스킵
+            sim_error = "similarity 측정 실패: " + str(exc)
+            logger.warning("[Quick Eval] 샘플 %s similarity 측정 건너뜀: %s", seq, exc)
+
+        results.append(
+            {
+                "question": query,
+                "ground_truth": gt,
+                "answer": answer,
+                "score": score,
+                "similarity": round(sim, 4) if sim is not None else None,
+                "score_error": score_error,
+                "sim_error": sim_error,
+            }
+        )
+        score_show = str(round(score, 2)) if score is not None else "N/A"
+        sim_show = str(round(sim, 2)) if sim is not None else "N/A"
+        print(
+            "["
+            + str(seq)
+            + "/"
+            + str(total)
+            + "] Score: "
+            + score_show
+            + ", Sim: "
+            + sim_show
+        )
+
+    # 결과 리포트 출력 (누락 샘플 표기)
     res_df = pd.DataFrame(results)
-    avg_score = res_df['score'].mean()
-    print("\n--- 최종 통합 점수 (샘플 3개) ---")
-    print("평균 점수: " + str(round(avg_score, 2)))
+    valid_scores = res_df["score"].dropna()
+    valid_sims = res_df["similarity"].dropna()
+    avg_score = valid_scores.mean()
+    avg_sim = valid_sims.mean()
+    print("\n--- 최종 통합 점수 (샘플 " + str(total) + "개) ---")
+    print(
+        "평균 점수: "
+        + (str(round(float(avg_score), 2)) if len(valid_scores) else "N/A")
+        + " (측정 "
+        + str(len(valid_scores))
+        + "/"
+        + str(total)
+        + "건)"
+    )
+    print(
+        "평균 유사도: "
+        + (str(round(float(avg_sim), 2)) if len(valid_sims) else "N/A")
+        + " (측정 "
+        + str(len(valid_sims))
+        + "/"
+        + str(total)
+        + "건)"
+    )
+    for r in results:
+        if r["score_error"] or r["sim_error"]:
+            print(
+                "[누락] "
+                + str(r["question"])[:40]
+                + ": "
+                + (r["score_error"] or r["sim_error"])
+            )
     print("--- [검증 완료] ---")
+
 
 if __name__ == "__main__":
     pdf = "tests/data/2201.07520v1.pdf"
