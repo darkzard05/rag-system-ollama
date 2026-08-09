@@ -29,7 +29,13 @@ class PoisonedCacheManager:
     async def get(self, key: str) -> object | None:
         return self._store.get(key)
 
-    async def set(self, key: str, value: object, ttl_seconds: float = 0) -> None:
+    async def set(
+        self,
+        key: str,
+        value: object,
+        ttl_seconds: float = 0,
+        persist_to_disk: bool = True,
+    ) -> None:
         self._store[key] = value
 
 

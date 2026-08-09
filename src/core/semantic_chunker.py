@@ -298,6 +298,7 @@ class EmbeddingBasedSemanticChunker:
                         self.cache_manager.set(
                             cache_key,
                             {"vector": vec_np.tolist(), "cache_version": "1.0"},
+                            persist_to_disk=False,
                         ),
                         timeout=30.0,
                     )
@@ -375,7 +376,9 @@ class EmbeddingBasedSemanticChunker:
         )
         await asyncio.wait_for(
             self.cache_manager.set(
-                cache_key, {"vector": vec_np.tolist(), "cache_version": "1.0"}
+                cache_key,
+                {"vector": vec_np.tolist(), "cache_version": "1.0"},
+                persist_to_disk=False,
             ),
             timeout=30.0,
         )

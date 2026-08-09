@@ -3,6 +3,7 @@
 응답 캐싱, 세맨틱 캐싱, TTL 관리, 캐시 일관성
 """
 
+import asyncio
 import hashlib
 import logging
 import pickle
@@ -497,6 +498,10 @@ class DiskCache(CacheBackend[T]):
 
     async def get(self, key: str) -> T | None:
         """값 조회 (보안 검증 포함)"""
+        return await asyncio.to_thread(self._get_sync, key)
+
+    def _get_sync(self, key: str) -> T | None:
+        """동기 파일 조회 — 이벤트 루프 블로킹 방지를 위해 스레드에서 실행"""
         with self.lock:
             cache_file = self._get_cache_path(key)
             if not cache_file.exists():
@@ -550,6 +555,10 @@ class DiskCache(CacheBackend[T]):
 
     async def set(self, key: str, value: T, ttl_seconds: float = 0) -> None:
         """값 저장 (보안 메타데이터 생성 및 권한 강제 포함)"""
+        await asyncio.to_thread(self._set_sync, key, value, ttl_seconds)
+
+    def _set_sync(self, key: str, value: T, ttl_seconds: float = 0) -> None:
+        """동기 파일 저장 — 이벤트 루프 블로킹 방지를 위해 스레드에서 실행"""
         with self.lock:
             cache_file = self._get_cache_path(key)
             try:
@@ -568,6 +577,10 @@ class DiskCache(CacheBackend[T]):
                     ttl_seconds=ttl_seconds if ttl_seconds > 0 else 86400.0,
                 )
 
+                # [최적화] 전체 디렉터리 스캔(glob) 대신 증분 카운터 유지 (쓰기당 O(N) 제거)
+                if not cache_file.exists():
+                    self.stats.cache_size += 1
+
                 # 1. 파일 저장 — 클래스 식별자 문제를 피해, 직렬화는 기본 dict로 수행합니다.
                 with open(cache_file, "wb") as f:
                     pickle.dump(entry.__dict__, f)
@@ -583,18 +596,24 @@ class DiskCache(CacheBackend[T]):
                     str(cache_file) + ".meta", metadata
                 )
 
-                self.stats.cache_size = len(list(self.cache_dir.glob("*.cache")))
-
             except Exception as e:
                 logger.error(f"[DiskCache] 저장 오류: {e}")
 
     async def delete(self, key: str) -> None:
         """값 삭제"""
+        await asyncio.to_thread(self._delete_sync, key)
+
+    def _delete_sync(self, key: str) -> None:
+        """동기 파일 삭제 — 이벤트 루프 블로킹 방지를 위해 스레드에서 실행"""
         with self.lock:
             self._delete_file(self._get_cache_path(key))
 
     async def clear(self) -> None:
         """전체 삭제"""
+        await asyncio.to_thread(self._clear_sync)
+
+    def _clear_sync(self) -> None:
+        """동기 전체 삭제 — 이벤트 루프 블로킹 방지를 위해 스레드에서 실행"""
         import contextlib
 
         with self.lock:
@@ -606,18 +625,21 @@ class DiskCache(CacheBackend[T]):
     def get_stats(self) -> CacheStatistics:
         """통계 조회"""
         with self.lock:
-            self.stats.cache_size = len(list(self.cache_dir.glob("*.cache")))
             self.stats.update_hit_rate()
             return self.stats
 
     def _delete_file(self, path: Path) -> None:
-        """파일 및 메타데이터 삭제"""
+        """파일 및 메타데이터 삭제 (증분 카운터 동기화 포함)"""
         try:
+            removed = False
             if path.exists():
                 path.unlink()
+                removed = True
             meta = Path(str(path) + ".meta")
             if meta.exists():
                 meta.unlink()
+            if removed and self.stats.cache_size > 0:
+                self.stats.cache_size -= 1
         except Exception:
             pass
 
@@ -704,7 +726,12 @@ class CacheManager:
             return None
 
     async def set(
-        self, key: str, value: Any, ttl_seconds: float = 0, use_semantic: bool = False
+        self,
+        key: str,
+        value: Any,
+        ttl_seconds: float = 0,
+        use_semantic: bool = False,
+        persist_to_disk: bool = True,
     ) -> None:
         """값 저장 (L1, L2, L3)"""
         with self.lock:
@@ -716,9 +743,10 @@ class CacheManager:
             if self.semantic_cache and use_semantic:
                 await self.semantic_cache.set(key, value, ttl_seconds)
 
-            # L3 (디스크) 저장 - 세맨틱이 아닐 때만 저장하거나 정책에 따라 결정
-            # 여기서는 모든 실답변을 디스크에 백업함
-            if self.disk_cache:
+            # L3 (디스크) 저장
+            # [최적화] persist_to_disk=False 시 디스크 저장 생략
+            # (문장 임베딩은 FAISS 벡터 캐시에 영속화되므로 중복 디스크 저장 불필요)
+            if self.disk_cache and persist_to_disk:
                 await self.disk_cache.set(key, value, ttl_seconds)
 
     async def delete(self, key: str) -> None:

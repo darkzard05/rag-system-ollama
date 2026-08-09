@@ -36,7 +36,9 @@ class TrackingCacheManager:
     async def get(self, key: str) -> dict[str, object] | None:
         return self._store.get(key)
 
-    async def set(self, key: str, value: dict[str, object]) -> None:
+    async def set(
+        self, key: str, value: dict[str, object], persist_to_disk: bool = True
+    ) -> None:
         self.set_calls.append((key, value))
         self._store[key] = value
 
