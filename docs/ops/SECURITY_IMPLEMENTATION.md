@@ -5,12 +5,12 @@
 Pickle 역직렬화 공격으로부터 RAG 시스템의 BM25 캐시를 보호하기 위해 다층 방어 시스템을 구현했습니다.
 
 ### 변경 내용 요약
-- ✅ **cache_security.py**: 캐시 보안 관리 시스템 (314줄)
+- ✅ **src/security/cache_security.py**: 캐시 보안 관리 시스템 (314줄)
 - ✅ **config.yml**: 캐시 보안 설정 섹션 추가
 - ✅ **config.py**: 캐시 보안 설정 로드 로직 추가
 - ✅ **rag_core.py**: VectorStoreCache에 보안 검증 통합
-- ✅ **test_cache_security.py**: 포괄적 테스트 스위트 (600+ 줄)
-- ✅ **migrate_cache_v1_to_v2.py**: 자동 마이그레이션 스크립트
+- ✅ **test_cache_security.py** (`tests/security/`): 포괄적 테스트 스위트 (600+ 줄)
+- ✅ **migrate_cache_v1_to_v2.py** (`scripts/maintenance/`): 자동 마이그레이션 스크립트
 
 ---
 
@@ -18,7 +18,7 @@ Pickle 역직렬화 공격으로부터 RAG 시스템의 BM25 캐시를 보호하
 
 ### 1. 캐시 보안 관리자 (CacheSecurityManager)
 
-**파일**: `src/cache_security.py`
+**파일**: `src/security/cache_security.py`
 
 #### 주요 기능
 
@@ -135,7 +135,7 @@ CACHE_CHECK_PERMISSIONS=true
 
 ## 🧪 테스트
 
-### 테스트 파일: `tests/test_cache_security.py`
+### 테스트 파일: `tests/security/test_cache_security.py`
 
 총 **45개 테스트** (600+ 줄):
 
@@ -159,16 +159,16 @@ CACHE_CHECK_PERMISSIONS=true
 
 ```bash
 # 모든 테스트 실행
-pytest tests/test_cache_security.py -v
+pytest tests/security/test_cache_security.py -v
 
 # 특정 클래스만
-pytest tests/test_cache_security.py::TestCacheMetadata -v
+pytest tests/security/test_cache_security.py::TestCacheMetadata -v
 
 # 커버리지 포함
-pytest tests/test_cache_security.py --cov=src.cache_security
+pytest tests/security/test_cache_security.py --cov=src.security.cache_security
 
 # 성능 테스트만
-pytest tests/test_cache_security.py -v -k performance
+pytest tests/security/test_cache_security.py -v -k performance
 ```
 
 #### 예상 결과
@@ -195,20 +195,20 @@ if metadata is None:
 
 ### 수동 마이그레이션 스크립트
 
-**파일**: `scripts/migrate_cache_v1_to_v2.py`
+**파일**: `scripts/maintenance/migrate_cache_v1_to_v2.py`
 
 ```bash
 # 일반 마이그레이션 (백업 자동 생성)
-python scripts/migrate_cache_v1_to_v2.py --cache-dir .model_cache
+python scripts/maintenance/migrate_cache_v1_to_v2.py --cache-dir .model_cache
 
 # 드라이런 (실제 작업 없음)
-python scripts/migrate_cache_v1_to_v2.py --cache-dir .model_cache --dry-run
+python scripts/maintenance/migrate_cache_v1_to_v2.py --cache-dir .model_cache --dry-run
 
 # 백업 없이
-python scripts/migrate_cache_v1_to_v2.py --cache-dir .model_cache --no-backup
+python scripts/maintenance/migrate_cache_v1_to_v2.py --cache-dir .model_cache --no-backup
 
 # 검증만
-python scripts/migrate_cache_v1_to_v2.py --cache-dir .model_cache --verify-only
+python scripts/maintenance/migrate_cache_v1_to_v2.py --cache-dir .model_cache --verify-only
 ```
 
 #### 마이그레이션 흐름
@@ -317,7 +317,7 @@ python scripts/migrate_cache_v1_to_v2.py --cache-dir .model_cache --verify-only
 ## ✅ 체크리스트
 
 ### 코드 구현
-- [x] cache_security.py 작성 (CacheSecurityManager, CacheMetadata)
+- [x] src/security/cache_security.py 작성 (CacheSecurityManager, CacheMetadata)
 - [x] config.yml 확장 (cache_security 섹션)
 - [x] config.py 업데이트 (설정 로드)
 - [x] rag_core.py 통합 (VectorStoreCache 보안)
