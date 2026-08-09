@@ -178,11 +178,25 @@ async def retrieve_and_rerank(
     bm25 = cfg.get("bm25_retriever")
     faiss = cfg.get("faiss_retriever")
 
+    from common.config import DYNAMIC_TOP_K_CONFIG, ENSEMBLE_WEIGHTS, RETRIEVER_CONFIG
+    from core.retriever_factory import (
+        search_bm25_with_scores,
+        search_faiss_with_scores,
+    )
+
+    # [수정] R3a-01: 리트리버가 실제 반환한 점수를 메타데이터에서 캡처하도록
+    # 점수 주입 검색 헬퍼를 사용한다 (FAISS similarity_search_with_score / BM25 get_top_n+get_scores).
+    search_k = int(RETRIEVER_CONFIG.get("search_kwargs", {}).get("k", 25))
+
     search_tasks = {}
     if bm25:
-        search_tasks["bm25"] = asyncio.create_task(bm25.ainvoke(query))
+        search_tasks["bm25"] = asyncio.create_task(
+            search_bm25_with_scores(bm25, query, search_k)
+        )
     if faiss:
-        search_tasks["faiss"] = asyncio.create_task(faiss.ainvoke(query))
+        search_tasks["faiss"] = asyncio.create_task(
+            search_faiss_with_scores(faiss, query, search_k)
+        )
 
     results = {}
     if search_tasks:
@@ -196,24 +210,35 @@ async def retrieve_and_rerank(
         f"[RAG] [RETRIEVE] 검색 결과 확보 (BM25: {len(results.get('bm25', []))}, Vector: {len(results.get('faiss', []))})"
     )
 
-    all_docs = []
+    # [수정] R3a-01: 소스별 dict {"bm25": [...], "faiss": [...]}를 그대로 전달해
+    # SearchResultAggregator._rrf_fusion_2node가 가중치와 소스별 순위를 실제 적용.
+    # score=0.5 하드코딩 폴백 제거 — 리트리버 점수를 명시 캡처하고, 점수가 없는
+    # 경우(테스트 대역 등)에만 순위 보존 폴백(0.0)을 사용한다.
+    source_results: dict[str, list[AggregatedSearchResult]] = {}
     doc_map: dict[str, Document] = {}
     for source, res in results.items():
+        node_results = []
         for doc in res:
             doc_id = doc.metadata.get("doc_id", fast_hash(doc.page_content))
-            all_docs.append(
+            raw_score = doc.metadata.get("score")
+            if raw_score is None:
+                logger.debug(
+                    f"[RAG] [RETRIEVE] {source} 소스 문서에 score 메타데이터 없음 — 순위 보존 폴백"
+                )
+                raw_score = 0.0
+            node_results.append(
                 AggregatedSearchResult(
                     doc_id=doc_id,
                     content=doc.page_content,
-                    score=doc.metadata.get("score", 0.5),
+                    score=float(raw_score),
                     node_id=source,
                     metadata=doc.metadata,
                 )
             )
             if doc_id not in doc_map:
                 doc_map[doc_id] = doc
-
-    from common.config import ENSEMBLE_WEIGHTS
+        if node_results:
+            source_results[source] = node_results
 
     aggregator = SearchResultAggregator()
     weights = get_state_attr(state, "search_weights") or {
@@ -221,30 +246,39 @@ async def retrieve_and_rerank(
         "faiss": ENSEMBLE_WEIGHTS[1],
     }
 
-    logger.info(
-        f"[RAG] [RETRIEVE] 하이브리드 가중치 적용: BM25({weights['bm25']:.1f}), FAISS({weights['faiss']:.1f})"
+    # 실제 집계에 적용되는 가중치만 로그로 기록 (단일 소스 상황 포함)
+    applied_desc = ", ".join(
+        f"{nid}({weights.get(nid, 1.0):.2f})" for nid in source_results
     )
+    logger.info(f"[RAG] [RETRIEVE] 하이브리드 가중치 적용: {applied_desc}")
 
     aggregated, _ = aggregator.aggregate_results(
-        {"all": all_docs},
+        source_results,
         strategy=AggregationStrategy.WEIGHTED_RRF,
-        top_k=25,
+        top_k=search_k,
         weights=weights,
     )
 
-    # [최적화] Dynamic Top-K 결정: 상위권 점수 격차(Gap)가 크면 리랭킹 후보군 축소
+    # [수정] R3a-04: 동적 Top-K 임계값을 RRF 점수 스케일(1/(k+rank))로 보정.
+    # 가중치 합산 RRF의 상위권 최대 gap은 ~0.003 수준이므로 config 값(기본 0.003)으로 판정.
+    dynamic_cfg = DYNAMIC_TOP_K_CONFIG
+    gap_threshold = float(dynamic_cfg.get("gap_threshold", 0.003))
+    min_candidates = int(dynamic_cfg.get("min_candidates", 12))
+    max_candidates = int(dynamic_cfg.get("max_candidates", 18))
+
     if len(aggregated) >= 10:
         top_1_score = aggregated[0].aggregated_score
         top_10_score = aggregated[9].aggregated_score
         score_gap = top_1_score - top_10_score
 
-        # Gap이 0.5 이상이면 상위 그룹이 명확하므로 후보군을 12개로 제한
-        dynamic_top_k = 12 if score_gap > 0.5 else 18
+        # 상위 그룹이 명확하면 후보군을 축소하고, 그렇지 않으면 최대 후보를 유지
+        dynamic_top_k = min_candidates if score_gap > gap_threshold else max_candidates
         logger.info(
-            f"[RAG] [RETRIEVE] Dynamic Top-K 적용: {dynamic_top_k} (Score Gap: {score_gap:.3f})"
+            f"[RAG] [RETRIEVE] Dynamic Top-K 적용: {dynamic_top_k} "
+            f"(Score Gap: {score_gap:.4f} / 임계값: {gap_threshold:.4f})"
         )
     else:
-        dynamic_top_k = 12
+        dynamic_top_k = min_candidates
 
     final_docs = [
         doc_map.get(

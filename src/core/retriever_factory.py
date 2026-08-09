@@ -2,6 +2,7 @@
 벡터 저장소 및 리트리버 컴포넌트 생성을 담당하는 팩토리 모듈.
 """
 
+import asyncio
 import logging
 from typing import Any
 
@@ -169,3 +170,70 @@ def create_bm25_retriever(docs: list[Document]) -> Any:
     retriever = BM25Retriever.from_documents(docs, preprocess_func=bm25_tokenizer)
     retriever.k = RETRIEVER_CONFIG["search_kwargs"]["k"]
     return retriever
+
+
+def _bm25_results_with_scores(retriever: Any, query: str, k: int) -> list[Document]:
+    """rank_bm25 점수를 ``metadata["score"]``에 주입한 BM25 상위 결과를 반환합니다.
+
+    ``get_top_n``은 순위 정렬된 문서를, ``get_scores``는 코퍼스 전체 점수를 반환하므로
+    객체 id 기준으로 매칭해 각 문서의 실제 TF-IDF 계열 점수를 기록한다.
+    """
+    tokenized_query = retriever.preprocess_func(query)
+    docs = retriever.vectorizer.get_top_n(tokenized_query, retriever.docs, n=k)
+    all_scores = retriever.vectorizer.get_scores(tokenized_query)
+    score_by_doc_id = {
+        id(doc): float(score)
+        for doc, score in zip(retriever.docs, all_scores, strict=False)
+    }
+    for doc in docs:
+        score = score_by_doc_id.get(id(doc))
+        if score is not None:
+            doc.metadata["score"] = score
+    return list(docs)
+
+
+async def search_bm25_with_scores(retriever: Any, query: str, k: int) -> list[Document]:
+    """BM25 검색 결과를 실제 rank_bm25 점수와 함께 반환합니다.
+
+    실제 ``BM25Retriever``면 동기 내부 호출(``get_top_n`` + ``get_scores``)을
+    스레드로 실행해 점수를 주입하고, 그 외 객체(테스트 대역 등)는 ``ainvoke`` 폴백.
+    """
+    from langchain_community.retrievers import BM25Retriever
+
+    if isinstance(retriever, BM25Retriever):
+        return await asyncio.to_thread(_bm25_results_with_scores, retriever, query, k)
+    docs = await retriever.ainvoke(query)
+    return list(docs)
+
+
+def _faiss_results_with_scores(retriever: Any, query: str, k: int) -> list[Document]:
+    """FAISS ``similarity_search_with_score``의 유사도 점수를 metadata에 주입합니다.
+
+    프로젝트 인덱스는 ``MAX_INNER_PRODUCT``(L2 정규화 벡터)이므로 점수가 클수록
+    유사하며 ``index.search``가 내림차순으로 반환한다.
+    """
+    vector_store = retriever.vectorstore
+    docs_scores = vector_store.similarity_search_with_score(query, k=k)
+    for doc, score in docs_scores:
+        doc.metadata["score"] = float(score)
+    return [doc for doc, _score in docs_scores]
+
+
+async def search_faiss_with_scores(
+    retriever: Any, query: str, k: int
+) -> list[Document]:
+    """FAISS 검색 결과를 실제 유사도 점수와 함께 반환합니다.
+
+    ``VectorStoreRetriever`` 안의 FAISS vectorstore를 언랩해 점수 포함 경로
+    (``similarity_search_with_score``)를 사용하고, 그 외 객체는 ``ainvoke`` 폴백.
+    """
+    from langchain_core.vectorstores import VectorStoreRetriever
+
+    if isinstance(retriever, VectorStoreRetriever):
+        vector_store = retriever.vectorstore
+        if hasattr(vector_store, "similarity_search_with_score"):
+            return await asyncio.to_thread(
+                _faiss_results_with_scores, retriever, query, k
+            )
+    docs = await retriever.ainvoke(query)
+    return list(docs)

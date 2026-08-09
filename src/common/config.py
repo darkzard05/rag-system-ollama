@@ -114,6 +114,11 @@ DYNAMIC_WEIGHTING_CONFIG: dict = RETRIEVER_CONFIG.get(
     "dynamic_weighting", {"enabled": False}
 )
 ENSEMBLE_WEIGHTS: list[float] = RETRIEVER_CONFIG.get("ensemble_weights", [0.4, 0.6])
+# R3a-04: RRF 점수 스케일(1/(k+rank)) 기준 동적 top-k 임계값 config (기본 gap 0.003)
+DYNAMIC_TOP_K_CONFIG: dict = RETRIEVER_CONFIG.get(
+    "dynamic_top_k",
+    {"gap_threshold": 0.003, "min_candidates": 12, "max_candidates": 18},
+)
 
 _reranker_config = _rag_config.get("reranker", {})
 RERANKER_MODEL_NAME: str = _reranker_config.get("model_name", "ms-marco-MultiBERT-L-12")

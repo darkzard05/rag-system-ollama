@@ -66,6 +66,13 @@ rag:
       k: 25  # 충분한 후보군 확보를 위해 상향
     # BM25와 FAISS의 가중치 기본값
     ensemble_weights: [0.4, 0.6]
+
+    # 동적 Top-K 임계값 — RRF 집계 점수 스케일(1/(k+rank), 최대 gap ~0.003) 기준
+    # score gap > gap_threshold 이면 상위 그룹이 명확해 리랭킹 후보를 min_candidates로 축소
+    dynamic_top_k:
+      gap_threshold: 0.003
+      min_candidates: 12
+      max_candidates: 18
     
     # [추가] 동적 가중치 설정 (질문 의도에 따라 자동 조절)
     dynamic_weighting:
