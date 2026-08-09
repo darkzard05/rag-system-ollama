@@ -13,6 +13,7 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 from common.config import (
     EMBEDDING_BATCH_SIZE,
+    EMBEDDING_DEVICE,
     SEMANTIC_CHUNKER_CONFIG,
     TEXT_SPLITTER_CONFIG,
 )
@@ -26,6 +27,20 @@ from services.monitoring.performance_monitor import (
 logger = logging.getLogger(__name__)
 
 
+def _is_ollama_embedder(embedder: Embeddings) -> bool:
+    """Ollama 기반 임베더인지 판별합니다.
+
+    model_loader가 이미 langchain_ollama를 로드한 뒤 호출되므로 추가 임포트
+    비용 없이 정확한 isinstance 판별이 가능합니다. langchain_ollama가
+    설치되지 않은 환경(HuggingFace 전용)에서는 False를 반환합니다.
+    """
+    try:
+        from langchain_ollama import OllamaEmbeddings
+    except ImportError:
+        return False
+    return isinstance(embedder, OllamaEmbeddings)
+
+
 def _get_optimal_batch_size(embedder: Embeddings) -> int:
     """하드웨어 사양에 따른 최적 배치 사이즈 결정"""
     if isinstance(EMBEDDING_BATCH_SIZE, int):
@@ -33,7 +48,20 @@ def _get_optimal_batch_size(embedder: Embeddings) -> int:
 
     import torch
 
-    if getattr(embedder, "model_kwargs", {}).get("device") == "cuda":
+    # HuggingFace 임베더: model_kwargs.device로 명시적 판별 (기존 동작 유지)
+    device = getattr(embedder, "model_kwargs", {}).get("device")
+
+    # [수정] Ollama 임베더: 실행 디바이스가 model_kwargs에 노출되지 않아
+    # (extra="forbid" Pydantic 모델) 항상 CPU 분기로 떨어지던 문제 해결.
+    # 로컬 CUDA 가용 여부 또는 명시적 embedding_device 설정(cuda) 기준으로
+    # GPU 배치 크기를 적용한다. OllamaEmbeddings.embed_documents는 입력 전체를
+    # 단일 HTTP 요청으로 전송하므로, 배치 증가 = HTTP 왕복 횟수 감소.
+    is_ollama = _is_ollama_embedder(embedder)
+    uses_gpu = device == "cuda" or (
+        is_ollama and (torch.cuda.is_available() or EMBEDDING_DEVICE == "cuda")
+    )
+
+    if uses_gpu:
         try:
             total_mem = torch.cuda.get_device_properties(0).total_memory / (1024**3)
             return 128 if total_mem > 10 else (64 if total_mem > 4 else 32)

@@ -3,7 +3,12 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import numpy as np
 import pytest
 from langchain_core.documents import Document
-from src.core.chunking import _postprocess_metadata, split_documents
+from src.core.chunking import (
+    _get_optimal_batch_size,
+    _is_ollama_embedder,
+    _postprocess_metadata,
+    split_documents,
+)
 
 
 def create_mock_document(
@@ -150,6 +155,62 @@ async def test_split_documents_semantic_chunking():
         assert vectors is not None
         np.testing.assert_array_equal(vectors[0], np.array([0.1]))
         mock_log.assert_any_call("의미론적 분할 완료 (1개 조각)", session_id=None)
+
+
+def test_get_optimal_batch_size_int_config():
+    """Explicit int config should win over auto-detection."""
+    with patch("src.core.chunking.EMBEDDING_BATCH_SIZE", 64):
+        assert _get_optimal_batch_size(MagicMock()) == 64
+
+
+def test_get_optimal_batch_size_hf_cuda():
+    """HuggingFace embedder with model_kwargs.device=cuda uses GPU tiers."""
+    embedder = MagicMock()
+    embedder.model_kwargs = {"device": "cuda"}
+    with (
+        patch("src.core.chunking.EMBEDDING_BATCH_SIZE", "auto"),
+        patch("torch.cuda.is_available", return_value=True),
+        patch("torch.cuda.get_device_properties") as props,
+    ):
+        props.return_value.total_memory = 24 * 1024**3
+        assert _get_optimal_batch_size(embedder) == 128
+
+
+def test_get_optimal_batch_size_ollama_gpu():
+    """Ollama embedder gets GPU batch size when CUDA is available.
+
+    Regression: OllamaEmbeddings has no model_kwargs.device, so it used to
+    always fall through to the CPU branch (batch <= 16), multiplying HTTP
+    round trips on GPU machines.
+    """
+    with (
+        patch("src.core.chunking.EMBEDDING_BATCH_SIZE", "auto"),
+        patch("src.core.chunking._is_ollama_embedder", return_value=True),
+        patch("torch.cuda.is_available", return_value=True),
+        patch("torch.cuda.get_device_properties") as props,
+    ):
+        props.return_value.total_memory = 8 * 1024**3
+        assert _get_optimal_batch_size(MagicMock()) == 64
+
+
+def test_get_optimal_batch_size_ollama_cpu():
+    """Ollama embedder on a CPU-only machine keeps the conservative batch."""
+    with (
+        patch("src.core.chunking.EMBEDDING_BATCH_SIZE", "auto"),
+        patch("src.core.chunking._is_ollama_embedder", return_value=True),
+        patch("torch.cuda.is_available", return_value=False),
+        patch("src.core.chunking.EMBEDDING_DEVICE", "auto"),
+        patch("src.core.chunking.os.cpu_count", return_value=8),
+    ):
+        assert _get_optimal_batch_size(MagicMock()) == 8
+
+
+def test_is_ollama_embedder():
+    """Detector recognizes real OllamaEmbeddings instances."""
+    from langchain_ollama import OllamaEmbeddings
+
+    assert _is_ollama_embedder(OllamaEmbeddings(model="test-embedding")) is True
+    assert _is_ollama_embedder(MagicMock()) is False
 
 
 def test_postprocess_metadata_inheritance():
