@@ -1,0 +1,356 @@
+{
+  "meta": {
+    "script": "scripts/eval_quality.py",
+    "tag": "eval",
+    "timestamp": "2026-08-06T17:29:19",
+    "pdf": "tests/data/2201.07520v1.pdf",
+    "testset_n": 1,
+    "no_llm": true,
+    "model": "qwen3:4b-instruct-2507-q4_K_M",
+    "embedder": "nomic-embed-text-v2-moe",
+    "num_predict": 512,
+    "num_ctx": 4096,
+    "truncation_threshold": 460.8,
+    "timeout_seconds": 180.0,
+    "golden_total": 5,
+    "testset_total": 1
+  },
+  "questions": [
+    {
+      "source": "golden",
+      "row": 1,
+      "query": "CM3 모델이 이미지를 학습할 때 사용하는 구체적인 원리와 토큰화 방식은 뭐야? 기존 DALL-E와는 어떤 차이가 있어?",
+      "ground_truth": null,
+      "degenerate": {
+        "is_degenerate": false,
+        "reason": null,
+        "status": "포함"
+      },
+      "note": null,
+      "skipped_no_llm": false,
+      "retrieval": {
+        "doc_count": 4,
+        "max_rerank_score": 0.5329,
+        "documents": [
+          {
+            "page": 5,
+            "section": "4 ZERO/FEW-SHOT PROMPTING",
+            "rerank_score": 0.5161985158920288
+          },
+          {
+            "page": 6,
+            "section": "4 ZERO/FEW-SHOT PROMPTING",
+            "rerank_score": 0.5328527092933655
+          },
+          {
+            "page": 14,
+            "section": "8 CONCLUSION",
+            "rerank_score": 0.5125980377197266
+          },
+          {
+            "page": 18,
+            "section": "REFERENCE",
+            "rerank_score": 0.5016500949859619
+          }
+        ],
+        "relevant": false,
+        "p_at_1": 0,
+        "mrr_at_5": 0.0
+      },
+      "answer": "",
+      "answer_chars": 0,
+      "eval_count": null,
+      "eval_count_missing": true,
+      "ttft": null,
+      "tps": null,
+      "truncated": 0,
+      "prompt_tokens_est": 2810,
+      "overflow": 0,
+      "judge": null,
+      "judge_excluded": true,
+      "judge_error": "--no-llm 모드 (generation/judge 생략)",
+      "error": null
+    },
+    {
+      "source": "golden",
+      "row": 2,
+      "query": "문서 내에서 언급된 모델의 파라미터 수와 학습 데이터셋의 규모는 어떻게 돼?",
+      "ground_truth": null,
+      "degenerate": {
+        "is_degenerate": false,
+        "reason": null,
+        "status": "포함"
+      },
+      "note": null,
+      "skipped_no_llm": false,
+      "retrieval": {
+        "doc_count": 4,
+        "max_rerank_score": 0.4485,
+        "documents": [
+          {
+            "page": 3,
+            "section": "3 CM3",
+            "rerank_score": 0.4484909176826477
+          },
+          {
+            "page": 4,
+            "section": "3 CM3",
+            "rerank_score": 0.4419519007205963
+          },
+          {
+            "page": 4,
+            "section": "4 ZERO/FEW-SHOT PROMPTING",
+            "rerank_score": 0.38450127840042114
+          },
+          {
+            "page": 19,
+            "section": "REFERENCE",
+            "rerank_score": 0.44725674390792847
+          }
+        ],
+        "relevant": false,
+        "p_at_1": 0,
+        "mrr_at_5": 0.0
+      },
+      "answer": "",
+      "answer_chars": 0,
+      "eval_count": null,
+      "eval_count_missing": true,
+      "ttft": null,
+      "tps": null,
+      "truncated": 0,
+      "prompt_tokens_est": 2778,
+      "overflow": 0,
+      "judge": null,
+      "judge_excluded": true,
+      "judge_error": "--no-llm 모드 (generation/judge 생략)",
+      "error": null
+    },
+    {
+      "source": "golden",
+      "row": 3,
+      "query": "이 논문의 핵심 기여점(Contribution) 3가지만 요약해줘.",
+      "ground_truth": null,
+      "degenerate": {
+        "is_degenerate": false,
+        "reason": null,
+        "status": "포함"
+      },
+      "note": null,
+      "skipped_no_llm": false,
+      "retrieval": {
+        "doc_count": 5,
+        "max_rerank_score": 0.3217,
+        "documents": [
+          {
+            "page": 1,
+            "section": "Front Matter",
+            "rerank_score": 0.29530608654022217
+          },
+          {
+            "page": 7,
+            "section": "4 ZERO/FEW-SHOT PROMPTING",
+            "rerank_score": 0.2797878384590149
+          },
+          {
+            "page": 10,
+            "section": "4 ZERO/FEW-SHOT PROMPTING",
+            "rerank_score": 0.2764814794063568
+          },
+          {
+            "page": 12,
+            "section": "5 FINE-TUNING",
+            "rerank_score": 0.2879467308521271
+          },
+          {
+            "page": 13,
+            "section": "7 RELATED WORK",
+            "rerank_score": 0.32172054052352905
+          }
+        ],
+        "relevant": false,
+        "p_at_1": 0,
+        "mrr_at_5": 0.0
+      },
+      "answer": "",
+      "answer_chars": 0,
+      "eval_count": null,
+      "eval_count_missing": true,
+      "ttft": null,
+      "tps": null,
+      "truncated": 0,
+      "prompt_tokens_est": 2449,
+      "overflow": 0,
+      "judge": null,
+      "judge_excluded": true,
+      "judge_error": "--no-llm 모드 (generation/judge 생략)",
+      "error": null
+    },
+    {
+      "source": "golden",
+      "row": 4,
+      "query": "안녕, 너는 누구니?",
+      "ground_truth": null,
+      "degenerate": {
+        "is_degenerate": true,
+        "reason": "빈 엔티티 (expected_key_entities=[])",
+        "status": "제외됨"
+      },
+      "note": null,
+      "skipped_no_llm": true,
+      "retrieval": null,
+      "answer": "",
+      "answer_chars": 0,
+      "eval_count": null,
+      "eval_count_missing": true,
+      "ttft": null,
+      "tps": null,
+      "truncated": 0,
+      "prompt_tokens_est": 0,
+      "overflow": 0,
+      "judge": null,
+      "judge_excluded": null,
+      "judge_error": null,
+      "error": null
+    },
+    {
+      "source": "golden",
+      "row": 5,
+      "query": "이미지 생성 모델의 최신 트렌드에 대해 알려줘.",
+      "ground_truth": null,
+      "degenerate": {
+        "is_degenerate": false,
+        "reason": null,
+        "status": "포함"
+      },
+      "note": "out-of-doc 스트레스 케이스 (문서 밖 질문, P@1=0 기대)",
+      "skipped_no_llm": false,
+      "retrieval": {
+        "doc_count": 4,
+        "max_rerank_score": 0.4605,
+        "documents": [
+          {
+            "page": 5,
+            "section": "4 ZERO/FEW-SHOT PROMPTING",
+            "rerank_score": 0.4604809284210205
+          },
+          {
+            "page": 6,
+            "section": "4 ZERO/FEW-SHOT PROMPTING",
+            "rerank_score": 0.4195399284362793
+          },
+          {
+            "page": 8,
+            "section": "4 ZERO/FEW-SHOT PROMPTING",
+            "rerank_score": 0.40928220748901367
+          },
+          {
+            "page": 14,
+            "section": "REFERENCE",
+            "rerank_score": 0.4170762300491333
+          }
+        ],
+        "relevant": false,
+        "p_at_1": 0,
+        "mrr_at_5": 0.0
+      },
+      "answer": "",
+      "answer_chars": 0,
+      "eval_count": null,
+      "eval_count_missing": true,
+      "ttft": null,
+      "tps": null,
+      "truncated": 0,
+      "prompt_tokens_est": 2927,
+      "overflow": 0,
+      "judge": null,
+      "judge_excluded": true,
+      "judge_error": "--no-llm 모드 (generation/judge 생략)",
+      "error": null
+    },
+    {
+      "source": "testset",
+      "row": 1,
+      "query": "CM3 모델은 어떤 종류의 모델을 기반으로 하고 있으며, 그 핵심 특징은 무엇인가요?",
+      "ground_truth": "CM3는 구조화된 다중 모달 문서의 대규모 데이터 세트를 기반으로 훈련된 원인 마스킹 생성 모델입니다. 핵심 특징은 왼쪽에서 오른쪽으로 토큰을 생성하면서, 문자열 끝부분에 생성되는 소수의 긴 토큰 스피언을 원래 위치에서 마스킹하지 않고, 그 위치를 제외한 방식으로 처리하는 것입니다.",
+      "degenerate": {
+        "is_degenerate": false,
+        "reason": null,
+        "status": "포함"
+      },
+      "note": null,
+      "skipped_no_llm": false,
+      "retrieval": {
+        "doc_count": 5,
+        "max_rerank_score": 0.5107,
+        "documents": [
+          {
+            "page": 1,
+            "section": "Front Matter",
+            "rerank_score": 0.5107239484786987
+          },
+          {
+            "page": 1,
+            "section": "ABSTRACT",
+            "rerank_score": 0.3993315100669861
+          },
+          {
+            "page": 4,
+            "section": "4 ZERO/FEW-SHOT PROMPTING",
+            "rerank_score": 0.4317134618759155
+          },
+          {
+            "page": 6,
+            "section": "4 ZERO/FEW-SHOT PROMPTING",
+            "rerank_score": 0.4227743148803711
+          },
+          {
+            "page": 9,
+            "section": "4 ZERO/FEW-SHOT PROMPTING",
+            "rerank_score": 0.41165056824684143
+          }
+        ],
+        "relevant": null,
+        "p_at_1": null,
+        "mrr_at_5": null
+      },
+      "answer": "",
+      "answer_chars": 0,
+      "eval_count": null,
+      "eval_count_missing": true,
+      "ttft": null,
+      "tps": null,
+      "truncated": 0,
+      "prompt_tokens_est": 2440,
+      "overflow": 0,
+      "judge": null,
+      "judge_excluded": true,
+      "judge_error": "--no-llm 모드 (generation/judge 생략)",
+      "error": null
+    }
+  ],
+  "aggregates": {
+    "scorable_count": 4,
+    "p_at_1": 0.0,
+    "mrr_at_5": 0.0,
+    "latency_question_count": 5,
+    "avg_ttft": null,
+    "avg_tps": null,
+    "avg_answer_chars": 0.0,
+    "avg_eval_count": null,
+    "truncated_ratio": null,
+    "truncated_count": 0,
+    "overflow_ratio": 0.0,
+    "overflow_count": 0,
+    "judge_avg": null,
+    "judge_count": 0,
+    "eval_count_missing_count": 5,
+    "degenerate": [
+      {
+        "source": "golden",
+        "row": 4,
+        "reason": "빈 엔티티 (expected_key_entities=[])"
+      }
+    ]
+  }
+}
