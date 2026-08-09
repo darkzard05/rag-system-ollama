@@ -113,3 +113,10 @@ checklist.md
 context-notes.md
 .ignore
 
+# Agent tooling dirs (not project artifacts)
+.claude/
+.agents/skills/
+
+# Runtime pid files
+reports/f3_streamlit.pid
+
