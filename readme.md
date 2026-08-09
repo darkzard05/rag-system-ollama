@@ -4,7 +4,7 @@
 > Optimized for extreme speed and precision using `LangGraph` orchestration, local `Ollama` models, and a sleek Streamlit interface.
 
 [![Python 3.10+](https://img.shields.io/badge/Python-3.10+-blue.svg)](https://www.python.org)
-[![Model: qwen3:4b-instruct](https://img.shields.io/badge/Model-qwen3:4b--instruct-blueviolet.svg)](https://ollama.com/library/qwen3)
+[![Model: qwen3:4b-instruct-2507-q4_K_M](https://img.shields.io/badge/Model-qwen3:4b--instruct--2507--q4_K_M-blueviolet.svg)](https://ollama.com/library/qwen3)
 [![Backend: LangGraph](https://img.shields.io/badge/Orchestrator-LangGraph-informational.svg)]()
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
@@ -14,16 +14,22 @@
 
 ![Application Interface](assets/image1.png)
 
-*GraphRAG-Ollama features a refined sidebar, real-time status logging, and a professional PDF viewer with a grouped-control navigation toolbar.*
+*GraphRAG-Ollama features a refined sidebar, real-time status logging, and a professional PDF viewer with a grouped-control navigation toolbar. The unified chat timeline surfaces every pipeline stage — document indexing, retrieval, streaming generation, and the final cited answer with page-level references.*
+
+### Pipeline in action
+
+![Real-time document indexing with progress and cancellation](assets/image3.png)
+
+![Streaming generation with live retrieval pipeline status](assets/image2.png)
 
 ---
 
-## ⚡ Key Highlights (v3.3.0 Updated)
+## ⚡ Key Highlights (2026-08 Updated)
 
 ### 🚀 **Extreme Performance & Efficiency**
 - **Header-Aware Semantic Chunking:** Beyond simple text splitting, our system respects Markdown headers (`#`, `##`). It prevents context contamination between sections and injects structural metadata (`current_section`) into every chunk.
 - **99.8% Metadata Optimization:** Implements **Reference-based Metadata Offloading**. Word coordinates for highlighting are stored in a dedicated side-cache (`CoordCacheManager`), reducing FAISS index RAM usage by over 99% while maintaining sub-millisecond hydration during retrieval.
-- **FlashRank Semantic Reranking:** Integrated `FlashRank` (v0.2.0) with ONNX runtime. Re-evaluates search results using a Cross-Encoder model on CPU, achieving **2x higher accuracy (P@1)** with minimal latency.
+- **FlashRank Semantic Reranking:** Integrated `FlashRank` (v0.2.0) with ONNX runtime. The cross-encoder re-evaluates search results on CPU and cleanly separates relevant documents (score ≥ `min_score_to_skip`, default 0.85) from out-of-scope ones, enabling the fast-path grade short-circuit (`rag.reranker.engine`: `auto` / `flashrank` / `semantic`).
 
 ### 🧠 **Intelligent Reasoning & Citations**
 - **Configurable Prompt System:** All RAG prompts (`grading`, `rewriting`, `QA`) are externalized in `config.yml`. They use generalized instructions to handle complex model names and technical terms without hardcoding.
@@ -31,9 +37,18 @@
 - **Relevant Entity Extraction:** The LLM is strictly instructed to extract key technical entities during the grading phase, ensuring transparency in its reasoning process.
 
 ### 🛡️ **Reliability & Integrity**
-- **Multi-Layer Unit Testing:** 13+ new unit tests covering Graph Flow, RAG Orchestration, Document Processing, and Advanced Citations.
-- **100% Integrity Pass:** Integrated verification system (`verify_integrity.py`) ensures code style, typing, and RAG logic are always production-ready.
+- **68+ unit test files** covering Graph Flow, RAG Orchestration, Document Processing, Advanced Citations, concurrency, and streaming.
+- **CI-enforced integrity:** `ruff check`, `ruff format --check`, `mypy src`, `bandit`, `pip-audit`, unit coverage ≥55%, and 12 integration tests (auth/ownership/PDF/SSE).
 - **Ghosting-Free UI:** Advanced `st.fragment` and `st.empty` placeholder management prevents visual glitches during real-time streaming.
+- **Robust PDF handling:** Corrupt PDFs are rejected upfront on upload; the viewer stays crash-proof and layout-preserved.
+
+### 🆕 Recent Improvements (2026-06 → 08)
+- **Reasoning extraction:** `models.thinking` (default `true`) enables Ollama native reasoning streams, surfaced in the UI as a native "reasoning expander" with a condensed pipeline summary per answer.
+- **Faster first query:** embedding model, FlashRank ONNX, and the default LLM are preloaded at build time (silently skipped on failure); `num_ctx` raised to 8192.
+- **GPU batch embedding:** the Ollama embedder now picks batch size from available VRAM (`embedding_batch_size: auto`), cutting embedding HTTP round-trips.
+- **Non-blocking cache I/O:** DiskCache operations run on a worker thread (`asyncio.to_thread`) with an incremental size counter and an optional `persist_to_disk=False` fast path.
+- **Streamlit 1.60:** upgrade fixes a pdf-viewer scroll regression; hash-based PDF serving (`/api/v1/pdf/{hash}`) is path-injection-safe with multi-page highlight coordinates.
+- **Eval harness:** `scripts/eval_quality.py` measures P@1/MRR@5/TTFT/tokens-per-sec + LLM judge score per run into `reports/`.
 
 ---
 
@@ -54,19 +69,21 @@
 ```text
 rag-system-ollama/
 ├── src/
-│   ├── .deepeval/
 │   ├── api/
 │   ├── cache/
 │   ├── common/
 │   ├── core/
-│   ├── data/
+│   │   └── session/
 │   ├── infra/
 │   ├── main.py # 🏁 Entry Point
 │   ├── security/
 │   ├── services/
+│   │   ├── monitoring/
+│   │   └── optimization/
 │   └── ui/
+│       ├── components/
+│       └── styles/
 ├── scripts/
-│   ├── .model_cache/
 │   ├── analyze_dom.py
 │   ├── analyze_logs.py
 │   ├── analyze_paths.py
@@ -85,6 +102,7 @@ rag-system-ollama/
 │   ├── dump_page.py
 │   ├── e2e_performance_benchmark.py
 │   ├── eval_grader.py
+│   ├── eval_quality.py
 │   ├── eval_results.json
 │   ├── eval_retrieval.py
 │   ├── evaluate_pipeline.py
@@ -93,7 +111,9 @@ rag-system-ollama/
 │   ├── find_containers.py
 │   ├── inspect_containers.py
 │   ├── kill_streamlit.py
+│   ├── layout_probe.py
 │   ├── maintenance/
+│   ├── probe_qwen3_thinking.py
 │   ├── quick_verify_rag.py
 │   ├── README.md
 │   ├── reverify_dom_task1.py
@@ -126,7 +146,6 @@ rag-system-ollama/
 │   └── visual_qa_automation.py
 ├── tests/
 │   ├── conftest.py
-│   ├── data/
 │   ├── e2e/
 │   ├── integration/
 │   ├── README.md
@@ -178,14 +197,17 @@ We maintain a strict **Zero-Error Policy**. Run the automated verification suite
 # Run all unit tests
 pytest tests/unit
 
-# Run full pipeline integration test
+# Full pipeline integration test
 python scripts/test_full_pipeline.py
 
 # Verify section metadata extraction
 python scripts/verify_section_metadata.py
+
+# Integrity check (style, typing, RAG logic)
+python scripts/maintenance/verify_integrity.py
 ```
 
-CI enforces unit coverage ≥55% (`--cov-fail-under=55`) and additionally runs the auth/ownership/PDF/SSE integration tests (`test_api_auth_login`, `test_api_pdf_serving`, `test_global_exception_handler`, `test_ownership_hardening`, `test_pdf_library_retention`, `test_stream_error_isolation`, `test_api_endpoints`).
+CI enforces unit coverage ≥55% (`--cov-fail-under=55`) and additionally runs `bandit`, `pip-audit`, and the integration tests: `test_rag_integration`, `test_streamlit_app`, `test_streaming_response`, `test_cache_security`, `test_caching_system`, `test_api_auth_login`, `test_api_pdf_serving`, `test_global_exception_handler`, `test_ownership_hardening`, `test_pdf_library_retention`, `test_stream_error_isolation`, `test_api_endpoints`.
 
 ---
 
@@ -211,11 +233,16 @@ Each run writes `reports/eval_quality_<tag>_<ts>.json` and `.md` with per-questi
 |-----|---------|---------|
 | `models.ollama_num_predict` | 2048 | Max generated tokens per answer |
 | `models.num_ctx` | 8192 | Model context window (tokens) |
+| `models.thinking` | true | Enable Ollama native reasoning extraction |
+| `models.embedding_batch_size` | auto | Embedding batch size (auto = GPU VRAM-based) |
+| `rag.parsing.hydration_mode` | precision_clip | PDF coordinate extraction mode for highlighting |
+| `rag.reranker.engine` | auto | Reranker engine: `auto` / `flashrank` / `semantic` |
 | `rag.prompts.grading.min_score_to_skip` | 0.85 | Skip the LLM grade when the max rerank score reaches this |
+| `global_cache.enable_vector_cache` | true | Enable vector store (indexing results) caching |
 | `ui.timeline_poll_seconds` | 1.0 | Timeline fragment auto-refresh interval (seconds) |
 
 ---
 
 ## 📄 License
 MIT License - Developed by **darkzard05**.
-**Status:** v3.3.0 | **Last Updated:** 2026-03-12
+**Last Updated:** 2026-08-09
