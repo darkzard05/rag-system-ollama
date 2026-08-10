@@ -163,6 +163,11 @@ class TestPipelineEdgeCases:
             ),
         ):
             mock_manager.return_value.retrievers.get.return_value = (mock_vs, mock_bm25)
+            # [T18-스모크] T12(R1b-04) async get_retrievers(pin 경유) 호환 mock —
+            # bare MagicMock은 await 불가하므로 AsyncMock으로 동일 쌍을 반환한다.
+            mock_manager.return_value.get_retrievers = AsyncMock(
+                return_value=(mock_vs, mock_bm25)
+            )
             SessionManager.set(
                 "file_hash", "dummy_hash", session_id=rag_system.session_id
             )
@@ -201,6 +206,11 @@ class TestPipelineEdgeCases:
             ),
         ):
             mock_manager.return_value.retrievers.get.return_value = (mock_vs, mock_bm25)
+            # [T18-스모크] T12(R1b-04) async get_retrievers(pin 경유) 호환 mock —
+            # bare MagicMock은 await 불가하므로 AsyncMock으로 동일 쌍을 반환한다.
+            mock_manager.return_value.get_retrievers = AsyncMock(
+                return_value=(mock_vs, mock_bm25)
+            )
             SessionManager.set(
                 "file_hash", "timeout_hash", session_id=rag_system.session_id
             )
@@ -246,6 +256,11 @@ class TestPipelineEdgeCases:
             ),
         ):
             mock_manager.return_value.retrievers.get.return_value = (mock_vs, mock_bm25)
+            # [T18-스모크] T12(R1b-04) async get_retrievers(pin 경유) 호환 mock —
+            # bare MagicMock은 await 불가하므로 AsyncMock으로 동일 쌍을 반환한다.
+            mock_manager.return_value.get_retrievers = AsyncMock(
+                return_value=(mock_vs, mock_bm25)
+            )
             SessionManager.set(
                 "file_hash", "long_query_hash", session_id=rag_system.session_id
             )

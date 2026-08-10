@@ -128,7 +128,21 @@ class PipelineBuilder:
         # 이전의 file_hash 조기 커밋을 롤백으로 감쌉니다. 빌드 실패·취소 시
         # 이전 값으로 복원해 "새 해시 + 이전 엔진" 비정상 조합이 세션에 남아
         # 옛 문서 기준으로 동작하는 팬텀 상태가 생기지 않게 합니다.
+        # [T18-회귀수정] pdf_file_path/파일명도 같은 커밋 단위로 기록·롤백합니다.
+        # UI/API 업로드 경로는 이미 세션에 설정되지만, build_pipeline을 직접
+        # 호출하는 경로(스크립트/테스트)는 비어 있어 쿼리 시점 퇴출 자기 치유
+        # 재구축(get_or_build → build_fn)이 file_path=None으로 실패했습니다.
+        prev_pdf_file_path = SessionManager.get(
+            "pdf_file_path", session_id=self.session_id
+        )
+        prev_file_name = SessionManager.get(
+            "last_uploaded_file_name", session_id=self.session_id
+        )
         SessionManager.set("file_hash", file_hash, session_id=self.session_id)
+        SessionManager.set("pdf_file_path", file_path, session_id=self.session_id)
+        SessionManager.set(
+            "last_uploaded_file_name", file_name, session_id=self.session_id
+        )
 
         try:
             return await self._build_impl(
@@ -141,6 +155,12 @@ class PipelineBuilder:
             )
         except BaseException:
             SessionManager.set("file_hash", prev_file_hash, session_id=self.session_id)
+            SessionManager.set(
+                "pdf_file_path", prev_pdf_file_path, session_id=self.session_id
+            )
+            SessionManager.set(
+                "last_uploaded_file_name", prev_file_name, session_id=self.session_id
+            )
             logger.warning(
                 "[RAG] [INDEX] 파이프라인 구축 실패 — file_hash 롤백: "
                 f"{file_hash!r} -> {prev_file_hash!r}"
@@ -329,7 +349,26 @@ async def prepare_query_config_or_build(
         # LRU/용량 퇴출(silent eviction)에서 보호해 쿼리마다 재인덱싱되는
         # churn을 방지한다. 해제는 aquery/astream 종료 시 unpin_retrievers
         # (rag_core.py:154, :224)와 clear_session의 unregister가 담당한다.
-        result = await coordinator.get_retrievers(file_hash, None)
+        #
+        # [T18-회귀수정] get_retrievers 내부 check_memory_pressure() await 사이
+        # unpinned 리소스가 퇴출될 수 있다(메모리 압력 TOCTOU). build_fn을
+        # get_or_build에 넘기면 build_pipeline의 반환값(메시지 문자열)이
+        # 리소스로 저장되므로 부적합 — 퇴출로 인한 ValueError는 아래 기존
+        # 빌드 폴백으로 자기 치유한다. build_fn이 없으면 None 폴백
+        # ((None, None) 분기로 하류가 처리).
+        try:
+            result = await coordinator.get_retrievers(file_hash, None)
+        except ValueError:
+            result = None
+            if pdf_file_path and build_fn is not None:
+                await build_fn(
+                    file_path=pdf_file_path,
+                    file_name=SessionManager.get(
+                        "last_uploaded_file_name", session_id=session_id
+                    ),
+                    embedder=embedder,
+                )
+                result = coordinator.retrievers.get(file_hash)
     vector_store, bm25_shared = result if result else (None, None)
 
     faiss_ret = SessionManager.get("active_faiss_retriever", session_id=session_id)

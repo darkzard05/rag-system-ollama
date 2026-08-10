@@ -1,6 +1,7 @@
 import asyncio
+from unittest.mock import AsyncMock, MagicMock
+
 import pytest
-from unittest.mock import MagicMock, AsyncMock
 
 from cache.engine_cache import EngineCacheManager
 from core.rag_core import RAGSystem
@@ -37,6 +38,9 @@ def mock_resources(monkeypatch):
     vector_store = MagicMock()
     vector_store.as_retriever.return_value = MagicMock()
     mock_rm.retrievers.get.return_value = (vector_store, MagicMock())
+    # [T18-스모크] T12(R1b-04)가 쿼리 경로를 async get_retrievers(pin 경유)로 변경 —
+    # bare MagicMock은 await 불가하므로 AsyncMock으로 동일 리트리버 쌍을 반환한다.
+    mock_rm.get_retrievers = AsyncMock(return_value=mock_rm.retrievers.get.return_value)
     monkeypatch.setattr("core.rag_core.get_resource_manager", lambda: mock_rm)
     monkeypatch.setattr("core.pipeline_builder.get_resource_manager", lambda: mock_rm)
 
