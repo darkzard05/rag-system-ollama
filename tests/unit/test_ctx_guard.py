@@ -21,7 +21,8 @@ from core.model_loader import ModelManager
 from core.pipeline_builder import PipelineBuilder
 
 _NUM_CTX = 8192
-_BUDGET = int(_NUM_CTX * 0.85)
+_NUM_PREDICT = 2048
+_BUDGET = int((_NUM_CTX - _NUM_PREDICT) * 0.85)
 
 _DOC_MARKERS = ("doc_A_low", "doc_B_mid", "doc_C_high")
 
@@ -83,6 +84,7 @@ async def _run_generate(mock_llm: MagicMock, docs: list[Document], fake_count) -
 
     with (
         patch("core.graph_builder.OLLAMA_NUM_CTX", _NUM_CTX),
+        patch("core.graph_builder.OLLAMA_NUM_PREDICT", _NUM_PREDICT),
         patch("core.graph_builder.count_tokens_rough", side_effect=fake_count),
         patch("core.graph_builder.adispatch_custom_event", new=AsyncMock()),
         patch.object(ModelManager, "inference_session", _patch_inference_session()),
@@ -100,12 +102,13 @@ async def test_generate_trims_low_rerank_docs_when_over_budget():
         return _BUDGET + 5000 if n_docs >= 3 else _BUDGET - 5000
 
     mock_llm = MagicMock()
-    result, sent_messages, state = await _run_generate(
+    result, sent_messages, _state = await _run_generate(
         mock_llm, _make_docs(), fake_count
     )
 
     assert result["performance"]["relevant_docs_count"] == 2
-    assert [d.metadata["rerank_score"] for d in state["relevant_docs"]] == [0.9, 0.5]
+    # R1a-03: 최종 상태는 노드 반환 dict로 반영된다 (in-place state 변이 제거)
+    assert [d.metadata["rerank_score"] for d in result["relevant_docs"]] == [0.9, 0.5]
     human_content = sent_messages[0][1].content
     assert "doc_A_low" not in human_content
     assert "doc_B_mid" in human_content
@@ -120,12 +123,13 @@ async def test_generate_keeps_minimum_two_docs_even_when_over_budget():
         return _BUDGET + 5000
 
     mock_llm = MagicMock()
-    result, sent_messages, state = await _run_generate(
+    result, sent_messages, _state = await _run_generate(
         mock_llm, _make_docs(), fake_count
     )
 
     assert result["performance"]["relevant_docs_count"] == 2
-    assert [d.metadata["rerank_score"] for d in state["relevant_docs"]] == [0.9, 0.5]
+    # R1a-03: 최종 상태는 노드 반환 dict로 반영된다 (in-place state 변이 제거)
+    assert [d.metadata["rerank_score"] for d in result["relevant_docs"]] == [0.9, 0.5]
     human_content = sent_messages[0][1].content
     assert "doc_A_low" not in human_content
     assert "doc_B_mid" in human_content
@@ -164,10 +168,11 @@ async def test_generate_preserves_descending_rerank_order_after_trim():
         return _BUDGET + 5000 if n_docs >= 4 else _BUDGET - 5000
 
     mock_llm = MagicMock()
-    result, sent_messages, state = await _run_generate(mock_llm, docs, fake_count)
+    result, sent_messages, _state = await _run_generate(mock_llm, docs, fake_count)
 
     assert result["performance"]["relevant_docs_count"] == 3
-    assert [d.metadata["rerank_score"] for d in state["relevant_docs"]] == [
+    # R1a-03: 최종 상태는 노드 반환 dict로 반영된다 (in-place state 변이 제거)
+    assert [d.metadata["rerank_score"] for d in result["relevant_docs"]] == [
         0.99,
         0.95,
         0.9,

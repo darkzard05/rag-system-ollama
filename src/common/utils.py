@@ -486,10 +486,12 @@ def count_tokens_rough(text: str) -> int:
     """
     텍스트의 토큰 수를 대략적으로 계산합니다. (보수적 추정)
     - 영어/숫자/공백(ASCII): 약 3~4글자당 1토큰
-    - 한글/특수문자(비ASCII): 약 1글자당 2~3토큰 (멀티바이트 특성 반영)
+    - 한글/특수문자(비ASCII): 약 1글자당 1.4토큰
 
-    최신 LLM(Llama 3, DeepSeek 등)의 토크나이저 특성을 반영하여
-    한국어 문서를 처리할 때 컨텍스트 초과를 방지하기 위해 보수적으로 산출합니다.
+    R4-02: Ollama `prompt_eval_count` 실측 대비 기존 비ASCII 가중치(2.5/문자)가
+    2.32배 과대추정이었다(동일 프롬프트 추정 1388 vs 실제 598). 실측 보정 결과
+    한글 1글자당 1.2~1.5토큰 수준이 실제와 근접하여, 안전 마진을 남긴 1.4로
+    재보정했다. 한글/비ASCII가 ASCII보다 토큰당 문자 수가 적다는 보수적 원칙은 유지한다.
     """
 
     if not text:
@@ -502,8 +504,8 @@ def count_tokens_rough(text: str) -> int:
     # 2. 비ASCII(한글, 한자 등) 문자 개수 파악
     non_ascii_chars = len(text) - ascii_chars
 
-    # 3. 보수적 가중치 적용 (ASCII는 3글자당 1토큰, 비ASCII는 1글자당 2.5토큰)
-    rough_count = (ascii_chars / 3.0) + (non_ascii_chars * 2.5)
+    # 3. 보수적 가중치 적용 (ASCII는 3글자당 1토큰, 비ASCII는 1글자당 1.4토큰 — R4-02 보정)
+    rough_count = (ascii_chars / 3.0) + (non_ascii_chars * 1.4)
 
     # 최소 1개 이상 반환 및 정수 올림 처리 효과
     return int(rough_count) + 1
