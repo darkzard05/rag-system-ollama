@@ -40,6 +40,49 @@ def compute_file_hash(file_path: str, data: bytes | None = None) -> str:
         return ""
 
 
+def _to_float(value: Any) -> float | None:
+    """값을 float로 변환합니다. 파싱 불가(None 포함) 시 None을 반환합니다."""
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _words_bbox(words: list[Any]) -> list[float] | None:
+    """단어 좌표 리스트의 실제 텍스트 영역 bbox ``[x0, y0, x1, y1]``를 계산합니다.
+
+    tuple/리스트(5-tuple·8-tuple)와 dict 형식을 모두 지원하며, 파싱 불가 항목은
+    건너뜁니다. 유효 좌표가 하나도 없으면 None을 반환해 호출부가 페이지 rect로
+    폴백하도록 합니다.
+    """
+    xs0: list[float] = []
+    ys0: list[float] = []
+    xs1: list[float] = []
+    ys1: list[float] = []
+    for w in words:
+        if isinstance(w, dict):
+            x0 = _to_float(w.get("x0"))
+            y0 = _to_float(w.get("y0"))
+            x1 = _to_float(w.get("x1"))
+            y1 = _to_float(w.get("y1"))
+        elif isinstance(w, (tuple, list)) and len(w) >= 4:
+            x0 = _to_float(w[0])
+            y0 = _to_float(w[1])
+            x1 = _to_float(w[2])
+            y1 = _to_float(w[3])
+        else:
+            continue
+        if x0 is None or y0 is None or x1 is None or y1 is None:
+            continue
+        xs0.append(x0)
+        ys0.append(y0)
+        xs1.append(x1)
+        ys1.append(y1)
+    if not xs0:
+        return None
+    return [min(xs0), min(ys0), max(xs1), max(ys1)]
+
+
 @contextlib.contextmanager
 def open_pdf_document(file_path: str):
     """PDF 파일을 자동으로 정리하는 컨텍스트 매니저.
@@ -237,9 +280,24 @@ async def load_pdf_docs(
                         )
 
                     if HYDRATION_MODE == "precision_clip":
-                        # 페이지 전체 Rect를 기본 bbox로 설정 (폴백용)
-                        page_rect = doc[page_num - 1].rect
-                        bbox = [page_rect.x0, page_rect.y0, page_rect.x1, page_rect.y1]
+                        # [R2-06] 페이지 전체 rect 대신 실제 텍스트 영역(단어 bbox 합집합)으로
+                        # bbox를 산출 — 헤더/푸터(마진) 영역을 제외해 캐시 미스 시
+                        # 불필요한 전체 페이지 I/O를 줄입니다. 실질 하이라이트 정밀도는
+                        # utils.py의 토큰 시퀀스 매칭이 담당합니다 (config 주석 참조).
+                        raw_words = (
+                            chunk.get("words", []) if isinstance(chunk, dict) else []
+                        )
+                        content_bbox = _words_bbox(raw_words)
+                        if content_bbox is not None:
+                            bbox = content_bbox
+                        else:
+                            page_rect = doc[page_num - 1].rect
+                            bbox = [
+                                page_rect.x0,
+                                page_rect.y0,
+                                page_rect.x1,
+                                page_rect.y1,
+                            ]
 
                     tables = chunk.get("tables", []) if isinstance(chunk, dict) else []
 

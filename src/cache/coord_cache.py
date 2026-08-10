@@ -37,6 +37,19 @@ COORD_CACHE_DIR = PROJECT_ROOT / ".model_cache" / "coord_cache"
 COORD_CACHE_DB = COORD_CACHE_DIR / "coords.db"
 
 
+def to_coord5(word: Any) -> Any:
+    """단어 좌표를 캐시 저장 규격 5-tuple ``(x0, y0, x1, y1, word)``로 정규화합니다.
+
+    좌표 캐시에는 추출 경로별로 서로 다른 튜플 길이가 유입될 수 있어
+    (pymupdf4llm ``extractWORDS()`` 8-tuple ``(x0, y0, x1, y1, word, block, line, word_no)``
+    vs C-엔진/하이드레이터 5-tuple), 저장 전에 한 번에 통일합니다.
+    dict 형식(테스트/기존 캐시 항목)은 그대로 통과시켜 하위 호환을 유지합니다.
+    """
+    if isinstance(word, (tuple, list)) and len(word) >= 5:
+        return (word[0], word[1], word[2], word[3], word[4])
+    return word
+
+
 class CoordCacheManager:
     """단어 좌표 데이터를 SQLite에 캐싱하고 관리하는 클래스 (싱글톤)."""
 
@@ -293,14 +306,18 @@ class CoordCacheManager:
         self,
         file_hash: str,
         page_num: int,
-        coords: list[dict[str, Any]],
+        coords: list[Any],
     ) -> bool:
         """좌표 데이터를 캐시에 저장합니다 (Write-Behind)."""
         if not file_hash or not coords:
             return False
 
+        # [R2-09] 저장 전 5-tuple 정규화 — pymupdf4llm 8-tuple과 C-엔진 5-tuple을 통일.
+        # 하이드레이션 읽기 경로(utils.py: c[0..4] 소비)와 대칭을 유지합니다.
+        normalized = [to_coord5(w) for w in coords]
+
         try:
-            await self._submit(self._save_coords_impl(file_hash, page_num, coords))
+            await self._submit(self._save_coords_impl(file_hash, page_num, normalized))
             return True
         except Exception as e:
             logger.error(f"좌표 캐시 큐 삽입 실패 ({file_hash}, p{page_num}): {e}")

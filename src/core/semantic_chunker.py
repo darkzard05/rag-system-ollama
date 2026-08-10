@@ -818,10 +818,14 @@ class EmbeddingBasedSemanticChunker:
             if chunk_norm > 1e-9:
                 chunk_vector = chunk_vector / chunk_norm
 
+            # [R2-05] start는 오버랩 포함 실제 텍스트 범위(actual_start) 기준으로 산출.
+            # merged_text(:812-814)와 벡터(:815)가 이미 actual_start를 사용하므로,
+            # group_start 기준으로 산출하면 오버랩 문장 구간의 좌표·페이지 메타데이터가
+            # 청크 텍스트와 어긋납니다 (페이지 경계 오버랩 시 하이라이트 좌표 누락).
             chunks.append(
                 {
                     "text": merged_text,
-                    "start": sentences[group_start]["start"],
+                    "start": sentences[actual_start]["start"],
                     "end": sentences[group_end - 1]["end"],
                     "vector": chunk_vector,
                     "is_hard_split": sentences[group_end - 1].get(

@@ -106,7 +106,11 @@ rag:
     ignore_code: false       # 코드 블록 보존
     
     # [수정] 하이드레이션 모드 설정
-    # precision_clip: 필요한 구역만 정밀 추출 (권장)
+    # precision_clip: 페이지별 실제 텍스트 영역(word bbox) 좌표만 추출 (권장)
+    #   - 추출 시 문서_processor가 헤더/푸터(마진)를 제외한 텍스트 영역 bbox를
+    #     메타데이터에 저장하고, 하이드레이터가 해당 clip으로 단어를 추출합니다.
+    #   - 실질 하이라이트 정밀도는 추출된 단어 좌표 위에서 utils.py의
+    #     단어 토큰 시퀀스 매칭(슬라이딩 윈도우)이 담당합니다.
     # full: 페이지 전체 좌표 추출 (비효율적)
     # none: 좌표 추출 안 함 (하이라이트 불가)
     hydration_mode: "precision_clip" 
