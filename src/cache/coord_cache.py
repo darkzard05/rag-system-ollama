@@ -26,6 +26,7 @@ from common.config import PROJECT_ROOT
 MAX_CACHE_SIZE_MB = 500
 CACHE_TTL_DAYS = 7
 _EVICTION_INTERVAL_SECONDS = 1800  # 30 minutes
+_EVICTION_BATCH_SIZE = 128  # [R1b-07] 크기 상한 초과 시 사이클당 삭제 행 수
 _CONNECTION_MAX_AGE = 300  # 5분: 연결 최대 생존 시간 (초)
 _CONNECTION_HEALTH_CHECK_INTERVAL = 30  # 30초: 헬스체크 간격
 _WRITE_BEHIND_QUEUE_MAX = 5000  # 백그라운드 큐 최대 대기 항목 (메모리 바운드)
@@ -313,15 +314,50 @@ class CoordCacheManager:
             "DELETE FROM coords WHERE ? - created_at > ?", (now, ttl_seconds)
         )
 
-        # 2. 크기 제한 (간단한 구현: 전체 크기가 넘으면 오래된 것부터 삭제)
-        # SQLite 파일 크기 확인 (동기 호출을 asyncio 스레드로 위임)
-        size = await asyncio.to_thread(lambda: COORD_CACHE_DB.stat().st_size)
-        if size > MAX_CACHE_SIZE_MB * 1024 * 1024:
-            _ = await db.execute("""
-                DELETE FROM coords WHERE rowid IN (
-                    SELECT rowid FROM coords ORDER BY created_at ASC LIMIT 10
+        # 2. 크기 제한 — [R1b-07] SUM(length(coords)) 기반 초과 감지 후 배치 삭제.
+        #    상한을 초과하면 오래된 행부터 반복 삭제해 한 사이클에서 상한 이하로
+        #    되돌립니다. (기존 LIMIT 10은 10행/30분 = 하루 480행에 불과해
+        #    500MB 상한이 사실상 비작동이었습니다)
+        #
+        #    [오버 삭제 방지] 삭제 후보를 "created_at 오름차순 누적 바이트가
+        #    현재 초과분 이하"인 행으로 한정해, 한 번의 배치가 보존해야 할
+        #    최신 행까지 휩쓸지 않도록 합니다. 행 수는 _EVICTION_BATCH_SIZE로
+        #    상한을 둡니다(사이클당 작업량 바운드).
+        size_limit = MAX_CACHE_SIZE_MB * 1024 * 1024
+        while True:
+            async with db.execute(
+                "SELECT COALESCE(SUM(length(coords)), 0) FROM coords"
+            ) as cursor:
+                row = await cursor.fetchone()
+            total_size = row[0] if row else 0
+            if total_size <= size_limit:
+                break
+            excess = total_size - size_limit
+            cur = await db.execute(
+                "DELETE FROM coords WHERE rowid IN ("
+                "SELECT rowid FROM ("
+                "  SELECT rowid,"
+                "    SUM(length(coords)) OVER ("
+                "      ORDER BY created_at ASC, rowid ASC"
+                "    ) AS cum_size"
+                "  FROM coords"
+                ") WHERE cum_size <= ?"
+                " ORDER BY rowid LIMIT ?)",
+                (excess, _EVICTION_BATCH_SIZE),
+            )
+            if not cur.rowcount:
+                # 누적 바이트가 초과분을 넘는 단일 행만 남은 경우(너무 큰 1행),
+                # 가장 오래된 1행을 삭제해 진행을 보장합니다. 최신 행은 모든
+                # 오래된 행이 사라지고도 상한을 넘을 때만 삭제 대상이 됩니다.
+                cur = await db.execute(
+                    "DELETE FROM coords WHERE rowid = ("
+                    "SELECT rowid FROM coords"
+                    " ORDER BY created_at ASC, rowid ASC LIMIT 1"
+                    ")"
                 )
-            """)
+                if not cur.rowcount:
+                    # 안전망: 삭제할 행이 없는데도 상한 미달이 아닌 경우 루프 종료
+                    break
         await db.commit()
 
     # -- 공개 API (루프 독립) ----------------------------------------------
@@ -450,6 +486,11 @@ class CoordCacheManager:
         self._stop_owner_loop()
         self._conn_lock = asyncio.Lock()
         self._queue = asyncio.Queue(maxsize=_WRITE_BEHIND_QUEUE_MAX)
+        # [R1b-05] close→재사용 시 가드를 리셋하지 않으면 _ensure_schema가 조기
+        # 반환해 eviction 루프가 영구 비활성됩니다 (worker는 _ensure_worker_started가
+        # _worker_task is None으로 재시작하지만 eviction은 재시작되지 않았음).
+        self._schema_ready = False
+        self._eviction_started = False
 
     async def _close_impl(self) -> None:
         async with self._conn_lock:
