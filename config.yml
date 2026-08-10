@@ -58,6 +58,7 @@ rag:
       hnsw_m: 32                  # HNSW 그래프 연결 수 (기본 32)
       quantization_threshold: 5000 # 5000개 이상 문서 시 SQ8 양자화 적용 (메모리 75% 절감)
       use_l2_norm: true           # 코사인 유사도 보장을 위한 L2 정규화 사용 여부
+      nprobe: 16                  # [R3a-02] IVF 티어(2만 청크 이상) 검색 시 탐색 셀 수 (리콜-속도 트레이드오프)
 
   # 리트리버 설정
   retriever:

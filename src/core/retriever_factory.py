@@ -16,6 +16,44 @@ from core.session import SessionManager
 logger = logging.getLogger(__name__)
 
 
+def _faiss_gpu_supported(faiss_mod: Any) -> bool:
+    """faiss-gpu 설치 여부를 심볼 존재로 판정합니다 (GPU 자동 감지 fail-safe).
+
+    R3a-05: faiss-cpu에는 GPU 심볼(``StandardGpuResources``,
+    ``index_cpu_to_gpu_multiple``, ``GpuMultipleClonerOptions``)이 없어
+    ``faiss.get_num_gpus()``만으로는 GPU 사용을 판정할 수 없다. faiss-gpu가
+    설치된 경우에만 GPU 경로를 활성화한다 (실측: faiss-cpu 1.9.0에서 세 심볼 부재).
+    """
+    return all(
+        hasattr(faiss_mod, name)
+        for name in (
+            "StandardGpuResources",
+            "index_cpu_to_gpu_multiple",
+            "GpuMultipleClonerOptions",
+            "get_num_gpus",
+        )
+    )
+
+
+def _configure_hnsw_efsearch(index: Any, index_type: str, ef_search: int) -> None:
+    """HNSW 인덱스의 efSearch를 설정합니다 (GPU 사용 여부와 무관).
+
+    FAISS 가이드: HNSW의 speed-accuracy 트레이드오프는 ``efSearch``로 조절한다.
+    R3a-05: GPU가 활성 감지돼도 HNSW 티어는 GPU 전환 대상이 아니므로("Supported
+    on GPU: no") CPU HNSW 인덱스에 항상 의도한 efSearch를 적용해야 한다.
+    """
+    import faiss
+
+    if "HNSW" not in index_type:
+        return
+    try:
+        hnsw_index = faiss.downcast_index(index)
+        hnsw_index.hnsw.efSearch = ef_search
+        logger.debug(f"[FAISS] HNSW efSearch 설정: {ef_search}")
+    except Exception as e:
+        logger.warning(f"[FAISS] HNSW efSearch 설정 실패 (무시): {e}")
+
+
 def create_vector_store(
     docs: list[Document],
     embedder: Embeddings,
@@ -47,11 +85,11 @@ def create_vector_store(
             vectors = np.ascontiguousarray(vectors, dtype="float32")
         logger.info(f"[FAISS] Using pre-computed vectors: {vectors.shape}")
 
-    # GPU 자동 감지 및 설정
+    # GPU 자동 감지 및 설정 — faiss-gpu 심볼 존재 시에만 활성화 (R3a-05)
     use_gpu = False
     gpu_device = 0
     try:
-        if torch.cuda.is_available():
+        if _faiss_gpu_supported(faiss) and torch.cuda.is_available():
             ngpus = faiss.get_num_gpus()
             if ngpus > 0:
                 use_gpu = True
@@ -70,6 +108,8 @@ def create_vector_store(
     hnsw_m = index_params.get("hnsw_m", 32)
     # [수정] config.yml에서 임계값 로드 (기본값 5000)
     q_threshold = index_params.get("quantization_threshold", 5000)
+    # [R3a-02] config.yml에서 IVF nprobe 로드 (기본값 16)
+    nprobe_config = int(index_params.get("nprobe", 16))
 
     # GPU 인덱스 및 정규화 전략 최적화
     # [최적화] 조건부 L2 정규화 — 이미 정규화된 벡터는 건너뜀
@@ -84,6 +124,8 @@ def create_vector_store(
     # [최적화] 문서 규모 및 벤치마크 결과에 따른 적응형 인덱스 전략 (Adaptive Strategy)
     chunk_count = len(docs)
     d = vectors.shape[1]
+    # nlist는 IVF 티어에서만 사용 (타 티어에서 mypy unbound 방지용 초기값)
+    nlist = 0
 
     if chunk_count < 500:
         # 1단계: 초소형 (정밀도 100%, 전수 조사 오버헤드 없음)
@@ -117,8 +159,19 @@ def create_vector_store(
         logger.info(f"[FAISS] 인덱스 분포 학습 중... ({index_type})")
         index.train(vectors)
 
-    # GPU 인덱스로 전환 (대규모 문서군에서만 활성화)
-    if use_gpu and chunk_count > 5000:
+    # [R3a-02] IVF 검색 파라미터 nprobe 설정 — FAISS 기본값 1은 전체 nlist 중
+    # 단 1개 셀만 탐색해 리콜 붕괴. nprobe=min(config, nlist) 상한으로 가드.
+    if index_type.startswith("IVF"):
+        nprobe = max(1, min(nprobe_config, nlist))
+        index.nprobe = nprobe
+        logger.info(f"[FAISS] IVF nprobe 설정: {nprobe} (nlist: {nlist})")
+
+    # GPU 인덱스로 전환 — faiss-gpu + NVIDIA GPU + 초대형(IVF) 티어에서만 활성화.
+    # 근거 (R3a-05): FAISS 가이드 — HNSW는 "Supported on GPU: no". HNSW 티어
+    # (5000~20000 청크)를 GPU로 복제하면 예외 → 불필요한 CPU 폴백만 유발하므로
+    # 2만 이상 IVF 티어만 전환한다. nprobe는 위에서 CPU 인덱스에 먼저 설정돼
+    # 복제 시에도 보존된다.
+    if use_gpu and chunk_count >= 20000 and index_type.startswith("IVF"):
         try:
             from core.model_loader import ModelManager
 
@@ -141,10 +194,8 @@ def create_vector_store(
 
     index.add(vectors)
 
-    if "HNSW" in index_type and not use_gpu:
-        hnsw_index = faiss.downcast_index(index)
-        hnsw_index.hnsw.efSearch = ef_search
-        logger.debug(f"[FAISS] HNSW efSearch 설정: {ef_search}")
+    # efSearch 설정 — use_gpu와 무관하게 HNSW 인덱스에 적용 (R3a-05)
+    _configure_hnsw_efsearch(index, index_type, ef_search)
 
     doc_ids = [str(uuid.uuid4()) for _ in range(chunk_count)]
     new_docs = {
