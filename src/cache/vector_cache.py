@@ -18,6 +18,7 @@ from common.config import (
     SEMANTIC_CHUNKER_CONFIG,
     TEXT_SPLITTER_CONFIG,
     VECTOR_STORE_CACHE_DIR,
+    VECTOR_STORE_CONFIG,
 )
 from common.text_utils import bm25_tokenizer
 from common.utils import fast_hash
@@ -27,6 +28,48 @@ from security.cache_security import (
 )
 
 logger = logging.getLogger(__name__)
+
+# [R3a-03] 캐시 서명 스키마 버전. 상향 시 저장된 VERSION.json과 로드 시
+# 재검증(:216-240)이 새 버전을 인식해 구버전 캐시는 자연 퇴거(재구축)됩니다.
+CACHE_SCHEMA_VERSION: int = 3
+
+# [R3a-03] semantic chunker의 임베딩 정규화 배선 (T8/R2-02에서 단위노름으로
+# 일원화 — src/core/semantic_chunker.py:711,724의 normalize=True). 이 배선이
+# 바뀌면(예: normalize=False) 청크 벡터가 달라지므로 서명에 반영해 스테일
+# 캐시 히트를 방지합니다. 배선 변경 시 이 상수도 함께 갱신해야 합니다.
+SEMANTIC_CHUNKER_NORMALIZE: bool = True
+
+# [R3a-03] retriever_factory(src/core/retriever_factory.py:106-112)가
+# index_params에서 소비하는 키의 기본값 — 미설정(빈 dict)과 명시 기본값이
+# 동일 서명을 생성하도록 서명 직렬화 시 병합됩니다.
+_INDEX_PARAM_DEFAULTS: dict[str, Any] = {
+    "use_l2_norm": True,
+    "hnsw_m": 32,
+    "quantization_threshold": 5000,
+    "nprobe": 16,
+}
+
+
+def _normalize_index_params(index_params: dict) -> dict[str, Any]:
+    """index_params를 타입 안정하게 정규화해 서명 해시 안정성을 보장합니다.
+
+    소비처가 실제 적용하는 기본값을 병합하고 모든 값을 bool/float/str 계열로
+    일원화합니다. orjson 직렬화 시 int(5000)와 float(5000.0)가 다른 바이트로
+    인코딩되어 동일 설정이 다른 서명을 만들 수 있으므로, 수치 키는 float로,
+    플래그는 bool로 고정합니다.
+    """
+    merged = {**_INDEX_PARAM_DEFAULTS, **index_params}
+    normalized: dict[str, Any] = {}
+    for key, value in merged.items():
+        if isinstance(value, bool):
+            normalized[key] = value
+        elif isinstance(value, (int, float)):
+            normalized[key] = float(value)
+        elif isinstance(value, (list, tuple)):
+            normalized[key] = [str(v) for v in value]
+        else:
+            normalized[key] = str(value)
+    return normalized
 
 
 def _serialize_docs(docs: list[Document]) -> list[dict]:
@@ -59,9 +102,10 @@ def _build_cache_payloads(
 def _build_config_signature(embedding_model_name: str) -> str:
     """청킹/파싱 설정 기반의 안정적인 캐시 키 서명을 생성합니다.
 
-    임베딩 모델명, 청크 크기/중첩, 분할 구분자, 의미론적 분할 사용 여부가
-    바뀌면 서로 다른 캐시 디렉터리를 사용하도록 하여 오래된 설정으로 생성된
-    청크가 재사용되지 않도록 보장합니다. (설정 변경 시 일회성 캐시 재구축)
+    임베딩 모델명, 청크 크기/중첩, 분할 구분자, 의미론적 분할 사용 여부, 인덱스
+    전략(index_params), 청커 정규화 배선이 바뀌면 서로 다른 캐시 디렉터리를
+    사용하도록 하여 오래된 설정으로 생성된 청크가 재사용되지 않도록 보장합니다.
+    (설정 변경 시 일회성 캐시 재구축)
     """
     splitter = TEXT_SPLITTER_CONFIG
     semantic = SEMANTIC_CHUNKER_CONFIG
@@ -72,6 +116,14 @@ def _build_config_signature(embedding_model_name: str) -> str:
             "chunk_overlap": splitter.get("chunk_overlap"),
             "separators": list(splitter.get("separators") or []),
             "semantic_chunker_enabled": semantic.get("enabled", False),
+            # [R3a-03] 인덱스 전략 — use_l2_norm/hnsw_m/quantization_threshold/nprobe
+            # (retriever_factory 소비 키)가 바뀌면 스테일 인덱스 캐시를 방지해야 함.
+            "index_params": _normalize_index_params(
+                VECTOR_STORE_CONFIG.get("index_params", {})
+            ),
+            # [R3a-03] semantic chunker 정규화 배선(T8) — 정규화 전후 벡터가
+            # 달라도 캐시 히트되지 않도록 서명에 반영.
+            "semantic_chunker_normalize": SEMANTIC_CHUNKER_NORMALIZE,
         },
         option=orjson.OPT_SORT_KEYS,
     )
@@ -225,6 +277,16 @@ class VectorStoreCache:
                         )
                         self._cache_invalid = True
                         return None, None, None
+                    # [R3a-03] 스키마 버전 재검증 — 구버전(schema < 3) 캐시는
+                    # 서명 변경을 반영하지 못하므로 자연 퇴거(재구축)를 유도한다.
+                    stored_schema_version = manifest.get("schema_version", 1)
+                    if stored_schema_version < CACHE_SCHEMA_VERSION:
+                        logger.warning(
+                            f"[CACHE] 스키마 버전 불일치: cached={stored_schema_version}, "
+                            f"runtime={CACHE_SCHEMA_VERSION}. 캐시를 삭제하지 않고 재구축합니다."
+                        )
+                        self._cache_invalid = True
+                        return None, None, None
                 except (json.JSONDecodeError, KeyError, OSError) as e:
                     logger.warning(
                         f"[CACHE] VERSION.json read failed ({e}). "
@@ -321,7 +383,7 @@ class VectorStoreCache:
 
             version_manifest = {
                 "faiss_version": _faiss.__version__,
-                "schema_version": 2,
+                "schema_version": CACHE_SCHEMA_VERSION,
                 "python_version": _sys.version,
                 "created_at": _time.time(),
             }
