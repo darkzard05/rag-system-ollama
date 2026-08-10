@@ -147,7 +147,7 @@ rag:
     grading:
       min_score_to_skip: 0.85   # max_rerank_score가 이 값 이상이면 LLM grade 생략(short-circuit). 실측: 관련 질문 max 0.855~0.908 / 비관련·저신뢰 0.048~0.057 (이분 분포)
       grade_top_n: 3            # doc-only: grade에 전달할 상위 문서 수 상한 (graph_builder.py:358 docs[:3] — 코드 배선 안 함)
-      max_retries: 2            # doc-only: rewrite 최대 재시도 횟수 (graph_builder.py:321 retry_count >= 2 — 코드 배선 안 함)
+      max_retries: 2            # rewrite 최대 재시도 횟수 (graph_builder.py grade_documents 리다이렉트 상한 — GRADING_CONFIG로 배선됨)
 
 
 # --- 평가(Evaluation) 설정 ---

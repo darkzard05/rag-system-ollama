@@ -364,21 +364,29 @@ async def grade_documents(
         get_state_attr(state, "is_cached")
         or get_state_attr(state, "intent") == "general"
     ):
-        return {}
+        # R1a-06: 라우팅은 intent가 아닌 route 채널로 결정하므로 여기서도 명시적으로 설정
+        return {"route": "generate"}
 
     grade_start = time.perf_counter()
 
     retry_count = get_state_attr(state, "retry_count", 0)
-    if retry_count >= 2:
+    max_retries = GRADING_CONFIG.get("max_retries", 2)
+    if retry_count >= max_retries:
         logger.info(
-            f"[RAG] [GRADE] 최대 재시도 횟수({retry_count}) 도달. 즉시 생성 단계로 이동."
+            f"[RAG] [GRADE] 최대 재시도 횟수({retry_count}/{max_retries}) 도달. 즉시 생성 단계로 이동."
         )
-        return {"intent": "generate"}
+        return {"intent": "generate", "route": "generate"}
 
     docs = get_state_attr(state, "relevant_docs")
     if not docs:
         logger.info("[RAG] [GRADE] 문서가 없어 즉시 재구성 단계로 이동")
-        return {"intent": "transform"}
+        # R1a-01: 증가는 grade 단일 지점에서만. "문서 없음" 경로가 루프 종료를
+        # rewrite 폴백의 간접 증가에 의존하던 취약 결합을 명시적 델타 +1로 해소.
+        return {
+            "intent": "transform",
+            "route": "transform",
+            "retry_count": 1,
+        }
 
     # Short-circuit: 리랭킹 점수가 충분히 높으면 LLM 검증 생략
     max_rerank_score = max(
@@ -395,7 +403,7 @@ async def grade_documents(
         )
         grade_ms = (time.perf_counter() - grade_start) * 1000
         logger.info(f"[RAG] [GRADE][TIMING] grade_ms={grade_ms:.1f} short_circuit=True")
-        return {"intent": "generate"}
+        return {"intent": "generate", "route": "generate"}
 
     query = get_state_attr(state, "input")
     cfg = config.get("configurable", {})
@@ -469,7 +477,7 @@ async def grade_documents(
             logger.info(
                 f"[RAG] [GRADE][TIMING] grade_ms={grade_ms:.1f} short_circuit=False"
             )
-            return {"intent": "generate"}
+            return {"intent": "generate", "route": "generate"}
         else:
             optimized = parsed.optimized_query or query
             logger.info(
@@ -485,8 +493,11 @@ async def grade_documents(
             )
             return {
                 "intent": "transform",
+                "route": "transform",
                 "search_queries": [optimized],
-                "retry_count": retry_count + 1,
+                # 리듀서 reset_or_add는 합산 계약이므로 항상 상수 델타 1을 반환한다.
+                # `retry_count + 1`을 반환하면 누적값이 다시 합산돼 예산이 이중 소진된다 (R1a-01).
+                "retry_count": 1,
             }
 
     except (RuntimeError, ValueError, json.JSONDecodeError) as e:
@@ -495,28 +506,32 @@ async def grade_documents(
         logger.info(
             f"[RAG] [GRADE][TIMING] grade_ms={grade_ms:.1f} short_circuit=False"
         )
-        return {"intent": "transform", "retry_count": retry_count + 1}
+        return {
+            "intent": "transform",
+            "route": "transform",
+            "retry_count": 1,
+        }
 
 
 async def rewrite_query(
     state: GraphState, config: RunnableConfig, *, writer: StreamWriter
 ) -> dict[str, Any]:
     """grade_documents에서 이미 재작성된 쿼리를 전달합니다. (LLM 호출 없음)"""
-    MAX_REWRITE_RETRIES = 3
     search_queries = get_state_attr(state, "search_queries")
-    retry_count = get_state_attr(state, "retry_count", 0)
 
     if search_queries:
         new_query = search_queries[-1]
         logger.info(f"[RAG] [REWRITE] 전달받은 재구성 쿼리 사용: '{new_query}'")
         # retry_count는 grade_documents가 이미 +1을 적용했으므로 순수 passthrough만 한다.
-        # (리듀서 operator.add로 합산되므로 여기서 값을 내려보내면 재시도 예산이 이중 소진됨)
+        # (리듀서 reset_or_add가 합산하므로 여기서 값을 내려보내면 재시도 예산이 이중 소진됨)
         return {}
 
-    # 폴백: grade_documents에서 쿼리 생성 실패 시 원본 유지
+    # 폴백: grade_documents에서 쿼리 생성 실패 시 원본 유지.
+    # retry_count 증가는 grade_documents 단일 지점에서만 수행한다 (R1a-01).
+    # 합산 리듀서(reset_or_add)에 절대 목표값을 델타로 반환하면 예산이 이중 소진된다.
     query = get_state_attr(state, "input")
     logger.info(f"[RAG] [REWRITE] 재검색 쿼리 없음, 원본 유지: '{query}'")
-    return {"retry_count": min(retry_count + 1, MAX_REWRITE_RETRIES)}
+    return {}
 
 
 def format_context(docs: list[Document]) -> str:
@@ -768,9 +783,9 @@ async def build_graph() -> Any:
 
         workflow.add_conditional_edges(
             "grade_documents",
-            lambda s: get_state_attr(
-                s, "intent", "generate"
-            ),  # default to generate on unknown
+            # R1a-06: 라우팅은 intent(분류 의미)가 아닌 route(전용 라우팅 채널)로 결정.
+            # route 미설정 시 명시적 기본값 generate (grade가 항상 route를 반환하므로 방어적 폴백).
+            lambda s: get_state_attr(s, "route", "generate"),
             {"generate": "generate", "transform": "rewrite_query"},
         )
 

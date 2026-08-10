@@ -62,7 +62,7 @@ async def test_grade_documents_short_circuit():
     config = {"configurable": {"llm": llm}}
 
     result = await grade_documents(state, config, writer=None)
-    assert result == {"intent": "generate"}
+    assert result == {"intent": "generate", "route": "generate"}
     # Short-circuit에서는 LLM을 호출하지 않아야 합니다.
     llm.ainvoke.assert_not_called()
     llm.bind.assert_not_called()
@@ -95,7 +95,7 @@ async def test_grade_documents_rubric_pass():
     config = {"configurable": {"llm": mock_llm}}
 
     result = await grade_documents(state, config, writer=None)
-    assert result == {"intent": "generate"}
+    assert result == {"intent": "generate", "route": "generate"}
 
 
 @pytest.mark.asyncio
@@ -127,6 +127,7 @@ async def test_grade_documents_rubric_fail():
     result = await grade_documents(state, config, writer=None)
     assert result == {
         "intent": "transform",
+        "route": "transform",
         "search_queries": ["DeepSeek-R1 성능 벤치마크"],
         "retry_count": 1,
     }
@@ -161,6 +162,7 @@ async def test_grade_documents_is_relevant_false():
     result = await grade_documents(state, config, writer=None)
     assert result == {
         "intent": "transform",
+        "route": "transform",
         "search_queries": ["DeepSeek-R1 리뷰"],
         "retry_count": 1,
     }
@@ -187,7 +189,7 @@ async def test_grade_documents_short_circuit_above_threshold():
     config = {"configurable": {"llm": llm}}
 
     result = await grade_documents(state, config, writer=MockWriter())
-    assert result == {"intent": "generate"}
+    assert result == {"intent": "generate", "route": "generate"}
     # Short-circuit에서는 LLM을 호출하지 않아야 합니다.
     llm.ainvoke.assert_not_called()
     llm.bind.assert_not_called()
@@ -222,7 +224,7 @@ async def test_grade_documents_calls_llm_below_threshold(
     config = {"configurable": {"llm": mock_llm}}
 
     result = await grade_documents(state, config, writer=MockWriter())
-    assert result == {"intent": "generate"}
+    assert result == {"intent": "generate", "route": "generate"}
     # 임계값 미만이므로 LLM 검증 경로가 실제로 실행되어야 합니다.
     mock_llm.bind.assert_called_once()
     json_llm.ainvoke.assert_awaited_once()

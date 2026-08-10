@@ -1,6 +1,8 @@
+from unittest.mock import MagicMock, patch
+
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
-from core.graph_builder import rewrite_query, preprocess
+
+from core.graph_builder import preprocess, rewrite_query
 
 
 @pytest.mark.asyncio
@@ -35,12 +37,16 @@ async def test_rewrite_query_reducer_logic(mock_dispatch):
 
 @pytest.mark.asyncio
 @patch("core.graph_builder.adispatch_custom_event")
-async def test_rewrite_query_fallback_increments_retry(mock_dispatch):
-    """search_queries가 없으면 폴백으로 retry_count만 1 증가시킵니다."""
+async def test_rewrite_query_fallback_no_increment(mock_dispatch):
+    """search_queries가 없어도 폴백은 retry_count를 반환하지 않습니다 (R1a-01).
+
+    리듀서 reset_or_add는 합산 계약이므로 여기서 값을 내려보내면 재시도 예산이
+    이중 소진된다. 증가는 grade_documents 단일 지점에서만 수행한다.
+    """
     # Setup
     llm = MagicMock()
 
-    state = {"input": "original query", "retry_count": 0, "search_queries": []}
+    state = {"input": "original query", "retry_count": 1, "search_queries": []}
     config = {"configurable": {"llm": llm}}
     writer = MagicMock()
 
@@ -48,7 +54,7 @@ async def test_rewrite_query_fallback_increments_retry(mock_dispatch):
     update = await rewrite_query(state, config, writer=writer)
 
     # Verify
-    assert update == {"retry_count": 1}
+    assert update == {}
     llm.ainvoke.assert_not_called()
 
 

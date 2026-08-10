@@ -3,7 +3,7 @@
 """
 
 import operator
-from typing import Annotated, Any, TypedDict
+from typing import Annotated, Any, Literal, TypedDict
 
 from langchain_core.documents import Document
 from langchain_core.messages import BaseMessage
@@ -63,10 +63,9 @@ class GraphState(TypedDict):
     input: str
     chat_history: Annotated[list[BaseMessage], operator.add]
     intent: str | None
+    route: Literal["generate", "transform"]  # R1a-06: 라우팅 전용 채널 (intent와 분리)
     search_queries: Annotated[list[str], reset_or_append]
-    documents: list[Document]
     relevant_docs: list[Document]
-    context: str | None
     response: str | None
     thought: str | None
     performance: dict[str, Any] | None
