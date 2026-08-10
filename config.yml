@@ -150,8 +150,16 @@ rag:
 
     # 2. 문서 평가(grading) 설정 (Todo 4 — FlashRank 실측 분포 기반, 근거: .omo/evidence/task-4-rag-answer-quality.md)
     grading:
-      min_score_to_skip: 0.85   # max_rerank_score가 이 값 이상이면 LLM grade 생략(short-circuit). 실측: 관련 질문 max 0.855~0.908 / 비관련·저신뢰 0.048~0.057 (이분 분포)
-      grade_top_n: 3            # doc-only: grade에 전달할 상위 문서 수 상한 (graph_builder.py:358 docs[:3] — 코드 배선 안 함)
+      # FlashRank(sigmoid) short-circuit 임계값 — max_rerank_score가 이 값 이상이면 LLM grade 생략.
+      # 실측: 관련 질문 max 0.855~0.908 / 비관련·저신뢰 0.048~0.057 (이분 분포)
+      min_score_to_skip: 0.85
+      # [R3b-02] semantic(bi-encoder, 코사인) 엔진용 별도 임계값 — 코사인 실측 0.32~0.57 범위를 상회하도록
+      # 0.85 대신 0.60으로 분기 (FlashRank 강제/semantic 폴백 시에도 short-circuit 활성화)
+      min_score_to_skip_semantic: 0.60
+      # [R3b-01] 리랭킹 최종 선별 풀 크기 (graph_builder.py retrieve_and_rerank의 rerank_top_k로 배선)
+      top_k: 5
+      # grade에 전달할 상위 문서 수 상한 (graph_builder.py grade_documents test_docs로 배선)
+      grade_top_n: 3
       max_retries: 2            # rewrite 최대 재시도 횟수 (graph_builder.py grade_documents 리다이렉트 상한 — GRADING_CONFIG로 배선됨)
 
 

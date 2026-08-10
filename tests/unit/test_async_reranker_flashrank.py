@@ -21,10 +21,14 @@ from core.async_reranker import (
 
 @pytest.fixture(autouse=True)
 def _reset_global_reranker():
-    """모듈 전역 _async_reranker 캐시를 테스트 간 초기화합니다."""
+    """모듈 전역 _async_reranker/_rerank_engine_active/_semantic_fallback_reranker를 초기화합니다."""
     ar._async_reranker = None
+    ar._rerank_engine_active = "flashrank"
+    ar._semantic_fallback_reranker = None
     yield
     ar._async_reranker = None
+    ar._rerank_engine_active = "flashrank"
+    ar._semantic_fallback_reranker = None
 
 
 def _make_docs(n: int = 3) -> list[Document]:

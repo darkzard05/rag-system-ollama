@@ -328,13 +328,17 @@ async def retrieve_and_rerank(
     else:
         dynamic_top_k = min_candidates
 
-    final_docs = [
-        doc_map.get(
+    # [R3b-02] RRF 집계 점수를 doc_id 기준으로 보관 — 6자 미만 쿼리 리랭킹 생략 경로에서
+    # rerank_score로 기록해 grade short-circuit이 0.0으로만 평가되는 것을 방지한다.
+    rrf_scores: dict[str, float] = {}
+    final_docs = []
+    for r in aggregated[:dynamic_top_k]:
+        doc = doc_map.get(
             r.doc_id,
             Document(page_content=r.content, metadata=r.metadata),
         )
-        for r in aggregated[:dynamic_top_k]
-    ]
+        rrf_scores[r.doc_id] = float(r.aggregated_score)
+        final_docs.append(doc)
 
     aggregate_ms = (time.perf_counter() - t0) * 1000
 
@@ -351,9 +355,14 @@ async def retrieve_and_rerank(
     from core.async_reranker import get_async_reranker
 
     reranker = await get_async_reranker()
-    rerank_top_k = min(GRADING_CONFIG.get("top_k", 5), len(final_docs))
+    rerank_top_k = min(int(GRADING_CONFIG.get("top_k", 5)), len(final_docs))
     if len(query or "") < 6:
         ranked_docs = final_docs[:rerank_top_k]
+        # [R3b-02] 6자 미만 쿼리는 리랭킹을 생략하되 rerank_score(RRF 집계 점수)를 기록해
+        # grade short-circuit이 0.0으로만 평가되는 것을 방지한다.
+        for doc in ranked_docs:
+            doc_key = doc.metadata.get("doc_id", fast_hash(doc.page_content))
+            doc.metadata["rerank_score"] = rrf_scores.get(doc_key, 0.0)
     else:
         ranked_docs, _ = await reranker.rerank(
             final_docs,
@@ -440,7 +449,14 @@ async def grade_documents(
     max_rerank_score = max(
         (d.metadata.get("rerank_score", 0.0) for d in docs), default=0.0
     )
-    min_score_to_skip = GRADING_CONFIG.get("min_score_to_skip", 0.85)
+    # [R3b-02] rerank_score 스케일은 엔진에 따라 다르다 — FlashRank 시그모이드(실측 0.06~0.91)와
+    # bi-encoder 코사인(실측 0.32~0.57). 활성 엔진에 따라 임계값을 분기한다.
+    from core.async_reranker import get_active_rerank_engine
+
+    if get_active_rerank_engine() == "semantic":
+        min_score_to_skip = GRADING_CONFIG.get("min_score_to_skip_semantic", 0.60)
+    else:
+        min_score_to_skip = GRADING_CONFIG.get("min_score_to_skip", 0.85)
     if max_rerank_score >= min_score_to_skip:
         logger.info(
             f"[RAG] [GRADE] Short-circuit 활성화 (Max Rerank Score: {max_rerank_score:.3f} >= {min_score_to_skip})"
@@ -465,7 +481,7 @@ async def grade_documents(
             "graph_status", {"status": "문서 관련성 검증 중..."}, config=config
         )
 
-    test_docs = docs[:3]
+    test_docs = docs[: int(GRADING_CONFIG.get("grade_top_n", 3))]
     context_text = "\n\n".join(
         [f"DOC {i + 1}: {d.page_content}" for i, d in enumerate(test_docs)]
     )
@@ -879,6 +895,11 @@ def _merge_adjacent_chunks(
             current_doc.metadata["chunk_index"] = next_m.get(
                 "chunk_index", curr_m.get("chunk_index")
             )
+            # [R3b-05] 병합 문서의 rerank_score는 head가 아닌 그룹 내 최대값으로 결정 —
+            # grade short-circuit의 max_rerank_score와 UI 신뢰도 배지가 최고 관련 청크를 대표하도록 한다.
+            curr_score = float(curr_m.get("rerank_score", 0.0) or 0.0)
+            next_score = float(next_m.get("rerank_score", 0.0) or 0.0)
+            current_doc.metadata["rerank_score"] = max(curr_score, next_score)
         else:
             merged_docs.append(current_doc)
             current_doc = Document(

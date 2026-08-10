@@ -11,6 +11,7 @@ import gc
 import logging
 import sys
 import threading
+import time
 from collections import OrderedDict
 from collections.abc import Callable
 from contextlib import asynccontextmanager
@@ -26,10 +27,17 @@ from common.config import (
     OLLAMA_TIMEOUT,
     RERANKER_MODEL_NAME,
 )
-from common.exceptions import LLMInferenceError
+from common.exceptions import LLMInferenceError, ResourceBuildError
 
 T = TypeVar("T")
 P = ParamSpec("P")
+
+# [R3b-03] 빌드 실패 네거티브 캐시(회로 차단기) 상수.
+# build_fn이 연속 `_BUILD_FAILURE_LIMIT`회 실패하면 `_BUILD_CIRCUIT_TTL_SECONDS` 동안
+# 재빌드를 차단하고 즉시 ResourceBuildError(reason="circuit_open")를 던진다.
+# → FlashRank 같은 무거운 로드가 오프라인/차단 상태에서 매 쿼리 재시도되는 지연 누적을 방지.
+_BUILD_FAILURE_LIMIT = 3
+_BUILD_CIRCUIT_TTL_SECONDS = 60.0
 
 logger = logging.getLogger(__name__)
 
@@ -278,6 +286,7 @@ class ResourceCoordinator:
         self.clients = ClientPool()
         self._build_locks: dict[str, asyncio.Lock] = {}
         self._build_call_counter = 0
+        self._build_failures: dict[str, tuple[int, float]] = {}
         self._inference_semaphore: asyncio.Semaphore | None = None
         self._semaphore_loop: asyncio.AbstractEventLoop | None = None
 
@@ -291,6 +300,7 @@ class ResourceCoordinator:
         self.clients = ClientPool()
         self._build_locks.clear()
         self._build_call_counter = 0
+        self._build_failures.clear()
         self._inference_semaphore = None
         self._semaphore_loop = None
 
@@ -312,6 +322,46 @@ class ResourceCoordinator:
 
         if stale_keys:
             logger.debug(f"[RESOURCE] Cleaned up {len(stale_keys)} stale build locks")
+
+    def _check_build_circuit(self, key: str) -> None:
+        """[R3b-03] 실패 네거티브 캐시 판정 — 연속 실패 N회 && TTL 미경과면 즉시 차단."""
+        now = time.monotonic()
+        fail_info = self._build_failures.get(key)
+        if fail_info is None:
+            return
+        count, last_fail = fail_info
+        if count >= _BUILD_FAILURE_LIMIT:
+            elapsed = now - last_fail
+            if elapsed < _BUILD_CIRCUIT_TTL_SECONDS:
+                raise ResourceBuildError(
+                    key=key,
+                    reason="circuit_open",
+                    details={
+                        "failures": count,
+                        "ttl_seconds": _BUILD_CIRCUIT_TTL_SECONDS,
+                        "remaining_seconds": round(
+                            _BUILD_CIRCUIT_TTL_SECONDS - elapsed, 1
+                        ),
+                    },
+                )
+            # TTL 경과 → 재시도 허용 (카운터 리셋)
+            self._build_failures.pop(key, None)
+
+    def _record_build_failure(self, key: str) -> None:
+        """[R3b-03] 빌드 실패를 네거티브 캐시에 기록하고 회로 차단 전환을 로그로 노출."""
+        now = time.monotonic()
+        count, _ = self._build_failures.get(key, (0, 0.0))
+        count += 1
+        self._build_failures[key] = (count, now)
+        if count >= _BUILD_FAILURE_LIMIT:
+            logger.error(
+                f"[RESOURCE] '{key}' 빌드 {count}회 연속 실패 — "
+                f"{_BUILD_CIRCUIT_TTL_SECONDS:.0f}초 회로 차단 (재시도 → 즉시 폴백 전환)"
+            )
+        else:
+            logger.warning(
+                f"[RESOURCE] '{key}' 빌드 실패 ({count}/{_BUILD_FAILURE_LIMIT}) — 재시도 허용"
+            )
 
     @property
     def inference_semaphore(self) -> asyncio.Semaphore | None:
@@ -409,6 +459,9 @@ class ResourceCoordinator:
                 self._build_call_counter = 0
                 self._cleanup_build_locks()
 
+            # [R3b-03] 실패 네거티브 캐시 — 회로 차단 상태면 재빌드를 시도하지 않고 즉시 실패.
+            self._check_build_circuit(key)
+
             res = pool.get(key)
             if res is not None:
                 return res
@@ -418,11 +471,16 @@ class ResourceCoordinator:
                     f"Resource '{key}' not found in {pool.name} and no build_fn provided."
                 )
 
-            if asyncio.iscoroutinefunction(build_fn):
-                res = await build_fn(*args, **kwargs)
-            else:
-                # [이벤트 루프 차단 방지] 무거운 sync 모델 로드는 워커 스레드에서 실행
-                res = await asyncio.to_thread(build_fn, *args, **kwargs)
+            try:
+                if asyncio.iscoroutinefunction(build_fn):
+                    res = await build_fn(*args, **kwargs)
+                else:
+                    # [이벤트 루프 차단 방지] 무거운 sync 모델 로드는 워커 스레드에서 실행
+                    res = await asyncio.to_thread(build_fn, *args, **kwargs)
+            except Exception:
+                self._record_build_failure(key)
+                raise
+            self._build_failures.pop(key, None)
             await pool.put(key, res)
             return res
 

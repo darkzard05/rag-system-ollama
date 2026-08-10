@@ -179,6 +179,50 @@ class VectorStoreError(PDFProcessingError):
         super().__init__(message, final_details)
 
 
+class ResourceBuildError(PDFProcessingError):
+    """
+    리소스 풀 빌드 실패 또는 회로 차단(실패 네거티브 캐시) 예외.
+
+    원인:
+    - 모델/리소스 빌드 함수가 연속 실패해 실패 네거티브 캐시가 발동(reason="circuit_open")
+    - 리소스 로드 자체 실패 (reason=None)
+
+    복구 전략:
+    - 회로 차단: TTL 경과 후 자동으로 빌드 재시도 허용 (재시도 정책)
+    - 그 외: 호출자가 폴백(Fallback) 경로로 전환
+    """
+
+    def __init__(
+        self,
+        key: str | None = None,
+        reason: str | None = None,
+        details: dict[Any, Any] | None = None,
+    ):
+        """
+        리소스 빌드 오류 초기화.
+
+        Args:
+            key: 실패한 리소스 키 (로그용)
+            reason: 실패 원인 (circuit_open 등)
+            details: 추가 정보 (실패 횟수, TTL 등)
+        """
+        if reason == "circuit_open" and key:
+            message = (
+                f"리소스 '{key}' 빌드 회로가 열려 있어 재빌드를 건너뜁니다 "
+                "(연속 실패 네거티브 캐시 — TTL 경과 후 재시도)."
+            )
+        elif key:
+            message = f"리소스 '{key}' 빌드 실패"
+        else:
+            message = "리소스 빌드 실패"
+
+        final_details: dict[Any, Any] = dict(details or {})
+        if reason:
+            final_details.setdefault("reason", reason)
+
+        super().__init__(message, final_details)
+
+
 class LLMInferenceError(PDFProcessingError):
     """
     LLM 추론(응답 생성) 중 발생하는 오류.
