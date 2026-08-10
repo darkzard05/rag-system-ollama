@@ -317,6 +317,10 @@ async def load_pdf_docs(
                                 "has_tables": len(tables) > 0,
                                 "table_count": len(tables),
                                 "chunk_index": len(docs),
+                                # [R2-04] 페이지 단위 추출 결과는 사전 분할 단위 —
+                                # split_documents가 과대 페이지만 하위 분할하고
+                                # 나머지를 재사용하도록 플래그를 세팅한다.
+                                "is_already_chunked": True,
                             },
                         )
                     )

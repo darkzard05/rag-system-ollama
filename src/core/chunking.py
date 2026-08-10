@@ -110,12 +110,13 @@ def _postprocess_metadata(split_docs: list[Document]) -> None:
 
         is_reference = ref_start_idx is not None and i >= ref_start_idx
 
+        # [R2-08] 문서 단위 is_anchor/is_header 휴리스틱은 제품 파이프라인에서
+        # 소비처 0건(테스트 포함) — 데드 계산 제거. is_content/is_reference는
+        # 기존 테스트(metadata audit)가 소비하므로 유지한다.
         doc.metadata.update(
             {
                 "is_content": not (is_noise or is_reference),
                 "is_reference": is_reference,
-                "is_anchor": doc.metadata.get("is_anchor", False) if i == 0 else False,
-                "is_header": bool(doc.metadata.get("page") == 1 and i < 3),
             }
         )
 

@@ -214,7 +214,7 @@ class CoordCacheManager:
                         (file_hash, page_num, orjson.dumps(coords), time.time()),
                     )
                     await db.commit()
-                except aiosqlite.Error as e:
+                except (aiosqlite.Error, OSError, RuntimeError) as e:
                     logger.error(
                         f"백그라운드 저장 실패 ({file_hash}, p{page_num}): {e}"
                     )
@@ -240,7 +240,22 @@ class CoordCacheManager:
             ):
                 return self._conn
 
-            # 2. 연결이 없거나 만료/비정상 → 헬스체크 주기 도래 시에만 SELECT 1 실행
+            # 2. [R1b-09] 연결 수명(_CONNECTION_MAX_AGE) 초과 → 헬스체크 주기와
+            #    무관하게 즉시 재연결 (DB 파일 외부 교체/삭제 감지 지연 제거)
+            if (
+                self._conn is not None
+                and (now - self._conn_created_at) >= _CONNECTION_MAX_AGE
+            ):
+                logger.debug(
+                    f"연결 수명 경과 ({(now - self._conn_created_at):.0f}s), 재연결"
+                )
+                with contextlib.suppress(Exception):
+                    await self._conn.close()
+                self._conn = None
+                self._conn_healthy = False
+                return await self._connect()
+
+            # 3. 수명 내이지만 헬스체크 주기 도래 → 지연 검증 (SELECT 1)
             if self._conn is not None:
                 if (now - self._last_health_check) >= _CONNECTION_HEALTH_CHECK_INTERVAL:
                     try:
@@ -254,19 +269,28 @@ class CoordCacheManager:
                             await self._conn.close()
                         self._conn = None
                         self._conn_healthy = False
-                else:
-                    # 헬스체크 주기 아님 → 이전 상태 신뢰하고 반환 (낙관적)
-                    return self._conn
+                        return await self._connect()
+                # 4. 수명·헬스체크 모두 유효 → 이전 상태 신뢰하고 반환 (낙관적)
+                return self._conn
 
-            # 3. 새 연결 생성 + WAL 모드
-            self._conn = await aiosqlite.connect(COORD_CACHE_DB)
-            await self._conn.execute("PRAGMA journal_mode=WAL")
-            await self._conn.execute("PRAGMA synchronous=NORMAL")
-            await self._conn.execute("PRAGMA cache_size=-32768")  # 32MB 캐시
-            self._conn_created_at = now
-            self._last_health_check = now
-            self._conn_healthy = True
-            return self._conn
+            # 5. 연결이 없거나 재연결 후 → 신규 생성 + WAL 모드
+            return await self._connect()
+
+    async def _connect(self) -> aiosqlite.Connection:
+        """새 SQLite 연결을 생성하고 WAL 모드로 초기화합니다. (owner 루프 전용)"""
+        try:
+            conn = await aiosqlite.connect(COORD_CACHE_DB)
+            await conn.execute("PRAGMA journal_mode=WAL")
+            await conn.execute("PRAGMA synchronous=NORMAL")
+            await conn.execute("PRAGMA cache_size=-32768")  # 32MB 캐시
+        except (aiosqlite.Error, OSError) as e:
+            # [R1b-09] 재연결 실패를 명시적 예외로 표면화 (낙관적 반환 제거)
+            raise RuntimeError(f"좌표 캐시 DB 연결 실패: {COORD_CACHE_DB} — {e}") from e
+        self._conn = conn
+        self._conn_created_at = time.monotonic()
+        self._last_health_check = time.monotonic()
+        self._conn_healthy = True
+        return conn
 
     async def start_eviction_loop(self) -> None:
         """백그라운드에서 주기적으로 캐시를 정리합니다."""

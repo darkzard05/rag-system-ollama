@@ -311,6 +311,7 @@ async def prepare_query_config_or_build(
 
     pdf_file_path = SessionManager.get("pdf_file_path", session_id=session_id)
     coordinator = get_resource_manager()
+
     result = coordinator.retrievers.get(file_hash)
     if result is None and pdf_file_path and build_fn is not None:
         # build_pipeline internally calls register_retrievers which
@@ -323,6 +324,12 @@ async def prepare_query_config_or_build(
             embedder=embedder,
         )
         result = coordinator.retrievers.get(file_hash)
+    if result is not None:
+        # [R1b-04] get_retrievers(내부 pin) 경유 — 진행 중인 세션의 리트리버를
+        # LRU/용량 퇴출(silent eviction)에서 보호해 쿼리마다 재인덱싱되는
+        # churn을 방지한다. 해제는 aquery/astream 종료 시 unpin_retrievers
+        # (rag_core.py:154, :224)와 clear_session의 unregister가 담당한다.
+        result = await coordinator.get_retrievers(file_hash, None)
     vector_store, bm25_shared = result if result else (None, None)
 
     faiss_ret = SessionManager.get("active_faiss_retriever", session_id=session_id)
