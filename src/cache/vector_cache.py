@@ -87,6 +87,54 @@ def _deserialize_docs(doc_dicts: list[dict]) -> list[Document]:
     ]
 
 
+# [R3a-06] Pickle-free 정책 — 저장·로드 양쪽에서 pickle(index.pkl)을 생성/사용하지
+# 않는다. langchain의 `FAISS.save_local`은 `index.faiss`와 함께 pickle `index.pkl`
+# (docstore + index_to_docstore_id 2-튜플)을 디스크에 작성하지만, 로드 경로
+# (load())는 index.pkl을 읽지 않고 index.faiss + JSON으로 재구성한다. 따라서
+# index.pkl은 데드 아티팩트 + 잠재 보안 표면이므로 저장 포맷은 `faiss.write_index`
+# (바이너리 인덱스) + JSON 직렬화(docstore 매핑)로 단일화한다.
+def _write_pickle_free_index(vector_store: Any, faiss_index_dir: str) -> None:
+    """FAISS 인덱스와 docstore 매핑을 pickle 없이 디스크에 저장합니다.
+
+    - 바이너리 인덱스는 `faiss.write_index`로 `index.faiss`에 기록합니다
+      (save_local 내부 구현과 동일한 직렬화 — 인덱스 타입/메트릭/검색 파라미터
+      보존).
+    - docstore 매핑(index position -> doc_id)은 JSON(`index_to_docstore_id.json`)
+      으로 직렬화해 로드 시 동일 매핑으로 docstore를 재구성할 수 있게 합니다.
+      문서 본문은 `doc_splits.json`이 이미 JSON으로 담당합니다.
+    """
+    import faiss
+
+    os.makedirs(faiss_index_dir, exist_ok=True)
+    index_path = os.path.join(faiss_index_dir, "index.faiss")
+    faiss.write_index(vector_store.index, index_path)
+
+    mapping_path = os.path.join(faiss_index_dir, "index_to_docstore_id.json")
+    mapping = {
+        str(position): doc_id
+        for position, doc_id in sorted(vector_store.index_to_docstore_id.items())
+    }
+    with open(mapping_path, "wb") as f:
+        f.write(orjson.dumps(mapping))
+
+
+def _reconstruct_doc_ids(faiss_index_dir: str, doc_count: int) -> list[str]:
+    """저장된 JSON docstore 매핑으로 doc_id 목록을 재구성합니다.
+
+    Pickle-free 정책: `index_to_docstore_id.json`(R3a-06 저장 포맷)이 있으면
+    doc_id 일관성을 보존하고, 없으면(legacy 캐시) 기존처럼 uuid4로 재생성합니다.
+    """
+    mapping_path = os.path.join(faiss_index_dir, "index_to_docstore_id.json")
+    if not os.path.exists(mapping_path):
+        return [str(uuid.uuid4()) for _ in range(doc_count)]
+    with open(mapping_path, "rb") as f:
+        raw_mapping = orjson.loads(f.read())
+    index_to_docstore_id = {
+        int(position): doc_id for position, doc_id in raw_mapping.items()
+    }
+    return [index_to_docstore_id[pos] for pos in sorted(index_to_docstore_id)]
+
+
 def _build_cache_payloads(
     doc_splits: list[Document], bm25_docs: list[Document]
 ) -> dict[str, bytes]:
@@ -133,7 +181,9 @@ def _build_config_signature(embedding_model_name: str) -> str:
 class VectorStoreCache:
     """
     벡터 저장소와 관련 컴포넌트를 디스크에 캐싱하고 로드합니다.
-    Pickle-free 로딩을 통해 보안성을 강화합니다.
+    Pickle-free 정책: 저장(save)과 로드(load) 양쪽 모두 pickle(index.pkl)을
+    생성/사용하지 않습니다 — 인덱스는 faiss.write_index, docstore 매핑은 JSON으로
+    직렬화해 보안성을 강화합니다 (R3a-06).
     """
 
     def __init__(
@@ -302,9 +352,9 @@ class VectorStoreCache:
 
             index = faiss.read_index(index_file)
 
-            import uuid
-
-            doc_ids = [str(uuid.uuid4()) for _ in range(len(doc_splits))]
+            # [R3a-06] index.pkl 대신 JSON으로 직렬화된 docstore 매핑으로 doc_id를
+            # 재구성합니다 (legacy 캐시는 기존처럼 uuid4 재생성으로 폴백).
+            doc_ids = _reconstruct_doc_ids(self.faiss_index_path, len(doc_splits))
             new_docstore_docs = dict(zip(doc_ids, doc_splits, strict=False))
             docstore = InMemoryDocstore(new_docstore_docs)
             index_to_docstore_id = dict(enumerate(doc_ids))
@@ -372,7 +422,9 @@ class VectorStoreCache:
                 stg_doc_splits_path + ".meta", doc_meta
             )
 
-            vector_store.save_local(stg_faiss_index_path)
+            # [R3a-06] save_local 대신 faiss.write_index + JSON docstore 매핑으로
+            # 저장해 데드 pickle 아티팩트(index.pkl)를 생성하지 않습니다.
+            _write_pickle_free_index(vector_store, stg_faiss_index_path)
             self.security_manager.enforce_directory_permissions(stg_faiss_index_path)
 
             # FAISS 버전 메타데이터 저장 (버전 불일치 시 자동 캐시 재생성)
