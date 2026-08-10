@@ -1,65 +1,58 @@
 """
-임베딩 기반 의미론적 텍스트 분할기를 구현합니다.
+임베딩 기반 의미론적 텍스트 분할기 — 오케스트레이션 모듈.
 
 이 모듈은 문서를 문장 단위로 우선 분할한 후, 인접 문장 간의 임베딩 유사도를
 계산하여 유사도가 낮은 지점을 경계로 선택합니다. 이를 통해 의미론적으로
 일관성 있는 청크를 생성합니다.
+
+[R2-10] 958줄 모노리스를 관심사별 믹스인 모듈로 분리했습니다.
+본 모듈은 클래스 뼈대 + ``__init__`` + ``split_text``/``split_documents``
+오케스트레이션만 담당합니다.
+
+- ``semantic_chunker_sentences.py``: 문장 분할/리플로우/짧은 문장 병합
+- ``semantic_chunker_embeddings.py``: 임베딩 생성/캐시/거리 계산
+- ``semantic_chunker_breakpoints.py``: 브레이크포인트 탐색/헤더 패턴
+- ``semantic_chunker_merge.py``: 청크 병합/중복제거/그룹화/섹션 제목
+- ``semantic_chunker_metadata.py``: 청크→문서 메타데이터 역매핑
+
+공개 API(``EmbeddingBasedSemanticChunker.split_documents``·``_split_sentences``·
+``__init__`` 시그니처)는 기존과 동일하게 유지되어 외부 import 경로가 그대로
+동작합니다.
 """
 
 import asyncio
 import concurrent.futures
 import logging
 import re
-from typing import TYPE_CHECKING, Any, Literal, cast
+from typing import cast
 
 import numpy as np
-import xxhash
 from langchain_core.documents import Document
 from langchain_core.embeddings import Embeddings
 
-from common.constants import ChunkingConstants
+from core.semantic_chunker_breakpoints import SemanticChunkerBreakpointsMixin
+from core.semantic_chunker_embeddings import SemanticChunkerEmbeddingsMixin
+from core.semantic_chunker_merge import SemanticChunkerMergeMixin
+from core.semantic_chunker_metadata import SemanticChunkerMetadataMixin
+from core.semantic_chunker_sentences import SemanticChunkerSentencesMixin
 from services.optimization.caching_optimizer import CacheManager, get_cache_manager
-
-# 순환 참조 방지 및 타입 힌트용
-if TYPE_CHECKING:
-    pass
 
 logger = logging.getLogger(__name__)
 
 
-# [상수] 표준 섹션 키워드 (정제 시 활용)
-STANDARD_SECTION_KEYWORDS = [
-    "ABSTRACT",
-    "INTRODUCTION",
-    "RELATED WORK",
-    "METHOD",
-    "EXPERIMENT",
-    "RESULT",
-    "CONCLUSION",
-    "REFERENCE",
-    "ACKNOWLEDGMENT",
-]
-
-
-class EmbeddingBasedSemanticChunker:
+class EmbeddingBasedSemanticChunker(
+    SemanticChunkerSentencesMixin,
+    SemanticChunkerEmbeddingsMixin,
+    SemanticChunkerBreakpointsMixin,
+    SemanticChunkerMergeMixin,
+    SemanticChunkerMetadataMixin,
+):
     """
     임베딩 기반 의미론적 텍스트 분할기.
 
     문장 단위로 분할 후, 임베딩 유사도 기반으로 의미 경계를 탐지하여
     일관성 있는 청크를 생성합니다.
     """
-
-    # 복합 헤더 패턴 (Markdown # + 대문자 섹션명)
-    HEADER_PATTERN = re.compile(
-        r"^(\s*#{1,6}\s+.+|\d+\s+[A-Z]{2,}.*|[A-Z]{3,}(\s+[A-Z]{3,})*)$",
-        re.MULTILINE,
-    )
-    # 간단 헤더 패턴 (breakpoint 탐지용)
-    HEADER_SIMPLE = re.compile(r"^\s*#{1,6}\s+.+", re.MULTILINE)
-    # 축약어 마침표 패턴 — 문장 분할 시 가짜 경계로 취급하지 않아야 함 (R2-03)
-    ABBREVIATION_PATTERN = re.compile(r"(?i)\b(?:et al|e\.g|i\.e|Dr|Mr|vs)\.(?=\s)")
-    # 축약어 마침표 임시 보호용 센티널 (길이 1:1 치환 → 오프셋 보존)
-    ABBREV_SENTINEL = "\x00"
 
     def __init__(
         self,
@@ -93,557 +86,15 @@ class EmbeddingBasedSemanticChunker:
         self.cache_manager = cache_manager or get_cache_manager()
 
         # [최적화] 모델 식별을 위한 이름 추출 (Ollama 및 HuggingFace 지원 강화)
-        self.model_name = getattr(embedder, "model", None) or getattr(
-            embedder, "model_name", "default_model"
+        # 모델명은 항상 문자열이어야 하므로 (emb:{model}:{hash} 캐시 키) cast로 보장.
+        self.model_name = cast(
+            str,
+            getattr(embedder, "model", None)
+            or getattr(embedder, "model_name", "default_model"),
         )
 
         # ✅ 정규식 사전 컴파일 (성능 최적화)
         self._sentence_pattern = re.compile(self.sentence_split_regex)
-
-    @staticmethod
-    def _line_kind(line: str) -> Literal["blank", "structure", "list_marker", "text"]:
-        """라인 유형 분류 — 리플로우 병합 판정에 사용됩니다."""
-        stripped = line.strip()
-        if not stripped:
-            return "blank"
-        if stripped.startswith("#") or stripped.startswith("|"):
-            return "structure"
-        if re.fullmatch(r"[-*_=]{3,}", stripped):
-            return "structure"
-        if re.match(r"^(?:[-*+]|\d+[.)])\s", stripped):
-            return "list_marker"
-        return "text"
-
-    def _reflow_wrapped_lines(self, text: str) -> str:
-        """PDF 마크다운의 래핑 줄바꿈을 공백으로 병합하는 리플로우 전처리.
-
-        개행(\\n)을 정확히 1문자(공백)로 치환하므로 텍스트 전체 길이와
-        비-개행 문자의 위치가 보존되어, 산출된 문장 오프셋(start/end)이 원본
-        텍스트 좌표와 그대로 일치합니다 (좌표 하이드레이션 무결성 유지).
-
-        병합 규칙: (1) 연속된 일반 텍스트 라인은 병합, (2) 리스트 마커 라인은
-        자신의 래핑 연속 라인과 병합. 빈 줄/헤더/테이블 행/수평선은 구조 요소로
-        병합하지 않고, 일반 텍스트 뒤의 새 리스트/헤더 시작도 병합하지 않습니다.
-        """
-        out: list[str] = []
-        prev_kind: Literal["blank", "structure", "list_marker", "text"] = "blank"
-        for line in text.split("\n"):
-            kind = self._line_kind(line)
-            if out and prev_kind in ("text", "list_marker") and kind == "text":
-                out.append(" ")
-            elif out:
-                out.append("\n")
-            out.append(line)
-            prev_kind = kind
-        return "".join(out)
-
-    def _split_sentences(self, text: str) -> list[dict]:
-        """
-        문장 단위로 텍스트를 분할하고 오프셋 정보를 함께 반환합니다.
-        [최적화] 마크다운 테이블 행(|)을 보호하며, 너무 긴 문장은 강제로 분할합니다.
-        [R2-03] 분할 전에 래핑 라인을 리플로우(개행→공백)하여 PDF 줄바꿈 파편이
-        독립 "문장"으로 남지 않도록 합니다.
-        """
-        # [R2-03] 문장 분할 전 리플로우 — 오프셋 보존(개행 1:1 → 공백)
-        text = self._reflow_wrapped_lines(text)
-        lines = text.split("\n")
-        temp_sentences: list[dict[str, Any]] = []
-        current_pos = 0
-
-        # 1. 행 단위로 훑으며 테이블 보호 및 문장 분할
-        for line in lines:
-            line_len = len(line)
-            stripped = line.strip()
-
-            # 테이블 행 감지 ( | 로 시작하고 | 로 끝나는 패턴)
-            if stripped.startswith("|") and stripped.endswith("|"):
-                self._add_cleaned_sentence(
-                    temp_sentences, line, current_pos, current_pos + line_len
-                )
-            else:
-                # [R2-03] 축약어 마침표를 센티널로 보호해 가짜 문장 경계 차단.
-                # 센티널은 길이 1:1 치환이므로 정규식 매치 위치는 원본 라인 좌표와 동일.
-                protected_line = self.ABBREVIATION_PATTERN.sub(
-                    lambda m: m.group(0)[:-1] + self.ABBREV_SENTINEL, line
-                )
-                # 일반 텍스트는 정규식으로 분할 (원본 라인에서 슬라이스 → 마침표 복원 불필요)
-                parts = list(self._sentence_pattern.finditer(protected_line))
-                last_pos = 0
-                for match in parts:
-                    sep_end = match.end()
-                    segment_text = line[last_pos:sep_end]
-                    if segment_text.strip():
-                        self._add_cleaned_sentence(
-                            temp_sentences,
-                            segment_text,
-                            current_pos + last_pos,
-                            current_pos + sep_end,
-                        )
-                    last_pos = sep_end
-
-                if last_pos < len(line):
-                    remaining_text = line[last_pos:]
-                    if remaining_text.strip():
-                        self._add_cleaned_sentence(
-                            temp_sentences,
-                            remaining_text,
-                            current_pos + last_pos,
-                            current_pos + len(line),
-                        )
-
-            current_pos += line_len + 1  # \n 포함
-
-        # 2. 너무 긴 세그먼트 강제 분할 (OOM 방지 및 하드 스플릿 플래그 처리)
-        hard_split_limit: int = ChunkingConstants.MAX_HARD_SPLIT_LEN.value
-        if self.max_chunk_size > 0:
-            hard_split_limit = min(
-                ChunkingConstants.MAX_HARD_SPLIT_LEN.value,
-                int(self.max_chunk_size * 1.5),
-            )
-
-        final_sentences: list[dict[str, Any]] = []
-        for seg in temp_sentences:
-            seg_text = str(seg["text"])
-            seg_start = int(seg["start"])
-
-            if len(seg_text) <= hard_split_limit:
-                final_sentences.append(seg)
-            else:
-                # 강제 분할 로직
-                curr_pos = 0
-                while curr_pos < len(seg_text):
-                    sub_len: int = int(hard_split_limit)
-                    if curr_pos + sub_len < len(seg_text):
-                        # 공백 기준으로 끊기 시도
-                        last_space = seg_text.rfind(" ", curr_pos, curr_pos + sub_len)
-                        if last_space != -1 and last_space > curr_pos + (sub_len // 2):
-                            sub_len = int(last_space - curr_pos + 1)
-
-                    sub_text = seg_text[curr_pos : curr_pos + sub_len]
-                    is_last_sub = curr_pos + sub_len >= len(seg_text)
-
-                    self._add_cleaned_sentence(
-                        final_sentences,
-                        sub_text,
-                        seg_start + curr_pos,
-                        seg_start + curr_pos + len(sub_text),
-                        is_hard_split=not is_last_sub,
-                    )
-                    curr_pos += sub_len
-
-        return final_sentences
-
-    def _add_cleaned_sentence(
-        self,
-        target_list: list[dict[str, Any]],
-        raw_text: str,
-        start_offset: int,
-        end_offset: int,
-        is_hard_split: bool = False,
-    ):
-        """정제된 문장을 리스트에 추가합니다."""
-        l_stripped = raw_text.lstrip()
-        n_leading = len(raw_text) - len(l_stripped)
-
-        stripped = l_stripped.rstrip()
-        n_trailing = len(l_stripped) - len(stripped)
-
-        final_start = start_offset + n_leading
-        final_end = end_offset - n_trailing
-
-        embed_text = stripped.replace("\n", " ")
-        if embed_text:
-            target_list.append(
-                {
-                    "text": embed_text,
-                    "start": final_start,
-                    "end": final_end,
-                    "is_hard_split": is_hard_split,
-                }
-            )
-
-    async def _get_embeddings(
-        self, texts: list[str], normalize: bool = False
-    ) -> np.ndarray:
-        """
-        텍스트 리스트의 임베딩을 생성합니다 (배치 처리 및 캐싱 강화).
-        [수정] 차원 불일치/None 캐시 벡터는 제거하지 않고 해당 텍스트를
-        재임베딩하여 복구하며, 반환 행렬의 행 수는 항상 입력 텍스트 수와 동일합니다.
-        """
-        if not texts:
-            return np.array([]).reshape(0, 0)
-
-        all_results: list[np.ndarray | None] = [None] * len(texts)
-        missing_indices: list[int] = []
-        missing_texts: list[str] = []
-        text_to_output_indices: dict[str, list[int]] = {}
-        newly_embedded: list[tuple[int, str, np.ndarray]] = []
-
-        # 1. 정제 및 캐시 확인
-        for i, text in enumerate(texts):
-            norm_text = " ".join(text.split())
-            cache_key = (
-                f"emb:{self.model_name}:{xxhash.xxh64(norm_text.encode()).hexdigest()}"
-            )
-
-            cached_raw = await self.cache_manager.get(cache_key)
-            if cached_raw is not None:
-                cached_vec = (
-                    cached_raw["vector"]
-                    if isinstance(cached_raw, dict) and "vector" in cached_raw
-                    else cached_raw
-                )
-                cached_vector = self._as_valid_vector(cached_vec)
-                if cached_vector is not None:
-                    all_results[i] = cached_vector
-                    continue
-
-            if norm_text not in text_to_output_indices:
-                missing_texts.append(norm_text)
-            text_to_output_indices.setdefault(norm_text, []).append(i)
-            missing_indices.append(i)
-
-        # 2. 누락분 배치 임베딩 수행 (캐시 저장은 모든 배치 성공 후 단일 패스)
-        if missing_texts:
-            logger.debug(
-                f"[Chunker] {len(missing_texts)}개 문장 신규 임베딩 생성 중 (Batch Size: {self.batch_size})..."
-            )
-
-            # [수정] 배치 루프 동안 메모리에만 수집, 캐시 저장은 루프 이후 단일 패스로 수행
-            for b_idx in range(0, len(missing_texts), self.batch_size):
-                batch = missing_texts[b_idx : b_idx + self.batch_size]
-                batch_indices = missing_indices[b_idx : b_idx + self.batch_size]
-
-                try:
-                    # [최적화] 동기 임베딩 생성을 비동기 스레드로 분리
-                    batch_vecs = await asyncio.to_thread(
-                        self.embedder.embed_documents, batch
-                    )
-
-                    for batch_text, vec in zip(batch, batch_vecs, strict=False):
-                        vec_np = np.array(vec, dtype="float32")
-                        for output_idx in text_to_output_indices.get(batch_text, []):
-                            all_results[output_idx] = vec_np
-                            newly_embedded.append(
-                                (output_idx, texts[output_idx], vec_np)
-                            )
-
-                except Exception as e:
-                    logger.error(
-                        f"[Chunker] 배치 {b_idx} 임베딩 생성 중 오류 발생: {e}",
-                        exc_info=True,
-                    )
-                    # 배치 실패 시 해당 인덱스의 결과 제거
-                    for idx in batch_indices:
-                        all_results[idx] = None
-                    raise
-
-            # [수정] 모든 배치 성공 후 단일 패스로 캐시 저장 (부분 캐시 저장 방지)
-            try:
-                for norm_text, vec_np in {
-                    text: vec for _, text, vec in newly_embedded
-                }.items():
-                    cache_key = f"emb:{self.model_name}:{xxhash.xxh64(norm_text.encode()).hexdigest()}"
-                    await asyncio.wait_for(
-                        self.cache_manager.set(
-                            cache_key,
-                            {"vector": vec_np.tolist(), "cache_version": "1.0"},
-                            persist_to_disk=False,
-                        ),
-                        timeout=30.0,
-                    )
-            except asyncio.TimeoutError:
-                logger.error("[Chunker] 캐시 저장 타임아웃 (일부 항목 미저장 가능)")
-                raise
-
-        # 3. [수정] 차원 불일치/누락 벡터는 개별 재임베딩으로 복구 (제거하지 않음)
-        expected_dim = self._resolve_expected_dim(all_results, newly_embedded)
-        if expected_dim is None:
-            raise ValueError(
-                "[Chunker] 임베딩 결과가 하나도 없어 벡터 행렬을 구성할 수 없습니다."
-            )
-
-        for i, res_vec in enumerate(all_results):
-            if res_vec is None or int(res_vec.shape[0]) != expected_dim:
-                logger.warning(
-                    f"[Chunker] 캐시된 벡터 차원 불일치 감지 (Index: {i}, "
-                    f"Dim: {None if res_vec is None else res_vec.shape[0]} "
-                    f"!= Expected: {expected_dim}). 해당 문장을 재임베딩하여 복구합니다."
-                )
-                all_results[i] = await self._reembed_single(texts[i], expected_dim)
-
-        # 4. [수정] 행렬 조립 — 행 수는 항상 입력 텍스트 수와 동일해야 함
-        valid_vectors = [cast(np.ndarray, v) for v in all_results]
-        if len(valid_vectors) != len(texts):
-            raise ValueError(
-                f"[Chunker] 임베딩 행렬의 행 수({len(valid_vectors)})가 "
-                f"입력 텍스트 수({len(texts)})와 일치하지 않습니다."
-            )
-
-        embeddings_matrix = np.stack(valid_vectors).astype("float32")
-        if normalize:
-            norms = np.linalg.norm(embeddings_matrix, axis=1, keepdims=True)
-            embeddings_matrix = np.divide(
-                embeddings_matrix,
-                norms,
-                out=np.zeros_like(embeddings_matrix),
-                where=norms > 1e-9,
-            )
-        return embeddings_matrix
-
-    @staticmethod
-    def _as_valid_vector(cached_vec: Any) -> np.ndarray | None:
-        """캐시된 값이 1차원 벡터로 해석 가능하면 np.ndarray로, 아니면 None을 반환합니다."""
-        try:
-            vec_np = np.asarray(cached_vec, dtype="float32")
-        except (TypeError, ValueError):
-            return None
-        if vec_np.ndim != 1 or vec_np.shape[0] == 0:
-            return None
-        return vec_np
-
-    async def _reembed_single(self, text: str, expected_dim: int) -> np.ndarray:
-        """차원 불일치/None 캐시 벡터에 대해 해당 텍스트를 재임베딩하여 복구합니다."""
-        norm_text = " ".join(text.split())
-        try:
-            vecs = await asyncio.to_thread(self.embedder.embed_documents, [norm_text])
-        except Exception as e:
-            raise ValueError(f"[Chunker] 캐시 벡터 복구 재임베딩 실패: {e}") from e
-        if not vecs:
-            raise ValueError(
-                f"[Chunker] 캐시 벡터 복구 재임베딩 결과가 비어 있습니다: {norm_text[:80]!r}"
-            )
-        vec_np = np.asarray(vecs[0], dtype="float32")
-        if vec_np.ndim != 1 or vec_np.shape[0] != expected_dim:
-            raise ValueError(
-                f"[Chunker] 캐시 벡터 복구 재임베딩 후에도 차원 불일치 "
-                f"(text: {norm_text[:80]!r}, expected dim: {expected_dim}, "
-                f"got: {vec_np.shape})."
-            )
-
-        cache_key = (
-            f"emb:{self.model_name}:{xxhash.xxh64(norm_text.encode()).hexdigest()}"
-        )
-        await asyncio.wait_for(
-            self.cache_manager.set(
-                cache_key,
-                {"vector": vec_np.tolist(), "cache_version": "1.0"},
-                persist_to_disk=False,
-            ),
-            timeout=30.0,
-        )
-        return vec_np
-
-    @staticmethod
-    def _resolve_expected_dim(
-        all_results: list[np.ndarray | None],
-        newly_embedded: list[tuple[int, str, np.ndarray]],
-    ) -> int | None:
-        """새로 임베딩된 벡터를 우선, 없으면 캐시 벡터로 표준 차원을 결정합니다."""
-        for _, _, vec in newly_embedded:
-            return int(vec.shape[0])
-        for res_vec in all_results:
-            if res_vec is not None:
-                return int(res_vec.shape[0])
-        return None
-
-    def _find_breakpoints(
-        self, distances: list[float], sentences: list[dict] | None = None
-    ) -> list[int]:
-        """
-        유사도 거리(1-cos_sim) 분포를 분석하여 분할 지점을 찾습니다.
-        [고도화] 마크다운 헤더 감지 시 강제 분할 지점으로 추가합니다.
-        """
-        if not distances:
-            return []
-
-        dist_array = np.array(distances)
-        threshold = 0.0
-
-        if self.breakpoint_threshold_type == "percentile":
-            threshold = float(
-                np.percentile(dist_array, self.breakpoint_threshold_value)
-            )
-        elif self.breakpoint_threshold_type == "standard_deviation":
-            threshold = float(
-                np.mean(dist_array)
-                + self.breakpoint_threshold_value * np.std(dist_array)
-            )
-        elif self.breakpoint_threshold_type == "interquartile":
-            # [수정] Mypy 타입 추론 지원을 위해 리스트 형태의 인덱스 전달 시 반환값을 명시적으로 처리
-            percentiles = cast(np.ndarray, np.percentile(dist_array, [25, 75]))
-            q1, q3 = float(percentiles[0]), float(percentiles[1])
-            iqr = q3 - q1
-            threshold = float(
-                np.mean(dist_array) + self.breakpoint_threshold_value * iqr
-            )
-        elif self.breakpoint_threshold_type == "gradient":
-            # 거리가 급격히 변하는 지점 감지
-            threshold = float(
-                np.percentile(np.gradient(dist_array), self.breakpoint_threshold_value)
-            )
-        elif self.breakpoint_threshold_type == "similarity_threshold":
-            # [R2-01] config 기본 모드 — 명시 분기 (기존 else 암묵 폴백 제거)
-            threshold = float(self.similarity_threshold)
-        else:
-            threshold = float(self.similarity_threshold)  # 알 수 없는 유형 방어용
-            logger.warning(
-                f"[Chunker] 알 수 없는 breakpoint_threshold_type="
-                f"{self.breakpoint_threshold_type!r} — similarity_threshold 폴백 사용"
-            )
-
-        # 1. 유사도 기반 분기점 추출
-        breakpoints = (np.where(dist_array > threshold)[0] + 1).tolist()
-
-        # 2. [고도화] 마크다운 헤더 감지 기반 강제 분할
-        if sentences:
-            header_bps = []
-            for i, s in enumerate(sentences):
-                # 문장의 시작이 헤더 패턴인 경우 (첫 문장 제외)
-                if i > 0 and self.HEADER_SIMPLE.match(s["text"].strip()):
-                    header_bps.append(i)
-
-            if header_bps:
-                logger.info(
-                    f"[Chunker] {len(header_bps)}개의 마크다운 헤더를 감지하여 강제 분할 지점으로 설정합니다."
-                )
-                breakpoints = sorted(set(breakpoints + header_bps))
-
-        # 3. [안전 장치] 너무 긴 청크 방지
-        if sentences:
-            current_len = 0
-            safety_bps = []
-            for i, s in enumerate(sentences):
-                current_len += len(s["text"])
-                if current_len > (self.max_chunk_size * 0.9):
-                    # 이미 breakpoints에 이 근처 지점이 있는지 확인
-                    if not any(abs(bp - (i + 1)) <= 1 for bp in breakpoints):
-                        safety_bps.append(i + 1)
-                    current_len = 0
-            if safety_bps:
-                breakpoints = sorted(set(breakpoints + safety_bps))
-
-        return breakpoints
-
-    def _optimize_chunk_sizes(self, chunks: list[dict]) -> list[dict]:
-        """
-        생성된 청크들의 크기를 검사하여 병합하며, 벡터도 가중 평균으로 계산합니다.
-        [수정] 섹션(Header)이 다르면 절대로 병합하지 않습니다.
-        """
-        if not chunks:
-            return chunks
-
-        optimized = []
-        current_chunk = None
-
-        for chunk in chunks:
-            if current_chunk is None:
-                current_chunk = chunk
-                continue
-
-            # 예상 병합 크기 (공백 포함)
-            merged_text = current_chunk["text"] + " " + chunk["text"]
-            merged_len = len(merged_text)
-
-            # [핵심] 섹션이 다르면 병합 절대 금지
-            is_different_section = current_chunk.get("current_section") != chunk.get(
-                "current_section"
-            )
-
-            # 강제 분할 지점(오프셋 단절 또는 플래그) 확인
-            is_at_hard_boundary = current_chunk.get("end") != chunk.get(
-                "start"
-            ) or current_chunk.get("is_hard_split", False)
-
-            # [수정] 지능적 병합 조건 강화
-            should_merge = False
-
-            if not is_different_section and not is_at_hard_boundary:
-                # 1. 크기가 극도로 작을 때만 병합 시도
-                if len(current_chunk["text"]) < self.min_chunk_size:
-                    should_merge = merged_len <= self.max_chunk_size
-
-                # 2. 유사도 기반 지능적 병합
-                if not should_merge and merged_len <= self.max_chunk_size:
-                    sim = float(np.dot(current_chunk["vector"], chunk["vector"]))
-                    if sim > (ChunkingConstants.SIMILARITY_MERGE_THRESHOLD / 100.0):
-                        should_merge = True
-
-            if should_merge:
-                # 벡터 병합: 각 청크의 길이를 고려한 가중 평균
-                len_a = len(current_chunk["text"])
-                len_b = len(chunk["text"])
-                total_len = len_a + len_b
-
-                if total_len > 0:
-                    merged_vector = (
-                        current_chunk["vector"] * len_a + chunk["vector"] * len_b
-                    ) / total_len
-                    norm = np.linalg.norm(merged_vector)
-                    if norm > 0:
-                        merged_vector /= norm
-                else:
-                    merged_vector = current_chunk["vector"]
-
-                current_chunk["text"] = merged_text
-                current_chunk["end"] = chunk["end"]
-                current_chunk["vector"] = merged_vector
-                current_chunk["is_hard_split"] = chunk.get("is_hard_split", False)
-            else:
-                optimized.append(current_chunk)
-                current_chunk = chunk
-
-        if current_chunk:
-            optimized.append(current_chunk)
-
-        return optimized
-
-    def _clean_section_title(self, raw_title: str) -> str:
-        """섹션 제목에서 마크다운 기호 및 불필요한 본문 텍스트를 제거합니다."""
-        # 1. 마크다운 헤더 기호 및 앞뒤 공백 제거
-        clean_title = raw_title.lstrip("# ").strip()
-
-        # 2. 논문의 주요 섹션 키워드 체크 (상수 활용)
-        upper_title = clean_title.upper()
-        for kw in STANDARD_SECTION_KEYWORDS:
-            if upper_title.startswith(kw):
-                return kw
-
-        # 3. 너무 긴 경우(100자 이상) 첫 번째 끊김 지점에서 자르기 (제목 보존을 위해 확장)
-        if len(clean_title) > 100:
-            parts = re.split(r"[\n\r\.\:]", clean_title)
-            if parts:
-                clean_title = parts[0].strip()
-
-        # 4. 특수문자 제거 및 최종 길이 제한
-        clean_title = re.sub(r"[#\*_]", "", clean_title)
-        return clean_title[:150]  # 제목 복원을 위해 길이 상향
-
-    def _prune_duplicates(
-        self, chunks: list[dict], threshold: float = 0.98
-    ) -> list[dict]:
-        """임베딩 벡터 기반으로 유사도가 높은 중복 청크를 제거합니다."""
-        if not chunks:
-            return []
-
-        pruned = [chunks[0]]
-        for i in range(1, len(chunks)):
-            current_vec = chunks[i]["vector"]
-            is_dup = False
-
-            # 최근 3개의 청크와 비교하여 중복 여부 확인 (대량 문서 내 반복 구간 처리)
-            for prev in pruned[-3:]:
-                sim = float(np.dot(current_vec, prev["vector"]))
-                if sim > threshold:
-                    is_dup = True
-                    break
-
-            if not is_dup:
-                pruned.append(chunks[i])
-            else:
-                logger.debug(f"[Chunker] 중복 청크 제거됨 (유사도 > {threshold})")
-
-        return pruned
 
     async def split_text(self, text: str) -> list[dict]:
         """
@@ -658,50 +109,8 @@ class EmbeddingBasedSemanticChunker:
         if not raw_sentences:
             return []
 
-        # [최적화] 너무 짧은 문장 병합 (오프셋 유지)
-        min_merge_len = ChunkingConstants.MIN_MERGE_LEN.value
-        # [수정] 헤더 감지 정규식 강화: # 패턴 또는 대문자 시작 섹션 (1 INTRODUCTION 등)
-        # [최적화] 클래스 상수 HEADER_PATTERN 사용 (재컴파일 방지)
-
-        sentences = []
-        if raw_sentences:
-            # [최적화] 병합 전 1회만 헤더 여부를 계산하여 캐싱
-            for raw_s in raw_sentences:
-                raw_s["is_header"] = bool(
-                    self.HEADER_PATTERN.match(raw_s["text"].strip())
-                )
-
-            current_s = raw_sentences[0]
-            for s in raw_sentences[1:]:
-                # [수정] 현재 문장이 헤더거나, 다음 문장이 헤더인 경우 병합 제외 (Clean Section Preservation)
-                # [최적화] 미리 캐싱된 is_header 값 재사용 (정규식 중복 호출 제거)
-                is_curr_header = current_s.get("is_header", False)
-                is_next_header = s.get("is_header", False)
-
-                can_merge = (
-                    not is_curr_header  # ✅ 현재 문장이 헤더면 절대 합치지 않음
-                    and not is_next_header  # 다음 문장이 헤더면 합치지 않음
-                    and not current_s.get("is_hard_split", False)
-                    and (len(s["text"]) < min_merge_len)
-                    and (len(current_s["text"]) + len(s["text"]) < 1000)
-                )
-
-                if can_merge:
-                    current_s["text"] += " " + s["text"]
-                    current_s["end"] = s["end"]
-                    current_s["is_hard_split"] = s.get("is_hard_split", False)
-                    # 병합된 문장은 헤더가 아님 (텍스트가 변경되었으므로)
-                    current_s["is_header"] = False
-                else:
-                    sentences.append(current_s)
-                    current_s = s
-            sentences.append(current_s)
-
-        # [최적화] 헤더 위치 미리 캐싱 (O(1) lookup용) — 이미 위에서 계산 완료
-
-        header_indices = {
-            i for i, s in enumerate(sentences) if s.get("is_header", False)
-        }
+        # [최적화] 너무 짧은 문장 병합 (오프셋 유지) + 헤더 위치 캐싱
+        sentences, header_indices = self._merge_short_sentences(raw_sentences)
 
         if len(sentences) <= self.buffer_size:
             # 벡터가 없으므로 계산 필요
@@ -719,7 +128,7 @@ class EmbeddingBasedSemanticChunker:
             return sentences
 
         # 2. 개별 문장 임베딩 생성 (캐싱 활용)
-        # [R2-02] 단위노름 배선 — 거리(:690)·병합(:511)·중복제거(:579) 일관성 확보
+        # [R2-02] 단위노름 배선 — 거리·병합·중복제거 일관성 확보
         indiv_embeddings = await self._get_embeddings(
             [s["text"] for s in sentences], normalize=True
         )
@@ -731,154 +140,21 @@ class EmbeddingBasedSemanticChunker:
         for s, v in zip(sentences, indiv_embeddings, strict=True):
             s["vector"] = v
 
-        # 3. Buffer 기반 Combined Embeddings 생성
-        combined_embeddings = []
-        for i in range(len(sentences)):
-            start = max(0, i - self.buffer_size)
-            end = min(len(sentences), i + self.buffer_size + 1)
-            window_vectors = indiv_embeddings[start:end]
-            combined_vec = np.mean(window_vectors, axis=0)
-            norm = np.linalg.norm(combined_vec)
-            if norm > 1e-9:
-                combined_vec /= norm
-            combined_embeddings.append(combined_vec)
-
-        combined_embeddings_arr = np.array(combined_embeddings)
-
-        # 4. 거리 계산
-        distances = []
-        for i in range(len(combined_embeddings_arr) - 1):
-            similarity = np.dot(
-                combined_embeddings_arr[i], combined_embeddings_arr[i + 1]
-            )
-            distances.append(1.0 - float(similarity))
+        # 3-4. Buffer 기반 Combined Embeddings + 인접 거리 계산
+        combined_embeddings_arr = self._buffer_combined_embeddings(indiv_embeddings)
+        distances = self._compute_distances(combined_embeddings_arr)
 
         # 5. 분기점 탐색 (헤더 인식 로직 포함됨)
         breakpoints = self._find_breakpoints(distances, sentences=sentences)
 
         # 6. 그룹화 및 헤더 컨텍스트(Section) 추적
-        chunks = []
-        start_idx = 0
-        all_bps = breakpoints + [len(sentences)]
-
-        current_header = "Front Matter"  # [수정] 기본값
-
-        # [추가] 헤더 병합용 상태
-        pending_header = ""
-        is_first_header = True
-
-        for i, bp in enumerate(all_bps):
-            group_start = start_idx
-            group_end = bp
-            if group_start >= group_end:
-                continue
-
-            # [고도화] 새로운 헤더로 시작하는지 확인 (오버랩 방지용)
-            is_new_header_start = sentences[group_start].get("is_header", False)
-
-            # Overlap 적용: 헤더로 시작하는 경우 오버랩 생략 (Clean Section Start)
-            actual_start = group_start
-            if i > 0 and not is_new_header_start:
-                actual_start = max(0, group_start - self.chunk_overlap)
-
-            # [핵심] 현재 청크의 헤더 섹션 결정 (미리 캐싱된 header_indices 사용)
-            for s_idx in range(start_idx, group_end):
-                if s_idx not in header_indices:  # O(1) set lookup
-                    continue
-                s = sentences[s_idx]
-                text_strip = s["text"].strip()
-                new_h = self._clean_section_title(text_strip)
-
-                # [지능형 병합] 전치사나 'OF' 등으로 끝나면 다음 헤더와 합침
-                incomplete_markers = ["OF", "AND", "WITH", "IN", "FOR", "THE", "A"]
-                if (
-                    any(new_h.upper().endswith(w) for w in incomplete_markers)
-                    and len(new_h) < 100
-                ):
-                    pending_header = new_h + " "
-                    continue
-
-                if pending_header:
-                    new_h = (pending_header + new_h).strip()
-                    pending_header = ""
-
-                # 첫 번째 거대한 헤더는 제목으로 처리
-                if is_first_header and len(new_h) > 10:
-                    current_header = f"TITLE: {new_h}"
-                    is_first_header = False
-                else:
-                    current_header = new_h
-
-            merged_text = " ".join(
-                [s["text"] for s in sentences[actual_start:group_end]]
-            )
-            chunk_vector = np.mean(indiv_embeddings[actual_start:group_end], axis=0)
-            # [R2-02] 청크 벡터 단위노름 — 병합/중복제거의 dot product가 코사인 유사도
-            chunk_norm = float(np.linalg.norm(chunk_vector))
-            if chunk_norm > 1e-9:
-                chunk_vector = chunk_vector / chunk_norm
-
-            # [R2-05] start는 오버랩 포함 실제 텍스트 범위(actual_start) 기준으로 산출.
-            # merged_text(:812-814)와 벡터(:815)가 이미 actual_start를 사용하므로,
-            # group_start 기준으로 산출하면 오버랩 문장 구간의 좌표·페이지 메타데이터가
-            # 청크 텍스트와 어긋납니다 (페이지 경계 오버랩 시 하이라이트 좌표 누락).
-            chunks.append(
-                {
-                    "text": merged_text,
-                    "start": sentences[actual_start]["start"],
-                    "end": sentences[group_end - 1]["end"],
-                    "vector": chunk_vector,
-                    "is_hard_split": sentences[group_end - 1].get(
-                        "is_hard_split", False
-                    ),
-                    "current_section": current_header,
-                }
-            )
-            start_idx = bp
+        chunks = self._group_sentences_into_chunks(
+            sentences, header_indices, indiv_embeddings, breakpoints
+        )
 
         # 7. 크기 최적화 및 중복 제거
         optimized_chunks = self._optimize_chunk_sizes(chunks)
         return self._prune_duplicates(optimized_chunks)
-
-    def _extract_metadata_for_chunk(
-        self, chunk: dict[str, Any], doc_ranges: list[dict[str, Any]]
-    ) -> dict[str, Any]:
-        """
-        청크에 대한 메타데이터를 추출하고 병합합니다.
-        """
-        c_start = chunk["start"]
-        c_end = chunk["end"]
-
-        overlapping_pages = []
-        merged_metadata: dict[str, Any] = {}
-
-        for doc_range in doc_ranges:
-            # 범위 겹침 확인: [start1, end1] 과 [start2, end2]
-            if max(c_start, doc_range["start"]) < min(c_end, doc_range["end"]):
-                # [수정] Mypy 타입 추론 강화를 위해 cast 사용
-                metadata = cast(dict[str, Any], doc_range["metadata"])
-                page = metadata.get("page")
-                if page and page not in overlapping_pages:
-                    overlapping_pages.append(page)
-
-                # 기본 메타데이터는 첫 번째 겹치는 문서에서 가져오되, 페이지 정보는 업데이트
-                if not merged_metadata:
-                    merged_metadata = metadata.copy()
-
-        if overlapping_pages:
-            merged_metadata["pages"] = sorted(overlapping_pages)
-            # 하위 호환성을 위해 단일 page 필드는 첫 페이지로 유지
-            merged_metadata["page"] = overlapping_pages[0]
-            # 다중 페이지 여부 표시
-            merged_metadata["is_cross_page"] = len(overlapping_pages) > 1
-
-        # [핵심 수정] 추출된 섹션 정보를 메타데이터에 주입
-        merged_metadata["current_section"] = chunk.get("current_section", "일반 본문")
-
-        merged_metadata["start_index"] = c_start
-        merged_metadata["end_index"] = c_end
-
-        return merged_metadata
 
     async def split_documents(
         self, docs: list["Document"]
