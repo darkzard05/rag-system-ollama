@@ -263,8 +263,24 @@ def _faiss_results_with_scores(retriever: Any, query: str, k: int) -> list[Docum
     프로젝트 인덱스는 ``MAX_INNER_PRODUCT``(L2 정규화 벡터)이므로 점수가 클수록
     유사하며 ``index.search``가 내림차순으로 반환한다.
     """
+    import faiss
+    import numpy as np
+
     vector_store = retriever.vectorstore
-    docs_scores = vector_store.similarity_search_with_score(query, k=k)
+    # [R3a-07] 쿼리 벡터 L2 정규화 — 인덱스 벡터는 구축 시 정규화되었으므로
+    # 쿼리도 동일 규격으로 맞춰 IP(내적)를 진짜 코사인 유사도로 고정한다.
+    # Ollama 임베더는 단위벡터를 반환하나 HF/기타 백엔드는 미보장 — 명시적
+    # 정규화로 계약을 코드에 고정해 임베더 교체 시 회귀를 방지한다.
+    embed_fn = vector_store.embedding_function
+    query_vec = (
+        embed_fn.embed_query(query)
+        if hasattr(embed_fn, "embed_query")
+        else embed_fn(query)
+    )
+    query_np = np.asarray(query_vec, dtype="float32").reshape(1, -1)
+    faiss.normalize_L2(query_np)
+
+    docs_scores = vector_store.similarity_search_with_score_by_vector(query_np[0], k=k)
     for doc, score in docs_scores:
         doc.metadata["score"] = float(score)
     return [doc for doc, _score in docs_scores]

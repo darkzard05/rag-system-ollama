@@ -365,10 +365,51 @@ def load_embedding_model(
 
             from core.session import SessionManager
 
+            # [R2-07] Ollama `/api/embed` truncate 기본값(true)은 임베딩 모델
+            # 컨텍스트 초과 입력을 무음 잘라낸다. langchain_ollama 0.3.x는
+            # truncate를 생성자로 받지도 않으므로, 서브클래스에서 명시적으로
+            # truncate=False를 전달해 과잉 입력을 에러로 표면화한다.
+            class _NoTruncateOllamaEmbeddings(OllamaEmbeddings):
+                """Ollama 임베딩 — `/api/embed` truncate=False 명시."""
+
+                truncate: bool = False
+
+                def embed_documents(self, texts: list[str]) -> list[list[float]]:
+                    if not self._client:
+                        msg = (
+                            "Ollama client is not initialized. "
+                            "Please ensure Ollama is running and the model is loaded."
+                        )
+                        raise ValueError(msg)
+                    return self._client.embed(
+                        self.model,
+                        texts,
+                        truncate=self.truncate,
+                        options=self._default_params,
+                        keep_alive=self.keep_alive,
+                    )["embeddings"]
+
+                async def aembed_documents(self, texts: list[str]) -> list[list[float]]:
+                    if not self._async_client:
+                        msg = (
+                            "Ollama client is not initialized. "
+                            "Please ensure Ollama is running and the model is loaded."
+                        )
+                        raise ValueError(msg)
+                    return (
+                        await self._async_client.embed(
+                            self.model,
+                            texts,
+                            truncate=self.truncate,
+                            options=self._default_params,
+                            keep_alive=self.keep_alive,
+                        )
+                    )["embeddings"]
+
             logger.info(
                 f"[MODEL] [LOAD] Ollama 임베딩 엔진 사용 | 모델: {clean_model_name}"
             )
-            result = OllamaEmbeddings(
+            result = _NoTruncateOllamaEmbeddings(
                 model=clean_model_name,
                 base_url=OLLAMA_BASE_URL,
                 keep_alive=_keep_alive_seconds(),
@@ -406,6 +447,10 @@ def load_embedding_model(
             encode_kwargs: dict[str, Any] = {
                 "device": target_device,
                 "batch_size": batch_size,
+                # [R3a-07] HF 임베더 출력 L2 정규화 — 코사인 일관성 계약.
+                # 인덱스(use_l2_norm)와 쿼리 양쪽이 단위벡터일 때 IP(내적)=코사인.
+                # ONNX+CPU 가속 경로에만 국한하지 않고 전 백엔드(CPU/CUDA)에 적용.
+                "normalize_embeddings": True,
             }
 
             if target_device == "cuda":
@@ -418,9 +463,6 @@ def load_embedding_model(
 
             if backend == "onnx":
                 model_kwargs["backend"] = "onnx"
-                # [추가] ONNX 가속 시 최적화 설정 주입
-                if target_device == "cpu":
-                    encode_kwargs["normalize_embeddings"] = True  # 정규화 가속 활용
 
             if target_device == "cuda":
                 # [수정] SentenceTransformer 직접 생성 시 torch_dtype 관련 오류 방지를 위해 일단 제외

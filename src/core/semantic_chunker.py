@@ -10,7 +10,7 @@ import asyncio
 import concurrent.futures
 import logging
 import re
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 import numpy as np
 import xxhash
@@ -56,6 +56,10 @@ class EmbeddingBasedSemanticChunker:
     )
     # 간단 헤더 패턴 (breakpoint 탐지용)
     HEADER_SIMPLE = re.compile(r"^\s*#{1,6}\s+.+", re.MULTILINE)
+    # 축약어 마침표 패턴 — 문장 분할 시 가짜 경계로 취급하지 않아야 함 (R2-03)
+    ABBREVIATION_PATTERN = re.compile(r"(?i)\b(?:et al|e\.g|i\.e|Dr|Mr|vs)\.(?=\s)")
+    # 축약어 마침표 임시 보호용 센티널 (길이 1:1 치환 → 오프셋 보존)
+    ABBREV_SENTINEL = "\x00"
 
     def __init__(
         self,
@@ -96,11 +100,52 @@ class EmbeddingBasedSemanticChunker:
         # ✅ 정규식 사전 컴파일 (성능 최적화)
         self._sentence_pattern = re.compile(self.sentence_split_regex)
 
+    @staticmethod
+    def _line_kind(line: str) -> Literal["blank", "structure", "list_marker", "text"]:
+        """라인 유형 분류 — 리플로우 병합 판정에 사용됩니다."""
+        stripped = line.strip()
+        if not stripped:
+            return "blank"
+        if stripped.startswith("#") or stripped.startswith("|"):
+            return "structure"
+        if re.fullmatch(r"[-*_=]{3,}", stripped):
+            return "structure"
+        if re.match(r"^(?:[-*+]|\d+[.)])\s", stripped):
+            return "list_marker"
+        return "text"
+
+    def _reflow_wrapped_lines(self, text: str) -> str:
+        """PDF 마크다운의 래핑 줄바꿈을 공백으로 병합하는 리플로우 전처리.
+
+        개행(\\n)을 정확히 1문자(공백)로 치환하므로 텍스트 전체 길이와
+        비-개행 문자의 위치가 보존되어, 산출된 문장 오프셋(start/end)이 원본
+        텍스트 좌표와 그대로 일치합니다 (좌표 하이드레이션 무결성 유지).
+
+        병합 규칙: (1) 연속된 일반 텍스트 라인은 병합, (2) 리스트 마커 라인은
+        자신의 래핑 연속 라인과 병합. 빈 줄/헤더/테이블 행/수평선은 구조 요소로
+        병합하지 않고, 일반 텍스트 뒤의 새 리스트/헤더 시작도 병합하지 않습니다.
+        """
+        out: list[str] = []
+        prev_kind: Literal["blank", "structure", "list_marker", "text"] = "blank"
+        for line in text.split("\n"):
+            kind = self._line_kind(line)
+            if out and prev_kind in ("text", "list_marker") and kind == "text":
+                out.append(" ")
+            elif out:
+                out.append("\n")
+            out.append(line)
+            prev_kind = kind
+        return "".join(out)
+
     def _split_sentences(self, text: str) -> list[dict]:
         """
         문장 단위로 텍스트를 분할하고 오프셋 정보를 함께 반환합니다.
         [최적화] 마크다운 테이블 행(|)을 보호하며, 너무 긴 문장은 강제로 분할합니다.
+        [R2-03] 분할 전에 래핑 라인을 리플로우(개행→공백)하여 PDF 줄바꿈 파편이
+        독립 "문장"으로 남지 않도록 합니다.
         """
+        # [R2-03] 문장 분할 전 리플로우 — 오프셋 보존(개행 1:1 → 공백)
+        text = self._reflow_wrapped_lines(text)
         lines = text.split("\n")
         temp_sentences: list[dict[str, Any]] = []
         current_pos = 0
@@ -116,8 +161,13 @@ class EmbeddingBasedSemanticChunker:
                     temp_sentences, line, current_pos, current_pos + line_len
                 )
             else:
-                # 일반 텍스트는 정규식으로 분할
-                parts = list(self._sentence_pattern.finditer(line))
+                # [R2-03] 축약어 마침표를 센티널로 보호해 가짜 문장 경계 차단.
+                # 센티널은 길이 1:1 치환이므로 정규식 매치 위치는 원본 라인 좌표와 동일.
+                protected_line = self.ABBREVIATION_PATTERN.sub(
+                    lambda m: m.group(0)[:-1] + self.ABBREV_SENTINEL, line
+                )
+                # 일반 텍스트는 정규식으로 분할 (원본 라인에서 슬라이스 → 마침표 복원 불필요)
+                parts = list(self._sentence_pattern.finditer(protected_line))
                 last_pos = 0
                 for match in parts:
                     sep_end = match.end()
@@ -432,8 +482,15 @@ class EmbeddingBasedSemanticChunker:
             threshold = float(
                 np.percentile(np.gradient(dist_array), self.breakpoint_threshold_value)
             )
+        elif self.breakpoint_threshold_type == "similarity_threshold":
+            # [R2-01] config 기본 모드 — 명시 분기 (기존 else 암묵 폴백 제거)
+            threshold = float(self.similarity_threshold)
         else:
-            threshold = float(self.similarity_threshold)  # 폴백
+            threshold = float(self.similarity_threshold)  # 알 수 없는 유형 방어용
+            logger.warning(
+                f"[Chunker] 알 수 없는 breakpoint_threshold_type="
+                f"{self.breakpoint_threshold_type!r} — similarity_threshold 폴백 사용"
+            )
 
         # 1. 유사도 기반 분기점 추출
         breakpoints = (np.where(dist_array > threshold)[0] + 1).tolist()
@@ -650,7 +707,8 @@ class EmbeddingBasedSemanticChunker:
             # 벡터가 없으므로 계산 필요
             if sentences:
                 sentence_texts = [s["text"] for s in sentences]
-                embeddings = await self._get_embeddings(sentence_texts)
+                # [R2-02] 단위노름 배선 — 병합/중복제거의 dot product가 진짜 코사인 유사도
+                embeddings = await self._get_embeddings(sentence_texts, normalize=True)
                 if embeddings.shape[0] != len(sentence_texts):
                     raise ValueError(
                         f"[Chunker] 임베딩 행 수({embeddings.shape[0]})가 "
@@ -661,7 +719,10 @@ class EmbeddingBasedSemanticChunker:
             return sentences
 
         # 2. 개별 문장 임베딩 생성 (캐싱 활용)
-        indiv_embeddings = await self._get_embeddings([s["text"] for s in sentences])
+        # [R2-02] 단위노름 배선 — 거리(:690)·병합(:511)·중복제거(:579) 일관성 확보
+        indiv_embeddings = await self._get_embeddings(
+            [s["text"] for s in sentences], normalize=True
+        )
         if indiv_embeddings.shape[0] != len(sentences):
             raise ValueError(
                 f"[Chunker] 임베딩 행 수({indiv_embeddings.shape[0]})가 "
@@ -752,6 +813,10 @@ class EmbeddingBasedSemanticChunker:
                 [s["text"] for s in sentences[actual_start:group_end]]
             )
             chunk_vector = np.mean(indiv_embeddings[actual_start:group_end], axis=0)
+            # [R2-02] 청크 벡터 단위노름 — 병합/중복제거의 dot product가 코사인 유사도
+            chunk_norm = float(np.linalg.norm(chunk_vector))
+            if chunk_norm > 1e-9:
+                chunk_vector = chunk_vector / chunk_norm
 
             chunks.append(
                 {
