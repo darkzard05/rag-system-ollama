@@ -44,6 +44,7 @@ class SessionManager:
         "pdf_file_path": None,
         "file_hash": None,
         "rag_engine": None,
+        "rag_engine_file_hash": None,
         "llm": None,
         "embedder": None,
         "is_generating_answer": False,

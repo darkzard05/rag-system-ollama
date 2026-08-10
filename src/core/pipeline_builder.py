@@ -15,6 +15,7 @@ from typing import Any
 
 from langchain_core.embeddings import Embeddings
 
+from cache.engine_cache import EngineCacheManager
 from cache.vector_cache import VectorStoreCache
 from common.config import (
     DEFAULT_EMBEDDING_MODEL,
@@ -121,6 +122,41 @@ class PipelineBuilder:
         Returns:
             (메시지, 캐시 사용 여부) 튜플.
         """
+        file_hash = compute_file_hash(file_path)
+        prev_file_hash = SessionManager.get("file_hash", session_id=self.session_id)
+        # [R1b-03] 팬텀 상태 방지: PDF 로드/청킹/벡터 빌드 등 실패 가능 작업
+        # 이전의 file_hash 조기 커밋을 롤백으로 감쌉니다. 빌드 실패·취소 시
+        # 이전 값으로 복원해 "새 해시 + 이전 엔진" 비정상 조합이 세션에 남아
+        # 옛 문서 기준으로 동작하는 팬텀 상태가 생기지 않게 합니다.
+        SessionManager.set("file_hash", file_hash, session_id=self.session_id)
+
+        try:
+            return await self._build_impl(
+                file_path,
+                file_name,
+                embedder,
+                file_hash,
+                on_progress,
+                check_cancelled,
+            )
+        except BaseException:
+            SessionManager.set("file_hash", prev_file_hash, session_id=self.session_id)
+            logger.warning(
+                "[RAG] [INDEX] 파이프라인 구축 실패 — file_hash 롤백: "
+                f"{file_hash!r} -> {prev_file_hash!r}"
+            )
+            raise
+
+    async def _build_impl(
+        self,
+        file_path: str,
+        file_name: str,
+        embedder: Embeddings,
+        file_hash: str,
+        on_progress: Callable[[int], Any] | None,
+        check_cancelled: Callable[[], bool] | None,
+    ) -> tuple[str, bool]:
+        """file_hash 커밋 이후의 실제 파이프라인 구축 본문 (실패 가능 작업)."""
 
         def _check() -> None:
             if check_cancelled is not None and check_cancelled():
@@ -130,9 +166,6 @@ class PipelineBuilder:
 
         start_time = time.time()
         logger.info(f"[RAG] [INDEX] 파이프라인 구축 시작: {file_name}")
-
-        file_hash = compute_file_hash(file_path)
-        SessionManager.set("file_hash", file_hash, session_id=self.session_id)
 
         emb_model_name = getattr(
             embedder, "model", getattr(embedder, "model_name", "unknown")
@@ -236,16 +269,9 @@ class PipelineBuilder:
             ),
             build_graph(),
         )
-        SessionManager.set("rag_engine", workflow, session_id=self.session_id)
-
-        try:
-            current_loop = asyncio.get_running_loop()
-            current_loop_id = id(current_loop)
-        except RuntimeError:
-            current_loop_id = 0
-        SessionManager.set(
-            "rag_engine_loop_id", current_loop_id, session_id=self.session_id
-        )
+        # 엔진과 file_hash 해시 메타데이터를 일관되게 캐싱합니다.
+        # EngineCacheManager.get_engine이 해시 불일치(팬텀 상태)를 검출하게 합니다.
+        EngineCacheManager.set_engine(self.session_id, workflow)
 
         if on_progress:
             on_progress(100)
