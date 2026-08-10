@@ -148,9 +148,7 @@ async def test_hardcap_prevents_third_retry() -> None:
                     "thread_id": "test_hardcap",
                 }
             }
-            result = await graph.ainvoke(
-                {"input": "질문", "chat_history": []}, config=config
-            )
+            result = await graph.ainvoke({"input": "질문"}, config=config)
     finally:
         invalidate_graph_cache()
 

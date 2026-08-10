@@ -329,7 +329,7 @@ class TestPipelineIntegration(unittest.TestCase):
             events = []
 
             async for event in graph.astream_events(
-                {"input": "Test query", "chat_history": []},
+                {"input": "Test query"},
                 config=config,
                 version="v2",
             ):

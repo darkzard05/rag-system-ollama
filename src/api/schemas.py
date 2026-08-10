@@ -2,11 +2,9 @@
 애플리케이션 전체에서 사용되는 데이터 구조(스키마)를 정의합니다.
 """
 
-import operator
 from typing import Annotated, Any, Literal, TypedDict
 
 from langchain_core.documents import Document
-from langchain_core.messages import BaseMessage
 from pydantic import BaseModel, Field, computed_field
 
 
@@ -61,7 +59,6 @@ class GraphState(TypedDict):
     """
 
     input: str
-    chat_history: Annotated[list[BaseMessage], operator.add]
     intent: str | None
     route: Literal["generate", "transform"]  # R1a-06: 라우팅 전용 채널 (intent와 분리)
     search_queries: Annotated[list[str], reset_or_append]

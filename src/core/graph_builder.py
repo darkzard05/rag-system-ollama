@@ -43,10 +43,11 @@ def _get_session_id(config: RunnableConfig | None = None) -> str:
 
 
 class _GraphCache:
-    """컴파일된 그래프와 빌드 락을 안전하게 캡슐화합니다."""
+    """컴파일된 그래프, 체크포인터, 빌드 락을 안전하게 캡슐화합니다."""
 
     def __init__(self) -> None:
         self._compiled: Any = None
+        self._checkpointer: Any = None
         self._lock: asyncio.Lock | None = None
 
     def get_lock(self) -> asyncio.Lock:
@@ -63,9 +64,19 @@ class _GraphCache:
     def compiled(self, value: Any) -> None:
         self._compiled = value
 
+    @property
+    def checkpointer(self) -> Any:
+        """그래프에 연결된 체크포인터(saver)를 반환합니다."""
+        return self._checkpointer
+
+    @checkpointer.setter
+    def checkpointer(self, value: Any) -> None:
+        self._checkpointer = value
+
     def invalidate(self) -> None:
         """컴파일된 그래프를 무효화하여 다음 build_graph() 호출 시 재컴파일합니다."""
         self._compiled = None
+        self._checkpointer = None
 
 
 _graph_cache = _GraphCache()
@@ -76,11 +87,46 @@ def invalidate_graph_cache() -> None:
     _graph_cache.invalidate()
 
 
+def delete_graph_thread(thread_id: str) -> None:
+    """세션 종료 시 그래프 체크포인터의 해당 thread를 제거합니다 (R1a-02/R1b-02).
+
+    InMemorySaver는 퇴거 정책이 없는 프로세스 전역 저장소이므로, 세션이 삭제될 때
+    명시적으로 정리하지 않으면 thread_id(=session_id) 수만큼 체크포인트가 무제한
+    누적된다. 체크포인터가 아직 구성되지 않았으면(그래프 미실행) 조용히 무시한다.
+    """
+    cp = _graph_cache.checkpointer
+    if cp is None:
+        logger.debug("[RAG] [GRAPH] 체크포인터 미구성 — thread 정리 생략")
+        return
+    cp.delete_thread(thread_id)
+
+
 def get_state_attr(state: Any, key: str, default: Any = None) -> Any:
     """dict와 object(GraphState) 모두에서 속성을 안전하게 가져옵니다."""
     if isinstance(state, dict):
         return state.get(key, default)
     return getattr(state, key, default)
+
+
+def _sanitize_channel_value(value: Any) -> Any:
+    """상태 채널 값을 msgpack 직렬화 가능한 순수 타입으로 위생화합니다.
+
+    R1a-05: JsonPlusSerializer(pickle_fallback=False) 전환에 따라 상태에 저장되는
+    값은 int/str/float/bool/None/list/dict만 허용한다. 그 외 객체(커스텀 클래스
+    인스턴스 등)를 만나면 조용히 pickle로 강등하지 않고 명시적 예외를 던진다.
+    """
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    if isinstance(value, list):
+        return [_sanitize_channel_value(item) for item in value]
+    if isinstance(value, tuple):
+        return tuple(_sanitize_channel_value(item) for item in value)
+    if isinstance(value, dict):
+        return {k: _sanitize_channel_value(v) for k, v in value.items()}
+    raise ValueError(
+        f"직렬화 불가 객체 감지 (pickle 강등 금지): {type(value).__name__} — "
+        "채널에는 순수 타입만 저장할 수 있습니다."
+    )
 
 
 async def _safe_invoke(llm: Any, prompt: str, config: dict) -> Any:
@@ -579,7 +625,6 @@ async def generate(
 
     # [CTX 가드] num_ctx 대비 prompt 추정 토큰이 85%를 초과하면 rerank_score가 낮은
     # 문서부터 제거하여 컨텍스트 초과(overflow)를 방지합니다. (최소 2문서 유지)
-    # chat_history는 generate 프롬프트에 포함되지 않으므로 추정식에서 제외합니다.
     if docs:
         query = get_state_attr(state, "input") or ""
         est = count_tokens_rough(
@@ -658,11 +703,15 @@ async def generate(
     return {
         "response": full_response,
         "thought": full_thought,
-        "performance": {
-            **last_metadata,
-            "input_token_count": input_tokens,
-            "relevant_docs_count": len(docs),
-        },
+        # R1a-05: response_metadata 등 임의 객체가 섞이면 체크포인트 전체가 pickle로
+        # 강등되는 경로를 차단하기 위해 순수 타입만 저장한다.
+        "performance": _sanitize_channel_value(
+            {
+                **last_metadata,
+                "input_token_count": input_tokens,
+                "relevant_docs_count": len(docs),
+            }
+        ),
     }
 
 
@@ -795,7 +844,14 @@ async def build_graph() -> Any:
         from langgraph.checkpoint.memory import InMemorySaver
         from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
 
-        memory = InMemorySaver(serde=JsonPlusSerializer(pickle_fallback=True))
+        # R1a-05: pickle_fallback=False — msgpack 직렬화 불가 객체는 조용히 pickle로
+        # 강등하지 않고 명시적 예외를 발생시킨다. 상태 채널은 _sanitize_channel_value로
+        # 순수 타입만 저장되도록 위생화한다. InMemorySaver는 실험/테스트용 저장소이므로
+        # 운영 전환 시 퇴거 정책이 있는 영속 체크포인터로 교체해야 한다.
+        memory = InMemorySaver(serde=JsonPlusSerializer(pickle_fallback=False))
 
         _graph_cache.compiled = workflow.compile(checkpointer=memory)
+        # R1a-02/R1b-02: 세션 삭제 시 delete_graph_thread가 해당 thread를 정리할 수
+        # 있도록 saver를 전역에서 참조 가능하게 노출한다.
+        _graph_cache.checkpointer = memory
         return _graph_cache.compiled

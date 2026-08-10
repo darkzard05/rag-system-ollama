@@ -524,6 +524,16 @@ class SessionManager:
 
         if pdf_path:
             cls.safe_remove_file(pdf_path)
+
+        # R1a-02/R1b-02: 그래프 체크포인터(InMemorySaver)의 해당 thread도 함께 제거해
+        # 세션 삭제 후에도 체크포인트가 메모리에 잔존하는 누수를 차단한다.
+        # thread_id는 pipeline_builder에서 session_id와 동일하게 주입된다.
+        try:
+            from core.graph_builder import delete_graph_thread
+
+            delete_graph_thread(session_id)
+        except Exception as e:
+            logger.warning(f"[SESSION] 체크포인터 thread 정리 실패 ({session_id}): {e}")
         return True
 
     @classmethod

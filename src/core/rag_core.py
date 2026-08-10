@@ -131,11 +131,9 @@ class RAGSystem:
             )
 
             monitor = get_performance_monitor()
-            chat_history = self._get_recent_history()
+            # R1a-04: chat_history 채널 제거 — 히스토리는 SessionManager가 전담한다.
             with monitor.track_operation(OperationType.RAG_PIPELINE_TOTAL):
-                result = await rag_engine.ainvoke(
-                    {"input": query, "chat_history": chat_history}, config=config
-                )
+                result = await rag_engine.ainvoke({"input": query}, config=config)
             docs = result.get("relevant_docs", [])
             await hydrate_documents(docs)
             from .graph_builder import format_context
@@ -163,7 +161,6 @@ class RAGSystem:
             raise VectorStoreError(
                 details={"reason": "파이프라인이 준비되지 않았습니다."}
             )
-        chat_history = self._get_recent_history()
         file_hash = SessionManager.get("file_hash", session_id=self.session_id)
 
         async def _consumer():
@@ -181,7 +178,8 @@ class RAGSystem:
                     )
                     async for event in breaker.call_async_stream(
                         rag_engine.astream_events,
-                        {"input": query, "chat_history": chat_history},
+                        # R1a-04: chat_history 채널 제거 — 히스토리는 SessionManager가 전담한다.
+                        {"input": query},
                         config=config,
                         version="v2",
                     ):

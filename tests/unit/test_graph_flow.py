@@ -94,7 +94,6 @@ async def test_workflow_general_intent(compiled_workflow, mock_llm):
     config = {"configurable": {"llm": llm, "thread_id": "test_thread"}}
     inputs = {
         "input": "안녕",
-        "chat_history": [],
         "retry_count": 0,
         "search_queries": [],
         "relevant_docs": [],
@@ -138,7 +137,7 @@ async def test_workflow_rag_success_path(
             "thread_id": "test_thread_rag",
         }
     }
-    inputs = {"input": "RAG가 뭐야?", "chat_history": []}
+    inputs = {"input": "RAG가 뭐야?"}
 
     # Execute
     result = await compiled_workflow.ainvoke(inputs, config=config)
@@ -188,7 +187,7 @@ async def test_workflow_rag_retry_path(
             "thread_id": "test_thread_rag",
         }
     }
-    inputs = {"input": "정보를 알려줘", "chat_history": []}
+    inputs = {"input": "정보를 알려줘"}
 
     # Execute
     result = await compiled_workflow.ainvoke(inputs, config=config)
@@ -301,7 +300,7 @@ async def test_workflow_cache_hit_path(mock_llm):
             compiled_workflow = await build_graph()
 
             config = {"configurable": {"llm": llm, "thread_id": "test_thread_cache"}}
-            inputs = {"input": "테스트", "chat_history": []}
+            inputs = {"input": "테스트"}
 
             # Execute
             result = await compiled_workflow.ainvoke(inputs, config=config)

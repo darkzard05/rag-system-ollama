@@ -48,7 +48,7 @@ def test_reset_or_add_accumulates_within_turn():
 
 async def test_preprocess_resets_search_queries():
     """preprocess가 search_queries=[]를 반환해 턴 시작 리셋 신호를 보낸다."""
-    state = {"input": "DeepSeek-R1 성능은 어때?", "chat_history": []}
+    state = {"input": "DeepSeek-R1 성능은 어때?"}
     config = {"configurable": {}}
     result = await preprocess(state, config, writer=MockWriter())
     assert result["search_queries"] == []

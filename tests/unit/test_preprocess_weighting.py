@@ -16,7 +16,7 @@ class MockWriter:
 
 
 async def _preprocess_weights(query: str) -> dict[str, float]:
-    state = {"input": query, "chat_history": []}
+    state = {"input": query}
     config = {"configurable": {}}
     result = await preprocess(state, config, writer=MockWriter())
     return result["search_weights"]
