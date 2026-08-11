@@ -1,0 +1,41 @@
+T10 manual QA - JsonPlusSerializer allowlist round-trip test
+Date: 2026-08-10
+Interpreter: C:\ProgramData\anaconda3\envs\rag-ollama\python.exe
+Test file: tests/unit/test_checkpoint_serde_allowlist.py
+
+== pytest run 1/3 (full tail) ==
+.....                                                                    [100%]Running teardown with pytest sessionfinish...
+
+============================== warnings summary ===============================
+tests\unit\test_checkpoint_serde_allowlist.py:26
+  C:\Users\darkzard05\hy\rag-system-ollama\tests\unit\test_checkpoint_serde_allowlist.py:26: LangChainPendingDeprecationWarning: The default value of `allowed_objects` will change in a future version. Pass an explicit value (e.g., allowed_objects='messages' or allowed_objects='core') to suppress this warning.
+    from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+5 passed, 1 warning in 2.68s
+
+== pytest run 2/3 (tail) ==
+
+5 passed, 1 warning in 2.66s
+
+
+== pytest run 3/3 (tail) ==
+
+5 passed, 1 warning in 2.36s
+
+
+== ruff check ==
+All checks passed!
+
+ruff exit code: 0
+
+== Findings ==
+- ToolMessage round-trip PASSED with the PRODUCTION 3-entry allowlist (no graph_builder.py change needed).
+- ToolMessage.__module__ = 'langchain_core.messages.tool'; BaseMessage subclasses serialize via the
+  msgpack EXT_PYDANTIC_V2 path (model_dump/model_validate_json), bypassing the LC-constructor allowlist check.
+- ToolMessage must be constructed WITH tool_call_id (required field); a bare ToolMessage('x') raises
+  KeyError 'tool_call_id' at dump - that is a pydantic validation artifact, not an allowlist failure.
+- Single pytest warning is the module-IMPORT-time baseline (jsonplus LC_REVIVER = Reviver() at module top
+  level; appears at test file line 26 import) - pre-existing T1 gate baseline, NOT asserted by the tests
+  (instantiation warning test scoped to constructor only and passes with 0 records).
+- Serialization type is 'msgpack', never 'pickle' (pickle_fallback=False verified).

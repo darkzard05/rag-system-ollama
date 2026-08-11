@@ -1,0 +1,47 @@
+PHASE1 import-time LangChainPendingDeprecationWarnings: 1
+  [C:\ProgramData\anaconda3\envs\rag-ollama\lib\site-packages\langgraph\checkpoint\base\__init__.py:17] The default value of `allowed_objects` will change in a future version. Pass an explicit value (e.g., allowed_objects='messages' or allowed_objects='core') to suppress this warning.
+PHASE2 warnings under error-filter: 0
+PHASE2 RESULT: PASS (0 LangChainPendingDeprecationWarnings; all round-trips OK)
+msgpack revived type: HumanMessage | content='안녕하세요, 테스트 메시지'
+json allowlist revived type: HumanMessage | content='hi'
+================================================================================
+[2026-08-10] T9 follow-up: app-bootstrap warning suppression (plan QA-failure branch b)
+Interpreter: C:\ProgramData\anaconda3\envs\rag-ollama\python.exe
+
+Warning source (verified): import langgraph.checkpoint.base -> base/__init__.py:17 ->
+  langgraph/checkpoint/serde/jsonplus.py module-level LC_REVIVER = Reviver() (allowed_objects=None)
+  -> langchain_core/load/load.py:408 warn_deprecated(pending=True) -> LangChainPendingDeprecationWarning.
+  JsonPlusSerializer.__init__ emits no warning; serializer params cannot silence it (no allowed_objects param).
+
+Root cause of the failed plain message-filter: langchain_core._api.deprecation registers its
+  OWN warning filters when imported; Python's warnings.filters are checked from index 0
+  (last-registered wins), so a filter registered BEFORE the langgraph import chain is
+  out-ranked by langchain's own 'default' LangChainPendingDeprecationWarning filter.
+  A/B/C proof:
+  - A (no filter):            import langgraph.checkpoint.base -> 1 warning
+  - B (ignore filter, then import, no pre-import of deprecation): -> 1 warning (STILL FIRES)
+  - C (pre-import langchain_core._api.deprecation, THEN register ignore w/ category): -> 0 warnings
+
+FIX (src/main.py P4 block, at top before all other imports):
+  1) import warnings
+  2) from langchain_core._api.deprecation import LangChainPendingDeprecationWarning
+  3) warnings.filterwarnings("ignore", message="The default value of .allowed_objects. will change",
+                             category=LangChainPendingDeprecationWarning)
+  Message+category scoped only; all other warnings untouched. graph_builder.py keeps
+  JsonPlusSerializer(pickle_fallback=False, allowed_json_modules=[...]) as defense-in-depth.
+
+FRESH-PROCESS VERIFICATION:
+(a) baseline (no filter)  -- python t9_verify_a.py (import langgraph.checkpoint.base):
+    OUTPUT:
+    IMPORT_OK (baseline)
+    C:\ProgramData\anaconda3\envs\rag-ollama\lib\site-packages\langgraph\checkpoint\base\__init__.py:17: LangChainPendingDeprecationWarning: The default value of `allowed_objects` will change in a future version. Pass an explicit value (e.g., allowed_objects='messages' or allowed_objects='core') to suppress this warning.
+      from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
+    -> 1 LangChainPendingDeprecationWarning
+
+(b) fix replicated (exact src/main.py P4 block order)  -- python t9_verify_b.py:
+    OUTPUT:
+    IMPORT_OK (with fix)
+    -> 0 LangChainPendingDeprecationWarnings
+
+(c) ruff check src/main.py src/core/graph_builder.py -> All checks passed!
+================================================================================
