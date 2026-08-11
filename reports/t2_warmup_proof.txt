@@ -1,0 +1,107 @@
+# T2 Warmup Proof — 실질 LLM 워밍 추론 (P2)
+
+Date: 2026-08-10
+Repo: rag-system-ollama
+Branch: main (worktree clean before change)
+Interpreter: C:\ProgramData\anaconda3\envs\rag-ollama\python.exe (active env)
+
+## 1) FAILING run (TDD red) — BEFORE the change, new test against unmodified code
+
+Command:
+    python -m pytest tests/unit/test_preload_warmup.py -q
+
+Exit code: 1  (1 failed, 1 passed, 1 warning in 6.91s)
+
+stdout tail:
+
+```
+F.                                                                       [100%]Running teardown with pytest sessionfinish...
+
+================================== FAILURES ===================================
+__________ test_preload_warmup_invokes_llm_exactly_once_with_warmup ___________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x000002274DEE4730>
+
+    @pytest.mark.asyncio
+    async def test_preload_warmup_invokes_llm_exactly_once_with_warmup(monkeypatch):
+        """프리로드 step3에서 LLM.invoke가 정확히 1회, "warmup" 인자로 호출되는지 검증합니다."""
+        recording_llm = _RecordingLLM()
+        _patch_model_manager(monkeypatch, recording_llm)
+
+        await pb._preload_model()
+
+>       assert len(recording_llm.invoke_calls) == 1
+E       assert 0 == 1
+E        +  where 0 = len([])
+E        +    where [] = <test_preload_warmup._RecordingLLM object at 0x000002274DE7A1A0>.invoke_calls
+
+tests\unit\test_preload_warmup.py:61: AssertionError
+============================== warnings summary ===============================
+..\..\..\..\ProgramData\anaconda3\envs\rag-ollama\lib\site-packages\langgraph\cache\base\__init__.py:8
+  C:\ProgramData\anaconda3\envs\rag-ollama\lib\site-packages\langgraph\cache\base\__init__.py:8: LangChainPendingDeprecationWarning: The default value of `allowed_objects` will change in a future version. Pass an explicit value (e.g., allowed_objects='messages' or allowed_objects='core') to suppress this warning.
+    from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ===========================
+FAILED tests/unit/test_preload_warmup.py::test_preload_warmup_invokes_llm_exactly_once_with_warmup
+1 failed, 1 passed, 1 warning in 6.91s
+EXITCODE=1
+```
+
+Interpretation: invoke_calls == [] — current `_preload_model` only builds the LLM client
+(`get_llm`) and never calls `llm.invoke`, so the preload is a no-op for the cold model
+load. The failure-path test (get_llm raises -> no re-raise) already passes.
+
+## 2) GREEN run (TDD green) — AFTER the change
+
+Command:
+    python -m pytest tests/unit/test_preload_warmup.py -q
+
+Exit code: 0  (2 passed, 1 warning in 3.24s)
+
+stdout tail:
+
+```
+..                                                                       [100%]Running teardown with pytest sessionfinish...
+
+============================== warnings summary ===============================
+..\..\..\..\ProgramData\anaconda3\envs\rag-ollama\lib\site-packages\langgraph\cache\base\__init__.py:8
+  C:\ProgramData\anaconda3\envs\rag-ollama\lib\site-packages\langgraph\cache\base\__init__.py:8: LangChainPendingDeprecationWarning: The default value of `allowed_objects` will change in a future version. Pass an explicit value (e.g., allowed_objects='messages' or allowed_objects='core') to suppress this warning.
+    from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+2 passed, 1 warning in 3.24s
+EXITCODE=0
+```
+
+Note: the LangChainPendingDeprecationWarning is pre-existing env noise (P4/T9 scope),
+unrelated to T2.
+
+## 3) Flakiness check — 3 consecutive green runs
+
+```
+run1: 2 passed, 1 warning in 3.00s
+run2: 2 passed, 1 warning in 2.90s
+run3: 2 passed, 1 warning in 2.47s
+```
+
+## 4) Regression — existing preload/ctx-guard suite stays green
+
+Command:
+    python -m pytest tests/unit/test_ctx_guard.py -q
+
+Result: 6 passed, 1 warning in 22.69s (exit 0)
+(tests/unit/test_pipeline_builder.py does not exist — regression scope = test_ctx_guard.py)
+
+## 5) Lint
+
+Command:
+    ruff check src/core/pipeline_builder.py tests/unit/test_preload_warmup.py
+
+Result: All checks passed! (exit 0)
+
+## Hermeticity
+
+The new test monkeypatches ModelManager.get_embedder / get_flashranker / get_llm
+(all three — steps 1/2 must not block or reach step 3 with real Ollama calls) and
+makes zero real model/network calls. CI (no Ollama) green.

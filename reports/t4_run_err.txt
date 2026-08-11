@@ -1,0 +1,125 @@
+2026-08-11 08:02:37.081 Uvicorn server started on :::8501
+[08:08:46] INFO     - [ASYNC_WORKER] Dedicated event loop started
+[08:08:46] INFO     - [SYSTEM] [INIT] 임시 디렉토리 준비 완료: C:\Users\darkzard05\hy\rag-system-ollama\data\temp
+[08:08:46] INFO     - [SYSTEM] 전역 백그라운드 워커 시작됨
+[08:08:46] INFO     - [SYSTEM] 프로세스 종료 핸들러 등록 완료
+[08:08:46] INFO     - [SYSTEM] [INTEGRITY] Windows 라이브러리 무결성 점검 완료 (OK)
+[08:10:36] INFO     - 문서 업로드 완료: 2201.07520v1.pdf
+[08:11:57] INFO     - [MODEL] [LOAD] Ollama 임베딩 엔진 사용 | 모델: nomic-embed-text-v2-moe
+[08:11:59] INFO     - [RAG] [INDEX] 파이프라인 구축 시작: 2201.07520v1.pdf
+[08:11:59] INFO     - RAG 캐시 안전 로드 완료 (Pickle-free): 'C:\Users\darkzard05\hy\rag-system-ollama\.model_cache\vector_store_cache\b14eac1860bab54116fe13be659b560309f4cf6262801232b021f1c1c8dfaaa9_d896bb6c3a1bd063'
+[08:11:59] INFO     - [RAG] [INDEX] 벡터 캐시 히트: 60개 청크 로드됨
+[08:11:59] WARNING  - [RetrieverPool] Memory pressure detected (87.3%). Triggering eviction.
+[08:11:59] INFO     - [RAG] [GRAPH] build_graph() 호출됨
+[08:11:59] INFO     - [RAG] [GRAPH] 그래프 재구성 시작
+[08:11:59] INFO     - [RAG] [ENGINE] 엔진 캐시됨 (loop_id=2415817479104)
+[08:12:31] INFO     - [RAG] [PRELOAD] 임베딩 워밍 완료
+[08:12:33] INFO     - [RAG] [PRELOAD] FlashRank 워밍 완료
+[08:14:08] INFO     - [RAG] [PRELOAD] LLM 워밍 추론 완료
+[08:14:08] INFO     - [RAG] [PRELOAD] 모델 프리로드 완료: qwen3:4b-instruct-2507-q4_K_M
+[08:25:36] INFO     - [RAG] [ENGINE] 캐시된 rag_engine 사용
+[08:25:36] INFO     - [RAG] [PREPROCESS] 입력 질의: 'cm3가 뭔가요?'
+[08:25:36] INFO     - [RAG] [RETRIEVE] 원본 쿼리 기반 검색 시작: 'cm3가 뭔가요?'
+[08:25:40] INFO     - [RAG] [RETRIEVE] 하이브리드 가중치 적용: bm25(0.40), faiss(0.60)
+[08:25:40] INFO     - [RAG] [RETRIEVE] Dynamic Top-K 적용: 18 (Score Gap: 0.0025 / 임계값: 0.0030)
+[08:25:40] INFO     - [RERANK] engine=flashrank
+[08:25:48] INFO     - [RAG] [RETRIEVE] 리랭킹 선별 완료: 18개 후보 중 5개 최종 선별
+[08:25:48] WARNING  - [RAG] [CTX] 1개 초단문 섹션 드롭 (< 50자)
+[08:25:48] INFO     - [RAG] [RETRIEVE] 하이브리드 검색 및 문맥 보강 완료: 최종 4개 섹션 구성
+[08:25:48] INFO     - [RAG] [RETRIEVE][TIMING] search_ms=3784.9 aggregate_ms=3788.4 rerank_ms=12044.2 merge_ms=12054.1 total_ms=12054.1
+[08:25:48] INFO     - 좌표 캐시 owner 이벤트 루프 시작됨
+[08:25:48] INFO     - [RAG] [GRADE] Short-circuit 활성화 (Max Rerank Score: 0.948 >= 0.85)
+[08:25:48] INFO     - [RAG] [GRADE][TIMING] grade_ms=1.6 short_circuit=True
+[08:25:48] INFO     - [RAG] [GENERATE] 관련 문서 수: 4
+[08:25:48] INFO     - [RAG] [GENERATE] 문서 0 길이: 1180
+[08:25:48] INFO     - [RAG] [GENERATE] 문서 1 길이: 1077
+[08:25:48] INFO     - [RAG] [GENERATE] 문서 2 길이: 1032
+[08:25:48] INFO     - [RAG] [GENERATE] 문서 3 길이: 1155
+[08:25:48] INFO     - 좌표 캐시 eviction 루프 시작됨
+[08:25:48] INFO     - [HYDRATE] 정밀 좌표 추출: 2201.07520v1.pdf P2
+[08:25:49] INFO     - 좌표 캐시 백그라운드 워커 시작됨
+[08:25:49] INFO     - [HYDRATE] 정밀 좌표 추출: 2201.07520v1.pdf P6
+[08:25:49] INFO     - [HYDRATE] 정밀 좌표 추출: 2201.07520v1.pdf P12
+[08:25:49] INFO     - [HYDRATE] 정밀 좌표 추출: 2201.07520v1.pdf P13
+[08:25:49] INFO     - [HYDRATE] 정밀 좌표 추출: 2201.07520v1.pdf P14
+[08:25:54] INFO     - [RAG] [GENERATE][TIMING] generate_ms=6047.1 ttft_ms=1776.5 output_chars=360
+[08:25:54] INFO     - [HIGHLIGHT] Processing 4 docs for annotations
+[08:25:55] INFO     - [HIGHLIGHT] PDF 하이라이트 생성 완료: 97개 영역 (대상 페이지: [2, 6, 12, 13, 14])
+[08:42:45] INFO     - 문서 업로드 완료: 2201.07520v1.pdf
+[08:42:45] INFO     - [RAG] [INDEX] 파이프라인 구축 시작: 2201.07520v1.pdf
+[08:42:46] INFO     - RAG 캐시 안전 로드 완료 (Pickle-free): 'C:\Users\darkzard05\hy\rag-system-ollama\.model_cache\vector_store_cache\b14eac1860bab54116fe13be659b560309f4cf6262801232b021f1c1c8dfaaa9_d896bb6c3a1bd063'
+[08:42:46] INFO     - [RAG] [INDEX] 벡터 캐시 히트: 60개 청크 로드됨
+[08:42:46] INFO     - [RAG] [GRAPH] build_graph() 호출됨
+[08:42:46] INFO     - [RAG] [GRAPH] 캐시된 그래프 반환
+[08:42:46] INFO     - [RAG] [ENGINE] 엔진 캐시됨 (loop_id=2415817479104)
+[08:42:48] INFO     - [RAG] [ENGINE] 캐시된 rag_engine 사용
+[08:42:48] INFO     - [RAG] [PREPROCESS] 입력 질의: 'cm3가 뭔가요?'
+[08:42:48] INFO     - [RAG] [RETRIEVE] 원본 쿼리 기반 검색 시작: 'cm3가 뭔가요?'
+[08:42:48] INFO     - [RAG] [RETRIEVE] 하이브리드 가중치 적용: bm25(0.40), faiss(0.60)
+[08:42:48] INFO     - [RAG] [RETRIEVE] Dynamic Top-K 적용: 18 (Score Gap: 0.0025 / 임계값: 0.0030)
+[08:42:56] INFO     - [RAG] [RETRIEVE] 리랭킹 선별 완료: 18개 후보 중 5개 최종 선별
+[08:42:56] WARNING  - [RAG] [CTX] 1개 초단문 섹션 드롭 (< 50자)
+[08:42:56] INFO     - [RAG] [RETRIEVE] 하이브리드 검색 및 문맥 보강 완료: 최종 4개 섹션 구성
+[08:42:56] INFO     - [RAG] [RETRIEVE][TIMING] search_ms=416.3 aggregate_ms=420.3 rerank_ms=7871.7 merge_ms=7880.9 total_ms=7880.9
+[08:42:56] INFO     - [RAG] [GRADE] Short-circuit 활성화 (Max Rerank Score: 0.948 >= 0.85)
+[08:42:56] INFO     - [RAG] [GRADE][TIMING] grade_ms=5.7 short_circuit=True
+[08:42:56] INFO     - [RAG] [GENERATE] 관련 문서 수: 4
+[08:42:56] INFO     - [RAG] [GENERATE] 문서 0 길이: 1180
+[08:42:56] INFO     - [RAG] [GENERATE] 문서 1 길이: 1077
+[08:42:56] INFO     - [RAG] [GENERATE] 문서 2 길이: 1032
+[08:42:56] INFO     - [RAG] [GENERATE] 문서 3 길이: 1155
+[08:43:00] INFO     - [RAG] [GENERATE][TIMING] generate_ms=4499.2 ttft_ms=426.9 output_chars=362
+[08:43:00] INFO     - [HIGHLIGHT] Processing 4 docs for annotations
+[08:43:00] INFO     - [HIGHLIGHT] PDF 하이라이트 생성 완료: 97개 영역 (대상 페이지: [2, 6, 12, 13, 14])
+[08:43:54] INFO     - 문서 업로드 완료: 2201.07520v1.pdf
+[08:43:55] INFO     - [RAG] [INDEX] 파이프라인 구축 시작: 2201.07520v1.pdf
+[08:43:55] INFO     - RAG 캐시 안전 로드 완료 (Pickle-free): 'C:\Users\darkzard05\hy\rag-system-ollama\.model_cache\vector_store_cache\b14eac1860bab54116fe13be659b560309f4cf6262801232b021f1c1c8dfaaa9_d896bb6c3a1bd063'
+[08:43:55] INFO     - [RAG] [INDEX] 벡터 캐시 히트: 60개 청크 로드됨
+[08:43:55] INFO     - [RAG] [GRAPH] build_graph() 호출됨
+[08:43:55] INFO     - [RAG] [GRAPH] 캐시된 그래프 반환
+[08:43:55] INFO     - [RAG] [ENGINE] 엔진 캐시됨 (loop_id=2415817479104)
+[08:43:57] INFO     - [RAG] [ENGINE] 캐시된 rag_engine 사용
+[08:43:57] INFO     - [RAG] [PREPROCESS] 입력 질의: 'cm3가 뭔가요?'
+[08:43:57] INFO     - [RAG] [RETRIEVE] 원본 쿼리 기반 검색 시작: 'cm3가 뭔가요?'
+[08:43:58] INFO     - [RAG] [RETRIEVE] 하이브리드 가중치 적용: bm25(0.40), faiss(0.60)
+[08:43:58] INFO     - [RAG] [RETRIEVE] Dynamic Top-K 적용: 18 (Score Gap: 0.0025 / 임계값: 0.0030)
+[08:44:06] INFO     - [RAG] [RETRIEVE] 리랭킹 선별 완료: 18개 후보 중 5개 최종 선별
+[08:44:06] WARNING  - [RAG] [CTX] 1개 초단문 섹션 드롭 (< 50자)
+[08:44:06] INFO     - [RAG] [RETRIEVE] 하이브리드 검색 및 문맥 보강 완료: 최종 4개 섹션 구성
+[08:44:06] INFO     - [RAG] [RETRIEVE][TIMING] search_ms=533.4 aggregate_ms=538.0 rerank_ms=8680.6 merge_ms=8691.1 total_ms=8691.1
+[08:44:06] INFO     - [RAG] [GRADE] Short-circuit 활성화 (Max Rerank Score: 0.948 >= 0.85)
+[08:44:06] INFO     - [RAG] [GRADE][TIMING] grade_ms=1.8 short_circuit=True
+[08:44:06] INFO     - [RAG] [GENERATE] 관련 문서 수: 4
+[08:44:06] INFO     - [RAG] [GENERATE] 문서 0 길이: 1180
+[08:44:06] INFO     - [RAG] [GENERATE] 문서 1 길이: 1077
+[08:44:06] INFO     - [RAG] [GENERATE] 문서 2 길이: 1032
+[08:44:06] INFO     - [RAG] [GENERATE] 문서 3 길이: 1155
+[08:44:10] INFO     - [RAG] [GENERATE][TIMING] generate_ms=4501.6 ttft_ms=441.8 output_chars=386
+[08:44:10] INFO     - [HIGHLIGHT] Processing 4 docs for annotations
+[08:44:10] INFO     - [HIGHLIGHT] PDF 하이라이트 생성 완료: 97개 영역 (대상 페이지: [2, 6, 12, 13, 14])
+[08:45:36] INFO     - 문서 업로드 완료: 2201.07520v1.pdf
+[08:45:36] INFO     - [RAG] [INDEX] 파이프라인 구축 시작: 2201.07520v1.pdf
+[08:45:36] INFO     - RAG 캐시 안전 로드 완료 (Pickle-free): 'C:\Users\darkzard05\hy\rag-system-ollama\.model_cache\vector_store_cache\b14eac1860bab54116fe13be659b560309f4cf6262801232b021f1c1c8dfaaa9_d896bb6c3a1bd063'
+[08:45:36] INFO     - [RAG] [INDEX] 벡터 캐시 히트: 60개 청크 로드됨
+[08:45:36] INFO     - [RAG] [GRAPH] build_graph() 호출됨
+[08:45:36] INFO     - [RAG] [GRAPH] 캐시된 그래프 반환
+[08:45:36] INFO     - [RAG] [ENGINE] 엔진 캐시됨 (loop_id=2415817479104)
+[08:45:38] INFO     - [RAG] [ENGINE] 캐시된 rag_engine 사용
+[08:45:38] INFO     - [RAG] [PREPROCESS] 입력 질의: 'cm3가 뭔가요?'
+[08:45:38] INFO     - [RAG] [RETRIEVE] 원본 쿼리 기반 검색 시작: 'cm3가 뭔가요?'
+[08:45:38] INFO     - [RAG] [RETRIEVE] 하이브리드 가중치 적용: bm25(0.40), faiss(0.60)
+[08:45:38] INFO     - [RAG] [RETRIEVE] Dynamic Top-K 적용: 18 (Score Gap: 0.0025 / 임계값: 0.0030)
+[08:45:45] INFO     - [RAG] [RETRIEVE] 리랭킹 선별 완료: 18개 후보 중 5개 최종 선별
+[08:45:45] WARNING  - [RAG] [CTX] 1개 초단문 섹션 드롭 (< 50자)
+[08:45:45] INFO     - [RAG] [RETRIEVE] 하이브리드 검색 및 문맥 보강 완료: 최종 4개 섹션 구성
+[08:45:45] INFO     - [RAG] [RETRIEVE][TIMING] search_ms=372.8 aggregate_ms=375.8 rerank_ms=7062.7 merge_ms=7066.5 total_ms=7066.5
+[08:45:45] INFO     - [RAG] [GRADE] Short-circuit 활성화 (Max Rerank Score: 0.948 >= 0.85)
+[08:45:45] INFO     - [RAG] [GRADE][TIMING] grade_ms=1.0 short_circuit=True
+[08:45:45] INFO     - [RAG] [GENERATE] 관련 문서 수: 4
+[08:45:45] INFO     - [RAG] [GENERATE] 문서 0 길이: 1180
+[08:45:45] INFO     - [RAG] [GENERATE] 문서 1 길이: 1077
+[08:45:45] INFO     - [RAG] [GENERATE] 문서 2 길이: 1032
+[08:45:45] INFO     - [RAG] [GENERATE] 문서 3 길이: 1155
+[08:45:47] INFO     - [RAG] [GENERATE][TIMING] generate_ms=2419.3 ttft_ms=382.5 output_chars=195
+[08:45:47] INFO     - [HIGHLIGHT] Processing 4 docs for annotations
+[08:45:47] INFO     - [HIGHLIGHT] PDF 하이라이트 생성 완료: 97개 영역 (대상 페이지: [2, 6, 12, 13, 14])
