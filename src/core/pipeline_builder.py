@@ -56,8 +56,12 @@ async def _preload_model() -> None:
         await ModelManager.get_flashranker()
         logger.info("[RAG] [PRELOAD] FlashRank 워밍 완료")
 
-        # 3) LLM 프리로드 (기존)
-        await ModelManager.get_llm(DEFAULT_OLLAMA_MODEL)
+        # 3) LLM 프리로드 — 클라이언트 생성만으로는 Ollama 콜드 모델 로드가 첫 쿼리
+        # 시점까지 지연되므로, 실질 워밍 추론을 1회 실행해 콜드 스타트를 선행합니다.
+        # invoke는 블로킹 HTTP 호출이므로 to_thread로 실행해 이벤트 루프를 막지 않습니다.
+        llm = await ModelManager.get_llm(DEFAULT_OLLAMA_MODEL)
+        await asyncio.to_thread(llm.invoke, "warmup")
+        logger.info("[RAG] [PRELOAD] LLM 워밍 추론 완료")
         logger.info(f"[RAG] [PRELOAD] 모델 프리로드 완료: {DEFAULT_OLLAMA_MODEL}")
     except Exception:
         logger.warning(
