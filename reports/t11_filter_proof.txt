@@ -1,0 +1,11 @@
+T11 verification (orchestrator-run, 2026-08-10)
+=== pytest test_min_section_filter.py ===
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+5 passed, 1 warning in 1.99s
+=== regression graph_flow/hybrid/rerank_thresholds ===
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+16 passed, 1 warning in 2.62s
+=== ruff ===
+All checks passed!
