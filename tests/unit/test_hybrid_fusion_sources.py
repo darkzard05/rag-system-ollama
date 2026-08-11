@@ -61,10 +61,14 @@ def _scored_docs(
 
     실제 청크 문서처럼 page/chunk_index/start_index/end_index 메타데이터를
     포함해 ``_merge_adjacent_chunks``가 페이지 경계를 인식하도록 한다.
+    (T11) 본문은 50자 이상으로 패딩 — retrieve_and_rerank의 초단문 필터
+    (_filter_min_section_len, <50자 드롭)가 이 융합 테스트를 건드리지 않도록
+    스텁 본문이 최종 컨텍스트에 그대로 남게 한다. 이 테스트의 대상은 소스
+    퓨전·점수 주입이지 본문 길이가 아니다.
     """
     return [
         Document(
-            page_content=f"{prefix} 문서 #{i}",
+            page_content=f"{prefix} 문서 #{i} " + "섹션 본문 문맥 보강 " * 6,
             metadata={
                 "doc_id": f"{prefix}_{i}",
                 "score": round(top_score - i * decay, 4),

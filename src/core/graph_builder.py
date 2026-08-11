@@ -186,6 +186,22 @@ async def preprocess(
     }
 
 
+_MIN_CONTEXT_SECTION_LEN = 50
+
+
+def _filter_min_section_len(docs: list[Document]) -> list[Document]:
+    """50자 미만 초단문 섹션을 최종 컨텍스트에서 제거합니다.
+
+    실측 사례(`[GENERATE] 문서 0 길이: 43`)처럼 의미 없는 단편 청크가
+    generate 컨텍스트를 오염시키는 것을 방지한다. 모든 문서가 50자 미만인
+    극단 케이스에서는 컨텍스트가 완전히 비지 않도록 1개는 유지한다 (가드).
+    """
+    if not docs:
+        return []
+    kept = [d for d in docs if len(d.page_content) >= _MIN_CONTEXT_SECTION_LEN]
+    return kept if kept else docs[:1]
+
+
 async def retrieve_and_rerank(
     state: GraphState, config: RunnableConfig, *, writer: StreamWriter
 ) -> dict[str, Any]:
@@ -380,6 +396,22 @@ async def retrieve_and_rerank(
     merged_context_docs = await asyncio.to_thread(
         _merge_adjacent_chunks, context_docs, max_tokens=800
     )
+    # [T11] 50자 미만 초단문 섹션 드롭 — generate 컨텍스트가 단편 청크로 오염되지
+    # 않도록 필터링한다. 백필 없음: 드롭으로 인한 문서 수 감소는 허용
+    # (grade_top_n=3, top_k=5 하한 이상 유지).
+    filtered_docs = _filter_min_section_len(merged_context_docs)
+    dropped = len(merged_context_docs) - len(filtered_docs)
+    if dropped > 0:
+        logger.warning(
+            "[RAG] [CTX] %d개 초단문 섹션 드롭 (< %d자)",
+            dropped,
+            _MIN_CONTEXT_SECTION_LEN,
+        )
+        SessionManager.add_status_log(
+            f"{dropped}개 초단문 섹션(50자 미만)을 컨텍스트에서 제외했습니다.",
+            session_id=_get_session_id(config),
+        )
+    merged_context_docs = filtered_docs
     logger.info(
         f"[RAG] [RETRIEVE] 하이브리드 검색 및 문맥 보강 완료: 최종 {len(merged_context_docs)}개 섹션 구성"
     )
