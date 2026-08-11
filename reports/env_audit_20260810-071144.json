@@ -1,0 +1,59 @@
+{
+  "task": "T1",
+  "timestamp_utc": "2026-08-10T07:11:44Z",
+  "executable": "C:\\ProgramData\\anaconda3\\envs\\rag-ollama\\python.exe",
+  "python_version": "3.10.19 | packaged by Anaconda, Inc. | (main, Oct 21 2025, 16:41:31) [MSC v.1929 64 bit (AMD64)]",
+  "streamlit_version": "1.60.0",
+  "streamlit_meets_runtime_threshold_1_56": true,
+  "versions": {
+    "langgraph": "1.0.1",
+    "streamlit": "1.60.0",
+    "flashrank": "0.2.0",
+    "onnxruntime": "1.20.1",
+    "langchain_core": "1.2.7",
+    "langchain_ollama": "0.3.10"
+  },
+  "version_origins": {
+    "langgraph": "C:\\Users\\darkzard05\\AppData\\Roaming\\Python\\Python310\\site-packages\\langgraph-1.0.1.dist-info",
+    "streamlit": "C:\\Users\\darkzard05\\AppData\\Roaming\\Python\\Python310\\site-packages\\streamlit-1.60.0.dist-info",
+    "flashrank": "C:\\Users\\darkzard05\\AppData\\Roaming\\Python\\Python310\\site-packages\\FlashRank-0.2.0.dist-info",
+    "onnxruntime": "C:\\Users\\darkzard05\\AppData\\Roaming\\Python\\Python310\\site-packages\\onnxruntime-1.20.1.dist-info",
+    "langchain_core": "C:\\ProgramData\\anaconda3\\envs\\rag-ollama\\lib\\site-packages\\langchain_core-1.2.7.dist-info",
+    "langchain_ollama": "C:\\Users\\darkzard05\\AppData\\Roaming\\Python\\Python310\\site-packages\\langchain_ollama-0.3.10.dist-info"
+  },
+  "gate_baseline": {
+    "ruff_check": "pass",
+    "ruff_format_check": "pass",
+    "mypy_src": "pass",
+    "pytest_unit": "pass",
+    "bandit": "fail",
+    "pip_audit": "fail"
+  },
+  "gate_evidence": {
+    "ruff_check": "exit 0 — 'All checks passed!'",
+    "ruff_format_check": "exit 0 — '59 files already formatted'",
+    "mypy_src": "exit 0 — 'Success: no issues found in 59 source files'",
+    "pytest_unit": "exit 0 — '374 passed, 1 warning in 125.12s (0:02:05)'; warning = LangChainPendingDeprecationWarning re JsonPlusSerializer allowed_objects (P4) from langgraph/checkpoint/base/__init__.py:17",
+    "bandit": "exit 1 — 2 medium/high: B608 hardcoded_sql_expressions src/cache/coord_cache.py:420; B324 weak MD5 src/core/async_reranker.py:45 (9 low, 1 medium, 1 high total)",
+    "pip_audit": "exit 1 — 47 known vulnerabilities in 11 packages (resolved from requirements.txt in temp venv; top: torch 2.6.0, transformers 4.57.6, langgraph 1.0.1, langchain-core 0.3.86, langchain 0.3.30)"
+  },
+  "requirements_diff": [
+    "langgraph: installed 1.0.1 (user-site) vs pin >=0.2.74 — satisfies lower bound but major-version drift (1.0.x vs 0.2.x); env site-packages also holds langgraph-1.0.7 dist-info shadowed by user-site on sys.path",
+    "langchain_core: installed 1.2.7 vs pin >=0.3.34,<0.4.0 — VIOLATES upper bound <0.4.0 (1.2.7); env also holds langchain_core-1.4.9 dist-info shadowed by 1.2.7",
+    "langchain_ollama: installed 0.3.10 vs pin >=0.2.2 — satisfies; env also holds langchain_ollama-1.0.1 dist-info shadowed by user-site 0.3.10",
+    "streamlit: installed 1.60.0 vs pin ==1.60.0 — exact match",
+    "flashrank: installed 0.2.0 vs pin ==0.2.0 — exact match",
+    "onnxruntime: installed 1.20.1 vs pin >=1.20.1 — satisfies (env holds onnxruntime_gpu-1.19.2 dist-info, not selected)",
+    "fastapi (extra probe): installed 0.133.1 vs pin ==0.133.1 — exact match",
+    "faiss-cpu (extra probe): installed 1.9.0.post1 vs pin ==1.9.0.post1 — exact match; NOTE env holds faiss_cpu-1.13.2 dist-info which lacks GPU attrs (pre-existing LSP errors) but is shadowed by user-site 1.9.0.post1"
+  ],
+  "notes": [
+    "Active interpreter: `python` on PATH resolves to C:\\ProgramData\\anaconda3\\envs\\rag-ollama\\python.exe (Anaconda 3.10.19) and imports streamlit 1.60.0 — accepted (>=1.56, matches runtime deprecation behavior; components.html deprecation exists since 1.56).",
+    "streamlit/flashrank/onnxruntime/langgraph/langchain_ollama resolve from user-site C:\\Users\\darkzard05\\AppData\\Roaming\\Python\\Python310\\site-packages (site.addusersitepackages runs before env site-packages), confirming notepad E0 observation (absent from env Lib/site-packages).",
+    "Candidate probes: (a) Python 3.13 WindowsApps python3.13.exe — streamlit NOT installed (ModuleNotFoundError) → rejected; (b) Python 3.12 C:\\Users\\darkzard05\\AppData\\Local\\Programs\\Python\\Python312\\python.exe — streamlit 1.50.0 (<1.56) → rejected; (c) anaconda env python — streamlit 1.60.0 → accepted. `where streamlit`/`where streamlit.cmd` returned nothing on PATH.",
+    "Gate tools run via `python -m <tool>` under the accepted interpreter: ruff 0.15.1, mypy 1.11.0, pytest 8.3.2, bandit 1.8.3, pip-audit 2.10.0.",
+    "pytest_unit pass despite 1 warning (P4 JsonPlusSerializer allowed_objects deprecation) — warning is informational, exit code 0.",
+    "pip_audit resolves requirements.txt into a temp venv (WARNING venv redirect noted), so its reported versions (langgraph 1.0.1, langchain-core 0.3.86, langchain 0.3.30) reflect pin resolution, not this interpreter's site-packages."
+  ],
+  "errors": []
+}
