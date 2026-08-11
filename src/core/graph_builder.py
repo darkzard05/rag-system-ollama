@@ -970,7 +970,19 @@ async def build_graph() -> Any:
         # 강등하지 않고 명시적 예외를 발생시킨다. 상태 채널은 _sanitize_channel_value로
         # 순수 타입만 저장되도록 위생화한다. InMemorySaver는 실험/테스트용 저장소이므로
         # 운영 전환 시 퇴거 정책이 있는 영속 체크포인터로 교체해야 한다.
-        memory = InMemorySaver(serde=JsonPlusSerializer(pickle_fallback=False))
+        # P4: allowed_json_modules 명시 — langchain_core.messages 타입(상태에 저장될 수
+        # 있는 객체형)만 reviver allowlist에 올린다. 순수 타입(int/str/float/bool/None/
+        # list/dict)은 생성자 재구성이 필요 없어 allowlist 대상이 아니다.
+        memory = InMemorySaver(
+            serde=JsonPlusSerializer(
+                pickle_fallback=False,
+                allowed_json_modules=[
+                    ("langchain_core", "messages", "HumanMessage"),
+                    ("langchain_core", "messages", "AIMessage"),
+                    ("langchain_core", "messages", "SystemMessage"),
+                ],
+            )
+        )
 
         _graph_cache.compiled = workflow.compile(checkpointer=memory)
         # R1a-02/R1b-02: 세션 삭제 시 delete_graph_thread가 해당 thread를 정리할 수

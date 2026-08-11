@@ -5,6 +5,24 @@ RAG Chatbot 애플리케이션의 메인 진입점 파일입니다.
 Streamlit 프레임워크를 기반으로 UI를 구성하고 세션 상태를 관리합니다.
 """
 
+# P4 (조사: .omo/evidence/log-issue-fixes/p4_warning_source.md): langgraph 1.0.1의
+# LangChainPendingDeprecationWarning("allowed_objects 기본값 변경 예정")은 모듈 임포트
+# 시점(langgraph/checkpoint/serde/jsonplus.py 모듈 최상위 LC_REVIVER = Reviver())에
+# 발생하며 앱의 JsonPlusSerializer 파라미터로는 제거할 수 없다. 경고 필터는
+# list-index-0 우선(last-registered wins)이므로, langchain_core._api.deprecation이
+# 임포트 시 자체 등록하는 필터보다 우리의 ignore가 나중에 등록(먼저 검사)되어야 한다.
+# 따라서 (1) 해당 모듈을 먼저 임포트한 뒤 (2) 카테고리+메시지 범위로만 억제를
+# 등록한다 — 다른 경고는 모두 그대로 유지된다.
+import warnings
+
+from langchain_core._api.deprecation import LangChainPendingDeprecationWarning
+
+warnings.filterwarnings(
+    "ignore",
+    message="The default value of .allowed_objects. will change",
+    category=LangChainPendingDeprecationWarning,
+)
+
 # [Lazy Import용] 런타임에 필요한 모듈들
 import asyncio
 import atexit
