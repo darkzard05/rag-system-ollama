@@ -1,0 +1,10 @@
+[18:23:13] WARNING  - `embedding_function` is expected to be an Embeddings object, support for passing in a function will soon be removed.
+[18:23:13] INFO     - RAG 캐시 안전 로드 완료 (Pickle-free): 'C:\Users\darkzard05\hy\rag-system-ollama\.model_cache\vector_store_cache\b14eac1860bab54116fe13be659b560309f4cf6262801232b021f1c1c8dfaaa9_d896bb6c3a1bd063'
+[bench] model=ms-marco-MultiBERT-L-12
+[bench] pool_type=real num_candidates=18
+[bench] query=cm3가 뭔가요?
+[bench] onnxruntime providers=['AzureExecutionProvider', 'CPUExecutionProvider']
+[bench] session providers=['CPUExecutionProvider'] intra_op_num_threads=0 inter_op_num_threads=0 graph_optimization_level=GraphOptimizationLevel.ORT_ENABLE_ALL
+[bench] per_run_ms=[4768.44, 4538.74, 4490.41, 4489.71, 4618.88]
+[bench] mean_ms=4581.23 median_ms=4538.74 p95_ms=4768.44
+[bench] report written to C:\Users\darkzard05\hy\rag-system-ollama\reports\rerank_bench_20260810_182338.json
