@@ -1,0 +1,34 @@
+T7 post-edit verification
+Date: 2026-08-10
+============================================================
+
+--- GREP: 'components.v1|components.' in src/ui/ (expect 0 hits) ---
+C:\Users\darkzard05\hy\rag-system-ollama\src\ui\ui.py:86:     from ui.components.chat import render_chat_input_area, render_chat_messages_area
+C:\Users\darkzard05\hy\rag-system-ollama\src\ui\ui.py:87:     from ui.components.viewer import render_pdf_area
+C:\Users\darkzard05\hy\rag-system-ollama\src\ui\components\chat.py:390:                         from ui.components.streaming import _build_process
+C:\Users\darkzard05\hy\rag-system-ollama\src\ui\components\chat.py:473:             from ui.components.streaming import (
+
+--- GREP: 'components' anywhere in src/ui/ (expect only 0 hits) ---
+C:\Users\darkzard05\hy\rag-system-ollama\src\ui\ui.py:86:     from ui.components.chat import render_chat_input_area, render_chat_messages_area
+C:\Users\darkzard05\hy\rag-system-ollama\src\ui\ui.py:87:     from ui.components.viewer import render_pdf_area
+C:\Users\darkzard05\hy\rag-system-ollama\src\ui\widget_keys.py:30:     """Widget key for the RAG rebuild cancel button (components/chat.py)."""
+C:\Users\darkzard05\hy\rag-system-ollama\src\ui\widget_keys.py:35:     """Widget key for a reference page-jump button (components/chat.py)."""
+C:\Users\darkzard05\hy\rag-system-ollama\src\ui\widget_keys.py:40:     """Widget key for the PDF viewer component (components/viewer.py).
+C:\Users\darkzard05\hy\rag-system-ollama\src\ui\components\chat.py:386:                     # ui.components 내부 순환 의존을 피하기 위해 lazy import
+C:\Users\darkzard05\hy\rag-system-ollama\src\ui\components\chat.py:390:                         from ui.components.streaming import _build_process
+C:\Users\darkzard05\hy\rag-system-ollama\src\ui\components\chat.py:473:             from ui.components.streaming import (
+
+--- RUFF CHECK src/ui/ui.py ---
+All checks passed!
+
+
+--- RUFF FORMAT --CHECK src/ui/ui.py ---
+1 file already formatted
+
+
+--- hasattr(st, 'html') re-probe (post-edit) ---
+hasattr_html: True
+st.html: <bound method HtmlMixin.html of DeltaGenerator()>
+
+--- PRECISE GREP: 'streamlit.components' / 'components.v1' / 'components.html' in src/ui/ (expect 0 hits) ---
+(0 hits — clean)

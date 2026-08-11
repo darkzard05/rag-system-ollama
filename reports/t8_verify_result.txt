@@ -1,0 +1,5 @@
+[1/4] Navigating to http://localhost:8501 ...
+[2/4] Precondition: injected script marker '--header-h' in page.content() -> False
+[3/4] [data-testid='stHeader'] count -> 1
+[4/4] getPropertyValue('--header-h') -> ''
+RESULT: FAIL (--header-h empty — st.html sandbox blocks parent-frame access, or script did not execute)

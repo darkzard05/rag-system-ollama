@@ -27,6 +27,7 @@ def inject_header_height_script() -> None:
     """
     import streamlit.components.v1 as components
 
+    # deprecated but functional; st.html sandbox blocks parent-frame access — see p1_sthtml_verdict.md
     components.html(
         """
         <script>
