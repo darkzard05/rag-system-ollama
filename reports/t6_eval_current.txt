@@ -1,0 +1,198 @@
+C:\ProgramData\anaconda3\envs\rag-ollama\lib\site-packages\langgraph\cache\base\__init__.py:8: LangChainPendingDeprecationWarning: The default value of `allowed_objects` will change in a future version. Pass an explicit value (e.g., allowed_objects='messages' or allowed_objects='core') to suppress this warning.
+  from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
+[22:26:30] INFO     - [MODEL] [LOAD] Ollama 임베딩 엔진 사용 | 모델: nomic-embed-text-v2-moe
+[22:26:31] INFO     - [RAG] [INDEX] 파이프라인 구축 시작: 2201.07520v1.pdf
+[22:26:31] INFO     - RAG 캐시 안전 로드 완료 (Pickle-free): 'C:\Users\darkzard05\hy\rag-system-ollama\.model_cache\vector_store_cache\b14eac1860bab54116fe13be659b560309f4cf6262801232b021f1c1c8dfaaa9_d896bb6c3a1bd063'
+[22:26:31] INFO     - [RAG] [INDEX] 벡터 캐시 히트: 60개 청크 로드됨
+[22:26:31] INFO     - [RAG] [GRAPH] build_graph() 호출됨
+[22:26:31] INFO     - [RAG] [GRAPH] 그래프 재구성 시작
+[22:26:31] INFO     - [RAG] [ENGINE] 엔진 캐시됨 (loop_id=2367976057072)
+[22:26:34] INFO     - [MODEL] [LOAD] Ollama 임베딩 엔진 사용 | 모델: nomic-embed-text-v2-moe
+[22:26:35] INFO     - [RAG] [ENGINE] 캐시된 rag_engine 사용
+[22:26:35] INFO     - [RAG] [PREPROCESS] 입력 질의: 'CM3 모델이 이미지를 학습할 때 사용하는 구체적인 원리와 토큰화 방식은 뭐야? 기존 DALL-E와는 어떤 차이가 있어?'
+[22:26:35] INFO     - [RAG] [RETRIEVE] 원본 쿼리 기반 검색 시작: 'CM3 모델이 이미지를 학습할 때 사용하는 구체적인 원리와 토큰화 방식은 뭐야? 기존 DALL-E와는 어떤 차이가 있어?'
+[22:26:47] INFO     - [RAG] [PRELOAD] 임베딩 워밍 완료
+[22:26:49] INFO     - [RAG] [RETRIEVE] 하이브리드 가중치 적용: bm25(0.40), faiss(0.60)
+[22:26:49] INFO     - [RAG] [RETRIEVE] Dynamic Top-K 적용: 18 (Score Gap: 0.0022 / 임계값: 0.0030)
+[22:26:49] INFO     - [RERANK] engine=flashrank
+[22:26:49] INFO     - [RAG] [PRELOAD] FlashRank 워밍 완료
+[22:26:58] INFO     - [RAG] [RETRIEVE] 리랭킹 선별 완료: 18개 후보 중 5개 최종 선별
+[22:26:58] INFO     - [RAG] [RETRIEVE] 하이브리드 검색 및 문맥 보강 완료: 최종 5개 섹션 구성
+[22:26:58] INFO     - [RAG] [RETRIEVE][TIMING] search_ms=13486.0 aggregate_ms=13488.5 rerank_ms=22909.8 merge_ms=22913.1 total_ms=22913.1
+[22:26:58] INFO     - 좌표 캐시 owner 이벤트 루프 시작됨
+[22:26:58] INFO     - [RAG] [GRADE] Short-circuit 활성화 (Max Rerank Score: 0.918 >= 0.85)
+[22:26:58] INFO     - [RAG] [GRADE][TIMING] grade_ms=0.3 short_circuit=True
+[22:26:58] WARNING  - [RetrieverPool] Memory pressure detected (93.0%). Triggering eviction.
+[22:26:58] INFO     - [RAG] [ENGINE] 캐시된 rag_engine 사용
+[22:26:58] INFO     - [RAG] [PREPROCESS] 입력 질의: '문서 내에서 언급된 모델의 파라미터 수와 학습 데이터셋의 규모는 어떻게 돼?'
+[22:26:58] INFO     - [RAG] [PREPROCESS] 의미 중심 질의 판단 (FAISS: 0.8)
+[22:26:58] INFO     - [RAG] [RETRIEVE] 원본 쿼리 기반 검색 시작: '문서 내에서 언급된 모델의 파라미터 수와 학습 데이터셋의 규모는 어떻게 돼?'
+[22:26:59] INFO     - 좌표 캐시 eviction 루프 시작됨
+[22:26:59] INFO     - [HYDRATE] 정밀 좌표 추출: 2201.07520v1.pdf P2
+[22:26:59] INFO     - [RAG] [RETRIEVE] 하이브리드 가중치 적용: bm25(0.20), faiss(0.80)
+[22:26:59] INFO     - [RAG] [RETRIEVE] Dynamic Top-K 적용: 18 (Score Gap: 0.0024 / 임계값: 0.0030)
+[22:27:01] INFO     - 좌표 캐시 백그라운드 워커 시작됨
+[22:27:01] INFO     - [HYDRATE] 정밀 좌표 추출: 2201.07520v1.pdf P5
+[22:27:01] INFO     - [HYDRATE] 정밀 좌표 추출: 2201.07520v1.pdf P6
+[22:27:01] INFO     - [HYDRATE] 정밀 좌표 추출: 2201.07520v1.pdf P6
+[22:27:01] INFO     - [HYDRATE] 정밀 좌표 추출: 2201.07520v1.pdf P6
+[22:27:01] INFO     - [HYDRATE] 정밀 좌표 추출: 2201.07520v1.pdf P6
+[22:27:01] INFO     - [HYDRATE] 정밀 좌표 추출: 2201.07520v1.pdf P7
+[22:27:02] ERROR    - Task exception was never retrieved
+future: <Task finished name='Task-32' coro=<<async_generator_athrow without __name__>()> exception=RuntimeError('async generator ignored GeneratorExit')>
+RuntimeError: async generator ignored GeneratorExit
+[22:27:09] INFO     - [RAG] [RETRIEVE] 리랭킹 선별 완료: 18개 후보 중 5개 최종 선별
+[22:27:09] INFO     - [RAG] [RETRIEVE] 하이브리드 검색 및 문맥 보강 완료: 최종 5개 섹션 구성
+[22:27:09] INFO     - [RAG] [RETRIEVE][TIMING] search_ms=719.0 aggregate_ms=721.1 rerank_ms=10255.0 merge_ms=10258.5 total_ms=10258.5
+[22:27:09] WARNING  - [RetrieverPool] Memory pressure detected (96.2%). Triggering eviction.
+[22:27:09] INFO     - [RetrieverPool] Evicting: b14eac1860bab54116fe13be659b560309f4cf6262801232b021f1c1c8dfaaa9
+[22:27:09] INFO     - [RAG] [INDEX] 파이프라인 구축 시작: 2201.07520v1.pdf
+[22:27:09] INFO     - RAG 캐시 안전 로드 완료 (Pickle-free): 'C:\Users\darkzard05\hy\rag-system-ollama\.model_cache\vector_store_cache\b14eac1860bab54116fe13be659b560309f4cf6262801232b021f1c1c8dfaaa9_d896bb6c3a1bd063'
+[22:27:09] INFO     - [RAG] [INDEX] 벡터 캐시 히트: 60개 청크 로드됨
+[22:27:09] WARNING  - [RetrieverPool] Memory pressure detected (96.6%). Triggering eviction.
+[22:27:09] INFO     - [RAG] [GRAPH] build_graph() 호출됨
+[22:27:09] INFO     - [RAG] [GRAPH] 캐시된 그래프 반환
+[22:27:09] INFO     - [HYDRATE] 정밀 좌표 추출: 2201.07520v1.pdf P9
+[22:27:09] INFO     - [RAG] [ENGINE] 엔진 캐시됨 (loop_id=2367976057072)
+[22:27:09] INFO     - [RAG] [ENGINE] 캐시된 rag_engine 사용
+[22:27:09] INFO     - [HYDRATE] 정밀 좌표 추출: 2201.07520v1.pdf P10
+[22:27:09] INFO     - [RAG] [PREPROCESS] 입력 질의: '이 논문의 핵심 기여점(Contribution) 3가지만 요약해줘.'
+[22:27:09] INFO     - [RAG] [PREPROCESS] 의미 중심 질의 판단 (FAISS: 0.8)
+[22:27:09] INFO     - [HYDRATE] 정밀 좌표 추출: 2201.07520v1.pdf P10
+[22:27:09] INFO     - [HYDRATE] 정밀 좌표 추출: 2201.07520v1.pdf P11
+[22:27:09] INFO     - [RAG] [RETRIEVE] 원본 쿼리 기반 검색 시작: '이 논문의 핵심 기여점(Contribution) 3가지만 요약해줘.'
+[22:27:09] INFO     - [HYDRATE] 정밀 좌표 추출: 2201.07520v1.pdf P11
+[22:27:09] ERROR    - Task exception was never retrieved
+future: <Task finished name='Task-81' coro=<<async_generator_athrow without __name__>()> exception=RuntimeError('async generator ignored GeneratorExit')>
+RuntimeError: async generator ignored GeneratorExit
+[22:27:10] INFO     - [RAG] [RETRIEVE] 하이브리드 가중치 적용: bm25(0.20), faiss(0.80)
+[22:27:10] INFO     - [RAG] [RETRIEVE] Dynamic Top-K 적용: 18 (Score Gap: 0.0027 / 임계값: 0.0030)
+[22:27:13] INFO     - [RAG] [PRELOAD] LLM 워밍 추론 완료
+[22:27:13] INFO     - [RAG] [PRELOAD] 모델 프리로드 완료: qwen3:4b-instruct-2507-q4_K_M
+[22:27:19] INFO     - [RAG] [RETRIEVE] 리랭킹 선별 완료: 18개 후보 중 5개 최종 선별
+[22:27:19] INFO     - [RAG] [RETRIEVE] 하이브리드 검색 및 문맥 보강 완료: 최종 5개 섹션 구성
+[22:27:19] INFO     - [RAG] [RETRIEVE][TIMING] search_ms=609.8 aggregate_ms=612.2 rerank_ms=10162.3 merge_ms=10164.6 total_ms=10164.6
+[22:27:19] INFO     - [RAG] [GRADE] Short-circuit 활성화 (Max Rerank Score: 0.908 >= 0.85)
+[22:27:19] INFO     - [RAG] [GRADE][TIMING] grade_ms=0.5 short_circuit=True
+[22:27:19] WARNING  - [RetrieverPool] Memory pressure detected (97.3%). Triggering eviction.
+[22:27:19] INFO     - [RetrieverPool] Evicting: b14eac1860bab54116fe13be659b560309f4cf6262801232b021f1c1c8dfaaa9
+[22:27:19] INFO     - [RAG] [INDEX] 파이프라인 구축 시작: 2201.07520v1.pdf
+[22:27:19] INFO     - RAG 캐시 안전 로드 완료 (Pickle-free): 'C:\Users\darkzard05\hy\rag-system-ollama\.model_cache\vector_store_cache\b14eac1860bab54116fe13be659b560309f4cf6262801232b021f1c1c8dfaaa9_d896bb6c3a1bd063'
+[22:27:19] INFO     - [RAG] [INDEX] 벡터 캐시 히트: 60개 청크 로드됨
+[22:27:19] WARNING  - [RetrieverPool] Memory pressure detected (97.3%). Triggering eviction.
+[22:27:19] INFO     - [RAG] [GRAPH] build_graph() 호출됨
+[22:27:19] INFO     - [RAG] [GRAPH] 캐시된 그래프 반환
+[22:27:19] INFO     - [HYDRATE] 정밀 좌표 추출: 2201.07520v1.pdf P3
+[22:27:19] INFO     - [RAG] [ENGINE] 엔진 캐시됨 (loop_id=2367976057072)
+[22:27:19] INFO     - [RAG] [ENGINE] 캐시된 rag_engine 사용
+[22:27:19] INFO     - [HYDRATE] 정밀 좌표 추출: 2201.07520v1.pdf P12
+[22:27:19] INFO     - [RAG] [PREPROCESS] 입력 질의: '이미지 생성 모델의 최신 트렌드에 대해 알려줘.'
+[22:27:19] INFO     - [HYDRATE] 정밀 좌표 추출: 2201.07520v1.pdf P12
+[22:27:19] ERROR    - Task exception was never retrieved
+future: <Task finished name='Task-128' coro=<<async_generator_athrow without __name__>()> exception=RuntimeError('async generator ignored GeneratorExit')>
+RuntimeError: async generator ignored GeneratorExit
+[22:27:19] INFO     - [RAG] [RETRIEVE] 원본 쿼리 기반 검색 시작: '이미지 생성 모델의 최신 트렌드에 대해 알려줘.'
+[22:27:20] INFO     - [RAG] [RETRIEVE] 하이브리드 가중치 적용: bm25(0.40), faiss(0.60)
+[22:27:20] INFO     - [RAG] [RETRIEVE] Dynamic Top-K 적용: 18 (Score Gap: 0.0024 / 임계값: 0.0030)
+[22:27:27] INFO     - [RAG] [RETRIEVE] 리랭킹 선별 완료: 18개 후보 중 5개 최종 선별
+[22:27:27] INFO     - [RAG] [RETRIEVE] 하이브리드 검색 및 문맥 보강 완료: 최종 5개 섹션 구성
+[22:27:27] INFO     - [RAG] [RETRIEVE][TIMING] search_ms=541.9 aggregate_ms=544.2 rerank_ms=7718.7 merge_ms=7721.6 total_ms=7721.6
+[22:27:27] WARNING  - [RetrieverPool] Memory pressure detected (97.6%). Triggering eviction.
+[22:27:27] INFO     - [RetrieverPool] Evicting: b14eac1860bab54116fe13be659b560309f4cf6262801232b021f1c1c8dfaaa9
+[22:27:27] INFO     - [RAG] [INDEX] 파이프라인 구축 시작: 2201.07520v1.pdf
+[22:27:27] INFO     - RAG 캐시 안전 로드 완료 (Pickle-free): 'C:\Users\darkzard05\hy\rag-system-ollama\.model_cache\vector_store_cache\b14eac1860bab54116fe13be659b560309f4cf6262801232b021f1c1c8dfaaa9_d896bb6c3a1bd063'
+[22:27:27] INFO     - [RAG] [INDEX] 벡터 캐시 히트: 60개 청크 로드됨
+[22:27:27] WARNING  - [RetrieverPool] Memory pressure detected (97.6%). Triggering eviction.
+[22:27:27] INFO     - [RAG] [GRAPH] build_graph() 호출됨
+[22:27:27] INFO     - [RAG] [GRAPH] 캐시된 그래프 반환
+[22:27:27] INFO     - [HYDRATE] 정밀 좌표 추출: 2201.07520v1.pdf P4
+[22:27:27] INFO     - [RAG] [ENGINE] 엔진 캐시됨 (loop_id=2367976057072)
+[22:27:27] INFO     - [RAG] [ENGINE] 캐시된 rag_engine 사용
+[22:27:27] INFO     - [HYDRATE] 정밀 좌표 추출: 2201.07520v1.pdf P14
+[22:27:27] INFO     - [RAG] [PREPROCESS] 입력 질의: 'CM3 모델은 어떤 종류의 모델을 기반으로 하고 있으며, 그 핵심 특징은 무엇인가요?'
+[22:27:27] INFO     - [HYDRATE] 정밀 좌표 추출: 2201.07520v1.pdf P14
+[22:27:27] INFO     - [HYDRATE] 정밀 좌표 추출: 2201.07520v1.pdf P15
+[22:27:27] INFO     - [RAG] [RETRIEVE] 원본 쿼리 기반 검색 시작: 'CM3 모델은 어떤 종류의 모델을 기반으로 하고 있으며, 그 핵심 특징은 무엇인가요?'
+[22:27:27] INFO     - [HYDRATE] 정밀 좌표 추출: 2201.07520v1.pdf P18
+[22:27:27] INFO     - [HYDRATE] 정밀 좌표 추출: 2201.07520v1.pdf P19
+[22:27:27] ERROR    - Task exception was never retrieved
+future: <Task finished name='Task-173' coro=<<async_generator_athrow without __name__>()> exception=RuntimeError('async generator ignored GeneratorExit')>
+RuntimeError: async generator ignored GeneratorExit
+[22:27:28] INFO     - [RAG] [RETRIEVE] 하이브리드 가중치 적용: bm25(0.40), faiss(0.60)
+[22:27:28] INFO     - [RAG] [RETRIEVE] Dynamic Top-K 적용: 18 (Score Gap: 0.0020 / 임계값: 0.0030)
+[22:27:36] INFO     - [RAG] [RETRIEVE] 리랭킹 선별 완료: 18개 후보 중 5개 최종 선별
+[22:27:36] INFO     - [RAG] [RETRIEVE] 하이브리드 검색 및 문맥 보강 완료: 최종 5개 섹션 구성
+[22:27:36] INFO     - [RAG] [RETRIEVE][TIMING] search_ms=436.4 aggregate_ms=438.3 rerank_ms=9293.7 merge_ms=9298.2 total_ms=9298.2
+[22:27:36] INFO     - [RAG] [GRADE] Short-circuit 활성화 (Max Rerank Score: 0.874 >= 0.85)
+[22:27:36] INFO     - [RAG] [GRADE][TIMING] grade_ms=0.4 short_circuit=True
+[22:27:36] WARNING  - [RetrieverPool] Memory pressure detected (92.4%). Triggering eviction.
+[22:27:36] INFO     - [RetrieverPool] Evicting: b14eac1860bab54116fe13be659b560309f4cf6262801232b021f1c1c8dfaaa9
+[22:27:36] INFO     - [RAG] [INDEX] 파이프라인 구축 시작: 2201.07520v1.pdf
+[22:27:36] INFO     - RAG 캐시 안전 로드 완료 (Pickle-free): 'C:\Users\darkzard05\hy\rag-system-ollama\.model_cache\vector_store_cache\b14eac1860bab54116fe13be659b560309f4cf6262801232b021f1c1c8dfaaa9_d896bb6c3a1bd063'
+[22:27:36] INFO     - [RAG] [INDEX] 벡터 캐시 히트: 60개 청크 로드됨
+[22:27:36] WARNING  - [RetrieverPool] Memory pressure detected (92.4%). Triggering eviction.
+[22:27:36] INFO     - [RAG] [GRAPH] build_graph() 호출됨
+[22:27:36] INFO     - [RAG] [GRAPH] 캐시된 그래프 반환
+[22:27:36] INFO     - [HYDRATE] 정밀 좌표 추출: 2201.07520v1.pdf P13
+[22:27:36] INFO     - [RAG] [ENGINE] 엔진 캐시됨 (loop_id=2367976057072)
+[22:27:36] INFO     - [RAG] [ENGINE] 캐시된 rag_engine 사용
+[22:27:36] ERROR    - Task exception was never retrieved
+future: <Task finished name='Task-221' coro=<<async_generator_athrow without __name__>()> exception=RuntimeError('async generator ignored GeneratorExit')>
+RuntimeError: async generator ignored GeneratorExit
+[22:27:36] INFO     - [RAG] [PREPROCESS] 입력 질의: 'CM3 모델이 훈련된 데이터 세트는 어떤 내용을 포함하며, 그 데이터의 순서는 어떻게 되나요?'
+[22:27:36] INFO     - [RAG] [RETRIEVE] 원본 쿼리 기반 검색 시작: 'CM3 모델이 훈련된 데이터 세트는 어떤 내용을 포함하며, 그 데이터의 순서는 어떻게 되나요?'
+[22:27:37] INFO     - [RAG] [RETRIEVE] 하이브리드 가중치 적용: bm25(0.40), faiss(0.60)
+[22:27:37] INFO     - [RAG] [RETRIEVE] Dynamic Top-K 적용: 18 (Score Gap: 0.0030 / 임계값: 0.0030)
+[22:27:47] INFO     - [RAG] [RETRIEVE] 리랭킹 선별 완료: 18개 후보 중 5개 최종 선별
+[22:27:47] INFO     - [RAG] [RETRIEVE] 하이브리드 검색 및 문맥 보강 완료: 최종 5개 섹션 구성
+[22:27:47] INFO     - [RAG] [RETRIEVE][TIMING] search_ms=459.4 aggregate_ms=462.2 rerank_ms=10666.0 merge_ms=10668.7 total_ms=10668.7
+[22:27:47] INFO     - [RAG] [GRADE] Short-circuit 활성화 (Max Rerank Score: 0.891 >= 0.85)
+[22:27:47] INFO     - [RAG] [GRADE][TIMING] grade_ms=3.8 short_circuit=True
+[22:27:47] WARNING  - [RetrieverPool] Memory pressure detected (94.0%). Triggering eviction.
+[22:27:47] INFO     - [RetrieverPool] Evicting: b14eac1860bab54116fe13be659b560309f4cf6262801232b021f1c1c8dfaaa9
+[22:27:47] INFO     - [RAG] [INDEX] 파이프라인 구축 시작: 2201.07520v1.pdf
+[22:27:47] INFO     - RAG 캐시 안전 로드 완료 (Pickle-free): 'C:\Users\darkzard05\hy\rag-system-ollama\.model_cache\vector_store_cache\b14eac1860bab54116fe13be659b560309f4cf6262801232b021f1c1c8dfaaa9_d896bb6c3a1bd063'
+[22:27:47] INFO     - [RAG] [INDEX] 벡터 캐시 히트: 60개 청크 로드됨
+[22:27:47] WARNING  - [RetrieverPool] Memory pressure detected (94.0%). Triggering eviction.
+[22:27:47] INFO     - [RAG] [GRAPH] build_graph() 호출됨
+[22:27:47] INFO     - [RAG] [GRAPH] 캐시된 그래프 반환
+[22:27:47] ERROR    - Task exception was never retrieved
+future: <Task finished name='Task-264' coro=<<async_generator_athrow without __name__>()> exception=RuntimeError('async generator ignored GeneratorExit')>
+RuntimeError: async generator ignored GeneratorExit
+[22:27:47] INFO     - [RAG] [ENGINE] 엔진 캐시됨 (loop_id=2367976057072)
+[22:27:47] INFO     - [RAG] [ENGINE] 캐시된 rag_engine 사용
+[22:27:47] INFO     - [RAG] [PREPROCESS] 입력 질의: 'CM3 모델은 어떤 데이터를 기반으로 훈련되었나요?'
+[22:27:47] INFO     - [RAG] [PREPROCESS] 키워드 중심 질의 판단 (BM25: 0.8)
+[22:27:47] INFO     - [RAG] [RETRIEVE] 원본 쿼리 기반 검색 시작: 'CM3 모델은 어떤 데이터를 기반으로 훈련되었나요?'
+[22:27:48] INFO     - [RAG] [RETRIEVE] 하이브리드 가중치 적용: bm25(0.80), faiss(0.20)
+[22:27:48] INFO     - [RAG] [RETRIEVE] Dynamic Top-K 적용: 18 (Score Gap: 0.0019 / 임계값: 0.0030)
+[22:27:57] INFO     - [RAG] [RETRIEVE] 리랭킹 선별 완료: 18개 후보 중 5개 최종 선별
+[22:27:57] INFO     - [RAG] [RETRIEVE] 하이브리드 검색 및 문맥 보강 완료: 최종 5개 섹션 구성
+[22:27:57] INFO     - [RAG] [RETRIEVE][TIMING] search_ms=464.9 aggregate_ms=467.3 rerank_ms=9691.3 merge_ms=9695.7 total_ms=9695.7
+[22:27:57] INFO     - [RAG] [GRADE] Short-circuit 활성화 (Max Rerank Score: 0.901 >= 0.85)
+[22:27:57] INFO     - [RAG] [GRADE][TIMING] grade_ms=0.6 short_circuit=True
+[22:27:57] ERROR    - [RAG] 문서 하이드레이션 실패: 
+[22:27:57] ERROR    - unhandled exception during asyncio.run() shutdown
+task: <Task finished name='Task-306' coro=<<async_generator_athrow without __name__>()> exception=RuntimeError('async generator ignored GeneratorExit')>
+RuntimeError: async generator ignored GeneratorExit
+
+============================================================
+[eval_quality] RAG 답변 품질 평가 시작
+  model=qwen3:4b-instruct-2507-q4_K_M embedder=nomic-embed-text-v2-moe no_llm=True
+============================================================
+[1/4] 파이프라인 구축: C:\Users\darkzard05\hy\rag-system-ollama\tests\data\2201.07520v1.pdf
+[2/4] 질문 로드: golden 5건 + testset(top 3) 3건
+[3/4] 질문 평가 실행 (timeout=180.0s/건)...
+  [golden:1] OK | CM3 모델이 이미지를 학습할 때 사용하는 구체적인 원리와 토큰화 방식은 뭐야? 기존 
+  [golden:2] OK | 문서 내에서 언급된 모델의 파라미터 수와 학습 데이터셋의 규모는 어떻게 돼?
+  [golden:3] OK | 이 논문의 핵심 기여점(Contribution) 3가지만 요약해줘.
+  [golden:4] SKIP(degenerate) | 안녕, 너는 누구니?
+  [golden:5] OK | 이미지 생성 모델의 최신 트렌드에 대해 알려줘.
+  [testset:1] OK | CM3 모델은 어떤 종류의 모델을 기반으로 하고 있으며, 그 핵심 특징은 무엇인가요?
+  [testset:2] OK | CM3 모델이 훈련된 데이터 세트는 어떤 내용을 포함하며, 그 데이터의 순서는 어떻게 
+  [testset:3] OK | CM3 모델은 어떤 데이터를 기반으로 훈련되었나요?
+[4/4] 평가 완료
+
+[saved] C:\Users\darkzard05\hy\rag-system-ollama\reports\eval_quality_qr_current_20260810_222629.json
+[saved] C:\Users\darkzard05\hy\rag-system-ollama\reports\eval_quality_qr_current_20260810_222629.md
+[summary] scorable=4 P@1=0.0 MRR@5=0.1458 avg_ttft=None avg_tps=None judge_avg=None
