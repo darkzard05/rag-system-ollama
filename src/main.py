@@ -365,6 +365,40 @@ async def _bg_rebuild_task(
         SessionManager.set("is_building_rag", False, session_id=session_id)
 
 
+async def _bg_update_qa_chain(session_id: str) -> None:
+    """
+    [Background Task] 문서 인덱싱은 유지한 채 LLM(QA Chain)만 백그라운드로 교체합니다.
+
+    `_bg_rebuild_task`와 동일하게 run_in_background_worker(common.utils)가 전용
+    AsyncWorker 이벤트 루프에서 실행한다. load_llm은 동기 호출이므로
+    `asyncio.to_thread`로 스레드 풀에 오프로드한다 — AsyncWorker는 단일 루프이며
+    스트림 소비자(ui/components/streaming.py)와 공유되므로 루프에서 직접 실행하면
+    UI 스트리밍까지 함께 블로킹된다.
+    """
+    from core.model_loader import load_llm
+    from core.session import SessionManager
+
+    SessionManager.set_session_id(session_id)
+    SessionManager.set("is_swapping_model", True, session_id=session_id)
+    try:
+        SessionManager.add_status_log("🔄 추론 모델 교체 중", session_id=session_id)
+        selected_model = SessionManager.get(
+            "last_selected_model", session_id=session_id
+        )
+        model_name = str(selected_model or DEFAULT_OLLAMA_MODEL)
+        llm = await asyncio.to_thread(load_llm, model_name)
+        SessionManager.set("llm", llm, session_id=session_id)
+        SessionManager.add_status_log("✅ 추론 모델 교체 완료", session_id=session_id)
+    except Exception as e:
+        error_msg = f"QA 체인 업데이트 실패: {e}"
+        logger.error(f"QA 업데이트 실패: {e}", exc_info=True)
+        SessionManager.add_status_log(f"❌ {error_msg}", session_id=session_id)
+        SessionManager.add_message("assistant", error_msg, session_id=session_id)
+    finally:
+        SessionManager.set("rag_build_complete_flag", True, session_id=session_id)
+        SessionManager.set("is_swapping_model", False, session_id=session_id)
+
+
 def _update_qa_chain(session_id: str | None = None) -> None:
     """
     문서 인덱싱은 유지한 채 LLM(QA Chain)만 교체합니다.
@@ -566,6 +600,7 @@ def _render_app_layout(available_models: list[str] | None = None) -> None:
             new_chat_callback=on_new_chat,
             refresh_models_callback=on_refresh_models,
             is_generating=bool(SessionManager.get("is_generating_answer", False)),
+            is_swapping_model=bool(SessionManager.get("is_swapping_model", False)),
             current_file_name=SessionManager.get("last_uploaded_file_name"),
             available_models=available_models,
         )
@@ -645,7 +680,13 @@ def _handle_pending_tasks() -> None:
 
     elif SessionManager.get("needs_qa_chain_update", False, current_sid):
         SessionManager.set("needs_qa_chain_update", False, current_sid)
-        _update_qa_chain(current_sid)
+        # [INT-3] 이미 교체 진행 중이면 중복 디스패치 금지 (is_swapping_model 가드)
+        if not SessionManager.get("is_swapping_model", False, current_sid):
+            SessionManager.set("is_swapping_model", True, current_sid)
+
+            from common.utils import run_in_background_worker
+
+            run_in_background_worker(_bg_update_qa_chain(current_sid), current_sid)
         needs_rerun = True
 
     if needs_rerun:

@@ -36,6 +36,7 @@ def render_settings_content(
     new_chat_callback=None,
     refresh_models_callback=None,
     is_generating=False,
+    is_swapping_model=False,
     current_file_name=None,
     current_embedding_model=None,
     available_models=None,
@@ -49,6 +50,7 @@ def render_settings_content(
         new_chat_callback,
         refresh_models_callback,
         is_generating,
+        is_swapping_model,
         current_file_name,
         available_models,
     )
@@ -61,6 +63,7 @@ def _render_settings_internal(
     new_chat_callback,
     refresh_models_callback,
     is_generating,
+    is_swapping_model,
     current_file_name,
     available_models,
 ):
@@ -108,7 +111,7 @@ def _render_settings_internal(
             index=def_idx,
             key="model_selector",
             on_change=model_selector_callback,
-            disabled=is_generating,
+            disabled=is_generating or is_swapping_model,
         )
 
         # 모델 새로고침 (Ollama에서 모델 목록 재조회)
