@@ -161,13 +161,40 @@ def _render_settings_internal(
         ):
             new_chat_callback()
 
-        # 초기화
+        # 초기화 (파괴적 동작 — 확인 다이얼로그 + 생성 중 비활성 + 시각 위계 하향)
         if st.button(
             "Reset All",
             use_container_width=True,
-            type="primary",
+            type="secondary",
             help="모든 대화와 데이터를 초기화합니다.",
             key="reset_btn",
+            disabled=is_generating,
+        ):
+            _confirm_reset_all()
+
+
+@st.dialog("Reset All 확인")
+def _confirm_reset_all() -> None:
+    """Reset All 실행 전 확인 다이얼로그 (모듈 레벨 정의 — st.dialog 제약).
+
+    파괴적 동작이므로 취소/확인 두 경로를 제공합니다.
+    취소 시 아무것도 수행하지 않고, 확인 시 전체 상태를 초기화합니다.
+    """
+    st.warning("모든 대화·데이터가 삭제됩니다. 계속할까요?")
+    col_cancel, col_confirm = st.columns(2)
+    with col_cancel:
+        if st.button(
+            "취소",
+            use_container_width=True,
+            key="reset_confirm_cancel_btn",
+        ):
+            st.rerun()
+    with col_confirm:
+        if st.button(
+            "확인 삭제",
+            use_container_width=True,
+            type="primary",
+            key="reset_confirm_btn",
         ):
             SessionManager.reset_all_state()
             st.rerun()
