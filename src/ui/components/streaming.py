@@ -5,7 +5,7 @@
   스레드+큐 브릿지 (3회 연속 타임아웃 가드 포함).
 - start_streaming_turn: streaming 메시지를 타임라인에 추가하고 백그라운드
   스레드에서 청크를 소비·업데이트한다.
-- _finalize_pdf_side_effects: 완료 턴의 PDF 주석·자동 페이지 점프를 반영한다.
+- _finalize_pdf_side_effects: 완료 턴의 PDF 주석 반영을 담당한다.
 """
 
 import asyncio
@@ -13,7 +13,6 @@ import html
 import logging
 import queue
 import threading
-import time
 import uuid
 from collections.abc import Iterator
 from concurrent.futures import CancelledError, Future
@@ -220,7 +219,7 @@ def _spawn_stream_consumer(sid: str, msg_id: str, query: str, model_name: str):
 
 
 def _finalize_pdf_side_effects(sid: str, msg_id: str) -> None:
-    """완료된 스트리밍 턴의 PDF 주석·자동 페이지 이동을 반영합니다.
+    """완료된 스트리밍 턴의 PDF 주석을 반영합니다.
 
     fitz 기반 좌표 추출(느린 작업)은 세션 락 밖에서 수행하며, 실패해도 턴
     완료와 is_generating_answer 해제에는 영향을 주지 않습니다.
@@ -239,7 +238,7 @@ def _finalize_pdf_side_effects(sid: str, msg_id: str) -> None:
                 documents = msg.get("documents") or []
                 break
 
-    # 오류 턴 또는 문서 없음 → 주석/점프 생략
+    # 오류 턴 또는 문서 없음 → 주석 생략
     if has_error or not documents:
         return
 
@@ -257,17 +256,9 @@ def _finalize_pdf_side_effects(sid: str, msg_id: str) -> None:
         sid,
     )
 
-    try:
-        target_p = getattr(documents[0], "metadata", {}).get("page")
-        if target_p:
-            SessionManager.set(
-                "pdf_target_page",
-                {"page": int(target_p), "source": "auto", "ts": time.time()},
-                sid,
-            )
-            SessionManager.set("current_page", int(target_p), sid)
-    except (ValueError, TypeError, IndexError, AttributeError) as exc:
-        logger.exception(f"[CHAT] 자동 페이지 이동 실패: {exc}")
+    # 자동 페이지 점프 제거 (uiux-fix-p1 INT-1) — 사용자 발의 없는 화면 이동 금지.
+    # 답변 완료 시 pdf_target_page/current_page를 자동 세팅하지 않는다.
+    # 수동 점프는 chat.py 참조 버튼이 pdf_target_page(source="manual")로 처리한다.
 
 
 def stream_chunks(

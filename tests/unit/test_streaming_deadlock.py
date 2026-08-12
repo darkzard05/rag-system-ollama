@@ -129,7 +129,7 @@ def test_consumer_error_sets_message_error_and_clears_flag():
 
 
 def test_consumer_documents_set_pdf_side_effects():
-    """완료 턴: 문서 메타데이터의 page로 pdf_annotations/자동 점프가 반영된다."""
+    """완료 턴: 문서 메타데이터로 pdf_annotations 반영 + 자동 점프 미발생(INT-1)."""
     sid = "test_stream_deadlock_pdf"
     SessionManager.reset_all_state(sid)
     SessionManager.set_session_id(sid)
@@ -161,13 +161,10 @@ def test_consumer_documents_set_pdf_side_effects():
     assert pdf_annotations["file_hash"] is None  # 테스트에서 file_hash 미설정
     assert pdf_annotations["annotations"] == []  # 좌표 없음 → 주석 없음
 
-    pdf_target = SessionManager.get("pdf_target_page", session_id=sid)
-    assert isinstance(pdf_target, dict)
-    assert pdf_target["page"] == 7
-    assert pdf_target["source"] == "auto"
-    assert isinstance(pdf_target["ts"], float)
-
-    assert SessionManager.get("current_page", session_id=sid) == 7
+    # uiux-fix-p1 INT-1: 답변 완료 시 자동 점프 토큰/페이지가 세팅되지 않는다.
+    # (page=7 문서가 있어도 사용자 발의 없는 화면 이동 금지)
+    assert SessionManager.get("pdf_target_page", session_id=sid) is None
+    assert SessionManager.get("current_page", session_id=sid) == 1  # 기본값 유지
     assert SessionManager.get("generation_cancel", False, sid) is False
 
 

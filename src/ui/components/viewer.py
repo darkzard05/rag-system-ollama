@@ -113,8 +113,11 @@ def _resolve_pdf_state() -> dict | None:
 
     pdf_target_page는 일회성 점프 토큰이다:
     - dict {"page": int, "source": "auto"|"manual", "ts": float} 형식.
+      (uiux-fix-p1 INT-1: "auto" 소스는 더 이상 생성되지 않음 — 자동 점프 제거.
+      수동 참조 버튼(chat.py)이 "manual" 토큰만 생성한다.)
     - source=="auto"인데 manual_nav_ts가 토큰의 ts보다 크면 사용자가 더 최근에
       수동 네비게이션한 것이므로 토큰을 폐기하고 점프하지 않는다.
+      (레거시 "auto" 토큰과 방어적 처리를 위해 로직은 유지)
     - 레거시 int 값도 수용한다 (source="manual" 취급).
     """
     pdf_path_raw = SessionManager.get("pdf_file_path")
@@ -200,9 +203,10 @@ def render_pdf_area():
     """PDF 뷰어 + 네비게이션 컨트롤을 렌더링하는 단일 fragment.
 
     run_every 폴링으로 백그라운드 스트리밍 완료(_finalize_pdf_side_effects)가
-    기록한 pdf_target_page/pdf_annotations를 최대 2초 내에 소비하여 자동 점프와
-    하이라이트를 화면에 반영한다. 뷰어와 컨트롤이 한 fragment이므로 컨트롤
-    클릭도 뷰어를 함께 재실행한다.
+    기록한 pdf_annotations(및 수동 참조 점프 시 pdf_target_page)를 최대 2초
+    내에 소비하여 하이라이트를 화면에 반영한다. (uiux-fix-p1 INT-1: 자동
+    점프는 제거 — pdf_target_page는 수동 참조 버튼이 설정한다.) 뷰어와
+    컨트롤이 한 fragment이므로 컨트롤 클릭도 뷰어를 함께 재실행한다.
 
     손상/지원 불가 PDF는 스크립트를 죽이지 않고 뷰어 영역 안에서 오류로
     격리하여 렌더링한다. 어떤 예외도 이 함수 밖으로 새어나가지 않는다.
