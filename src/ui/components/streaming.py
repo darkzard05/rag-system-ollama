@@ -194,12 +194,15 @@ def _spawn_stream_consumer(sid: str, msg_id: str, query: str, model_name: str):
                 state = SessionManager._get_state(sid)
                 # is_generating_answer를 먼저 해제하여 후속 처리 오류에도 플래그가 남지 않게 함
                 state["is_generating_answer"] = False
-                state["generation_cancel"] = False
-                state["_dirty_keys"].update(
-                    {"is_generating_answer", "generation_cancel"}
-                )
+                # 중단 여부는 확정 저장 전에 원시 상태에서 판독한다 (락 보유 중
+                # SessionManager.get() 호출은 데드락이므로 dict를 직접 읽는다).
+                was_cancelled = bool(state.get("generation_cancel", False))
                 for msg in state["messages"]:
                     if msg.get("msg_id") == msg_id:
+                        # "중단됨" 확정 상태는 generation_cancel 클리어보다 먼저
+                        # 저장해야 중단 정보가 소실되지 않는다 (uiux-fix-p1 INT-2/G4).
+                        if was_cancelled:
+                            msg["cancelled"] = True
                         msg["msg_type"] = "general"
                         msg["processed_content"] = apply_tooltips_to_response(
                             html.escape(msg.get("content", "")),
@@ -207,6 +210,10 @@ def _spawn_stream_consumer(sid: str, msg_id: str, query: str, model_name: str):
                         )
                         msg["process"] = _build_process(msg)
                         break
+                state["generation_cancel"] = False
+                state["_dirty_keys"].update(
+                    {"is_generating_answer", "generation_cancel"}
+                )
                 state["_dirty_keys"].add("messages")
             # PDF 주석·자동 점프는 세션 락 밖에서 수행한다 (느린 fitz 파싱 방지)
             _finalize_pdf_side_effects(sid, msg_id)

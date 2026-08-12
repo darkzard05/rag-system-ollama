@@ -134,10 +134,14 @@ def render_message(
 
         # 완료된 어시스턴트 메시지의 하단 정보
         if role == "assistant" and msg_type == "general":
+            cancelled = bool(kwargs.get("cancelled", False))
             # 완료 요약 + 출처 미리보기 (기본 노출).
             # 스트리밍 중 st.status 피드백이 완료 시 사라지는 문제를 완화한다.
             if (content or processed_content or "").strip():
-                if documents:
+                if cancelled:
+                    # 중단 확정 상태: 부분 답변 보존 안내 (uiux-fix-p1 INT-2)
+                    st.caption("⏹ 중단됨 · 부분 답변 보존")
+                elif documents:
                     pages = _extract_reference_pages(documents)
                     page_txt = " · ".join(f"p.{p}" for p in pages[:4])
                     if len(pages) > 4:
@@ -375,6 +379,12 @@ def _render_unified_timeline(current_sid: str) -> None:
                 continue
             status_text = msg.get("status", "생성 중...")
             thought = msg.get("thought", "")
+            # 중단 요청 접수 시 즉시 "중단 중..." 피드백 (uiux-fix-p1 INT-2)
+            cancel_requested = bool(
+                SessionManager.get("generation_cancel", False, current_sid)
+            )
+            if cancel_requested:
+                status_text = "중단 중..."
 
             with st.chat_message("assistant", avatar="🤖"):
                 # 실시간 상태 표시
@@ -392,9 +402,12 @@ def _render_unified_timeline(current_sid: str) -> None:
                         process = _build_process(msg)
                         if process.get("steps"):
                             status.write(" · ".join(process["steps"]))
+                    # 중단 요청 접수 시 "중단 중..." 안내를 즉시 표시한다 (INT-2)
+                    if cancel_requested:
+                        status.caption("중단 중...")
                     # 빈 박스 방지: thought·단계가 모두 없어도 "준비 중..."
                     # placeholder로 본문이 절대 비어 보이지 않게 한다.
-                    if not thought and not process_steps:
+                    elif not thought and not process_steps:
                         status.caption("준비 중...")
 
                 # 스트리밍 내용 표시 (커서 포함)
@@ -430,6 +443,7 @@ def _render_unified_timeline(current_sid: str) -> None:
             is_latest=is_latest,
             error=msg.get("error"),
             process=msg.get("process"),
+            cancelled=msg.get("cancelled", False),
         )
 
 
