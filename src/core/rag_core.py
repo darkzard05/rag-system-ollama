@@ -11,12 +11,12 @@ import logging
 from collections.abc import AsyncIterator, Callable
 from typing import Any
 
-import httpx
 from langchain_core.embeddings import Embeddings
 
 from cache.engine_cache import EngineCacheManager
 from common.circuit_breaker import get_circuit_breaker_registry
 from common.exceptions import VectorStoreError
+from common.retry import retry_stream
 from core.document_hydrator import hydrate_documents
 from core.pipeline_builder import PipelineBuilder, prepare_query_config_or_build
 from core.resource_manager import get_resource_manager
@@ -30,32 +30,15 @@ async def _stream_with_retry(
     max_retries: int = 3,
     base_delay: float = 1.0,
 ) -> AsyncIterator[dict]:
-    for attempt in range(max_retries):
-        yielded_any = False
-        try:
-            async for item in event_stream_factory():
-                yielded_any = True
-                yield item
-            return
-        except (
-            ConnectionError,
-            TimeoutError,
-            OSError,
-            httpx.RequestError,
-            httpx.TimeoutException,
-        ) as e:
-            if yielded_any:
-                # 첫 토큰 이후 오류는 재시도하지 않는다 (중복 전송 방지).
-                raise
-            if attempt == max_retries - 1:
-                raise
-            delay = base_delay * (2**attempt)
-            logger.warning(
-                f"[RAG] Stream retry {attempt + 1}/{max_retries} after {delay:.1f}s: {e}"
-            )
-            await asyncio.sleep(delay)
-        except asyncio.CancelledError:
-            raise
+    # R12: 원래의 인라인 재시도 루프를 common/retry.py 의 retry_stream 으로
+    # 위임한다. 정확한 의미론(base_delay=1.0, 2**attempt 백오프, "첫 토큰 이후
+    # 재시도 안 함", 동일 예외 집합, asyncio.CancelledError 재발생)을 보존한다.
+    async for item in retry_stream(
+        event_stream_factory,
+        max_retries=max_retries,
+        base_delay=base_delay,
+    ):
+        yield item
 
 
 def _log_hydration_task_failure(task: asyncio.Task[Any]) -> None:

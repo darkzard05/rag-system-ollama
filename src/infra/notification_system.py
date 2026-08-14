@@ -16,16 +16,16 @@ class SystemNotifier:
     UI 컴포넌트(Toast, Status Box)와 백엔드 로깅을 동시에 처리합니다.
     """
 
-    # 기본 아이콘 매핑
+    # 기본 아이콘 매핑 (uiux-fix-p2: 사용자 표면 이모지 제거 — 빈 문자열로 접두사 미노출)
     ICONS = {
-        "info": "ℹ️",
-        "success": "✅",
-        "warning": "⚠️",
-        "error": "❌",
-        "loading": "⏳",
-        "brain": "🧠",
-        "file": "📄",
-        "setting": "⚙️",
+        "info": "",
+        "success": "",
+        "warning": "",
+        "error": "",
+        "loading": "",
+        "brain": "",
+        "file": "",
+        "setting": "",
     }
 
     @classmethod

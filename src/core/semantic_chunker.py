@@ -35,7 +35,7 @@ from core.semantic_chunker_embeddings import SemanticChunkerEmbeddingsMixin
 from core.semantic_chunker_merge import SemanticChunkerMergeMixin
 from core.semantic_chunker_metadata import SemanticChunkerMetadataMixin
 from core.semantic_chunker_sentences import SemanticChunkerSentencesMixin
-from services.optimization.caching_optimizer import CacheManager, get_cache_manager
+from services.optimization.caching_optimizer import CacheManager
 
 logger = logging.getLogger(__name__)
 
@@ -83,7 +83,15 @@ class EmbeddingBasedSemanticChunker(
         self.batch_size = batch_size
 
         # [최적화] 전역 캐시 관리자 설정
-        self.cache_manager = cache_manager or get_cache_manager()
+        # 청킹 임베딩 벡터는 FAISS 벡터 캐시에 이미 영속화되므로, 청커 전용
+        # 캐시는 디스크 쓰기를 수행하지 않는 메모리 전용 CacheManager 를 사용한다.
+        # (전역 get_cache_manager() 기본값의 디스크 캐시를 끄지 않고 청커 범위로만
+        #  메모리 전용으로 스코프 — 전역 디스크 캐시는 그대로 유지)
+        self.cache_manager = cache_manager or CacheManager(
+            enable_memory_cache=True,
+            enable_semantic_cache=False,
+            enable_disk_cache=False,
+        )
 
         # [최적화] 모델 식별을 위한 이름 추출 (Ollama 및 HuggingFace 지원 강화)
         # 모델명은 항상 문자열이어야 하므로 (emb:{model}:{hash} 캐시 키) cast로 보장.

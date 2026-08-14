@@ -98,7 +98,7 @@ def test_streaming_error_stores_friendly_message_and_clears_flag():
     target = next(m for m in messages if m.get("msg_id") == msg_id)
     assert target["msg_type"] == "general"
     assert "boom" not in target["error"]
-    assert "오류가 발생" in target["error"]
+    assert "An error occurred" in target["error"]
     assert SessionManager.get("is_generating_answer", False, session_id) is False
 
 

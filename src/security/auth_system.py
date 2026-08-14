@@ -19,6 +19,8 @@ from pathlib import Path
 from threading import RLock
 from typing import Any
 
+from security import crypto_utils
+
 logger = logging.getLogger(__name__)
 
 
@@ -174,9 +176,9 @@ class SimpleJWT:
 
         # 서명 생성
         message = f"{header_encoded}.{payload_encoded}"
-        signature = hmac.new(
-            self.secret_key.encode(), message.encode(), hashlib.sha256
-        ).digest()
+        signature = bytes.fromhex(
+            crypto_utils.hmac_sign(self.secret_key, message, "sha256")
+        )
 
         signature_encoded = base64.urlsafe_b64encode(signature).decode().rstrip("=")
 
@@ -193,9 +195,9 @@ class SimpleJWT:
 
             # 서명 검증
             message = f"{header_encoded}.{payload_encoded}"
-            expected_signature = hmac.new(
-                self.secret_key.encode(), message.encode(), hashlib.sha256
-            ).digest()
+            expected_signature = bytes.fromhex(
+                crypto_utils.hmac_sign(self.secret_key, message, "sha256")
+            )
 
             # 패딩 추가
             signature = base64.urlsafe_b64decode(signature_encoded + "===")

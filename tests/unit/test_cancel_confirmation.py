@@ -136,9 +136,9 @@ def test_streaming_status_shows_cancelling_caption():
         chat_mod._render_unified_timeline.__wrapped__(sid)
 
     label = mock_st.status.call_args.args[0]
-    assert "중단 중..." in label
+    assert "Stopping..." in label
     captions = [c.args[0] for c in status_holder.caption.call_args_list]
-    assert "중단 중..." in captions
+    assert "Stopping..." in captions
 
 
 def test_render_message_shows_cancelled_caption():
@@ -159,5 +159,5 @@ def test_render_message_shows_cancelled_caption():
         )
 
     captions = [c.args[0] for c in mock_st.caption.call_args_list]
-    assert any("중단됨" in c for c in captions)
-    assert not any("✅ 답변 생성 완료" in c for c in captions)
+    assert any("Stopped · Partial answer preserved" in c for c in captions)
+    assert not any("Answer complete" in c for c in captions)

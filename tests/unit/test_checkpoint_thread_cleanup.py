@@ -153,3 +153,43 @@ def test_channel_sanitizer_keeps_pure_types():
 
     value: Any = {"a": 1, "b": ["x", None, True, 1.5], "c": {"d": "e"}}
     assert _sanitize_channel_value(value) == value
+
+
+# ------------------------------------------------- R8/R13 — 통합 캐시 폴드 검증
+
+
+@pytest.mark.asyncio
+async def test_invalidate_rebuilds_graph_through_unified_cache():
+    """invalidate_graph_cache() 후 build_graph()는 통합 캐시에서 재컴파일해야 한다.
+
+    그래프 항목이 통합 ObjectCache(_graph_object_cache)에 보관되므로,
+    invalidate()로 해당 항목이 삭제된 뒤 build_graph()는 새 그래프를 빌드하고
+    다시 통합 캐시에 기록해야 한다. 단일 전역 asyncio.Lock + 이중 확인 불변식은
+    그대로 preserved 된다.
+    """
+    from core.graph_builder import _GRAPH_CACHE_KEY, _graph_object_cache
+
+    invalidate_graph_cache()
+    await build_graph()
+
+    # 항목이 통합 캐시에 단일 키로 보관되어 있다.
+    entry_after_build = await _graph_object_cache.get(_GRAPH_CACHE_KEY)
+    assert entry_after_build is not None
+    assert entry_after_build.compiled is not None
+    assert entry_after_build.checkpointer is not None
+
+    first_compiled = entry_after_build.compiled
+
+    # 무효화 → 항목이 통합 캐시에서 제거된다.
+    invalidate_graph_cache()
+    assert await _graph_object_cache.get(_GRAPH_CACHE_KEY) is None
+
+    # 재빌드 → 동일한 단일 키로 새 항목이 다시 보관된다.
+    recompiled = await build_graph()
+    entry_after_rebuild = await _graph_object_cache.get(_GRAPH_CACHE_KEY)
+    assert entry_after_rebuild is not None
+    # 컴파일 결과는 매 빌드마다 새 객체이므로 identity는 다르다.
+    assert entry_after_rebuild.compiled is not first_compiled
+    assert recompiled is entry_after_rebuild.compiled
+
+    invalidate_graph_cache()

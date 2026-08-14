@@ -7,7 +7,7 @@ Streamlit-based frontend orchestration for the RAG system, managing the two-colu
 - `ui.py`: Main layout orchestration and global CSS injection.
 - `bridge.py`: Real-time synchronization between `SessionStore` and `st.session_state` (with interactive key preservation).
 - `components/`: Modular UI elements.
-    - `chat.py`: Unified conversational timeline (single-pass `@st.fragment(run_every=2.0)`), streaming message rendering, native status/expander components.
+    - `chat.py`: Unified conversational timeline (single-pass `@st.fragment(run_every=UI_TIMELINE_POLL_SECONDS)`), streaming message rendering, native status/expander components.
     - `streaming.py`: Async stream consumption bridge (`stream_chunks`) and message-driven streaming updates (`start_streaming_turn`, `_spawn_stream_consumer`).
     - `viewer.py`: PDF rendering fragment (`@st.fragment`), page navigation, annotation display.
     - `sidebar.py`: Global settings and session controls.
@@ -21,7 +21,7 @@ Streamlit-based frontend orchestration for the RAG system, managing the two-colu
 |-------|------|-------|
 | Layout/CSS | `src/ui/ui.py` + `src/ui/styles/main.css` | Flex chain selectors in CSS |
 | PDF flickering | `src/ui/components/viewer.py` | `@st.fragment` wrapper |
-| Chat timeline | `src/ui/components/chat.py` | Unified timeline fragment polls every 2s |
+| Chat timeline | `src/ui/components/chat.py` | Unified timeline fragment polls every 1.0s (`timeline_poll_seconds`) |
 | Streaming updates | `src/ui/components/streaming.py` | Background thread updates message dicts |
 | State sync | `src/ui/bridge.py` + `main.py` | `UIBridge.sync_session()` |
 | Sidebar/settings | `src/ui/components/sidebar.py` | |
@@ -29,7 +29,7 @@ Streamlit-based frontend orchestration for the RAG system, managing the two-colu
 ## CONVENTIONS
 - **Fragment first**: Wrap localized UI sections in `@st.fragment` to prevent full-page reruns.
 - **PDF + Chat**: Separate fragments — PDF navigation does not force chat rerun, and vice versa.
-- **Message polling**: `_render_unified_timeline` runs every 2s to pick up new messages without explicit `st.rerun()`.
+- **Message polling**: `_render_unified_timeline` runs every 1.0s (`timeline_poll_seconds`) to pick up new messages without explicit `st.rerun()`.
 - **Everything is a message**: Document context, build progress/errors, logs, and streaming state are all stored as messages (`msg_type` discriminator) in `SessionManager.messages`.
 - **Interactive key protection**: `UIBridge.sync_session()` preserves widget-bound keys during state sync.
 - **Module-level callbacks**: Navigation `on_click` handlers are module-level (not per-render closures).

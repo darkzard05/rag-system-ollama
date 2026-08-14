@@ -12,7 +12,8 @@ RAG 시스템 전용 예외 클래스 모음.
         logger.warning("PDF에 추출 가능한 텍스트가 없습니다.")
     except VectorStoreError:
         # 벡터 저장소 오류: 재시도
-        retry_with_backoff()
+        # 공통 헬퍼는 common/retry.py::retry_with_backoff 를 사용하세요.
+        retry_with_backoff(fn, retry_on=(VectorStoreError,))
     except PDFProcessingError as e:
         # 다른 모든 예외
         logger.error(f"PDF 처리 오류: {e}")

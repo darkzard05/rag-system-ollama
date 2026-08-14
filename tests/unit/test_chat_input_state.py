@@ -6,9 +6,9 @@ Phase B: 4분기 → 3분기 (생성 중 / 미준비 / 준비됨) 단순화에 �
 from core.session import SessionManager
 from ui.components.chat import _resolve_chat_input_state
 
-_PLACEHOLDER_GENERATING = "AI가 답변 생성 중입니다..."
-_PLACEHOLDER_NOT_READY = "PDF를 업로드한 후 질문해 보세요"
-_PLACEHOLDER_READY = "추가 질문을 입력하세요..."
+_PLACEHOLDER_GENERATING = "AI is generating your answer..."
+_PLACEHOLDER_NOT_READY = "Upload a PDF and ask a question"
+_PLACEHOLDER_READY = "Ask a follow-up question..."
 
 
 def _reset_session(sid: str) -> None:

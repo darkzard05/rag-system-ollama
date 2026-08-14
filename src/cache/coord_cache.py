@@ -417,7 +417,9 @@ class CoordCacheManager:
         try:
             # IN 절을 위한 쿼리 생성
             placeholders = ",".join(["?"] * len(page_nums))
-            query = f"SELECT page_num, coords FROM coords WHERE file_hash = ? AND page_num IN ({placeholders})"
+            # Placeholder count is derived from len(page_nums); page_nums are ints and
+            # file_hash is bound as a parameter, so no user input reaches the SQL text.
+            query = f"SELECT page_num, coords FROM coords WHERE file_hash = ? AND page_num IN ({placeholders})"  # nosec B608
 
             results = {}
             db = await self._get_connection()

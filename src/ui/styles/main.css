@@ -13,18 +13,39 @@
        (.streamlit/config.toml deliberately has no [theme]), so mirror Streamlit's
        default light/dark palette via prefers-color-scheme. */
     --background-color: #ffffff;
+    /* VIS-1: brand hue tokens — Streamlit default red kept EXACTLY (#ff4b4b).
+       Component tokens (hue/sat/light) let derivative tones — focus rings, tints —
+       be computed with hsl() while --primary-color stays pixel-identical. */
+    --primary-hue: 0;
+    --primary-sat: 100%;
+    --primary-lit: 64.7%;
     --primary-color: #ff4b4b;
+    /* ACC-2: focus ring color, 3:1 contrast on this background (5.4:1 on white) */
+    --focus-ring-color: hsl(var(--primary-hue) var(--primary-sat) 42%);
     --border-color: rgba(49, 51, 63, 0.2);
     --text-color: #31333f;
+    /* C5: header height fallback (px). Must mirror HEADER_H_FALLBACK_PX in ui.py
+       so the JS probe and the CSS contract agree when the parent frame is
+       unreachable. */
+    --header-h-fallback: 60px;
 }
 
 @media (prefers-color-scheme: dark) {
     :root {
         --background-color: #0e1117;
         --primary-color: #ff4b4b;
+        /* ACC-2: focus ring color, 3:1 contrast on this background (9.2:1 on #0e1117) */
+        --focus-ring-color: hsl(var(--primary-hue) var(--primary-sat) 78%);
         --border-color: rgba(250, 250, 250, 0.2);
         --text-color: #fafafa;
     }
+}
+
+/* ACC-2: global keyboard focus ring — 2px, WCAG 3:1 on both themes.
+   Color resolves from --focus-ring-color (light #d60000 5.4:1 / dark #ff8f8f 9.2:1). */
+[data-testid="stMainBlockContainer"] *:focus-visible {
+    outline: 2px solid var(--focus-ring-color) !important;
+    outline-offset: 2px !important;
 }
 
 .stApp { max-width: 100%; width: 100%; height: 100vh; height: 100dvh; overflow: hidden; margin: 0; }
@@ -37,7 +58,7 @@
     overflow: hidden !important;
     position: relative !important;
     box-sizing: border-box !important;
-    padding-top: var(--header-h, 60px) !important;
+    padding-top: var(--header-h, var(--header-h-fallback)) !important;
     padding-bottom: 0 !important;
     padding-left: 0 !important;
     padding-right: 0 !important;
@@ -166,7 +187,7 @@
     min-height: 0 !important;
     margin-top: auto !important; /* pins the bar to the bottom when the viewer is short */
     overflow: visible !important;
-    border-top: 1px solid color-mix(in srgb, var(--border-color, #ccc) 25%, transparent) !important;
+    border-top: 1px solid color-mix(in srgb, var(--border-color) 25%, transparent) !important;
     padding-top: 8px !important;
     background: color-mix(in srgb, var(--background-color) 96%, var(--primary-color) 4%) !important;
 }
@@ -233,7 +254,7 @@
     min-height: 0 !important;
     z-index: 1000 !important;
     background-color: var(--background-color) !important;
-    border-top: 1px solid color-mix(in srgb, var(--border-color, #ccc) 30%, transparent) !important;
+    border-top: 1px solid color-mix(in srgb, var(--border-color) 30%, transparent) !important;
     padding-top: 8px !important;
 }
 
@@ -247,7 +268,7 @@
 /* Chat Input Focus Enhancement */
 [data-testid="stChatInput"]:focus-within {
     border-color: var(--primary-color) !important;
-    box-shadow: 0 0 0 2px color-mix(in srgb, var(--primary-color) 20%, transparent) !important;
+    box-shadow: 0 0 0 2px var(--focus-ring-color) !important;
 }
 
 /* Chat Input Disabled State */
@@ -296,7 +317,7 @@ header[data-testid="stHeader"] {
     background: var(--background-color) !important;
     z-index: 99999 !important;
     display: flex !important;
-    border-bottom: 1px solid color-mix(in srgb, var(--border-color, #ccc) 30%, transparent);
+    border-bottom: 1px solid color-mix(in srgb, var(--border-color) 30%, transparent);
 }
 .stAppDeployButton { display: none !important; }
 
@@ -316,6 +337,13 @@ header[data-testid="stHeader"] {
 @keyframes msgFadeIn {
     from { opacity: 0; transform: translateY(6px); }
     to   { opacity: 1; transform: translateY(0); }
+}
+
+/* ACC-9: honor the OS reduced-motion preference — disable the entrance animation */
+@media (prefers-reduced-motion: reduce) {
+    [data-testid="stChatMessage"]:last-child {
+        animation: none !important;
+    }
 }
 
 /* Popover body: prevent overflow on narrow screens */
@@ -339,11 +367,19 @@ header[data-testid="stHeader"] {
         height: auto !important;
         overflow: visible !important;
     }
-    [data-testid="stColumn"] {
+    /* VIS-4: mobile stack — compact PDF preview (35vh) + chat column dominates.
+       Scoped to the app's own columns so PDF-controls inner columns stay auto. */
+    [data-testid="stMainBlockContainer"] [data-testid="stColumn"]:first-child {
         display: flex !important;
         flex-direction: column !important;
-        height: 50vh !important;
+        height: 35vh !important;
         overflow-y: auto !important;
+    }
+    [data-testid="stMainBlockContainer"] [data-testid="stColumn"]:last-child {
+        display: flex !important;
+        flex-direction: column !important;
+        flex: 1 !important;
+        height: auto !important;
     }
     [data-testid="stColumn"] > [data-testid="stVerticalBlock"]
     > [data-testid="stLayoutWrapper"] > [data-testid="stVerticalBlock"] {
@@ -375,7 +411,7 @@ header[data-testid="stHeader"] {
         width: 100% !important;
         z-index: 1000 !important;
         background-color: var(--background-color) !important;
-        border-top: 1px solid color-mix(in srgb, var(--border-color, #ccc) 30%, transparent) !important;
+border-top: 1px solid color-mix(in srgb, var(--border-color) 30%, transparent) !important;
     }
     /* PDF controls bar inner columns: never 50vh (scope out of the global column rule) */
     [data-testid="stMainBlockContainer"] [data-testid="stColumn"]:first-child
@@ -396,3 +432,23 @@ header[data-testid="stHeader"] {
 
 /* 문서 컨텍스트/빌드 배너는 통합 타임라인 내 네이티브 컴포넌트로 대체됨.
    (st.chat_message + st.status) - 커스텀 CSS 제거 완료 */
+
+/* C8: sidebar brand lockup — replaces inline <div style> in sidebar.py so the
+   logo follows the theme tokens instead of hard-coded sizes/colors. */
+.rag-brand {
+    text-align: center;
+    padding: 10px 0;
+    margin-bottom: 10px;
+}
+
+.rag-brand__name {
+    font-size: 1.5rem;
+    font-weight: 700;
+    color: var(--text-color);
+}
+
+.rag-brand__sub {
+    font-size: 0.9rem;
+    color: var(--primary-color);
+    opacity: 0.8;
+}

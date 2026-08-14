@@ -42,7 +42,7 @@ def _set_active_engine(engine: str) -> None:
 
 
 def _text_hash(text: str) -> str:
-    return hashlib.md5(text.encode("utf-8")).hexdigest()
+    return hashlib.md5(text.encode("utf-8"), usedforsecurity=False).hexdigest()
 
 
 def _get_cached_emb(text: str) -> list[float] | None:

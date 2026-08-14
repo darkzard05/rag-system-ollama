@@ -25,10 +25,11 @@ from common.async_worker import AsyncWorker
 from common.config import MSG_ERROR_OLLAMA_NOT_RUNNING, UI_STREAMING_TIMEOUT
 from common.utils import apply_tooltips_to_response, extract_annotations_from_docs
 from core.session import SessionManager
+from ui.components.common import get_doc_metadata
 
 logger = logging.getLogger(__name__)
 
-_GENERIC_STREAMING_MSG = "답변 생성 중 오류가 발생했습니다."
+_GENERIC_STREAMING_MSG = "An error occurred while generating the answer."
 
 # 원시 예외 서명 → 사용자 친화 메시지 매핑 (config.yml errors 영역 상수 활용)
 _ERROR_SIGNATURES: tuple[tuple[str, str], ...] = (
@@ -67,11 +68,7 @@ def _build_process(msg: dict[str, Any]) -> dict[str, Any]:
     sections: list[str] = []
     seen_sections: set[str] = set()
     for d in documents:
-        meta = (
-            getattr(d, "metadata", {})
-            if hasattr(d, "metadata")
-            else d.get("metadata", {})
-        )
+        meta = get_doc_metadata(d)
         section = meta.get("current_section")
         if section and section not in seen_sections:
             seen_sections.add(section)
@@ -81,11 +78,7 @@ def _build_process(msg: dict[str, Any]) -> dict[str, Any]:
 
     top_scores: list[dict[str, Any]] = []
     for d in documents:
-        meta = (
-            getattr(d, "metadata", {})
-            if hasattr(d, "metadata")
-            else d.get("metadata", {})
-        )
+        meta = get_doc_metadata(d)
         if (score := meta.get("rerank_score")) is None:
             continue
         try:

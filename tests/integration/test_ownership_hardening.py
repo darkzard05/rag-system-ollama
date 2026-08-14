@@ -102,7 +102,10 @@ async def test_concurrent_upload_second_rejected(client, pdf_override, auth_over
 
     with (
         patch("src.api.api_server.RAGSystem.build_pipeline", new=_build_pipeline),
-        patch.object(api.RAGResourceManager, "get_embedder", new_callable=AsyncMock),
+        patch(
+            "src.core.resource_manager.ResourceManager.get_embedder_for_session",
+            new_callable=AsyncMock,
+        ),
     ):
         auth_override["user_id"] = "user-a"
         task_a = asyncio.create_task(

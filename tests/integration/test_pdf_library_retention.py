@@ -67,7 +67,7 @@ def _upload(session_id: str):
     with (
         patch("src.api.api_server.RAGSystem", mock_rag_system),
         patch(
-            "src.api.api_server.RAGResourceManager.get_embedder",
+            "src.core.resource_manager.ResourceManager.get_embedder_for_session",
             new_callable=AsyncMock,
         ),
     ):

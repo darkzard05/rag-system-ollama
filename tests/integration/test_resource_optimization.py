@@ -2,7 +2,7 @@ import asyncio
 import os
 
 import pytest
-from src.api.api_server import RAGResourceManager
+from src.core.resource_manager import ResourceManager
 
 
 @pytest.mark.asyncio
@@ -19,7 +19,11 @@ async def test_resource_loading_concurrency():
 
     # 두 개의 모델 로딩 요청을 동시에 보냄
     # (실제로는 캐시되어 있지 않은 상태여야 함)
-    tasks = [RAGResourceManager.get_llm("llama3"), RAGResourceManager.get_llm("qwen2")]
+    manager = ResourceManager()
+    tasks = [
+        manager.get_llm_for_session("test-session", "llama3"),
+        manager.get_llm_for_session("test-session", "qwen2"),
+    ]
 
     # 실제 모델 로딩 함수가 thread-safe하게 호출되는지 로그로 확인 가능
     # 여기서는 예외가 발생하지 않고 완료되는지 체크

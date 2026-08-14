@@ -6,7 +6,7 @@ API 입력 경계 검증 테스트 (F11 - TDD).
 - 질문 길이 상한(MAX_QUERY_LENGTH, 4000자) 초과 시 400
 - 세션 ID 길이 상한(MAX_SESSION_ID_LENGTH, 64자) 초과 시 400
 
-테스트 환경: Ollama 불필요. RAGSystem/RAGResourceManager 를 모킹합니다.
+테스트 환경: Ollama 불필요. RAGSystem 및 ResourceManager 세션 래퍼를 모킹합니다.
 """
 
 import io
@@ -34,15 +34,24 @@ def auth_headers():
 @pytest.fixture
 def mock_rag_resources():
     """RAG 리소스(LLM, Embedder 등)를 모킹하여 무거운 로딩 방지"""
-    with patch("src.api.api_server.RAGResourceManager") as mock_mgr:
+    with (
+        patch(
+            "src.core.resource_manager.ResourceManager.get_llm_for_session",
+            new_callable=AsyncMock,
+        ) as mock_get_llm,
+        patch(
+            "src.core.resource_manager.ResourceManager.get_embedder_for_session",
+            new_callable=AsyncMock,
+        ) as mock_get_embedder,
+    ):
         mock_llm = MagicMock()
-        mock_mgr.get_llm = AsyncMock(return_value=mock_llm)
+        mock_get_llm.return_value = mock_llm
 
         mock_embedder = MagicMock()
         mock_embedder.model_name = "mock-embedding-model"
-        mock_mgr.get_embedder = AsyncMock(return_value=mock_embedder)
+        mock_get_embedder.return_value = mock_embedder
 
-        yield mock_mgr
+        yield mock_get_llm
 
 
 @pytest.fixture

@@ -499,6 +499,55 @@ class ResourceCoordinator:
         name = model_name or DEFAULT_EMBEDDING_MODEL
         return await self.get_or_build(self.models, name, load_embedding_model, name)
 
+    async def get_llm_for_session(
+        self, session_id: str = "default", model_name: str | None = None, **kwargs
+    ) -> Any:
+        # [R10] LAZY import: SessionManager imports streamlit at module top;
+        # importing it here avoids a circular import and keeps Streamlit out of core.
+        from common.config import DEFAULT_OLLAMA_MODEL
+        from core.session import SessionManager
+
+        current_model = SessionManager.get("last_selected_model", session_id=session_id)
+        target_model = model_name or current_model or DEFAULT_OLLAMA_MODEL
+
+        # [R7] 세션별 모델 전환 로그
+        if current_model and current_model != target_model:
+            logger.info(
+                f"[MODEL] [SWITCH] LLM 전환 (Session: {session_id}) | {current_model} -> {target_model}"
+            )
+
+        # [R16] POOLING: delegate to the EXISTING name-keyed LRU pool
+        # (f"llm_{target_model}"). Do NOT re-key by session_id.
+        llm = await self.get_llm(target_model, **kwargs)
+        SessionManager.set("last_selected_model", target_model, session_id=session_id)
+        return llm
+
+    async def get_embedder_for_session(
+        self, session_id: str = "default", model_name: str | None = None
+    ) -> Any:
+        # [R10] LAZY import: SessionManager imports streamlit at module top;
+        # importing it here avoids a circular import and keeps Streamlit out of core.
+        from common.config import AVAILABLE_EMBEDDING_MODELS
+        from core.session import SessionManager
+
+        current_embedder = SessionManager.get(
+            "last_selected_embedding_model", session_id=session_id
+        )
+        target_model = model_name or current_embedder or AVAILABLE_EMBEDDING_MODELS[0]
+
+        # [R7] 세션별 임베딩 모델 전환 로그
+        if current_embedder and current_embedder != target_model:
+            logger.info(
+                f"[MODEL] [SWITCH] 임베딩 모델 전환 (Session: {session_id}) | {current_embedder} -> {target_model}"
+            )
+
+        # [R16] POOLING: delegate to the EXISTING name-keyed LRU pool (model name).
+        embedder = await self.get_embedder(target_model)
+        SessionManager.set(
+            "last_selected_embedding_model", target_model, session_id=session_id
+        )
+        return embedder
+
     async def get_flashranker(self, model_name: str | None = None) -> Any:
         target = model_name or RERANKER_MODEL_NAME
 

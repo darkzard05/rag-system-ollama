@@ -219,6 +219,21 @@ class TestHMACSignature:
 
         assert hmac1 != hmac2
 
+    def test_hmac_roundtrip_via_crypto_utils(self, security_manager_high):
+        """compute_integrity_hmac must match crypto_utils.hmac_sign (R14)."""
+        from security import crypto_utils
+
+        data = b"round-trip payload"
+        manager_sig = security_manager_high.compute_integrity_hmac(data)
+        util_sig = crypto_utils.hmac_sign(
+            security_manager_high.hmac_secret, data, "sha256"
+        )
+
+        assert manager_sig == util_sig
+        assert crypto_utils.hmac_verify(
+            security_manager_high.hmac_secret, data, manager_sig
+        )
+
 
 # ============================================================================
 # 메타데이터 저장/로드 테스트

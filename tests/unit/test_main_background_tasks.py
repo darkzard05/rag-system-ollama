@@ -152,7 +152,7 @@ class TestMainBackgroundTasks(unittest.TestCase):
 
         assert not SessionManager.get("new_file_uploaded", session_id="test_session")
         mock_success.assert_called_once()
-        assert "이미 업로드된 동일한 문서" in mock_success.call_args.args[0]
+        assert "already uploaded" in mock_success.call_args.args[0]
 
     def test_on_file_upload_rejects_corrupt_pdf_without_mutation(self):
         garbage_bytes = b"not a pdf"
@@ -174,7 +174,7 @@ class TestMainBackgroundTasks(unittest.TestCase):
 
         # 검증 실패는 st.error 대신 타임라인 메시지로 기록되어야 한다 (레이아웃 유지).
         messages = SessionManager.get_messages(session_id="test_session")
-        assert any("손상되었거나 읽을 수 없는 PDF" in m["content"] for m in messages)
+        assert any("corrupted or unreadable" in m["content"] for m in messages)
         assert not SessionManager.get("new_file_uploaded", session_id="test_session")
         assert (
             SessionManager.get("pdf_file_path", session_id="test_session")

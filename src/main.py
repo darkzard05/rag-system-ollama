@@ -210,7 +210,7 @@ async def _bg_rebuild_task(
     SessionManager.set("rebuild_done", False, session_id=session_id)
     SessionManager.set("rebuild_error", None, session_id=session_id)
     SessionManager.set(
-        "rebuild_status", f"'{file_name}' 분석 중...", session_id=session_id
+        "rebuild_status", f"Analyzing '{file_name}'...", session_id=session_id
     )
 
     # 타임라인에 분석 시작 메시지 추가 (하나의 메시지를 업데이트)
@@ -220,11 +220,11 @@ async def _bg_rebuild_task(
     SessionManager.set("build_msg_id", build_msg_id, session_id=session_id)
     SessionManager.add_message(
         "system",
-        f"📄 '{file_name}' 문서 분석 시작",
+        f"Analysis started for '{file_name}'",
         msg_type="build_progress",
         msg_id=build_msg_id,
         progress=0,
-        status="분석 준비 중...",
+        status="Preparing analysis...",
         cancelable=True,
         logs=[],
         session_id=session_id,
@@ -239,14 +239,14 @@ async def _bg_rebuild_task(
             SessionManager.set("rebuild_cancelled", False, session_id=session_id)
             SessionManager.set("rebuild_progress", 0, session_id=session_id)
             SessionManager.add_status_log(
-                "❌ 문서 분석이 취소되었습니다.", session_id=session_id
+                "Document analysis cancelled.", session_id=session_id
             )
             SessionManager.add_message(
                 "system",
-                "문서 분석이 취소되었습니다",
+                "Document analysis cancelled",
                 msg_type="build_error",
                 msg_id=build_msg_id,
-                error="사용자가 분석을 취소함",
+                error="cancelled by the user",
                 session_id=session_id,
             )
             return
@@ -260,11 +260,11 @@ async def _bg_rebuild_task(
             # 타임라인 진행 메시지 업데이트 (동일 msg_id)
             SessionManager.add_message(
                 "system",
-                f"📄 '{file_name}' 분석 진행 중",
+                f"Analyzing '{file_name}'...",
                 msg_type="build_progress",
                 msg_id=build_msg_id,
                 progress=pct,
-                status=msg or f"진행률 {pct}%",
+                status=msg or f"Progress {pct}%",
                 cancelable=True,
                 logs=SessionManager.get("status_logs", [], session_id) or [],
                 session_id=session_id,
@@ -278,14 +278,14 @@ async def _bg_rebuild_task(
             SessionManager.set("rebuild_cancelled", False, session_id=session_id)
             SessionManager.set("rebuild_progress", 0, session_id=session_id)
             SessionManager.add_status_log(
-                "❌ 문서 분석이 취소되었습니다.", session_id=session_id
+                "Document analysis cancelled.", session_id=session_id
             )
             SessionManager.add_message(
                 "system",
-                "문서 분석이 취소되었습니다",
+                "Document analysis cancelled",
                 msg_type="build_error",
                 msg_id=build_msg_id,
-                error="사용자가 분석을 취소함",
+                error="cancelled by the user",
                 session_id=session_id,
             )
             return
@@ -315,11 +315,11 @@ async def _bg_rebuild_task(
             },
             session_id=session_id,
         )
-        SessionManager.add_status_log(f"✅ {success_message}", session_id=session_id)
+        SessionManager.add_status_log(success_message, session_id=session_id)
         # 타임라인 진행 메시지 완료 처리 (동일 msg_id)
         SessionManager.add_message(
             "system",
-            f"✅ {success_message}",
+            success_message,
             msg_type="build_progress",
             msg_id=build_msg_id,
             progress=100,
@@ -338,22 +338,22 @@ async def _bg_rebuild_task(
         SessionManager.set("rebuild_progress", 0, session_id=session_id)
         SessionManager.add_message(
             "system",
-            "문서 분석이 취소되었습니다",
+            "Document analysis cancelled",
             msg_type="build_error",
             msg_id=build_msg_id,
-            error="비동기 작업 취소됨",
+            error="async task cancelled",
             session_id=session_id,
         )
     except Exception as e:
         logger.error(f"Background RAG rebuild error: {e}", exc_info=True)
-        error_msg = f"문서 처리 중 오류가 발생했습니다: {str(e)}"
+        error_msg = f"An error occurred while processing the document: {e}"
         SessionManager.set("rebuild_error", error_msg, session_id=session_id)
         SessionManager.set("pdf_processing_error", error_msg, session_id=session_id)
         SessionManager.set("rebuild_progress", 0, session_id=session_id)
         SessionManager.set("pdf_processed", False, session_id=session_id)
         SessionManager.add_message(
             "system",
-            "문서 분석 중 오류 발생",
+            "Error during document analysis",
             msg_type="build_error",
             msg_id=build_msg_id,
             error=error_msg,
@@ -381,18 +381,20 @@ async def _bg_update_qa_chain(session_id: str) -> None:
     SessionManager.set_session_id(session_id)
     SessionManager.set("is_swapping_model", True, session_id=session_id)
     try:
-        SessionManager.add_status_log("🔄 추론 모델 교체 중", session_id=session_id)
+        SessionManager.add_status_log(
+            "Switching inference model...", session_id=session_id
+        )
         selected_model = SessionManager.get(
             "last_selected_model", session_id=session_id
         )
         model_name = str(selected_model or DEFAULT_OLLAMA_MODEL)
         llm = await asyncio.to_thread(load_llm, model_name)
         SessionManager.set("llm", llm, session_id=session_id)
-        SessionManager.add_status_log("✅ 추론 모델 교체 완료", session_id=session_id)
+        SessionManager.add_status_log("Inference model switched", session_id=session_id)
     except Exception as e:
-        error_msg = f"QA 체인 업데이트 실패: {e}"
+        error_msg = f"Failed to update the QA chain: {e}"
         logger.error(f"QA 업데이트 실패: {e}", exc_info=True)
-        SessionManager.add_status_log(f"❌ {error_msg}", session_id=session_id)
+        SessionManager.add_status_log(error_msg, session_id=session_id)
         SessionManager.add_message("assistant", error_msg, session_id=session_id)
     finally:
         SessionManager.set("rag_build_complete_flag", True, session_id=session_id)
@@ -408,17 +410,17 @@ def _update_qa_chain(session_id: str | None = None) -> None:
     sid = session_id or SessionManager.get_session_id()
     selected_model = SessionManager.get("last_selected_model", session_id=sid)
     try:
-        SessionManager.add_status_log("🔄 추론 모델 교체 중", session_id=sid)
+        SessionManager.add_status_log("Switching inference model...", session_id=sid)
         from core.model_loader import load_llm
 
         model_name = str(selected_model or DEFAULT_OLLAMA_MODEL)
         llm = load_llm(model_name)
         SessionManager.set("llm", llm, session_id=sid)
-        SessionManager.add_status_log("✅ 추론 모델 교체 완료", session_id=sid)
+        SessionManager.add_status_log("Inference model switched", session_id=sid)
     except Exception as e:
-        error_msg = f"QA 체인 업데이트 실패: {e}"
+        error_msg = f"Failed to update the QA chain: {e}"
         logger.error(f"QA 업데이트 실패: {e}", exc_info=True)
-        SessionManager.add_status_log(f"❌ {error_msg}", session_id=sid)
+        SessionManager.add_status_log(error_msg, session_id=sid)
         SessionManager.add_message("assistant", error_msg, session_id=sid)
     finally:
         SessionManager.set("rag_build_complete_flag", True, session_id=sid)
@@ -450,15 +452,13 @@ def on_file_upload() -> None:
         return
 
     if uploaded_file.type != "application/pdf":
-        _post_upload_error(
-            "❌ 올바른 PDF 파일이 아닙니다. PDF 형식의 파일을 업로드해주세요."
-        )
+        _post_upload_error("Invalid PDF file. Please upload a file in PDF format.")
         return
 
     file_size_mb = uploaded_file.size / (1024 * 1024)
     if file_size_mb > MAX_FILE_SIZE_MB:
         _post_upload_error(
-            f"❌ 파일 크기가 너무 큽니다 ({file_size_mb:.2f} MB). {MAX_FILE_SIZE_MB}MB 이하의 파일을 업로드해주세요."
+            f"File is too large ({file_size_mb:.2f} MB). Please upload a file no larger than {MAX_FILE_SIZE_MB} MB."
         )
         return
 
@@ -482,15 +482,15 @@ def on_file_upload() -> None:
         import fitz  # lazy import: 검증이 필요한 시점에만 로드
 
         if not file_bytes:
-            raise ValueError("PDF 파일이 비어 있습니다.")
+            raise ValueError("PDF file is empty.")
         with fitz.open(stream=file_bytes, filetype="pdf") as upload_doc:
             page_count = len(upload_doc)
         if page_count < 1:
-            raise ValueError("PDF 파일에 페이지가 없습니다.")
+            raise ValueError("PDF file has no pages.")
     except Exception as e:
         logger.warning(f"손상되었거나 읽을 수 없는 PDF 업로드 차단: {e}")
         _post_upload_error(
-            "❌ 손상되었거나 읽을 수 없는 PDF 파일입니다. 올바른 PDF 파일을 업로드해주세요."
+            "The PDF file is corrupted or unreadable. Please upload a valid PDF file."
         )
         return
 
@@ -525,23 +525,21 @@ def on_file_upload() -> None:
             # [UX] 분석 진행 자리표시자 메시지: _bg_rebuild_task가 동일 msg_id로 업데이트
             SessionManager.add_message(
                 "system",
-                f"📄 '{uploaded_file.name}' 문서 분석 시작",
+                f"Analysis started for '{uploaded_file.name}'",
                 msg_type="build_progress",
                 msg_id=f"build_{sid}",
                 progress=0,
-                status="분석 준비 중...",
+                status="Preparing analysis...",
                 cancelable=True,
                 logs=[],
                 session_id=sid,
             )
             SessionManager.set("new_file_uploaded", True)
-            SystemNotifier.success(f"문서 업로드 완료: {uploaded_file.name}")
+            SystemNotifier.success(f"Document uploaded: {uploaded_file.name}")
         except Exception as e:
-            SystemNotifier.error("파일 저장 중 오류 발생", details=str(e))
+            SystemNotifier.error("Error while saving the file", details=str(e))
     else:
-        SystemNotifier.success(
-            f"'{uploaded_file.name}'은(는) 이미 업로드된 동일한 문서입니다."
-        )
+        SystemNotifier.success(f"'{uploaded_file.name}' was already uploaded.")
 
 
 def on_new_chat() -> None:
@@ -725,7 +723,7 @@ def main() -> None:
     if not st.session_state.get("_bootstrapped"):
         st.session_state._bootstrapped = True
         st.markdown(_SPLASH_HTML, unsafe_allow_html=True)
-        st.status("🔄 앱 초기화 중...", state="running")
+        st.status("Initializing app...", state="running")
         st.rerun()
 
     if "available_models_list" not in st.session_state:

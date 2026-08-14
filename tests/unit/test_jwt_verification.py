@@ -65,3 +65,23 @@ def test_valid_token_roundtrip(tmp_path):
     assert isinstance(payload["jti"], str)
     assert payload["jti"]
     assert payload["exp"] > time.time()
+
+
+def test_jwt_signature_via_crypto_utils(tmp_path):
+    """create_token/verify_token must use crypto_utils.hmac_sign (R14)."""
+    from security import crypto_utils
+
+    jwt = _new_jwt(tmp_path)
+    token = jwt.create_token("admin", expires_in=3600)
+
+    header_seg, payload_seg, sig_seg = token.split(".")
+    message = f"{header_seg}.{payload_seg}"
+    expected_sig = crypto_utils.hmac_sign(jwt.secret_key, message, "sha256")
+
+    # The stored signature (base64-decoded) is the raw digest bytes of expected_sig.
+    from base64 import urlsafe_b64decode
+
+    stored = urlsafe_b64decode(sig_seg + "=" * (-len(sig_seg) % 4))
+    assert stored == bytes.fromhex(expected_sig)
+
+    assert jwt.verify_token(token) is not None

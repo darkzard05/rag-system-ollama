@@ -125,7 +125,7 @@ def test_consumer_error_sets_message_error_and_clears_flag():
     assert target["msg_type"] == "general"
     # P0 계약: 원시 예외 문자열은 노출하지 않고 친화적 메시지로 매핑된다
     assert "boom" not in target["error"]
-    assert "오류가 발생" in target["error"]
+    assert "An error occurred" in target["error"]
 
 
 def test_consumer_documents_set_pdf_side_effects():
@@ -169,10 +169,17 @@ def test_consumer_documents_set_pdf_side_effects():
 
 
 def test_render_message_shows_error_via_st_error():
-    """오류 메시지: st.error로 표시되고 본문 markdown은 렌더링되지 않아야 한다."""
+    """오류 메시지: st.error로 표시되고 본문 markdown은 렌더링되지 않아야 한다.
+
+    C1 리팩터 이후 에러는 ui.components.common.ui_error 경로로 나가므로,
+    common.st 도 함께 패치하여 실제 호출 경로를 검증한다.
+    """
     from ui.components import chat as chat_mod
 
-    with patch("ui.components.chat.st") as mock_st:
+    with (
+        patch("ui.components.chat.st") as mock_st,
+        patch("ui.components.common.st") as mock_common_st,
+    ):
         # chat_message 컨텍스트 매니저 동작 구성
         mock_st.chat_message.return_value.__enter__.return_value = MagicMock()
         mock_st.expander.return_value.__enter__.return_value = MagicMock()
@@ -185,7 +192,7 @@ def test_render_message_shows_error_via_st_error():
             error="boom",
         )
 
-    assert mock_st.error.called
-    assert "boom" in str(mock_st.error.call_args.args[0])
+    assert mock_common_st.error.called
+    assert "boom" in str(mock_common_st.error.call_args.args[0])
     # 오류가 있는 메시지는 본문 콘텐츠를 렌더링하지 않아야 한다
     mock_st.markdown.assert_not_called()

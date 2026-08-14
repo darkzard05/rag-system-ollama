@@ -13,7 +13,13 @@ from common.config import MSG_PDF_VIEWER_NO_FILE
 from common.exceptions import PDFProcessingError
 from common.utils import safe_cache_data
 from core.session import SessionManager
-from ui.widget_keys import pdf_viewer_key
+from ui.components.common import navigate_to_page, show_pdf_error, ui_error
+from ui.widget_keys import (
+    MANUAL_NAV_TS_KEY,
+    PDF_NAV_INPUT_KEY,
+    PDF_TARGET_PAGE_KEY,
+    pdf_viewer_key,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -63,40 +69,41 @@ def _get_pdf_total_pages(pdf_path: str) -> int | None:
 # ---------------------------------------------------------------------------
 
 
+def _navigate(delta: int, total_pages: int | None = None) -> None:
+    """Move by ``delta`` pages (clamped), syncing state + nav input (D4/D5)."""
+    current = int(SessionManager.get("current_page", 1))
+    if total_pages is None:
+        target = current + delta
+    else:
+        target = min(total_pages, max(1, current + delta))
+    navigate_to_page(target)
+
+
 def _on_prev_click():
     """이전 페이지로 이동 (네비게이션 버튼 콜백)"""
-    current = SessionManager.get("current_page", 1)
-    new_page = max(1, current - 1)
-    SessionManager.set("current_page", new_page)
-    SessionManager.set("manual_nav_ts", time.time())
-    st.session_state["pdf_nav_input_v6"] = new_page
+    _navigate(-1)
 
 
-def _on_next_click(total_pages: int):
-    """다음 페이지로 이동 (네비게이션 버튼 콜백)"""
-    current = SessionManager.get("current_page", 1)
-    new_page = min(total_pages, current + 1)
-    SessionManager.set("current_page", new_page)
-    SessionManager.set("manual_nav_ts", time.time())
-    st.session_state["pdf_nav_input_v6"] = new_page
+def _on_next_click_callback():
+    """다음 페이지 네비게이션 콜백 (module-level).
+
+    total_pages는 런타임에만 알 수 있으므로 여기서 조회 후 _navigate에 전달한다.
+    """
+    pdf_path = SessionManager.get("pdf_file_path", "")
+    if not pdf_path:
+        return
+    total = _get_pdf_total_pages(os.path.abspath(pdf_path))
+    if not total:
+        return
+    _navigate(1, total_pages=total)
 
 
 def _on_page_change():
     """페이지 번호 입력 변경 시 (number_input on_change 콜백)"""
-    new_p = st.session_state.get("pdf_nav_input_v6")
+    new_p = st.session_state.get(PDF_NAV_INPUT_KEY)
     if new_p:
         SessionManager.set("current_page", new_p)
-        SessionManager.set("manual_nav_ts", time.time())
-
-
-def _on_next_click_callback():
-    """다음 페이지 네비게이션 콜백 (module-level)"""
-    pdf_path = SessionManager.get("pdf_file_path", "")
-    if pdf_path:
-        total = _get_pdf_total_pages(os.path.abspath(pdf_path))
-        if not total:
-            return
-        _on_next_click(total)
+        SessionManager.set(MANUAL_NAV_TS_KEY, time.time())
 
 
 # ---------------------------------------------------------------------------
@@ -139,7 +146,7 @@ def _resolve_pdf_state() -> dict | None:
         return None
 
     # Handle external page navigation (e.g., from chat references)
-    target = SessionManager.get("pdf_target_page")
+    target = SessionManager.get(PDF_TARGET_PAGE_KEY)
     if target is not None:
         if isinstance(target, dict):
             page = target.get("page")
@@ -151,24 +158,25 @@ def _resolve_pdf_state() -> dict | None:
             ts = 0.0
         if page is None:
             # 형식 오류 토큰(page 누락): 폴링마다 재평가되지 않도록 폐기한다.
-            SessionManager.delete("pdf_target_page")
-            st.session_state.pop("pdf_target_page", None)
+            SessionManager.delete(PDF_TARGET_PAGE_KEY)
+            st.session_state.pop(PDF_TARGET_PAGE_KEY, None)
         elif (
-            source == "auto" and float(SessionManager.get("manual_nav_ts", 0) or 0) > ts
+            source == "auto"
+            and float(SessionManager.get(MANUAL_NAV_TS_KEY, 0) or 0) > ts
         ):
             # 사용자가 자동 점프 토큰 설정 이후 더 최근에 수동 네비게이션함
             # → 토큰 폐기 (점프 없음), 정상 nav-input 분기로 폴스루.
-            SessionManager.delete("pdf_target_page")
-            st.session_state.pop("pdf_target_page", None)
+            SessionManager.delete(PDF_TARGET_PAGE_KEY)
+            st.session_state.pop(PDF_TARGET_PAGE_KEY, None)
         else:
             current_page = min(max(1, int(page)), total_pages)
             SessionManager.set("current_page", current_page)
             # pdf_target_page는 일회성 소비: 점프 적용 후 키를 삭제하여
             # 사용자가 수동 네비게이션으로 벗어나도 매 rerun마다 참조 페이지로
             # 되돌아가지 않도록 보장한다.
-            SessionManager.delete("pdf_target_page")
-            st.session_state.pop("pdf_target_page", None)
-            st.session_state["pdf_nav_input_v6"] = current_page
+            SessionManager.delete(PDF_TARGET_PAGE_KEY)
+            st.session_state.pop(PDF_TARGET_PAGE_KEY, None)
+            st.session_state[PDF_NAV_INPUT_KEY] = current_page
             return {
                 "pdf_path": pdf_path,
                 "file_hash": file_hash,
@@ -176,14 +184,14 @@ def _resolve_pdf_state() -> dict | None:
                 "current_page": current_page,
             }
 
-    if "pdf_nav_input_v6" in st.session_state:
+    if PDF_NAV_INPUT_KEY in st.session_state:
         current_page = min(
-            max(1, int(st.session_state["pdf_nav_input_v6"])), total_pages
+            max(1, int(st.session_state[PDF_NAV_INPUT_KEY])), total_pages
         )
         SessionManager.set("current_page", current_page)
     else:
         current_page = min(max(1, SessionManager.get("current_page", 1)), total_pages)
-        st.session_state["pdf_nav_input_v6"] = current_page
+        st.session_state[PDF_NAV_INPUT_KEY] = current_page
 
     return {
         "pdf_path": pdf_path,
@@ -216,30 +224,24 @@ def render_pdf_area():
         if state is None:
             pdf_path = SessionManager.get("pdf_file_path")
             if pdf_path and os.path.exists(os.path.abspath(str(pdf_path))):
-                st.error(
-                    "⚠️ PDF 파일을 열 수 없습니다. 파일이 손상되었거나 지원되지 않는 형식입니다."
-                )
+                show_pdf_error("open")
             else:
                 st.info(MSG_PDF_VIEWER_NO_FILE)
             return
-        _display_pdf_viewer(
-            state["pdf_path"], state["current_page"], state["file_hash"]
-        )
-        _display_pdf_controls(state["current_page"], state["total_pages"])
+        render_pdf_viewer(state["pdf_path"], state["current_page"], state["file_hash"])
+        render_pdf_controls(state["current_page"], state["total_pages"])
     except Exception as e:
         logger.error(f"PDF 뷰어 영역 오류: {e}", exc_info=True)
-        st.error(
-            "⚠️ PDF 파일을 열 수 없습니다. 파일이 손상되었거나 지원되지 않는 형식입니다."
-        )
+        show_pdf_error("open")
 
 
-def _display_pdf_viewer(pdf_path, current_page, file_hash):
+def render_pdf_viewer(pdf_path, current_page, file_hash):
     try:
         from streamlit_pdf_viewer import pdf_viewer  # lazy: PDF 표시 시에만 import
 
         pdf_bytes = _get_pdf_bytes(pdf_path)
         if not pdf_bytes:
-            st.error("⚠️ PDF 데이터를 불러올 수 없습니다.")
+            show_pdf_error("data")
             return
 
         raw_annotations = SessionManager.get("pdf_annotations", [])
@@ -264,13 +266,13 @@ def _display_pdf_viewer(pdf_path, current_page, file_hash):
         )
     except PDFProcessingError as e:
         logger.error(f"PDF 처리 오류: {e}")
-        st.error(f"PDF 뷰어 오류: {e}")
+        ui_error("PDF 뷰어 오류가 발생했습니다. 잠시 후 다시 시도해주세요.")
     except Exception as e:
         logger.error(f"PDF 뷰어 렌더링 오류: {e}", exc_info=True)
-        st.error(f"PDF 뷰어 렌더링 오류: {e}")
+        ui_error("PDF 뷰어 렌더링에 실패했습니다.")
 
 
-def _display_pdf_controls(current_page, total_pages):
+def render_pdf_controls(current_page, total_pages):
     try:
         col_prev, col_page, col_next = st.columns(
             [1, 2, 1], gap="small", vertical_alignment="center"
@@ -290,7 +292,7 @@ def _display_pdf_controls(current_page, total_pages):
                 "Page",
                 min_value=1,
                 max_value=total_pages,
-                key="pdf_nav_input_v6",
+                key=PDF_NAV_INPUT_KEY,
                 on_change=_on_page_change,
                 label_visibility="collapsed",
             )

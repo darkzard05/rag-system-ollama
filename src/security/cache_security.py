@@ -22,6 +22,7 @@ from pathlib import Path
 from pydantic import BaseModel, Field, field_validator
 
 from common.config import CACHE_EXPECTED_DIR_MODE, CACHE_EXPECTED_FILE_MODE
+from security import crypto_utils
 
 logger = logging.getLogger(__name__)
 
@@ -153,8 +154,7 @@ class CacheSecurityManager:
     def compute_integrity_hmac(self, data: bytes, algorithm: str = "sha256") -> str:
         if not self.hmac_secret:
             raise ValueError("HMAC 비밀키가 설정되지 않았습니다")
-        h = hmac.new(self.hmac_secret.encode(), data, digestmod=algorithm)
-        return h.hexdigest()
+        return crypto_utils.hmac_sign(self.hmac_secret, data, algorithm)
 
     @staticmethod
     def load_cache_metadata(metadata_path: str) -> CacheMetadata | None:

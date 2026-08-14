@@ -21,6 +21,7 @@ from typing import Any
 import streamlit as st
 
 from common.constants import MAX_MESSAGE_HISTORY
+from common.retry import retry_with_backoff
 
 logger = logging.getLogger(__name__)
 _session_id_var: ContextVar[str] = ContextVar("session_id", default="default")
@@ -460,24 +461,28 @@ class SessionManager:
     @classmethod
     def safe_remove_file(cls, path: str, max_retries: int = 3):
         """[Windows 대응] 지수 백오프를 사용한 안전한 파일 삭제"""
-        for attempt in range(max_retries):
-            try:
-                if os.path.exists(path):
-                    os.remove(path)
-                    logger.info(f"[SESSION] [CLEANUP] 파일 삭제 완료: {path}")
-                return True
-            except PermissionError:
-                if attempt < max_retries - 1:
-                    wait_time = 0.5 * (2**attempt)
-                    time.sleep(wait_time)
-                else:
-                    logger.warning(
-                        f"[SESSION] [CLEANUP] 파일 삭제 최종 실패 (잠금): {path}"
-                    )
-            except Exception as e:
-                logger.warning(f"[SESSION] [CLEANUP] 파일 삭제 중 예외 ({path}): {e}")
-                break
-        return False
+
+        def _remove() -> bool:
+            if os.path.exists(path):
+                os.remove(path)
+                logger.info(f"[SESSION] [CLEANUP] 파일 삭제 완료: {path}")
+            return True
+
+        try:
+            # R12: 인라인 백오프 루프를 common/retry.py 의 retry_with_backoff
+            # (동기 time.sleep 경로) 로 위임. 숫자(0.5*2**attempt)와 재시도
+            # 대상(PermissionError)을 정확히 보존한다. sync 컨텍스트에서 호출되므로
+            # 블로킹 time.sleep 을 유지한다.
+            return retry_with_backoff(
+                _remove,
+                max_retries=max_retries,
+                base_delay=0.5,
+                backoff=2.0,
+                retry_on=(OSError, PermissionError),
+            )
+        except OSError:
+            logger.warning(f"[SESSION] [CLEANUP] 파일 삭제 최종 실패 (잠금): {path}")
+            return False
 
     @classmethod
     def delete_session(cls, session_id: str) -> bool:

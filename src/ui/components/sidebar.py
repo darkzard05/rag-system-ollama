@@ -1,6 +1,6 @@
 """
-사이드바 설정 및 관리 컴포넌트.
-(접근성 개선: label_visibility="collapsed" 대신 CSS 클래스 사용)
+Sidebar settings and management component.
+(Accessibility: CSS classes instead of label_visibility="collapsed")
 """
 
 import streamlit as st
@@ -13,16 +13,12 @@ from core.session import SessionManager
 
 
 def _render_sidebar_logo():
-    """사이드바 상단에 브랜드 로고를 렌더링합니다."""
+    """Render the brand logo at the top of the sidebar (C8: theme-driven CSS)."""
     st.markdown(
         """
-<div style="text-align: center; padding: 10px 0; margin-bottom: 10px;">
-    <div style="font-size: 1.5rem; font-weight: 700; color: var(--text-color);">
-        GraphRAG-Ollama
-    </div>
-    <div style="font-size: 0.9rem; color: var(--primary-color); opacity: 0.8;">
-        Local RAG · PDF Chat
-    </div>
+<div class="rag-brand">
+    <div class="rag-brand__name">GraphRAG-Ollama</div>
+    <div class="rag-brand__sub">Local RAG · PDF Chat</div>
 </div>
 """,
         unsafe_allow_html=True,
@@ -41,7 +37,7 @@ def render_settings_content(
     current_embedding_model=None,
     available_models=None,
 ):
-    """설정창 내부 콘텐츠 렌더링 (사이드바 외부 호출용)"""
+    """Render the settings content (callable outside the sidebar)."""
     _render_sidebar_logo()
     _render_settings_internal(
         file_uploader_callback,
@@ -67,7 +63,7 @@ def _render_settings_internal(
     current_file_name,
     available_models,
 ):
-    """사이드바의 설정 섹션 실제 렌더링 로직 (접근성 최적화 버전)"""
+    """Render the settings section logic (accessibility-optimized)."""
     safe_models = available_models if isinstance(available_models, list) else []
 
     # 1. 문서 업로드 섹션
@@ -88,7 +84,7 @@ def _render_settings_internal(
             st.caption(f"Current File: :green[{current_file_name}]")
 
     # 2. 고급 설정 (익스팬더)
-    with st.expander("🛠️ Settings", expanded=False):
+    with st.expander("Settings", expanded=False):
         # 모델 설정 그룹
         from core.model_loader import ModelManager
 
@@ -117,10 +113,10 @@ def _render_settings_internal(
         # 모델 새로고침 (Ollama에서 모델 목록 재조회)
         if (
             st.button(
-                "↻ 모델 새로고침",
+                "Refresh Models",
                 use_container_width=True,
                 type="primary",
-                help="Ollama에서 사용 가능한 모델 목록을 다시 불러옵니다.",
+                help="Refresh the list of models available in Ollama.",
                 key="refresh_models_btn",
                 disabled=is_generating,
             )
@@ -153,10 +149,10 @@ def _render_settings_internal(
         is_building = bool(SessionManager.get("is_building_rag", False))
         if (
             st.button(
-                "새 대화",
+                "New Chat",
                 use_container_width=True,
                 type="primary",
-                help="대화 내용만 초기화하고 문서는 유지합니다.",
+                help="Start a new chat, keeping the uploaded documents.",
                 key="new_chat_btn",
                 disabled=is_generating or is_building,
             )
@@ -169,32 +165,32 @@ def _render_settings_internal(
             "Reset All",
             use_container_width=True,
             type="secondary",
-            help="모든 대화와 데이터를 초기화합니다.",
+            help="Delete all conversations and data.",
             key="reset_btn",
             disabled=is_generating,
         ):
             _confirm_reset_all()
 
 
-@st.dialog("Reset All 확인")
+@st.dialog("Confirm Reset All")
 def _confirm_reset_all() -> None:
-    """Reset All 실행 전 확인 다이얼로그 (모듈 레벨 정의 — st.dialog 제약).
+    """Confirmation dialog before Reset All (module-level for st.dialog constraint).
 
-    파괴적 동작이므로 취소/확인 두 경로를 제공합니다.
-    취소 시 아무것도 수행하지 않고, 확인 시 전체 상태를 초기화합니다.
+    Since this is destructive, both cancel and confirm paths are provided.
+    Cancel does nothing; confirm resets all state.
     """
-    st.warning("모든 대화·데이터가 삭제됩니다. 계속할까요?")
+    st.warning("All conversations and data will be deleted. Continue?")
     col_cancel, col_confirm = st.columns(2)
     with col_cancel:
         if st.button(
-            "취소",
+            "Cancel",
             use_container_width=True,
             key="reset_confirm_cancel_btn",
         ):
             st.rerun()
     with col_confirm:
         if st.button(
-            "확인 삭제",
+            "Delete",
             use_container_width=True,
             type="primary",
             key="reset_confirm_btn",

@@ -26,6 +26,10 @@ from security.cache_security import (
     CacheIntegrityError,
     CacheTrustError,
 )
+from services.optimization.caching_optimizer import (
+    ObjectCache,
+    SyncCacheBridge,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -215,6 +219,17 @@ class VectorStoreCache:
         self.security_manager = get_security_manager()
         self._cache_invalid = False
 
+        # [R4/R9] 통합 객체 캐시 브릿지 — 파싱된 인메모리 객체(doc_splits/
+        # vector_store/bm25_retriever)를 SyncCacheBridge 로 감싼 ObjectCache 에
+        # 보관합니다. load/save 는 평범한 def(비동기 아님)이므로 await 할 수 없고,
+        # 호출부(pipeline_builder.py)도 동기 컨텍스트라 이벤트 루프 충돌을 피하려면
+        # SyncCacheBridge 가 필요합니다. 디스크 직렬화(pickle-free)는 그대로 유지.
+        self._object_cache: SyncCacheBridge = SyncCacheBridge(
+            ObjectCache[tuple[list[Document] | None, Any | None, Any | None]](
+                max_size=256, ttl_seconds=0.0
+            )
+        )
+
     def _get_cache_paths(self):
         cache_dir = self.cache_dir
         return (
@@ -246,6 +261,15 @@ class VectorStoreCache:
         embedder: Embeddings,
         resource_manager: Any | None = None,
     ) -> tuple[list[Document] | None, Any | None, Any | None]:
+        # [R4/R9] 통합 객체 캐시: 디스크에서 파싱된 인메모리 객체를 먼저 조회해
+        # 중복 파싱(특히 FAISS 인덱스 로드)을 방지합니다. 키는 캐시 디렉터리 경로
+        # (legacy 재지정 포함)로, 동일 파일/설정이면 동일 객체를 반환합니다.
+        object_cache_key = self.cache_dir
+        cached = self._object_cache.get_sync(object_cache_key)
+        if cached is not None:
+            logger.debug(f"[Cache] Unified object-cache hit: {object_cache_key}")
+            return cached
+
         if not all(
             os.path.exists(p)
             for p in [
@@ -378,7 +402,10 @@ class VectorStoreCache:
             bm25_retriever.k = RETRIEVER_CONFIG.get("search_kwargs", {}).get("k", 5)
 
             logger.info(f"RAG 캐시 안전 로드 완료 (Pickle-free): '{self.cache_dir}'")
-            return doc_splits, vector_store, bm25_retriever
+            result = (doc_splits, vector_store, bm25_retriever)
+            # [R4/R9] 파싱 완료된 객체를 통합 캐시에 보관 (동기 브릿지 경유).
+            self._object_cache.set_sync(object_cache_key, result)
+            return result
 
         except Exception as e:
             logger.warning(
@@ -481,9 +508,14 @@ class VectorStoreCache:
                     shutil.rmtree(staging_dir)
                 return
             self._cache_invalid = False
+            # [R4/R9] 디스크에 새로 쓴 상태와 인메모리 객체 캐시를 일치시킵니다.
+            # 파싱 객체는 새 disk 상태에서 load 시 재구성되므로 여기선 무효화.
+            self._object_cache.delete_sync(self.cache_dir)
             logger.info(f"[Cache] 벡터 캐시 저장 완료: {self.cache_dir}")
 
         except Exception as e:
             logger.error(f"캐시 저장 실패: {e}")
+            # 실패 시 잠재적 스테일 인메모리 객체 캐시도 정리.
+            self._object_cache.delete_sync(self.cache_dir)
             if os.path.exists(staging_dir):
                 shutil.rmtree(staging_dir)

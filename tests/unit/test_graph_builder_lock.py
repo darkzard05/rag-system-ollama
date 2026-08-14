@@ -65,3 +65,31 @@ async def test_concurrent_build_graph_compiles_exactly_once():
         "expected exactly one construction; the second caller must reuse the cached graph."
     )
     assert graph_a is graph_b
+
+
+@pytest.mark.asyncio
+async def test_invalidate_uses_unified_cache_roundtrip():
+    """invalidate → rebuild 가 통합 ObjectCache 를 통해 동작해야 한다 (R8/R13 폴드)."""
+    from core.graph_builder import _GRAPH_CACHE_KEY, _graph_object_cache
+
+    gb.invalidate_graph_cache()
+    graph = await gb.build_graph()
+    entry = await _graph_object_cache.get(_GRAPH_CACHE_KEY)
+    assert entry is not None
+    assert entry.compiled is graph
+
+    # 단일 전역 락은 매 호출 동일 객체를 반환한다.
+    lock1 = gb._graph_cache.get_lock()
+    lock2 = gb._graph_cache.get_lock()
+    assert lock1 is lock2
+
+    # 무효화 후 통합 캐시 항목이 사라지고 재빌드로 복구된다.
+    gb.invalidate_graph_cache()
+    assert await _graph_object_cache.get(_GRAPH_CACHE_KEY) is None
+
+    graph2 = await gb.build_graph()
+    entry2 = await _graph_object_cache.get(_GRAPH_CACHE_KEY)
+    assert entry2 is not None
+    assert entry2.compiled is graph2
+
+    gb.invalidate_graph_cache()

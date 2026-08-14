@@ -95,7 +95,7 @@ class TestModelSwapBackgroundDispatch(unittest.TestCase):
             SessionManager.get("is_swapping_model", session_id="test_session") is False
         )
         logs = SessionManager.get("status_logs", [], session_id="test_session") or []
-        assert any("교체 완료" in log for log in logs)
+        assert any("Inference model switched" in log for log in logs)
 
 
 if __name__ == "__main__":

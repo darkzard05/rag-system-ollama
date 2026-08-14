@@ -7,7 +7,9 @@ import asyncio
 import copy
 import logging
 import re
+import threading
 import time
+from dataclasses import dataclass
 from typing import Any
 
 from langchain_core.callbacks.manager import adispatch_custom_event
@@ -28,6 +30,7 @@ from common.config import (
 from common.utils import count_tokens_rough, fast_hash
 from core.model_loader import ModelManager
 from core.session import SessionManager
+from services.optimization.caching_optimizer import ObjectCache
 
 logger = logging.getLogger(__name__)
 
@@ -44,41 +47,110 @@ def _get_session_id(config: RunnableConfig | None = None) -> str:
     return SessionManager.get_session_id()
 
 
+@dataclass
+class _CompiledGraphEntry:
+    """통합 캐시에 보관되는 단일 그래프 항목 (컴파일 결과 + 체크포인터)."""
+
+    compiled: Any = None
+    checkpointer: Any = None
+
+
+# 통합 캐시(ObjectCache)에 보관되는 항목의 키 — 프로세스 전역 단일 항목.
+_GRAPH_CACHE_KEY = "compiled_graph"
+
+# 통합 캐시 백엔드 — 컴파일된 그래프/체크포인터를 인메모리 객체로 보관.
+# R8/R13: 이 백엔드는 LRU/제거/TTL 부속만 담당하며, 동시 빌드 보호는
+# _GraphCache 프록시가 보유한 단일 asyncio.Lock + 이중 확인이 전담한다.
+_graph_object_cache: ObjectCache[_CompiledGraphEntry] = ObjectCache[
+    _CompiledGraphEntry
+](max_size=1, ttl_seconds=0.0)
+
+
+# ObjectCache는 async API이므로, 동기 호출 경로(테스트/삭제 콜백)에서는
+# 전용 백그라운드 루프에서 run_coroutine_threadsafe로 구동한다
+# (engine_cache.py의 SyncCacheBridge 대체 패턴과 동일).
+_graph_cache_loop: asyncio.AbstractEventLoop | None = None
+_graph_cache_loop_lock = threading.Lock()
+
+
+def _get_graph_cache_loop() -> asyncio.AbstractEventLoop:
+    """그래프 캐시 전용 백그라운드 이벤트 루프를 생성/반환 (lazy, once)."""
+    global _graph_cache_loop
+    with _graph_cache_loop_lock:
+        if _graph_cache_loop is not None and not _graph_cache_loop.is_closed():
+            return _graph_cache_loop
+
+        loop = asyncio.new_event_loop()
+
+        def _run() -> None:
+            asyncio.set_event_loop(loop)
+            loop.run_forever()
+
+        thread = threading.Thread(
+            target=_run, name="GraphCache-ObjectCache", daemon=True
+        )
+        thread.start()
+        _graph_cache_loop = loop
+        return loop
+
+
+def _run_graph_cache_coro(coro: Any) -> Any:
+    """전용 루프에서 async ObjectCache 코루틴을 동기적으로 완료."""
+    loop = _get_graph_cache_loop()
+    future = asyncio.run_coroutine_threadsafe(coro, loop)
+    return future.result()
+
+
 class _GraphCache:
-    """컴파일된 그래프, 체크포인터, 빌드 락을 안전하게 캡슐화합니다."""
+    """컴파일된 그래프, 체크포인터, 빌드 락을 안전하게 캡슐화하는 프록시.
+
+    실제 항목은 통합 캐시(_graph_object_cache: ObjectCache)에 보관되며,
+    본 프록시는 (1) 단일 전역 asyncio.Lock + 이중 확인 불변식을 보유하고,
+    (2) 테스트/삭제 콜백이 직접 찌르는 동기 surface
+    (.compiled/.checkpointer/.get_lock())를 노출한다.
+    """
 
     def __init__(self) -> None:
-        self._compiled: Any = None
-        self._checkpointer: Any = None
         self._lock: asyncio.Lock | None = None
 
     def get_lock(self) -> asyncio.Lock:
-        """지연 초기화된 그래프 빌드 락을 반환합니다."""
+        """지연 초기화된 단일 그래프 빌드 락을 반환합니다 (매 호출 동일 객체)."""
         if self._lock is None:
             self._lock = asyncio.Lock()
         return self._lock
 
+    def _get_entry(self) -> _CompiledGraphEntry | None:
+        return _run_graph_cache_coro(_graph_object_cache.get(_GRAPH_CACHE_KEY))
+
+    def _set_entry(self, entry: _CompiledGraphEntry) -> None:
+        _run_graph_cache_coro(_graph_object_cache.set(_GRAPH_CACHE_KEY, entry))
+
     @property
     def compiled(self) -> Any:
-        return self._compiled
+        entry = self._get_entry()
+        return entry.compiled if entry is not None else None
 
     @compiled.setter
     def compiled(self, value: Any) -> None:
-        self._compiled = value
+        entry = self._get_entry() or _CompiledGraphEntry()
+        entry.compiled = value
+        self._set_entry(entry)
 
     @property
     def checkpointer(self) -> Any:
         """그래프에 연결된 체크포인터(saver)를 반환합니다."""
-        return self._checkpointer
+        entry = self._get_entry()
+        return entry.checkpointer if entry is not None else None
 
     @checkpointer.setter
     def checkpointer(self, value: Any) -> None:
-        self._checkpointer = value
+        entry = self._get_entry() or _CompiledGraphEntry()
+        entry.checkpointer = value
+        self._set_entry(entry)
 
     def invalidate(self) -> None:
         """컴파일된 그래프를 무효화하여 다음 build_graph() 호출 시 재컴파일합니다."""
-        self._compiled = None
-        self._checkpointer = None
+        _run_graph_cache_coro(_graph_object_cache.delete(_GRAPH_CACHE_KEY))
 
 
 _graph_cache = _GraphCache()
@@ -224,7 +296,8 @@ async def retrieve_and_rerank(
             f"[RAG] [RETRIEVE] 재구성된 쿼리 사용: '{query}' (Retry: {get_state_attr(state, 'retry_count')})"
         )
         SessionManager.add_status_log(
-            f"재구성된 쿼리로 검색 시도: {query}", session_id=_get_session_id(config)
+            f"Retrying search with rewritten query: {query}",
+            session_id=_get_session_id(config),
         )
     else:
         logger.info(f"[RAG] [RETRIEVE] 원본 쿼리 기반 검색 시작: '{query}'")
@@ -233,10 +306,12 @@ async def retrieve_and_rerank(
 
     if writer is not None:
         await adispatch_custom_event(
-            "graph_status", {"status": "관련 지식 탐색 중..."}, config=config
+            "graph_status",
+            {"status": "Searching for relevant knowledge..."},
+            config=config,
         )
     SessionManager.add_status_log(
-        f"지식 탐색 중: {query}", session_id=_get_session_id(config)
+        f"Searching knowledge base: {query}", session_id=_get_session_id(config)
     )
 
     bm25 = cfg.get("bm25_retriever")
@@ -364,7 +439,7 @@ async def retrieve_and_rerank(
             f"[RAG] [RETRIEVE] 검색 결과가 전혀 없습니다 (Query Length: {q_len})"
         )
         SessionManager.add_status_log(
-            "검색된 문서가 없습니다.", session_id=_get_session_id(config)
+            "No documents found.", session_id=_get_session_id(config)
         )
         return {"relevant_docs": []}
 
@@ -494,7 +569,7 @@ async def grade_documents(
             f"[RAG] [GRADE] Short-circuit 활성화 (Max Rerank Score: {max_rerank_score:.3f} >= {min_score_to_skip})"
         )
         SessionManager.add_status_log(
-            "신뢰도 높은 지식이 발견되어 즉시 답변 생성을 시작합니다.",
+            "High-confidence knowledge found. Generating the answer now.",
             session_id=_get_session_id(config),
         )
         grade_ms = (time.perf_counter() - grade_start) * 1000
@@ -510,7 +585,7 @@ async def grade_documents(
 
     if writer is not None:
         await adispatch_custom_event(
-            "graph_status", {"status": "문서 관련성 검증 중..."}, config=config
+            "graph_status", {"status": "Verifying document relevance..."}, config=config
         )
 
     test_docs = docs[: int(GRADING_CONFIG.get("grade_top_n", 3))]
@@ -694,11 +769,13 @@ async def generate(
     cfg = config.get("configurable", {})
     llm = cfg.get("llm")
     if not llm:
-        return {"response": "LLM 미로드"}
+        return {"response": "LLM not loaded"}
 
     if writer is not None:
         await adispatch_custom_event(
-            "graph_status", {"status": "답변 논리 설계 및 생성 중..."}, config=config
+            "graph_status",
+            {"status": "Designing and generating the answer..."},
+            config=config,
         )
     # R1a-08: generate 진입 상태 로그는 단일 호출당 1회만 기록한다.
     # SessionManager.add_status_log(manager.py:381-382)가 연속 동일 로그를 중복 제거하므로

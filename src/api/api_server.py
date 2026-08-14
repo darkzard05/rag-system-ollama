@@ -44,6 +44,7 @@ from common.constants import FilePathConstants
 from common.exceptions import PDFProcessingError
 from core.document_processor import compute_file_hash
 from core.rag_core import RAGSystem
+from core.resource_manager import get_resource_manager
 from core.session import SessionManager
 from security.auth_system import AuthenticationManager
 
@@ -277,50 +278,6 @@ async def logout(
     return {"message": "로그아웃되었습니다."}
 
 
-# --- 싱글톤 리소스 관리 (중앙 ModelManager 위임) ---
-class RAGResourceManager:
-    @classmethod
-    async def get_llm(cls, model_name: str | None = None, session_id: str = "default"):
-        current_model = SessionManager.get("last_selected_model", session_id=session_id)
-        target_model = model_name or current_model or DEFAULT_OLLAMA_MODEL
-
-        # [최적화] 세션별 모델 전환 로그
-        if current_model and current_model != target_model:
-            logger.info(
-                f"[MODEL] [SWITCH] LLM 전환 (Session: {session_id}) | {current_model} -> {target_model}"
-            )
-
-        # [최적화] ModelManager의 비동기 메서드 직접 호출 (스레드 전환 오버헤드 제거)
-        from core.model_loader import ModelManager
-
-        llm = await ModelManager.get_llm(target_model)
-        SessionManager.set("last_selected_model", target_model, session_id=session_id)
-        return llm
-
-    @classmethod
-    async def get_embedder(
-        cls, model_name: str | None = None, session_id: str = "default"
-    ):
-        current_embedder = SessionManager.get(
-            "last_selected_embedding_model", session_id=session_id
-        )
-        target_model = model_name or current_embedder or AVAILABLE_EMBEDDING_MODELS[0]
-
-        if current_embedder and current_embedder != target_model:
-            logger.info(
-                f"[MODEL] [SWITCH] 임베딩 모델 전환 (Session: {session_id}) | {current_embedder} -> {target_model}"
-            )
-
-        from core.model_loader import ModelManager
-
-        embedder = await ModelManager.get_embedder(target_model)
-
-        SessionManager.set(
-            "last_selected_embedding_model", target_model, session_id=session_id
-        )
-        return embedder
-
-
 # --- 세션 격리 의존성 ---
 async def get_session_context(x_session_id: str | None = Header(None)) -> str:
     """헤더에서 세션 ID를 추출하고 컨텍스트를 고정합니다."""
@@ -451,8 +408,8 @@ async def upload_document(
         persisted_path.write_bytes(content)
 
         # [수정] 동적으로 결정된 임베딩 모델 사용 (모델 로딩은 무거우므로 스레드 유지)
-        embedder = await RAGResourceManager.get_embedder(
-            embedding_model, session_id=session_id
+        embedder = await get_resource_manager().get_embedder_for_session(
+            session_id, embedding_model
         )
 
         # [중요] RAGSystem 클래스를 통해 세션 격리 보장

@@ -16,6 +16,13 @@ from pathlib import Path
 
 import streamlit as st
 
+from ui.widget_keys import CSS_INJECTED_KEY
+
+# Header height fallback, shared by the JS probe (ui.py) and the CSS contract
+# (main.css --header-h) so the two never drift (C5). 60px == 3.75rem.
+HEADER_H_FALLBACK_PX: int = 60
+HEADER_H_FALLBACK_REM: str = "3.75rem"
+
 _COLUMN_RATIO: list[int] = [42, 58]
 
 
@@ -25,28 +32,31 @@ def inject_header_height_script() -> None:
     Uses window.parent.document to reach the parent page from the iframe,
     bypassing Streamlit's innerHTML sanitization on st.markdown.
     """
-    import streamlit.components.v1 as components
-
-    # deprecated but functional; st.html sandbox blocks parent-frame access — see p1_sthtml_verdict.md
-    components.html(
-        """
+    # st.iframe embeds the HTML in an iframe with same-origin access and JS
+    # execution — required here because the script reaches window.parent.document
+    # (st.html's sandbox would block that). The content is a <script> only, so
+    # height="content" auto-measures to ~0px (effectively invisible), matching
+    # the old components.html(height=0). Plain string (not f-string): the JS is
+    # heavily braced. Inject the single
+    # fallback value via replace so JS braces stay literal.
+    js = """
         <script>
         try {
             const doc = window.parent.document;
-            // Pass-1 fail-safe: apply the 60px fallback before the header even exists.
-            doc.documentElement.style.setProperty('--header-h', '3.75rem');
+            // Pass-1 fail-safe: apply the fallback before the header even exists.
+            doc.documentElement.style.setProperty('--header-h', '__HEADER_H_FALLBACK__');
             const header = doc.querySelector('[data-testid="stHeader"]');
             if (header) {
                 const h = header.offsetHeight;
                 doc.documentElement.style.setProperty('--header-h', h + 'px');
             }
             window.addEventListener('resize', () => {
-                const h2 = doc.querySelector('[data-testid="stHeader"]')?.offsetHeight || 60;
+                const h2 = doc.querySelector('[data-testid="stHeader"]')?.offsetHeight || __HEADER_H_FALLBACK_PX__;
                 doc.documentElement.style.setProperty('--header-h', h2 + 'px');
             });
             if (window.visualViewport) {
                 window.visualViewport.addEventListener('resize', () => {
-                    const h3 = doc.querySelector('[data-testid="stHeader"]')?.offsetHeight || 60;
+                    const h3 = doc.querySelector('[data-testid="stHeader"]')?.offsetHeight || __HEADER_H_FALLBACK_PX__;
                     doc.documentElement.style.setProperty('--header-h', h3 + 'px');
                 });
             }
@@ -54,9 +64,10 @@ def inject_header_height_script() -> None:
             // Best-effort: layout defaults remain intact if the parent frame is unreachable.
         }
         </script>
-        """,
-        height=0,
+        """.replace("__HEADER_H_FALLBACK__", HEADER_H_FALLBACK_REM).replace(
+        "__HEADER_H_FALLBACK_PX__", str(HEADER_H_FALLBACK_PX)
     )
+    st.iframe(js, height="content")
 
 
 @st.cache_data(show_spinner=False)
@@ -66,9 +77,9 @@ def _load_css() -> str:
 
 
 def inject_custom_css() -> None:
-    if "css_script_injected" not in st.session_state:
+    if CSS_INJECTED_KEY not in st.session_state:
         inject_header_height_script()  # 세션당 1회만 주입 (리스너는 부모 window에 유지)
-        st.session_state.css_script_injected = True
+        st.session_state[CSS_INJECTED_KEY] = True
     try:
         css_content = _load_css()
         st.markdown(f"<style>{css_content}</style>", unsafe_allow_html=True)
