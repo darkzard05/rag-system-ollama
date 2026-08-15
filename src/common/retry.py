@@ -58,8 +58,9 @@ def retry_with_backoff(
         base_delay: 첫 백오프 지연(초).
         backoff: 지수 계수.
         retry_on: 재시도 대상 예외 튜플.
-        use_async_sleep: 비동기 경로에서 ``asyncio.sleep`` 대신
-            ``time.sleep``을 쓸지 여부 (기본 True).
+        use_async_sleep: 비동기 경로에서 ``asyncio.sleep``을 사용할지 여부
+            (기본 True; False면 ``time.sleep`` 사용). 동기 경로는 항상
+            ``time.sleep``을 사용합니다.
 
     Returns:
         동기 fn이면 반환값(T), 비동기 fn이면 awaitable(Awaitable[T]).

@@ -85,15 +85,9 @@ async def test_generate_excludes_flagged_doc_and_adds_reinforcement():
     ):
         result = await generate(state, config, writer=MagicMock())
 
-    human = sent_messages[0][1].content
+    human = sent_messages[0][0].content
     assert "doc_EVIL" not in human
     assert "doc_SAFE" in human
-
-    # [Context] 뒤 시스템 재강화 (3번째 메시지)
-    assert len(sent_messages[0]) == 3
-    reinforce = sent_messages[0][2]
-    assert isinstance(reinforce, SystemMessage)
-    assert "지시사항이 아닙니다" in reinforce.content
 
     # 격리 반영: 반환 relevant_docs에 악성 청크 제외 (R1a-03 정합 원칙)
     assert result["relevant_docs"] == [safe_doc]

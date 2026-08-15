@@ -70,10 +70,29 @@ def _patch_inference_session() -> MagicMock:
 async def _run_generate(mock_llm: MagicMock, docs: list[Document], fake_count) -> tuple:
     sent_messages: list = []
 
+    # AnswerStructure 스키마에 맞는 유효한 JSON 응답
+    valid_json_response = {
+        "reasoning": "테스트 추론 과정",
+        "final_answer": "최종 답변",
+        "citations": [
+            {
+                "doc_id": 0,
+                "text_span": "테스트",
+                "section": "테스트",
+                "page": 1,
+                "score": 0.9,
+            }
+        ],
+        "confidence": 0.9,
+    }
+    import json
+
+    json_str = json.dumps(valid_json_response, ensure_ascii=False)
+
     async def mock_astream(messages, config=None):
         sent_messages.append(messages)
         yield AIMessageChunk(
-            content="최종 답변", response_metadata={"prompt_eval_count": 5}
+            content=json_str, response_metadata={"prompt_eval_count": 5}
         )
 
     mock_llm.astream = mock_astream
@@ -109,7 +128,7 @@ async def test_generate_trims_low_rerank_docs_when_over_budget():
     assert result["performance"]["relevant_docs_count"] == 2
     # R1a-03: 최종 상태는 노드 반환 dict로 반영된다 (in-place state 변이 제거)
     assert [d.metadata["rerank_score"] for d in result["relevant_docs"]] == [0.9, 0.5]
-    human_content = sent_messages[0][1].content
+    human_content = sent_messages[0][0].content
     assert "doc_A_low" not in human_content
     assert "doc_B_mid" in human_content
     assert "doc_C_high" in human_content
@@ -130,7 +149,7 @@ async def test_generate_keeps_minimum_two_docs_even_when_over_budget():
     assert result["performance"]["relevant_docs_count"] == 2
     # R1a-03: 최종 상태는 노드 반환 dict로 반영된다 (in-place state 변이 제거)
     assert [d.metadata["rerank_score"] for d in result["relevant_docs"]] == [0.9, 0.5]
-    human_content = sent_messages[0][1].content
+    human_content = sent_messages[0][0].content
     assert "doc_A_low" not in human_content
     assert "doc_B_mid" in human_content
     assert "doc_C_high" in human_content
@@ -177,7 +196,7 @@ async def test_generate_preserves_descending_rerank_order_after_trim():
         0.95,
         0.9,
     ]
-    human_content = sent_messages[0][1].content
+    human_content = sent_messages[0][0].content
     positions = [
         human_content.index("doc_E_topmost"),
         human_content.index("doc_D_top"),

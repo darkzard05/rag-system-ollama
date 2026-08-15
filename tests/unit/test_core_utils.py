@@ -94,7 +94,7 @@ def test_apply_tooltips_to_response_empty_inputs():
 
 def test_apply_tooltips_to_response_no_page_metadata():
     doc = Document(page_content="Test content", metadata={})
-    # [수정] 인용구 패턴 [1]에서 페이지 1을 추출하므로, 문서에 해당 페이지가 없더라도 
+    # [수정] 인용구 패턴 [1]에서 페이지 1을 추출하므로, 문서에 해당 페이지가 없더라도
     # 기본 메시지와 함께 툴팁 태그로 감싸집니다.
     result = apply_tooltips_to_response("[1]", [doc])
     assert "citation-highlight" in result
@@ -119,3 +119,20 @@ def test_normalize_latex_delimiters():
     assert normalize_latex_delimiters(r"\[y = ax + b\]") == "$$y = ax + b$$"
     # 중복 방지
     assert normalize_latex_delimiters("$x$") == "$x$"
+
+
+def test_normalize_latex_preserves_fenced_code_block():
+    result = normalize_latex_delimiters("```\n\\[x^2\\]\n```")
+    assert "$$" not in result
+    assert "\\[x^2\\]" in result
+
+
+def test_normalize_latex_preserves_inline_code():
+    result = normalize_latex_delimiters("inline `\\(a\\)` text")
+    assert "\\(a\\)" in result
+    assert "$" not in result
+
+
+def test_normalize_latex_converts_outside_code():
+    result = normalize_latex_delimiters("before \\[y=ax\\] after")
+    assert "$$y=ax$$" in result
