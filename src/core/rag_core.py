@@ -17,6 +17,7 @@ from cache.engine_cache import EngineCacheManager
 from common.circuit_breaker import get_circuit_breaker_registry
 from common.exceptions import VectorStoreError
 from common.retry import retry_stream
+from common.utils import fast_hash
 from core.document_hydrator import hydrate_documents
 from core.pipeline_builder import PipelineBuilder, prepare_query_config_or_build
 from core.resource_manager import get_resource_manager
@@ -52,6 +53,28 @@ def _log_hydration_task_failure(task: asyncio.Task[Any]) -> None:
     exc = task.exception()
     if exc is not None:
         logger.error(f"[RAG] 문서 하이드레이션 실패: {exc}")
+
+
+def _dedup_docs(docs: list, seen: set[str]) -> list:
+    """rewrite 루프 재실행 시 중복 도착 문서를 제거합니다.
+
+    `seen`은 호출자(_consumer)가 소유하며 호출 간 유지됩니다.
+    안정 키는 doc_id 메타데이터 우선, 없으면 page_content 해시로 계산합니다.
+    """
+    kept: list = []
+    for _d in docs:
+        _meta = getattr(_d, "metadata", None) or {}
+        _content = getattr(_d, "page_content", "") or ""
+        _key = (
+            str(_meta.get("doc_id"))
+            if _meta.get("doc_id") is not None
+            else fast_hash(_content)
+        )
+        if _key in seen:
+            continue
+        seen.add(_key)
+        kept.append(_d)
+    return kept
 
 
 class RAGSystem:
@@ -150,6 +173,7 @@ class RAGSystem:
             # rewrite 루프가 retrieve 노드를 재실행하면 청크가 2회 발생하므로
             # 단일 변수가 아닌 리스트로 보관해 모든 하이드레이션 태스크를 유지한다.
             hydration_tasks: list[asyncio.Task[Any]] = []
+            seen_doc_keys: set[str] = set()
             try:
 
                 async def _event_factory():
@@ -185,9 +209,15 @@ class RAGSystem:
                             if isinstance(chunk, dict) and "retrieve" in chunk:
                                 docs = chunk["retrieve"].get("relevant_docs", [])
                                 if docs:
-                                    task = asyncio.create_task(hydrate_documents(docs))
-                                    task.add_done_callback(_log_hydration_task_failure)
-                                    hydration_tasks.append(task)
+                                    new_docs = _dedup_docs(docs, seen_doc_keys)
+                                    if new_docs:
+                                        task = asyncio.create_task(
+                                            hydrate_documents(new_docs)
+                                        )
+                                        task.add_done_callback(
+                                            _log_hydration_task_failure
+                                        )
+                                        hydration_tasks.append(task)
                             yield ("updates", chunk)
             except Exception as e:
                 logger.error(f"[RAG] 스트림 에러: {e}", exc_info=True)

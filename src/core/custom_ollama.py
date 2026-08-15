@@ -60,10 +60,13 @@ class DeepThinkingChatOllama(ChatOllama):
                     continue
 
                 b_type = block.get("type")
-                if b_type == "reasoning":
-                    thought += str(block.get("reasoning") or "")
-                elif b_type == "thought":  # 일부 모델 변종 대응
-                    thought += str(block.get("thought") or "")
+                if b_type in ["reasoning", "thought", "thinking"]:
+                    thought += str(
+                        block.get("reasoning")
+                        or block.get("thought")
+                        or block.get("thinking")
+                        or ""
+                    )
                 elif b_type == "text":
                     content += str(block.get("text") or "")
 

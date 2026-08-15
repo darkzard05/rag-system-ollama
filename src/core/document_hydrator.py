@@ -106,6 +106,11 @@ async def hydrate_documents(docs: list[Document]) -> None:
                         coords = await asyncio.to_thread(
                             _extract_page_words_sync, path, page_num, chunk_bbox
                         )
+                        # Fallback: bbox-scoped extract failed -> retry whole page
+                        if not coords and chunk_bbox is not None:
+                            coords = await asyncio.to_thread(
+                                _extract_page_words_sync, path, page_num, None
+                            )
                         if coords:
                             await coord_cache.save_coords(file_hash, page_num, coords)
 
@@ -116,3 +121,8 @@ async def hydrate_documents(docs: list[Document]) -> None:
                 if page_coords:
                     # 첫 페이지 좌표 (하위 호환)
                     doc.metadata["word_coords"] = page_coords[min(page_coords)]
+                else:
+                    # 좌표 추출 실패 시에도 인용 row(페이지 번호)를 유지해
+                    # UI에서 페이지 점프만이라도 가능하게 한다 (크래시 방지).
+                    doc.metadata.setdefault("citation_pages", pages)
+                    doc.metadata["coord_extract_failed"] = True
