@@ -4,11 +4,50 @@ Session Management (Reliable Sync)
 
 UI 스레드와 비동기 스레드 간의 완벽한 데이터 공유를 위해
 전역 폴백 저장소를 주 데이터원으로 사용합니다.
+
+Concurrency contract
+--------------------
+The store is a single global dict-of-dicts (`_fallback_sessions`) guarded by
+two locks with a strict ownership split:
+
+- `_map_lock` (a single shared `threading.Lock`) protects ONLY the container
+  structure of `_fallback_sessions` and `_session_locks`: creating a session's
+  state lazily (`_get_state`), creating a per-session lock lazily
+  (`_acquire_lock`), session eviction (`_evict_oldest_session_locked`), and the
+  bulk teardown (`reset`). It never guards the *contents* of an individual
+  session's state dict.
+
+- Each session owns a dedicated `threading.Lock` (created lazily in
+  `_acquire_lock` and stored in `_session_locks`). EVERY read-modify-write on a
+  session's state takes this per-session lock for the ENTIRE operation:
+  `set`, `get` (when `create=True`, and the non-creating read path),
+  `add_message`, `add_status_log`, `replace_last_status_log`,
+  `reset_conversation`, `delete`, and the dirty-key snapshot in
+  `sync_to_streamlit`. The per-session lock is always acquired BEFORE
+  `_map_lock` (via `_get_state`), so the lock ordering is consistent and
+  deadlock-free.
+
+Read/write ownership:
+- Writes to a session's state dict (and its nested mutable lists `messages`,
+  `status_logs`, `doc_pool`, `_dirty_keys`) happen ONLY while holding that
+  session's per-session lock. The lists are mutated in place; callers must not
+  retain and mutate a reference across lock boundaries.
+- Reads of a single key are atomic because `get` holds the per-session lock for
+  the whole read. Cross-session reads never touch another session's lock.
+
+Cross-thread safety (RAGSystem async + UI): because every access to a given
+session is serialized by that session's per-session lock regardless of which
+thread/async task performs it, the same `session_id` accessed concurrently from
+the `RAGSystem` worker and the Streamlit/UI thread cannot corrupt state or
+observe a torn update. The UI mirror (`sync_to_streamlit`) snapshots
+`_dirty_keys` and the referenced values while holding the per-session lock, so
+the partial-read / shared-alias / TOCTOU problems are excluded by
+construction. The optional `_ui_sync` adapter is only invoked AFTER the lock is
+released, so the UI layer never participates in the locked critical section.
 """
 
 from __future__ import annotations
 
-import copy
 import logging
 import os
 import threading
@@ -16,12 +55,16 @@ import time
 import uuid
 from collections.abc import Set
 from contextvars import ContextVar
-from typing import Any
-
-import streamlit as st
+from typing import TYPE_CHECKING, Any
 
 from common.constants import MAX_MESSAGE_HISTORY
 from common.retry import retry_with_backoff
+
+if TYPE_CHECKING:
+    # Type-only import: never executed at runtime, so core stays free of any
+    # streamlit import. SessionManager.set_ui_sync accepts the UI-sync adapter
+    # protocol implemented by ui.session_sync.StreamlitSessionSync.
+    from ui.session_sync import StreamlitSessionSync
 
 logger = logging.getLogger(__name__)
 _session_id_var: ContextVar[str] = ContextVar("session_id", default="default")
@@ -72,6 +115,17 @@ class SessionManager:
     _fallback_sessions: dict[str, dict[str, Any]] = {}
     _session_locks: dict[str, threading.Lock] = {}
     _map_lock = threading.Lock()
+
+    # Pluggable UI-sync adapter. When installed (via set_ui_sync), session state
+    # is mirrored into the live UI (e.g. Streamlit) without core importing any
+    # UI framework. None means "no UI layer attached" -> core uses only the
+    # global store. Tuned to the Adapter protocol: write(key, val) / read(key, default).
+    _ui_sync: StreamlitSessionSync | None = None
+
+    @classmethod
+    def set_ui_sync(cls, adapter: StreamlitSessionSync | None) -> None:
+        """Attach (or detach with None) the UI-sync adapter for this session layer."""
+        cls._ui_sync = adapter
 
     @classmethod
     def reset(cls) -> None:
@@ -235,16 +289,9 @@ class SessionManager:
         if not values:
             return
 
-        try:
+        if cls._ui_sync is not None:
             for k, val in values.items():
-                if isinstance(val, list):
-                    st.session_state[k] = val[:]
-                elif isinstance(val, dict):
-                    st.session_state[k] = copy.copy(val)
-                else:
-                    st.session_state[k] = val
-        except Exception as e:
-            logger.warning(f"[SESSION] Streamlit 동기화 중 오류: {e}")
+                cls._ui_sync.write(k, val)
 
     @classmethod
     def get(
@@ -258,7 +305,7 @@ class SessionManager:
 
         스레드 안전성: 세션별 락(_acquire_lock)을 전체 읽기 작업 동안
         유지하여 concurrent set()/add_message() 등으로부터 원자적 읽기를 보장합니다.
-        잠금 순서: _acquire_lock(sid) → _global_lock (add_message/add_status_log과 일관).
+        잠금 순서: _acquire_lock(sid) → _map_lock (add_message/add_status_log과 일관).
         """
         sid = session_id or cls.get_session_id()
 
@@ -280,7 +327,9 @@ class SessionManager:
                 from streamlit.runtime.scriptrunner import get_script_run_ctx
 
                 if get_script_run_ctx():
-                    return st.session_state.get(key, default)
+                    if cls._ui_sync is not None:
+                        return cls._ui_sync.read(key, default)
+                    return default
             except (ImportError, RuntimeError, AttributeError) as exc:
                 logger.debug(
                     "[SESSION] Streamlit 세션 상태 조회 실패, 폴백 사용: %s", exc

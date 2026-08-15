@@ -195,6 +195,13 @@ _init_temp_directory()
 _start_global_background_worker()
 _register_cleanup_handlers()
 
+# F1: attach the Streamlit UI-sync adapter so SessionManager can mirror state
+# into st.session_state without core importing streamlit.
+from core.session import SessionManager
+from ui.session_sync import StreamlitSessionSync
+
+SessionManager.set_ui_sync(StreamlitSessionSync())
+
 
 async def _bg_rebuild_task(
     session_id: str, file_path: str, file_name: str, embedder_name: str
