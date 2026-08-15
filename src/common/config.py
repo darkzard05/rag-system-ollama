@@ -58,45 +58,22 @@ OLLAMA_TEMPERATURE: float = _get_env(
     "OLLAMA_TEMPERATURE", _models_config.get("temperature", 0.1), float
 )
 OLLAMA_NUM_CTX: int = _get_env(
-    "OLLAMA_NUM_CTX", _models_config.get("num_ctx", 4096), int
+    "OLLAMA_NUM_CTX", _models_config.get("num_ctx", 8192), int
 )
 OLLAMA_TOP_P: float = _get_env("OLLAMA_TOP_P", _models_config.get("top_p", 0.8), float)
-OLLAMA_KEEP_ALIVE: str = _get_env(
-    "OLLAMA_KEEP_ALIVE", _models_config.get("keep_alive", "30m"), str
-)
 OLLAMA_THINKING: bool = _get_env(
     "OLLAMA_THINKING",
     _models_config.get("thinking", True),
     lambda x: str(x).lower() == "true",
 )
-
-MAX_CONCURRENT_INFERENCE: int = _get_env(
-    "MAX_CONCURRENT_INFERENCE", _models_config.get("max_concurrent_inference", 1), int
+OLLAMA_KEEP_ALIVE: str = _get_env(
+    "OLLAMA_KEEP_ALIVE",
+    _models_config.get("keep_alive", "30m"),
 )
-# Ollama HTTP 요청 및 추론 세마포어 획득 타임아웃 (초 단위). 0 이하 또는 None이면
-# 타임아웃을 적용하지 않는다.
-OLLAMA_TIMEOUT: float | None = _get_env(
-    "OLLAMA_TIMEOUT", _models_config.get("timeout", 120), float
+MODEL_CACHE_DIR: str = _get_env(
+    "MODEL_CACHE_DIR",
+    _models_config.get("cache_dir", ".model_cache"),
 )
-MAX_CACHED_MODELS: int = _get_env(
-    "MAX_CACHED_MODELS", _models_config.get("max_cached_models", 5), int
-)
-MAX_RESOURCE_POOL_SIZE: int = _get_env(
-    "MAX_RESOURCE_POOL_SIZE", _models_config.get("max_resource_pool_size", 10), int
-)
-MAX_RESOURCE_POOL_SIZE_BYTES: int = _get_env(
-    "MAX_RESOURCE_POOL_SIZE_BYTES",
-    _models_config.get("max_resource_pool_size_bytes", 2 * 1024 * 1024 * 1024),  # 2GB
-    int,
-)
-
-# --- 2. 임베딩 설정 (Embeddings) ---
-DEFAULT_EMBEDDING_MODEL: str = os.getenv(
-    "DEFAULT_EMBEDDING_MODEL",
-    _models_config.get("default_embedding", "nomic-embed-text-v2-moe"),
-)
-AVAILABLE_EMBEDDING_MODELS: list[str] = [DEFAULT_EMBEDDING_MODEL]
-CACHE_DIR: str = str(PROJECT_ROOT / _models_config.get("cache_dir", ".model_cache"))
 EMBEDDING_BATCH_SIZE: Union[int, str] = _get_env(
     "EMBEDDING_BATCH_SIZE",
     _models_config.get("embedding_batch_size", 16),
@@ -105,6 +82,36 @@ EMBEDDING_BATCH_SIZE: Union[int, str] = _get_env(
 EMBEDDING_DEVICE: str = _get_env(
     "EMBEDDING_DEVICE", _models_config.get("embedding_device", "auto")
 )
+MAX_CACHED_MODELS: int = _get_env(
+    "MAX_CACHED_MODELS", _models_config.get("max_cached_models", 5), int
+)
+MAX_CONCURRENT_INFERENCE: int = _get_env(
+    "MAX_CONCURRENT_INFERENCE", _models_config.get("max_concurrent_inference", 1), int
+)
+MAX_RESOURCE_POOL_SIZE: int = _get_env(
+    "MAX_RESOURCE_POOL_SIZE", _models_config.get("max_resource_pool_size", 5), int
+)
+MAX_RESOURCE_POOL_SIZE_BYTES: int = _get_env(
+    "MAX_RESOURCE_POOL_SIZE_BYTES",
+    _models_config.get("max_resource_pool_size_bytes", 536870912),
+    int,
+)
+OLLAMA_TIMEOUT: int = _get_env(
+    "OLLAMA_TIMEOUT", _models_config.get("timeout", 120), int
+)
+ENABLE_OLLAMA_PRESSURE_FALLBACK: bool = _get_env(
+    "ENABLE_OLLAMA_PRESSURE_FALLBACK",
+    _models_config.get("enable_ollama_pressure_fallback", True),
+    lambda x: str(x).lower() == "true",
+)
+
+# --- 2. 임베딩 설정 (Embeddings) ---
+_embedding_config = _config.get("embeddings", {})
+DEFAULT_EMBEDDING_MODEL: str = _get_env(
+    "DEFAULT_EMBEDDING_MODEL",
+    _embedding_config.get("default_embedding", "nomic-embed-text-v2-moe"),
+)
+AVAILABLE_EMBEDDING_MODELS: list[str] = [DEFAULT_EMBEDDING_MODEL]
 
 # --- 3. RAG 파이프라인 설정 (RAG) ---
 _rag_config = _config.get("rag", {})
@@ -138,9 +145,12 @@ VECTOR_STORE_CACHE_DIR: str = str(
 )
 
 # --- 5. 프롬프트 설정 (Prompts) ---
+# prompts 섹션은 config.yml의 rag.prompts 아래에 있음
+_rag_config = _config.get("rag", {})
 _prompts_config = _rag_config.get("prompts") or {}
 ANALYSIS_PROTOCOL: str = _prompts_config.get("analysis_protocol", "")
 GRADING_CONFIG: dict = _prompts_config.get("grading", {})
+PROMPT_TEMPLATES_CONFIG: dict = _prompts_config.get("prompt_templates", {})
 
 # --- 6. 보안 및 캐시 (Security & Global Cache) ---
 _cache_security_config = _config.get("cache_security", {})
@@ -176,26 +186,74 @@ ENABLE_VECTOR_CACHE: bool = _get_env(
     lambda x: str(x).lower() == "true",
 )
 
+# --- 6.5 평가 설정 (Evaluation) ---
+_evaluation_config = _config.get("evaluation", {})
+EVAL_JUDGE_MODEL: str = _get_env(
+    "EVAL_JUDGE_MODEL",
+    _evaluation_config.get("judge_model", "qwen3:4b-instruct-2507-q4_K_M"),
+)
+
 # --- 7. UI 메시지 (UI) ---
 _ui_config = _config.get("ui", {})
 
 _ui_streaming = _ui_config.get("streaming", {})
 UI_STREAMING_TIMEOUT: int = _ui_streaming.get("timeout_seconds", 30)
 
-UI_TIMELINE_POLL_SECONDS: float = float(_ui_config.get("timeline_poll_seconds", 1.0))
+UI_TIMELINE_POLL_SECONDS: float = _ui_config.get("timeline_poll_seconds", 0.5)
 
 _ui_messages = _ui_config.get("messages", {})
-MSG_PDF_VIEWER_NO_FILE = _ui_messages.get(
-    "pdf_viewer_no_file", "미리볼 PDF가 없습니다."
-)
 MSG_CHAT_GUIDE: str = _ui_messages.get("chat_guide", "PDF를 업로드한 후 질문해 보세요")
-_ui_errors = _ui_messages.get("errors", {})
-MSG_ERROR_OLLAMA_NOT_RUNNING = _ui_errors.get(
-    "ollama_not_running", "Ollama 서버 연결 실패"
+MSG_PDF_VIEWER_NO_FILE: str = _ui_messages.get(
+    "pdf_viewer_no_file", "No PDF to preview. Please upload a file from the sidebar."
 )
 
-# --- 8. 평가 (Evaluation) ---
-_eval_config = _config.get("evaluation", {})
-EVAL_JUDGE_MODEL: str = _get_env(
-    "EVAL_JUDGE_MODEL", _eval_config.get("judge_model", DEFAULT_OLLAMA_MODEL)
+MSG_ERROR_OLLAMA_NOT_RUNNING: str = _ui_config.get(
+    "error_ollama_not_running",
+    "Ollama 서버에 연결할 수 없습니다. 서버가 실행 중인지 확인해 주세요.",
 )
+
+MSG_ERROR_EMBEDDING_FAILED: str = _ui_config.get(
+    "error_embedding_failed",
+    "임베딩 생성에 실패했습니다. 모델 설정이나 입력을 확인해 주세요.",
+)
+
+MSG_ERROR_VECTOR_STORE_FAILED: str = _ui_config.get(
+    "error_vector_store_failed",
+    "벡터 저장소 작업에 실패했습니다. 캐시 디렉터리 권한을 확인해 주세요.",
+)
+
+MSG_ERROR_GENERIC: str = _ui_config.get(
+    "error_generic",
+    "알 수 없는 오류가 발생했습니다. 잠시 후 다시 시도해 주세요.",
+)
+
+MSG_ERROR_PARSE_FAILED: str = _ui_config.get(
+    "error_parse_failed",
+    "문서 파싱에 실패했습니다. 파일 형식을 확인해 주세요.",
+)
+
+# --- 8. 에러 메시지 (Errors) ---
+_error_config = _config.get("errors", {})
+MSG_ERROR_OLLAMA_NOT_RUNNING = _error_config.get(
+    "ollama_not_running", MSG_ERROR_OLLAMA_NOT_RUNNING
+)
+MSG_ERROR_EMBEDDING_FAILED = _error_config.get(
+    "embedding_failed", MSG_ERROR_EMBEDDING_FAILED
+)
+MSG_ERROR_VECTOR_STORE_FAILED = _error_config.get(
+    "vector_store_failed", MSG_ERROR_VECTOR_STORE_FAILED
+)
+MSG_ERROR_GENERIC = _error_config.get("generic", MSG_ERROR_GENERIC)
+MSG_ERROR_PARSE_FAILED = _error_config.get("parse_failed", MSG_ERROR_PARSE_FAILED)
+
+# --- 9. 검증 설정 (Verification) ---
+_verification_config = _config.get("verification", {})
+VERIFICATION_ENABLED: bool = _verification_config.get("enabled", False)
+VERIFICATION_SAMPLE_RATE: float = _verification_config.get("sample_rate", 0.1)
+
+# --- 10. 스트리밍 설정 (Streaming) ---
+_streaming_config = _config.get("streaming", {})
+STREAMING_COMPRESSION_ENABLED: bool = _streaming_config.get("compression", {}).get(
+    "enabled", False
+)
+STREAMING_FLUSH_INTERVAL_MS: int = _streaming_config.get("flush_interval_ms", 50)

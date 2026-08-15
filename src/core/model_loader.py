@@ -19,11 +19,12 @@ if TYPE_CHECKING:
 import contextlib
 
 from common.config import (
-    CACHE_DIR,
     DEFAULT_EMBEDDING_MODEL,
     EMBEDDING_DEVICE,
+    ENABLE_OLLAMA_PRESSURE_FALLBACK,
     MAX_CACHED_MODELS,
     MAX_CONCURRENT_INFERENCE,
+    MODEL_CACHE_DIR,
     MSG_ERROR_OLLAMA_NOT_RUNNING,
     OLLAMA_BASE_URL,
     OLLAMA_KEEP_ALIVE,
@@ -35,6 +36,10 @@ from common.config import (
     OLLAMA_TOP_P,
 )
 from common.exceptions import EmbeddingModelError
+from common.system_pressure import (
+    host_pressure_exceeded,
+    ollama_backend_active,
+)
 from services.monitoring.performance_monitor import (
     OperationType,
     get_performance_monitor,
@@ -97,7 +102,6 @@ class ModelManager:
     def get_filtered_models(cls, available_models: list[str]) -> dict[str, list[str]]:
         """모델 목록을 LLM과 임베딩 모델로 분류하여 반환합니다."""
         from common.config import (
-            AVAILABLE_EMBEDDING_MODELS,
             DEFAULT_EMBEDDING_MODEL,
             DEFAULT_OLLAMA_MODEL,
         )
@@ -108,15 +112,16 @@ class ModelManager:
         embedding_candidates = [
             m for m in safe_models if any(kw in str(m).lower() for kw in embed_keywords)
         ]
-        actual_embeddings = sorted(
-            set(AVAILABLE_EMBEDDING_MODELS + embedding_candidates)
-        )
+        actual_embeddings = sorted(set(embedding_candidates))
         if DEFAULT_EMBEDDING_MODEL not in actual_embeddings:
             actual_embeddings.append(DEFAULT_EMBEDDING_MODEL)
         actual_embeddings.sort()
 
         llm_candidates = [m for m in safe_models if m not in embedding_candidates]
-        actual_llms = llm_candidates if llm_candidates else [DEFAULT_OLLAMA_MODEL]
+        # 중복 제거
+        actual_llms = (
+            sorted(set(llm_candidates)) if llm_candidates else [DEFAULT_OLLAMA_MODEL]
+        )
         if DEFAULT_OLLAMA_MODEL not in actual_llms:
             actual_llms.append(DEFAULT_OLLAMA_MODEL)
         actual_llms.sort()
@@ -209,7 +214,20 @@ class ModelManager:
             except Exception as e:
                 logger.debug(f"VRAM 체크 실패 (무시): {e}")
 
-        # 2. 시스템 RAM 체크 (폴백)
+        # 2. Ollama 압력 폴백 (torch.cuda 미사용 기본 배포)
+        if (
+            ENABLE_OLLAMA_PRESSURE_FALLBACK
+            and ollama_backend_active()
+            and host_pressure_exceeded(threshold=90.0)
+        ):
+            logger.warning(
+                "[ModelManager] 호스트 RAM 압박 감지 (Ollama 폴백, >90%). "
+                "자원 방출을 시작합니다."
+            )
+            await cls._evict_oldest_model()
+            return True
+
+        # 3. 시스템 RAM 체크 (폴백)
         _psutil = _get_psutil()
         if _psutil:
             mem = _psutil.virtual_memory()
@@ -473,7 +491,7 @@ def load_embedding_model(
                 model_name=model_key,
                 model_kwargs=model_kwargs,
                 encode_kwargs=encode_kwargs,
-                cache_folder=CACHE_DIR,
+                cache_folder=MODEL_CACHE_DIR,
             )
 
             logger.info(

@@ -18,16 +18,21 @@ from contextlib import asynccontextmanager
 from typing import Any, Generic, ParamSpec, TypeVar
 
 from common.config import (
-    CACHE_DIR,
+    ENABLE_OLLAMA_PRESSURE_FALLBACK,
     MAX_CACHED_MODELS,
     MAX_CONCURRENT_INFERENCE,
     MAX_RESOURCE_POOL_SIZE,
     MAX_RESOURCE_POOL_SIZE_BYTES,
+    MODEL_CACHE_DIR,
     OLLAMA_BASE_URL,
     OLLAMA_TIMEOUT,
     RERANKER_MODEL_NAME,
 )
 from common.exceptions import LLMInferenceError, ResourceBuildError
+from common.system_pressure import (
+    host_pressure_exceeded,
+    ollama_backend_active,
+)
 
 T = TypeVar("T")
 P = ParamSpec("P")
@@ -172,6 +177,18 @@ class ModelPool(BaseResourcePool[Any]):
                     return True
         except Exception as e:
             logger.debug(f"VRAM check failed: {e}")
+
+        if (
+            ENABLE_OLLAMA_PRESSURE_FALLBACK
+            and ollama_backend_active()
+            and host_pressure_exceeded(threshold=90.0)
+        ):
+            logger.warning(
+                "[ModelPool] Host RAM pressure detected (Ollama fallback). "
+                "Triggering eviction."
+            )
+            await self._evict_one()
+            return True
         return False
 
     async def _evict_one(self) -> bool:
@@ -527,13 +544,13 @@ class ResourceCoordinator:
     ) -> Any:
         # [R10] LAZY import: SessionManager imports streamlit at module top;
         # importing it here avoids a circular import and keeps Streamlit out of core.
-        from common.config import AVAILABLE_EMBEDDING_MODELS
+        from common.config import DEFAULT_EMBEDDING_MODEL
         from core.session import SessionManager
 
         current_embedder = SessionManager.get(
             "last_selected_embedding_model", session_id=session_id
         )
-        target_model = model_name or current_embedder or AVAILABLE_EMBEDDING_MODELS[0]
+        target_model = model_name or current_embedder or DEFAULT_EMBEDDING_MODEL
 
         # [R7] 세션별 임베딩 모델 전환 로그
         if current_embedder and current_embedder != target_model:
@@ -554,7 +571,7 @@ class ResourceCoordinator:
         def _build(name):
             from flashrank import Ranker
 
-            return Ranker(model_name=name, cache_dir=CACHE_DIR)
+            return Ranker(model_name=name, cache_dir=MODEL_CACHE_DIR)
 
         return await self.get_or_build(
             self.models, f"flashrank_{target}", _build, target
