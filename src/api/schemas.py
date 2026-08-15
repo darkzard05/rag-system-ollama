@@ -123,3 +123,35 @@ class AggregatedSearchResult(BaseModel):
     score: float
     node_id: str
     metadata: dict[str, Any]
+
+
+class Citation(BaseModel):
+    """답변 내 인용 정보"""
+
+    doc_id: int
+    text_span: str
+    section: str
+    page: int
+    score: float
+
+
+class AnswerStructure(BaseModel):
+    """구조화된 답변 스키마 (LLM 구조화 출력용)"""
+
+    reasoning: str = Field(description="단계별 추론 과정")
+    final_answer: str = Field(description="최종 사용자 답변")
+    citations: list[Citation] = Field(
+        default_factory=list, description="인용 목록 [doc:N] 참조"
+    )
+    confidence: float = Field(
+        ge=0.0, le=1.0, default=0.8, description="답변 신뢰도 (0.0-1.0)"
+    )
+
+
+class ParseFailureMetrics(BaseModel):
+    """파싱 실패 메트릭 (모니터링용)"""
+
+    total_attempts: int = 0
+    failed_attempts: int = 0
+    failure_rate: float = 0.0
+    last_failure_reason: str | None = None

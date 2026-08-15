@@ -10,6 +10,7 @@
 
 import asyncio
 import html
+import json
 import logging
 import queue
 import threading
@@ -112,6 +113,66 @@ def _build_process(msg: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _extract_final_answer_delta(buffer: str, start: int) -> tuple[str, int]:
+    """Incrementally pull the growing `final_answer` string value out of a
+    partial JSON buffer. Returns (new_delta_text, new_scan_pos).
+
+    Tracks the `final_answer` key's string value char-by-char, honoring
+    escapes (\\\", \\\\, \\n, \\/) and nested braces. If the value is not yet
+    inside a complete-enough structure, returns ("", start). `start` lets us
+    resume scanning so only newly-arrived characters are emitted.
+    """
+    n = len(buffer)
+    key = '"final_answer"'
+
+    # 1) Locate the "final_answer" key. ALWAYS search from the start of the
+    #    buffer: `start` tracks the value-scan offset, not the key position,
+    #    so incremental calls must re-find the key from 0.
+    idx = buffer.find(key, 0)
+    if idx == -1:
+        return "", 0
+    # Ensure it is a real key (followed by optional whitespace + colon).
+    after_key = idx + len(key)
+    lead = buffer[after_key:].lstrip()
+    if not lead.startswith(":"):
+        return "", 0
+
+    # 2) The first '"' after the key is the value's opening quote. Skip past
+    #    the colon to locate it (the key's own closing quote is before it).
+    quote_idx = buffer.find('"', after_key)
+    if quote_idx == -1:
+        return "", 0
+
+    # How many value chars were already emitted before this call.
+    emit_from = max(0, start - (quote_idx + 1))
+
+    # 3) Copy characters until the matching unescaped closing quote, emitting
+    #    only the slice that is NEW since `start` (no duplication).
+    i = quote_idx + 1
+    delta_chars: list[str] = []
+    while i < n:
+        ch = buffer[i]
+        if ch == "\\":
+            # Emit the escaped pair verbatim; skip the escape + next char.
+            if i + 1 < n:
+                delta_chars.append(ch)
+                delta_chars.append(buffer[i + 1])
+                i += 2
+                continue
+            # Trailing backslash: incomplete escape, stop scanning.
+            break
+        if ch == '"':
+            # Found the closing quote → value complete.
+            new_delta = "".join(delta_chars)[emit_from:]
+            return new_delta, i + 1
+        delta_chars.append(ch)
+        i += 1
+
+    # Value still open; emit only chars we have not emitted yet.
+    new_delta = "".join(delta_chars)[emit_from:]
+    return new_delta, i
+
+
 def start_streaming_turn(sid: str, query: str, model_name: str) -> str:
     """스트리밍 시작: 빈 streaming 메시지 생성 후 msg_id 반환"""
     msg_id = str(uuid.uuid4())
@@ -138,6 +199,8 @@ def _spawn_stream_consumer(sid: str, msg_id: str, query: str, model_name: str):
 
     def bg_task():
         SessionManager.set_session_id(sid)
+        raw_json_acc = ""
+        fa_scan_pos = 0
         try:
             for chunk in stream_chunks(query, model_name, sid):
                 # 중단 요청 감지 → 누적된 부분 콘텐츠를 그대로 확정 (finally에서 처리)
@@ -157,7 +220,16 @@ def _spawn_stream_consumer(sid: str, msg_id: str, query: str, model_name: str):
                             if chunk.thought:
                                 msg["thought"] = msg.get("thought", "") + chunk.thought
                             if chunk.content:
-                                msg["content"] = msg.get("content", "") + chunk.content
+                                if getattr(chunk, "raw_json", False):
+                                    raw_json_acc += chunk.content
+                                    delta, fa_scan_pos = _extract_final_answer_delta(
+                                        raw_json_acc, fa_scan_pos
+                                    )
+                                    msg["content"] = msg.get("content", "") + delta
+                                else:
+                                    msg["content"] = (
+                                        msg.get("content", "") + chunk.content
+                                    )
                             if chunk.metadata and "documents" in chunk.metadata:
                                 msg["documents"] = chunk.metadata["documents"]
                             if chunk.performance:
@@ -187,6 +259,30 @@ def _spawn_stream_consumer(sid: str, msg_id: str, query: str, model_name: str):
                 state = SessionManager._get_state(sid)
                 # is_generating_answer를 먼저 해제하여 후속 처리 오류에도 플래그가 남지 않게 함
                 state["is_generating_answer"] = False
+                # 구조화 모드(raw_json) 누적 텍스트를 파싱된 final_answer로 교체한다.
+                # 파싱 실패 시 원시 텍스트(raw fallback)를 유지한다 (데드락 회피:
+                # 락 보유 중 SessionManager.set 사용 금지 → dict 직접 수정).
+                if raw_json_acc:
+                    for msg in state["messages"]:
+                        if msg.get("msg_id") == msg_id:
+                            try:
+                                cleaned = raw_json_acc.strip()
+                                if cleaned.startswith("```"):
+                                    cleaned = cleaned.split("```", 2)[1]
+                                    if cleaned.startswith("json"):
+                                        cleaned = cleaned[4:]
+                                    cleaned = cleaned.strip()
+                                parsed = json.loads(cleaned)
+                                if (
+                                    isinstance(parsed, dict)
+                                    and "final_answer" in parsed
+                                ):
+                                    msg["content"] = parsed["final_answer"]
+                            except (json.JSONDecodeError, KeyError):
+                                logger.warning(
+                                    "[STREAMING] raw_json 파싱 실패, 원시 텍스트 유지."
+                                )
+                            break
                 # 중단 여부는 확정 저장 전에 원시 상태에서 판독한다 (락 보유 중
                 # SessionManager.get() 호출은 데드락이므로 dict를 직접 읽는다).
                 was_cancelled = bool(state.get("generation_cancel", False))

@@ -39,7 +39,7 @@ from api.streaming_handler import (
     get_adaptive_controller,
     get_streaming_handler,
 )
-from common.config import AVAILABLE_EMBEDDING_MODELS, DEFAULT_OLLAMA_MODEL
+from common.config import DEFAULT_EMBEDDING_MODEL, DEFAULT_OLLAMA_MODEL
 from common.constants import FilePathConstants
 from common.exceptions import PDFProcessingError
 from core.document_processor import compute_file_hash
@@ -529,8 +529,13 @@ async def stream_query_rag(
         rag_sys = RAGSystem(session_id=sid)
 
         handler = get_streaming_handler()
-        controller = get_adaptive_controller()
+        controller = get_adaptive_controller(client_profile="api")
         sse_handler = ServerSentEventsHandler()
+
+        # 배치 버퍼
+        batch_buffer: list[tuple[str | None, dict[str, Any], int | None]] = []
+        batch_size = 10  # 10개 이벤트마다 배치 전송
+        event_counter = 0
 
         try:
             # RAGSystem이 직접 생성한 스트림 이벤트를 핸들러에 전달
@@ -545,22 +550,37 @@ async def stream_query_rag(
 
                 # 1. 상태 업데이트 처리
                 if chunk.status:
-                    yield sse_handler.format_sse_event(
-                        "status", {"message": chunk.status, "node": chunk.node_name}
+                    batch_buffer.append(
+                        (
+                            "status",
+                            {"message": chunk.status, "node": chunk.node_name},
+                            event_counter,
+                        )
                     )
+                    event_counter += 1
                     # 비동기 제너레이터 내에서도 명시적 세션 ID 사용 (최적화: 직접 호출)
                     SessionManager.add_status_log(chunk.status, session_id=sid)
 
                 # 2. 메시지(답변 및 사고 과정) 처리
                 if chunk.content:
-                    yield sse_handler.format_sse_event(
-                        "message", {"content": chunk.content}
+                    batch_buffer.append(
+                        (
+                            "message",
+                            {"content": chunk.content},
+                            event_counter,
+                        )
                     )
+                    event_counter += 1
 
                 if chunk.thought:
-                    yield sse_handler.format_sse_event(
-                        "thought", {"content": chunk.thought}
+                    batch_buffer.append(
+                        (
+                            "thought",
+                            {"content": chunk.thought},
+                            event_counter,
+                        )
                     )
+                    event_counter += 1
 
                 # 3. 메타데이터(문서) 처리
                 if chunk.metadata and "documents" in chunk.metadata:
@@ -568,9 +588,26 @@ async def stream_query_rag(
                         _doc_to_source(d, max_chars=100)
                         for d in chunk.metadata["documents"]
                     ]
-                    yield sse_handler.format_sse_event("sources", {"documents": docs})
+                    batch_buffer.append(
+                        (
+                            "sources",
+                            {"documents": docs},
+                            event_counter,
+                        )
+                    )
+                    event_counter += 1
 
-            yield sse_handler.format_sse_event("end", {"status": "done"})
+                # 배치 크기 도달 시 전송
+                if len(batch_buffer) >= batch_size:
+                    yield sse_handler.format_sse_batch(batch_buffer)
+                    batch_buffer.clear()
+
+            # 남은 버퍼 전송
+            if batch_buffer:
+                yield sse_handler.format_sse_batch(batch_buffer)
+                batch_buffer.clear()
+
+            yield sse_handler.format_sse_event("end", {"status": "done"}, event_counter)
         except (RuntimeError, ValueError, ConnectionError, PDFProcessingError) as e:
             logger.error(f"Streaming error (Session: {sid}): {e}")
             yield sse_handler.format_sse_error(str(e))
@@ -609,7 +646,7 @@ async def get_system_stats(user_id: str = Depends(verify_token)):
         "auth_stats": auth_manager.get_statistics(),
         "active_models": {
             "llm": DEFAULT_OLLAMA_MODEL,
-            "embedding": AVAILABLE_EMBEDDING_MODELS[0],
+            "embedding": DEFAULT_EMBEDDING_MODEL,
         },
     }
 
