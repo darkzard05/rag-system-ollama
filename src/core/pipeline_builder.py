@@ -11,6 +11,7 @@ import logging
 import os
 import time
 from collections.abc import Callable
+from dataclasses import dataclass
 from typing import Any
 
 from langchain_core.embeddings import Embeddings
@@ -33,12 +34,22 @@ from core.session import SessionManager
 
 logger = logging.getLogger(__name__)
 
+
 # --- 모델 프리로드 (1회성, 비차단) ---
 # _register_and_finalize 완료 시 기본 Ollama 모델을 백그라운드로 로드하여
 # 첫 쿼리 시 LLM 콜드 스타트 지연을 완화합니다.
-_preload_lock: asyncio.Lock | None = None
-_preload_loop: asyncio.AbstractEventLoop | None = None
-_preload_scheduled: bool = False
+# 프리로드 상태(락/루프/스케줄 플래그)를 단일 홀더에 캡슐화하여
+# 모듈 전역 mutable 상태의 접근을 한 객체로 모읍니다 (테스트 용이성).
+@dataclass
+class _PreloadState:
+    """모델 프리로드 1회성 스케줄링 상태를 보관하는 모듈 전역 홀더."""
+
+    lock: asyncio.Lock | None = None
+    loop: asyncio.AbstractEventLoop | None = None
+    scheduled: bool = False
+
+
+_preload_state = _PreloadState()
 
 
 async def _preload_model() -> None:
@@ -79,18 +90,17 @@ async def _schedule_model_preload() -> None:
     if os.getenv("IS_CI_TEST") == "true" or os.getenv("IS_UNIT_TEST") == "true":
         logger.info("[RAG] [PRELOAD] 테스트 환경 — 프리로드 스킵")
         return
-    global _preload_lock, _preload_loop, _preload_scheduled
     current_loop = asyncio.get_running_loop()
-    if _preload_lock is not None and _preload_loop is current_loop:
-        lock = _preload_lock
+    if _preload_state.lock is not None and _preload_state.loop is current_loop:
+        lock = _preload_state.lock
     else:
         lock = asyncio.Lock()
-        _preload_lock = lock
-        _preload_loop = current_loop
+        _preload_state.lock = lock
+        _preload_state.loop = current_loop
     async with lock:
-        if _preload_scheduled:
+        if _preload_state.scheduled:
             return
-        _preload_scheduled = True
+        _preload_state.scheduled = True
         try:
             asyncio.create_task(_preload_model())
         except Exception:
@@ -189,7 +199,7 @@ class PipelineBuilder:
                 )
 
         start_time = time.time()
-        logger.info(f"[RAG] [INDEX] 파이프라인 구축 시작: {file_name}")
+        logger.debug(f"[RAG] [INDEX] 파이프라인 구축 시작: {file_name}")
 
         emb_model_name = getattr(
             embedder, "model", getattr(embedder, "model_name", "unknown")
@@ -202,7 +212,7 @@ class PipelineBuilder:
             if cache_data and all(x is not None for x in cache_data):
                 doc_splits, vector_store, bm25_retriever = cache_data
                 if doc_splits is not None:
-                    logger.info(
+                    logger.debug(
                         f"[RAG] [INDEX] 벡터 캐시 히트: {len(doc_splits)}개 청크 로드됨"
                     )
 
