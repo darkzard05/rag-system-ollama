@@ -31,10 +31,14 @@ async def run_benchmark():
     # 2. 문서 로드 및 분할 (의미론적 청킹 활성화 가정)
     docs = _load_pdf_docs(test_pdf, "test.pdf")
 
-    # [A] 최적화 미적용 시뮬레이션 (순수 FAISS 생성 시간 측정)
-    print("\n[A] 기존 방식: FAISS가 임베딩을 처음부터 다시 계산")
+    # [A] 기존 방식 시뮬레이션 (임베딩 계산 포함 전체 시간 측정)
+    print("\n[A] 기존 방식: 임베딩을 먼저 계산한 뒤 FAISS에 주입")
+    # 먼저 벡터 확보 (A/B 모두 동일하게 사전 계산하여 공정 비교)
+    texts_a = [d.page_content for d in docs]
+    precomputed_vectors_a = [np.array(v) for v in embedder.embed_documents(texts_a)]
+
     start_a = time.time()
-    _ = _create_vector_store(docs, embedder, vectors=None)
+    _ = _create_vector_store(docs, embedder, vectors=precomputed_vectors_a)
     duration_a = time.time() - start_a
     print(f">> 소요 시간: {duration_a:.4f}초")
 

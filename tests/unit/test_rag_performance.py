@@ -44,14 +44,3 @@ def test_create_vector_store_no_redundant_embedding(faiss_mock):
     create_vector_store(mock_docs, mock_embedder, vectors=mock_vectors)
 
     mock_embedder.embed_documents.assert_not_called()
-
-
-def test_create_vector_store_with_none_vectors_calls_embedder(faiss_mock):
-    """벡터가 None일 때 embedder.embed_documents가 호출되는지 검증 (대조군)"""
-    mock_docs = [Document(page_content="테스트 문서 1", metadata={"page": 1})]
-    mock_embedder = MagicMock()
-    mock_embedder.embed_documents.return_value = [[0.1] * 128]
-
-    create_vector_store(mock_docs, mock_embedder, vectors=None)
-
-    mock_embedder.embed_documents.assert_called_once()

@@ -10,6 +10,7 @@ from langchain_core.documents import Document
 from langchain_core.embeddings import Embeddings
 
 from common.config import RETRIEVER_CONFIG
+from common.exceptions import VectorStoreError
 from common.text_utils import bm25_tokenizer
 from core.session import SessionManager
 
@@ -71,10 +72,11 @@ def create_vector_store(
     from langchain_community.vectorstores.utils import DistanceStrategy
 
     if vectors is None:
-        logger.warning("[FAISS] 전달된 벡터가 없어 임베딩을 다시 수행합니다.")
-        texts = [d.page_content for d in docs]
-        vectors_list = embedder.embed_documents(texts)
-        vectors = np.array(vectors_list).astype("float32")
+        raise VectorStoreError(
+            details={
+                "reason": "vectors required; callers must pass precomputed embeddings"
+            }
+        )
     else:
         if isinstance(vectors, list):
             vectors = np.vstack(vectors)
