@@ -232,6 +232,8 @@ def _spawn_stream_consumer(sid: str, msg_id: str, query: str, model_name: str):
                                     )
                             if chunk.metadata and "documents" in chunk.metadata:
                                 msg["documents"] = chunk.metadata["documents"]
+                            if getattr(chunk, "citations", None):
+                                msg["citations"] = chunk.citations
                             if chunk.performance:
                                 msg["metrics"] = chunk.performance
                             updated = True
@@ -296,6 +298,7 @@ def _spawn_stream_consumer(sid: str, msg_id: str, query: str, model_name: str):
                         msg["processed_content"] = apply_tooltips_to_response(
                             html.escape(msg.get("content", "")),
                             msg.get("documents", []),
+                            citations=msg.get("citations"),
                         )
                         msg["process"] = _build_process(msg)
                         break

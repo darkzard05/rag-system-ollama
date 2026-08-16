@@ -36,6 +36,7 @@ class StreamChunk:
     metadata: dict[str, Any] | None = None  # 메타데이터 추가
     performance: dict[str, Any] | None = None  # 통합 성능 통계 추가
     raw_json: bool = False  # 구조화 모드 원시 JSON 스트리밍 플래그
+    citations: list[dict[str, Any]] | None = None  # P3: 구조화 인용 배열
 
 
 @dataclass
@@ -258,6 +259,18 @@ class StreamingResponseHandler:
                                 raw_json=raw_json,
                             )
                             self.chunk_index += 1
+
+                        # P3: 구조화된 인용 배열(citations[])을 청크로 전달한다.
+                        if "citations" in data:
+                            cits = data["citations"]
+                            if isinstance(cits, list):
+                                yield StreamChunk(
+                                    content="",
+                                    timestamp=current_time,
+                                    chunk_index=self.chunk_index,
+                                    citations=cits,
+                                )
+                                self.chunk_index += 1
 
                     elif mode == "messages":
                         from langchain_core.messages import AIMessageChunk

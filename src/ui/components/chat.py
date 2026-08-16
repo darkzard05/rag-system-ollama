@@ -17,6 +17,7 @@ import streamlit as st
 from common.config import DEFAULT_OLLAMA_MODEL, MSG_CHAT_GUIDE, UI_TIMELINE_POLL_SECONDS
 from common.utils import (
     apply_tooltips_to_response,
+    fast_hash,
     normalize_latex_delimiters,
 )
 from core.session import SessionManager
@@ -49,6 +50,77 @@ def _handle_page_jump(p: int) -> None:
     st.rerun()
 
 
+def _doc_stable_id(doc: object) -> str:
+    """문서의 안정 식별자(doc_id 메타 또는 content 해시)를 반환합니다."""
+    meta = get_doc_metadata(doc)
+    content = ""
+    if hasattr(doc, "page_content"):
+        content = getattr(doc, "page_content", "") or ""
+    else:
+        content = doc.get("page_content", "") if isinstance(doc, dict) else ""
+    doc_id = meta.get("doc_id")
+    if doc_id is not None:
+        return str(doc_id)
+    return fast_hash(content)
+
+
+def _handle_doc_jump(doc_id: str) -> None:
+    """인용의 안정 doc_id로 문서를 찾아 첫 페이지로 이동합니다."""
+    docs = SessionManager.get("documents", []) or []
+    target_page = 1
+    found = False
+    for d in docs:
+        if _doc_stable_id(d) == doc_id:
+            found = True
+            page = get_doc_metadata(d).get("page")
+            with contextlib.suppress(ValueError, TypeError):
+                if page is not None:
+                    target_page = int(page)
+            break
+    if not found:
+        # doc_id만으로 페이지를 알 수 없으면 1p 기준으로 이동한다.
+        target_page = 1
+    SessionManager.set(
+        "pdf_target_page",
+        {"page": target_page, "source": "citation", "ts": time.time()},
+    )
+    navigate_to_page(target_page)
+    st.toast("Moving to cited document...")
+    st.rerun()
+
+
+def _render_citation_anchors(
+    citations: list[dict[str, Any]], documents: list[Any] | None
+) -> None:
+    """citations[] 배열을 클릭 가능한 출처 앵커로 렌더합니다.
+
+    PRIMARY 소스는 citations[] (안정 doc_id 기반)이며, 인라인 [doc:N] 폴백은
+    apply_tooltips_to_response가 담당합니다. doc_id가 documents에서 실제 문서를
+    가리키면 점프 버튼을 노출합니다.
+    """
+    if not citations:
+        return
+    doc_ids = {_doc_stable_id(d) for d in (documents or [])}
+    with st.container():
+        st.caption("Sources")
+        for idx, cit in enumerate(citations):
+            sid = str(cit.get("doc_id", ""))
+            span = cit.get("text_span") or cit.get("section") or f"Source {idx + 1}"
+            label = html.escape(str(span))[:160]
+            if sid in doc_ids:
+                if st.button(
+                    f"{idx + 1}. {label}",
+                    key=f"cit_doc_{sid}_{idx}",
+                    use_container_width=True,
+                ):
+                    _handle_doc_jump(sid)
+            else:
+                st.markdown(
+                    f'<span data-doc-id="{html.escape(sid)}">{idx + 1}. {label}</span>',
+                    unsafe_allow_html=True,
+                )
+
+
 def _extract_reference_pages(documents: list[Any]) -> list[int]:
     """문서 메타데이터에서 참조 페이지 번호 목록을 추출합니다."""
     pages: set[int] = set()
@@ -67,24 +139,41 @@ def _render_references_popover(
     msg_id: str,
     documents: list[Any] | None,
     on_page_jump: Callable[[int], None] | None = None,
+    citations: list[dict[str, Any]] | None = None,
 ) -> None:
-    """참조 페이지 popover와 페이지 이동 버튼을 렌더링합니다."""
+    """참조 popover: 페이지 이동 버튼 + doc 기반 인용 점프를 렌더링합니다."""
     with st.popover("References", use_container_width=False):
-        if not documents:
+        if not documents and not citations:
             return
 
-        pages = _extract_reference_pages(documents)
-        if not pages:
-            return
-        cols = st.columns(min(len(pages), 5))
-        for idx, p in enumerate(pages):
-            clicked = cols[idx % len(cols)].button(
-                f"{p}p",
-                key=jump_key(msg_id, p, idx),
-                use_container_width=True,
-            )
-            if clicked and on_page_jump is not None:
-                on_page_jump(p)
+        pages = _extract_reference_pages(documents or [])
+        if pages:
+            st.caption("By page")
+            cols = st.columns(min(len(pages), 5))
+            for idx, p in enumerate(pages):
+                clicked = cols[idx % len(cols)].button(
+                    f"{p}p",
+                    key=jump_key(msg_id, p, idx),
+                    use_container_width=True,
+                )
+                if clicked and on_page_jump is not None:
+                    on_page_jump(p)
+
+        # P3: citations[] 기반 doc 점프 (안정 doc_id).
+        doc_citations = [c for c in (citations or []) if c.get("doc_id") is not None]
+        if doc_citations:
+            doc_ids = {_doc_stable_id(d) for d in (documents or [])}
+            st.caption("By doc")
+            for idx, cit in enumerate(doc_citations):
+                sid = str(cit.get("doc_id"))
+                if sid in doc_ids:
+                    label = cit.get("section") or cit.get("text_span") or f"doc {sid}"
+                    if st.button(
+                        f"{idx + 1}. {label}",
+                        key=f"pop_doc_{msg_id}_{sid}_{idx}",
+                        use_container_width=True,
+                    ):
+                        _handle_doc_jump(sid)
 
 
 def render_message(
@@ -99,11 +188,13 @@ def render_message(
     msg_index: int = 0,
     is_latest: bool = False,
     process: dict | None = None,
+    citations: list[dict[str, Any]] | None = None,
     **kwargs,
 ) -> None:
     """메시지를 렌더링하는 통합 엔진."""
     avatar_icon = AVATARS["assistant"] if role == "assistant" else AVATARS["user"]
     msg_id = kwargs.get("msg_id", f"msg_{msg_index}")
+    citations = citations or kwargs.get("citations")
 
     with (
         st.chat_message(role, avatar=avatar_icon)
@@ -136,7 +227,9 @@ def render_message(
 
             display_text = normalize_latex_delimiters(display_text)
             if role == "assistant" and documents:
-                display_text = apply_tooltips_to_response(display_text, documents)
+                display_text = apply_tooltips_to_response(
+                    display_text, documents, citations=citations
+                )
             st.markdown(display_text, unsafe_allow_html=(role == "assistant"))
 
         # 완료된 어시스턴트 메시지의 하단 정보
@@ -166,9 +259,12 @@ def render_message(
             # 참조 페이지 popover는 documents가 있는 모든 완료된 어시스턴트
             # 메시지에 렌더링한다. 버튼 키는 msg_id 기반이므로 이전 답변과
             # 공존해도 안전하다 (최신 여부(is_latest)와 무관).
-            if documents:
+            if documents or citations:
                 _render_references_popover(
-                    msg_id, documents, on_page_jump=_handle_page_jump
+                    msg_id,
+                    documents,
+                    on_page_jump=_handle_page_jump,
+                    citations=citations,
                 )
 
                 # 성능 지표 (UX-3: 기본 접힘)
@@ -462,6 +558,7 @@ def _render_unified_timeline(current_sid: str) -> None:
             error=msg.get("error"),
             process=msg.get("process"),
             cancelled=msg.get("cancelled", False),
+            citations=msg.get("citations"),
         )
 
 

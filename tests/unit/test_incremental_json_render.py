@@ -54,3 +54,62 @@ def test_open_value_partial():
     d2, p2 = _extract_final_answer_delta(b2, p)
     assert d2 == "lo"
     assert "".join([d, d2]) == "Hello"
+
+
+def _make_doc(doc_id: str, page: int, content: str) -> "object":
+    """Minimal mapping-style document stand-in for citation rendering tests."""
+
+    class _Doc:
+        def __init__(self, doc_id: str, page: int, content: str):
+            self.page_content = content
+            self.metadata = {"doc_id": doc_id, "page": page, "source": "t.pdf"}
+
+    return _Doc(doc_id, page, content)
+
+
+def test_citations_array_rendered_by_doc_id():
+    """A response carrying a `citations[]` array must surface clickable anchors
+    resolved by stable `doc_id` (NOT page number).
+
+    Regression guard for P3: the structured citations array must reach the
+    rendered HTML as `data-doc-id` anchors pointing at the correct document.
+    """
+    from common.utils import apply_tooltips_to_response
+
+    known_doc_id = "doc_abc123"
+    # Document lives on page 7; an anchor must resolve to doc_abc123, never p1.
+    documents = [_make_doc(known_doc_id, 7, "Deep content about topic X.")]
+
+    citations = [
+        {
+            "doc_id": known_doc_id,
+            "text_span": "topic X detail",
+            "section": "§3",
+            "page": 7,
+            "score": 0.91,
+        }
+    ]
+
+    html_out = apply_tooltips_to_response(
+        "The model says topic X applies.",
+        documents,
+        citations=citations,
+    )
+
+    # Anchor present and keyed by stable doc_id.
+    assert f'data-doc-id="{known_doc_id}"' in html_out
+    # Must NOT fall back to page-1 mis-link (doc_id, not page, is the key).
+    assert 'data-doc-id="1"' not in html_out
+    # The cited source label is surfaced.
+    assert "topic X detail" in html_out
+    # Inline [doc:N] fallback path is preserved/independent.
+    assert "citation-sources" in html_out
+
+
+def test_citations_array_ignored_without_documents():
+    """When no documents are supplied, citations are not injected (no dead
+    anchors pointing at nothing)."""
+    from common.utils import apply_tooltips_to_response
+
+    out = apply_tooltips_to_response("Plain answer with no doc context.")
+    assert "citation-sources" not in out

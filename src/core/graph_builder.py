@@ -726,17 +726,59 @@ async def rewrite_query(
     return {}
 
 
+def _doc_stable_id(doc: Document) -> str:
+    """문서의 안정(stable) 식별자를 반환합니다.
+
+    `format_context`, `_estimate_ctx_tokens`, verify 노드 모두 동일한 식별자를
+    사용해야 하므로 단일 진원(single source of truth)으로 추출합니다.
+    `doc_id` 메타데이터가 있으면 그것을, 없으면 page_content 해시를 사용합니다
+    (graph_builder.py:382 / rag_core.py:69 와 동일 패턴).
+    """
+    return str(doc.metadata.get("doc_id", fast_hash(doc.page_content)))
+
+
+# verify 노드와 테스트에서 공유하는 안정-id 인용 검증 정규식.
+# 형식은 format_context가 내보내는 토큰과 동일해야 한다 ([doc:<stable_id>]).
+_RE_VERIFY_DOC_CITATION = re.compile(r"\[doc:([\w-]+)\]")
+
+
+def _validate_cited_doc_ids(answer: str, docs: list[Document]) -> list[str]:
+    """답변 내 [doc:<stable_id>] 인용이 docs에 실제로 존재하는지 멤버십 검사.
+
+    위치 기반 int 범위 검사(int(...) > max_idx)가 아니라, docs에서 계산한
+    안정-id 집합(valid_ids)에 cited id가 속하는지 확인한다. 존재하지 않는
+    (알 수 없는/환각) id만 invalid_citations로 반환한다.
+    """
+    if not docs:
+        # docs가 없는데 인용이 남아있으면 모두 무효.
+        return [m.group(1) for m in _RE_VERIFY_DOC_CITATION.finditer(answer)]
+
+    valid_ids = {_doc_stable_id(d) for d in docs}
+    invalid: list[str] = []
+    for m in _RE_VERIFY_DOC_CITATION.finditer(answer):
+        cited_id = m.group(1)
+        if cited_id not in valid_ids:
+            invalid.append(cited_id)
+    return invalid
+
+
 def format_context(docs: list[Document]) -> str:
     """검색된 문서들을 LLM이 읽기 좋은 형식의 문자열로 변환합니다.
 
-    Phase 1.4: 구조화된 답변을 위한 인용 포맷 [doc:N] [section:X] [page:Y] [score:Z]
+    Phase 1.4: 구조화된 답변을 위한 인용 포맷
+    [doc:<stable_id>] [section:X] [page:Y] [score:Z]
+
+    [수정] 인용 토큰은 enumerate 위치(i) 대신 안정 식별자(stable id)를 사용합니다.
+    위치 기반 토큰은 rerank/retry 시 문서 순서가 바뀌면 인용이 엉뚱한 청크를
+    가리키는 버그를 유발하므로, doc_id(또는 content 해시)를 씁니다.
     """
     context = ""
-    for i, d in enumerate(docs):
+    for d in docs:
+        stable_id = _doc_stable_id(d)
         section = d.metadata.get("current_section", "일반 본문")
         page = d.metadata.get("page", "?")
         score = d.metadata.get("rerank_score", d.metadata.get("score", 0.0))
-        context += f"[doc:{i}] [section:{section}] [page:{page}] [score:{score:.3f}]\n{d.page_content}\n\n"
+        context += f"[doc:{stable_id}] [section:{section}] [page:{page}] [score:{score:.3f}]\n{d.page_content}\n\n"
     return context
 
 
@@ -759,11 +801,12 @@ def _estimate_ctx_tokens(docs: list, query: str) -> int:
             f"{ANALYSIS_PROTOCOL}\n\n[Context]\n\n[Question]\n{query}"
         )
     context = "".join(
-        f"[doc:{i}] [section:{d.metadata.get('current_section', '일반 본문')}] "
+        f"[doc:{_doc_stable_id(d)}] "
+        f"[section:{d.metadata.get('current_section', '일반 본문')}] "
         f"[page:{d.metadata.get('page', '?')}] "
         f"[score:{float(d.metadata.get('rerank_score', d.metadata.get('score', 0.0))):.3f}]"
         f"\n{d.page_content}\n\n"
-        for i, d in enumerate(docs)
+        for d in docs
     )
     return count_tokens_rough(
         f"{ANALYSIS_PROTOCOL}\n\n[Context]\n{context}\n\n[Question]\n{query}"
@@ -1047,6 +1090,14 @@ async def generate(
                 {"content": "", "thought": parsed_answer.reasoning},
                 config=config,
             )
+        # P3: 인라인 [doc:...] 폴백과 별도로 citations[] 자체를 스트림에 태워
+        # 안정적 doc_id 기반 렌더링을 가능케 한다.
+        if parsed_answer and writer is not None:
+            await adispatch_custom_event(
+                "citations",
+                {"citations": [c.model_dump() for c in parsed_answer.citations]},
+                config=config,
+            )
     except (json.JSONDecodeError, ValueError) as e:
         parse_failed = True
         logger.warning(f"[RAG] [GENERATE] JSON 파싱 실패, 폴백 사용: {e}")
@@ -1196,25 +1247,16 @@ async def verify_answer(
     # 컨텍스트 구성
     context = format_context(docs) if docs else ""
 
-    # 인용 일관성 검사: 모든 [doc:N]이 실제 문서 인덱스 범위 내에 있는지
-    import re
-
-    cited_doc_ids = set()
-    for match in re.finditer(r"\[doc:(\d+)\]", answer):
-        cited_doc_ids.add(int(match.group(1)))
-
-    max_doc_idx = len(docs) - 1
-    invalid_citations = [doc_id for doc_id in cited_doc_ids if doc_id > max_doc_idx]
+    # 인용 일관성 검사: 모든 [doc:<stable_id>]가 실제 문서 집합에 존재하는지
+    # (위치 기반 int 범위 검사가 아니라 stable id 멤버십 검사).
+    invalid_citations = _validate_cited_doc_ids(answer, docs)
 
     if invalid_citations:
-        logger.warning(
-            f"[RAG] [VERIFY] 유효하지 않은 인용 감지: {invalid_citations} (최대 인덱스: {max_doc_idx})"
-        )
+        logger.warning(f"[RAG] [VERIFY] 유효하지 않은 인용 감지: {invalid_citations}")
         return {
             "verification_route": "regenerate",
             "verification_issues": [f"유효하지 않은 인용: {invalid_citations}"],
         }
-
     # Faithfulness 검증: LLM으로 컨텍스트 기반 답변 검증
     verify_prompt = f"""당신은 답변 검증 전문가입니다. 아래 [Context]와 [Answer]를 보고 답변이 컨텍스트에 충실한지 판단하십시오.
 

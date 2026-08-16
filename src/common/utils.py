@@ -24,6 +24,12 @@ _RE_CITATION_BLOCK = re.compile(
     r"(\[|(?:\s|^)\()((?:[^\]\)]*?[Pp](?:age)?\.?\s*)?\d+(?:[\s,]*)(?:(?:[Pp](?:age)?\.?\s*)?\d+(?:[\s,]*))*)([\]\)]|(?:\s|$))",
     re.IGNORECASE,
 )
+# [수정] 문서 인용 패턴: [doc:<stable_id>] — stable_id는 문서의 doc_id 메타데이터
+# (없으면 page_content 해시)이며, enumerate 위치/페이지 번호가 아님. 기존
+# _RE_CITATION_BLOCK이 [doc:chunk_B]를 페이지로 오인하는 버그를 막기 위해 전용
+# 패턴으로 먼저 처리한다.
+_RE_DOC_CITATION = re.compile(r"\[doc:([\w-]+)\]")
+
 _RE_EXTRACT_PAGES = re.compile(r"(\d+)")
 _RE_WHITESPACE = re.compile(r"\s+")
 _RE_CLEAN_LIST_NUM = re.compile(r"^\d+[\.\)]\s*")
@@ -322,12 +328,18 @@ def extract_annotations_from_docs(documents: list) -> list[dict]:
 
 
 def apply_tooltips_to_response(
-    response_text: str, documents: list | None = None, msg_index: int = 0
+    response_text: str,
+    documents: list | None = None,
+    msg_index: int = 0,
+    citations: list[dict] | None = None,
 ) -> str:
     """
     답변 내의 인용구([1], [p.5] 등)에 문서 정보 툴팁을 입힙니다.
     스팬은 시각적 구분용이며 클릭 동작이 없습니다 (단순 메타데이터).
     실제 페이지 이동은 네이티브 참조 popover 버튼이 담당합니다.
+
+    citations: 구조화 인용 배열(doc_id 기반). 있으면 본문 말미에
+    data-doc-id 앵커 소스 블록을 덧붙여 안정적 doc 점프를 지원합니다.
     """
     if not response_text:
         return response_text
@@ -337,6 +349,48 @@ def apply_tooltips_to_response(
 
     if not documents:
         return text
+
+    # [doc:<stable_id>] -> 문서를 stable id(doc_id 또는 content 해시)로 조회.
+    # 위치 기반 인덱스가 아니라 멤버십 조회하므로 rerank 재정렬 후에도
+    # 동일 청크를 가리킨다 (P2: 안정 ID 매핑). 못 찾으면 원본 그대로 반환.
+    doc_by_stable_id: dict[str, Any] = {}
+    for _doc in documents:
+        if hasattr(_doc, "metadata"):
+            _meta = _doc.metadata or {}
+            _content = getattr(_doc, "page_content", "") or ""
+        else:
+            _meta = _doc.get("metadata", {}) or {}
+            _content = _doc.get("page_content", "") or ""
+        _sid = (
+            str(_meta.get("doc_id"))
+            if _meta.get("doc_id") is not None
+            else fast_hash(_content)
+        )
+        doc_by_stable_id[_sid] = _doc
+
+    def replace_doc_citation(match):
+        # [doc:<stable_id>] — stable_id는 page_content 해시/위치가 아니라
+        # 문서 식별자. 페이지 정규식이 stable_id를 페이지로 오인하는 버그를
+        # 차단하기 위해 전용 패턴이 먼저 처리한다.
+        cited_id = match.group(1)
+        if cited_id not in doc_by_stable_id:
+            # 알 수 없는 id면 원본 그대로 반환 (죽은 인용 방지).
+            return match.group(0)
+
+        doc = doc_by_stable_id[cited_id]
+        content = (
+            getattr(doc, "page_content", "")
+            if hasattr(doc, "page_content")
+            else doc.get("page_content", "")
+        )
+        clean_content = html.escape(content).replace("\n", " ").strip()[:300] + "..."
+
+        return (
+            f'<span class="citation-highlight" title="{clean_content}" '
+            f'data-doc-id="{cited_id}" '
+            f'style="color: #007bff; font-weight: 600; text-decoration: underline; text-underline-offset: 3px;">'
+            f"{match.group(0)}</span>"
+        )
 
     def replace_citation(match):
         full_match = match.group(0).strip()
@@ -410,10 +464,43 @@ def apply_tooltips_to_response(
         )
 
     try:
-        # 인용구 패턴 매칭 및 치환
+        # 1. 문서 인용 [doc:N]을 먼저 위치 기반으로 치환 (페이지 오인 방지).
+        text = _RE_DOC_CITATION.sub(replace_doc_citation, text)
+        # 2. 페이지 인용 [p.3] 등을 처리 ([doc:N]은 이미 변환되어 영향 없음).
         text = _RE_CITATION_BLOCK.sub(replace_citation, text)
     except Exception as e:
         logger.error(f"[Utils] 인용구 처리 오류: {e}")
+
+    # 3. 구조화 citations[]를 본문 말미의 data-doc-id 소스 앵커로 덧붙인다.
+    #    PRIMARY 소스는 citations[] (doc_id 기반, rerank 후에도 안정).
+    #    인라인 [doc:N] 폴백은 위 단계에서 이미 처리된다.
+    if citations:
+        anchors: list[str] = []
+        for idx, cit in enumerate(citations):
+            if not isinstance(cit, dict):
+                continue
+            sid = cit.get("doc_id")
+            if sid is None:
+                continue
+            label = html.escape(
+                str(cit.get("text_span") or cit.get("section") or f"Source {idx + 1}")
+            )[:160]
+            anchors.append(
+                f'<span class="citation-source" data-doc-id="{html.escape(str(sid))}" '
+                f'style="color: #007bff; font-weight: 600; margin-right: 8px;">'
+                f"[{idx + 1}] {label}</span>"
+            )
+        if anchors:
+            text += (
+                '\n\n<span class="citation-sources" data-doc-ids="{}">{}</span>'.format(
+                    ",".join(
+                        html.escape(str(c.get("doc_id")))
+                        for c in citations
+                        if isinstance(c, dict) and c.get("doc_id") is not None
+                    ),
+                    "".join(anchors),
+                )
+            )
 
     return text
 

@@ -228,3 +228,26 @@ async def test_grade_documents_calls_llm_below_threshold(
     # 임계값 미만이므로 LLM 검증 경로가 실제로 실행되어야 합니다.
     mock_llm.bind.assert_called_once()
     json_llm.ainvoke.assert_awaited_once()
+
+
+def test_structured_output_prompt_drops_inline_citation_mandate():
+    """structured_output 프롬프트가 인라인 `[doc:N]` 강제 삽입 명령을 포함하지 않는지,
+    그리고 citations[] 배열이 스키마에 남아 있는지 검증 (P1: MED)."""
+    from common.config import PROMPT_TEMPLATES_CONFIG
+
+    prompt: str = PROMPT_TEMPLATES_CONFIG.get("structured_output", "")
+    assert prompt, "structured_output 프롬프트가 비어 있습니다."
+
+    # (a) 인라인 강제 인용 명령이 제거되었는지 확인
+    assert "반드시 `[doc:N]` 형태로 인용" not in prompt
+    # (b) citations가 여전히 스키마/프롬프트의 유일한 인용 출처로 유지되는지 확인
+    assert "citations" in prompt
+    assert "citations[]" in prompt
+
+
+def test_structured_output_schema_retains_citations_key():
+    """로드된 structured_output 프롬프트 본문에 citations 키 정의가 존재하는지 검증."""
+    from common.config import PROMPT_TEMPLATES_CONFIG
+
+    prompt = PROMPT_TEMPLATES_CONFIG.get("structured_output", "")
+    assert '"citations"' in prompt
