@@ -41,6 +41,10 @@ models:
   max_cached_models: 5
 
   # 최대 동시 추론 수 (VRAM 보호를 위한 전역 세마포어 값)
+  # 기본값 1 = 직렬 추론. 1보다 크게 설정하면 OOM 위험이 커지므로
+  # 호스트 RAM 압력(host_pressure_exceeded, 기본 임계값 90%) 초과 시
+  # 자동으로 1로 강등(degrade)되어 VRAM/메모리 폭주를 막는다.
+  # 값은 반드시 정수 >= 1. 0 이하/비정수면 로드 시 ValueError 발생.
   max_concurrent_inference: 1
 
   # Ollama HTTP 요청 및 추론 세마포어 획득 타임아웃 (초)
@@ -132,6 +136,17 @@ rag:
     min_chunk_size: 200
     max_chunk_size: 1000
     similarity_threshold: 0.6
+
+  # 쿼리 캐시 설정 (선택적 opt-in)
+  query_cache:
+    enabled: false                 # 쿼리 캐시 활성화 여부
+    similarity_threshold: 0.92     # 캐시 히트를 위한 유사도 임계값
+    ttl_seconds: 3600              # 캐시 항목 수명(초)
+    min_confidence: 0.85           # 캐시 저장 최소 신뢰도
+
+  # 채점(grading) 단계 설정
+  grading:
+    enabled: true                  # 문서 채점 단계 활성화 여부
 
   # 프롬프트 설정
   prompts:

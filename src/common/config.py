@@ -85,9 +85,32 @@ EMBEDDING_DEVICE: str = _get_env(
 MAX_CACHED_MODELS: int = _get_env(
     "MAX_CACHED_MODELS", _models_config.get("max_cached_models", 5), int
 )
-MAX_CONCURRENT_INFERENCE: int = _get_env(
-    "MAX_CONCURRENT_INFERENCE", _models_config.get("max_concurrent_inference", 1), int
+# [WAVE4] 동시 추론 수는 int >= 1 여야 한다. 0 이하 또는 비정수면 로드 시점에
+# 명확한 에러를 발생시킨다 (런타임 크래시나 1로의 묵시적 강제 변환 금지).
+_MAX_CONCURRENT_INFERENCE_RAW: Any = _get_env(
+    "MAX_CONCURRENT_INFERENCE",
+    _models_config.get("max_concurrent_inference", 1),
+    int,
 )
+if not isinstance(_MAX_CONCURRENT_INFERENCE_RAW, int) or isinstance(
+    _MAX_CONCURRENT_INFERENCE_RAW, bool
+):
+    raise ValueError(
+        "MAX_CONCURRENT_INFERENCE must be an integer, "
+        f"got {_MAX_CONCURRENT_INFERENCE_RAW!r} "
+        f"(type={type(_MAX_CONCURRENT_INFERENCE_RAW).__name__}). "
+        "Set env MAX_CONCURRENT_INFERENCE or config key "
+        "models.max_concurrent_inference to an integer >= 1."
+    )
+if _MAX_CONCURRENT_INFERENCE_RAW <= 0:
+    raise ValueError(
+        "MAX_CONCURRENT_INFERENCE must be an integer >= 1, "
+        f"got {_MAX_CONCURRENT_INFERENCE_RAW}. "
+        "OOM risk: values < 1 would disable the inference guard. "
+        "Set env MAX_CONCURRENT_INFERENCE or config key "
+        "models.max_concurrent_inference to an integer >= 1."
+    )
+MAX_CONCURRENT_INFERENCE: int = _MAX_CONCURRENT_INFERENCE_RAW
 MAX_RESOURCE_POOL_SIZE: int = _get_env(
     "MAX_RESOURCE_POOL_SIZE", _models_config.get("max_resource_pool_size", 5), int
 )
@@ -135,6 +158,19 @@ TEXT_SPLITTER_CONFIG: dict = _rag_config.get(
     "text_splitter", {"chunk_size": 500, "chunk_overlap": 100}
 )
 SEMANTIC_CHUNKER_CONFIG: dict = _rag_config.get("semantic_chunker", {"enabled": False})
+
+# 쿼리 캐시 설정 (선택적 opt-in)
+_query_cache_config = _rag_config.get("query_cache", {})
+QUERY_CACHE_ENABLED: bool = bool(_query_cache_config.get("enabled", False))
+QUERY_CACHE_SIMILARITY: float = float(
+    _query_cache_config.get("similarity_threshold", 0.92)
+)
+QUERY_CACHE_TTL: int = int(_query_cache_config.get("ttl_seconds", 3600))
+QUERY_CACHE_MIN_CONF: float = float(_query_cache_config.get("min_confidence", 0.85))
+
+# 채점(grading) 단계 설정
+_grading_config = _rag_config.get("grading", {})
+GRADING_ENABLED: bool = bool(_grading_config.get("enabled", True))
 
 # --- 4. 파싱 및 하이드레이션 (Parsing) ---
 PARSING_CONFIG: dict = _rag_config.get("parsing", {})
