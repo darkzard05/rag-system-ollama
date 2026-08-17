@@ -24,17 +24,126 @@ from pydantic import BaseModel, Field
 from api.schemas import AggregatedSearchResult, AnswerStructure, GraphState
 from common.config import (
     ANALYSIS_PROTOCOL,
+    DEFAULT_EMBEDDING_MODEL,
     GRADING_CONFIG,
+    GRADING_ENABLED,
     OLLAMA_NUM_CTX,
     OLLAMA_NUM_PREDICT,
     PROMPT_TEMPLATES_CONFIG,
+    QUERY_CACHE_ENABLED,
+    QUERY_CACHE_MIN_CONF,
+    QUERY_CACHE_TTL,
 )
 from common.utils import count_tokens_rough, fast_hash
 from core.model_loader import ModelManager
 from core.session import SessionManager
-from services.optimization.caching_optimizer import ObjectCache
+from services.monitoring.performance_monitor import (
+    OperationType,
+    get_performance_monitor,
+)
+from services.optimization.caching_optimizer import ObjectCache, get_cache_manager
 
 logger = logging.getLogger(__name__)
+
+# ----------------------------------------------------------------------------
+# Wave 3 grade reduction — memoization contract (T8).
+# MUST stay byte-equal to ``GRADE_MEMO_KEY`` in ``core/pipeline_builder.py``
+# (line ~41). We deliberately use the literal instead of importing it because
+# pipeline_builder imports ``build_graph`` from this module at module scope,
+# so ``from core.pipeline_builder import GRADE_MEMO_KEY`` would be a circular
+# import. pipeline_builder owns the canonical definition + re-index invalidation;
+# this module only stores into the same key.
+_GRADE_MEMO_KEY = "grade_decision_memo"
+
+
+def _grade_memo_key(state: Any, docs: list) -> str:
+    """안정 해시로 메모 키를 생성합니다 (query + 정렬된 doc_id 집합).
+
+    동일 (query, doc-set) 조합이면 항상 동일 키 → 같은 세션 내 반복 질의 시
+    LLM 호출을 건너뛰고 이전 판단을 재사용한다. doc_id가 하나라도 바뀌면
+    해시가 달라져(staleness miss) 오래된 메모가 재사용되지 않는다.
+    """
+    query = get_state_attr(state, "input") or ""
+    # 재구성된 쿼리(search_queries[-1])가 실제 평가에 쓰인 경우 그걸 사용.
+    search_queries = get_state_attr(state, "search_queries")
+    if search_queries:
+        query = search_queries[-1]
+    doc_ids = sorted(_doc_stable_id(d) for d in docs)
+    return fast_hash(f"GRADE|{query}|" + "|".join(doc_ids))
+
+
+def _store_grade_memo(state: Any, docs: list, decision: dict, sid: str) -> None:
+    """실제 LLM 판단을 세션 메모(dict)에 저장합니다.
+
+    실패해도 채점 흐름을 깨뜨리지 않도록 내부에서 흡수한다 (최대한 best-effort).
+    저장 실패 시 다음 반복에서 단순히 miss → LLM 경로로 폴백한다.
+    """
+    try:
+        memo_key = _grade_memo_key(state, docs)
+        existing = SessionManager.get(_GRADE_MEMO_KEY, session_id=sid, default={})
+        if not isinstance(existing, dict):
+            existing = {}
+        existing[memo_key] = decision
+        SessionManager.set(_GRADE_MEMO_KEY, existing, session_id=sid)
+    except Exception as e:  # noqa: BLE001 - 메모 저장 실패는 치명적이지 않음
+        logger.debug(f"[RAG] [GRADE] 메모 저장 실패 (무시): {e}")
+
+
+# ============================================================================
+# Per-stage latency tracing (Wave 1)
+# ----------------------------------------------------------------------------
+# Every query emits ONE consolidated `[QUERY][TIMING]` line aggregating the
+# duration (ms) of each pipeline stage. Single-threaded LangGraph node
+# execution means at most one node runs at a time, so a module-level
+# threading.local buffer keyed by query lifecycle is safe: `preprocess`
+# (always-runs-first node) resets it at the start of every query, and
+# `generate` (terminal node) reads it once and emits the line before each
+# return. The buffer is captured into a local at generate entry so retries
+# (which re-run retrieve/grade) accumulate correctly.
+# ============================================================================
+
+_stage_timing_local = threading.local()
+
+
+def _reset_stage_timings() -> None:
+    """Clear per-query stage timing buffer (called at preprocess start)."""
+    _stage_timing_local.stages = {
+        "preprocess_ms": 0.0,
+        "retrieve_ms": 0.0,
+        "grade_ms": 0.0,
+        "generate_total_ms": 0.0,
+        "ttft_ms": 0.0,
+    }
+
+
+def _add_stage_ms(stage: str, ms: float) -> None:
+    """Accumulate a stage duration into the per-query buffer."""
+    if not hasattr(_stage_timing_local, "stages"):
+        _reset_stage_timings()
+    _stage_timing_local.stages[stage] = _stage_timing_local.stages.get(
+        stage, 0.0
+    ) + float(ms)
+
+
+def _enter_stage(operation_type: OperationType, **metadata: Any) -> Any:
+    """Begin a tracked operation, returning the OperationTracker context manager.
+
+    Mirrors the existing ``with get_performance_monitor().track_operation(...)``
+    pattern used in ``chunking.py`` but exposes the tracker so callers can exit
+    it without re-indenting large node bodies.
+    """
+    return get_performance_monitor().track_operation(operation_type, dict(metadata))
+
+
+def _emit_query_timing(timings: dict[str, float]) -> None:
+    """Emit the single consolidated per-query timing line."""
+    logger.info(
+        f"[QUERY][TIMING] preprocess_ms={timings.get('preprocess_ms', 0.0):.1f} "
+        f"retrieve_ms={timings.get('retrieve_ms', 0.0):.1f} "
+        f"grade_ms={timings.get('grade_ms', 0.0):.1f} "
+        f"generate_total_ms={timings.get('generate_total_ms', 0.0):.1f} "
+        f"ttft_ms={timings.get('ttft_ms', 0.0):.1f}"
+    )
 
 
 def _get_session_id(config: RunnableConfig | None = None) -> str:
@@ -194,6 +303,56 @@ def get_state_attr(state: Any, key: str, default: Any = None) -> Any:
     return getattr(state, key, default)
 
 
+# 쿼리 응답 캐시 저장값 구조: {"response": str, "confidence": float}
+# SemanticCache.get()은 내부 유사도 임계값을 통과한 entry.value(저장값) 또는 None만 반환하며,
+# 유사도 점수나 히트 객체를 노출하지 않으므로 신뢰도는 저장 시 함께 직렬화한다.
+_QUERY_CACHE_VALUE_VERSION = "1.0"
+
+
+class _AsyncEmbeddingWrapper:
+    """동기형 embed_query를 비동기 인터페이스로 감싸는 어댑터.
+
+    SemanticCache._embed()는 self.embedding_model.embed_query(text)를
+    무조건 await한다. Ollama 임베더(_NoTruncateOllamaEmbeddings)의 embed_query는
+    동기형(list 반환)이라 await 시 crash한다. 캐시 소스는 건드리지 않고, 쿼리
+    경로에서 캐시에 주입하는 임베더만 비동기 퍼사드로 감싸 호환시킨다.
+    """
+
+    def __init__(self, embedder: Any) -> None:
+        self._embedder = embedder
+
+    async def embed_query(self, text: str) -> list[float]:
+        return self._embedder.embed_query(text)
+
+    async def embed_documents(self, texts: list[str]) -> list[list[float]]:
+        if hasattr(self._embedder, "embed_documents"):
+            return self._embedder.embed_documents(texts)
+        return [self._embedder.embed_query(t) for t in texts]
+
+
+async def _ensure_query_cache_embedder() -> None:
+    """전역 캐시 싱글톤의 세맨틱 캐시에 임베더를 주입한다.
+
+    SemanticCache는 self.embedding_model이 None이면 get/set 시 항상 None을
+    반환한다(임베딩 불가). 청커는 별도 CacheManager 인스턴스를 만들므로 전역
+    싱글톤의 semantic_cache.embedding_model은 기본 비어 있다 — 쿼리 경로에서
+    캐시를 쓰려면 런타임에 주입해야 한다. (캐시 클래스는 수정하지 않음)
+    동기형 Ollama 임베더는 _AsyncEmbeddingWrapper로 감싸 await 호환을 맞춘다.
+    """
+    if not QUERY_CACHE_ENABLED:
+        return
+    cm = get_cache_manager()
+    if cm.semantic_cache is None:
+        return
+    if cm.semantic_cache.embedding_model is not None:
+        return
+    try:
+        embedder = await ModelManager.get_embedder(DEFAULT_EMBEDDING_MODEL)
+        cm.semantic_cache.embedding_model = _AsyncEmbeddingWrapper(embedder)
+    except Exception as e:  # noqa: BLE001 - 캐시 누락은 치명적이지 않음
+        logger.warning(f"[RAG] [CACHE] 임베더 주입 실패 — 쿼리 캐시 비활성화: {e}")
+
+
 def _sanitize_channel_value(value: Any) -> Any:
     """상태 채널 값을 msgpack 직렬화 가능한 순수 타입으로 위생화합니다.
 
@@ -227,6 +386,11 @@ async def preprocess(
     state: GraphState, config: RunnableConfig, *, writer: StreamWriter
 ) -> dict[str, Any]:
     """의도 분류 및 캐시 확인을 수행합니다."""
+    # [TIMING] 매 쿼리 시작 시 스테이지 누적 버퍼 초기화 (preprocess는 항상 최초 실행)
+    _reset_stage_timings()
+    _preprocess_op = _enter_stage(OperationType.QUERY_PROCESSING)
+    _preprocess_op.__enter__()
+    _preprocess_start = time.perf_counter()
     query = get_state_attr(state, "input", "").strip()
     logger.info(f"[RAG] [PREPROCESS] 입력 질의: '{query}'")
 
@@ -260,9 +424,38 @@ async def preprocess(
             weights = {"bm25": round(1.0 - sm_w, 1), "faiss": sm_w}
             logger.info(f"[RAG] [PREPROCESS] 의미 중심 질의 판단 (FAISS: {sm_w})")
 
+    _preprocess_ms = (time.perf_counter() - _preprocess_start) * 1000
+    _add_stage_ms("preprocess_ms", _preprocess_ms)
+    _preprocess_op.__exit__(None, None, None)
+
+    # 쿼리 응답 캐시 조회 (선택적 opt-in). 세션에 활성 인덱싱 문서가 있을 때만
+    # 후보군으로 삼는다 — 문서 없는 세션의 캐시 히트는 부정확하므로 무시한다.
+    is_cached = False
+    cached_response: str | None = None
+    if QUERY_CACHE_ENABLED:
+        sid = _get_session_id(config)
+        has_doc = bool(SessionManager.get("file_hash", session_id=sid, default=None))
+        if has_doc:
+            await _ensure_query_cache_embedder()
+            try:
+                cached = await get_cache_manager().get(query, use_semantic=True)
+            except Exception as e:  # noqa: BLE001 - 캐시 실패는 정상 경로로 폴백
+                logger.warning(f"[RAG] [CACHE] 조회 실패 — 우회: {e}")
+                cached = None
+            if (
+                isinstance(cached, dict)
+                and cached.get("response") is not None
+                and float(cached.get("confidence", 0.0)) >= QUERY_CACHE_MIN_CONF
+            ):
+                is_cached = True
+                cached_response = str(cached["response"])
+                intent = "general"  # 라우터가 generate로 단축 라우팅
+                logger.info("[RAG] [PREPROCESS] 쿼리 캐시 히트 — generate 단축 경로")
+
     return {
         "intent": intent,
-        "is_cached": False,
+        "is_cached": is_cached,
+        "cached_response": cached_response,
         "search_weights": weights,
         # 턴 시작 시 이전 턴의 재작성 쿼리 잔재 제거 (reset_or_append 리듀서의 리셋 신호)
         "search_queries": [],
@@ -306,6 +499,8 @@ async def retrieve_and_rerank(
         return {}
 
     t0 = time.perf_counter()
+    _retrieve_op = _enter_stage(OperationType.DOCUMENT_RETRIEVAL)
+    _retrieve_op.__enter__()
 
     from core.search_aggregator import AggregationStrategy, SearchResultAggregator
 
@@ -520,6 +715,8 @@ async def retrieve_and_rerank(
         f"merge_ms={merge_ms:.1f} total_ms={total_ms:.1f}"
     )
 
+    _add_stage_ms("retrieve_ms", total_ms)
+    _retrieve_op.__exit__(None, None, None)
     return {"relevant_docs": merged_context_docs}
 
 
@@ -545,6 +742,12 @@ async def grade_documents(
     state: GraphState, config: RunnableConfig, *, writer: StreamWriter
 ) -> dict[str, Any]:
     """검색된 문서들의 관련성을 LLM으로 평가하고, 부적절 시 재검색 쿼리를 동시에 생성합니다."""
+    # 운영자 제어 채점 단계 opt-out (GRADING_ENABLED=False): LLM 호출 없이
+    # 즉시 generate로 직행. T8 메모이제이션/is_cached 단축 경로보다 우선.
+    if not GRADING_ENABLED:
+        logger.info("[RAG] [GRADE] 채점 단계 비활성화 — generate로 직행")
+        return {"intent": "generate", "route": "generate"}
+
     if (
         get_state_attr(state, "is_cached")
         or get_state_attr(state, "intent") == "general"
@@ -553,6 +756,8 @@ async def grade_documents(
         return {"route": "generate"}
 
     grade_start = time.perf_counter()
+    _grade_op = _enter_stage(OperationType.LLM_INFERENCE)
+    _grade_op.__enter__()
 
     retry_count = get_state_attr(state, "retry_count", 0)
     max_retries = GRADING_CONFIG.get("max_retries", 2)
@@ -560,6 +765,7 @@ async def grade_documents(
         logger.info(
             f"[RAG] [GRADE] 최대 재시도 횟수({retry_count}/{max_retries}) 도달. 즉시 생성 단계로 이동."
         )
+        _grade_op.__exit__(None, None, None)
         return {"intent": "generate", "route": "generate"}
 
     docs = get_state_attr(state, "relevant_docs")
@@ -567,11 +773,42 @@ async def grade_documents(
         logger.info("[RAG] [GRADE] 문서가 없어 즉시 재구성 단계로 이동")
         # R1a-01: 증가는 grade 단일 지점에서만. "문서 없음" 경로가 루프 종료를
         # rewrite 폴백의 간접 증가에 의존하던 취약 결합을 명시적 델타 +1로 해소.
+        _grade_op.__exit__(None, None, None)
         return {
             "intent": "transform",
             "route": "transform",
             "retry_count": 1,
         }
+
+    # Wave 3 grade reduction: 동일 세션 내 동일 (query, doc-set) 반복 질의 시
+    # 이전 LLM 판단을 재사용한다 (메모 해시 miss 시에만 LLM 호출).
+    # 메모 저장 실패는 채점을 깨뜨리지 않도록 LLM 경로로 폴백한다.
+    sid = _get_session_id(config)
+    try:
+        memo_key = _grade_memo_key(state, docs)
+        grade_memo = SessionManager.get(_GRADE_MEMO_KEY, session_id=sid, default={})
+        if isinstance(grade_memo, dict) and memo_key in grade_memo:
+            decision = grade_memo[memo_key]
+            reused_route = (
+                decision.get("route", "generate")
+                if isinstance(decision, dict)
+                else "generate"
+            )
+            logger.info("[RAG] [GRADE] 메모이즈된 판단 재사용")
+            SessionManager.add_status_log(
+                "이전 평가 결과를 재사용합니다.", session_id=sid
+            )
+            grade_ms = (time.perf_counter() - grade_start) * 1000
+            logger.info(f"[RAG] [GRADE][TIMING] grade_ms={grade_ms:.1f} memo_hit=True")
+            _add_stage_ms("grade_ms", grade_ms)
+            _grade_op.__exit__(None, None, None)
+            # [FIX] 메모 히트 시에도 재시도 카운터를 누적해야 한다.
+            # 메모 재사용 경로가 retry_count 를 반환하지 않으면 reset_or_add
+            # 리듀서가 카운터를 증가시키지 않아 hardcap(>= max_retries)에
+            # 도달하지 못하고 무한 재귀(GraphRecursionError)가 발생한다.
+            return {"intent": "generate", "route": reused_route, "retry_count": 1}
+    except Exception as e:  # noqa: BLE001 - 메모 실패는 치명적이지 않음
+        logger.debug(f"[RAG] [GRADE] 메모 조회 실패, LLM 경로로 진행: {e}")
 
     # Short-circuit: 리랭킹 점수가 충분히 높으면 LLM 검증 생략
     max_rerank_score = max(
@@ -595,6 +832,8 @@ async def grade_documents(
         )
         grade_ms = (time.perf_counter() - grade_start) * 1000
         logger.info(f"[RAG] [GRADE][TIMING] grade_ms={grade_ms:.1f} short_circuit=True")
+        _add_stage_ms("grade_ms", grade_ms)
+        _grade_op.__exit__(None, None, None)
         return {"intent": "generate", "route": "generate"}
 
     query = get_state_attr(state, "input")
@@ -665,10 +904,13 @@ async def grade_documents(
                 "검색된 지식의 관련성이 확인되었습니다.",
                 session_id=_get_session_id(config),
             )
+            _store_grade_memo(state, docs, {"route": "generate"}, sid)
             grade_ms = (time.perf_counter() - grade_start) * 1000
             logger.info(
                 f"[RAG] [GRADE][TIMING] grade_ms={grade_ms:.1f} short_circuit=False"
             )
+            _add_stage_ms("grade_ms", grade_ms)
+            _grade_op.__exit__(None, None, None)
             return {"intent": "generate", "route": "generate"}
         else:
             optimized = parsed.optimized_query or query
@@ -679,10 +921,13 @@ async def grade_documents(
                 "검색 결과가 부적합하여 질문 재구성을 시도합니다.",
                 session_id=_get_session_id(config),
             )
+            _store_grade_memo(state, docs, {"route": "transform"}, sid)
             grade_ms = (time.perf_counter() - grade_start) * 1000
             logger.info(
                 f"[RAG] [GRADE][TIMING] grade_ms={grade_ms:.1f} short_circuit=False"
             )
+            _add_stage_ms("grade_ms", grade_ms)
+            _grade_op.__exit__(None, None, None)
             return {
                 "intent": "transform",
                 "route": "transform",
@@ -694,10 +939,13 @@ async def grade_documents(
 
     except (RuntimeError, ValueError, json.JSONDecodeError) as e:
         logger.warning(f"[RAG] [GRADE] 평가 실패, 기본값(NO) 적용하여 재구성 시도: {e}")
+        _store_grade_memo(state, docs, {"route": "transform"}, sid)
         grade_ms = (time.perf_counter() - grade_start) * 1000
         logger.info(
             f"[RAG] [GRADE][TIMING] grade_ms={grade_ms:.1f} short_circuit=False"
         )
+        _add_stage_ms("grade_ms", grade_ms)
+        _grade_op.__exit__(None, None, None)
         return {
             "intent": "transform",
             "route": "transform",
@@ -904,9 +1152,12 @@ async def generate(
     state: GraphState, config: RunnableConfig, *, writer: StreamWriter
 ) -> dict[str, Any]:
     """최종 답변을 생성합니다."""
+    # [TIMING] 쿼리당 버퍼를 로컬에 캡처 (재시도로 retrieve/grade가 재실행되어도 누적 유지)
+    _query_timings = dict(getattr(_stage_timing_local, "stages", {}))
     cfg = config.get("configurable", {})
     llm = cfg.get("llm")
     if not llm:
+        _emit_query_timing(_query_timings)
         return {"response": "LLM not loaded"}
 
     if writer is not None:
@@ -935,7 +1186,24 @@ async def generate(
             await adispatch_custom_event(
                 "response_chunk", {"content": no_info_msg}, config=config
             )
+        _emit_query_timing(_query_timings)
         return {"response": no_info_msg}
+
+    # 쿼리 캐시 단축 경로: preprocess에서 is_cached=True로 라우팅된 경우.
+    # LLM 스트리밍을 완전히 건너뛴다. cached path에는 relevant_docs가 없으므로
+    # 바로 아래 인젝션/CTX 가드는 사실상 no-op라 안전이 보존된다.
+    if get_state_attr(state, "is_cached"):
+        cached_response = get_state_attr(state, "cached_response")
+        if cached_response:
+            logger.info("[RAG] [GENERATE] 캐시 응답 스트리밍 (LLM 미호출)")
+            if writer is not None:
+                await adispatch_custom_event(
+                    "response_chunk", {"content": cached_response}, config=config
+                )
+            _emit_query_timing(_query_timings)
+            return {"response": cached_response}
+        # cached_response가 비어 있으면(예외적) 정상 생성 경로로 폴백하지 않고
+        # 빈 응답을 반환한다 — 캐시 무결성 보장.
 
     # R4-04: 검색 청크 인젝션 패턴 스캔 — 발견된 청크는 컨텍스트에서 제외하고 경고를 남긴다.
     # 격리 결과도 R1a-03과 동일한 원칙으로 노드 반환을 통해 최종 상태에 반영한다.
@@ -961,6 +1229,7 @@ async def generate(
                 await adispatch_custom_event(
                     "response_chunk", {"content": no_info_msg}, config=config
                 )
+            _emit_query_timing(_query_timings)
             return {"response": no_info_msg, "relevant_docs": []}
 
     # [CTX 가드] num_ctx 대비 prompt 추정 토큰이 예산을 초과하면 rerank_score가 낮은
@@ -1004,6 +1273,8 @@ async def generate(
 
     gen_start = time.perf_counter()
     ttft_ms: float | None = None
+    _generate_op = _enter_stage(OperationType.LLM_INFERENCE)
+    _generate_op.__enter__()
 
     # 구조화된 출력 모드인지 확인 (PROMPT_TEMPLATES_CONFIG에 structured_output이 있으면 구조화 모드)
     use_structured_output = "structured_output" in PROMPT_TEMPLATES_CONFIG
@@ -1051,6 +1322,13 @@ async def generate(
         f"[RAG] [GENERATE][TIMING] generate_ms={generate_ms:.1f} "
         f"ttft_ms={(ttft_ms or 0.0):.1f} output_chars={len(full_response)}"
     )
+    _query_timings["generate_total_ms"] = (
+        _query_timings.get("generate_total_ms", 0.0) + generate_ms
+    )
+    _query_timings["ttft_ms"] = _query_timings.get("ttft_ms", 0.0) + float(
+        ttft_ms or 0.0
+    )
+    _generate_op.__exit__(None, None, None)
 
     # Phase 1.2: 구조화된 답변 파싱 (JSON 출력 기대)
     parsed_answer = None
@@ -1138,6 +1416,32 @@ async def generate(
     # 않아 retrieve가 전달한 기존 상태를 보존한다.
     if state_docs is not None:
         result["relevant_docs"] = state_docs
+
+    # 쿼리 응답 캐시 저장 (선택적 opt-in). 캐시 히트 경로가 아니라 이번에 새로
+    # 생성한 경우에만 저장한다. 신뢰도가 기준 미달이면 저장하지 않는다.
+    if QUERY_CACHE_ENABLED and not get_state_attr(state, "is_cached"):
+        query_for_cache = get_state_attr(state, "input", "") or ""
+        conf = float(result.get("confidence", 0.0))
+        if query_for_cache and conf >= QUERY_CACHE_MIN_CONF:
+            sid = _get_session_id(config)
+            if bool(SessionManager.get("file_hash", session_id=sid, default=None)):
+                await _ensure_query_cache_embedder()
+                try:
+                    await get_cache_manager().set(
+                        query_for_cache,
+                        {
+                            "response": result["response"],
+                            "confidence": conf,
+                            "version": _QUERY_CACHE_VALUE_VERSION,
+                        },
+                        ttl_seconds=QUERY_CACHE_TTL,
+                        use_semantic=True,
+                        persist_to_disk=False,
+                    )
+                except Exception as e:  # noqa: BLE001 - 캐시 저장 실패는 무시
+                    logger.warning(f"[RAG] [CACHE] 저장 실패 — 무시: {e}")
+
+    _emit_query_timing(_query_timings)
     return result
 
 
