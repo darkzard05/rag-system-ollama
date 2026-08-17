@@ -203,6 +203,24 @@ from ui.session_sync import StreamlitSessionSync
 SessionManager.set_ui_sync(StreamlitSessionSync())
 
 
+async def _warmup_models() -> None:
+    """[WARMUP] 시작 시 LLM+임베더 1회 프리웜 — 첫 쿼리 TTFT 제거.
+
+    AsyncWorker 전용 루프에서 비차단으로 실행된다. Ollama 미연결 등 실패 시에도
+    UI 시작은 계속되어야 하므로 호출부에서 비치명적으로 감싼다.
+    """
+    from core.model_loader import _warmup_models as _core_warmup
+
+    await _core_warmup()
+
+
+# [WARMUP] 부팅 시 1회 프리웜을 백그라운드 워커에 제출(비차단, 비치명적).
+try:
+    _async_worker.submit(_warmup_models())
+except Exception as e:
+    logger.warning(f"[WARMUP] 모델 프리웜 실패 — 첫 쿼리에서 로드됨: {e}")
+
+
 async def _bg_rebuild_task(
     session_id: str, file_path: str, file_name: str, embedder_name: str
 ):
