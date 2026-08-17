@@ -31,8 +31,14 @@ from core.graph_builder import build_graph
 from core.resource_manager import get_resource_manager
 from core.retriever_factory import create_bm25_retriever, create_vector_store
 from core.session import SessionManager
+from services.optimization.caching_optimizer import get_cache_manager
 
 logger = logging.getLogger(__name__)
+
+
+# T8 계약: 세션별 grade 결정 메모 키 (T8이 이 키로 memo를 저장하고,
+# 본 모듈이 동일 키로 무효화합니다. 신규 문서 인덱싱 시 staleness 방지).
+GRADE_MEMO_KEY = "grade_decision_memo"
 
 
 # --- 모델 프리로드 (1회성, 비차단) ---
@@ -220,7 +226,11 @@ class PipelineBuilder:
                         "기존 분석 데이터 발견 (캐시 활용)", session_id=self.session_id
                     )
                     await self._register_and_finalize(
-                        file_hash, vector_store, bm25_retriever, on_progress
+                        file_hash,
+                        vector_store,
+                        bm25_retriever,
+                        on_progress,
+                        fresh_build=False,
                     )
                     return f"'{file_name}' 캐시 데이터 로드 완료", True
 
@@ -276,7 +286,11 @@ class PipelineBuilder:
 
         # 6. 등록 및 최종화 (캐시 저장 전에 수행 — 실패 시 캐시 미저장)
         await self._register_and_finalize(
-            file_hash, vector_store, bm25_retriever, on_progress
+            file_hash,
+            vector_store,
+            bm25_retriever,
+            on_progress,
+            fresh_build=True,
         )
 
         # 7. 캐시 저장 (엔진 등록 성공 후에만 저장)
@@ -295,8 +309,13 @@ class PipelineBuilder:
         vector_store: Any,
         bm25_retriever: Any,
         on_progress: Callable[[int], Any] | None = None,
+        fresh_build: bool = False,
     ) -> None:
-        """생성된 리소스를 전역 풀에 등록하고 세션을 초기화합니다."""
+        """생성된 리소스를 전역 풀에 등록하고 세션을 초기화합니다.
+
+        fresh_build=True 이면 (캐시 재사용이 아닌) 실제 신규/교체 인덱싱이
+        완료된 것이므로, 기존 코퍼스와 연결된 캐시/메모를 무효화합니다.
+        """
         _, workflow = await asyncio.gather(
             get_resource_manager().register_retrievers(
                 file_hash, vector_store, bm25_retriever
@@ -310,8 +329,30 @@ class PipelineBuilder:
         if on_progress:
             on_progress(100)
 
+        # 신규 인덱싱 시에만 무효화: 캐시 재사용 빌드는 건드리지 않음.
+        if fresh_build:
+            await self._invalidate_caches_on_index()
+
         # 모델 프리로드 (1회성, 비차단 — 첫 쿼리 콜드 스타트 완화)
         await _schedule_model_preload()
+
+    async def _invalidate_caches_on_index(self) -> None:
+        """신규 인덱싱 후 쿼리 캐시·grade 메모 무효화 (실패해도 커밋 차단 안 함)."""
+        # (1) 세맨틱 쿼리 캐시 무효화 (T5 대응: stale 답변 방지)
+        try:
+            cache_mgr = get_cache_manager()
+            if cache_mgr.semantic_cache is not None:
+                await cache_mgr.semantic_cache.clear()
+                logger.info("[RAG] [CACHE] 신규 인덱싱 — 세맨틱 쿼리 캐시 무효화 완료")
+        except Exception as e:
+            logger.warning(f"[RAG] [CACHE] 무효화 실패 — 우회: {e}")
+
+        # (2) 세션별 grade 결정 메모 무효화 (T8을 위한 계약 키 사용)
+        try:
+            SessionManager.delete(GRADE_MEMO_KEY, session_id=self.session_id)
+            logger.info("[RAG] [CACHE] 신규 인덱싱 — grade 메모 무효화 완료")
+        except Exception as e:
+            logger.warning(f"[RAG] [CACHE] 무효화 실패 — 우회: {e}")
 
 
 async def prepare_query_config_or_build(
