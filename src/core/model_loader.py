@@ -88,6 +88,7 @@ class ModelManager:
     # 비동기 락 (지연 로딩)
     _locks: dict[str, asyncio.Lock] = {}
     _inference_semaphore: asyncio.Semaphore | None = None
+    _inference_semaphore_bound: int | None = None
 
     # [수정] LRU 캐시로 변경
     _instances: OrderedDict[str, Any] = OrderedDict()
@@ -138,8 +139,19 @@ class ModelManager:
     @classmethod
     def _get_semaphore(cls) -> asyncio.Semaphore:
         """전역 추론 세마포어를 반환합니다. (지연 로딩)"""
-        if cls._inference_semaphore is None:
-            cls._inference_semaphore = asyncio.Semaphore(MAX_CONCURRENT_INFERENCE)
+        # [WAVE4] VRAM 압력 시 >1 동시 추론을 1로 강등. 기본값(1)에서는
+        # host_pressure_exceeded 호출 없이 동작/성능 변화 없음.
+        effective_bound = (
+            1
+            if (MAX_CONCURRENT_INFERENCE > 1 and host_pressure_exceeded())
+            else MAX_CONCURRENT_INFERENCE
+        )
+        if (
+            cls._inference_semaphore is None
+            or cls._inference_semaphore_bound != effective_bound
+        ):
+            cls._inference_semaphore = asyncio.Semaphore(effective_bound)
+            cls._inference_semaphore_bound = effective_bound
         return cls._inference_semaphore
 
     @classmethod
@@ -312,6 +324,30 @@ class ModelManager:
         from .resource_manager import get_resource_manager
 
         await get_resource_manager().clear_vram()
+
+
+async def _warmup_models() -> None:
+    """[WARMUP] 시작 시 LLM+임베더를 1회 프리웜하여 첫 쿼리 TTFT를 제거한다.
+
+    - LLM / 임베더 각각 한 번씩만 로드(캐시 히트 보장).
+    - 임베더는 ``None`` 전달로 설정 기본 모델 사용(앱 정상 로드 경로와 동일).
+    - LLM은 ``keep_alive=OLLAMA_KEEP_ALIVE``(로더 기본값)로 빌드되어 즉시
+      축출되지 않는다.
+    - 호출부에서 비치명적으로 감싸야 하므로 여기선 예외를 잡지 않는다.
+    - 모델 로드/쿼리 경로는 건드리지 않고 프리웜 전용 throwaway 토큰만 소비.
+    """
+    from common.config import DEFAULT_OLLAMA_MODEL
+
+    llm = await ModelManager.get_llm(DEFAULT_OLLAMA_MODEL)
+    embedder = await ModelManager.get_embedder(None)
+
+    # Throwaway 토큰: 임베더 1회, LLM minimal 스트리밍 → 즉시 중단.
+    await embedder.aembed_query("warmup")
+
+    async for _ in llm.astream("warmup"):
+        break
+
+    logger.info("[WARMUP] LLM+임베더 프리웜 완료")
 
 
 def _fetch_available_models_cached() -> list[str]:

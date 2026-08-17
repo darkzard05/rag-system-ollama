@@ -305,6 +305,7 @@ class ResourceCoordinator:
         self._build_call_counter = 0
         self._build_failures: dict[str, tuple[int, float]] = {}
         self._inference_semaphore: asyncio.Semaphore | None = None
+        self._inference_semaphore_bound: int | None = None
         self._semaphore_loop: asyncio.AbstractEventLoop | None = None
 
     def reset(self) -> None:
@@ -319,6 +320,7 @@ class ResourceCoordinator:
         self._build_call_counter = 0
         self._build_failures.clear()
         self._inference_semaphore = None
+        self._inference_semaphore_bound = None
         self._semaphore_loop = None
 
     def _get_build_lock(self, key: str) -> asyncio.Lock:
@@ -387,6 +389,7 @@ class ResourceCoordinator:
     @inference_semaphore.setter
     def inference_semaphore(self, sem: asyncio.Semaphore) -> None:
         self._inference_semaphore = sem
+        self._inference_semaphore_bound = None
         try:
             self._semaphore_loop = asyncio.get_running_loop()
         except RuntimeError:
@@ -399,9 +402,25 @@ class ResourceCoordinator:
         발생시킵니다. 기본값은 config의 OLLAMA_TIMEOUT입니다.
         """
         loop = asyncio.get_running_loop()
+        # [WAVE4] VRAM 압력 시 >1 동시 추론을 1로 강등. 기본값(1)에서는
+        # host_pressure_exceeded 호출 없이 기존 흐름과 동일(동작/성능 변화 없음).
+        effective_bound = (
+            1
+            if (MAX_CONCURRENT_INFERENCE > 1 and host_pressure_exceeded())
+            else MAX_CONCURRENT_INFERENCE
+        )
         if self._inference_semaphore is None or self._semaphore_loop is not loop:
-            self._inference_semaphore = asyncio.Semaphore(MAX_CONCURRENT_INFERENCE)
+            # First creation or loop change -> (re)create the managed default.
+            self._inference_semaphore = asyncio.Semaphore(effective_bound)
+            self._inference_semaphore_bound = effective_bound
             self._semaphore_loop = loop
+        elif self._inference_semaphore_bound is not None:
+            # Managed semaphore only: re-create on VRAM-pressure bound change.
+            # Track the CREATION bound (not _value) to avoid permit-leak recreation.
+            if self._inference_semaphore_bound != effective_bound:
+                self._inference_semaphore = asyncio.Semaphore(effective_bound)
+                self._inference_semaphore_bound = effective_bound
+        # Injected semaphores (bound is None) are respected as-is — never recreated.
         wait_seconds = timeout if timeout is not None else OLLAMA_TIMEOUT
         if wait_seconds is None or wait_seconds <= 0:
             await self._inference_semaphore.acquire()
