@@ -4,8 +4,8 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
-import src.core.session.manager as _mgr
-from src.core.session.manager import (  # noqa: E402
+
+from core.session.manager import (  # noqa: E402
     MAX_MESSAGE_HISTORY,
     SessionManager,
 )
@@ -18,33 +18,38 @@ def reset_session_manager():
     SessionManager.reset()
 
 
-def _make_streamlit_mock(session_state_dict):
-    """Create a minimal streamlit mock with a real dict for session_state."""
-    return SimpleNamespace(
-        session_state=session_state_dict,
-        runtime=SimpleNamespace(
-            exists=lambda: True,
-            scriptrunner=SimpleNamespace(
-                get_script_run_ctx=lambda: SimpleNamespace(session_id="t")
-            ),
-        ),
-    )
+class _FakeUiSync:
+    """UI-sync adapter backed by a plain dict (stands in for StreamlitSessionSync)."""
+
+    def __init__(self, store: dict) -> None:
+        self.store = store
+        self.writes: list[tuple[str, object]] = []
+
+    def write(self, key: str, val: object) -> None:
+        self.store[key] = val
+        self.writes.append((key, val))
+
+    def read(self, key: str, default: object = None) -> object:
+        return self.store.get(key, default)
 
 
 def _patch_sync_deps(st_dict):
     """Return combined patchers for sync_to_streamlit testing.
 
-    We need to patch:
-    1. `_mgr.st` — replace module-level st with mock whose session_state is a real dict.
-    2. `_is_streamlit_running` — force True (real streamlit has no runtime here).
-    3. `streamlit.runtime.scriptrunner.get_script_run_ctx` — return truthy mock context,
-       because `sync_to_streamlit` does a fresh `from streamlit.runtime...` import at runtime.
+    The streamlit dependency was refactored out of core: UI writes now go
+    through a pluggable adapter installed via ``SessionManager.set_ui_sync``
+    (see core.session.manager / ui.session_sync). We install a fake adapter
+    whose backing store is ``st_dict``, and force ``_is_streamlit_running`` so
+    that ``get``/``sync_to_streamlit`` route to the adapter.
     """
-    mock_st = _make_streamlit_mock(st_dict)
+    adapter = _FakeUiSync(st_dict)
     return (
-        patch.object(_mgr, "st", mock_st),
+        patch.object(SessionManager, "_ui_sync", adapter),
         patch.object(SessionManager, "_is_streamlit_running", return_value=True),
-        patch("streamlit.runtime.scriptrunner.get_script_run_ctx"),
+        patch(
+            "streamlit.runtime.scriptrunner.get_script_run_ctx",
+            return_value=SimpleNamespace(session_id="t"),
+        ),
     )
 
 

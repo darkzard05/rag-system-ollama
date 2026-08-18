@@ -132,6 +132,11 @@ class SessionManager:
         with cls._map_lock:
             cls._fallback_sessions.clear()
             cls._session_locks.clear()
+        # Detach any UI-sync adapter installed via set_ui_sync (e.g. by main.py
+        # at import time). Leaving it attached makes `get()` prefer the live UI
+        # store over the global fallback, which breaks test isolation and any
+        # non-UI consumer that expects the fallback store to be authoritative.
+        cls.set_ui_sync(None)
         _session_id_var.set("default")
 
     @classmethod
@@ -327,9 +332,22 @@ class SessionManager:
                 from streamlit.runtime.scriptrunner import get_script_run_ctx
 
                 if get_script_run_ctx():
+                    # Only prefer the live UI store when an adapter is actually
+                    # attached. Without one the global fallback store remains the
+                    # authoritative source (e.g. in tests or headless consumers).
                     if cls._ui_sync is not None:
                         return cls._ui_sync.read(key, default)
-                    return default
+                    if create:
+                        with cls._acquire_lock(sid):
+                            state = cls._get_state(sid)
+                            if key in state:
+                                return state[key]
+                    else:
+                        with cls._acquire_lock(sid):
+                            fallback = cls._fallback_sessions.get(sid)
+                            if fallback is not None and key in fallback:
+                                return fallback[key]
+
             except (ImportError, RuntimeError, AttributeError) as exc:
                 logger.debug(
                     "[SESSION] Streamlit 세션 상태 조회 실패, 폴백 사용: %s", exc
