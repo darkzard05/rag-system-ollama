@@ -22,6 +22,46 @@ SRC_DIR = BASE_DIR / "src"
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
+from core.session import SessionManager  # noqa: E402
+
+# 횡단 의존성 방지: `pythonpath=["src"]` 환경에서 `import core` 와 `import
+# src.core` 가 서로 다른 모듈 객체로 로드되어, 같은 클래스(`SessionManager` 등)가
+# 테스트/소스별로 복제되고 전역 상태가 공유되지 않는 문제가 발생합니다.
+# `src.core.*` 가 이미 로드되어 있다면 `core.*` 별칭이 동일 객체를 가리키도록
+# sys.modules 를 병합합니다 (반대 방향도 보정).
+import pkgutil
+
+for _pkg in ("core", "ui", "common", "api", "infra", "security", "services"):
+    _src_mod = sys.modules.get(f"src.{_pkg}")
+    _mod = sys.modules.get(_pkg)
+    if _src_mod is not None and _mod is not None and _src_mod is not _mod:
+        # 두 별칭이 모두 로드된 경우 하나로 통일 (src.* 를 정통으로 취함)
+        sys.modules[_pkg] = _src_mod
+        # 하위 모듈도 재귀적으로 병합
+        _prefix = f"src.{_pkg}."
+        for _name, _modobj in list(sys.modules.items()):
+            if _name.startswith(_prefix):
+                _alias = _name[len("src.") :]
+                if _alias in sys.modules and sys.modules[_alias] is not _modobj:
+                    sys.modules[_alias] = _modobj
+
+
+@pytest.fixture(autouse=True)
+def _reset_session_manager_per_test():
+    """테스트 간 전역 상태 누수를 차단합니다.
+
+    SessionManager는 프로세스 전역 딕셔너리를 주 저장소로 사용하며, 일부 테스트는
+    main.py import를 통해 UI-sync 어댑터(StreamlitSessionSync)를 전역에 부착합니다.
+    어댑터가 남아 있으면 코어 로직(add_message 등)이 실제 UI session_state에
+    의존하게 되어 테스트가 깨지므로, 각 테스트 전후로 폴백 저장소와 어댑터를
+    모두 초기화합니다. 두 import 별칭(core / src.core)을 함께 정리합니다.
+    """
+    SessionManager.reset()
+    SessionManager.set_ui_sync(None)
+    yield
+    SessionManager.reset()
+    SessionManager.set_ui_sync(None)
+
 
 @pytest.fixture
 def mock_llm():
