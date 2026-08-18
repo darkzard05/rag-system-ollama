@@ -230,15 +230,6 @@ class VectorStoreCache:
             )
         )
 
-    def _get_cache_paths(self):
-        cache_dir = self.cache_dir
-        return (
-            cache_dir,
-            os.path.join(cache_dir, "doc_splits.json"),
-            os.path.join(cache_dir, "faiss_index"),
-            os.path.join(cache_dir, "bm25_docs.json"),
-        )
-
     def _try_load_legacy(self) -> bool:
         """Check if legacy cache dir (pre-fast_hash) exists and re-point paths."""
         if not self._legacy_cache_dir:

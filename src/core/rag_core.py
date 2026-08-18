@@ -236,21 +236,6 @@ class RAGSystem:
 
         return _consumer()
 
-    def _get_recent_history(self, limit: int = 5) -> list:
-        from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
-
-        raw_messages = SessionManager.get_messages(session_id=self.session_id)
-        filtered = [m for m in raw_messages if m.get("msg_type") == "general"]
-        formatted: list[BaseMessage] = []
-        for msg in filtered[-limit:]:
-            role = msg.get("role")
-            content = msg.get("content", "")
-            if role == "user":
-                formatted.append(HumanMessage(content=content))
-            elif role == "assistant":
-                formatted.append(AIMessage(content=content))
-        return formatted
-
     def get_status(self) -> list[str]:
         self._ensure_session_context()
         return SessionManager.get("status_logs", session_id=self.session_id) or []

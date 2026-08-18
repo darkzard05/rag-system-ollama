@@ -47,7 +47,6 @@ DEFAULT_OLLAMA_MODEL: str = os.getenv(
     "DEFAULT_OLLAMA_MODEL",
     _models_config.get("default_ollama", "qwen3:4b-instruct-2507-q4_K_M"),
 )
-OLLAMA_MODEL_NAME = DEFAULT_OLLAMA_MODEL
 OLLAMA_BASE_URL: str = _get_env(
     "OLLAMA_BASE_URL", _models_config.get("base_url", "http://127.0.0.1:11434")
 )
@@ -167,9 +166,6 @@ SEMANTIC_CHUNKER_CONFIG: dict = _rag_config.get("semantic_chunker", {"enabled": 
 # 쿼리 캐시 설정 (선택적 opt-in)
 _query_cache_config = _rag_config.get("query_cache", {})
 QUERY_CACHE_ENABLED: bool = bool(_query_cache_config.get("enabled", False))
-QUERY_CACHE_SIMILARITY: float = float(
-    _query_cache_config.get("similarity_threshold", 0.92)
-)
 QUERY_CACHE_TTL: int = int(_query_cache_config.get("ttl_seconds", 3600))
 QUERY_CACHE_MIN_CONF: float = float(_query_cache_config.get("min_confidence", 0.85))
 
@@ -294,7 +290,3 @@ VERIFICATION_SAMPLE_RATE: float = _verification_config.get("sample_rate", 0.1)
 
 # --- 10. 스트리밍 설정 (Streaming) ---
 _streaming_config = _config.get("streaming", {})
-STREAMING_COMPRESSION_ENABLED: bool = _streaming_config.get("compression", {}).get(
-    "enabled", False
-)
-STREAMING_FLUSH_INTERVAL_MS: int = _streaming_config.get("flush_interval_ms", 50)

@@ -820,12 +820,6 @@ def get_cache_manager(
     return _cache_manager
 
 
-def reset_cache_manager() -> None:
-    """캐시 관리자 리셋"""
-    global _cache_manager
-    _cache_manager = None
-
-
 class ObjectCache(CacheBackend[T]):
     """
     객체 캐시 - 임의의 메모리 파이썬 객체 보관 (컴파일된 그래프, 파싱된

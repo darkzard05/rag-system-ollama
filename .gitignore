@@ -121,3 +121,23 @@ context-notes.md
 # Runtime pid files
 reports/f3_streamlit.pid
 
+# Coverage / diagnostic dumps (local only)
+cov.json
+cov_table.txt
+coverage_raw.txt
+full_pipeline.err
+full_pipeline.pid
+reports/diag*.txt
+reports/diag*_err.txt
+reports/f3*_app_*.txt
+reports/f4*_app_*.txt
+reports/query_bench*.json
+
+# Local debug / scratch scripts
+debug_test.py
+fix_config.py
+fix_prompt.py
+scripts/benchmarks/_diag.py
+scripts/benchmarks/_diag4.py
+scripts/benchmarks/_diag5.py
+

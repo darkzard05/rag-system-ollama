@@ -456,15 +456,6 @@ class PerformanceMonitor:
         except Exception as e:
             logger.error(f"Failed to queue metrics for CSV: {e}")
 
-    def log_qa_history(self, entry: dict[str, Any]):
-        """QA 히스토리를 큐에 삽입 (JSONL용)"""
-        try:
-            if "timestamp" not in entry:
-                entry["timestamp"] = datetime.now().isoformat()
-            self._log_queue.put(entry)
-        except Exception as e:
-            logger.error(f"Failed to queue QA history for JSONL: {e}")
-
     def stop(self):
         """모니터링 시스템 종료 및 남은 로그 플러시"""
         self._stop_event.set()
@@ -530,19 +521,6 @@ class PerformanceMonitor:
             duration_seconds: Duration in seconds
         """
         self._response_tracker.record_duration(operation_type, duration_seconds)
-
-    def record_token_count(
-        self, operation_type: OperationType, token_count: int
-    ) -> None:
-        """
-        Record token count for operation.
-
-        Args:
-            operation_type: Type of operation
-            token_count: Number of tokens
-        """
-        with self._lock:
-            logger.debug(f"[{operation_type.value}] Tokens recorded: {token_count}")
 
     # ========================================================================
     # Statistics Retrieval

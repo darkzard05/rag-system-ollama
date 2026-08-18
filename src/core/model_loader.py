@@ -23,7 +23,6 @@ from common.config import (
     EMBEDDING_DEVICE,
     ENABLE_OLLAMA_PRESSURE_FALLBACK,
     MAX_CACHED_MODELS,
-    MAX_CONCURRENT_INFERENCE,
     MODEL_CACHE_DIR,
     MSG_ERROR_OLLAMA_NOT_RUNNING,
     OLLAMA_BASE_URL,
@@ -130,31 +129,6 @@ class ModelManager:
         return {"llm": actual_llms, "embedding": actual_embeddings}
 
     @classmethod
-    def _get_lock(cls, name: str) -> asyncio.Lock:
-        """이름에 해당하는 비동기 락을 반환합니다. (지연 로딩)"""
-        if name not in cls._locks:
-            cls._locks[name] = asyncio.Lock()
-        return cls._locks[name]
-
-    @classmethod
-    def _get_semaphore(cls) -> asyncio.Semaphore:
-        """전역 추론 세마포어를 반환합니다. (지연 로딩)"""
-        # [WAVE4] VRAM 압력 시 >1 동시 추론을 1로 강등. 기본값(1)에서는
-        # host_pressure_exceeded 호출 없이 동작/성능 변화 없음.
-        effective_bound = (
-            1
-            if (MAX_CONCURRENT_INFERENCE > 1 and host_pressure_exceeded())
-            else MAX_CONCURRENT_INFERENCE
-        )
-        if (
-            cls._inference_semaphore is None
-            or cls._inference_semaphore_bound != effective_bound
-        ):
-            cls._inference_semaphore = asyncio.Semaphore(effective_bound)
-            cls._inference_semaphore_bound = effective_bound
-        return cls._inference_semaphore
-
-    @classmethod
     def get_faiss_gpu_resources(cls):
         """FAISS GPU 리소스를 싱글톤으로 반환합니다."""
         if cls._faiss_gpu_resources is None:
@@ -190,14 +164,6 @@ class ModelManager:
         from .resource_manager import get_resource_manager
 
         get_resource_manager().release_inference_lock()
-
-    @classmethod
-    def _get_from_cache(cls, key: str) -> Any | None:
-        """LRU 캐시에서 인스턴스를 가져오고 순서를 갱신합니다."""
-        if key in cls._instances:
-            cls._instances.move_to_end(key)
-            return cls._instances[key]
-        return None
 
     @classmethod
     async def _check_memory_pressure(cls):
@@ -250,21 +216,6 @@ class ModelManager:
                 await cls._evict_oldest_model()
                 return True
         return False
-
-    @classmethod
-    async def _add_to_cache(cls, key: str, instance: Any):
-        """LRU 캐시에 인스턴스를 추가합니다. 필요 시 가장 오래된 것을 방출합니다."""
-        # 추가 전 메모리 상태 확인
-        await cls._check_memory_pressure()
-
-        if key in cls._instances:
-            cls._instances.move_to_end(key)
-            cls._instances[key] = instance
-        else:
-            if len(cls._instances) >= cls.MAX_CACHED_MODELS:
-                await cls._evict_oldest_model()
-            cls._instances[key] = instance
-            cls._instances.move_to_end(key)
 
     @classmethod
     async def _evict_oldest_model(cls):
@@ -441,23 +392,6 @@ def load_embedding_model(
                         truncate=self.truncate,
                         options=self._default_params,
                         keep_alive=self.keep_alive,
-                    )["embeddings"]
-
-                async def aembed_documents(self, texts: list[str]) -> list[list[float]]:
-                    if not self._async_client:
-                        msg = (
-                            "Ollama client is not initialized. "
-                            "Please ensure Ollama is running and the model is loaded."
-                        )
-                        raise ValueError(msg)
-                    return (
-                        await self._async_client.embed(
-                            self.model,
-                            texts,
-                            truncate=self.truncate,
-                            options=self._default_params,
-                            keep_alive=self.keep_alive,
-                        )
                     )["embeddings"]
 
             logger.info(

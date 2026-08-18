@@ -8,7 +8,6 @@ Ollama는 별도 프로세스라 torch.cuda 미사용 환경(기본 배포)에�
 
 from __future__ import annotations
 
-import contextlib
 import logging
 
 from common.config import ENABLE_OLLAMA_PRESSURE_FALLBACK, HOST_PRESSURE_THRESHOLD
@@ -48,12 +47,3 @@ def ollama_backend_active() -> bool:
     return "/" not in DEFAULT_EMBEDDING_MODEL or DEFAULT_EMBEDDING_MODEL.startswith(
         "ollama:"
     )
-
-
-def get_torch_cuda_available() -> bool:
-    """torch.cuda 사용 가능 여부 (torch 부재 시 False)."""
-    with contextlib.suppress(Exception):
-        import torch
-
-        return torch.cuda.is_available()
-    return False

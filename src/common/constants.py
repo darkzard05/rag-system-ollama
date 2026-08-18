@@ -12,20 +12,6 @@ from pathlib import Path
 _PROJECT_ROOT = Path(__file__).parent.parent.parent
 
 
-class PerformanceConstants(IntEnum):
-    """성능 관련 상수"""
-
-    # 임베딩 배치 처리
-    EMBEDDING_BATCH_SIZE_DEFAULT = 64
-    EMBEDDING_BATCH_SIZE_GPU_HIGH = 128
-    EMBEDDING_BATCH_SIZE_GPU_MID = 64
-    EMBEDDING_BATCH_SIZE_GPU_LOW = 32
-    EMBEDDING_BATCH_SIZE_CPU = 16
-
-    # 캐싱
-    MODEL_CACHE_TTL_SECONDS = 600  # 10분
-
-
 # 모듈 레벨 상수 (IntEnum 외부에서 직접 import 가능)
 MAX_MESSAGE_HISTORY = 100
 
@@ -35,16 +21,11 @@ class ChunkingConstants(IntEnum):
 
     # 청크 크기
     MIN_CHUNK_SIZE = 200
-    DEFAULT_CHUNK_SIZE = 500
     MAX_CHUNK_SIZE = 1000
-
-    # 청크 오버랩
-    DEFAULT_OVERLAP_SIZE = 100
 
     # 의미론적 분할 (Semantic Chunking)
     MAX_HARD_SPLIT_LEN = 1500
     MIN_MERGE_LEN = 30
-    SEMANTIC_WINDOW_SIZE = 3
     SIMILARITY_MERGE_THRESHOLD = 92  # 0.92 * 100 (IntEnum이므로 정수로 관리)
 
 
@@ -57,14 +38,12 @@ class StringConstants:
 
     # 파일 설정
     MAX_FILE_SIZE_MB = 50
-    PDF_EXTENSION = ".pdf"
 
 
 class FilePathConstants:
     """파일 경로 관련 상수 (모두 프로젝트 루트 기준 절대경로)"""
 
     # 로그 디렉터리 — CWD와 무관하게 항상 <루트>/logs/로 수렴
-    LOG_DIR = _PROJECT_ROOT / "logs"
     LOG_FILE = _PROJECT_ROOT / "logs" / "app.log"
 
     # 캐시 디렉터리는 config.yml에서 로드하므로 여기서는 정의하지 않음

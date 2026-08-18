@@ -27,7 +27,6 @@ class AggregationStrategy(Enum):
 class DuplicateStrategy(Enum):
     """중복 처리 전략"""
 
-    KEEP_FIRST = "keep_first"
     KEEP_HIGHEST_SCORE = "keep_highest"
     MERGE_SCORES = "merge_scores"
     KEEP_LATEST = "keep_latest"
@@ -402,37 +401,3 @@ class SearchResultAggregator:
         agg.occurrence_count += 1
         metrics.duplicates_merged += 1
         metrics.score_adjustments += 1
-
-
-class ConsistencyValidator:
-    """결과 일관성 검증기 (Simplified)"""
-
-    def validate_aggregation(
-        self, aggregated: list[AggregatedResult]
-    ) -> dict[str, Any]:
-        if not aggregated:
-            return {"valid": True, "total_results": 0, "issues": []}
-
-        scores = [r.aggregated_score for r in aggregated]
-        doc_ids = [r.doc_id for r in aggregated]
-
-        issues = []
-        if any(
-            s > 100.0 or s < 0.0 for s in scores
-        ):  # RRF 등은 1.0 넘을 수 있어 임계치 조정
-            pass  # 스코어 범위는 전략마다 다르므로 엄격하게 체크하지 않음
-        if len(doc_ids) != len(set(doc_ids)):
-            issues.append("Duplicate doc_ids found")
-        if any(scores[i] < scores[i + 1] for i in range(len(scores) - 1)):
-            issues.append("Not properly sorted")
-
-        return {
-            "valid": len(issues) == 0,
-            "total_results": len(aggregated),
-            "issues": issues,
-            "score_stats": {
-                "min": min(scores),
-                "max": max(scores),
-                "avg": sum(scores) / len(scores),
-            },
-        }

@@ -50,12 +50,6 @@ class CachePermissionError(CacheSecurityError):
     pass
 
 
-class CacheVersionError(CacheSecurityError):
-    """캐시 버전 불일치"""
-
-    pass
-
-
 class CacheTrustError(CacheSecurityError):
     """신뢰할 수 없는 캐시 경로"""
 
@@ -215,17 +209,6 @@ class CacheSecurityManager:
         if bool(file_mode & (stat.S_IROTH | stat.S_IWOTH | stat.S_IWGRP)):
             if self.security_level == "high":
                 raise CachePermissionError(f"권한 과다: {file_path}")
-            return False
-        return True
-
-    def check_directory_ownership(self, dir_path: str) -> bool:
-        if os.name == "nt":
-            return True
-        st_info = os.stat(dir_path)
-        current_uid = getattr(os, "getuid", lambda: -1)()
-        if current_uid != -1 and st_info.st_uid != current_uid:
-            if self.security_level == "high":
-                raise CachePermissionError(f"소유권 불일치: {dir_path}")
             return False
         return True
 

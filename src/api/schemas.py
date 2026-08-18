@@ -146,12 +146,3 @@ class AnswerStructure(BaseModel):
     confidence: float = Field(
         ge=0.0, le=1.0, default=0.8, description="답변 신뢰도 (0.0-1.0)"
     )
-
-
-class ParseFailureMetrics(BaseModel):
-    """파싱 실패 메트릭 (모니터링용)"""
-
-    total_attempts: int = 0
-    failed_attempts: int = 0
-    failure_rate: float = 0.0
-    last_failure_reason: str | None = None

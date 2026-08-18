@@ -344,24 +344,6 @@ class CircuitBreakerRegistry:
                     )
                 return self.global_breakers[service_name]
 
-    def clear_session(self, session_id: str):
-        """세션 종료 시 해당 서킷 브레이커 정리"""
-        with self.lock:
-            if session_id in self.session_breakers:
-                del self.session_breakers[session_id]
-
-    def get_all_metrics(self) -> dict[str, dict[str, Any]]:
-        """모든 서킷 브레이커의 메트릭 조회"""
-        with self.lock:
-            metrics = {
-                f"global:{name}": breaker.get_metrics()
-                for name, breaker in self.global_breakers.items()
-            }
-            for sid, breakers in self.session_breakers.items():
-                for name, breaker in breakers.items():
-                    metrics[f"session:{sid}:{name}"] = breaker.get_metrics()
-            return metrics
-
 
 # 전역 레지스트리
 
@@ -374,9 +356,3 @@ def get_circuit_breaker_registry() -> CircuitBreakerRegistry:
     if _circuit_breaker_registry is None:
         _circuit_breaker_registry = CircuitBreakerRegistry()
     return _circuit_breaker_registry
-
-
-def reset_circuit_breaker_registry() -> None:
-    """레지스트리 리셋"""
-    global _circuit_breaker_registry
-    _circuit_breaker_registry = None
