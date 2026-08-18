@@ -120,6 +120,7 @@ context-notes.md
 
 # Runtime pid files
 reports/f3_streamlit.pid
+reports/*.pid
 
 # Coverage / diagnostic dumps (local only)
 cov.json
