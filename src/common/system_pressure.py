@@ -11,25 +11,28 @@ from __future__ import annotations
 import contextlib
 import logging
 
-from common.config import ENABLE_OLLAMA_PRESSURE_FALLBACK
+from common.config import ENABLE_OLLAMA_PRESSURE_FALLBACK, HOST_PRESSURE_THRESHOLD
 
 logger = logging.getLogger(__name__)
 
 
-def host_pressure_exceeded(threshold: float = 90.0) -> bool:
+def host_pressure_exceeded(threshold: float | None = None) -> bool:
     """
     호스트 가상 메모리 점유율이 임계값을 초과하면 True.
 
     psutil 부재 시 False 반환 (압력 감지 불가 → 퇴출 유도 안 함).
     """
+    if threshold is None:
+        threshold = HOST_PRESSURE_THRESHOLD
     try:
         import psutil
     except ImportError:
+        logger.warning("psutil unavailable — host pressure detection disabled")
         return False
     try:
         return psutil.virtual_memory().percent > threshold
     except Exception as e:
-        logger.debug(f"Host memory check failed: {e}")
+        logger.warning(f"Host memory check failed: {e}")
         return False
 
 

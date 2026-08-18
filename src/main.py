@@ -23,6 +23,18 @@ warnings.filterwarnings(
     category=LangChainPendingDeprecationWarning,
 )
 
+# [Path Bootstrap] 저장소 루트의 src/ 를 sys.path 에 추가하여
+# `from common`/`from core` 식의 bare import 가 해석되도록 한다.
+# (프로젝트 스크립트들이 사용하는 관례: scripts/test_app.py 등)
+# 이 부트스트랩이 없으면 streamlit run src/main.py 가 저장소 루트에서
+# 실행될 때 `No module named 'src.common'` 으로 실패한다.
+import sys
+from pathlib import Path
+
+_SRC_DIR = str(Path(__file__).resolve().parent)
+if _SRC_DIR not in sys.path:
+    sys.path.insert(0, _SRC_DIR)
+
 # [Lazy Import용] 런타임에 필요한 모듈들
 import asyncio
 import atexit

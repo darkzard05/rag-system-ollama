@@ -523,7 +523,7 @@ async def retrieve_and_rerank(
     if writer is not None:
         await adispatch_custom_event(
             "graph_status",
-            {"status": "Searching for relevant knowledge..."},
+            {"status": "관련 지식 검색 중..."},
             config=config,
         )
     SessionManager.add_status_log(
@@ -845,7 +845,7 @@ async def grade_documents(
 
     if writer is not None:
         await adispatch_custom_event(
-            "graph_status", {"status": "Verifying document relevance..."}, config=config
+            "graph_status", {"status": "문서 관련성 검증 중..."}, config=config
         )
 
     test_docs = docs[: int(GRADING_CONFIG.get("grade_top_n", 3))]
@@ -1163,7 +1163,7 @@ async def generate(
     if writer is not None:
         await adispatch_custom_event(
             "graph_status",
-            {"status": "Designing and generating the answer..."},
+            {"status": "답변 설계 및 생성 중..."},
             config=config,
         )
     # R1a-08: generate 진입 상태 로그는 단일 호출당 1회만 기록한다.

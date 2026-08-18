@@ -176,12 +176,12 @@ class ModelPool(BaseResourcePool[Any]):
                     await self._evict_one()
                     return True
         except Exception as e:
-            logger.debug(f"VRAM check failed: {e}")
+            logger.warning(f"VRAM check failed: {e}")
 
         if (
             ENABLE_OLLAMA_PRESSURE_FALLBACK
             and ollama_backend_active()
-            and host_pressure_exceeded(threshold=90.0)
+            and host_pressure_exceeded()
         ):
             logger.warning(
                 "[ModelPool] Host RAM pressure detected (Ollama fallback). "

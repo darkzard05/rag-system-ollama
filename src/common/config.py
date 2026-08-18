@@ -127,6 +127,11 @@ ENABLE_OLLAMA_PRESSURE_FALLBACK: bool = _get_env(
     _models_config.get("enable_ollama_pressure_fallback", True),
     lambda x: str(x).lower() == "true",
 )
+HOST_PRESSURE_THRESHOLD: float = _get_env(
+    "HOST_PRESSURE_THRESHOLD",
+    _models_config.get("host_pressure_threshold", 85.0),
+    float,
+)
 
 # --- 2. 임베딩 설정 (Embeddings) ---
 _embedding_config = _config.get("embeddings", {})

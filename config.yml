@@ -53,6 +53,9 @@ models:
   # Ollama는 별도 프로세스라 torch.cuda 미사용 시 VRAM 퇴출이 영원히 안 떠짐.
   # 호스트 RAM 압력 폴백으로 퇴출을 유도할지 (기본 배포= Ollama).
   enable_ollama_pressure_fallback: true
+  # 호스트 RAM 압력(host_pressure_exceeded) 임계값(%). 기본 배포(Ollama/CPU)에서
+  # 모델 퇴출을 유도하는 RAM 점유율 상한. 90%는 너무 높아 조기 퇴출을 막으므로 85%로 완화.
+  host_pressure_threshold: 85.0
 
 
 # --- RAG 파이프라인 설정 ---

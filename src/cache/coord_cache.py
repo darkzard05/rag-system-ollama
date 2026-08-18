@@ -203,18 +203,24 @@ class CoordCacheManager:
             self._worker_task = asyncio.create_task(self._write_behind_worker())
             logger.info("좌표 캐시 백그라운드 워커 시작됨")
 
+    async def _insert_coords_impl(
+        self, file_hash: str, page_num: int, coords: list[dict[str, Any]]
+    ) -> None:
+        """SQLite에 좌표를 기록합니다 (워커와 QueueFull 폴백 공용)."""
+        db = await self._get_connection()
+        await db.execute(
+            "INSERT OR REPLACE INTO coords (file_hash, page_num, coords, created_at) VALUES (?, ?, ?, ?)",
+            (file_hash, page_num, orjson.dumps(coords), time.time()),
+        )
+        await db.commit()
+
     async def _write_behind_worker(self) -> None:
         """백그라운드에서 큐의 좌표 데이터를 SQLite에 저장합니다."""
         while True:
             try:
                 file_hash, page_num, coords = await self._queue.get()
                 try:
-                    db = await self._get_connection()
-                    await db.execute(
-                        "INSERT OR REPLACE INTO coords (file_hash, page_num, coords, created_at) VALUES (?, ?, ?, ?)",
-                        (file_hash, page_num, orjson.dumps(coords), time.time()),
-                    )
-                    await db.commit()
+                    await self._insert_coords_impl(file_hash, page_num, coords)
                 except (aiosqlite.Error, OSError, RuntimeError) as e:
                     logger.error(
                         f"백그라운드 저장 실패 ({file_hash}, p{page_num}): {e}"
@@ -391,12 +397,14 @@ class CoordCacheManager:
     ) -> None:
         await self._ensure_worker_started()
         try:
-            # 큐가 가득 차면 블로킹하지 않고 드롭 (좌표는 재계산 가능한 캐시)
+            # 큐가 가득 차면 블로킹하지 않고 즉시 SQLite 기록으로 폴백.
+            # 좌표는 제품 차별화 기능(하이라이트)의 근간이므로 조용한 드롭은 금지.
             self._queue.put_nowait((file_hash, page_num, coords))
         except asyncio.QueueFull:
-            logger.warning(
-                f"좌표 캐시 큐 가득 참 — 좌표 저장 생략 ({file_hash}, p{page_num})"
+            logger.info(
+                f"좌표 캐시 큐 가득 참 — 즉시 기록 폴백 ({file_hash}, p{page_num})"
             )
+            await self._submit(self._insert_coords_impl(file_hash, page_num, coords))
 
     async def get_coords_batch(
         self, file_hash: str, page_nums: list[int]
