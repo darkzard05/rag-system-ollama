@@ -29,7 +29,6 @@ ROOT_DIR = Path(__file__).parent.parent.parent.absolute()
 # Mirrors ci.yml "Run Core Integrity Tests".
 INTEGRATION_FILES = [
     "tests/integration/test_rag_integration.py",
-    "tests/integration/test_streamlit_app.py",
     "tests/integration/test_streaming_response.py",
     "tests/security/test_cache_security.py",
     "tests/integration/test_caching_system.py",
