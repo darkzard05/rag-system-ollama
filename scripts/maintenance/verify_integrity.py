@@ -211,28 +211,15 @@ def main():
     )
 
     # 2. 단위 및 통합 테스트 (Pytest)
-    print_header("Step 2: Core & Integration Tests")
-    # 고속 단위 테스트
-    results["Test: Unit Tests"] = run_command(["pytest", "tests/unit"], "Unit Tests")
-    # UI 통합 테스트
-    results["Test: UI Flow"] = run_command(
-        ["pytest", "tests/integration/test_streamlit_app.py"], "Streamlit UI Test"
-    )
-    # 스트리밍 프로토콜 테스트
-    results["Test: Streaming"] = run_command(
-        ["pytest", "tests/integration/test_streaming_response.py"],
-        "Streaming Protocol Test",
-    )
-    # 보안 및 캐시 시스템 테스트 (CI 동기화)
-    results["Test: Security"] = run_command(
-        ["pytest", "tests/security/test_cache_security.py"], "Cache Security Test"
-    )
-    results["Test: Caching"] = run_command(
-        ["pytest", "tests/integration/test_caching_system.py"], "Caching System Test"
-    )
-    # RAG 시스템 통합 테스트
-    results["Test: RAG Core"] = run_command(
-        ["pytest", "tests/integration/test_rag_integration.py"], "RAG Core Integration"
+    # NOTE: CI parity — delegate to the SINGLE SOURCE OF TRUTH for the test
+    # stage (scripts/maintenance/run_ci_checks.py), identical to what the GitHub
+    # Actions `test` job and the local pre-push hook run. This guarantees the
+    # three entry points never drift apart.
+    print_header("Step 2: Core & Integration Tests (CI parity)")
+    results["Test: CI Parity"] = run_command(
+        ["python", "scripts/maintenance/run_ci_checks.py"],
+        "CI-Parity Test Suite",
+        timeout=600,
     )
 
     # 3. 실전 파이프라인 테스트 (E2E)
