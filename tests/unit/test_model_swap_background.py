@@ -12,12 +12,14 @@ from unittest.mock import MagicMock, patch
 sys.path.append(os.path.abspath("src"))
 
 from core.session import SessionManager
-from main import _bg_update_qa_chain, _handle_pending_tasks
+from src.main import _bg_update_qa_chain, _handle_pending_tasks
 
 
 class TestModelSwapBackgroundDispatch(unittest.TestCase):
     def setUp(self):
+        SessionManager.reset()
         SessionManager.reset_all_state("test_session")
+        SessionManager.set_ui_sync(None)
         SessionManager.set_session_id("test_session")
 
     def test_qa_chain_update_dispatches_to_background_worker(self):
@@ -27,7 +29,7 @@ class TestModelSwapBackgroundDispatch(unittest.TestCase):
 
         with (
             patch("common.utils.run_in_background_worker") as mock_run_bg,
-            patch("main.st.rerun") as mock_rerun,
+            patch("src.main.st.rerun") as mock_rerun,
         ):
             _handle_pending_tasks()
 
@@ -56,7 +58,7 @@ class TestModelSwapBackgroundDispatch(unittest.TestCase):
 
         with (
             patch("common.utils.run_in_background_worker") as mock_run_bg,
-            patch("main.st.rerun"),
+            patch("src.main.st.rerun"),
         ):
             _handle_pending_tasks()
 

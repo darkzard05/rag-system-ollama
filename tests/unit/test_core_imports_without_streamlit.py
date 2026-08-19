@@ -21,6 +21,7 @@ These tests prove two things across the refactor:
 
 import os
 import sys
+from typing import Any
 
 import pytest
 
@@ -59,6 +60,43 @@ def _block_streamlit() -> _no_streamlit:
     return _no_streamlit()
 
 
+def _snapshot_sys_modules() -> dict[str, object]:
+    """Capture every ``core.session*"`` and ``streamlit*"`` module object before we
+    mutate ``sys.modules``.
+
+    ``tests/conftest.py`` merges the ``core.*`` / ``src.core.*`` aliases into a
+    single authoritative module object at process start. Some tests below pop
+    ``core.session`` from ``sys.modules`` to force a fresh re-import; that creates
+    a *new* module object and splits the previously-merged ``SessionManager`` class,
+    which leaks across tests and breaks downstream consumers. Snapshotting and
+    restoring those modules around the mutation keeps the conftest merge intact.
+    """
+    return {
+        name: mod
+        for name, mod in sys.modules.items()
+        if name.startswith("core.session")
+        or name == "streamlit"
+        or name.startswith("streamlit.")
+    }
+
+
+def _restore_sys_modules(snapshot: dict[str, object]) -> None:
+    """Restore the ``core.session*"`` / ``streamlit*"`` modules to the snapshot.
+
+    Re-applies every captured module object, then drops any freshly-imported
+    session/streamlit submodule that was not present in the snapshot.
+    """
+    for name, mod in snapshot.items():
+        sys.modules[name] = mod
+    for name in [
+        n
+        for n in sys.modules
+        if n.startswith("core.session") or n.startswith("streamlit.")
+    ]:
+        if name not in snapshot:
+            sys.modules.pop(name, None)
+
+
 def _module_source_has_top_level_streamlit_import() -> bool:
     # type: () -> bool
     """True if ``src/core/session/manager.py`` still imports streamlit at top level."""
@@ -82,42 +120,55 @@ def test_baseline_top_level_streamlit_import_absent() -> None:
 
 def test_core_import_succeeds_with_streamlit_blocked() -> None:
     """F1 regression: importing core.session.manager must not require streamlit."""
-    with _block_streamlit():
-        # Drop any cached module so we re-import from source.
-        for mod in list(sys.modules):
-            if mod.startswith("core.session"):
-                sys.modules.pop(mod, None)
-        import core.session.manager as m  # noqa: F401
+    # Snapshot before mutating sys.modules so the conftest module-merge stays
+    # intact after the test (prevents cross-test leakage of SessionManager).
+    _snap = _snapshot_sys_modules()
+    try:
+        with _block_streamlit():
+            for mod in list(sys.modules):
+                if mod.startswith("core.session"):
+                    sys.modules.pop(mod, None)
+            import core.session.manager as m  # noqa: F401
 
-        assert hasattr(m.SessionManager, "set_ui_sync")
+            assert hasattr(m.SessionManager, "set_ui_sync")
+    finally:
+        _restore_sys_modules(_snap)
 
 
 def test_get_falls_back_to_global_store_when_no_adapter() -> None:
     """With no UI adapter installed, get() returns the global-store value."""
-    with _block_streamlit():
-        for mod in list(sys.modules):
-            if mod.startswith("core.session"):
-                sys.modules.pop(mod, None)
-        from core.session import SessionManager
+    # Snapshot before mutating sys.modules so the conftest module-merge survives
+    # the test (prevents cross-test leakage of SessionManager).
+    _snap = _snapshot_sys_modules()
+    try:
+        with _block_streamlit():
+            for mod in list(sys.modules):
+                if mod.startswith("core.session"):
+                    sys.modules.pop(mod, None)
+            from core.session import SessionManager
 
-        try:
-            SessionManager.reset()
-            SessionManager.set_ui_sync(None)
-            sid = "f1_fallback_sid"
-            SessionManager.set_session_id(sid)
-            SessionManager.init_session()
-            SessionManager.set("f1_marker", "from_global_store", session_id=sid)
+            try:
+                SessionManager.reset()
+                SessionManager.set_ui_sync(None)
+                sid = "f1_fallback_sid"
+                SessionManager.set_session_id(sid)
+                SessionManager.init_session()
+                SessionManager.set("f1_marker", "from_global_store", session_id=sid)
 
-            # No adapter -> must read the global store, never touch st.session_state.
-            assert (
-                SessionManager.get("f1_marker", session_id=sid) == "from_global_store"
-            )
-            # Missing key -> default, no raise.
-            assert (
-                SessionManager.get("f1_missing", default="dv", session_id=sid) == "dv"
-            )
-        finally:
-            SessionManager.set_ui_sync(None)
+                # No adapter -> must read the global store, never touch st.session_state.
+                assert (
+                    SessionManager.get("f1_marker", session_id=sid)
+                    == "from_global_store"
+                )
+                # Missing key -> default, no raise.
+                assert (
+                    SessionManager.get("f1_missing", default="dv", session_id=sid)
+                    == "dv"
+                )
+            finally:
+                SessionManager.set_ui_sync(None)
+    finally:
+        _restore_sys_modules(_snap)
 
 
 class _FakeSync:
@@ -142,62 +193,88 @@ def test_set_ui_sync_adapter_routes_writes() -> None:
     """
     import streamlit.runtime.scriptrunner as scriptrunner  # type: ignore
 
-    for mod in list(sys.modules):
-        if mod.startswith("core.session"):
-            sys.modules.pop(mod, None)
-    from core.session import SessionManager
-
-    fake = _FakeSync()
-    real_is_running = SessionManager._is_streamlit_running
-    real_ctx = scriptrunner.get_script_run_ctx
+    # Snapshot before popping so the conftest module-merge survives the test.
+    _snap = _snapshot_sys_modules()
     try:
-        SessionManager._is_streamlit_running = classmethod(  # type: ignore[assignment]
-            lambda cls: True
-        )
-        scriptrunner.get_script_run_ctx = lambda: object()  # truthy ctx
+        for mod in list(sys.modules):
+            if mod.startswith("core.session"):
+                sys.modules.pop(mod, None)
+        from core.session import SessionManager
 
-        SessionManager.reset()
-        SessionManager.set_ui_sync(fake)
-        sid = "f1_adapter_sid"
-        SessionManager.set_session_id(sid)
-        SessionManager.init_session()
+        fake = _FakeSync()
+        real_is_running = SessionManager._is_streamlit_running
+        real_ctx = scriptrunner.get_script_run_ctx
+        try:
+            SessionManager._is_streamlit_running = classmethod(  # type: ignore[assignment]
+                lambda cls: True
+            )
+            scriptrunner.get_script_run_ctx = lambda: object()  # truthy ctx
 
-        # list value must be copied (slice), not aliased.
-        SessionManager.set("f1_list", [1, 2, 3], session_id=sid)
-        # dict value must be copied.
-        SessionManager.set("f1_dict", {"a": 1}, session_id=sid)
-        SessionManager.set("f1_scalar", "x", session_id=sid)
+            SessionManager.reset()
+            SessionManager.set_ui_sync(fake)
+            sid = "f1_adapter_sid"
+            SessionManager.set_session_id(sid)
+            SessionManager.init_session()
 
-        SessionManager.sync_to_streamlit(sid)
+            # list value must be copied (slice), not aliased.
+            SessionManager.set("f1_list", [1, 2, 3], session_id=sid)
+            # dict value must be copied.
+            SessionManager.set("f1_dict", {"a": 1}, session_id=sid)
+            SessionManager.set("f1_scalar", "x", session_id=sid)
 
-        written = dict(fake.writes)
-        assert written["f1_list"] == [1, 2, 3]
-        assert written["f1_dict"] == {"a": 1}
-        assert written["f1_scalar"] == "x"
+            SessionManager.sync_to_streamlit(sid)
+
+            written = dict(fake.writes)
+            assert written["f1_list"] == [1, 2, 3]
+            assert written["f1_dict"] == {"a": 1}
+            assert written["f1_scalar"] == "x"
+        finally:
+            scriptrunner.get_script_run_ctx = real_ctx
+            SessionManager._is_streamlit_running = real_is_running  # type: ignore[assignment]
+            SessionManager.set_ui_sync(None)
     finally:
-        scriptrunner.get_script_run_ctx = real_ctx
-        SessionManager._is_streamlit_running = real_is_running  # type: ignore[assignment]
-        SessionManager.set_ui_sync(None)
+        _restore_sys_modules(_snap)
 
 
 def test_streamlitsessionsync_mirrors_copy_semantics() -> None:
     """StreamlitSessionSync.write must copy lists/dicts (no UI aliasing)."""
-    import streamlit as st  # type: ignore
+    from unittest.mock import patch
 
+    from ui import session_sync
     from ui.session_sync import StreamlitSessionSync
 
-    original_list = [1, 2, 3]
-    original_dict = {"a": 1}
+    # `SessionManager` routes UI writes through the installed adapter, which
+    # mirrors state into ``session_sync.st.session_state``. We substitute a plain
+    # dict-like store on the adapter's own ``st`` binding (not the global
+    # ``streamlit.session_state`` module attribute) so the assertion is robust
+    # even when another test has already booted the Streamlit runtime — Streamlit
+    # caches an internal ``session_state`` reference that the module attribute
+    # patch does not reach.
+    store: dict[str, Any] = {}
 
-    StreamlitSessionSync.write("k_list", original_list)
-    StreamlitSessionSync.write("k_dict", original_dict)
-    StreamlitSessionSync.write("k_scalar", "x")
+    class _SessionStateProxy:
+        def __getitem__(self, k):
+            return store[k]
 
-    assert st.session_state["k_list"] == original_list
-    assert st.session_state["k_list"] is not original_list  # sliced copy
-    assert st.session_state["k_dict"] == original_dict
-    assert st.session_state["k_dict"] is not original_dict  # shallow copy
-    assert st.session_state["k_scalar"] == "x"
+        def __setitem__(self, k, v):
+            store[k] = v
+
+        def get(self, k, default=None):
+            return store.get(k, default)
+
+    with patch.object(session_sync.st, "session_state", _SessionStateProxy()):
+        original_list = [1, 2, 3]
+        original_dict = {"a": 1}
+
+        StreamlitSessionSync.write("k_list", original_list)
+        StreamlitSessionSync.write("k_dict", original_dict)
+        StreamlitSessionSync.write("k_scalar", "x")
+
+        assert store["k_list"] == original_list
+        assert store["k_list"] is not original_list  # sliced copy
+        assert store["k_dict"] == original_dict
+        assert store["k_dict"] is not original_dict  # shallow copy
+        assert store["k_scalar"] == "x"
 
 
 if __name__ == "__main__":

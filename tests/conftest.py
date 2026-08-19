@@ -22,28 +22,47 @@ SRC_DIR = BASE_DIR / "src"
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
-from core.session import SessionManager  # noqa: E402
+# 횡단 의존성 방지: `sys.path` 에 `src` 가 들어가면 `import core` 와
+# `import src.core` 가 서로 다른 모듈 객체로 로드되어, 같은 클래스
+# (`SessionManager` 등)나 함수(`host_pressure_exceeded` 등)가 테스트/소스별로
+# 복제되고 전역 상태·monkeypatch 타깃이 불일치하는 문제가 발생합니다.
+#
+# 소스 모듈(`src.main` 등)은 언프리픽스 `core.*` 를 사용하므로, canonical 을
+# `src.core.*` 로 고정하고 `core.*` 별칭이 **항상 동일 객체**를 가리키도록
+# 강제합니다. conftest 가 먼저 로드되므로 이후 어떤 테스트가 `import src.core.x`
+# 를 해도 `core.x` 는 같은 객체입니다. 하위 모듈까지 전부 매핑합니다.
+for _name, _modobj in list(sys.modules.items()):
+    if _name.startswith("src.") and not _name.startswith("src.src."):
+        _alias = _name[len("src.") :]
+        # src.pkg.x -> pkg.x 별칭을 같은 객체로 (이미 있으면 덮어쓰지 않음)
+        if _alias not in sys.modules:
+            sys.modules[_alias] = _modobj
 
-# 횡단 의존성 방지: `pythonpath=["src"]` 환경에서 `import core` 와 `import
-# src.core` 가 서로 다른 모듈 객체로 로드되어, 같은 클래스(`SessionManager` 등)가
-# 테스트/소스별로 복제되고 전역 상태가 공유되지 않는 문제가 발생합니다.
-# `src.core.*` 가 이미 로드되어 있다면 `core.*` 별칭이 동일 객체를 가리키도록
-# sys.modules 를 병합합니다 (반대 방향도 보정).
-import pkgutil
-
+# 아직 로드되지 않은 하위 모듈도 future import 시 동일 객체를 쓰도록,
+# 이미 로드된 core.* 가 src.* 와 다르면 src.* 를 정통으로 통일.
 for _pkg in ("core", "ui", "common", "api", "infra", "security", "services"):
-    _src_mod = sys.modules.get(f"src.{_pkg}")
+    _src_name = f"src.{_pkg}"
+    _src_mod = sys.modules.get(_src_name)
     _mod = sys.modules.get(_pkg)
     if _src_mod is not None and _mod is not None and _src_mod is not _mod:
-        # 두 별칭이 모두 로드된 경우 하나로 통일 (src.* 를 정통으로 취함)
         sys.modules[_pkg] = _src_mod
-        # 하위 모듈도 재귀적으로 병합
-        _prefix = f"src.{_pkg}."
-        for _name, _modobj in list(sys.modules.items()):
-            if _name.startswith(_prefix):
-                _alias = _name[len("src.") :]
-                if _alias in sys.modules and sys.modules[_alias] is not _modobj:
-                    sys.modules[_alias] = _modobj
+        sys.modules[_src_name] = _src_mod
+
+
+def _current_session_manager():
+    """Return the SessionManager class that is *actually* bound to ``core.session``
+    right now.
+
+    Some tests (e.g. ``test_core_imports_without_streamlit``) pop ``core.session``
+    from ``sys.modules`` to force a fresh re-import, which creates a *new*
+    ``SessionManager`` class object. A module-level cached reference would then
+    point at the stale (pre-pop) class while the rest of the code uses the new
+    one, so state no longer shared. Re-importing here always yields the live
+    class, whatever alias the caller uses.
+    """
+    from core.session import SessionManager
+
+    return SessionManager
 
 
 @pytest.fixture(autouse=True)
@@ -52,13 +71,18 @@ def _reset_session_manager_per_test():
 
     SessionManager는 프로세스 전역 딕셔너리를 주 저장소로 사용하며, 일부 테스트는
     main.py import를 통해 UI-sync 어댑터(StreamlitSessionSync)를 전역에 부착합니다.
-    어댑터가 남아 있으면 코어 로직(add_message 등)이 실제 UI session_state에
-    의존하게 되어 테스트가 깨지므로, 각 테스트 전후로 폴백 저장소와 어댑터를
-    모두 초기화합니다. 두 import 별칭(core / src.core)을 함께 정리합니다.
+    어댑터가 남아 있으면 코어 로직이 실제 UI session_state에 의존하게 되어
+    테스트가 깨지므로, 각 테스트 전후로 폴백 저장소와 어댑터를 모두 초기화합니다.
+
+    ``_current_session_manager()`` 를 통해 **현재 유효한** SessionManager 클래스를
+    매번 다시 가져오므로, 다른 테스트가 ``sys.modules`` 를 더럽혀 새 클래스 객체를
+    만들었더라도 그 객체의 전역 상태를 정리할 수 있습니다.
     """
+    SessionManager = _current_session_manager()
     SessionManager.reset()
     SessionManager.set_ui_sync(None)
     yield
+    SessionManager = _current_session_manager()
     SessionManager.reset()
     SessionManager.set_ui_sync(None)
 

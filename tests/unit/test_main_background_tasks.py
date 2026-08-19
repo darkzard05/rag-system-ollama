@@ -15,8 +15,8 @@ sys.path.append(os.path.abspath("src"))
 
 from core.document_processor import compute_file_hash
 from core.session import SessionManager
-from main import _bg_rebuild_task, _update_qa_chain, on_file_upload
-from ui.components.streaming import stream_chunks
+from src.main import _bg_rebuild_task, _update_qa_chain, on_file_upload
+from src.ui.components.streaming import stream_chunks
 
 
 class FakeSessionState(dict):
@@ -44,7 +44,9 @@ def _make_test_pdf(text: str = "test") -> bytes:
 
 class TestMainBackgroundTasks(unittest.TestCase):
     def setUp(self):
+        SessionManager.reset()
         SessionManager.reset_all_state("test_session")
+        SessionManager.set_ui_sync(None)
         SessionManager.set_session_id("test_session")
 
     @patch("infra.notification_system.SystemNotifier.error")
@@ -108,8 +110,8 @@ class TestMainBackgroundTasks(unittest.TestCase):
 
             fake_state = FakeSessionState({"pdf_uploader": uploaded})
             with (
-                patch("main.FilePathConstants.TEMP_DIR", temp_dir),
-                patch("main.st.session_state", fake_state),
+                patch("src.main.FilePathConstants.TEMP_DIR", temp_dir),
+                patch("src.main.st.session_state", fake_state),
                 patch(
                     "infra.notification_system.SystemNotifier.success"
                 ) as mock_success,
@@ -144,8 +146,8 @@ class TestMainBackgroundTasks(unittest.TestCase):
         fake_state = FakeSessionState({"pdf_uploader": uploaded})
         with (
             tempfile.TemporaryDirectory() as temp_dir,
-            patch("main.FilePathConstants.TEMP_DIR", temp_dir),
-            patch("main.st.session_state", fake_state),
+            patch("src.main.FilePathConstants.TEMP_DIR", temp_dir),
+            patch("src.main.st.session_state", fake_state),
             patch("infra.notification_system.SystemNotifier.success") as mock_success,
         ):
             on_file_upload()
@@ -167,7 +169,7 @@ class TestMainBackgroundTasks(unittest.TestCase):
 
         fake_state = FakeSessionState({"pdf_uploader": uploaded})
         with (
-            patch("main.st.session_state", fake_state),
+            patch("src.main.st.session_state", fake_state),
             patch("infra.notification_system.SystemNotifier.success") as mock_success,
         ):
             on_file_upload()
@@ -205,10 +207,10 @@ class TestMainBackgroundTasks(unittest.TestCase):
                 side_effect=never_returning_astream,
             ),
             patch(
-                "ui.components.streaming.get_streaming_handler",
+                "src.ui.components.streaming.get_streaming_handler",
                 return_value=mock_handler,
             ),
-            patch("ui.components.streaming.UI_STREAMING_TIMEOUT", 0.01),
+            patch("src.ui.components.streaming.UI_STREAMING_TIMEOUT", 0.01),
             pytest.raises(TimeoutError),
         ):
             list(
