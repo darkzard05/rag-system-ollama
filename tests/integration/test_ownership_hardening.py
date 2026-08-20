@@ -7,12 +7,12 @@ fail-open(레거시: 미등록 세션은 모든 인증 사용자에게 접근 �
 - test_unbound_existing_file_denied: 파일 fail-closed 전환 검증 (RED 대상)
 - test_missing_file_404_for_unbound_hash: resolve-first 404 순서 고정 (regression lock)
 - test_concurrent_upload_second_rejected: TOCTOU 경합 검증 (RED 대상)
-- test_stale_session_owner_swept / test_stale_file_owner_swept: 스윕 검증 (RED 대상)
+
+스윕 로직(_sweep_stale_owners) 검증은 tests/unit/test_ownership.py 로 이관되었습니다.
 """
 
 import asyncio
 import io
-import time
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
@@ -84,7 +84,6 @@ async def test_missing_file_404_for_unbound_hash(client, pdf_override):
 @pytest.mark.asyncio
 async def test_concurrent_upload_second_rejected(client, pdf_override, auth_override):
     """첫 업로드가 진행 중일 때 다른 사용자의 동일 세션 업로드는 403 으로 거부되어야 합니다 (TOCTOU)."""
-    import src.api.api_server as api
 
     started = asyncio.Event()
     release = asyncio.Event()
@@ -100,10 +99,16 @@ async def test_concurrent_upload_second_rejected(client, pdf_override, auth_over
 
     files = {"file": ("test.pdf", io.BytesIO(_FAKE_PDF), "application/pdf")}
 
+    # Patch on the defining class via the bare ``core`` module path:
+    # ``get_embedder_for_session`` lives on ``ResourceCoordinator``
+    # (src/core/resource_manager.py:561) and the app imports ``core`` (not
+    # ``src.core``), so patching ``src.core.resource_manager.ResourceManager...``
+    # is a no-op (separate module object) that lets a real Ollama embedder build
+    # through. Patch on ``core.resource_manager.ResourceCoordinator`` to intercept.
     with (
         patch("src.api.api_server.RAGSystem.build_pipeline", new=_build_pipeline),
         patch(
-            "src.core.resource_manager.ResourceManager.get_embedder_for_session",
+            "core.resource_manager.ResourceCoordinator.get_embedder_for_session",
             new_callable=AsyncMock,
         ),
     ):
@@ -114,6 +119,8 @@ async def test_concurrent_upload_second_rejected(client, pdf_override, auth_over
             )
         )
         await asyncio.wait_for(started.wait(), timeout=10)
+        assert started.is_set(), "first upload never started building pipeline"
+        assert build_count == 1
 
         auth_override["user_id"] = "user-b"
         resp_b = await client.post(
@@ -124,21 +131,3 @@ async def test_concurrent_upload_second_rejected(client, pdf_override, auth_over
         release.set()
         resp_a = await task_a
         assert resp_a.status_code == 200
-
-
-def test_stale_session_owner_swept():
-    """TTL 을 초과한 세션 소유권 항목은 _sweep_stale_owners 로 제거되어야 합니다."""
-    import src.api.api_server as api
-
-    api._session_owners["ghost-session"] = ("user-x", time.time() - 10 * 24 * 3600)
-    api._sweep_stale_owners()
-    assert "ghost-session" not in api._session_owners
-
-
-def test_stale_file_owner_swept(pdf_override):
-    """디스크에 존재하지 않는 파일 소유권 항목은 _sweep_stale_owners 로 제거되어야 합니다."""
-    import src.api.api_server as api
-
-    api._file_owners["b" * 64] = ("user-x", time.time())
-    api._sweep_stale_owners()
-    assert "b" * 64 not in api._file_owners
