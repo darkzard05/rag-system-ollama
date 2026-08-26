@@ -10,8 +10,42 @@
 
 import logging
 import logging.handlers
+import os
+import shutil
 import warnings
 from pathlib import Path
+
+
+class WindowsSafeRotatingFileHandler(logging.handlers.RotatingFileHandler):
+    """Windows 멀티프로세스 환경에서 안전한 로그 롤오버 핸들러.
+
+    기본 ``RotatingFileHandler.doRollover`` 는 ``os.rename(app.log, app.log.1)`` 을
+    사용하는데, Windows 에서는 같은 파일을 다른 프로세스(예: 2번째 Streamlit
+    인스턴스)가 열고 있으면 ``WinError 32 (ERROR_SHARING_VIOLATION)`` 로 실패합니다.
+
+    이를 해결하기 위해 rename 대신 ``copy + truncate`` 전략을 사용합니다.
+    원본 파일을 다른 프로세스가 열고 있어도 내용을 복사한 뒤 원본을 0바이트로
+    자르므로 모든 writer 의 핸들이 유효하게 유지됩니다.
+    """
+
+    def rotate(self, source: str, dest: str) -> None:
+        """원본을 대상으로 복사한 뒤 원본을 비웁니다 (Windows 공유 위반 회피)."""
+        if not os.path.exists(source):
+            return
+        try:
+            shutil.copyfile(source, dest)
+            with open(source, "r+b") as fh:
+                fh.truncate(0)
+        except OSError as exc:
+            # WinError 32 = 파일을 다른 프로세스가 사용 중. 롤오버를 보류하고
+            # 다음 emit 에서 재시도하도록 경고만 남깁니다 (무음 삭제 금지).
+            if getattr(exc, "winerror", None) == 32 or exc.errno in (13,):
+                logging.getLogger(__name__).warning(
+                    "로그 롤오버 보류: %s 를 다른 프로세스가 사용 중 (다음 회차 재시도)",
+                    source,
+                )
+                return
+            raise
 
 
 class ContextFilter(logging.Filter):
@@ -123,7 +157,7 @@ def setup_logging(
         log_file = Path(log_file)
         log_file.parent.mkdir(parents=True, exist_ok=True)
 
-        file_handler = logging.handlers.RotatingFileHandler(
+        file_handler = WindowsSafeRotatingFileHandler(
             filename=log_file,
             maxBytes=10 * 1024 * 1024,  # 10MB
             backupCount=5,  # 최대 5개 백업
