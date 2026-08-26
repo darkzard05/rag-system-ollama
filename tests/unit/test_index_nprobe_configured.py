@@ -70,7 +70,13 @@ def _simulate_faiss_gpu(monkeypatch):
 
     import core.retriever_factory as rf
 
-    monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
+    # torch CPU 전용 빌드에서는 torch.cuda.is_available() 호출 자체가
+    # "Torch not compiled with CUDA enabled" 예외를 던진다. create_vector_store
+    # 가 이를 try/except 로 잡아 use_gpu=False 로 떨어지므로, torch.cuda 서브모듈
+    # 자체를 mock 으로 교체해 예외 없이 True 를 리턴하도록 강제한다.
+    torch.cuda = MagicMock()
+    torch.cuda.is_available = lambda: True
+    torch.cuda.current_device = lambda: 0
     monkeypatch.setattr(faiss, "get_num_gpus", lambda: 1)
     # faiss-cpu에는 이 심볼들이 없으므로 raising=False로 신규 주입
     monkeypatch.setattr(faiss, "StandardGpuResources", lambda: object(), raising=False)
