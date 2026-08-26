@@ -37,8 +37,8 @@
 - **Relevant Entity Extraction:** The LLM is strictly instructed to extract key technical entities during the grading phase, ensuring transparency in its reasoning process.
 
 ### 🛡️ **Reliability & Integrity**
-- **68+ unit test files** covering Graph Flow, RAG Orchestration, Document Processing, Advanced Citations, concurrency, and streaming.
-- **CI-enforced integrity:** `ruff check`, `ruff format --check`, `mypy src`, `bandit`, `pip-audit`, unit coverage ≥55%, and 12 integration tests (auth/ownership/PDF/SSE).
+- **129+ unit test files** (plus 29 integration tests) covering Graph Flow, RAG Orchestration, Document Processing, Advanced Citations, concurrency, and streaming.
+- **CI-enforced integrity:** `ruff check`, `ruff format --check`, `mypy src`, `bandit`, `pip-audit`, unit coverage ≥55%, and 29 integration tests (auth/ownership/PDF/SSE).
 - **Ghosting-Free UI:** Advanced `st.fragment` and `st.empty` placeholder management prevents visual glitches during real-time streaming.
 - **Robust PDF handling:** Corrupt PDFs are rejected upfront on upload; the viewer stays crash-proof and layout-preserved.
 
@@ -55,8 +55,8 @@
 ## 🛠️ Tech Stack
 <!-- TECH_STACK_START -->
 - **Streamlit**: 1.60.0
-- **LangChain**: 0.3.18
-- **LangGraph**: 0.2.74
+- **LangChain**: 1.3.0+
+- **LangGraph**: 1.2.0+
 - **PyMuPDF4LLM**: latest
 - **Ollama**: 0.6.1
 - **FastAPI**: 0.133.1
@@ -113,7 +113,7 @@ python scripts/verify_section_metadata.py
 python scripts/maintenance/verify_integrity.py
 ```
 
-CI enforces unit coverage ≥55% (`--cov-fail-under=55`) and additionally runs `bandit`, `pip-audit`, and the integration tests: `test_rag_integration`, `test_streamlit_app`, `test_streaming_response`, `test_cache_security`, `test_caching_system`, `test_api_auth_login`, `test_api_pdf_serving`, `test_global_exception_handler`, `test_ownership_hardening`, `test_pdf_library_retention`, `test_stream_error_isolation`, `test_api_endpoints`.
+CI enforces unit coverage ≥55% (`--cov-fail-under=55`) and additionally runs `bandit`, `pip-audit`, and the integration tests: `test_rag_integration`, `test_streamlit_ui_lifecycle`, `test_streaming_response`, `test_caching_system`, `test_api_auth_login`, `test_api_pdf_serving`, `test_global_exception_handler`, `test_ownership_hardening`, `test_pdf_library_retention`, `test_stream_error_isolation`, `test_api_endpoints` (29 integration tests total).
 
 ---
 
@@ -151,4 +151,4 @@ Each run writes `reports/eval_quality_<tag>_<ts>.json` and `.md` with per-questi
 
 ## 📄 License
 MIT License - Developed by **darkzard05**.
-**Last Updated:** 2026-08-09
+**Last Updated:** 2026-08-26
