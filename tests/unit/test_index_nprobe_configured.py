@@ -68,6 +68,8 @@ def _simulate_faiss_gpu(monkeypatch):
     import faiss
     import torch
 
+    import core.retriever_factory as rf
+
     monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
     monkeypatch.setattr(faiss, "get_num_gpus", lambda: 1)
     # faiss-cpu에는 이 심볼들이 없으므로 raising=False로 신규 주입
@@ -78,6 +80,11 @@ def _simulate_faiss_gpu(monkeypatch):
 
     conv_mock = MagicMock(return_value=MagicMock())
     monkeypatch.setattr(faiss, "index_cpu_to_gpu_multiple", conv_mock, raising=False)
+
+    # C-extension 모듈(faiss-cpu)에서는 setattr 주입이 hasattr 체크에 반영되지
+    # 않아 _faiss_gpu_supported() 가 False 를 리턴하는 환경 의존성이 있다.
+    # GPU 지원 가정을 명시적으로 강제해 테스트를 환경 독립적으로 만든다.
+    monkeypatch.setattr(rf, "_faiss_gpu_supported", lambda faiss_mod: True)
 
     from core.model_loader import ModelManager
 
