@@ -33,3 +33,26 @@ def test_stale_file_owner_swept():
     api._file_owners["b" * 64] = ("user-x", time.time())
     api._sweep_stale_owners()
     assert "b" * 64 not in api._file_owners
+
+
+def test_second_user_cannot_access_claimed_session():
+    """타인이 점유(claim)한 세션에 다른 사용자가 접근하면 403 이어야 합니다 (fail-closed)."""
+    from fastapi import HTTPException
+
+    api._session_owners.clear()
+    session_id = "claimed-session"
+    # user-a 가 최초로 세션 소유권을 점유
+    api._require_session_owner(session_id, "user-a")
+    # user-b 가 동일 세션에 접근 시도 → 403
+    with pytest.raises(HTTPException) as exc_info:
+        api._require_session_owner(session_id, "user-b")
+    assert exc_info.value.status_code == 403
+
+
+def test_first_user_claims_unbound_session():
+    """미등록 세션은 최초 인증 사용자가 소유권을 점유하며 403 이 발생하지 않습니다."""
+    api._session_owners.clear()
+    session_id = "fresh-session"
+    # 최초 점유는 예외를 발생시키지 않아야 함
+    api._require_session_owner(session_id, "user-a")
+    assert api._session_owners[session_id][0] == "user-a"

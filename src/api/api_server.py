@@ -7,7 +7,6 @@ import asyncio
 import logging
 import os
 import secrets
-import sys
 import threading
 import time
 from contextlib import asynccontextmanager
@@ -112,17 +111,34 @@ auth_manager = AuthenticationManager()
 # [임시] 테스트용 유저 및 API 키 등록 (CI 환경 호환성 위해 환경 변수 지원)
 TEST_USER = "admin"
 
+# AUTO_BOOTSTRAP_ADMIN: 기본 활성(true). 명시적으로 비활성화(0/no/false/"")하면
+# 기본 admin 계정 생성을 건너뛴다. 자동 생성된 비밀번호/API 키 값은 로그에 출력되지 않는다.
+_BOOTSTRAP_DEFAULT = os.getenv("AUTO_BOOTSTRAP_ADMIN", "true").lower() not in (
+    "0",
+    "no",
+    "false",
+    "",
+)
+
+TEST_PASSWORD: str = ""
+TEST_API_KEY: str = ""
+
 
 def _bootstrap_credentials(auth_manager: AuthenticationManager) -> tuple[str, str]:
-    """관리자 비밀번호/API 키를 준비하고 민감 정보를 콘솔(stderr)에 1회 출력합니다 (파일 로거 금지)."""
+    """관리자 크리덴셜을 준비한다. AUTO_BOOTSTRAP_ADMIN 가 명시적으로 비활성화된 경우 부트스트랩을 건너뛴다."""
+    if not _BOOTSTRAP_DEFAULT:
+        logger.warning(
+            "AUTO_BOOTSTRAP_ADMIN 이 비활성화되어 기본 admin 계정을 생성하지 않습니다."
+        )
+        return "", ""
     env_password = os.getenv("TEST_ADMIN_PASSWORD")
     if env_password:
         password = env_password
     else:
         password = secrets.token_urlsafe(12)
-        print(
-            f"[Security] 관리자 비밀번호 자동 생성 (로그인용): {password}",
-            file=sys.stderr,
+        logger.warning(
+            "관리자 비밀번호가 자동 생성되었습니다. TEST_ADMIN_PASSWORD 로 고정하거나 "
+            "환경 변수로 주입하세요 (값은 출력되지 않습니다)."
         )
     auth_manager.upsert_admin_credentials(TEST_USER, "admin_user", password)
 
@@ -132,7 +148,9 @@ def _bootstrap_credentials(auth_manager: AuthenticationManager) -> tuple[str, st
         api_key = env_api_key
     else:
         api_key = auth_manager.create_api_key(TEST_USER, expires_in=86400)
-        print(f"[Security] API Key 생성됨 (Bearer 인증용): {api_key}", file=sys.stderr)
+        logger.warning(
+            "관리자 API Key 가 자동 생성되었습니다 (값은 출력되지 않습니다)."
+        )
     return password, api_key
 
 
@@ -149,8 +167,10 @@ TEST_PASSWORD, TEST_API_KEY = _bootstrap_credentials(auth_manager)
 #   UI/API는 별도 프로세스라 메모리 레지스트리를 공유할 수 없다. 따라서 fail-closed로
 #   미등록 파일을 API 서빙 불가(403) 처리하여 크로스 유저 /pdf/{hash} 구멍을 차단한다.
 #   UI는 PDF를 로컬 렌더링(streamlit-pdf-viewer)하며 /api/v1/pdf 를 호출하지 않으므로 UX 손실이 없다.
-# - SESSIONS: fail-open (레거시). 미등록 세션은 모든 인증 사용자에게 접근 허용(shared-legacy).
-#   /login 생성 세션은 업로드 전 질의(400 플로우)가 가능해야 하며, 문서 접근은 파일 소유권이 관장한다.
+# - SESSIONS: first-use claim (fail-closed 기반). 미등록 세션은 최초 인증 사용자가
+#   소유권을 점유(claim)하며, 이후 다른 사용자의 접근은 403으로 차단된다(크로스 유저 구멍 폐쇄).
+#   단일 사용자 로컬 플로우(업로드 전 질의 400 등)는 유지되며, /login 시점에도 세션이 바인딩된다.
+#   문서 접근은 파일 소유권(_require_file_owner)이 별도로 관장한다.
 _OWNER_TTL_SECONDS = 7 * 24 * 3600
 # PDF 라이브러리 보존 기간: 세션 정리와 분리되어 오래된 업로드 파일을 수거
 _PDF_RETENTION_DAYS = 30
@@ -174,9 +194,14 @@ def _bind_session_owner(session_id: str, user_id: str) -> None:
 def _require_session_owner(session_id: str, user_id: str) -> None:
     with _owners_lock:
         entry = _session_owners.get(session_id)
-    owner = entry[0] if entry else None
-    # fail-open 유지: 미등록 세션(owner None)은 모든 인증 사용자에게 접근 허용.
-    if owner is not None and owner != user_id:
+        if entry is None:
+            # 미등록 세션: 최초 인증 사용자가 소유권을 점유(claim)한다.
+            # 이로써 다른 사용자가 해당 세션에 접근하는 구멍을 차단하며,
+            # 단일 사용자 로컬 플로우(업로드 전 질의 400 등)는 유지된다.
+            _session_owners[session_id] = (user_id, time.time())
+            return
+        owner = entry[0]
+    if owner != user_id:
         raise HTTPException(
             status_code=403, detail="다른 사용자의 세션에 접근할 수 없습니다."
         )
@@ -258,14 +283,20 @@ async def verify_token(
 
 
 @app.post("/api/v1/login")
-async def login(request: LoginRequest) -> TokenResponse:
+async def login(request: LoginRequest, client_request: Request) -> TokenResponse:
     """사용자 이름/비밀번호로 접근 토큰을 발급합니다."""
-    result = auth_manager.authenticate_by_username(request.username, request.password)
+    client_ip = client_request.client.host if client_request.client else None
+    result = auth_manager.authenticate_by_username(
+        request.username, request.password, client_ip
+    )
     if result is None:
         raise HTTPException(
             status_code=401, detail="사용자 이름 또는 비밀번호가 올바르지 않습니다."
         )
     access_token, session_id = result
+    owner = auth_manager.verify_token(access_token)
+    if owner:
+        _bind_session_owner(session_id, owner)
     return TokenResponse(
         access_token=access_token,
         token_type="bearer",

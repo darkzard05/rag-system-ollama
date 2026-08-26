@@ -242,9 +242,11 @@ class AuthenticationManager:
         self._sessions: dict[str, Session] = {}
         self._api_keys: dict[str, Token] = {}  # api_key_string -> Token object
         self._failed_logins: dict[str, list[float]] = {}  # user_id -> [timestamps]
+        self._failed_logins_by_ip: dict[str, list[float]] = {}  # ip -> [timestamps]
         self._deny_list: set[str] = set()
         self._lock = RLock()
         self._max_failed_attempts = 5
+        self._max_failed_attempts_per_ip = 30  # 전역 IP 브루트포스 차단 임계값
         self._lockout_duration = 900  # 15분
         self._load_state()
         self._jwt = SimpleJWT(secret_file=self._secret_file)
@@ -350,14 +352,14 @@ class AuthenticationManager:
                 return None
 
             # 잠금 확인
-            if self._is_user_locked(user_id):
+            if self._is_user_locked(user_id, ip_address):
                 return None
 
             # 비밀번호 검증
             if not PasswordHasher.verify_password(
                 password, user_data["password_hash"], user_data["salt"]
             ):
-                self._record_failed_login(user_id)
+                self._record_failed_login(user_id, ip_address)
                 return None
 
             # 성공
@@ -416,25 +418,31 @@ class AuthenticationManager:
             return None
         return self.authenticate(user_id, password, ip_address, user_agent)
 
-    def _is_user_locked(self, user_id: str) -> bool:
-        """사용자 잠금 여부"""
-        if user_id not in self._failed_logins:
-            return False
+    def _is_user_locked(self, user_id: str, ip_address: str | None = None) -> bool:
+        """사용자 또는 IP 기준 잠금 여부 (크로스 사용자 브루트포스 방지)."""
+        if user_id in self._failed_logins:
+            recent = [
+                ts
+                for ts in self._failed_logins[user_id]
+                if time.time() - ts < self._lockout_duration
+            ]
+            if len(recent) >= self._max_failed_attempts:
+                return True
+        if ip_address and ip_address in self._failed_logins_by_ip:
+            recent_ip = [
+                ts
+                for ts in self._failed_logins_by_ip[ip_address]
+                if time.time() - ts < self._lockout_duration
+            ]
+            if len(recent_ip) >= self._max_failed_attempts_per_ip:
+                return True
+        return False
 
-        recent_failures = [
-            ts
-            for ts in self._failed_logins[user_id]
-            if time.time() - ts < self._lockout_duration
-        ]
-
-        return len(recent_failures) >= self._max_failed_attempts
-
-    def _record_failed_login(self, user_id: str):
-        """실패한 로그인 기록"""
-        if user_id not in self._failed_logins:
-            self._failed_logins[user_id] = []
-
-        self._failed_logins[user_id].append(time.time())
+    def _record_failed_login(self, user_id: str, ip_address: str | None = None) -> None:
+        """실패한 로그인을 사용자 및 IP 모두에 기록한다."""
+        self._failed_logins.setdefault(user_id, []).append(time.time())
+        if ip_address:
+            self._failed_logins_by_ip.setdefault(ip_address, []).append(time.time())
 
     def _clear_failed_logins(self, user_id: str):
         """실패한 로그인 기록 초기화"""
@@ -625,5 +633,10 @@ class AuthenticationManager:
                 "api_keys": len(self._api_keys),
                 "locked_users": sum(
                     1 for uid in self._failed_logins if self._is_user_locked(uid)
+                ),
+                "locked_ips": sum(
+                    1
+                    for ip in self._failed_logins_by_ip
+                    if self._is_user_locked("", ip)
                 ),
             }

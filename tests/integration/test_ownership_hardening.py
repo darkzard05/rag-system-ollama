@@ -1,8 +1,8 @@
 """
 F2: 소유권 강화 (Ownership Hardening) 통합 테스트.
 
-파일 소유권은 fail-closed(미등록/타인 소유 파일 → 403), 세션 소유권은
-fail-open(레거시: 미등록 세션은 모든 인증 사용자에게 접근 허용)을 검증합니다.
+파일 소유권은 fail-closed(미등록/타인 소유 파일 → 403), 세션 소유권도
+fail-closed(미등록 세션은 최초 인증 사용자가 점유하며 타인 접근은 403)입니다.
 
 - test_unbound_existing_file_denied: 파일 fail-closed 전환 검증 (RED 대상)
 - test_missing_file_404_for_unbound_hash: resolve-first 404 순서 고정 (regression lock)
