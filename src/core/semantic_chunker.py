@@ -24,12 +24,14 @@ import asyncio
 import concurrent.futures
 import logging
 import re
+from pathlib import Path
 from typing import cast
 
 import numpy as np
 from langchain_core.documents import Document
 from langchain_core.embeddings import Embeddings
 
+from common.config import MODEL_CACHE_DIR
 from core.semantic_chunker_breakpoints import SemanticChunkerBreakpointsMixin
 from core.semantic_chunker_embeddings import SemanticChunkerEmbeddingsMixin
 from core.semantic_chunker_merge import SemanticChunkerMergeMixin
@@ -82,15 +84,18 @@ class EmbeddingBasedSemanticChunker(
         self.similarity_threshold = similarity_threshold
         self.batch_size = batch_size
 
-        # [최적화] 전역 캐시 관리자 설정
-        # 청킹 임베딩 벡터는 FAISS 벡터 캐시에 이미 영속화되므로, 청커 전용
-        # 캐시는 디스크 쓰기를 수행하지 않는 메모리 전용 CacheManager 를 사용한다.
-        # (전역 get_cache_manager() 기본값의 디스크 캐시를 끄지 않고 청커 범위로만
-        #  메모리 전용으로 스코프 — 전역 디스크 캐시는 그대로 유지)
+        # [최적화] 청킹 임베딩 전용 캐시 관리자 설정.
+        # 변경 전에는 메모리 전용(enable_disk_cache=False) + persist_to_disk=False
+        # 였어서, 재시작/재수집 시 동일 청크라도 항상 Ollama 왕복이 발생했다.
+        # 이제 영구 디스크 캐시(L3)를 켜 동일 콘텐츠 해시 키로 재수집 시 Ollama
+        # 라운드트립을 건너뛴다. 메모리 레이어(L1)도 함께 두어 동일 프로세스 내
+        # 반복 조회는 디스크 I/O 없이 처리한다. 디스크 경로는 전역 MODEL_CACHE_DIR
+        # 하위의 embedding_cache 로 격리해 기타 응답 캐시와 혼재되지 않게 한다.
         self.cache_manager = cache_manager or CacheManager(
             enable_memory_cache=True,
             enable_semantic_cache=False,
-            enable_disk_cache=False,
+            enable_disk_cache=True,
+            disk_cache_dir=str(Path(MODEL_CACHE_DIR) / "embedding_cache"),
         )
 
         # [최적화] 모델 식별을 위한 이름 추출 (Ollama 및 HuggingFace 지원 강화)

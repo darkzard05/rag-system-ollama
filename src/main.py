@@ -45,7 +45,7 @@ import shutil
 import threading
 import time
 from pathlib import Path
-from typing import Literal, cast
+from typing import Any, Literal, cast
 
 import streamlit as st
 
@@ -144,7 +144,7 @@ def _start_global_background_worker():
     return thread
 
 
-@st.cache_data(ttl=300)
+@st.cache_data(ttl=300, show_spinner=False)
 def _get_available_models_cached():
     """Ollama 모델 목록을 캐싱하여 UI 블로킹을 최소화합니다."""
     from core.model_loader import get_available_models
@@ -167,6 +167,26 @@ def _load_available_models() -> list[str]:
 
     filtered = [m for m in models if m != MSG_ERROR_OLLAMA_NOT_RUNNING]
     return filtered or [DEFAULT_OLLAMA_MODEL]
+
+
+def _warm_available_models() -> None:
+    """RC-C: 프로세스 부트 시 Ollama 모델 목록을 비동기 프리워밍합니다.
+
+    _get_available_models_cached(ttl=300)는 app 런타임 캐시이므로 import 시점
+    호출은 부팅 미리채우기에 쓰이지 않는다. 대신 데몬 스레드로 최대 1회만
+    조회하여 캐시를 데우고, 첫 사용자 렌더가 ~5s 블로킹(list 호출)되는 것을
+    막는다. Ollama 미연결 시 예외는 무시 — 첫 렌더의 기존 폴백/스피너가 보완.
+    """
+    try:
+        _get_available_models_cached()
+    except Exception:  # noqa: BLE001 - best-effort warmup; first render handles failure
+        logger.debug("[SYSTEM] model-list warmup skipped (Ollama not ready)")
+
+
+# 프로세스 시작 직후(import 직후) 백그라운드 웜업 — UI 첫 렌더 블로킹 제거.
+threading.Thread(
+    target=_warm_available_models, name="model-list-warmup", daemon=True
+).start()
 
 
 @safe_cache_resource(show_spinner=False)
@@ -499,6 +519,25 @@ def on_file_upload() -> None:
         )
         return
 
+    # [멱등 가드] Streamlit rerun/더블 트리거로 on_change 콜백이 동일 파일에
+    # 대해 중복 발동되는 것을 차단한다. 해시 계산 전에 세션에 처리 중 플래그를
+    # 선점 세트하여, 재진입 시점에 이미 처리 중이면 즉시 종료한다.
+    upload_guard_key = "file_upload_in_progress"
+    if SessionManager.get(upload_guard_key, False):
+        return
+    SessionManager.set(upload_guard_key, True)
+    try:
+        _process_uploaded_file(uploaded_file)
+    finally:
+        SessionManager.set(upload_guard_key, False)
+
+
+def _process_uploaded_file(uploaded_file) -> None:
+    """실제 업로드 처리 로직. on_file_upload 가 멱등 가드 후 호출한다."""
+    from core.document_processor import compute_file_hash
+    from core.session import SessionManager
+    from infra.notification_system import SystemNotifier
+
     last_file_name = SessionManager.get("last_uploaded_file_name")
     last_file_hash = SessionManager.get("file_hash")
 
@@ -516,7 +555,7 @@ def on_file_upload() -> None:
     # 손상된 파일이 temp에 복사되거나 빌드가 시작되면 뷰어/파이프라인이 크래시
     # 하므로, 여기서 즉시 검증하고 실패 시 아무 상태도 바꾸지 않는다.
     try:
-        import fitz  # lazy import: 검증이 필요한 시점에만 로드
+        import pymupdf as fitz  # lazy import: 검증이 필요한 시점에만 로드
 
         if not file_bytes:
             raise ValueError("PDF file is empty.")
@@ -572,6 +611,11 @@ def on_file_upload() -> None:
                 session_id=sid,
             )
             SessionManager.set("new_file_uploaded", True)
+            # 선점: on_change 자동 rerun의 첫 페인트 프레임이 빌드 메시지와
+            # 동일한 정착 상태를 보도록 is_building_rag를 미리 True로 세팅.
+            # reset_for_new_file은 이 플래그를 건드리지 않음. 디스패치 가드는
+            # _handle_pending_tasks에서 new_file_uploaded 단독으로 판단한다.
+            SessionManager.set("is_building_rag", True)
             SystemNotifier.success(f"Document uploaded: {uploaded_file.name}")
         except Exception as e:
             SystemNotifier.error("Error while saving the file", details=str(e))
@@ -652,13 +696,37 @@ def _handle_pending_tasks() -> None:
     is_building = bool(SessionManager.get("is_building_rag", False, current_sid))
     needs_rerun = False
 
-    if (
-        SessionManager.get("new_file_uploaded", False, current_sid)
-        and not is_building
-        and not SessionManager.get("is_generating_answer", False, current_sid)
-    ):
+    def _safe_dispatch(kind: str, coro: Any) -> None:
+        """백그라운드 디스패치를 감싸 실패 시 플래그가 영구 잔류되지 않게 한다.
+
+        ``run_in_background_worker`` 가 submit 에서 실패하면 ``_on_complete``
+        가 영원히 호출되지 않아 ``is_building_rag``/``needs_*`` 플래그가
+        굳어 입력창이 비활성화된다(INT-입력동결). 디스패치 직후 죽으면
+        여기서 플래그를 롤백한다.
+        """
+        from common.utils import run_in_background_worker
+
+        try:
+            run_in_background_worker(coro, current_sid)
+        except Exception as exc:  # noqa: BLE001 - 디스패치 실패는 복구해야 함
+            logger.error("[MAIN] 백그라운드 디스패치 실패 (%s): %s", kind, exc)
+            if kind == "rebuild":
+                SessionManager.set("needs_rag_rebuild", True, current_sid)
+            elif kind == "qa_update":
+                SessionManager.set("needs_qa_chain_update", True, current_sid)
+            SessionManager.set("is_building_rag", False, current_sid)
+            SessionManager.set(
+                "pdf_processing_error",
+                f"Background task dispatch failed: {exc}",
+                current_sid,
+            )
+
+    if SessionManager.get(
+        "new_file_uploaded", False, current_sid
+    ) and not SessionManager.get("is_generating_answer", False, current_sid):
         SessionManager.set("new_file_uploaded", False, current_sid)
-        SessionManager.set("is_building_rag", True, current_sid)
+        # is_building_rag는 업로드 콜백에서 이미 True로 선점됨. 가드를
+        # new_file_uploaded 단독으로 풀어 디스패치가 차단되지 않게 한다.
 
         current_file_path = SessionManager.get("pdf_file_path", None, current_sid)
         current_file_name = SessionManager.get(
@@ -672,16 +740,14 @@ def _handle_pending_tasks() -> None:
         # [UX] 리셋/진행 메시지는 on_file_upload가 렌더 전에 이미 수행했으므로
         # 여기서는 빌드 시작만 한다. (st.rerun 제거: 갱신은 2초 폴링 fragment와
         # run_in_background_worker의 완료 시 rerun이 담당)
-        from common.utils import run_in_background_worker
-
-        run_in_background_worker(
+        _safe_dispatch(
+            "rebuild",
             _bg_rebuild_task(
                 current_sid,
                 current_file_path,
                 current_file_name,
                 current_embedding_model,
             ),
-            current_sid,
         )
 
     elif (
@@ -700,16 +766,14 @@ def _handle_pending_tasks() -> None:
             "last_selected_embedding_model", None, current_sid
         )
 
-        from common.utils import run_in_background_worker
-
-        run_in_background_worker(
+        _safe_dispatch(
+            "rebuild",
             _bg_rebuild_task(
                 current_sid,
                 current_file_path,
                 current_file_name,
                 current_embedding_model,
             ),
-            current_sid,
         )
         needs_rerun = True
 
@@ -719,25 +783,11 @@ def _handle_pending_tasks() -> None:
         if not SessionManager.get("is_swapping_model", False, current_sid):
             SessionManager.set("is_swapping_model", True, current_sid)
 
-            from common.utils import run_in_background_worker
-
-            run_in_background_worker(_bg_update_qa_chain(current_sid), current_sid)
+            _safe_dispatch("qa_update", _bg_update_qa_chain(current_sid))
         needs_rerun = True
 
     if needs_rerun:
         st.rerun()
-
-
-_SPLASH_HTML = """
-<div style="text-align: center; padding: 80px 0;">
-    <div style="font-size: 2rem; font-weight: 700; color: var(--text-color);">
-        GraphRAG-Ollama
-    </div>
-    <div style="font-size: 1rem; color: var(--primary-color); opacity: 0.8; margin-top: 8px;">
-        Local RAG · PDF Chat
-    </div>
-</div>
-"""
 
 
 def _ensure_ui_globals() -> None:
@@ -753,25 +803,40 @@ def main() -> None:
     from core.session import SessionManager
     from ui.ui import inject_custom_css
 
+    _t_main = time.perf_counter()
     inject_custom_css()  # light import (ui.ui only); CSS lands in the first frame
     _ensure_ui_globals()  # heavy session init AFTER css is already streamed
+    logger.debug("[PERF] main(): css+globals took %.3fs", time.perf_counter() - _t_main)
 
-    # 부트 스플래시: 1차 패스에서 즉시 시각 피드백 후 1회 rerun (2차 패스에서 본 UI 렌더)
-    if not st.session_state.get("_bootstrapped"):
-        st.session_state._bootstrapped = True
-        st.markdown(_SPLASH_HTML, unsafe_allow_html=True)
-        st.status("Initializing app...", state="running")
-        st.rerun()
-
+    # 부트 스플래시 제거: 스플래시는 실제 지연(모듈 스코프 웜업·첫 쿼리 로드)을
+    # 커버하지 못하는 가짜 로더였다. 유일한 실제 블로킹(_load_available_models,
+    # Ollama list 최대 5s)에만 정직한 스피너를 표시한다.
     if "available_models_list" not in st.session_state:
-        st.session_state.available_models_list = _load_available_models()
+        _t_models = time.perf_counter()
+        with st.spinner("Loading available models…"):
+            st.session_state.available_models_list = _load_available_models()
+        logger.debug(
+            "[PERF] main(): _load_available_models took %.3fs",
+            time.perf_counter() - _t_models,
+        )
 
     if SessionManager.get("pdf_file_path") and not SessionManager.get("pdf_processed"):
         SessionManager.set("is_generating_answer", False)
 
     available_models = st.session_state.available_models_list
+    _t_layout = time.perf_counter()
     _render_app_layout(available_models=available_models)
+    logger.debug(
+        "[PERF] main(): _render_app_layout(sidebar) took %.3fs",
+        time.perf_counter() - _t_layout,
+    )
+    _t_pending = time.perf_counter()
     _handle_pending_tasks()
+    logger.debug(
+        "[PERF] main(): _handle_pending_tasks took %.3fs",
+        time.perf_counter() - _t_pending,
+    )
+    logger.debug("[PERF] main(): TOTAL rerun %.3fs", time.perf_counter() - _t_main)
 
     if SessionManager.get("is_first_run"):
         SessionManager.set("is_first_run", False)

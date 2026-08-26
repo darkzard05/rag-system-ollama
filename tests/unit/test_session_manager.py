@@ -154,6 +154,33 @@ def test_partial_sync():
         assert len(state["_dirty_keys"]) == 0
 
 
+def test_get_messages_returns_copy_not_shared_reference():
+    """Regression: get_messages() must return a copy, not the live stored list.
+
+    Previously get/get_messages returned the actual list reference held by
+    session state. A background add_message mutating that list in-place while
+    the UI thread iterated the returned reference caused
+    RuntimeError('list changed size during iteration'). Returning a copy gives
+    the caller an isolated snapshot.
+    """
+    sid = "copy_sid"
+    SessionManager.init_session(sid)
+    for i in range(3):
+        SessionManager.add_message("user", f"m{i}", session_id=sid)
+
+    snapshot = SessionManager.get_messages(session_id=sid)
+    assert isinstance(snapshot, list)
+    assert len(snapshot) == 3
+
+    # Mutating the returned snapshot must NOT affect stored state.
+    snapshot.append({"role": "user", "content": "injected"})
+    stored = SessionManager.get_messages(session_id=sid)
+    assert len(stored) == 3, "stored messages leaked via external mutation"
+
+    # The distinct object identity proves isolation.
+    assert snapshot is not stored
+
+
 # --- Lifecycle & Utility Tests ---
 
 

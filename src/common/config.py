@@ -4,6 +4,7 @@ config.yml 파일과 환경 변수에서 애플리케이션 설정을 로드합�
 
 import logging
 import os
+import secrets
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any, Union
@@ -37,6 +38,48 @@ def _get_env(key: str, default: Any, cast_type: Callable[[Any], Any] = str) -> A
         return cast_type(value)
     except (ValueError, TypeError):
         return default
+
+
+def _resolve_cache_hmac_secret(configured: str | None) -> str:
+    """CACHE_HMAC_SECRET 값을 결정합니다.
+
+    명시적으로 설정되지 않은 경우(None/빈 문자열) 암호학적으로 안전한 난수 키를
+    생성하고 `.model_cache/.cache_hmac_key`에 영속화해 재시작 후에도 동일하게
+    유지되도록 합니다. 영속 키가 없으면 매 재시작마다 기존 캐시 메타데이터 HMAC이
+    무효화되므로 반드시 파일로 보존합니다.
+
+    이 키 자동 생성은 pickle 직렬화 제거와 함께 RCE 경로를 차단하는
+    defense-in-depth(다층 방어)입니다. HMAC 무결성 검증은 항상 활성화되어
+    변조된 `.meta` 파일은 HMAC 불일치로 거부됩니다.
+    ⚠️ 키 파일은 비공개로 유지되어야 합니다(.model_cache/ 는 .gitignore 대상).
+    """
+    if configured and configured.strip():
+        return configured
+    key_path = PROJECT_ROOT / ".model_cache" / ".cache_hmac_key"
+    existing = None
+    if key_path.exists():
+        try:
+            existing = key_path.read_text(encoding="utf-8").strip()
+        except OSError:
+            existing = None
+    if existing:
+        return existing
+    generated = secrets.token_hex(32)
+    try:
+        key_path.parent.mkdir(parents=True, exist_ok=True)
+        fd = os.open(key_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        try:
+            os.write(fd, generated.encode("utf-8"))
+        finally:
+            os.close(fd)
+    except OSError:
+        # 0o600 플래그 open이 실패하는 환경(일부 Windows)은 폴백으로 기록.
+        # 기존 enforce_file_permissions와 동일하게 nt에서는 권한 오류를 무시.
+        try:
+            key_path.write_text(generated, encoding="utf-8")
+        except OSError as e:
+            logger.warning(f"HMAC 키 영속화 실패(메모리 전용으로 동작): {e}")
+    return generated
 
 
 _config = _load_config()
@@ -194,8 +237,8 @@ _cache_security_config = _config.get("cache_security", {})
 CACHE_SECURITY_LEVEL: str = _get_env(
     "CACHE_SECURITY_LEVEL", _cache_security_config.get("security_level", "medium"), str
 )
-CACHE_HMAC_SECRET: str | None = _get_env(
-    "CACHE_HMAC_SECRET", _cache_security_config.get("hmac_secret"), str
+CACHE_HMAC_SECRET: str | None = _resolve_cache_hmac_secret(
+    _get_env("CACHE_HMAC_SECRET", _cache_security_config.get("hmac_secret"), str)
 )
 CACHE_TRUSTED_PATHS: list[str] = _cache_security_config.get("trusted_paths", [])
 CACHE_CHECK_PERMISSIONS: bool = _get_env(
@@ -235,8 +278,6 @@ _ui_config = _config.get("ui", {})
 
 _ui_streaming = _ui_config.get("streaming", {})
 UI_STREAMING_TIMEOUT: int = _ui_streaming.get("timeout_seconds", 30)
-
-UI_TIMELINE_POLL_SECONDS: float = _ui_config.get("timeline_poll_seconds", 0.5)
 
 _ui_messages = _ui_config.get("messages", {})
 MSG_CHAT_GUIDE: str = _ui_messages.get("chat_guide", "PDF를 업로드한 후 질문해 보세요")

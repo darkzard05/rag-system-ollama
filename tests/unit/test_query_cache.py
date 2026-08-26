@@ -118,6 +118,7 @@ async def test_generate_cache_hit_zero_llm_calls(
     llm_ainvoke_calls: list[int] = []
 
     llm = MagicMock()
+    llm.bind.return_value = llm
 
     async def fake_astream(*args, **kwargs):  # pragma: no cover - must not run
         llm_astream_calls.append(1)
@@ -256,6 +257,7 @@ async def test_generate_general_intent_invokes_llm(monkeypatch):
     monkeypatch.setattr("core.graph_builder.QUERY_CACHE_ENABLED", True)
 
     llm = MagicMock()
+    llm.bind.return_value = llm
     llm_astream_calls: list[int] = []
 
     async def fake_astream(*args, **kwargs):

@@ -21,7 +21,7 @@ clicked state after a sync.
 # ---------------------------------------------------------------------------
 
 # Fired once per session to avoid re-injecting the global CSS/JS script.
-CSS_INJECTED_KEY: str = "css_script_injected"
+
 # Main chat-input widget — also in INTERACTIVE_KEYS.
 MAIN_CHAT_INPUT_KEY: str = "main_chat_input"
 # PDF nav input widget — also in INTERACTIVE_KEYS (v6 is the live generation).

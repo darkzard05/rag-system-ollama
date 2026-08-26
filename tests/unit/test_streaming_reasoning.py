@@ -31,6 +31,9 @@ async def test_generate_streams_thought_and_content(mock_dispatch):
 
     # 1. 의존성 모킹
     mock_llm = MagicMock()
+    # generate()는 llm.bind(response_format=...).astream(...) 을 호출하므로
+    # bind() 가 모킹된 astream 을 가진 자기 자신을 리턴하도록 세팅한다.
+    mock_llm.bind.return_value = mock_llm
 
     # astream 제너레이터 모킹 (사고 2번, 답변 2번 생성)
     async def mock_astream(*args, **kwargs):

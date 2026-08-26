@@ -106,7 +106,10 @@ async def test_hardcap_prevents_third_retry() -> None:
         chunk.response_metadata = {"prompt_eval_count": 10}
         yield chunk
 
+    # generate()는 json_llm.astream(...) 을 async for 로 순회하므로
+    # json_llm 에도 async generator astream 을 세팅한다.
     llm.astream = mock_astream
+    json_llm.astream = mock_astream
 
     def mock_convert(chunk: Any) -> tuple[Any, None]:
         return chunk.content, None

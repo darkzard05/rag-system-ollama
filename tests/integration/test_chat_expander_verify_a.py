@@ -43,9 +43,9 @@ Known pipeline defects surfaced by this full-flow run (both now FIXED):
   exceptions in the background generation thread are therefore observed
   indirectly via session state (assistant message presence and the
   `is_generating_answer` flag).
-- The stub LLM never emits a "thought" (graph_builder.py:510-515 fallback), so
+  - The stub LLM never emits a "thought" (graph_builder.py:510-515 fallback), so
   the real-pipeline answer cannot carry a non-empty thought. The native
-  reasoning expander ("🧠 상세 사고 과정", chat.py:189, guarded by a
+  reasoning expander ("Detailed thinking", chat.py:312, guarded by a
   content-based gate) is therefore exercised with a message-store injection
   carrying a thought as the closest observable equivalent.
 """
@@ -312,7 +312,7 @@ def test_chat_expander_and_interactive_chat_render() -> None:
     assert f_ok, f"uncaught exceptions: {[e.value for e in at.exception]}"
 
     # ------------------------------------------------------------------
-    # ASSERT (d2): native reasoning expander ("🧠 상세 사고 과정") renders
+    # ASSERT (d2): native reasoning expander ("Detailed thinking") renders
     # inside an assistant message. Real-pipeline thought is always empty with
     # the stub LLM (graph_builder.py:510-515), so the renderer is exercised
     # with a stored message carrying a thought (closest observable equivalent).
@@ -324,11 +324,11 @@ def test_chat_expander_and_interactive_chat_render() -> None:
         session_id=sid,
     )
     _run_until_settled(at)
-    thought_found = any(e.label == "🧠 상세 사고 과정" for e in at.expander)
+    thought_found = any(e.label == "Detailed thinking" for e in at.expander)
     record(
         "d2_thought_expander_rendered",
         thought_found,
-        f"native expander label '🧠 상세 사고 과정' present: {thought_found}",
+        f"native expander label 'Detailed thinking' present: {thought_found}",
     )
     assert thought_found, f"thought expander not rendered: {at.expander!r}"
 

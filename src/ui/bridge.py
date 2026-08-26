@@ -37,11 +37,20 @@ class UIBridge:
     def sync_session(cls) -> None:
         """
         SessionManager를 통해 세션 상태를 st.session_state로 동기화합니다.
+
+        세션 저장소(SSoT)에 미러링할 변경이 없으면 스냅샷/복원/동기화 작업을
+        생략하여 매 rerun마다 발생하는 불필요한 동기화 비용을 제거합니다.
+        변경 유무는 ``has_pending_ui_sync``(``_dirty_keys``) 신호로 판별하며,
+        인터랙티브 키 보호(SyncRegistry)와 무관하게 동작합니다.
         """
         session_id = ContextManager.get_current_session_id()
 
         # 세션 ID가 없거나 기본값인 경우 동기화 스킵
         if not session_id or session_id == "default":
+            return
+
+        # 변경 사항이 없으면 동기화 불필요 (rerun/render 비용 절감)
+        if not SessionManager.has_pending_ui_sync(session_id):
             return
 
         try:

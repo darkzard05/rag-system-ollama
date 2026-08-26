@@ -95,6 +95,9 @@ async def _run_generate(mock_llm: MagicMock, docs: list[Document], fake_count) -
             content=json_str, response_metadata={"prompt_eval_count": 5}
         )
 
+    # generate()는 llm.bind(response_format=...).astream(...) 을 호출하므로
+    # bind() 가 모킹된 astream 을 가진 자기 자신을 리턴하도록 세팅한다.
+    mock_llm.bind.return_value = mock_llm
     mock_llm.astream = mock_astream
     mock_llm._convert_chunk_to_thought_and_content = lambda chunk: (chunk.content, "")
 

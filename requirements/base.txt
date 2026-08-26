@@ -5,40 +5,44 @@ pymupdf>=1.25.0
 pymupdf4llm>=0.3.4
 
 # LangChain & RAG Core
-langchain>=0.3.18
-langgraph>=0.2.74
-langgraph-checkpoint-sqlite>=3.0.1
-langchain-community>=0.3.18
-langchain-core>=0.3.34,<0.4.0
-langchain-huggingface>=0.1.2
-langchain-ollama>=0.2.2
-langchain-text-splitters>=0.3.6
+langchain>=1.3.0
+langgraph>=1.2.0
+langgraph-checkpoint-sqlite>=3.1.1
+langchain-community>=0.4.0
+langchain-core>=1.5.4
+langchain-huggingface>=1.0.0
+langchain-ollama>=1.0.0
+langchain-text-splitters>=1.1.0
 
 # Vector Store & Embeddings
 faiss-cpu==1.9.0.post1
-sentence-transformers==3.4.1
-transformers>=4.48.3
-torch>=2.5.1,<2.7.0
+sentence-transformers>=6.0.0
+transformers>=5.0.0
+# NOTE: install torch with the matching CUDA wheel, e.g.
+#   pip install torch>=2.7.1 --index-url https://download.pytorch.org/whl/cu130
+# The default PyPI torch wheel is CUDA 12.x and will fail to load c10_cuda.dll
+# on systems whose driver only ships a newer CUDA runtime (e.g. RTX 2060 + driver 610.88 -> CUDA 13.3).
+torch>=2.7.1
 numpy==1.26.4
 rank-bm25==0.2.2
 flashrank==0.2.0
-optimum[onnxruntime]==2.1.0
+optimum==2.3.0
 onnxruntime>=1.20.1
 
 # LLM Server
 ollama==0.6.1
 
 # Configuration
-python-dotenv==1.1.1
+python-dotenv==1.2.2
 pyyaml==6.0.3
-orjson==3.10.15
+orjson==3.11.6
 pydantic>=2.10.0
 
 # API Server
 fastapi==0.133.1
 starlette>=0.49.1
 uvicorn==0.34.0
-python-multipart==0.0.22
+python-multipart==0.0.31
 requests>=2.32.0
 
 # Security & Image Processing

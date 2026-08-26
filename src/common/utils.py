@@ -208,7 +208,7 @@ def extract_annotations_from_docs(documents: list) -> list[dict]:
             # 메타데이터에 좌표가 없으면 PDF 파일에서 실시간으로 검색합니다.
             if not all_coords and file_path and os.path.exists(file_path):
                 try:
-                    import fitz
+                    import pymupdf as fitz
 
                     with fitz.open(file_path) as pdf:
                         page = pdf[page_val - 1]
@@ -631,7 +631,19 @@ def run_in_background_worker(coro: Awaitable[Any], session_id: str) -> None:
                     if session_info:
                         session_info.session.request_rerun(None)
             except Exception as e:
+                # rerun 재요청 실패 시 입력창이 영구 비활성화되지 않도록
+                # 세션 플래그를 정리한다(INT-입력동결). 폴링 fragment가
+                # 0.5초마다 상태를 재계산하므로 다음 폴링에서 복구된다.
                 logger.error(f"Background worker rerun failed: {e}", exc_info=True)
+                try:
+                    from core.session import SessionManager
+
+                    SessionManager.set_session_id(ctx.session_id)
+                    SessionManager.set("is_building_rag", False, ctx.session_id)
+                    SessionManager.set("is_swapping_model", False, ctx.session_id)
+                    SessionManager.set("is_generating_answer", False, ctx.session_id)
+                except Exception as inner:  # noqa: BLE001 - 복구 실패는 로그만
+                    logger.error(f"Flag recovery failed: {inner}", exc_info=True)
 
     future = AsyncWorker().submit(_with_session())
     future.add_done_callback(_on_complete)

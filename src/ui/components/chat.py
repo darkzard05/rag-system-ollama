@@ -9,12 +9,13 @@ import contextlib
 import html
 import logging
 import time
+import uuid
 from collections.abc import Callable
 from typing import Any
 
 import streamlit as st
 
-from common.config import DEFAULT_OLLAMA_MODEL, MSG_CHAT_GUIDE, UI_TIMELINE_POLL_SECONDS
+from common.config import DEFAULT_OLLAMA_MODEL, MSG_CHAT_GUIDE
 from common.utils import (
     apply_tooltips_to_response,
     fast_hash,
@@ -35,6 +36,9 @@ from ui.widget_keys import (
 )
 
 logger = logging.getLogger(__name__)
+
+# 본문 하단 "Answer complete" 캡션에 노출할 참조 페이지 미리보기 최대 수.
+PREVIEW_PAGES_MAX = 4
 
 
 def _handle_page_jump(p: int) -> None:
@@ -135,20 +139,34 @@ def _extract_reference_pages(documents: list[Any]) -> list[int]:
     return sorted(pages)
 
 
-def _render_references_popover(
+def _render_references_content(
     msg_id: str,
     documents: list[Any] | None,
     on_page_jump: Callable[[int], None] | None = None,
     citations: list[dict[str, Any]] | None = None,
-) -> None:
-    """참조 popover: 페이지 이동 버튼 + doc 기반 인용 점프를 렌더링합니다."""
-    with st.popover("References", use_container_width=False):
-        if not documents and not citations:
-            return
+    generating: bool = False,
+) -> bool:
+    """참조 콘텐츠(페이지/doc 점프 버튼)를 렌더링합니다.
 
-        pages = _extract_reference_pages(documents or [])
-        if pages:
-            st.caption("By page")
+    통합 익스팬더 내부에서 직접 호출되므로 popover 래퍼 없이 본문만 그립니다.
+    렌더된 참조가 있으면 True, 없으면 False를 반환합니다.
+
+    generating=True(스트리밍 중)에는 매 chunk rerun마다 동일 위젯이 재생성되므로
+    key를 소비하는 st.button 대신 정적 markdown으로 페이지/doc을 표시합니다.
+    key가 필요한 상호작용 점프 버튼은 완료 후(generating=False, 단일 rerun)에만
+    렌더하므로 StreamlitDuplicateElementKey 충돌을 피합니다.
+    """
+    rendered = False
+    if not documents and not citations:
+        return rendered
+
+    pages = _extract_reference_pages(documents or [])
+    if pages:
+        st.caption("By page")
+        if generating:
+            # 스트리밍 중: key 없는 정적 표시 (중복 등록 방지).
+            st.markdown(" · ".join(f"`{p}p`" for p in pages))
+        else:
             cols = st.columns(min(len(pages), 5))
             for idx, p in enumerate(pages):
                 clicked = cols[idx % len(cols)].button(
@@ -158,22 +176,146 @@ def _render_references_popover(
                 )
                 if clicked and on_page_jump is not None:
                     on_page_jump(p)
+        rendered = True
 
-        # P3: citations[] 기반 doc 점프 (안정 doc_id).
-        doc_citations = [c for c in (citations or []) if c.get("doc_id") is not None]
-        if doc_citations:
-            doc_ids = {_doc_stable_id(d) for d in (documents or [])}
-            st.caption("By doc")
-            for idx, cit in enumerate(doc_citations):
-                sid = str(cit.get("doc_id"))
-                if sid in doc_ids:
-                    label = cit.get("section") or cit.get("text_span") or f"doc {sid}"
+    # P3: citations[] 기반 doc 점프 (안정 doc_id).
+    doc_citations = [c for c in (citations or []) if c.get("doc_id") is not None]
+    if doc_citations:
+        doc_ids = {_doc_stable_id(d) for d in (documents or [])}
+        st.caption("By doc")
+        for idx, cit in enumerate(doc_citations):
+            sid = str(cit.get("doc_id"))
+            if sid in doc_ids:
+                label = cit.get("section") or cit.get("text_span") or f"doc {sid}"
+                if generating:
+                    # 스트리밍 중: key 없는 정적 표시.
+                    st.markdown(
+                        f'{idx + 1}. <span data-doc-id="{html.escape(sid)}">'
+                        f"{html.escape(label)}</span>",
+                        unsafe_allow_html=True,
+                    )
+                else:
                     if st.button(
                         f"{idx + 1}. {label}",
                         key=f"pop_doc_{msg_id}_{sid}_{idx}",
                         use_container_width=True,
                     ):
                         _handle_doc_jump(sid)
+        rendered = True
+    return rendered
+
+
+def render_generation_expander(
+    msg: dict[str, Any],
+    *,
+    expanded: bool,
+    generating: bool,
+    status_text: str = "Answer generation",
+    process_override: dict[str, Any] | None = None,
+) -> None:
+    """답변 말풍선 상단(질문↔답변 사이)에 **단일 고정 익스팬더**를 렌더합니다.
+
+    메트릭·생성 단계·상위 점수·사고 과정·참조를 모두 이 익스팬더 안에 수납해
+    산개되던 부가 정보(별도 Metrics 익스팬더, References popover, 완료 후
+    generation 익스팬더)를 하나로 통합한다. 기본값은 접힘(expanded=False).
+
+    스트리밍 중과 완료 후 동일 위젯을 재사용해, 생성 완료 시 상태 박스가
+    증발하던 문제를 해결한다. 본문은 매 렌더 **무조건** 작성하므로 fragment
+    폴링(0.5s)으로 st.expander가 재생성되어도 내용이 비지 않는다.
+
+    - generating=True: 기본 접힘 유지, 내부 st.spinner로 진행 표시
+    - generating=False: 접은 상태(완료 후 유지), 정적 헤더만
+    - cancelled 메시지는 추론 로그를 감춰 전체 추론 완료로 오인되지 않게 함
+    - process_override: 완료 메시지처럼 이미 계산된 process dict가 있으면
+      재파생(process_steps 의존) 대신 직접 사용한다.
+    """
+    thought = msg.get("thought", "") or ""
+    cancelled = bool(msg.get("cancelled", False))
+    show_thought = bool(thought and thought.strip() and not cancelled)
+    documents = msg.get("documents") or []
+    citations = msg.get("citations") or []
+    metrics = msg.get("metrics") or {}
+    msg_id = msg.get("msg_id") or ""
+
+    # ui.components 내부 순환 의존을 피하기 위해 lazy import
+    from ui.components.streaming import _build_process
+
+    process = process_override or _build_process(msg) or {}
+    steps = process.get("steps") or []
+    sections = process.get("sections") or []
+    top_scores = [
+        s
+        for s in (process.get("top_scores") or [])
+        if isinstance(s, dict) and "section" in s and "score" in s
+    ]
+    perf = process.get("perf") or {}
+
+    # 메트릭(완료 메시지에 실린 metrics)도 익스팬더 수납 대상.
+    retrieved = (
+        len(documents) if documents else (process or {}).get("retrieved_count", 0)
+    )
+    total_time = metrics.get("total_time", 0)
+    has_metrics = bool(total_time or retrieved)
+    has_block = bool(
+        steps or sections or top_scores or perf or show_thought or has_metrics
+    )
+
+    # 완료 메시지인데 표시할 내용이 없으면 익스팬더 자체를 렌더하지 않는다.
+    # 빈 익스팬더 헤더가 대화 줄 간격(패딩+익스팬더)을 키워 간격 과대를 유발한다.
+    # 생성 중(generating=True)에는 항상 익스팬더를 열어 진행 표시/깜빡임을 방지한다.
+    if not generating and not (has_block or documents or citations):
+        return
+
+    with st.expander("Answer details", expanded=expanded):
+        if generating:
+            with st.spinner(status_text):
+                pass  # spinner는 헤더 아래 진행 표시용(본문은 아래 즉시 작성)
+
+        if not (has_block or documents or citations):
+            # 생성 중인데 아직 표시할 내용이 없으면 진행 캡션만 노출.
+            st.caption("Preparing...")
+            return
+
+        if steps:
+            st.markdown(" · ".join(steps))
+        if sections:
+            st.caption(" · ".join(sections))
+        if top_scores:
+            st.caption(
+                ", ".join(f"{s['section']} {s['score']:.3f}" for s in top_scores)
+            )
+
+        # 메트릭: Time / Retrieved / Model (UX-3: 기본 접힘 익스팬더 내 수납).
+        parts = []
+        if isinstance(total_time, (int, float)):
+            parts.append(f"Time: {total_time:.1f}s")
+        if retrieved:
+            parts.append(f"Retrieved: {retrieved} chunks")
+        model = (
+            msg.get("model", "")
+            or SessionManager.get("last_selected_model", "")
+            or DEFAULT_OLLAMA_MODEL
+        )
+        if model:
+            parts.append(f"Model: {model}")
+        if parts:
+            st.caption(status_line(*parts))
+
+        if show_thought:
+            st.markdown("**Thinking process**")
+            st.markdown(thought)
+
+        # 참조(페이지/doc 점프) — 기존 References popover 내용을 익스팬더 안으로 통합.
+        if documents or citations:
+            st.divider()
+            st.caption("References")
+            _render_references_content(
+                msg_id,
+                documents,
+                on_page_jump=_handle_page_jump,
+                citations=citations,
+                generating=generating,
+            )
 
 
 def render_message(
@@ -191,10 +333,18 @@ def render_message(
     citations: list[dict[str, Any]] | None = None,
     **kwargs,
 ) -> None:
-    """메시지를 렌더링하는 통합 엔진."""
+    """메시지를 렌더링하는 통합 엔진.
+
+    신뢰 경계: `processed_content`는 호출자가 이미 HTML 이스케이프한 안전한
+    마크다운/HTML만 전달해야 한다(예: streaming.py의 생산 경로는 content를
+    html.escape 후 apply_tooltips_to_response로 <span>을 주입). 이 인자는
+    unsafe_allow_html=True로 렌더되므로 원시 LLM 출력을 그대로 넘기지 않는다.
+    원시 텍스트는 `content`로 전달하면 본문 경로에서 자동 이스케이프된다.
+    """
     avatar_icon = AVATARS["assistant"] if role == "assistant" else AVATARS["user"]
     msg_id = kwargs.get("msg_id", f"msg_{msg_index}")
     citations = citations or kwargs.get("citations")
+    cancelled = bool(kwargs.get("cancelled", False))
 
     with (
         st.chat_message(role, avatar=avatar_icon)
@@ -217,6 +367,26 @@ def render_message(
             ui_error(f"Error: {error}")
             return
 
+        # 통합 익스팬더(메트릭·단계·사고·참조) — 질문↔답변 사이(답변 말풍선 상단) 고정.
+        # 생성중(generating=True) 슬롯 경로와 완료 후 타임라인 경로가 동일 위젯을
+        # 그려 위치 점프를 제거한다.
+        if role == "assistant":
+            render_generation_expander(
+                {
+                    "thought": thought,
+                    "documents": documents or [],
+                    "citations": citations,
+                    "metrics": metrics,
+                    "model": kwargs.get("model", ""),
+                    "process_steps": [],
+                    "cancelled": cancelled,
+                    "msg_id": msg_id,
+                },
+                expanded=False,
+                generating=False,
+                process_override=process or None,
+            )
+
         # 본문 내용
         if processed_content:
             st.markdown(processed_content, unsafe_allow_html=True)
@@ -227,129 +397,49 @@ def render_message(
 
             display_text = normalize_latex_delimiters(display_text)
             if role == "assistant" and documents:
-                display_text = apply_tooltips_to_response(
-                    display_text, documents, citations=citations
-                )
+                # RC-A: 완료된 메시지 본문은 매 script run마다 변하지 않으므로
+                # tooltips 주입 결과(문서 스캔 O(docs))를 msg_id로 캐시해 재수행을
+                # 제거한다. st.markdown 호출은 매 run 그대로 실행되므로 위젯/참조
+                # popover 재렌더는 보장된다. content/documents/citations가 동일하면 재사용.
+                _tip_key = f"_msg_render_{msg_id}"
+                _tip_cached = st.session_state.get(_tip_key)
+                _tip_sig = (content, id(documents), id(citations))
+                if _tip_cached is not None and _tip_cached[0] == _tip_sig:
+                    display_text = _tip_cached[1]
+                else:
+                    display_text = apply_tooltips_to_response(
+                        display_text, documents, citations=citations
+                    )
+                    st.session_state[_tip_key] = (_tip_sig, display_text)
             st.markdown(display_text, unsafe_allow_html=(role == "assistant"))
 
-        # 완료된 어시스턴트 메시지의 하단 정보
-        if role == "assistant" and msg_type == "general":
-            cancelled = bool(kwargs.get("cancelled", False))
-            # 완료 요약 + 출처 미리보기 (기본 노출).
-            # 스트리밍 중 st.status 피드백이 완료 시 사라지는 문제를 완화한다.
-            if (content or processed_content or "").strip():
-                if cancelled:
-                    # 중단 확정 상태: 부분 답변 보존 안내 (uiux-fix-p1 INT-2)
-                    st.caption("Stopped · Partial answer preserved")
-                elif documents:
-                    pages = _extract_reference_pages(documents)
-                    page_txt = status_line(*(f"p.{p}" for p in pages[:4]))
-                    if len(pages) > 4:
-                        page_txt += f" +{len(pages) - 4} more"
-                    st.caption(
-                        status_line(
-                            "Answer complete",
-                            f"{len(documents)} references",
-                            page_txt,
-                        )
-                    )
-                else:
-                    st.caption("Answer complete")
-
-            # 참조 페이지 popover는 documents가 있는 모든 완료된 어시스턴트
-            # 메시지에 렌더링한다. 버튼 키는 msg_id 기반이므로 이전 답변과
-            # 공존해도 안전하다 (최신 여부(is_latest)와 무관).
-            if documents or citations:
-                _render_references_popover(
-                    msg_id,
-                    documents,
-                    on_page_jump=_handle_page_jump,
-                    citations=citations,
-                )
-
-                # 성능 지표 (UX-3: 기본 접힘)
-                if metrics:
-                    total_time = metrics.get("total_time", 0)
-                    # 성능 메트릭에 검색 청크 수 키가 없으므로 메시지에 실린 documents
-                    # 길이(실제 답변에 사용된 청크 수)를 우선 사용한다.
-                    retrieved = (
-                        len(documents)
-                        if documents
-                        else metrics.get("retrieved_chunks", 0)
-                    )
-                    model = (
-                        kwargs.get("model", "")
-                        or SessionManager.get("last_selected_model", "")
-                        or DEFAULT_OLLAMA_MODEL
-                    )
-                    with st.expander("Metrics", expanded=False):
-                        st.caption(
-                            status_line(
-                                f"Time: {total_time:.1f}s",
-                                f"Retrieved: {retrieved} chunks",
-                                f"Model: {model}",
-                            )
-                        )
-
-        # 상세 사고 과정/답변 프로세스 (LLM reasoning 로그 + 파이프라인 진행
-        # 구조) — 답변·출처 아래, 기본 접힘.
+        # 완료된 어시스턴트 메시지의 하단 상태줄 (기본 노출, 부가 정보는 상단 익스팬더로 통합).
         if (
             role == "assistant"
-            and msg_type != "streaming"
-            and (
-                (thought and thought.strip())
-                or bool(
-                    process
-                    and (
-                        process.get("steps")
-                        or process.get("sections")
-                        or process.get("top_scores")
-                        or process.get("perf")
+            and msg_type == "general"
+            and (content or processed_content or "").strip()
+        ):
+            if cancelled:
+                st.caption("Stopped · Partial answer preserved")
+            elif documents:
+                pages = _extract_reference_pages(documents)
+                page_txt = status_line(*(f"p.{p}" for p in pages[:PREVIEW_PAGES_MAX]))
+                if len(pages) > PREVIEW_PAGES_MAX:
+                    page_txt += f" +{len(pages) - PREVIEW_PAGES_MAX} more"
+                st.caption(
+                    status_line(
+                        "Answer complete",
+                        f"{len(documents)} references",
+                        page_txt,
                     )
                 )
-            )
-        ):
-            with st.expander("Detailed thinking", expanded=False):
-                process = process or {}
-                steps = process.get("steps") or []
-                sections = process.get("sections") or []
-                top_scores = process.get("top_scores") or []
-                perf = process.get("perf") or {}
-
-                if steps:
-                    st.markdown(" · ".join(steps))
-                if sections:
-                    st.caption(" · ".join(sections))
-                if top_scores:
-                    st.caption(
-                        ", ".join(
-                            f"{s['section']} {s['score']:.3f}" for s in top_scores
-                        )
-                    )
-                parts = []
-                if isinstance(perf.get("total_time"), (int, float)):
-                    parts.append(f"{perf['total_time']:.1f}s")
-                if isinstance(perf.get("tps"), (int, float)):
-                    parts.append(f"{perf['tps']:.1f} tok/s")
-                if perf.get("input_token_count") is not None:
-                    parts.append(f"{perf['input_token_count']} tok")
-                if parts:
-                    st.caption(status_line(*parts))
-
-                if thought and thought.strip():
-                    st.markdown("**Thinking process**")
-                    st.markdown(thought)
+            else:
+                st.caption("Answer complete")
 
 
 def _cancel_rebuild(sid: str) -> None:
     """문서 분석 재구축 취소 요청 콜백입니다."""
     SessionManager.set("rebuild_cancelled", True, session_id=sid)
-    st.rerun()
-
-
-def _handle_stop_generation(sid: str) -> None:
-    """스트리밍 중단 요청 콜백입니다. 소비 스레드가 부분 결과를 확정하도록 합니다."""
-    SessionManager.set("generation_cancel", True, session_id=sid)
     st.rerun()
 
 
@@ -390,13 +480,19 @@ def _render_doc_context_inline(sid: str) -> None:
             st.caption(status_line(file_name, f"Waiting...{cache_tag}"))
 
 
-@st.fragment(run_every=UI_TIMELINE_POLL_SECONDS)
 def _render_unified_timeline(current_sid: str) -> None:
     """
     통합 타임라인 렌더링 (단일 패스).
     메시지 리스트에 저장된 모든 타입의 메시지를 시간 순서대로 렌더링.
+
+    표준 리팩터 이후 폴링 fragment(``run_every``)는 제거되었다. 타임라인은
+    ``render_chat_messages_area`` 호출 시점(전체 rerun)에만 갱신되며, 스트리밍
+    중 토큰 갱신은 submit 핸들러의 ``st.empty()`` 플레이스홀더가 담당해
+    전체 컬럼 재렌더(깜빡임)를 유발하지 않는다.
     """
+    _t_tl = time.perf_counter()
     messages = SessionManager.get_messages() or []
+    n_msgs = len(messages)
 
     # 빈 대화일 때: 문서 컨텍스트가 있으면 표시, 없으면 가이드
     if not messages:
@@ -484,63 +580,24 @@ def _render_unified_timeline(current_sid: str) -> None:
         if content == "READY_FOR_QUERY":
             continue
 
-        # 스트리밍 중인 메시지
+        # 스트리밍 중인 메시지: 단일 pass로 직접 렌더.
+        # 슬롯(st.empty)을 쓰지 않고 매 렌더 msg 딕셔너리를 통째로 다시 그리므로
+        # 익스팬더가 항상 본문 위에 고정된다.
         if mtype == "streaming":
-            # 스트리밍 중 오류가 실린 메시지는 즉시 표면화
-            if msg.get("error"):
-                with st.chat_message("assistant", avatar=AVATARS["assistant"]):
-                    ui_error(str(msg.get("error")))
-                continue
-            status_text = msg.get("status", "Generating...")
-            thought = msg.get("thought", "")
-            # 중단 요청 접수 시 즉시 "Stopping..." 피드백 (uiux-fix-p1 INT-2)
-            cancel_requested = bool(
-                SessionManager.get("generation_cancel", False, current_sid)
+            # 활성 스트리밍 턴(입력창 아래 아닌 대화 안에 렌더)은 이 타임라인
+            # 브랜치에서 라이브 렌더와 스트림 소비를 함께 수행한다.
+            is_active = bool(
+                SessionManager.get("is_generating_answer", False, current_sid)
+                and SessionManager.get("active_stream_msg_id", "", current_sid)
+                == msg.get("msg_id")
             )
-            if cancel_requested:
-                status_text = "Stopping..."
-
+            if is_active:
+                _run_active_stream_in_timeline(
+                    msg, current_sid, query=msg.get("query", "")
+                )
+                continue
             with st.chat_message("assistant", avatar=AVATARS["assistant"]):
-                # 실시간 상태 표시
-                with st.status(
-                    f"{status_text}", expanded=True, state="running"
-                ) as status:
-                    if thought:
-                        status.write(thought)
-                    # ui.components 내부 순환 의존을 피하기 위해 lazy import
-                    # (모듈 레벨로 올리지 말 것 — chat.py:456과 동일한 이유).
-                    process_steps = msg.get("process_steps", [])
-                    if process_steps:
-                        from ui.components.streaming import _build_process
-
-                        process = _build_process(msg)
-                        if process.get("steps"):
-                            status.write(" · ".join(process["steps"]))
-                    # 중단 요청 접수 시 "Stopping..." 안내를 즉시 표시한다 (INT-2)
-                    if cancel_requested:
-                        status.caption("Stopping...")
-                    # 빈 박스 방지: thought·단계가 모두 없어도 "Preparing..."
-                    # placeholder로 본문이 절대 비어 보이지 않게 한다.
-                    elif not thought and not process_steps:
-                        status.caption("Preparing...")
-
-                # 스트리밍 내용 표시 (커서 포함)
-                display_content = msg.get("content", "")
-                if display_content:
-                    display_content = normalize_latex_delimiters(
-                        html.escape(display_content)
-                    )
-                    st.markdown(display_content + " ▌", unsafe_allow_html=True)
-
-                # 중단 버튼 (취소 요청 → 소비 스레드가 누적 부분 콘텐츠를 확정)
-                if not SessionManager.get("generation_cancel", False, current_sid):
-                    st.button(
-                        "Stop",
-                        key=f"stop_gen_{msg.get('msg_id')}",
-                        on_click=_handle_stop_generation,
-                        args=(current_sid,),
-                        use_container_width=True,
-                    )
+                _draw_streaming_message(msg, current_sid)
             continue
 
         # 일반 완료된 메시지 (사용자/어시스턴트)
@@ -561,6 +618,57 @@ def _render_unified_timeline(current_sid: str) -> None:
             citations=msg.get("citations"),
         )
 
+    logger.debug(
+        "[PERF] _render_unified_timeline: rendered %d msg(s) in %.3fs",
+        n_msgs,
+        time.perf_counter() - _t_tl,
+    )
+
+
+# ---------------------------------------------------------------------------
+# 스트리밍 전용 렌더 (단일 pass, 폴링 없음)
+# ---------------------------------------------------------------------------
+
+
+def _draw_streaming_message(msg: dict[str, Any], current_sid: str) -> None:
+    """스트리밍 메시지를 그립니다 (단일 pass 렌더).
+
+    표준 리팩터 이후 스트리밍은 별도 스레드/fragment 폴링 없이 단일 script run
+    안에서 ``_run_standard_streaming_turn``이 ``stream_chunks``를 동기 소비하며
+    본문을 갱신한다. 따라서 이 함수는 렌더 시점에 msg 딕셔너리를 한 번 읽어
+    익스팬더("Answer details")를 먼저 그리고 그 아래에 본문을 그린다.
+    """
+    # 스트리밍 중 오류가 실린 메시지는 즉시 표면화
+    if msg.get("error"):
+        st.error(str(msg.get("error")))
+        return
+
+    status_text = msg.get("status", "Generating...")
+    cancel_requested = bool(SessionManager.get("generation_cancel", False, current_sid))
+    if cancel_requested:
+        status_text = "Stopping..."
+
+    # 실시간 상태 표시 — 영속 익스팬더(본문 위에 고정, 생성 완료 후에도 유지).
+    render_generation_expander(
+        msg, expanded=False, generating=True, status_text=status_text
+    )
+
+    # 스트리밍 내용 표시 (커서 포함).
+    raw_content = msg.get("content", "")
+    msg_id = msg.get("msg_id", "")
+    cache_key = f"_stream_html_{msg_id}"
+    if raw_content:
+        cached = st.session_state.get(cache_key)
+        if not cached or cached["raw"] != raw_content:
+            processed = normalize_latex_delimiters(html.escape(raw_content))
+            st.session_state[cache_key] = {
+                "raw": raw_content,
+                "html": processed,
+            }
+        else:
+            processed = cached["html"]
+        st.markdown(processed + " ▌", unsafe_allow_html=True)
+
 
 # ---------------------------------------------------------------------------
 # 메인 렌더링
@@ -568,10 +676,11 @@ def _render_unified_timeline(current_sid: str) -> None:
 
 
 def render_chat_messages_area() -> None:
-    """Renders the chat column: unified timeline + sticky input."""
+    """Renders the chat column: unified timeline (streaming included)."""
     current_sid = SessionManager.get_session_id()
 
-    # 통합 타임라인 fragment (단일 진입점, 2초 폴링)
+    # 통합 타임라인 렌더. 스트리밍 메시지도 단일 pass로 직접 렌더하므로
+    # 익스팬더 위치가 안정적으로 유지된다.
     _render_unified_timeline(current_sid)
 
 
@@ -579,17 +688,29 @@ def _resolve_chat_input_state(sid: str) -> tuple[str, bool]:
     """채팅 입력의 placeholder/disabled 상태를 결정하는 순수 함수입니다."""
     is_generating = bool(SessionManager.get("is_generating_answer", False, sid))
     is_ready = SessionManager.is_ready_for_chat(session_id=sid)
+    is_swapping = bool(SessionManager.get("is_swapping_model", False, sid))
 
     if is_generating:
         return "AI is generating your answer...", True
+    if is_swapping:
+        return "Switching models, please wait...", True
     if not is_ready:
         return MSG_CHAT_GUIDE, True
     return "Ask a follow-up question...", False
 
 
 def render_chat_input_area() -> None:
-    """Renders the native st.chat_input() at the bottom of the chat column."""
+    """Renders the native st.chat_input() at the bottom of the chat column.
+
+    표준 스트리밍 리팩터 이후 폴링 fragment(``run_every``)는 제거되었다.
+    입력창 disabled 상태는 ``_resolve_chat_input_state``가 ``is_generating_answer``
+    플래그로 결정하며, 생성 완료/예외 시 submit 핸들러가 ``st.rerun()`` 1회로
+    입력창을 정상 활성화한다(INT-입력동결 방지). 폴링 자가치유가 사라진 대신
+    명시적 rerun 1회로 결정론적 활성화를 보장한다.
+    """
     current_sid = SessionManager.get_session_id()
+
+    # 생성 중에도 위젯을 disabled로 계속 렌더(입력창 소실 방지).
     input_placeholder, input_disabled = _resolve_chat_input_state(current_sid)
 
     user_query = st.chat_input(
@@ -599,30 +720,185 @@ def render_chat_input_area() -> None:
     if user_query and not input_disabled:
         query_text = user_query.strip()
         if query_text:
-            from ui.components.streaming import (
-                friendly_error_message,
-                start_streaming_turn,
+            _t_submit = time.perf_counter()
+            SessionManager.add_message("user", query_text, session_id=current_sid)
+
+            # [FIX-ORDER] 스트리밍 버블을 입력창 아래(분리)가 아닌 대화 타임라인
+            # 안(질문 바로 아래)에 그리려면, 스트리밍 루프를 입력 영역에서 직접
+            # 돌리지 않는다. 대신 `streaming` 타입 플레이스홀더를 추가하고 플래그를
+            # 세운 뒤 1회 rerun. 이후 타임라인의 `mtype=="streaming"` 브랜치가
+            # 동일 script run에서 라이브 렌더 + 스트림 소비를 함께 수행한다
+            # (입력 영역은 DOM상 메시지 스크롤 컨테이너보다 뒤에 방출되므로,
+            #  여기서 렌더하면 입력창 아래에 붙는 원인이었다).
+            stream_msg_id = str(uuid.uuid4())
+            SessionManager.add_message(
+                "assistant",
+                "",
+                msg_type="streaming",
+                msg_id=stream_msg_id,
+                query=query_text,
+                thought="",
+                documents=[],
+                metrics={},
+                citations=[],
+                processed_content=None,
+                session_id=current_sid,
+            )
+            SessionManager.set("is_generating_answer", True, current_sid)
+            SessionManager.set("active_stream_msg_id", stream_msg_id, current_sid)
+            logger.debug(
+                "[PERF] submit handler: setup took %.3fs (before st.rerun)",
+                time.perf_counter() - _t_submit,
+            )
+            # 타임라인이 라이브 스트리밍을 렌더하도록 명시적 rerun 1회.
+            st.rerun()
+
+
+def _friendly_stream_error(exc: Exception) -> str:
+    """원시 예외를 사용자 친화 메시지로 매핑합니다 (lazy import로 순환 의존 회피)."""
+    from ui.components.streaming import friendly_error_message
+
+    return friendly_error_message(exc)
+
+
+def _run_active_stream_in_timeline(
+    msg: dict[str, Any], current_sid: str, query: str
+) -> None:
+    """활성 스트리밍 메시지를 대화 타임라인 안에서 라이브 렌더한다.
+
+    입력 영역(입력창 아래)이 아니라 메시지 스크롤 컨테이너 내부에 렌더하므로
+    질문 → "Answer details" 익스팬더 → 스트리밍 본문 순서가 보장된다. 렌더와
+    스트림 소비를 동일 script run에서 함께 수행해 깜빡임을 막는다.
+    """
+    from ui.components.streaming import stream_chunks
+
+    msg_id = msg.get("msg_id", "")
+    model_name = SessionManager.get("last_selected_model", session_id=current_sid) or ""
+
+    accumulated = ""
+    thought = ""
+    documents: list[Any] = []
+    metrics: dict[str, Any] = {}
+    citations: list[dict[str, Any]] = []
+    _raw_json_parts: list[str] = []
+    _fa_scan_pos = 0
+
+    # 라이브 렌더 컨테이너: 매 chunk 본문/익스팬더를 갱신.
+    with st.chat_message("assistant", avatar=AVATARS["assistant"]):
+        aux_ph = st.empty()  # 부가 정보(thought/docs/metrics) 고정 슬롯
+        body_ph = st.empty()  # 본문 고정 슬롯
+
+        def _render_aux() -> None:
+            aux_ph.empty()
+            with aux_ph:
+                render_generation_expander(
+                    {
+                        "thought": thought,
+                        "documents": documents or [],
+                        "citations": citations,
+                        "metrics": metrics,
+                        "model": model_name,
+                        "process_steps": [],
+                        "cancelled": False,
+                        "msg_id": msg_id,
+                    },
+                    expanded=False,
+                    generating=True,
+                )
+
+        def _persist() -> None:
+            SessionManager.add_message(
+                "assistant",
+                accumulated,
+                msg_type="streaming",
+                msg_id=msg_id,
+                thought=thought,
+                documents=documents,
+                metrics=metrics,
+                citations=citations,
+                processed_content=None,
+                session_id=current_sid,
             )
 
-            SessionManager.add_message("user", query_text, session_id=current_sid)
-            SessionManager.set("is_generating_answer", True, current_sid)
-            try:
-                model_name = (
-                    SessionManager.get("last_selected_model", session_id=current_sid)
-                    or ""
-                )
-                start_streaming_turn(current_sid, query_text, model_name)
-            except Exception as exc:
-                # 보장: 배경 소비자 시작 전 예외가 발생해도 플래그가 남지 않도록
-                # 해제하고, 타임라인에 친화적 오류 메시지를 표면화한다.
-                logger.exception("[CHAT] 답변 생성 시작 실패: %s", exc)
-                SessionManager.set("is_generating_answer", False, current_sid)
-                SessionManager.set("generation_cancel", True, current_sid)
-                SessionManager.add_message(
-                    "assistant",
-                    "",
-                    msg_type="general",
-                    error=friendly_error_message(exc),
-                    session_id=current_sid,
-                )
-            st.rerun()
+        # 초기 프레임: 빈 본문이라도 익스팬더를 바로 붙여 순서를 고정.
+        _render_aux()
+        body_ph.markdown("", unsafe_allow_html=False)
+        _persist()
+
+        try:
+            for chunk in stream_chunks(query, model_name, current_sid):
+                if chunk.content:
+                    if getattr(chunk, "raw_json", False):
+                        from ui.components.streaming import (
+                            _extract_final_answer_delta,
+                        )
+
+                        _raw_json_parts.append(chunk.content)
+                        blob = "".join(_raw_json_parts)
+                        delta, _fa_scan_pos = _extract_final_answer_delta(
+                            blob, _fa_scan_pos
+                        )
+                        accumulated += delta
+                    else:
+                        accumulated += chunk.content
+                    body_ph.markdown(accumulated + " ▌", unsafe_allow_html=False)
+                if chunk.thought:
+                    thought += chunk.thought
+                _meta = chunk.metadata or {}
+                if _meta.get("documents"):
+                    documents = _meta["documents"]
+                if chunk.performance:
+                    metrics = chunk.performance
+                if getattr(chunk, "citations", None):
+                    citations = chunk.citations or []
+                if (
+                    chunk.thought
+                    or _meta.get("documents")
+                    or chunk.performance
+                    or getattr(chunk, "citations", None)
+                ):
+                    _render_aux()
+                _persist()
+            # 루프 정상 종료: 마지막 청크 이후에야 확정되는 메타데이터(문서/측정값/생각)가
+            # 있으면 누락 없이 익스팬더에 반영한다. (스트림 consumer는 metadata를 늦게
+            # 내보내는 경우가 있어, 루프 중 마지막 _render_aux 호출만으로는 불완전할 수 있음)
+            _render_aux()
+        except Exception as exc:  # noqa: BLE001 - 스트림 레벨 오류를 사용자에게 노출
+            logger.exception("[CHAT] 스트리밍 중 오류: %s", exc)
+            SessionManager.set("is_generating_answer", False, current_sid=current_sid)
+            SessionManager.add_message(
+                "assistant",
+                accumulated or "",
+                msg_type="general",
+                msg_id=msg_id,
+                thought=thought,
+                documents=documents,
+                metrics=metrics,
+                citations=citations,
+                error=_friendly_stream_error(exc),
+                session_id=current_sid,
+            )
+            return
+
+    # 스트리밍 정상 완료: 최종 스냅샷을 ``general``로 확정(폴링 대신 명시적 저장).
+    SessionManager.set("is_generating_answer", False, current_sid=current_sid)
+    # [FIX-STREAM-COMPLETE] 활성 run이 끝나면 이 run의 프레임이 화면에 고착된다.
+    # 그 프레임은 아직 `msg_type="streaming"` 확정 전(또는 활성 disabled 입력창) 상태라,
+    # "Answer details" 익스팬더(측정값/문서/생각)가 반영되지 않은 채 커서(▌)만 남고,
+    # 입력창도 disabled로 굳어 다음 질문 때까지 갱신되지 않는다(실측 재현 확인).
+    # 폴링 fragment 제거 이후 결정론적 전환은 명시적 rerun 1회로 보장한다.
+    # 이 rerun으로 타임라인이 `general` 브랜치를 타며 익스팬더를 즉시 렌더하고,
+    # 입력창도 `is_generating_answer=False`에 맞춰 정상 활성화된다.
+    SessionManager.add_message(
+        "assistant",
+        accumulated,
+        msg_type="general",
+        msg_id=msg_id,
+        thought=thought,
+        documents=documents,
+        metrics=metrics,
+        citations=citations,
+        processed_content=None,
+        session_id=current_sid,
+    )
+    st.rerun()

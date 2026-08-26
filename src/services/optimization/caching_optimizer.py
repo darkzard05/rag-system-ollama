@@ -5,14 +5,16 @@
 
 import asyncio
 import contextlib
+import dataclasses
 import hashlib
+import json
 import logging
-import pickle
 import threading
 import time
 from abc import ABC, abstractmethod
 from collections.abc import Coroutine
 from dataclasses import dataclass, field
+from datetime import date, datetime
 from pathlib import Path
 from threading import RLock
 from typing import Any, Generic, TypeVar
@@ -31,6 +33,46 @@ logger = logging.getLogger(__name__)
 # 타입 변수
 T = TypeVar("T")
 R = TypeVar("R")
+
+# ---------------------------------------------------------------
+# 캐시 직렬화 포맷
+# unsafe 역직렬화 대신 안전한 JSON 직렬화를 사용한다 (RCE 취약점 제거).
+# ---------------------------------------------------------------
+CACHE_FORMAT = "json-v2"
+CACHE_FORMAT_KEY = "_fmt"
+
+
+def _json_default(obj: Any) -> Any:
+    """json.dump 의 default 인코더.
+
+    지원 타입을 명시적으로 변환하고, 변환 불가능한 타입은
+    조용히 문자열화하지 않고 TypeError 를 발생시켜
+    무음 손상을 방지한다.
+    """
+    if isinstance(obj, (datetime, date)):
+        return obj.isoformat()
+    if dataclasses.is_dataclass(obj) and not isinstance(obj, type):
+        return dataclasses.asdict(obj)
+    if isinstance(obj, set | frozenset):
+        return list(obj)
+    try:
+        from pydantic import BaseModel
+
+        if isinstance(obj, BaseModel):
+            return obj.model_dump()
+    except ImportError:
+        pass
+    try:
+        # numpy scalar -> python 네이티브
+        if isinstance(obj, np.generic):
+            return obj.item()
+        # numpy array -> list (pickle 은 ndarray 를 그대로 직렬화했으므로 동등 보장)
+        if isinstance(obj, np.ndarray):
+            return obj.tolist()
+    except ImportError:
+        pass
+    msg = f"JSON 으로 직렬화할 수 없는 타입입니다: {type(obj).__name__}"
+    raise TypeError(msg)
 
 
 @dataclass
@@ -59,6 +101,38 @@ class CacheEntry:
         """접근 시간 업데이트"""
         self.accessed_at = time.time()
         self.hit_count += 1
+
+    def to_json_dict(self) -> dict[str, Any]:
+        """안전한 JSON 직렬화용 dict 로 변환 (unsafe 역직렬화 대체)."""
+        return {
+            CACHE_FORMAT_KEY: CACHE_FORMAT,
+            "key": self.key,
+            "value": self.value,
+            "created_at": self.created_at,
+            "accessed_at": self.accessed_at,
+            "ttl_seconds": self.ttl_seconds,
+            "hit_count": self.hit_count,
+            "metadata": self.metadata,
+        }
+
+    @classmethod
+    def from_json_dict(cls, data: dict[str, Any]) -> "CacheEntry":
+        """JSON dict → CacheEntry 복원. 포맷 불일치 시 ValueError."""
+        if data.get(CACHE_FORMAT_KEY) != CACHE_FORMAT:
+            msg = (
+                f"지원되지 않는 캐시 포맷입니다: "
+                f"{data.get(CACHE_FORMAT_KEY)!r} (expected {CACHE_FORMAT!r})"
+            )
+            raise ValueError(msg)
+        return cls(
+            key=data["key"],
+            value=data["value"],
+            created_at=data["created_at"],
+            accessed_at=data["accessed_at"],
+            ttl_seconds=data["ttl_seconds"],
+            hit_count=data.get("hit_count", 0),
+            metadata=data.get("metadata", {}),
+        )
 
 
 @dataclass
@@ -532,11 +606,32 @@ class DiskCache(CacheBackend[T]):
                     self.stats.total_misses += 1
                     return None
 
-                # 2. 안전하게 로드
-                with open(cache_file, "rb") as f:
-                    data = pickle.load(f)  # nosec B301
+                # 2. 안전하게 로드 (unsafe 역직렬화 미사용 — JSON 전용)
+                try:
+                    with open(cache_file, encoding="utf-8") as f:
+                        raw = json.load(f)
+                except (json.JSONDecodeError, UnicodeDecodeError):
+                    # 레거시 직렬화 파일 또는 손상된 파일 — 절대 역직렬화하지 않음
+                    logger.info(
+                        "[DiskCache] 레거시/손상된 캐시 파일 폐기 (JSON 파싱 실패)"
+                    )
+                    self._delete_file(cache_file)
+                    self.stats.total_misses += 1
+                    return None
 
-                entry = CacheEntry(**data) if isinstance(data, dict) else data
+                if (
+                    not isinstance(raw, dict)
+                    or raw.get(CACHE_FORMAT_KEY) != CACHE_FORMAT
+                ):
+                    # 레거시/알 수 없는 포맷 — 폐기
+                    logger.info(
+                        "[DiskCache] 레거시/지원되지 않는 포맷의 캐시 파일 폐기"
+                    )
+                    self._delete_file(cache_file)
+                    self.stats.total_misses += 1
+                    return None
+
+                entry = CacheEntry.from_json_dict(raw)
 
                 # 3. 만료 확인
                 if entry.is_expired():
@@ -585,9 +680,15 @@ class DiskCache(CacheBackend[T]):
                 if not cache_file.exists():
                     self.stats.cache_size += 1
 
-                # 1. 파일 저장 — 클래스 식별자 문제를 피해, 직렬화는 기본 dict로 수행합니다.
-                with open(cache_file, "wb") as f:
-                    pickle.dump(entry.__dict__, f)
+                # 1. 파일 저장 — unsafe 역직렬화 대신 안전한 JSON 직렬화 (RCE 취약점 제거)
+                with open(cache_file, "w", encoding="utf-8") as f:
+                    json.dump(
+                        entry.to_json_dict(),
+                        f,
+                        ensure_ascii=False,
+                        indent=2,
+                        default=_json_default,
+                    )
 
                 # 2. 파일 권한 강제 적용
                 self.security_manager.enforce_file_permissions(str(cache_file))
@@ -825,7 +926,7 @@ class ObjectCache(CacheBackend[T]):
     객체 캐시 - 임의의 메모리 파이썬 객체 보관 (컴파일된 그래프, 파싱된
     벡터스토어 등).
 
-    MemoryCache와 동일한 LRU/제거/TTL/락 관용구를 따르되, 값을 pickle/직렬화
+    MemoryCache와 동일한 LRU/제거/TTL/락 관용구를 따르되, 값을 unsafe 역직렬화
     하지 않고 메모리에 그대로 보관한다. CacheBackend ABC를 구현하므로 모든
     메서드는 비동기(async)이다.
     """

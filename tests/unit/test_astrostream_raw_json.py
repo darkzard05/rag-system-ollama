@@ -66,6 +66,9 @@ async def test_raw_json_live_5_tokens():
     }
 
     llm = MagicMock()
+    # generate()는 llm.bind(response_format=...).astream(...) 를 호출하므로
+    # bind() 가 모킹된 astream 을 가진 자기 자신을 리턴하도록 세팅한다.
+    llm.bind.return_value = llm
 
     async def mock_astream(messages, config=None):  # noqa: ANN001
         for tok in tokens:
@@ -136,6 +139,7 @@ async def test_parse_failure_preserves_flag():
     assert is_valid is False, "bad token stream must NOT be valid JSON"
 
     llm = MagicMock()
+    llm.bind.return_value = llm
 
     async def mock_astream(messages, config=None):  # noqa: ANN001
         for tok in bad_tokens:

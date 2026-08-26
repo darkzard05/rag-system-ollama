@@ -7,9 +7,9 @@ Streamlit-based frontend orchestration for the RAG system, managing the two-colu
 - `ui.py`: Main layout orchestration and global CSS injection.
 - `bridge.py`: Real-time synchronization between `SessionStore` and `st.session_state` (with interactive key preservation).
 - `components/`: Modular UI elements.
-    - `chat.py`: Unified conversational timeline (single-pass `@st.fragment(run_every=UI_TIMELINE_POLL_SECONDS)`), streaming message rendering, native status/expander components.
-    - `streaming.py`: Async stream consumption bridge (`stream_chunks`) and message-driven streaming updates (`start_streaming_turn`, `_spawn_stream_consumer`).
-    - `viewer.py`: PDF rendering fragment (`@st.fragment`), page navigation, annotation display.
+    - `chat.py`: Unified conversational timeline (single-pass render, no polling fragment), streaming message rendering, native status/expander components. `_run_standard_streaming_turn` consumes `stream_chunks` synchronously within one script run.
+    - `streaming.py`: Async stream consumption bridge (`stream_chunks`, background worker inside) and `consume_stream_into_message` pure helper that persists the assistant message (content/thought/docs/metrics/citations, cancel detection, PDF side-effects) without a background thread.
+    - `viewer.py`: PDF rendering fragment (`@st.fragment(run_every=2.0)`), page navigation, annotation display.
     - `sidebar.py`: Global settings and session controls.
 - `styles/`: CSS and theme assets.
     - `main.css`: Layout flex chain, responsive breakpoints, sticky chat input. Component styling delegated to native Streamlit elements.
@@ -21,8 +21,8 @@ Streamlit-based frontend orchestration for the RAG system, managing the two-colu
 |-------|------|-------|
 | Layout/CSS | `src/ui/ui.py` + `src/ui/styles/main.css` | Flex chain selectors in CSS |
 | PDF flickering | `src/ui/components/viewer.py` | `@st.fragment` wrapper |
-| Chat timeline | `src/ui/components/chat.py` | Unified timeline fragment polls every 1.0s (`timeline_poll_seconds`) |
-| Streaming updates | `src/ui/components/streaming.py` | Background thread updates message dicts |
+| Chat timeline | `src/ui/components/chat.py` | Single-pass render (no polling fragment) |
+| Streaming updates | `src/ui/components/streaming.py` | `consume_stream_into_message` persists message synchronously (no background thread) |
 | State sync | `src/ui/bridge.py` + `main.py` | `UIBridge.sync_session()` |
 | Sidebar/settings | `src/ui/components/sidebar.py` | |
 

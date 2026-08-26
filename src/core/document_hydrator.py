@@ -21,7 +21,7 @@ def _extract_page_words_sync(
     path: str, page_num: int, chunk_bbox: Any | None
 ) -> list[Any] | None:
     """PDF 파일에서 특정 페이지의 단어 좌표를 동기로 추출합니다 (스레드 푸시용)."""
-    import fitz  # lazy: 좌표 추출 시에만 import
+    import pymupdf as fitz  # lazy: 좌표 추출 시에만 import
 
     try:
         with fitz.open(path) as doc_obj:

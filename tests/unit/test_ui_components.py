@@ -88,32 +88,3 @@ def test_pdf_viewer_key_includes_page():
     assert pdf_viewer_key("abc", 1) == "pdf_v8_abc_1"
     assert pdf_viewer_key("abc", 1) != pdf_viewer_key("abc", 2)
     assert pdf_viewer_key("abc", 1) != pdf_viewer_key("abd", 1)
-
-
-def test_timeline_fragment_poll_interval_from_config():
-    """타임라인 fragment의 run_every가 config의 UI_TIMELINE_POLL_SECONDS를 사용한다.
-
-    decorator는 모듈 import 시점에 적용되므로, streamlit.fragment를 mock한 뒤
-    chat 모듈을 reload하여 전달된 run_every를 검증한다.
-    """
-    import importlib
-    from unittest.mock import patch
-
-    import streamlit
-
-    from common.config import UI_TIMELINE_POLL_SECONDS
-
-    with patch.object(streamlit, "fragment") as mock_fragment:
-        # decorator가 함수를 그대로 반환하도록 no-op 처리
-        mock_fragment.return_value = lambda func: func
-
-        import ui.components.chat as chat_module
-
-        importlib.reload(chat_module)
-
-        mock_fragment.assert_called_once()
-        _, kwargs = mock_fragment.call_args
-        assert kwargs.get("run_every") == UI_TIMELINE_POLL_SECONDS
-
-    # 원래 fragment 래핑 상태로 복원 (다른 테스트에 영향 방지)
-    importlib.reload(chat_module)

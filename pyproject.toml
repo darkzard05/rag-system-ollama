@@ -42,12 +42,13 @@ ignore = [
 [tool.ruff.lint.per-file-ignores]
 "src/main.py" = ["E402", "F401"] # Streamlit 초기화 및 조건부 임포트 허용
 "src/core/rag_core.py" = ["E402"] # 지연 임포트 허용
+"src/core/model_loader.py" = ["E402"] # 지연 임포트 허용
 "src/common/utils.py" = ["E402"] # 지연 임포트 허용
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
-pythonpath = ["src"]
+pythonpath = ["src", "."]
 markers = [
     "e2e: end-to-end browser tests requiring a running Streamlit app",
     "perf: performance/benchmark tests",

@@ -20,10 +20,14 @@ def _reset_interactive_keys() -> None:
 
 @patch("ui.bridge.ContextManager.get_current_session_id")
 @patch("ui.bridge.SessionManager.sync_to_streamlit")
+@patch("ui.bridge.SessionManager.has_pending_ui_sync")
 @patch("ui.bridge.st")
-def test_sync_session_skips_registered_keys(mock_st, mock_sync, mock_sid):
+def test_sync_session_skips_registered_keys(
+    mock_st, mock_has_pending, mock_sync, mock_sid
+):
     """INTERACTIVE_KEYS에 등록된 키는 동기화에서 건너뛰고, 나머지는 갱신됩니다."""
     mock_sid.return_value = "test_session"
+    mock_has_pending.return_value = True
 
     def fake_sync(session_id, key=None):
         session_state = mock_st.session_state
@@ -50,10 +54,14 @@ def test_sync_session_skips_registered_keys(mock_st, mock_sync, mock_sid):
 
 @patch("ui.bridge.ContextManager.get_current_session_id")
 @patch("ui.bridge.SessionManager.sync_to_streamlit")
+@patch("ui.bridge.SessionManager.has_pending_ui_sync")
 @patch("ui.bridge.st")
-def test_sync_session_updates_unregistered_keys(mock_st, mock_sync, mock_sid):
+def test_sync_session_updates_unregistered_keys(
+    mock_st, mock_has_pending, mock_sync, mock_sid
+):
     """등록되지 않은 키는 동기화에 의해 정상적으로 갱신됩니다."""
     mock_sid.return_value = "test_session"
+    mock_has_pending.return_value = True
 
     def fake_sync(session_id, key=None):
         mock_st.session_state["unregistered_key"] = "new_value"
@@ -66,3 +74,42 @@ def test_sync_session_updates_unregistered_keys(mock_st, mock_sync, mock_sid):
     UIBridge.sync_session()
 
     assert session_state["unregistered_key"] == "new_value"
+
+
+@patch("ui.bridge.ContextManager.get_current_session_id")
+@patch("ui.bridge.SessionManager.sync_to_streamlit")
+@patch("ui.bridge.SessionManager.has_pending_ui_sync")
+@patch("ui.bridge.st")
+def test_sync_session_skips_when_no_pending_change(
+    mock_st, mock_has_pending, mock_sync, mock_sid
+):
+    """변경 사항이 없으면 동기화(sync_to_streamlit)를 호출하지 않아야 합니다."""
+    mock_sid.return_value = "test_session"
+    mock_has_pending.return_value = False
+
+    UIBridge.sync_session()
+
+    mock_sync.assert_not_called()
+
+
+@patch("ui.bridge.ContextManager.get_current_session_id")
+@patch("ui.bridge.SessionManager.sync_to_streamlit")
+@patch("ui.bridge.SessionManager.has_pending_ui_sync")
+@patch("ui.bridge.st")
+def test_sync_session_runs_when_pending_change(
+    mock_st, mock_has_pending, mock_sync, mock_sid
+):
+    """변경 사항이 있으면 동기화(sync_to_streamlit)를 호출해야 합니다."""
+    mock_sid.return_value = "test_session"
+    mock_has_pending.return_value = True
+
+    def fake_sync(session_id, key=None):
+        mock_st.session_state["some_state"] = "updated_value"
+
+    mock_sync.side_effect = fake_sync
+    mock_st.session_state = {"some_state": "old_value"}
+
+    UIBridge.sync_session()
+
+    mock_sync.assert_called_once_with("test_session")
+    assert mock_st.session_state["some_state"] == "updated_value"

@@ -7,7 +7,9 @@ import asyncio
 import contextlib
 import hashlib
 import logging
+import os
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
 from langchain_core.documents import Document
@@ -89,7 +91,7 @@ def open_pdf_document(file_path: str):
 
     모든 재시도 경로에서 안전하게 리소스를 정리합니다.
     """
-    import fitz
+    import pymupdf as fitz
 
     doc = None
     try:
@@ -158,6 +160,43 @@ def _extract_markdown_via_thread(
             )
 
 
+def _extract_page_c_engine(
+    file_path: str,
+    page_idx: int,
+    do_extract_words: bool,
+) -> dict[str, Any]:
+    """C-Engine 단일 페이지 추출 (스레드 안전: 스레드별 PDF 핸들 사용).
+
+    PyMuPDF ``Document``/``page`` 객체는 스레드 간 공유가 안전하지 않으므로,
+    워커는 반드시 자체 ``open_pdf_document`` 핸들을 열고 닫는다. 메인 스레드의
+    ``doc`` 핸들을 절대 공유하지 않는다.
+    """
+    page_num = page_idx + 1
+    with open_pdf_document(file_path) as page_doc:
+        page = page_doc[page_idx]
+        # C-Engine을 통한 안정적인 텍스트 추출
+        text = page.get_text("text")
+
+        # 정밀 하이라이팅을 위한 단어 좌표 목록 추출
+        words: list[tuple[float, float, float, float, str]] = []
+        if do_extract_words:
+            try:
+                raw_words = page.get_text("words")
+                words = [
+                    (float(w[0]), float(w[1]), float(w[2]), float(w[3]), str(w[4]))
+                    for w in raw_words
+                ]
+            except Exception as word_e:
+                logger.debug(f"단어 좌표 추출 실패 (스킵): {word_e}")
+
+    return {
+        "text": text,
+        "metadata": {"page": page_num},
+        "words": words,
+        "tables": [],
+    }
+
+
 async def load_pdf_docs(
     file_path: str,
     file_name: str,
@@ -218,35 +257,46 @@ async def load_pdf_docs(
                         session_id=session_id,
                     )
 
-                    chunks = []
-                    for page_idx in range(total_pages):
-                        page = doc[page_idx]
-                        page_num = page_idx + 1
-
-                        # C-Engine을 통한 안정적인 텍스트 추출
-                        text = page.get_text("text")
-
-                        # 정밀 하이라이팅을 위한 단어 좌표 목록 추출
-                        words = []
-                        if do_extract_words:
+                    # 스레드 풀 기반 병렬 페이지 추출.
+                    # PyMuPDF Document는 스레드 간 공유가 안전하지 않으므로 각 워커가
+                    # 자체 PDF 핸들(``open_pdf_document``)을 열고 닫는다. 메인 스레드의
+                    # ``doc``는 절대 공유하지 않는다. 페이지 순서는 인덱스 순으로 보장.
+                    max_workers = min(total_pages, os.cpu_count() or 4) or 1
+                    # markdown 성공 경로(line 238)와 동일 변수 chunks 를 공유하여
+                    # 하단 enumerate(chunks) 에서 양 경로 결과를统一 소비한다.
+                    # 타입 어노테이션을 생략해 mypy no-redef(재정의 불일치)를 회피한다.
+                    chunks = [None] * total_pages
+                    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                        future_to_idx = {
+                            executor.submit(
+                                _extract_page_c_engine,
+                                file_path,
+                                page_idx,
+                                do_extract_words,
+                            ): page_idx
+                            for page_idx in range(total_pages)
+                        }
+                        # as_completed로 완료 순서와 무관하게 페이지 순서로 재조립
+                        for future in future_to_idx:
+                            page_idx = future_to_idx[future]
                             try:
-                                raw_words = page.get_text("words")
-                                words = [
-                                    (w[0], w[1], w[2], w[3], w[4]) for w in raw_words
-                                ]
-                            except Exception as word_e:
-                                logger.debug(f"단어 좌표 추출 실패 (스킵): {word_e}")
-
-                        chunks.append(
-                            {
-                                "text": text,
-                                "metadata": {"page": page_num},
-                                "words": words,
-                                "tables": [],
-                            }
-                        )
-                        if on_progress:
-                            on_progress(_extraction_progress_pct(page_num, total_pages))
+                                chunks[page_idx] = future.result()
+                            except Exception as page_e:
+                                logger.error(
+                                    f"[RAG] [PDF] C-Engine 페이지 {page_idx + 1} 추출 실패: "
+                                    f"{page_e}"
+                                )
+                                chunks[page_idx] = {
+                                    "text": "",
+                                    "metadata": {"page": page_idx + 1},
+                                    "words": [],
+                                    "tables": [],
+                                }
+                            # 진행률 콜백은 메인 스레드에서만 호출(스레드 안전)
+                            if on_progress:
+                                on_progress(
+                                    _extraction_progress_pct(page_idx + 1, total_pages)
+                                )
 
                 if on_progress:
                     on_progress(_extraction_progress_pct(total_pages, total_pages))

@@ -15,7 +15,7 @@ pydantic>=2.10.0
 
 # PyTorch - Explicitly targeting stable CPU/CUDA builds
 # Note: torchvision is EXCLUDED to prevent 0xc0000139 DLL conflicts
-torch==2.5.1 --index-url https://download.pytorch.org/whl/cpu
+torch>=2.7.1 --index-url https://download.pytorch.org/whl/cpu
 # For CUDA 12.1 (Uncomment below and comment above if you have a GPU)
 # torch==2.5.1 --index-url https://download.pytorch.org/whl/cu121
 

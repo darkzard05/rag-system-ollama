@@ -30,6 +30,7 @@ from common.config import (
 )
 from common.exceptions import LLMInferenceError, ResourceBuildError
 from common.system_pressure import (
+    eviction_allowed,
     host_pressure_exceeded,
     ollama_backend_active,
 )
@@ -45,6 +46,12 @@ _BUILD_FAILURE_LIMIT = 3
 _BUILD_CIRCUIT_TTL_SECONDS = 60.0
 
 logger = logging.getLogger(__name__)
+
+# [PRESSURE] 퇴출 스로틀 상수 (초). 호스트 RAM 압력 기반 퇴출은 Ollama처럼 별도
+# 프로세스 백엔드에서 파이썬 측 핸들 퇴출이 호스트 RAM을 줄이지 못해 조건이 영구히
+# 참이 되어 매 호출 "퇴출→즉시 재로드" 쓰래시가 난다. 풀 인스턴스별 쿨다운으로
+# 최대 빈도를 제한한다.
+EVICT_COOLDOWN_SECONDS: float = 30.0
 
 
 class BaseResourcePool(Generic[T]):
@@ -72,17 +79,26 @@ class BaseResourcePool(Generic[T]):
         with self._lock:
             self._pinned_keys.discard(key)
 
+    def _evict_one_locked(self) -> bool:
+        """가장 오래된 unpinned 리소스를 하나 퇴출합니다 (호출자가 _lock 보유 가정).
+
+        ``put``이 용량 체크→퇴출→삽입을 하나의 임계구역에서 처리하도록
+        락 외부에서 대기하지 않고 동기적으로 퇴출합니다. 하위 풀(ModelPool)은
+        CUDA 정리 훅을 이 지점에서 수행할 수 있습니다.
+        """
+        for key in list(self._pool.keys()):
+            if key not in self._pinned_keys:
+                res = self._pool.pop(key)
+                self._current_bytes -= self._get_resource_size(res)
+                logger.info(f"[{self.name}Pool] Evicting: {key}")
+                del res
+                return True
+        return False
+
     async def _evict_one(self) -> bool:
         """가장 오래된 unpinned 리소스를 하나 퇴출합니다."""
         with self._lock:
-            for key in list(self._pool.keys()):
-                if key not in self._pinned_keys:
-                    res = self._pool.pop(key)
-                    self._current_bytes -= self._get_resource_size(res)
-                    logger.info(f"[{self.name}Pool] Evicting: {key}")
-                    del res
-                    return True
-            return False
+            return self._evict_one_locked()
 
     def _get_resource_size(self, resource: Any) -> int:
         """리소스의 예상 메모리 점유율(bytes)을 계산합니다."""
@@ -119,25 +135,32 @@ class BaseResourcePool(Generic[T]):
             return None
 
     async def put(self, key: str, resource: T):
-        """리소스 등록 및 용량 초과 시 퇴출 수행."""
+        """리소스 등록 및 용량 초과 시 퇴출 수행.
+
+        용량 체크→퇴출→삽입 전체를 단일 임계구역에서 수행합니다. 이전 구현은
+        용량 초과 판정과 실제 삽입 사이에 ``_lock``을 해제(``await _evict_one``
+        대기)하여, 동시 ``put`` 다수가 동시에 한도를 통과해 용량 보장 계약을
+        위반(초과 적재 → VRAM OOM)하는 경쟁 상태가 있었습니다.
+        """
         resource_size = self._get_resource_size(resource)
 
+        # pinned 리소스는 퇴출 대상이 아니므로, 퇴출로 확보 가능한 용량만 따진다.
         with self._lock:
             if key in self._pool:
                 old_res = self._pool[key]
                 self._current_bytes -= self._get_resource_size(old_res)
                 self._pool.move_to_end(key)
 
-        # 용량 제한 도달 시 가장 오래된 unpinned 리소스 퇴출
-        while (
-            len(self._pool) >= self.item_limit
-            or (self._current_bytes + resource_size) > self.byte_limit
-        ):
-            if not await self._evict_one():
-                # 더 이상 퇴출할 수 있는(unpinned) 리소스가 없으면 중단
-                break
+            # 용량 초과 시 가장 오래된 unpinned 리소스를 하나씩 퇴출.
+            # 락을 유지한 채 동기 퇴출하므로 동시 put과의 경쟁이 없습니다.
+            while (
+                len(self._pool) >= self.item_limit
+                or (self._current_bytes + resource_size) > self.byte_limit
+            ):
+                if not self._evict_one_locked():
+                    # 더 이상 퇴출할 수 있는(unpinned) 리소스가 없으면 중단
+                    break
 
-        with self._lock:
             self._pool[key] = resource
             self._current_bytes += resource_size
 
@@ -183,6 +206,8 @@ class ModelPool(BaseResourcePool[Any]):
             and ollama_backend_active()
             and host_pressure_exceeded()
         ):
+            if not eviction_allowed(self.name):
+                return False
             logger.warning(
                 "[ModelPool] Host RAM pressure detected (Ollama fallback). "
                 "Triggering eviction."
@@ -216,6 +241,8 @@ class RetrieverPool(BaseResourcePool[Any]):
 
             mem = psutil.virtual_memory()
             if mem.percent > 85:
+                if not eviction_allowed(self.name):
+                    return False
                 logger.warning(
                     f"[{self.name}Pool] Memory pressure detected ({mem.percent}%). Triggering eviction."
                 )

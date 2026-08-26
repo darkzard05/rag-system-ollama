@@ -27,6 +27,9 @@ def _patch_inference_session() -> MagicMock:
 async def test_generate_fallback_merges_list_content():
     """hasattr(_convert_chunk_to_thought_and_content) == False + content 리스트여도 정상 병합."""
     mock_llm = MagicMock()
+    # generate()는 llm.bind(response_format=...).astream(...) 을 호출하므로
+    # bind() 가 모킹된 astream 을 가진 자기 자신을 리턴하도록 세팅한다.
+    mock_llm.bind.return_value = mock_llm
     # thought 분리 미지원 LLM 시뮬레이션 — MagicMock은 접근 시 자동 생성하므로 명시 제거
     if hasattr(mock_llm, "_convert_chunk_to_thought_and_content"):
         del mock_llm._convert_chunk_to_thought_and_content
@@ -66,6 +69,7 @@ async def test_generate_fallback_merges_list_content():
 async def test_generate_fallback_mixed_content_blocks():
     """리스트에 text 블록뿐 아니라 other/reasoning 블록이 섞여도 크래시 없이 text만 병합합니다."""
     mock_llm = MagicMock()
+    mock_llm.bind.return_value = mock_llm
     if hasattr(mock_llm, "_convert_chunk_to_thought_and_content"):
         del mock_llm._convert_chunk_to_thought_and_content
 

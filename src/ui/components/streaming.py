@@ -3,16 +3,17 @@
 
 - stream_chunks: 비동기 RAG 스트림을 동기 Streamlit 환경에서 소비하는
   스레드+큐 브릿지 (3회 연속 타임아웃 가드 포함).
-- start_streaming_turn: streaming 메시지를 타임라인에 추가하고 백그라운드
-  스레드에서 청크를 소비·업데이트한다.
+- consume_stream_into_message: ``stream_chunks``를 단일 script run 안에서
+  동기 소비해 어시스턴트 메시지를 영속화한다 (백그라운드 스레드 없음).
+  content/thought/documents/metrics/citations 누적, raw_json의 final_answer
+  추출, 사용자 중단(cancelled) 감지, PDF 주석 반영을 포함한다.
 - _finalize_pdf_side_effects: 완료 턴의 PDF 주석 반영을 담당한다.
 """
 
 import asyncio
-import html
-import json
 import logging
 import queue
+import re
 import threading
 import uuid
 from collections.abc import Iterator
@@ -23,8 +24,13 @@ from streamlit.runtime.scriptrunner import add_script_run_ctx
 
 from api.streaming_handler import StreamChunk, get_streaming_handler
 from common.async_worker import AsyncWorker
-from common.config import MSG_ERROR_OLLAMA_NOT_RUNNING, UI_STREAMING_TIMEOUT
-from common.utils import apply_tooltips_to_response, extract_annotations_from_docs
+from common.config import (
+    MSG_ERROR_OLLAMA_NOT_RUNNING,
+    UI_STREAMING_TIMEOUT,
+)
+from common.utils import (
+    extract_annotations_from_docs,
+)
 from core.session import SessionManager
 from ui.components.common import get_doc_metadata
 
@@ -173,148 +179,27 @@ def _extract_final_answer_delta(buffer: str, start: int) -> tuple[str, int]:
     return new_delta, i
 
 
-def start_streaming_turn(sid: str, query: str, model_name: str) -> str:
-    """스트리밍 시작: 빈 streaming 메시지 생성 후 msg_id 반환"""
-    msg_id = str(uuid.uuid4())
-    SessionManager.add_message(
-        role="assistant",
-        content="",
-        msg_type="streaming",
-        msg_id=msg_id,
-        thought="",
-        documents=[],
-        metrics={},
-        processed_content=None,
-        session_id=sid,
-    )
-    # 매 턴 시작 시 취소 플래그 초기화
-    SessionManager.set("generation_cancel", False, session_id=sid)
-    # 백그라운드 스레드에서 스트리밍 소비 시작
-    _spawn_stream_consumer(sid, msg_id, query, model_name)
-    return msg_id
+_FA_RE = re.compile(r'"final_answer"\s*:\s*"(.*)', re.DOTALL)
 
 
-def _spawn_stream_consumer(sid: str, msg_id: str, query: str, model_name: str):
-    """별도 스레드에서 스트림 소비 → SessionManager 메시지 직접 업데이트"""
+def _recover_final_answer(blob: str) -> str | None:
+    """깨진 JSON에서 final_answer 값을 정규식으로 복구한다.
 
-    def bg_task():
-        SessionManager.set_session_id(sid)
-        raw_json_acc = ""
-        fa_scan_pos = 0
-        try:
-            for chunk in stream_chunks(query, model_name, sid):
-                # 중단 요청 감지 → 누적된 부분 콘텐츠를 그대로 확정 (finally에서 처리)
-                if SessionManager.get("generation_cancel", False, session_id=sid):
-                    logger.info("[CHAT] 사용자가 답변 생성을 중단했습니다.")
-                    break
-                # 세션 락 획득 후 메시지 부분 업데이트
-                with SessionManager._acquire_lock(sid):
-                    state = SessionManager._get_state(sid)
-                    messages = state["messages"]
-                    updated = False
-                    for msg in messages:
-                        if msg.get("msg_id") == msg_id:
-                            if chunk.status:
-                                msg["status"] = chunk.status
-                                msg.setdefault("process_steps", []).append(chunk.status)
-                            if chunk.thought:
-                                msg["thought"] = msg.get("thought", "") + chunk.thought
-                            if chunk.content:
-                                if getattr(chunk, "raw_json", False):
-                                    raw_json_acc += chunk.content
-                                    delta, fa_scan_pos = _extract_final_answer_delta(
-                                        raw_json_acc, fa_scan_pos
-                                    )
-                                    msg["content"] = msg.get("content", "") + delta
-                                else:
-                                    msg["content"] = (
-                                        msg.get("content", "") + chunk.content
-                                    )
-                            if chunk.metadata and "documents" in chunk.metadata:
-                                msg["documents"] = chunk.metadata["documents"]
-                            if getattr(chunk, "citations", None):
-                                msg["citations"] = chunk.citations
-                            if chunk.performance:
-                                msg["metrics"] = chunk.performance
-                            updated = True
-                            break
-                    if updated:
-                        state["_dirty_keys"].add("messages")
-        except Exception as e:
-            logger.error(f"[STREAMING] 백그라운드 소비 오류: {e}", exc_info=True)
-            with SessionManager._acquire_lock(sid):
-                state = SessionManager._get_state(sid)
-                for msg in state["messages"]:
-                    if msg.get("msg_id") == msg_id:
-                        msg["error"] = friendly_error_message(e)
-                        msg["msg_type"] = "general"
-                        break
-                # 실패 시에도 is_generating_answer 해제 (락 재진입 금지: set() 대신 직접 수정)
-                state["is_generating_answer"] = False
-                state["_dirty_keys"].add("is_generating_answer")
-                state["_dirty_keys"].add("messages")
-        finally:
-            # 완료 시 msg_type 전환
-            # 주의: 세션 락은 비재진입(threading.Lock)이므로 락 보유 중
-            # SessionManager.set()을 호출하면 데드락이 발생한다. 상태는 직접 수정한다.
-            with SessionManager._acquire_lock(sid):
-                state = SessionManager._get_state(sid)
-                # is_generating_answer를 먼저 해제하여 후속 처리 오류에도 플래그가 남지 않게 함
-                state["is_generating_answer"] = False
-                # 구조화 모드(raw_json) 누적 텍스트를 파싱된 final_answer로 교체한다.
-                # 파싱 실패 시 원시 텍스트(raw fallback)를 유지한다 (데드락 회피:
-                # 락 보유 중 SessionManager.set 사용 금지 → dict 직접 수정).
-                if raw_json_acc:
-                    for msg in state["messages"]:
-                        if msg.get("msg_id") == msg_id:
-                            try:
-                                cleaned = raw_json_acc.strip()
-                                if cleaned.startswith("```"):
-                                    cleaned = cleaned.split("```", 2)[1]
-                                    if cleaned.startswith("json"):
-                                        cleaned = cleaned[4:]
-                                    cleaned = cleaned.strip()
-                                parsed = json.loads(cleaned)
-                                if (
-                                    isinstance(parsed, dict)
-                                    and "final_answer" in parsed
-                                ):
-                                    msg["content"] = parsed["final_answer"]
-                            except (json.JSONDecodeError, KeyError):
-                                logger.warning(
-                                    "[STREAMING] raw_json 파싱 실패, 원시 텍스트 유지."
-                                )
-                            break
-                # 중단 여부는 확정 저장 전에 원시 상태에서 판독한다 (락 보유 중
-                # SessionManager.get() 호출은 데드락이므로 dict를 직접 읽는다).
-                was_cancelled = bool(state.get("generation_cancel", False))
-                for msg in state["messages"]:
-                    if msg.get("msg_id") == msg_id:
-                        # "중단됨" 확정 상태는 generation_cancel 클리어보다 먼저
-                        # 저장해야 중단 정보가 소실되지 않는다 (uiux-fix-p1 INT-2/G4).
-                        if was_cancelled:
-                            msg["cancelled"] = True
-                        msg["msg_type"] = "general"
-                        msg["processed_content"] = apply_tooltips_to_response(
-                            html.escape(msg.get("content", "")),
-                            msg.get("documents", []),
-                            citations=msg.get("citations"),
-                        )
-                        msg["process"] = _build_process(msg)
-                        break
-                state["generation_cancel"] = False
-                state["_dirty_keys"].update(
-                    {"is_generating_answer", "generation_cancel"}
-                )
-                state["_dirty_keys"].add("messages")
-            # PDF 주석·자동 점프는 세션 락 밖에서 수행한다 (느린 fitz 파싱 방지)
-            _finalize_pdf_side_effects(sid, msg_id)
-
-    t = threading.Thread(
-        target=bg_task, daemon=True, name=f"stream-consumer-{msg_id[:8]}"
-    )
-    add_script_run_ctx(t)
-    t.start()
+    스트리밍 중 누적된 raw_json 이 닫히지 않은 따옴표/이스케이프로 인해
+    json.loads 에 실패하더라도, 버블에는 원시 JSON 이 아닌 복구된 정답 텍스트만
+    남도록 한다. 복구 불가능하면 None 반환.
+    """
+    if not blob:
+        return None
+    m = _FA_RE.search(blob)
+    if not m:
+        return None
+    value = m.group(1)
+    # 닫는 따옴표가 있으면 그 전까지, 없으면 그대로(열린 값) 사용
+    end = value.find('"')
+    if end != -1:
+        value = value[:end]
+    return value.strip()
 
 
 def _finalize_pdf_side_effects(sid: str, msg_id: str) -> None:
@@ -461,3 +346,131 @@ def stream_chunks(
                 )
             else:
                 logger.debug(f"[CHAT] Stream thread cleanup: {t.name}")
+
+
+def stream_content(query: str, model_name: str, session_id: str) -> Iterator[str]:
+    """``st.write_stream`` 호환 content-only 브릿지 제너레이터.
+
+    표준 스트리밍 패턴(``st.chat_message`` 안에서 ``st.write_stream``)에서
+    토큰 본문만 점진적으로 흘리기 위해 ``stream_chunks``의 ``content``
+    델타만 yield 한다. thought/documents/metrics/citations 같은 부가 정보는
+    호출자가 별도로 소비할 수 있도록 ``stream_chunks``를 직접 사용한다.
+
+    취소/타임아웃 가드는 ``stream_chunks`` 내부 큐 브릿지가 그대로 보장한다.
+    """
+    for chunk in stream_chunks(query, model_name, session_id):
+        if chunk.content:
+            yield chunk.content
+
+
+def consume_stream_into_message(
+    sid: str, query: str, model_name: str
+) -> dict[str, Any] | None:
+    """위젯 없이 ``stream_chunks``를 동기 소비해 메시지를 영속화한다.
+
+    표준 스트리밍 리팩터의 순수 로직 코어: 백그라운드 스레드 없이 단일
+    호출 안에서 청크를 순회하며 본문(raw_json 시 final_answer만 추출),
+    thought/documents/metrics/citations를 누적하고, 완료 시 어시스턴트
+    메시지(content)를 SessionManager에 영속화한다. UI 렌더(``_run_standard_
+    streaming_turn``)와 단위 테스트가 동일 코어를 재사용한다.
+
+    반환: 영속화된 어시스턴트 메시지 dict (실패 시 error 필드 포함).
+    """
+    msg_id = str(uuid.uuid4())
+    SessionManager.add_message(
+        role="assistant",
+        content="",
+        msg_type="general",
+        msg_id=msg_id,
+        thought="",
+        documents=[],
+        metrics={},
+        citations=[],
+        processed_content=None,
+        session_id=sid,
+    )
+
+    accumulated = ""
+    thought = ""
+    documents: list[Any] = []
+    metrics: dict[str, Any] = {}
+    citations: list[dict[str, Any]] = []
+    raw_json_parts: list[str] = []
+    fa_scan_pos = 0
+
+    try:
+        for chunk in stream_chunks(query, model_name, sid):
+            # 사용자 중단 요청 감지 → 누적된 부분 콘텐츠를 그대로 확정.
+            if SessionManager.get("generation_cancel", False, session_id=sid):
+                logger.info("[CHAT] 사용자가 답변 생성을 중단했습니다.")
+                break
+            if not chunk.content:
+                if chunk.thought:
+                    thought += chunk.thought
+                _meta = chunk.metadata or {}
+                if _meta.get("documents"):
+                    documents = _meta["documents"]
+                if chunk.performance:
+                    metrics = chunk.performance
+                if getattr(chunk, "citations", None):
+                    citations = chunk.citations or []
+                continue
+            if getattr(chunk, "raw_json", False):
+                raw_json_parts.append(chunk.content)
+                blob = "".join(raw_json_parts)
+                delta, fa_scan_pos = _extract_final_answer_delta(blob, fa_scan_pos)
+                accumulated += delta
+            else:
+                accumulated += chunk.content
+            if chunk.thought:
+                thought += chunk.thought
+            _meta = chunk.metadata or {}
+            if _meta.get("documents"):
+                documents = _meta["documents"]
+            if chunk.performance:
+                metrics = chunk.performance
+            if getattr(chunk, "citations", None):
+                citations = chunk.citations or []
+    except Exception as exc:  # noqa: BLE001 - 스트림 레벨 오류를 메시지에 보존
+        logger.exception("[CHAT] 스트리밍 소비 오류: %s", exc)
+        SessionManager.set("is_generating_answer", False, current_sid=sid)
+        SessionManager.add_message(
+            "assistant",
+            accumulated,
+            msg_type="general",
+            msg_id=msg_id,
+            thought=thought,
+            documents=documents,
+            metrics=metrics,
+            citations=citations,
+            error=friendly_error_message(exc),
+            session_id=sid,
+        )
+        return _target_message_dict(sid, msg_id)
+
+    cancelled = bool(SessionManager.get("generation_cancel", False, session_id=sid))
+    SessionManager.set("is_generating_answer", False, current_sid=sid)
+    SessionManager.add_message(
+        "assistant",
+        accumulated,
+        msg_type="general",
+        msg_id=msg_id,
+        thought=thought,
+        documents=documents,
+        metrics=metrics,
+        citations=citations,
+        processed_content=None,
+        cancelled=cancelled,
+        session_id=sid,
+    )
+    # 확정 상태 저장이 클리어보다 먼저 수행되어야 한다 (G4 순서 함정 회귀 방지).
+    SessionManager.set("generation_cancel", False, current_sid=sid)
+    # 완료 턴의 PDF 주석 반영 (기존 백그라운드 스레드 finally 역할을 동기 수행).
+    _finalize_pdf_side_effects(sid, msg_id)
+    return _target_message_dict(sid, msg_id)
+
+
+def _target_message_dict(sid: str, msg_id: str) -> dict[str, Any] | None:
+    """세션에서 msg_id에 해당하는 메시지 dict를 반환한다."""
+    messages = SessionManager.get_messages(session_id=sid)
+    return next((m for m in messages if m.get("msg_id") == msg_id), None)

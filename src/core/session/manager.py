@@ -299,6 +299,22 @@ class SessionManager:
                 cls._ui_sync.write(k, val)
 
     @classmethod
+    def has_pending_ui_sync(cls, session_id: str | None = None) -> bool:
+        """세션 저장소에 아직 UI로 미러링되지 않은 변경이 있는지 확인합니다.
+
+        ``sync_to_streamlit``이 소비하는 ``_dirty_keys`` 집합을 잠금 하에
+        조회하여, 변경이 없으면 UI 브릿지가 스냅샷/복원/동기화 작업을
+        생략할 수 있게 합니다. SSoT 신호만 사용하므로 위젯 상태 보호
+        (SyncRegistry)와 무관하게 동작합니다.
+        """
+        sid = session_id or cls.get_session_id()
+        with cls._acquire_lock(sid):
+            state = cls._fallback_sessions.get(sid)
+            if state is None:
+                return False
+            return bool(state["_dirty_keys"])
+
+    @classmethod
     def get(
         cls,
         key: str,
@@ -318,14 +334,14 @@ class SessionManager:
             with cls._acquire_lock(sid):
                 state = cls._get_state(sid)
                 if key in state:
-                    return state[key]
+                    return cls._copy_value(state[key])
         else:
             with cls._acquire_lock(sid):
                 fallback = cls._fallback_sessions.get(sid)
                 if fallback is None:
                     return default
                 if key in fallback:
-                    return fallback[key]
+                    return cls._copy_value(fallback[key])
 
         if cls._is_streamlit_running():
             try:
@@ -341,12 +357,12 @@ class SessionManager:
                         with cls._acquire_lock(sid):
                             state = cls._get_state(sid)
                             if key in state:
-                                return state[key]
+                                return cls._copy_value(state[key])
                     else:
                         with cls._acquire_lock(sid):
                             fallback = cls._fallback_sessions.get(sid)
                             if fallback is not None and key in fallback:
-                                return fallback[key]
+                                return cls._copy_value(fallback[key])
 
             except (ImportError, RuntimeError, AttributeError) as exc:
                 logger.debug(
@@ -388,6 +404,22 @@ class SessionManager:
                 state = cls._fallback_sessions[sid]
                 if key in state:
                     del state[key]
+
+    @classmethod
+    def _copy_value(cls, value: Any) -> Any:
+        """반환값의 얕은 복사본을 만들어 호출자가 내부 가변 상태를 돌연변이하지
+
+        못하게 합니다. ``get``/``get_messages``는 실제 저장소 객체(리스트/딕트)
+        참조를 그대로 반환했고, 백그라운드 ``add_message``가 동일 리스트를 제자리
+        변이(append/update)하는 동안 UI 스레드가 순회하면 torn read
+        (``list changed size during iteration``)가 발생했습니다. 리스트는 복사하여
+        호출자 소유로 만듭니다. 요소(dict)는 공유 정체성을 유지합니다(기존 동작).
+        """
+        if isinstance(value, list):
+            return list(value)
+        if isinstance(value, dict):
+            return dict(value)
+        return value
 
     @classmethod
     def get_messages(cls, session_id: str | None = None) -> list[dict[str, Any]]:

@@ -31,7 +31,8 @@ def mock_llm():
     json_llm = AsyncMock()
     llm.bind.return_value = json_llm
 
-    # astream 모킹 (비동기 제너레이터)
+    # astream 모킹 (비동기 제너레이터) — generate()는 json_llm.astream(...) 을
+    # async for 로 순회하므로 coroutine 이 아닌 async generator 여야 한다.
     async def mock_astream(*args, **kwargs):
         chunk = MagicMock()
         chunk.content = "테스트 답변입니다."
@@ -39,6 +40,7 @@ def mock_llm():
         yield chunk
 
     llm.astream = mock_astream
+    json_llm.astream = mock_astream
 
     # CustomOllama의 전처리 메서드 모사
     def mock_convert(chunk):

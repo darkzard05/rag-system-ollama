@@ -16,9 +16,9 @@ def test_compute_file_hash():
 @pytest.mark.asyncio
 async def test_load_pdf_docs_no_filtering():
     """모든 페이지가 필터링 없이 Document로 변환됩니다."""
-    # fitz.open 및 pymupdf4llm.to_markdown 모킹
+    # pymupdf.open (import pymupdf as fitz) 및 pymupdf4llm.to_markdown 모킹
     with (
-        patch("fitz.open") as mock_fitz_open,
+        patch("pymupdf.open") as mock_fitz_open,
         patch("pymupdf4llm.to_markdown") as mock_to_md,
         patch("core.document_processor.compute_file_hash", return_value="hash123"),
         patch("core.document_processor.SessionManager"),

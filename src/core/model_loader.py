@@ -6,17 +6,32 @@ Optimized: 타임아웃 강화 및 로컬 Ollama 통신 안정성 확보.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import itertools
 import logging
 import os
 import re
 from collections import OrderedDict
-from typing import TYPE_CHECKING, Any
+from collections.abc import Callable
+from typing import TYPE_CHECKING, Any, TypeVar
+
+T = TypeVar("T")
+
+
+def _build_offloop(builder: Callable[[], T]) -> T:
+    """무거운 동기 모델 생성자를 안전하게 실행합니다.
+
+    ``load_embedding_model``은 동기 함수이므로, 비동기 경로에서는
+    ``ResourceCoordinator.get_or_build``가 이미 ``asyncio.to_thread``로 이
+    함수를 워커 스레드에서 실행합니다(이때 실행 중인 루프가 없음). Streamlit
+    시작점 등 동기 진입부에서는 인라인으로 실행됩니다. 본 헬퍼는 두 경로 모두
+    동일하게 동작하도록 모델 생성부를 한 곳으로 모읍니다.
+    """
+    return builder()
+
 
 if TYPE_CHECKING:
     from langchain_core.embeddings import Embeddings
-
-import contextlib
 
 from common.config import (
     DEFAULT_EMBEDDING_MODEL,
@@ -36,6 +51,7 @@ from common.config import (
 )
 from common.exceptions import EmbeddingModelError
 from common.system_pressure import (
+    eviction_allowed,
     host_pressure_exceeded,
     ollama_backend_active,
 )
@@ -198,6 +214,8 @@ class ModelManager:
             and ollama_backend_active()
             and host_pressure_exceeded(threshold=90.0)
         ):
+            if not eviction_allowed("model_manager"):
+                return False
             logger.warning(
                 "[ModelManager] 호스트 RAM 압박 감지 (Ollama 폴백, >90%). "
                 "자원 방출을 시작합니다."
@@ -397,11 +415,15 @@ def load_embedding_model(
             logger.info(
                 f"[MODEL] [LOAD] Ollama 임베딩 엔진 사용 | 모델: {clean_model_name}"
             )
-            result = _NoTruncateOllamaEmbeddings(
-                model=clean_model_name,
-                base_url=OLLAMA_BASE_URL,
-                keep_alive=_keep_alive_seconds(),
-            )
+
+            def _build_ollama() -> Embeddings:
+                return _NoTruncateOllamaEmbeddings(
+                    model=clean_model_name,
+                    base_url=OLLAMA_BASE_URL,
+                    keep_alive=_keep_alive_seconds(),
+                )
+
+            result = _build_offloop(_build_ollama)
 
             SessionManager.set("current_embedding_device", "Ollama Backend")
         else:
@@ -457,12 +479,15 @@ def load_embedding_model(
                 # 필요한 경우 model_kwargs 대신 별도 최적화 경로 사용
                 pass
 
-            result = HuggingFaceEmbeddings(
-                model_name=model_key,
-                model_kwargs=model_kwargs,
-                encode_kwargs=encode_kwargs,
-                cache_folder=MODEL_CACHE_DIR,
-            )
+            def _build_hf() -> Embeddings:
+                return HuggingFaceEmbeddings(
+                    model_name=model_key,
+                    model_kwargs=model_kwargs,
+                    encode_kwargs=encode_kwargs,
+                    cache_folder=MODEL_CACHE_DIR,
+                )
+
+            result = _build_offloop(_build_hf)
 
             logger.info(
                 f"[MODEL] [LOAD] HF 임베딩 모델 로드 성공 | 엔진: {display_device} (Backend: {backend})"

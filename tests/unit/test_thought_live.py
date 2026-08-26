@@ -50,6 +50,7 @@ async def test_non_structured_thought_interleaved():
     prompt_config: dict[str, Any] = {}
 
     llm = MagicMock()
+    llm.bind.return_value = llm
     # thought/content 가 섞여(stream) 방출되도록 청크를 인터리브 배치한다.
     # content 청크들은 합쳐져 유효한 AnswerStructure JSON 이 되도록 한다
     # (non-structured 모드에서도 generate 는 full_response 를 JSON 파싱 시도).
@@ -141,6 +142,7 @@ async def test_structured_thought_one_shot():
     assert json.loads("".join(tokens))["reasoning"] == "step by step"
 
     llm = MagicMock()
+    llm.bind.return_value = llm
 
     async def mock_astream(messages, config=None):  # noqa: ANN001
         for tok in tokens:

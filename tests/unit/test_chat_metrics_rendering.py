@@ -2,17 +2,16 @@
 
 Phase B에서 성능 지표 popover 렌더링은 제거되었습니다. metrics는 세션 메시지에
 저장된 채 유지되므로, 여기서는 (1) 렌더링 경로가 popover/성능 테이블 HTML을
-더 이상 생성하지 않고, (2) 스트리밍 소비 스레드가 performance 청크를 메시지
-metrics로 그대로 저장하는지 검증합니다.
+더 이상 생성하지 않고, (2) 표준 스트리밍 소비(consume_stream_into_message)가
+performance 청크를 메시지 metrics로 그대로 저장하는지 검증합니다.
 """
 
-import time
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 from core.session import SessionManager
 from ui.components.chat import render_message
-from ui.components.streaming import start_streaming_turn
+from ui.components.streaming import consume_stream_into_message
 
 _METRICS = {
     "total_time": 2.345,
@@ -37,17 +36,6 @@ def _fake_chunk(
         metadata=metadata,
         performance=performance,
     )
-
-
-def _wait_for_flag_cleared(sid: str, timeout: float = 5.0) -> None:
-    """is_generating_answer가 False가 될 때까지 폴링합니다 (데드락 감지)."""
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        raw_state = SessionManager._fallback_sessions.get(sid, {})
-        if raw_state.get("is_generating_answer", True) is False:
-            break
-        time.sleep(0.05)
-    assert SessionManager.get("is_generating_answer", False, sid) is False
 
 
 def _render_with_metrics(role: str = "assistant") -> MagicMock:
@@ -115,9 +103,7 @@ def test_streaming_chunk_performance_stored_as_metrics():
         "ui.components.streaming.stream_chunks",
         return_value=iter(fake_chunks),
     ):
-        start_streaming_turn(session_id, "질문", "test-model")
-
-    _wait_for_flag_cleared(session_id)
+        consume_stream_into_message(session_id, "질문", "test-model")
 
     messages = SessionManager.get_messages(session_id=session_id)
     assert messages[-1]["role"] == "assistant"

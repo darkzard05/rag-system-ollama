@@ -22,6 +22,20 @@ from services.optimization.caching_optimizer import CacheManager
 logger = logging.getLogger(__name__)
 
 
+def _is_ollama_embedder(embedder: Embeddings) -> bool:
+    """Ollama 기반 임베더인지 판별합니다.
+
+    model_loader가 이미 langchain_ollama를 로드한 뒤 호출되므로 추가 임포트
+    비용 없이 정확한 isinstance 판별이 가능합니다. langchain_ollama가
+    설치되지 않은 환경에서는 False를 반환합니다.
+    """
+    try:
+        from langchain_ollama import OllamaEmbeddings
+    except ImportError:
+        return False
+    return isinstance(embedder, OllamaEmbeddings)
+
+
 class SemanticChunkerEmbeddingsMixin:
     """
     임베딩 생성/캐시 관심사 믹스인.
@@ -82,10 +96,22 @@ class SemanticChunkerEmbeddingsMixin:
                 f"[Chunker] {len(missing_texts)}개 문장 신규 임베딩 생성 중 (Batch Size: {self.batch_size})..."
             )
 
+            # [최적화] Ollama 임베더는 embed_documents가 입력 전체를 단일 HTTP
+            # 요청으로 전송하므로, 누락분을 한 번의 embed_documents 호출로 모두
+            # 묶어 HTTP 왕복 횟수를 1로 고정한다. (배치 사이즈로 쪼개면 왕복만
+            # 늘어나 성능이 떨어짐) 비-Ollama(HuggingFace 등)는 기존처럼
+            # batch_size 단위로 분할하여 메모리/디바이스 제약을 존중한다.
+            if _is_ollama_embedder(self.embedder):
+                embed_batches: list[list[str]] = [missing_texts]
+            else:
+                embed_batches = [
+                    missing_texts[b : b + self.batch_size]
+                    for b in range(0, len(missing_texts), self.batch_size)
+                ]
+
             # [수정] 배치 루프 동안 메모리에만 수집, 캐시 저장은 루프 이후 단일 패스로 수행
-            for b_idx in range(0, len(missing_texts), self.batch_size):
-                batch = missing_texts[b_idx : b_idx + self.batch_size]
-                batch_indices = missing_indices[b_idx : b_idx + self.batch_size]
+            for b_idx, batch in enumerate(embed_batches):
+                batch_indices = missing_indices[b_idx : b_idx + len(batch)]
 
                 try:
                     # [최적화] 동기 임베딩 생성을 비동기 스레드로 분리
@@ -121,7 +147,7 @@ class SemanticChunkerEmbeddingsMixin:
                         self.cache_manager.set(
                             cache_key,
                             {"vector": vec_np.tolist(), "cache_version": "1.0"},
-                            persist_to_disk=False,
+                            persist_to_disk=True,
                         ),
                         timeout=30.0,
                     )
@@ -201,7 +227,7 @@ class SemanticChunkerEmbeddingsMixin:
             self.cache_manager.set(
                 cache_key,
                 {"vector": vec_np.tolist(), "cache_version": "1.0"},
-                persist_to_disk=False,
+                persist_to_disk=True,
             ),
             timeout=30.0,
         )

@@ -14,7 +14,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from common.system_pressure import host_pressure_exceeded
+from common.system_pressure import eviction_allowed, host_pressure_exceeded
 
 
 def test_host_pressure_exceeded_true_above_threshold() -> None:
@@ -63,3 +63,39 @@ def test_host_pressure_exceeded_runtime_error_warns_and_false(
     assert any(
         "Host memory check failed" in record.message for record in caplog.records
     ), "런타임 오류 시 warning이 발생해야 함"
+
+
+# ---------------------------------------------------------------------------
+# PRESSURE 쓰래시 회귀: 호스트 RAM 압력 기반 퇴출은 쿨다운으로 스로틀되어야 함.
+# Ollama 별도 프로세스에서 파이썬 측 핸들 퇴출이 호스트 RAM을 못 줄여 매 호출
+# "퇴출→재로드" 루프가 나던 문제 방지.
+# ---------------------------------------------------------------------------
+
+
+def test_eviction_allowed_first_call_then_throttled(monkeypatch) -> None:
+    """연속 호출 시 첫 호출만 허용되고 쿨다운 내 재호출은 차단된다."""
+    # 독립 키 + 짧은 쿨다운으로 테스트 속도 확보
+    monkeypatch.setattr("common.system_pressure.EVICT_COOLDOWN_SECONDS", 0.05)
+    key = f"test_{id(object())}"
+    assert eviction_allowed(key) is True
+    assert eviction_allowed(key) is False
+
+
+def test_eviction_allowed_different_keys_independent(monkeypatch) -> None:
+    """키가 다르면 각각 독립적으로 허용된다."""
+    monkeypatch.setattr("common.system_pressure.EVICT_COOLDOWN_SECONDS", 0.05)
+    key_a = "test_a"
+    key_b = "test_b"
+    assert eviction_allowed(key_a) is True
+    assert eviction_allowed(key_b) is True
+
+
+def test_eviction_allowed_cooldown_expires(monkeypatch) -> None:
+    """쿨다운 경과 후 다시 허용된다."""
+    import time
+
+    monkeypatch.setattr("common.system_pressure.EVICT_COOLDOWN_SECONDS", 0.02)
+    key = "test_expire"
+    assert eviction_allowed(key) is True
+    time.sleep(0.05)
+    assert eviction_allowed(key) is True

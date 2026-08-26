@@ -1,8 +1,8 @@
 """채팅 턴 라이프사이클 검증: 스트리밍 소비 완료 후 메시지 영속화·PDF 부작용 동작.
 
-P1에서 persist_completed_turn이 제거되고 동일 로직이
-_spawn_stream_consumer의 finally 블록에 인라인되었으므로, start_streaming_turn을
-통해 소비 스레드의 실제 동작으로 상태 전이를 검증한다.
+표준 리팩터 이후 스트리밍은 백그라운드 스레드가 아닌 ``consume_stream_into_message``
+순수 헬퍼를 통한 동기 소비로 처리된다. 헬퍼가 실제 상태 전이(영속화·플래그 해제)를
+수행하므로 이를 직접 호출해 검증한다.
 """
 
 import time
@@ -10,7 +10,7 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 from core.session import SessionManager
-from ui.components.streaming import start_streaming_turn
+from ui.components.streaming import consume_stream_into_message
 
 
 def _fake_chunk(
@@ -28,17 +28,6 @@ def _fake_chunk(
         metadata=metadata,
         performance=performance,
     )
-
-
-def _wait_for_flag_cleared(sid: str, timeout: float = 5.0) -> None:
-    """is_generating_answer가 False가 될 때까지 폴링합니다 (데드락 감지)."""
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        raw_state = SessionManager._fallback_sessions.get(sid, {})
-        if raw_state.get("is_generating_answer", True) is False:
-            break
-        time.sleep(0.05)
-    assert SessionManager.get("is_generating_answer", False, sid) is False
 
 
 def _wait_for_pdf_side_effects(sid: str, timeout: float = 5.0) -> None:
@@ -66,12 +55,10 @@ def test_streaming_completion_stores_assistant_message():
         "ui.components.streaming.stream_chunks",
         return_value=iter(fake_chunks),
     ):
-        msg_id = start_streaming_turn(session_id, "질문", "test-model")
-
-    _wait_for_flag_cleared(session_id)
+        msg = consume_stream_into_message(session_id, "질문", "test-model")
 
     messages = SessionManager.get_messages(session_id=session_id)
-    target = next(m for m in messages if m.get("msg_id") == msg_id)
+    target = next(m for m in messages if m.get("msg_id") == msg["msg_id"])
     assert target["role"] == "assistant"
     assert target["content"] == "Hello world"
     assert target["thought"] == "I am thinking"
@@ -90,12 +77,10 @@ def test_streaming_error_stores_friendly_message_and_clears_flag():
         raise RuntimeError("boom")
 
     with patch("ui.components.streaming.stream_chunks", _raising_stream):
-        msg_id = start_streaming_turn(session_id, "질문", "test-model")
-
-    _wait_for_flag_cleared(session_id)
+        msg = consume_stream_into_message(session_id, "질문", "test-model")
 
     messages = SessionManager.get_messages(session_id=session_id)
-    target = next(m for m in messages if m.get("msg_id") == msg_id)
+    target = next(m for m in messages if m.get("msg_id") == msg["msg_id"])
     assert target["msg_type"] == "general"
     assert "boom" not in target["error"]
     assert "An error occurred" in target["error"]
@@ -119,12 +104,10 @@ def test_streaming_documents_set_pdf_side_effects():
         "ui.components.streaming.stream_chunks",
         return_value=iter(fake_chunks),
     ):
-        msg_id = start_streaming_turn(session_id, "질문", "test-model")
-
-    _wait_for_flag_cleared(session_id)
+        msg = consume_stream_into_message(session_id, "질문", "test-model")
 
     messages = SessionManager.get_messages(session_id=session_id)
-    target = next(m for m in messages if m.get("msg_id") == msg_id)
+    target = next(m for m in messages if m.get("msg_id") == msg["msg_id"])
     assert target["role"] == "assistant"
     assert target["documents"] == [doc]
     _wait_for_pdf_side_effects(session_id)

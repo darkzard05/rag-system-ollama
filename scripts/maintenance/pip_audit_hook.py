@@ -2,8 +2,8 @@
 Local pre-push dependency CVE scanner — mirrors ci.yml `pip-audit` EXACTLY.
 
 The GitHub Actions `security-scan` job runs:
-    pip-audit -r requirements.txt --skip-editable \
-        --ignore-vuln CVE-2025-2953 ... (8 CVEs)
+        pip-audit -r requirements.txt --skip-editable \
+        --ignore-vuln CVE-2025-2953 ... (7 CVEs)
 
 This script reproduces the same invocation so the local pre-push hook fails on
 the SAME dependency vulns CI would, keeping the repo clean (no vuln-only CI

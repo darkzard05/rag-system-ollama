@@ -4,6 +4,7 @@ LangGraph를 사용하여 자가 교정(Self-Correction) RAG 워크플로우를 
 """
 
 import asyncio
+import contextvars
 import copy
 import json
 import logging
@@ -27,6 +28,7 @@ from common.config import (
     DEFAULT_EMBEDDING_MODEL,
     GRADING_CONFIG,
     GRADING_ENABLED,
+    MAX_CONCURRENT_INFERENCE,
     OLLAMA_NUM_CTX,
     OLLAMA_NUM_PREDICT,
     PROMPT_TEMPLATES_CONFIG,
@@ -156,6 +158,170 @@ def _get_session_id(config: RunnableConfig | None = None) -> str:
         # 정상적인 "default" 세션 사용(비 Streamlit 모드)은 조용히 폴백합니다.
         logger.warning("[GRAPH] config에 session_id 누락 — 암묵적 세션 폴백")
     return SessionManager.get_session_id()
+
+
+# ============================================================================
+# PHASE 2 — Speculative / eager generation overlapping grade_documents.
+#
+# `grade_documents` is a *routing* node (it decides the LangGraph route:
+# `generate` vs `transform`/`rewrite`). We must NOT fuse it into `generate`.
+# Instead, when grade is about to make its LLM call (the slow part), we *also*
+# kick off the `generate` LLM stream eagerly. If grade's route is `generate`
+# (the common case), `generate` is already warm → near-zero added TTFT (the
+# grade duration is hidden behind the generation, effectively removing one
+# round-trip from p99).
+#
+# If grade's route is `transform`/`rewrite`, the speculative stream is
+# cancelled and its output is NEVER surfaced to the user.
+#
+# Safety constraints:
+#  * We only overlap when MAX_CONCURRENT_INFERENCE > 1, so the two LLM calls
+#    can genuinely run concurrently. With bound==1 (the default) the semaphore
+#    would serialize them, so we skip overlap entirely — the pipeline behaves
+#    exactly as before (no regression, no inverted ordering).
+#  * During the speculative run, all `adispatch_custom_event` calls are
+#    buffered (not emitted) so no partial answer reaches the UI. The buffer is
+#    kept in a ContextVar so it never crosses threads/coroutines.
+#  * The real `generate` node ADOPTS the already-running task: it replays the
+#    buffered events and returns the task's result — a single LLM call, just
+#    started earlier. On `transform`, that task is cancelled and the buffer
+#    dropped.
+# ============================================================================
+
+# Buffered events for the in-flight speculative generate of the current query.
+_spec_generate_events: "contextvars.ContextVar[list[_SpecEvent]]" = (
+    contextvars.ContextVar("_spec_generate_events")
+)
+
+
+@dataclass
+class _SpecEvent:
+    """A single buffered adispatch_custom_event payload."""
+
+    name: str
+    data: dict[str, Any]
+    config: RunnableConfig
+
+
+@dataclass
+class _SpecGenerate:
+    """In-flight speculative generate for one thread_id."""
+
+    task: "asyncio.Task[dict[str, Any]]"
+    buffer: list[_SpecEvent]
+    adopter: str | None = None  # thread_id that adopted the task, prevents reuse
+
+
+# Per-thread_id registry of the currently speculative generate task. Populated
+# by grade_documents, consumed (adopted or cancelled) by generate.
+_spec_registry: dict[str, _SpecGenerate] = {}
+
+
+def _spec_overlap_enabled() -> bool:
+    """True iff two LLM calls can genuinely run concurrently this session."""
+    return MAX_CONCURRENT_INFERENCE > 1
+
+
+async def _dispatch_event(
+    name: str,
+    data: dict[str, Any],
+    *,
+    writer: StreamWriter | None,
+    config: RunnableConfig,
+) -> None:
+    """Emit a custom event, or buffer it if a speculative generate is active.
+
+    Buffering ensures a speculative (possibly-to-be-discarded) generate never
+    leaks partial output to the user. The buffer is scoped to the current
+    coroutine context via a ContextVar.
+    """
+    buf = _spec_generate_events.get(None)
+    if buf is not None:
+        buf.append(_SpecEvent(name=name, data=data, config=config))
+        return
+    await adispatch_custom_event(name, data, config=config)
+
+
+def _start_speculative_generate(
+    state: GraphState, config: RunnableConfig, writer: StreamWriter
+) -> str | None:
+    """Begin an eager generate task inside the current coroutine context.
+
+    Returns the thread_id key under which the task is registered, or ``None``
+    if overlap is disabled (bound==1) or no thread_id is available. The
+    speculative generate's events are buffered until the route is decided.
+    """
+    if not _spec_overlap_enabled():
+        return None
+    cfg = config.get("configurable", {})
+    thread_id = cfg.get("thread_id")
+    if not thread_id:
+        return None
+    if thread_id in _spec_registry:
+        # One speculative generate per query; ignore duplicate triggers.
+        return None
+
+    _spec_generate_events.set([])
+    task = asyncio.ensure_future(generate(state, config, writer=writer))
+    # Tag the task so the speculative generate instance does NOT adopt itself
+    # (it must run normally and buffer its events instead).
+    task._is_speculative = True  # type: ignore[attr-defined]
+    _spec_registry[thread_id] = _SpecGenerate(task=task, buffer=[])
+    # The speculative task buffers into the ContextVar list we just captured.
+    _spec_registry[thread_id].buffer = _spec_generate_events.get([])
+    logger.info("[RAG] [SPEC] eager generate 시작 (route 결정 대기)")
+    return thread_id
+
+
+def _adopt_speculative_generate(
+    config: RunnableConfig,
+) -> tuple["asyncio.Task[dict[str, Any]]", list[_SpecEvent]] | None:
+    """Adopt a warm speculative generate task, if one exists for this thread_id.
+
+    Marks it adopted so it cannot be reused. Returns ``(task, buffered_events)``
+    for the adopting node to replay, or ``None`` if there is nothing to adopt
+    (normal sequential path).
+    """
+    cfg = config.get("configurable", {})
+    thread_id = cfg.get("thread_id")
+    if not thread_id:
+        return None
+    spec = _spec_registry.pop(thread_id, None)
+    if spec is None:
+        return None
+    if spec.adopter is not None:
+        return None
+    spec.adopter = thread_id
+    return spec.task, spec.buffer
+
+
+def _cancel_speculative_generate(config: RunnableConfig) -> None:
+    """Cancel any speculative generate for this thread_id and drop its buffer.
+
+    Used when grade routes to transform/rewrite — the speculative output must
+    never reach the user.
+    """
+    cfg = config.get("configurable", {})
+    thread_id = cfg.get("thread_id")
+    if not thread_id:
+        return None
+    spec = _spec_registry.pop(thread_id, None)
+    if spec is None:
+        return None
+    if spec.adopter is not None:
+        return None
+    spec.task.cancel()
+    spec.buffer.clear()
+    logger.info("[RAG] [SPEC] route=transform → speculative generate 취소 (미노출)")
+
+
+def _replay_spec_events(
+    buffer_token: "contextvars.Token[list[_SpecEvent]]",
+) -> list[_SpecEvent]:
+    """Return the buffered speculative events and clear them from the context."""
+    events = _spec_generate_events.get([])
+    _spec_generate_events.reset(buffer_token)
+    return events
 
 
 @dataclass
@@ -872,6 +1038,11 @@ async def grade_documents(
         else {"configurable": {"messages": []}}
     )
 
+    # PHASE 2: Eagerly start generate (buffered) so its LLM round-trip overlaps
+    # with the grade LLM call below. Adopted by generate on the common
+    # route=generate path; cancelled if grade routes to transform.
+    _start_speculative_generate(state, config, writer)
+
     try:
         if llm is None:
             raise ValueError("LLM is not initialized")
@@ -911,6 +1082,8 @@ async def grade_documents(
             )
             _add_stage_ms("grade_ms", grade_ms)
             _grade_op.__exit__(None, None, None)
+            # PHASE 2: route=generate → keep the warm speculative generate; the
+            # real generate node adopts it (single LLM call, started earlier).
             return {"intent": "generate", "route": "generate"}
         else:
             optimized = parsed.optimized_query or query
@@ -928,6 +1101,9 @@ async def grade_documents(
             )
             _add_stage_ms("grade_ms", grade_ms)
             _grade_op.__exit__(None, None, None)
+            # PHASE 2: route=transform → discard the speculative generate; its
+            # buffered output must never reach the user.
+            _cancel_speculative_generate(config)
             return {
                 "intent": "transform",
                 "route": "transform",
@@ -946,6 +1122,9 @@ async def grade_documents(
         )
         _add_stage_ms("grade_ms", grade_ms)
         _grade_op.__exit__(None, None, None)
+        # PHASE 2: LLM/JSON 오류로 route=transform이 되면 speculative generate를
+        # 취소·폐기해야 한다 (미노출 + 레지스트리 정리 → 이후 동일 thread_id 겹침 재활성).
+        _cancel_speculative_generate(config)
         return {
             "intent": "transform",
             "route": "transform",
@@ -1152,6 +1331,20 @@ async def generate(
     state: GraphState, config: RunnableConfig, *, writer: StreamWriter
 ) -> dict[str, Any]:
     """최종 답변을 생성합니다."""
+    # PHASE 2: If grade_documents pre-started this generate speculatively, adopt
+    # the already-warm task (replay its buffered events, return its result) so
+    # the grade round-trip is hidden behind generation. Single LLM call, just
+    # begun earlier — routing/answer quality unchanged. The speculative instance
+    # itself skips adoption via its _is_speculative tag.
+    if not getattr(asyncio.current_task(), "_is_speculative", False):
+        adoption = _adopt_speculative_generate(config)
+        if adoption is not None:
+            spec_task, spec_buffer = adoption
+            logger.info("[RAG] [SPEC] warm generate 채택 — speculative 결과 반환")
+            for ev in spec_buffer:
+                await adispatch_custom_event(ev.name, ev.data, config=ev.config)
+            return await spec_task
+
     # [TIMING] 쿼리당 버퍼를 로컬에 캡처 (재시도로 retrieve/grade가 재실행되어도 누적 유지)
     _query_timings = dict(getattr(_stage_timing_local, "stages", {}))
     cfg = config.get("configurable", {})
@@ -1161,9 +1354,10 @@ async def generate(
         return {"response": "LLM not loaded"}
 
     if writer is not None:
-        await adispatch_custom_event(
+        await _dispatch_event(
             "graph_status",
             {"status": "답변 설계 및 생성 중..."},
+            writer=writer,
             config=config,
         )
     # R1a-08: generate 진입 상태 로그는 단일 호출당 1회만 기록한다.
@@ -1183,8 +1377,8 @@ async def generate(
     if not docs and get_state_attr(state, "intent") != "general":
         logger.info("[RAG] [GENERATE] 관련 문서 없음 -> 사용자 안내 메시지 생성")
         if writer is not None:
-            await adispatch_custom_event(
-                "response_chunk", {"content": no_info_msg}, config=config
+            await _dispatch_event(
+                "response_chunk", {"content": no_info_msg}, writer=writer, config=config
             )
         _emit_query_timing(_query_timings)
         return {"response": no_info_msg}
@@ -1197,8 +1391,11 @@ async def generate(
         if cached_response:
             logger.info("[RAG] [GENERATE] 캐시 응답 스트리밍 (LLM 미호출)")
             if writer is not None:
-                await adispatch_custom_event(
-                    "response_chunk", {"content": cached_response}, config=config
+                await _dispatch_event(
+                    "response_chunk",
+                    {"content": cached_response},
+                    writer=writer,
+                    config=config,
                 )
             _emit_query_timing(_query_timings)
             return {"response": cached_response}
@@ -1226,8 +1423,11 @@ async def generate(
                 "[RAG] [INJECTION] 전체 검색 문서가 인젝션 패턴으로 격리됨 — 안내 메시지 반환"
             )
             if writer is not None:
-                await adispatch_custom_event(
-                    "response_chunk", {"content": no_info_msg}, config=config
+                await _dispatch_event(
+                    "response_chunk",
+                    {"content": no_info_msg},
+                    writer=writer,
+                    config=config,
                 )
             _emit_query_timing(_query_timings)
             return {"response": no_info_msg, "relevant_docs": []}
@@ -1280,7 +1480,11 @@ async def generate(
     use_structured_output = "structured_output" in PROMPT_TEMPLATES_CONFIG
 
     async with ModelManager.inference_session():
-        async for chunk in llm.astream([sys_msg, human_msg], config=config):
+        # JSON 모드 강제 바인딩(grade 노드 1053행과 동일) — qwen3:4b가 값 내부에
+        # 이스케이프 없는 큰따옴표를 넣어 json.loads가 실패(Expecting ',' delimiter)하는
+        # 깨진 JSON 출력을 막는다.
+        json_llm = llm.bind(response_format={"type": "json_object"})
+        async for chunk in json_llm.astream([sys_msg, human_msg], config=config):
             if hasattr(llm, "_convert_chunk_to_thought_and_content"):
                 content_chunk, thought_chunk = (
                     llm._convert_chunk_to_thought_and_content(chunk)
@@ -1307,13 +1511,14 @@ async def generate(
             # 구조화 모드(raw_json=True)에서는 파싱 전 원시 토큰을 먼저 띄우고,
             # 파싱 후 final_answer로 대체되도록 한다.
             if (content_chunk or thought_chunk) and writer is not None:
-                await adispatch_custom_event(
+                await _dispatch_event(
                     "response_chunk",
                     {
                         "content": content_chunk,
                         "thought": thought_chunk,
                         "raw_json": use_structured_output,
                     },
+                    writer=writer,
                     config=config,
                 )
 
@@ -1333,17 +1538,51 @@ async def generate(
     # Phase 1.2: 구조화된 답변 파싱 (JSON 출력 기대)
     parsed_answer = None
     parse_failed = False
-    try:
-        # JSON 블록 추출 (마크다운 코드 블록일 수 있음)
-        json_str = full_response.strip()
-        if json_str.startswith("```json"):
-            json_str = json_str[7:]
-        if json_str.startswith("```"):
-            json_str = json_str[3:]
-        if json_str.endswith("```"):
-            json_str = json_str[:-3]
-        json_str = json_str.strip()
+    json_str = full_response.strip()
+    if json_str.startswith("```json"):
+        json_str = json_str[7:]
+    if json_str.startswith("```"):
+        json_str = json_str[3:]
+    if json_str.endswith("```"):
+        json_str = json_str[:-3]
+    json_str = json_str.strip()
 
+    def _extract_partial(json_blob: str) -> dict[str, Any]:
+        """깨진 JSON에서 final_answer/citations를 정규식으로 복구한다.
+
+        모델이 문자열 값 내부에 이스케이프 없이 큰따옴표를 넣어 json.loads가
+        실패하는 경우(Expecting ',' delimiter 등), citations[] 유실을 막기 위해
+        최소한의 필드를 추출한다. 복구 불가능하면 빈 dict 반환.
+        """
+        recovered: dict[str, Any] = {}
+        m = re.search(
+            r'"final_answer"\s*:\s*"(.*?)"\s*,\s*"citations"', json_blob, re.DOTALL
+        )
+        if m:
+            recovered["final_answer"] = m.group(1)
+        else:
+            m2 = re.search(r'"final_answer"\s*:\s*"(.*)', json_blob, re.DOTALL)
+            if m2:
+                recovered["final_answer"] = m2.group(1).rstrip('"').rstrip()
+        cites = re.findall(
+            r'"doc_id"\s*:\s*(\d+).*?"text_span"\s*:\s*"([^"]*)"',
+            json_blob,
+            re.DOTALL,
+        )
+        if cites:
+            recovered["citations"] = [
+                {
+                    "doc_id": int(d),
+                    "text_span": t,
+                    "section": "",
+                    "page": 0,
+                    "score": 0.0,
+                }
+                for d, t in cites
+            ]
+        return recovered
+
+    try:
         parsed_data = json.loads(json_str)
 
         # LLM 출력 필드명 매핑: thinking → reasoning (일부 모델 호환성)
@@ -1363,27 +1602,41 @@ async def generate(
             and parsed_answer.reasoning
             and writer is not None
         ):
-            await adispatch_custom_event(
+            await _dispatch_event(
                 "response_chunk",
                 {"content": "", "thought": parsed_answer.reasoning},
+                writer=writer,
                 config=config,
             )
         # P3: 인라인 [doc:...] 폴백과 별도로 citations[] 자체를 스트림에 태워
         # 안정적 doc_id 기반 렌더링을 가능케 한다.
         if parsed_answer and writer is not None:
-            await adispatch_custom_event(
+            await _dispatch_event(
                 "citations",
                 {"citations": [c.model_dump() for c in parsed_answer.citations]},
+                writer=writer,
                 config=config,
             )
     except (json.JSONDecodeError, ValueError) as e:
         parse_failed = True
-        logger.warning(f"[RAG] [GENERATE] JSON 파싱 실패, 폴백 사용: {e}")
-        # 폴백: 원본 텍스트를 그대로 사용
+        # 진단: 재현/원인 분석을 위해 원시 출력을 기록 (blind spot 해소)
+        logger.warning(
+            f"[RAG] [GENERATE] JSON 파싱 실패, 폴백 사용: {e} "
+            f"(output_chars={len(full_response)})"
+        )
+        logger.debug(f"[RAG] [GENERATE] 파싱 실패 원시 출력:\n{json_str}")
+        # 강건화: 깨진 JSON에서 final_answer/citations 부분 복구 시도
+        recovered = _extract_partial(json_str)
+        if recovered:
+            logger.info(
+                f"[RAG] [GENERATE] 부분 복구 성공: "
+                f"final_answer={'Y' if recovered.get('final_answer') else 'N'}, "
+                f"citations={len(recovered.get('citations', []))}"
+            )
         parsed_answer = AnswerStructure(
             reasoning=full_thought or "추론 과정 파싱 실패",
-            final_answer=full_response,
-            citations=[],
+            final_answer=recovered.get("final_answer", full_response),
+            citations=recovered.get("citations", []),
             confidence=0.5,
         )
 
@@ -1637,8 +1890,17 @@ async def verify_answer(
         return {"verification_route": "end"}
 
     except Exception as e:
-        logger.error(f"[RAG] [VERIFY] 검증 중 오류: {e}")
-        return {"verification_route": "end"}
+        logger.error(f"[RAG] [VERIFY] 검증 중 오류(재생성 시도): {e}", exc_info=True)
+        # fail-closed: 검증 실패=신뢰 불가 → 통과("end")로 오인하지 않고 재생성.
+        # 무한루프 방지: 재생성 1회(최대) 소진 시에만 end 폴백.
+        regen_count = get_state_attr(state, "regeneration_count", 0)
+        if regen_count >= 1:
+            logger.warning("[RAG] [VERIFY] 재생성 소진 후 검증 실패 → end 폴백")
+            return {"verification_route": "end"}
+        return {
+            "verification_route": "regenerate",
+            "verification_issues": [f"검증 실행 오류: {e}"],
+        }
 
 
 async def build_graph() -> Any:

@@ -286,8 +286,6 @@ ui:
     # 로컬 Ollama 콜드 스타트(모델 로드/인덱스 빌드) 시 첫 청크까지 오래 걸릴 수
     # 있으므로 30 → 60초로 상향하여 가짜 타임아웃(최대 180초)을 방지합니다.
     timeout_seconds: 60
-  # 타임라인 fragment 자동 갱신 주기(초) — 스트리밍 체감 속도와 CPU 부하 트레이드오프
-  timeline_poll_seconds: 1.0
   messages:
     pdf_viewer_no_file: "No PDF to preview. Please upload a file from the sidebar."
     # 빈 대화 상태의 단일 가이드 (Phase B: 가이드 5→1 통합)

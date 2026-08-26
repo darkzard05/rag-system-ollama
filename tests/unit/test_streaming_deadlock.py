@@ -1,10 +1,9 @@
-"""P0 회귀 테스트: 스트리밍 소비 스레드 데드락 + 타임라인 오류 표시.
+"""P0 회귀 테스트: 스트리밍 소비 데드락 + 타임라인 오류 표시.
 
-- Bug 1: `_spawn_stream_consumer`의 finally 블록에서 세션 락(비재진입
-  threading.Lock) 보유 중 `SessionManager.set()`을 호출하여 데드락 발생,
-  `is_generating_answer`가 True로 고정되는 문제의 회귀 방지.
-- Bug 2: 스트리밍 실패 시 `msg["error"]`가 타임라인에 표시되지 않아
-  사용자에게 보이지 않던 문제의 회귀 방지.
+표준 리팩터 이후 스트리밍은 백그라운드 스레드(``_spawn_stream_consumer``)가
+아닌 ``consume_stream_into_message`` 순수 헬퍼를 통한 동기 소비로 처리된다.
+스레드/세션 락 데드락 원천 차단을 검증하며, 오류 시 ``msg["error"]``가
+타임라인에 표시되는지도 함께 확인한다.
 """
 
 import time
@@ -33,30 +32,6 @@ def _fake_chunk(
     )
 
 
-def _wait_for_flag_cleared(sid: str, timeout: float = 5.0) -> None:
-    """is_generating_answer가 False가 될 때까지 폴링합니다 (데드락 감지).
-
-    폴링은 락 없는 raw 읽기로 수행한다. 데드락이 재발하면 소비 스레드가
-    세션 락을 영원히 보유하므로 SessionManager.get()은 락 획득에서 블로킹되어
-    테스트가 중단(hang)된다. 락 없는 읽기로 폴링해야 제한 시간 내에
-    깔끔하게 실패(fail)할 수 있다.
-    """
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        raw_state = SessionManager._fallback_sessions.get(sid, {})
-        if raw_state.get("is_generating_answer", True) is False:
-            break
-        time.sleep(0.05)
-    else:
-        pytest.fail(
-            "is_generating_answer가 제한 시간 내에 해제되지 않음 "
-            f"({timeout}s) - 세션 락 데드락 가능성"
-        )
-
-    # 최종 확인은 공개 API로 수행 (락을 정상적으로 획득할 수 있어야 함)
-    assert SessionManager.get("is_generating_answer", False, sid) is False
-
-
 def _wait_for_pdf_side_effects(sid: str, timeout: float = 5.0) -> None:
     """PDF 부작용은 플래그 해제 이후 스레드에서 적용되므로 폴링으로 대기합니다."""
     deadline = time.monotonic() + timeout
@@ -82,21 +57,20 @@ def test_consumer_completes_sets_generating_false_no_deadlock():
         _fake_chunk(content="world!", performance={"total_time": 1.0}),
     ]
 
-    from ui.components.streaming import start_streaming_turn
+    from ui.components.streaming import consume_stream_into_message
 
     with patch(
         "ui.components.streaming.stream_chunks",
         return_value=iter(fake_chunks),
     ):
-        msg_id = start_streaming_turn(sid, "질문", "test-model")
+        msg = consume_stream_into_message(sid, "질문", "test-model")
 
-    # 데드락이 없다면 소비 스레드가 플래그를 해제한다
-    _wait_for_flag_cleared(sid)
+    # 동기 소비이므로 플래그는 즉시 해제된다 (스레드 데드락 원천 차단).
     assert SessionManager.get("is_generating_answer", False, sid) is False
 
     # 완료된 메시지는 general로 전환되어야 한다
     messages = SessionManager.get_messages(session_id=sid)
-    target = next(m for m in messages if m.get("msg_id") == msg_id)
+    target = next(m for m in messages if m.get("msg_id") == msg["msg_id"])
     assert target["msg_type"] == "general"
     assert "Hello world!" in target["content"]
 
@@ -112,16 +86,15 @@ def test_consumer_error_sets_message_error_and_clears_flag():
         yield _fake_chunk(status="시작 중", content="부분 응답")
         raise RuntimeError("boom")
 
-    from ui.components.streaming import start_streaming_turn
+    from ui.components.streaming import consume_stream_into_message
 
     with patch("ui.components.streaming.stream_chunks", _raising_stream):
-        msg_id = start_streaming_turn(sid, "질문", "test-model")
+        msg = consume_stream_into_message(sid, "질문", "test-model")
 
-    _wait_for_flag_cleared(sid)
     assert SessionManager.get("is_generating_answer", False, sid) is False
 
     messages = SessionManager.get_messages(session_id=sid)
-    target = next(m for m in messages if m.get("msg_id") == msg_id)
+    target = next(m for m in messages if m.get("msg_id") == msg["msg_id"])
     assert target["msg_type"] == "general"
     # P0 계약: 원시 예외 문자열은 노출하지 않고 친화적 메시지로 매핑된다
     assert "boom" not in target["error"]
@@ -142,19 +115,18 @@ def test_consumer_documents_set_pdf_side_effects():
         _fake_chunk(content="정리된 답변입니다.", metadata={"documents": [doc]}),
     ]
 
-    from ui.components.streaming import start_streaming_turn
+    from ui.components.streaming import consume_stream_into_message
 
     with patch(
         "ui.components.streaming.stream_chunks",
         return_value=iter(fake_chunks),
     ):
-        msg_id = start_streaming_turn(sid, "질문", "test-model")
+        msg = consume_stream_into_message(sid, "질문", "test-model")
 
-    _wait_for_flag_cleared(sid)
     assert SessionManager.get("is_generating_answer", False, sid) is False
 
     messages = SessionManager.get_messages(session_id=sid)
-    target = next(m for m in messages if m.get("msg_id") == msg_id)
+    target = next(m for m in messages if m.get("msg_id") == msg["msg_id"])
     assert target["documents"] == [doc]
     _wait_for_pdf_side_effects(sid)
     pdf_annotations = SessionManager.get("pdf_annotations", session_id=sid)

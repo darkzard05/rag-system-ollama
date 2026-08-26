@@ -76,15 +76,38 @@
 
 /* Content row layout wrapper — fills all remaining vertical space.
    NOTE: stLayoutWrapper is NOT :first-child in stVerticalBlock (zero-height stElementContainer siblings
-   precede it). Use a generic selector that targets any stLayoutWrapper at this level. */
+   precede it). Use a generic selector that targets any stLayoutWrapper at this level.
+
+   [BUG SHIELD] During an upload-triggered full rerun, a transient second top-level
+   stLayoutWrapper (hoisted column content) can momentarily appear as a SIBLING of
+   the real content row. The real content row is ALWAYS the LAST stLayoutWrapper in
+   the block. Restricting flex:1 to :last-child means a transient/extra wrapper
+   (any stLayoutWrapper that is NOT the last child) takes its natural content height
+   instead of stealing 50% of the flex space — so the real row stays full height and
+   the container never collapses to 420/420. Pairs with the deterministic iframe
+   emission fix in ui.py. */
 [data-testid="stMainBlockContainer"] > [data-testid="stVerticalBlock"]
-> [data-testid="stLayoutWrapper"] {
+> [data-testid="stLayoutWrapper"]:last-child {
     flex: 1 !important;
     min-height: 0 !important;
     min-width: 0 !important;
     overflow: hidden !important;
     display: flex !important;
     flex-direction: column !important;
+}
+
+/* SAFEGUARD (업로드 전환 붕괴 방지): 위 flex:1 규칙은 stLayoutWrapper가
+   "정확히 1개"일 때만 안전하다. 업로드 on_change 풀 rerun 과도기에는 Streamlit
+   델타 재정렬로 인해 동일 레벨에 유령 stLayoutWrapper(호이스팅된 컬럼 자식)가
+   일시적으로 형제로 나타날 수 있다. 이때 flex:1이 2개를 50:50로 분할하면
+   본진 2열 컨테이너가 함께 무너진다(실측 840→420). 진짜 콘텐츠 row는 항상
+   마지막 wrapper(last-child)이므로, 마지막이 아닌 형제는 flex를 0으로 굳혀
+   본진 row가 전체 높이(840)를 독점하게 한다. 근본 수정(inject_custom_css
+   매 렌더 동일 슬롯 점유)으로 유령 자체가 사라지지만, 이 가드는 2차 방어선. */
+[data-testid="stMainBlockContainer"] > [data-testid="stVerticalBlock"]
+> [data-testid="stLayoutWrapper"]:not(:last-child) {
+    flex: 0 0 auto !important;
+    min-height: 0 !important;
 }
 
 /* Inner stVerticalBlock between stLayoutWrapper and stHorizontalBlock -
@@ -136,6 +159,57 @@
     min-height: 0 !important;
     min-width: 0 !important;
     overflow: hidden !important;
+}
+
+/* Chat column (last child): the @st.fragment wrappers are DIRECT children of the
+   scroll container's stVerticalBlock.
+   - The INPUT fragment (:has(stChatInput)) stays natural height (flex:0 0 auto) so it
+     pins at the bottom and never grows.
+   - The MESSAGES fragment (the other wrapper) is promoted to flex:1 1 auto by the rule
+     below so it absorbs the free space; this keeps the input fixed at the column bottom
+     instead of re-jittering under margin-top:auto on every 2s fragment rerun. */
+[data-testid="stMainBlockContainer"] [data-testid="stColumn"]:last-child
+> [data-testid="stVerticalBlock"] > [data-testid="stLayoutWrapper"]:has([data-testid="stChatInput"]),
+[data-testid="stMainBlockContainer"] [data-testid="stColumn"]:last-child
+> [data-testid="stVerticalBlock"] > [data-testid="stElementContainer"] {
+    flex: 0 0 auto !important;
+    min-height: 0 !important;
+    min-width: 0 !important;
+    overflow: visible !important;
+}
+
+/* Messages (NO @st.fragment: each st.chat_message is its OWN stLayoutWrapper sibling
+   of the chat input, confirmed in ui.py — fragments were removed). Each message wrapper
+   MUST render at natural height (flex:0 0 auto, overflow:visible) so messages stack and
+   overflow into the column's single scroll container (stVerticalBlock rule ~287).
+
+   The old fragment-era rules gave these wrappers flex:1 1 auto + an inner overflow-y:auto
+   scroll region. Without a wrapping fragment, that rule now matches EVERY message, so each
+   message became an equal-height flex slice: few messages => big gaps between them; many
+   messages => gaps shrink; and because flex-grow absorbs all free space, content never
+   overflowed so the scrollbar never appeared. That is exactly the reported symptom. */
+[data-testid="stMainBlockContainer"] [data-testid="stColumn"]:last-child
+> [data-testid="stVerticalBlock"] > [data-testid="stLayoutWrapper"]:not(:has([data-testid="stChatInput"])),
+[data-testid="stMainBlockContainer"] [data-testid="stColumn"]:last-child
+> [data-testid="stVerticalBlock"] > [data-testid="stElementContainer"]:not(:has([data-testid="stChatInput"])) {
+    flex: 0 0 auto !important;
+    min-height: 0 !important;
+    min-width: 0 !important;
+    overflow: visible !important;
+}
+
+/* Each message's inner stVerticalBlock: natural flow, no flex/overflow. The column's
+   stVerticalBlock (rule ~287) is the ONE scroller; per-message scroll regions are wrong. */
+[data-testid="stMainBlockContainer"] [data-testid="stColumn"]:last-child
+> [data-testid="stVerticalBlock"] > [data-testid="stLayoutWrapper"]:not(:has([data-testid="stChatInput"]))
+> [data-testid="stVerticalBlock"] {
+    flex: 0 0 auto !important;
+    min-height: 0 !important;
+    overflow: visible !important;
+    display: flex !important;
+    flex-direction: column !important;
+    gap: 0 !important;
+    row-gap: 0 !important;
 }
 
 [data-testid="stColumn"] > [data-testid="stVerticalBlock"] > [data-testid="stLayoutWrapper"] > [data-testid="stVerticalBlock"],
@@ -224,15 +298,6 @@
     scrollbar-gutter: stable !important;
 }
 
-[data-testid="stMainBlockContainer"] [data-testid="stColumn"]:last-child
-> [data-testid="stVerticalBlock"] > [data-testid="stLayoutWrapper"],
-[data-testid="stMainBlockContainer"] [data-testid="stColumn"]:last-child
-> [data-testid="stVerticalBlock"] > [data-testid="stElementContainer"] {
-    flex: 0 0 auto !important;
-    min-height: 0 !important;
-    overflow: visible !important;
-}
-
 /* st.chat_input renders INLINE at its script position (Streamlit 1.60 DOM contract:
    nested in a column => position="inline"), wrapped in an stElementContainer that is a
    DIRECT child of the chat column's scroll container (stVerticalBlock). Sticky must live
@@ -240,15 +305,34 @@
    [data-testid="stChatInput"] was inert because its containing block (the wrapper) is the
    same height. margin-top:auto pins the footer when the conversation is short; sticky
    bottom:0 keeps it in view when content overflows. :has() (not :last-child) so trailing
-   zero-height stElementContainer siblings or injected nodes cannot break the match. */
+   zero-height stElementContainer siblings or injected nodes cannot break the match.
+   The input area is wrapped in @st.fragment(run_every=...) for self-healing (INT-입력동결),
+   which nests an extra stLayoutWrapper > stVerticalBlock between the column scrollport and
+   the stElementContainer:has(> stChatInput). That nested form is matched by the third
+   selector below so the sticky pin survives the fragment wrapper. */
 [data-testid="stMainBlockContainer"] [data-testid="stColumn"]:last-child
 > [data-testid="stVerticalBlock"]
 > [data-testid="stElementContainer"]:has(> [data-testid="stChatInput"]),
 [data-testid="stMainBlockContainer"] [data-testid="stColumn"]:last-child
 > [data-testid="stVerticalBlock"]
-> [data-testid="stLayoutWrapper"]:has(> [data-testid="stChatInput"]) {
+> [data-testid="stLayoutWrapper"]:has([data-testid="stChatInput"]),
+[data-testid="stMainBlockContainer"] [data-testid="stColumn"]:last-child
+> [data-testid="stVerticalBlock"]
+> [data-testid="stLayoutWrapper"]
+> [data-testid="stVerticalBlock"]
+> [data-testid="stElementContainer"]:has(> [data-testid="stChatInput"]) {
     position: sticky !important;
     bottom: 0 !important;
+    /* input is emitted BEFORE the messages area in ui.py (so the widget is in the DOM
+       during the blocking stream loop), but must visually sit at the column bottom.
+       The column stVerticalBlock is a flex column, so order:1 pushes the input last. */
+    order: 1 !important;
+    /* margin-top:auto pins the input to the column bottom when the conversation is
+       SHORT (content shorter than the scrollport). @st.fragment polling was removed
+       (see ui.py), so the 2s-rerun height-jitter that originally motivated dropping
+       this no longer occurs. sticky bottom:0 then keeps it in view while long content
+       scrolls. Both are needed: auto-margin handles the short case, sticky handles the
+       overflow case. */
     margin-top: auto !important;
     flex: 0 0 auto !important;
     min-height: 0 !important;
@@ -323,14 +407,34 @@ header[data-testid="stHeader"] {
 
 [data-testid="stChatMessage"] div[data-testid="stVerticalBlock"] { gap: 0px !important; }
 [data-testid="stChatMessage"] {
-    padding-top: var(--spacing-sm);
-    padding-bottom: var(--spacing-sm);
+    /* 대화 줄 간격 과대 방지: 상하 패딩을 var(--spacing-sm)(8px) →
+       var(--spacing-xs)(4px)로 축소하고, 기본 외곽 마진을 0으로 고정해
+       턴 간 간격을 타이트하게 유지한다. */
+    padding-top: var(--spacing-xs);
+    padding-bottom: var(--spacing-xs);
+    margin-bottom: 0 !important;
+    margin-top: 0 !important;
+}
+
+/* Answer details 익스팬더: 항상 질문 바로 아래에 붙이므로 헤더 상하 여백을
+   최소화해 대화 줄 간격을 타이트하게 유지한다. */
+[data-testid="stChatMessage"] [data-testid="stExpander"] {
+    margin-top: 2px !important;
+    margin-bottom: 4px !important;
+}
+[data-testid="stChatMessage"] [data-testid="stExpander"] > details > summary {
+    padding-top: 2px !important;
+    padding-bottom: 2px !important;
 }
 
 /* thought-expander, streaming-pulse, perf-table 등은 네이티브 컴포넌트(st.expander, st.status, st.caption)로 대체됨.
    커스텀 HTML 기반 스타일 제거 완료 */
 
-/* Latest chat message: subtle entrance animation */
+/* Latest chat message: subtle entrance animation.
+   NOTE: 스트리밍 중 본문은 chat.py의 안정 슬롯(_stream_slot)에 그려지고,
+   폴링 프래그먼트(_render_unified_timeline)는 스트리밍 메시지를 스킵하므로
+   마지막 chat_message DOM 노드는 재생성되지 않는다. 따라서 이 애니메이션은
+   메시지 최초 생성 시 1회만 발화하며 폴링/스트리밍 깜박임 원인이 아니다. */
 [data-testid="stChatMessage"]:last-child {
     animation: msgFadeIn 0.3s ease-out;
 }
@@ -349,6 +453,33 @@ header[data-testid="stHeader"] {
 /* Popover body: prevent overflow on narrow screens */
 [data-testid="stPopoverBody"] {
     max-width: 360px;
+}
+
+/* VIS-RESP: 769-1024px window/narrow laptop still hit the base
+   `flex-wrap: nowrap !important; overflow: hidden !important` rule and clip
+   the 2-column content. Stack + allow scroll here so content stays reachable. */
+@media (max-width: 1024px) {
+    .stApp, [data-testid="stAppViewContainer"] {
+        height: auto !important;
+        overflow: visible !important;
+    }
+    [data-testid="stMainBlockContainer"] {
+        height: auto !important;
+        display: flex !important;
+        flex-direction: column !important;
+        padding-top: 0 !important;
+    }
+    [data-testid="stHorizontalBlock"] {
+        flex-wrap: wrap !important;
+        height: auto !important;
+        overflow: visible !important;
+    }
+    [data-testid="stMainBlockContainer"] [data-testid="stColumn"] {
+        flex: 1 1 100% !important;
+        min-width: 0 !important;
+        height: auto !important;
+        overflow-y: auto !important;
+    }
 }
 
 @media (max-width: 768px) {
@@ -432,6 +563,25 @@ border-top: 1px solid color-mix(in srgb, var(--border-color) 30%, transparent) !
 
 /* 문서 컨텍스트/빌드 배너는 통합 타임라인 내 네이티브 컴포넌트로 대체됨.
    (st.chat_message + st.status) - 커스텀 CSS 제거 완료 */
+
+/* C6: collapse the header-height probe iframe (st.iframe height="content") to 0px.
+   Its height="content" auto-measure fails and reserves ~158px of top blank that
+   shoves the columns down. The probe <script> runs on iframe load regardless of
+   frame height, so collapsing it is safe and removes the blank. Do NOT revert to
+   visible height or the top gap returns. */
+[data-testid="stMainBlockContainer"] > [data-testid="stVerticalBlock"]
+> .stElementContainer:has(> [data-testid="stIFrame"]) {
+    height: 0 !important;
+    min-height: 0 !important;
+    flex: 0 0 0px !important;
+    overflow: hidden !important;
+    display: block !important;
+}
+[data-testid="stIFrame"] {
+    height: 0 !important;
+    min-height: 0 !important;
+    border: none !important;
+}
 
 /* C8: sidebar brand lockup — replaces inline <div style> in sidebar.py so the
    logo follows the theme tokens instead of hard-coded sizes/colors. */

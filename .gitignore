@@ -24,6 +24,7 @@ venv.bak/
 
 # Model cache
 .model_cache/
+.cache_hmac_key
 .model_cache_bak_*/
 .cache/
 *.pt

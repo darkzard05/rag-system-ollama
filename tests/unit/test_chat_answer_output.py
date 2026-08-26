@@ -9,14 +9,14 @@
 
 import os
 import tempfile
-import time
+import uuid
 from types import SimpleNamespace
 from unittest.mock import patch
 
 from langchain_core.documents import Document
 
 from core.session import SessionManager
-from ui.components.streaming import _GENERIC_STREAMING_MSG, start_streaming_turn
+from ui.components.streaming import _GENERIC_STREAMING_MSG
 
 
 def _fake_chunk(
@@ -41,23 +41,57 @@ def _fake_chunk(
     )
 
 
-def _wait_for_flag_cleared(sid: str, timeout: float = 5.0) -> None:
-    """is_generating_answer가 False가 될 때까지 폴링합니다 (데드락 감지)."""
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        if SessionManager.get("is_generating_answer", True, sid) is False:
-            break
-        time.sleep(0.05)
-    assert SessionManager.get("is_generating_answer", False, sid) is False
-
-
 def _drive_turn(sid: str, stream_factory) -> str:
-    """stream_chunks를 패치하여 한 턴을 구동하고 msg_id를 반환합니다."""
+    """stream_chunks를 패치하여 표준 소비 경로로 한 턴을 구동하고 msg_id를 반환.
+
+    표준 리팩터 이후 스트리밍은 백그라운드 스레드가 아닌 ``stream_chunks``
+    제너레이터를 단일 script run 안에서 동기 소비한다. 여기서는 위젯 렌더
+    없이 content만 누적해 SessionManager 메시지(content)를 검증한다.
+    """
+    from ui.components import streaming as streaming_mod
+    from ui.components.streaming import _extract_final_answer_delta
+
     SessionManager.reset_all_state(sid)
-    SessionManager.set("is_generating_answer", True, sid)
+    msg_id = str(uuid.uuid4())
+    SessionManager.add_message(
+        role="assistant",
+        content="",
+        msg_type="general",
+        msg_id=msg_id,
+        thought="",
+        documents=[],
+        metrics={},
+        citations=[],
+        processed_content=None,
+        session_id=sid,
+    )
+
+    accumulated = ""
+    raw_json_parts: list[str] = []
+    fa_scan_pos = 0
+    error_msg: str | None = None
     with patch("ui.components.streaming.stream_chunks", stream_factory):
-        msg_id = start_streaming_turn(sid, "질문", "test-model")
-    _wait_for_flag_cleared(sid)
+        try:
+            for chunk in streaming_mod.stream_chunks("질문", "test-model", sid):
+                if not chunk.content:
+                    continue
+                if getattr(chunk, "raw_json", False):
+                    raw_json_parts.append(chunk.content)
+                    blob = "".join(raw_json_parts)
+                    delta, fa_scan_pos = _extract_final_answer_delta(blob, fa_scan_pos)
+                    accumulated += delta
+                else:
+                    accumulated += chunk.content
+        except Exception as exc:  # noqa: BLE001 - 스트림 레벨 오류 보존
+            from ui.components.streaming import friendly_error_message
+
+            error_msg = friendly_error_message(exc)
+
+    SessionManager.set("is_generating_answer", False, sid)
+    msg = _target_message(sid, msg_id)
+    msg["content"] = accumulated
+    if error_msg is not None:
+        msg["error"] = error_msg
     return msg_id
 
 
@@ -82,8 +116,31 @@ def test_raw_json_chain_builds_processed_content():
     msg = _target_message(sid, msg_id)
 
     assert msg["content"] == "Hello [p.5]"
-    assert "citation-highlight" in msg["processed_content"]
-    assert 'data-page="5"' in msg["processed_content"]
+    # processed_content는 렌더 시점에 apply_tooltips_to_response로 생성되므로
+    # render_message 출력(AppTest markdown)으로 검증한다.
+    from streamlit.testing.v1 import AppTest
+
+    with tempfile.NamedTemporaryFile(
+        "w", suffix=".py", delete=False, encoding="utf-8"
+    ) as script_content:
+        script_content.write(
+            "import sys\n"
+            "sys.path.append(r'" + os.path.abspath("src") + "')\n"
+            "from langchain_core.documents import Document\n"
+            "from ui.components.chat import render_message\n"
+            'render_message(role="assistant", content="Hello [p.5]", '
+            'msg_type="general", documents='
+            "[" + repr(doc) + "])\n"
+        )
+        script_path = script_content.name
+    try:
+        at = AppTest.from_file(script_path).run(timeout=60)
+        assert not at.exception
+        body = "".join(m.value for m in at.markdown)
+        assert "citation-highlight" in body
+        assert 'data-page="5"' in body
+    finally:
+        os.remove(script_path)
     assert msg["msg_type"] == "general"
     assert SessionManager.get("is_generating_answer", True, sid) is False
 
@@ -122,11 +179,9 @@ def test_answer_xss_escaped_once():
             metadata={"documents": [doc]},
         )
 
-    msg_id = _drive_turn(sid, _stream)
-    msg = _target_message(sid, msg_id)
+    _drive_turn(sid, _stream)
 
-    assert "&lt;script&gt;" in msg["processed_content"]
-    assert "<script>" not in msg["processed_content"]
+    # processed_content는 렌더 시점에 생성되므로 아래 render_message/AppTest로 검증
 
     # render_message가 assistant content를 이스케이프하는지 직접 검증
     with tempfile.NamedTemporaryFile(

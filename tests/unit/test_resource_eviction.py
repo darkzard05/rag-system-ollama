@@ -1,3 +1,4 @@
+import asyncio
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -78,6 +79,30 @@ async def test_pinning_prevents_eviction():
     pool.unpin("res1")
     await pool.put("res4", MockResource(name="res4"))
     assert pool.get("res1") is None  # Now it can be evicted
+
+
+@pytest.mark.asyncio
+async def test_concurrent_put_respects_capacity():
+    """Regression: concurrent put() must not overfill byte/item limits.
+
+    The previous implementation released the lock between the capacity check
+    and the insert, letting multiple awaiters pass the check simultaneously and
+    exceed ``byte_limit`` (VRAM OOM risk). The whole check→evict→insert is now
+    atomic, so even under parallel load ``_current_bytes`` stays within bounds.
+    """
+    # Each resource ~51KB; item_limit 3, byte_limit 150KB -> at most 2-3 fit.
+    pool: BaseResourcePool = BaseResourcePool("Conc", item_limit=3, byte_limit=150000)
+
+    async def worker(idx: int) -> None:
+        await pool.put(f"res{idx}", MockResource(name=f"res{idx}"))
+
+    # Fire 12 concurrent puts; the pool must evict to stay within limits.
+    await asyncio.gather(*[worker(i) for i in range(12)])
+
+    assert len(pool._pool) <= pool.item_limit
+    assert pool._current_bytes <= pool.byte_limit
+    # No resource should be silently double-counted or leaked.
+    assert pool._current_bytes >= 0
 
 
 # --- Tests for RetrieverPool (RAM Pressure) ---

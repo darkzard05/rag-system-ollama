@@ -12,11 +12,14 @@ Streamlit UI 컴포넌트들을 조립하여 전체 레이아웃을 구성하는
 
 from __future__ import annotations
 
+import json
+import logging
+import time
 from pathlib import Path
 
 import streamlit as st
 
-from ui.widget_keys import CSS_INJECTED_KEY
+logger = logging.getLogger(__name__)
 
 # Header height fallback, shared by the JS probe (ui.py) and the CSS contract
 # (main.css --header-h) so the two never drift (C5). 60px == 3.75rem.
@@ -77,14 +80,56 @@ def _load_css() -> str:
 
 
 def inject_custom_css() -> None:
-    if CSS_INJECTED_KEY not in st.session_state:
-        inject_header_height_script()  # 세션당 1회만 주입 (리스너는 부모 window에 유지)
-        st.session_state[CSS_INJECTED_KEY] = True
+    """문서 <head>에 커스텀 CSS + 헤더 높이 감지 스크립트를 영구 주입한다.
+
+    ⚠️ 결정적 버그 수정 (업로드 전환 붕괴):
+    이전 구현은 ``CSS_INJECTED_KEY`` 가드로 ``st.iframe`` 호출을 "세션당 1회"만
+    했었다. 그 결과 첫 렌더는 ``stVerticalBlock`` 자식이
+    ``[stIFrame, stIFrame, contentRow]``(3개) 였으나, 업로드 on_change 풀 rerun
+    시 가드는 iframe 호출을 **생략** → ``[contentRow]``(1개)만 방출되었다.
+    Streamlit은 줄어든 최상위 요소 수를 슬롯 재활용으로 맞추는데, 비워진
+    iframe 슬롯이 ``stLayoutWrapper`` 로 재탄생하며 PDF 네비("⬅️ 이전 다음") 등
+    컬럼 자식이 그곳으로 호이스팅되어 **형제 wrapper 2개 → flex:1 50:50 분할
+    → 840→420 붕괴** 가 발생했다 (실측: main_content_wrapper_h 840→420, appRoots=1).
+
+    해결: iframe을 **렌더마다 항상 동일하게 방출**하여 최상위 요소 수/순서를
+    결정론적으로 고정한다. <head> 주입 스크립트 자체가 멱등(idempotent)이라
+    중복 방출해도 리스너 누수/스타일 덮어쓰기 없이 안전하다. 가드 변수는
+    제거한다(매 렌더 동일 슬롯 점유 보장).
+    """
     try:
         css_content = _load_css()
-        st.markdown(f"<style>{css_content}</style>", unsafe_allow_html=True)
     except (FileNotFoundError, PermissionError, OSError) as e:
         st.error(f"Failed to load custom CSS: {e}")
+        return
+    # [UX] CSS를 본문 <style> 마크업이 아니라 문서 <head>에 영구 주입한다.
+    # 본문 마크업 방식은 업로드 on_change 풀 rerun 시 레이아웃 delta가
+    # <style> delta보다 먼저 플러시되어 flex:1 규칙이 늦게 적용되고, 그 사이
+    # 2열 컨테이너가 콘텐츠 높이(≈420px)로 붕괴하는 깜빡임이 발생한다.
+    # <head>에 주입하면 세션 내 재런에서도 스타일이 유지되어 첫 페인트 전에
+    # 항상 적용되므로 붕괴 창이 사라진다. window.parent 접근이 필요하므로
+    # sandbox가 막는 st.html 대신 st.iframe(높이 0, JS 실행 가능)을 사용한다.
+
+    # 헤더 높이 감지 스크립트 - 매 렌더 동일 슬롯 점유(결정론적 최상위 구조).
+    inject_header_height_script()
+
+    css_json = json.dumps(css_content)
+    js = f"""
+        <script>
+        try {{
+            const css = {css_json};
+            const doc = window.parent.document;
+            let el = doc.getElementById('main-app-css');
+            if (!el) {{
+                el = doc.createElement('style');
+                el.id = 'main-app-css';
+                doc.head.appendChild(el);
+            }}
+            el.textContent = css;
+        }} catch (e) {{}}
+        </script>
+    """
+    st.iframe(js, height="content")
 
 
 def render_main_content() -> None:
@@ -103,7 +148,23 @@ def render_main_content() -> None:
 
     col_pdf, col_chat = st.columns(_COLUMN_RATIO, gap="small")
     with col_pdf:
+        t0 = time.perf_counter()
         render_pdf_area()
+        logger.debug("[PERF] render_pdf_area took %.3fs", time.perf_counter() - t0)
     with col_chat:
-        render_chat_messages_area()
+        # [FIX-STREAM-INPUT] Render the input BEFORE the messages area on purpose.
+        # render_chat_messages_area() -> _run_active_stream_in_timeline() runs a
+        # BLOCKING synchronous stream loop inside this same script run; st.chat_input()
+        # must be created BEFORE that loop starts so the widget is already in the DOM
+        # while tokens stream (otherwise the input vanishes for the whole generation and
+        # reappears only after). CSS `order:1` on the input wrapper re-pins it visually to
+        # the column bottom, so reordering the DOM does not disturb the bottom-pin layout.
+        t0 = time.perf_counter()
         render_chat_input_area()
+        logger.debug(
+            "[PERF] render_chat_input_area took %.3fs", time.perf_counter() - t0
+        )
+        render_chat_messages_area()
+        logger.debug(
+            "[PERF] render_chat_messages_area took %.3fs", time.perf_counter() - t0
+        )

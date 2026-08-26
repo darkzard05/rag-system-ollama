@@ -240,9 +240,9 @@ def test_streamed_answer_renders_thought_expander_and_reenables_input(
     assert "관련 문서 검색 중..." in steps, f"steps={steps}"
 
     # Rendered assistant message exposes the native reasoning expander
-    # (render_message → guarded st.expander, chat.py:173-219) whose contents
+    # (render_message → guarded st.expander, chat.py:312) whose contents
     # carry the pipeline steps.
-    assert any(e.label == "🧠 상세 사고 과정" for e in at.expander), [
+    assert any(e.label == "Detailed thinking" for e in at.expander), [
         e.label for e in at.expander
     ]
     step_text = "".join(

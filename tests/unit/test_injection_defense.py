@@ -63,6 +63,7 @@ def _patch_inference_session() -> MagicMock:
 async def test_generate_excludes_flagged_doc_and_adds_reinforcement():
     """generate가 악성 청크를 컨텍스트에서 제외하고 [Context] 뒤 재강화 메시지를 추가합니다."""
     mock_llm = MagicMock()
+    mock_llm.bind.return_value = mock_llm
     sent_messages: list = []
 
     async def mock_astream(messages, config=None):  # noqa: ARG001
