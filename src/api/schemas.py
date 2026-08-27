@@ -128,7 +128,11 @@ class AggregatedSearchResult(BaseModel):
 class Citation(BaseModel):
     """답변 내 인용 정보"""
 
-    doc_id: int
+    # 실제 doc_id 는 정수 인덱스가 아니라 fast_hash() 해시 문자열인 경우가 많다
+    # (graph_builder.py: doc_id = metadata.get("doc_id", fast_hash(page_content))).
+    # 모델이 따옴표 없이 해시를 넣으면 JSON 파싱이 실패하므로, 복구 후 문자열도
+    # 수용하도록 int | str 로 완화한다.
+    doc_id: int | str
     text_span: str
     section: str
     page: int

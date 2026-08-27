@@ -68,9 +68,12 @@ st.set_page_config(
 
 
 # 2. 로깅 설정 (최상단, 서버당 1회만 초기화)
+# LOG_LEVEL 환경변수로 DEBUG 전환 가능 (기본 INFO). JSON 파싱 실패 등 원시
+# 출력 추적이 필요할 때 LOG_LEVEL=DEBUG 로 서버를 기동한다.
 @st.cache_resource
 def _init_logging() -> logging.Logger:
-    return setup_logging(log_level="INFO", log_file=FilePathConstants.LOG_FILE)
+    log_level = os.getenv("LOG_LEVEL", "INFO").upper()
+    return setup_logging(log_level=log_level, log_file=FilePathConstants.LOG_FILE)
 
 
 logger = _init_logging()

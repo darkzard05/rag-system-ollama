@@ -17,7 +17,8 @@ from common.logging_config import setup_logging
 
 async def run_full_pipeline_test():
     # [동기화] 실제 앱과 동일한 로깅 설정 적용
-    setup_logging(log_level="INFO")
+    # LOG_LEVEL 환경변수로 DEBUG 전환 가능 (기본 INFO)
+    setup_logging(log_level=os.getenv("LOG_LEVEL", "INFO").upper())
 
     print("\n" + "=" * 50)
     print("[E2E] RAG Pipeline Integration Test (App Synchronized)")
