@@ -632,8 +632,10 @@ def run_in_background_worker(coro: Awaitable[Any], session_id: str) -> None:
                         session_info.session.request_rerun(None)
             except Exception as e:
                 # rerun 재요청 실패 시 입력창이 영구 비활성화되지 않도록
-                # 세션 플래그를 정리한다(INT-입력동결). 폴링 fragment가
-                # 0.5초마다 상태를 재계산하므로 다음 폴링에서 복구된다.
+                # 세션 플래그를 정리한다(INT-입력동결). 빌드 진행 바는
+                # 전용 폴링 fragment(_render_build_progress_fragment, 1.5초)가
+                # 플래그를 읽어 갱신하므로, 여기서 플래그를 내려주면
+                # 다음 폴링에서 정상 상태로 복구된다.
                 logger.error(f"Background worker rerun failed: {e}", exc_info=True)
                 try:
                     from core.session import SessionManager

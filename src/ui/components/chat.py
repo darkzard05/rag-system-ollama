@@ -445,6 +445,72 @@ def _cancel_rebuild(sid: str) -> None:
     st.rerun()
 
 
+def _render_build_progress_block(sid: str) -> None:
+    """문서 분석 상태 블록을 단독 렌더합니다 (전용 폴링 fragment가 호출).
+
+    리팩터링에서 타임라인 폴링이 제거된 뒤, 빌드 도중에는 전체 rerun이
+    발생하지 않아 ``st.progress`` 가 0%에 고착되던 결함(진행 바 동결)을
+    해결하기 위해 분리했다. ``_report_progress``(main.py)가 갱신하는
+    ``rebuild_progress`` 상태만 읽어 주기적(``run_every``)으로 다시 그린다.
+
+    분석 블록은 대화의 일부로 영구 잔존한다(빌드 완료/취소/에러 후에도 남아
+    타임라인 기록으로 남는다). 빌드가 한 번도 시작되지 않은 초기 상태에서만
+    렌더하지 않는다.
+    """
+    is_building = bool(SessionManager.get("is_building_rag", False, sid))
+    is_cancelling = bool(SessionManager.get("rebuild_cancelled", False, sid))
+    is_done = bool(SessionManager.get("rebuild_done", False, sid))
+    has_doc = bool(SessionManager.get("last_uploaded_file_name", "", sid))
+
+    # 빌드가 한 번도 시작되지 않은 초기 상태(업로드 전)에서는 노출하지 않는다.
+    if not (is_building or is_cancelling or is_done or has_doc):
+        return
+
+    progress = int(SessionManager.get("rebuild_progress", 0, sid))
+    status_text = str(SessionManager.get("rebuild_status", "", sid) or "")
+    error = SessionManager.get("pdf_processing_error", "", sid) or ""
+
+    if error:
+        label, state, expanded = "Analysis failed/cancelled", "error", True
+    elif progress >= 100 or is_done:
+        label, state, expanded = "Analysis complete", "complete", False
+    elif is_cancelling:
+        label, state, expanded = "Cancelling analysis...", "running", True
+    else:
+        label, state, expanded = (
+            f"Analyzing document: {status_text}",
+            "running",
+            True,
+        )
+
+    with (
+        st.chat_message("system", avatar=AVATARS["building"]),
+        st.status(label, expanded=expanded, state=state),
+    ):
+        st.progress(progress / 100)
+        st.caption(f"{progress}% complete")
+        if state == "running" and not is_cancelling:
+            st.button(
+                "Cancel Analysis",
+                key=cancel_rebuild_key(sid),
+                on_click=_cancel_rebuild,
+                args=(sid,),
+                use_container_width=True,
+            )
+
+
+@st.fragment(run_every=1.5)
+def _render_build_progress_fragment(sid: str) -> None:
+    """빌드 상태 블록 전용 폴링 fragment.
+
+    전체 rerun 없이 1.5초마다 ``rebuild_progress`` 를 다시 읽어 진행 바를
+    갱신한다(타임라인 폴링이 제거된 빈틈을 메움). 빌드 완료 후에는
+    ``run_in_background_worker._on_complete`` 의 rerun이 최종 100%를 확정한다.
+    완료/취소/에러 상태에서도 블록은 그대로 남아 대화 기록으로 잔존한다.
+    """
+    _render_build_progress_block(sid)
+
+
 def _render_guidance_panel() -> None:
     """빈 대화 상태의 단일 가이드 메시지를 렌더링합니다."""
     st.chat_message("system").markdown(MSG_CHAT_GUIDE)
@@ -487,10 +553,11 @@ def _render_unified_timeline(current_sid: str) -> None:
     통합 타임라인 렌더링 (단일 패스).
     메시지 리스트에 저장된 모든 타입의 메시지를 시간 순서대로 렌더링.
 
-    표준 리팩터 이후 폴링 fragment(``run_every``)는 제거되었다. 타임라인은
-    ``render_chat_messages_area`` 호출 시점(전체 rerun)에만 갱신되며, 스트리밍
-    중 토큰 갱신은 submit 핸들러의 ``st.empty()`` 플레이스홀더가 담당해
-    전체 컬럼 재렌더(깜빡임)를 유발하지 않는다.
+    타임라인은 ``render_chat_messages_area`` 호출 시점(전체 rerun)에만 갱신되며,
+    스트리밍 중 토큰 갱신은 submit 핸들러의 ``st.empty()`` 플레이스홀더가 담당해
+    전체 컬럼 재렌더(깜빡임)를 유발하지 않는다. 빌드 진행 표시(build_progress)는
+    타임라인이 아닌 전용 폴링 fragment(``_render_build_progress_fragment``)가
+    담당한다(전체 rerun 없이 1.5초마다 갱신).
     """
     _t_tl = time.perf_counter()
     messages = SessionManager.get_messages() or []
@@ -499,6 +566,9 @@ def _render_unified_timeline(current_sid: str) -> None:
     # 빈 대화일 때: 문서 컨텍스트가 있으면 표시, 없으면 가이드
     if not messages:
         if SessionManager.get("last_uploaded_file_name", "", current_sid):
+            # 문서가 있으면 분석 블록(전용 폴링 fragment)이 이미 별도로
+            # 렌더되므로 시작 가이드 패널("Upload a PDF...")은 노출하지 않는다.
+            # (빌드 진행/완료 블록과 중복되는 것을 방지)
             _render_doc_context_inline(current_sid)
         else:
             _render_guidance_panel()
@@ -519,43 +589,9 @@ def _render_unified_timeline(current_sid: str) -> None:
         # 시스템/로그 메시지 처리
         if role == "system":
             if mtype == "build_progress":
-                # 빌드 진행 상황
-                progress = msg.get("progress", 0)
-                status_text = msg.get("status", "Processing...")
-
-                # 상태를 생성 시점에 결정한다. (2초 폴링이 매번
-                # running 상태로 생성 후 complete로 전환하면 깜빡임이 발생)
-                if msg.get("error"):
-                    label, state, expanded = "Analysis failed/cancelled", "error", True
-                elif progress >= 100 or msg.get("done"):
-                    label, state, expanded = "Analysis complete", "complete", False
-                else:
-                    label, state, expanded = (
-                        f"Analyzing document: {status_text}",
-                        "running",
-                        True,
-                    )
-
-                with (
-                    st.chat_message("system", avatar=AVATARS["building"]),
-                    st.status(label, expanded=expanded, state=state),
-                ):
-                    st.progress(progress / 100)
-                    st.caption(f"{progress}% complete")
-                    if state == "running" and msg.get("cancelable", True):
-                        st.button(
-                            "Cancel Analysis",
-                            key=cancel_rebuild_key(current_sid),
-                            on_click=_cancel_rebuild,
-                            args=(current_sid,),
-                            use_container_width=True,
-                        )
-
-                    # 진행 로그 표시
-                    if msg.get("logs"):
-                        with st.expander("Progress log", expanded=False):
-                            for log in msg.get("logs", [])[-10:]:
-                                st.text(log)
+                # 빌드 진행 표시는 전용 폴링 fragment
+                # (_render_build_progress_fragment)가 담당하므로 타임라인에서
+                # 제외한다(빌드 도중 전체 rerun 없이도 갱신됨).
                 continue
 
             elif mtype == "build_error":
@@ -682,6 +718,10 @@ def render_chat_messages_area() -> None:
     """Renders the chat column: unified timeline (streaming included)."""
     current_sid = SessionManager.get_session_id()
 
+    # 분석 상태 블록을 타임라인 흐름 안에 둔다(별도 위치 배치 시 시작 메시지
+    # 말풍선이 블록 아래로 밀려 흐리게 노출되는 레이아웃 충돌을 방지).
+    _render_build_progress_fragment(current_sid)
+
     # 통합 타임라인 렌더. 스트리밍 메시지도 단일 pass로 직접 렌더하므로
     # 익스팬더 위치가 안정적으로 유지된다.
     _render_unified_timeline(current_sid)
@@ -705,11 +745,11 @@ def _resolve_chat_input_state(sid: str) -> tuple[str, bool]:
 def render_chat_input_area() -> None:
     """Renders the native st.chat_input() at the bottom of the chat column.
 
-    표준 스트리밍 리팩터 이후 폴링 fragment(``run_every``)는 제거되었다.
-    입력창 disabled 상태는 ``_resolve_chat_input_state``가 ``is_generating_answer``
-    플래그로 결정하며, 생성 완료/예외 시 submit 핸들러가 ``st.rerun()`` 1회로
-    입력창을 정상 활성화한다(INT-입력동결 방지). 폴링 자가치유가 사라진 대신
-    명시적 rerun 1회로 결정론적 활성화를 보장한다.
+    입력창 영역에는 폴링 fragment를 쓰지 않는다. disabled 상태는
+    ``_resolve_chat_input_state``가 ``is_generating_answer`` 플래그로 결정하며,
+    생성 완료/예외 시 submit 핸들러가 ``st.rerun()`` 1회로 입력창을 정상
+    활성화한다(INT-입력동결 방지). 빌드 진행 바는 이 영역이 아닌 별도의
+    ``_render_build_progress_fragment``(1.5초 폴링)가 담당한다.
     """
     current_sid = SessionManager.get_session_id()
 

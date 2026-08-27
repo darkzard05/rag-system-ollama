@@ -143,7 +143,10 @@ def render_main_content() -> None:
     │                        │  ─── Chat Input ───      │  ← sticky bottom inside column
     └────────────────────────┴──────────────────────────┘
     """
-    from ui.components.chat import render_chat_input_area, render_chat_messages_area
+    from ui.components.chat import (
+        render_chat_input_area,
+        render_chat_messages_area,
+    )
     from ui.components.viewer import render_pdf_area
 
     col_pdf, col_chat = st.columns(_COLUMN_RATIO, gap="small")
@@ -164,6 +167,7 @@ def render_main_content() -> None:
         logger.debug(
             "[PERF] render_chat_input_area took %.3fs", time.perf_counter() - t0
         )
+
         render_chat_messages_area()
         logger.debug(
             "[PERF] render_chat_messages_area took %.3fs", time.perf_counter() - t0
