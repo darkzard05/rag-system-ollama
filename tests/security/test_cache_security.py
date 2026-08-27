@@ -383,10 +383,58 @@ class TestTrustPath:
         result = manager.is_trusted_path(untrusted_path)
         assert result is False
 
-    def test_empty_trusted_paths_allows_all(self, temp_dir, security_manager):
-        """신뢰 경로 목록이 비어있으면 모두 허용"""
+    def test_empty_trusted_paths_denies_all(self, temp_dir, security_manager):
+        """신뢰 경로 목록이 비어있으면 모두 거부(fail-closed, 최소 권한)"""
         result = security_manager.is_trusted_path("/any/path")
-        assert result is True
+        assert result is False
+
+
+class TestMissingMetaRejection:
+    """`.meta` 누락 시 무결성 검증 생략 금지(fail-closed) — SEC-FIX 검증.
+
+    VectorCache.load()는 `.meta`가 없으면 verify_cache_integrity를 호출하지
+    않고, 이 예외를 잡아 재구축 경로로 빠집니다. 본 테스트는 해당 분기의
+    보안 결정(무결성 검증 불가 = 거부)을 단위 수준에서 고정합니다.
+    """
+
+    def test_meta_present_passes_integrity(self, temp_dir):
+        """`.meta` 존재 → 무결성 검증 통과(조작되지 않은 정상 캐시)"""
+        manager = CacheSecurityManager(
+            security_level="medium",
+            hmac_secret=None,
+            trusted_paths=[temp_dir],
+            check_permissions=False,
+        )
+        file_path = os.path.join(temp_dir, "doc_splits.json")
+        with open(file_path, "wb") as f:
+            f.write(b'[{"page_content": "ok", "metadata": {}}]')
+
+        metadata = manager.create_metadata_for_file(file_path)
+        metadata_path = file_path + ".meta"
+        manager.save_cache_metadata(metadata_path, metadata)
+
+        assert manager.verify_cache_trust(file_path) is True
+        assert manager.verify_cache_integrity(file_path) is True
+
+    def test_meta_missing_rejected(self, temp_dir):
+        """`.meta` 누락 → 무결성 검증 불가로 거부(CacheIntegrityError).
+
+        VectorCache.load()의 '생략' 분기가 제거되고 이 예외로 fail-closed 됩니다.
+        """
+        manager = CacheSecurityManager(
+            security_level="medium",
+            hmac_secret=None,
+            trusted_paths=[temp_dir],
+            check_permissions=False,
+        )
+        file_path = os.path.join(temp_dir, "doc_splits.json")
+        with open(file_path, "wb") as f:
+            f.write(b'[{"page_content": "ATTACK", "metadata": {}}]')
+
+        # `.meta` 없이 신뢰 경로 통과 후 무결성 검증 시도
+        assert manager.verify_cache_trust(file_path) is True
+        with pytest.raises(CacheIntegrityError):
+            manager.verify_cache_integrity(file_path)
 
 
 # ============================================================================

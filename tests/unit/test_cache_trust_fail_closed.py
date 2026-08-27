@@ -7,6 +7,7 @@
 - test 4 (guard): 신뢰 경로의 정상 save→load 왕복은 여전히 동작해야 함.
 """
 
+import os
 from pathlib import Path
 
 from langchain_community.retrievers import BM25Retriever
@@ -119,3 +120,28 @@ def test_load_accepts_trusted_cache_dir(tmp_path):
     assert [d.page_content for d in loaded_docs] == [
         d.page_content for d in SAMPLE_DOCS
     ]
+
+
+def test_load_rejects_cache_with_missing_meta(tmp_path):
+    """SEC-FIX: `.meta`가 누락된 아티팩트는 무결성 검증 불가로 거부(fail-closed).
+
+    이전에는 '.meta 없음 -> 무결성 검증 생략(legacy)' 분기가 조작된 캐시를
+    무검증으로 로드했음. 이제는 재구축 경로로 빠져야 한다.
+    """
+    cache = _make_cache(tmp_path)
+    cache.security_manager = CacheSecurityManager(
+        security_level="medium",
+        hmac_secret=None,
+        trusted_paths=[str(tmp_path)],
+        check_permissions=False,
+    )
+    _save_cache(cache)
+
+    # 정상 저장된 doc_splits.json의 .meta 사이드카를 삭제(조작/legacy 시뮬레이션)
+    cache_dir = os.path.join(str(tmp_path), os.listdir(str(tmp_path))[0])
+    os.remove(os.path.join(cache_dir, "doc_splits.json.meta"))
+
+    loaded = cache.load(MockEmbeddings())
+
+    assert loaded == (None, None, None)
+    assert cache._cache_invalid is True

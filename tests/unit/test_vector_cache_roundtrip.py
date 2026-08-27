@@ -53,7 +53,7 @@ def _make_cache(tmp_path: object) -> VectorStoreCache:
     cache.security_manager = CacheSecurityManager(
         security_level="medium",
         hmac_secret=None,
-        trusted_paths=[],
+        trusted_paths=[str(tmp_path)],
         check_permissions=False,
     )
     return cache

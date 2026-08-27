@@ -213,9 +213,10 @@ class CacheSecurityManager:
         return True
 
     def is_trusted_path(self, file_path: str) -> bool:
-        # 빈 화이트리스트 = 제한 없음 (의도적; 테스트는 trusted_paths=[]로 구성)
+        # 빈 화이트리스트 = 신뢰 경로 없음(거부). 최소 권한 원칙.
+        # (이전: 제한 없음으로 fail-open — 설정 유실 시 모든 경로 통과)
         if not self.trusted_paths:
-            return True
+            return False
         resolved_path = Path(file_path).resolve()
         for trusted in self.trusted_paths:
             try:

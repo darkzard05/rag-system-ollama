@@ -61,6 +61,16 @@ def test_faiss_reconstruction_without_pickle(temp_cache_dir):
     with open(cache.bm25_retriever_path, "wb") as f:
         f.write(orjson.dumps(_serialize_docs(docs)))
 
+    # SEC-FIX 호환: load()는 .meta 없는 아티팩트를 무결성 검증 불가로 거부하므로,
+    # 수동 생성 파일에도 .meta 사이드카를 동반 생성한다.
+    for artifact in (
+        cache.doc_splits_path,
+        cache.bm25_retriever_path,
+        os.path.join(cache.faiss_index_path, "index.faiss"),
+    ):
+        meta = cache.security_manager.create_metadata_for_file(artifact)
+        cache.security_manager.save_cache_metadata(artifact + ".meta", meta)
+
     # 3. 로드 시도
     embedder = MockEmbeddings()
     with (

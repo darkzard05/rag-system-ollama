@@ -298,17 +298,21 @@ class VectorStoreCache:
                         if os.path.exists(path + ".meta"):
                             self.security_manager.verify_cache_integrity(path)
                         else:
-                            logger.debug(
-                                f"[Cache] .meta 없음 - 무결성 검증 생략 (legacy): {path}"
+                            # [SEC-FIX] .meta 누락 = 무결성 검증 불가 → fail-closed
+                            # (기존 "생략" 분기는 조작된 아티팩트 무검증 로드 허용).
+                            raise CacheIntegrityError(
+                                f".meta 누락으로 무결성 검증 불가: {path}"
                             )
                     elif os.path.isdir(path):
                         for f in os.listdir(path):
+                            if f.endswith(".meta"):
+                                continue  # 메타데이터 사이드카는 검증 대상 아님
                             f_path = os.path.join(path, f)
                             if os.path.exists(f_path + ".meta"):
                                 self.security_manager.verify_cache_integrity(f_path)
                             else:
-                                logger.debug(
-                                    f"[Cache] .meta 없음 - 무결성 검증 생략 (legacy): {f_path}"
+                                raise CacheIntegrityError(
+                                    f".meta 누락으로 무결성 검증 불가: {f_path}"
                                 )
                 except (CacheTrustError, CacheIntegrityError) as e:
                     logger.critical(
