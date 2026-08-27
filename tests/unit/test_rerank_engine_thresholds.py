@@ -240,3 +240,53 @@ def _asyncio_run(coro):
     import asyncio
 
     return asyncio.run(coro)
+
+
+@pytest.mark.asyncio
+async def test_semantic_short_circuit_fires_within_cosine_range():
+    """[FIX 회귀] 코사인 실측 상한(~0.57) 이내의 점수(0.50)에서도 semantic 엔진
+    short-circuit가 발동해야 한다 (기존 0.60 임계값은 달성 불가 dead-path였다)."""
+    score = 0.50
+    assert score < _flashrank_threshold()  # FlashRank 0.85엔 못 미침
+
+    llm = MagicMock()
+    config = {"configurable": {"llm": llm}}
+
+    with patch.object(ar, "_rerank_engine_active", "semantic"):
+        result = await grade_documents(_grade_state(score), config, writer=None)
+
+    assert result == {"intent": "generate", "route": "generate"}
+    llm.ainvoke.assert_not_called()
+    llm.bind.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_semantic_short_circuit_blocked_when_top_gap_too_small():
+    """[FIX 회귀] 상위-차상위 격차가 min_top_gap_to_skip(0.05) 미만이면
+    점수가 애매한 집합으로 판단해 short-circuit을 막고 LLM 검증을 수행한다."""
+    # 코사인 상한 이내의 고득점이지만, 1·2위가 0.02 차이로 엎치락뒤치락.
+    state = {
+        "input": "모호한 질문",
+        "relevant_docs": [
+            Document(page_content="문서 A", metadata={"rerank_score": 0.50}),
+            Document(page_content="문서 B", metadata={"rerank_score": 0.48}),
+        ],
+        "retry_count": 0,
+        "is_cached": False,
+        "intent": "rag",
+    }
+    json_llm = AsyncMock()
+    mock_llm = MagicMock()
+    mock_llm.bind.return_value = json_llm
+    json_llm.ainvoke.return_value = MagicMock(
+        content='{"action": "generate", "is_relevant": true, '
+        '"relevant_entities": ["A"], "reason": "ok", "optimized_query": null}'
+    )
+    config = {"configurable": {"llm": mock_llm}}
+
+    with patch.object(ar, "_rerank_engine_active", "semantic"):
+        result = await grade_documents(state, config, writer=None)
+
+    assert result == {"intent": "generate", "route": "generate"}
+    # 격차가 작아 short-circuit이 막혔으므로 LLM 검증이 실제로 호출되어야 한다.
+    mock_llm.bind.assert_called_once()

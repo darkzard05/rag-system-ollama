@@ -175,9 +175,15 @@ rag:
       # FlashRank(sigmoid) short-circuit 임계값 — max_rerank_score가 이 값 이상이면 LLM grade 생략.
       # 실측: 관련 질문 max 0.855~0.908 / 비관련·저신뢰 0.048~0.057 (이분 분포)
       min_score_to_skip: 0.85
-      # [R3b-02] semantic(bi-encoder, 코사인) 엔진용 별도 임계값 — 코사인 실측 0.32~0.57 범위를 상회하도록
-      # 0.85 대신 0.60으로 분기 (FlashRank 강제/semantic 폴백 시에도 short-circuit 활성화)
-      min_score_to_skip_semantic: 0.60
+      # [R3b-02] semantic(bi-encoder, 코사인) 엔진용 별도 임계값.
+      # 코사인 실측 상한이 ~0.57이므로, 기존 0.60은 절대 도달 불가(dead fast-path)였다.
+      # 달성 가능 영역(0.45)으로 하향하여 short-circuit을 실제로 활성화한다.
+      # 단, 절대 점수는 임베딩 모델 의존적이라 아래 min_top_gap_to_skip 와 함께 사용한다.
+      min_score_to_skip_semantic: 0.45
+      # [FIX] 상위-차상위 rerank_score 격차가 이 값 미만이면 점수가 엎치락뒤치락인
+      # 애매한 문서 집합으로 판단해 short-circuit을 막고 LLM 검증을 수행한다.
+      # (모델 교체/스케일 변화 시 wrong-answer 잠재 위험 차단)
+      min_top_gap_to_skip: 0.05
       # [R3b-01] 리랭킹 최종 선별 풀 크기 (graph_builder.py retrieve_and_rerank의 rerank_top_k로 배선)
       top_k: 5
       # grade에 전달할 상위 문서 수 상한 (graph_builder.py grade_documents test_docs로 배선)

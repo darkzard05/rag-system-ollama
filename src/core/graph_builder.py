@@ -1204,10 +1204,17 @@ async def grade_documents(
     from core.async_reranker import get_active_rerank_engine
 
     if get_active_rerank_engine() == "semantic":
-        min_score_to_skip = GRADING_CONFIG.get("min_score_to_skip_semantic", 0.60)
+        min_score_to_skip = GRADING_CONFIG.get("min_score_to_skip_semantic", 0.45)
     else:
         min_score_to_skip = GRADING_CONFIG.get("min_score_to_skip", 0.85)
-    if max_rerank_score >= min_score_to_skip:
+    # [FIX] 상위-차상위 격차가 충분하지 않으면 점수가 애매한 문서 집합으로 판단해
+    # short-circuit을 막고 LLM 검증을 수행한다 (모델 교체 시 wrong-answer 잠재 위험 차단).
+    min_top_gap = GRADING_CONFIG.get("min_top_gap_to_skip", 0.05)
+    sorted_scores = sorted(
+        (float(d.metadata.get("rerank_score", 0.0)) for d in docs), reverse=True
+    )
+    top_gap = sorted_scores[0] - sorted_scores[1] if len(sorted_scores) > 1 else 1.0
+    if max_rerank_score >= min_score_to_skip and top_gap >= min_top_gap:
         logger.info(
             f"[RAG] [GRADE] Short-circuit 활성화 (Max Rerank Score: {max_rerank_score:.3f} >= {min_score_to_skip})"
         )
