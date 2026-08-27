@@ -62,6 +62,9 @@ async def test_structured_stream_ttft_first_chunk_before_completion():
             yield SimpleNamespace(content=tok, response_metadata={})
 
     llm.astream = mock_astream
+    # generate() wraps the injected llm with json_llm = llm.bind(...); the bound
+    # object must carry the mocked astream so tokens are actually yielded.
+    llm.bind.return_value = llm
     if hasattr(llm, "_convert_chunk_to_thought_and_content"):
         del llm._convert_chunk_to_thought_and_content
 

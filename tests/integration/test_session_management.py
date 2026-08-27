@@ -22,6 +22,7 @@ from src.api.api_server import app
 
 from common.constants import MAX_MESSAGE_HISTORY
 from core.session import SessionManager
+from ui.session_sync import StreamlitSessionSync
 
 client = TestClient(app)
 
@@ -84,20 +85,27 @@ def test_streamlit_sync_reassigns_mutable_objects():
     fallback_messages = SessionManager.get_messages()
     mock_state = {}
 
-    with (
-        patch.object(SessionManager, "_is_streamlit_running", return_value=True),
-        patch(
-            "streamlit.runtime.scriptrunner.get_script_run_ctx",
-            return_value=MagicMock(),
-        ),
-        patch("streamlit.session_state", mock_state),
-    ):
-        SessionManager.sync_to_streamlit()
+    # 신규 SessionManager는 set_ui_sync로 주입된 StreamlitSessionSync 어댑터를
+    # 통해서만 UI 상태를 미러링한다. 테스트에서도 동일하게 어댑터를 설치해야
+    # sync_to_streamlit()이 st.session_state로 값을 기록한다.
+    SessionManager.set_ui_sync(StreamlitSessionSync)
+    try:
+        with (
+            patch.object(SessionManager, "_is_streamlit_running", return_value=True),
+            patch(
+                "streamlit.runtime.scriptrunner.get_script_run_ctx",
+                return_value=MagicMock(),
+            ),
+            patch("streamlit.session_state", mock_state),
+        ):
+            SessionManager.sync_to_streamlit()
 
-    assert "messages" in mock_state
-    # 10개 초과 리스트는 복사본(val[:])이 할당되어 객체 재할당이 발생합니다.
-    assert mock_state["messages"] is not fallback_messages
-    assert mock_state["messages"] == fallback_messages
+        assert "messages" in mock_state
+        # 10개 초과 리스트는 복사본(val[:])이 할당되어 객체 재할당이 발생합니다.
+        assert mock_state["messages"] is not fallback_messages
+        assert mock_state["messages"] == fallback_messages
+    finally:
+        SessionManager.set_ui_sync(None)
 
 
 def test_api_session_isolation():

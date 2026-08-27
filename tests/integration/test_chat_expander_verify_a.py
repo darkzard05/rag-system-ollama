@@ -129,7 +129,7 @@ def _chat_input_ready(at: AppTest) -> bool:
     return (
         len(at.chat_input) >= 1
         and at.chat_input[0].disabled is False
-        and at.chat_input[0].placeholder == "추가 질문을 입력하세요..."
+        and at.chat_input[0].placeholder == "Ask a follow-up question..."
     )
 
 
@@ -312,10 +312,11 @@ def test_chat_expander_and_interactive_chat_render() -> None:
     assert f_ok, f"uncaught exceptions: {[e.value for e in at.exception]}"
 
     # ------------------------------------------------------------------
-    # ASSERT (d2): native reasoning expander ("Detailed thinking") renders
-    # inside an assistant message. Real-pipeline thought is always empty with
-    # the stub LLM (graph_builder.py:510-515), so the renderer is exercised
-    # with a stored message carrying a thought (closest observable equivalent).
+    # ASSERT (d2): the native "Answer details" expander renders inside an
+    # assistant message, and the stored thought appears under "**Thinking
+    # process**" (chat.py:305). Real-pipeline thought is always empty with the
+    # stub LLM (graph_builder.py:510-515), so the renderer is exercised with a
+    # stored message carrying a thought (closest observable equivalent).
     # ------------------------------------------------------------------
     SessionManager.add_message(
         "assistant",
@@ -324,11 +325,18 @@ def test_chat_expander_and_interactive_chat_render() -> None:
         session_id=sid,
     )
     _run_until_settled(at)
-    thought_found = any(e.label == "Detailed thinking" for e in at.expander)
+    # Multiple "Answer details" expanders may exist (build/streaming/completed
+    # messages); scan ALL of them for the stored thought.
+    thought_found = any(
+        "테스트 생각 과정입니다." in m.value
+        for e in at.expander
+        if e.label == "Answer details"
+        for m in e.markdown
+    )
     record(
         "d2_thought_expander_rendered",
         thought_found,
-        f"native expander label 'Detailed thinking' present: {thought_found}",
+        f"native 'Answer details' expander with thought present: {thought_found}",
     )
     assert thought_found, f"thought expander not rendered: {at.expander!r}"
 

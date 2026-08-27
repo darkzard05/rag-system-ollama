@@ -33,10 +33,13 @@ def test_metadata_to_context_string_conversion():
     # 3. 최종 컨텍스트 포맷팅 테스트 (병합된 문서 기준)
     context_str = format_context(merged_docs)
 
-    # 4. 검증: [섹션, p.X] 형식이 포함되어 있는가? (기본 섹션 = "일반 본문")
-    assert "[일반 본문, p.1]" in context_str
-    assert "[일반 본문, p.2]" in context_str
-    assert context_str.startswith("[일반 본문, p.1]")
+    # 4. 검증: 리팩터 이후 컨텍스트 포맷은
+    #    "[doc:<hash>] [section:일반 본문] [page:1] [score:0.000]" 형식이다.
+    #    (기본 섹션 = "일반 본문", 페이지 메타데이터는 [page:N] 태그로 직렬화)
+    assert "[section:일반 본문]" in context_str
+    assert "[page:1]" in context_str
+    assert "[page:2]" in context_str
+    assert context_str.startswith("[doc:")
 
     # 페이지 1의 내용들이 하나로 합쳐져서 나타나는지 확인
     assert "첫 내용" in context_str

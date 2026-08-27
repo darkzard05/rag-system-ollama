@@ -100,17 +100,17 @@ def test_build_status_banner_lifecycle():
     # NOTE: `with st.status(...)` auto-updates a "running" status to "complete"
     # at context-manager exit (streamlit mutable_status_container.py:174-193),
     # so AppTest always observes the terminal state here. The running branch is
-    # proven by the label ("문서 분석 중: ...", only in the running branch) and
-    # by the "분석 취소" button (rendered only when state == running).
-    assert "문서 분석 중" in at.status[0].label, at.status[0].label
+    # proven by the label ("Analyzing document: ...", only in the running branch)
+    # and by the "Cancel Analysis" button (rendered only when state == running).
+    assert "Analyzing document:" in at.status[0].label, at.status[0].label
     assert at.status[0].state != "error", at.status[0].state
     cancel_labels = [b.label for b in at.button]
-    assert "분석 취소" in cancel_labels, cancel_labels
-    logs_exp = next((e for e in at.expander if e.label == "진행 로그"), None)
+    assert "Cancel Analysis" in cancel_labels, cancel_labels
+    logs_exp = next((e for e in at.expander if e.label == "Progress log"), None)
     assert logs_exp is not None, [e.label for e in at.expander]
     log_text = "".join(t.value for t in logs_exp.text)
-    assert "▹ 로그1" in log_text, log_text
-    assert "▹ 로그2" in log_text, log_text
+    assert "로그1" in log_text, log_text
+    assert "로그2" in log_text, log_text
     # 구형 도크(expander)는 제거되어서는 안 됨 → 네이티브 st.status로만 표시
     assert not any("⏳" in e.label for e in at.expander), at.expander
     assert not at.exception
@@ -128,8 +128,10 @@ def test_build_status_banner_lifecycle():
     at.run(timeout=_RUN_TIMEOUT)
 
     assert at.status, f"no st.status rendered after completion: {at.status}"
+    # AppTest auto-transitions st.status to "complete" at context exit, so the
+    # terminal state is always "complete"; the done branch is proven by label.
     assert at.status[0].state == "complete", at.status[0].state
-    assert "✅ 분석 완료" in at.status[0].label, at.status[0].label
+    assert "Analysis complete" in at.status[0].label, at.status[0].label
     assert not at.exception
 
 
@@ -235,14 +237,14 @@ def test_streamed_answer_renders_thought_expander_and_reenables_input(
     assert "독립 검증용 추론 과정입니다." in (assistant_msgs[-1].get("thought") or "")
 
     # T2's status accumulation: the mocked stream's status step must land in
-    # msg["process"]["steps"] at completion.
-    steps = (assistant_msgs[-1].get("process") or {}).get("steps") or []
-    assert "관련 문서 검색 중..." in steps, f"steps={steps}"
+    # msg["process_steps"] at completion (rendered via _build_process → steps).
+    steps = assistant_msgs[-1].get("process_steps") or []
+    assert "관련 문서 검색 중..." in steps, f"process_steps={steps}"
 
-    # Rendered assistant message exposes the native reasoning expander
-    # (render_message → guarded st.expander, chat.py:312) whose contents
-    # carry the pipeline steps.
-    assert any(e.label == "Detailed thinking" for e in at.expander), [
+    # Rendered assistant message exposes the native "Answer details" expander
+    # (render_generation_expander, chat.py:269) whose body carries the pipeline
+    # steps joined by " · " (chat.py:280).
+    assert any(e.label == "Answer details" for e in at.expander), [
         e.label for e in at.expander
     ]
     step_text = "".join(

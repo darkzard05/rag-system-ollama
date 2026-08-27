@@ -395,6 +395,7 @@ def consume_stream_into_message(
     documents: list[Any] = []
     metrics: dict[str, Any] = {}
     citations: list[dict[str, Any]] = []
+    process_steps: list[str] = []
     raw_json_parts: list[str] = []
     fa_scan_pos = 0
 
@@ -407,6 +408,11 @@ def consume_stream_into_message(
             if not chunk.content:
                 if chunk.thought:
                     thought += chunk.thought
+                # 상태(파이프라인 단계) 청크 누적 → 완료 시 process_steps에 보존.
+                if chunk.status:
+                    step = chunk.status
+                    if not process_steps or process_steps[-1] != step:
+                        process_steps.append(step)
                 _meta = chunk.metadata or {}
                 if _meta.get("documents"):
                     documents = _meta["documents"]
@@ -443,6 +449,7 @@ def consume_stream_into_message(
             documents=documents,
             metrics=metrics,
             citations=citations,
+            process_steps=process_steps[-10:],
             error=friendly_error_message(exc),
             session_id=sid,
         )
@@ -459,6 +466,7 @@ def consume_stream_into_message(
         documents=documents,
         metrics=metrics,
         citations=citations,
+        process_steps=process_steps[-10:],
         processed_content=None,
         cancelled=cancelled,
         session_id=sid,

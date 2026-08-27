@@ -331,6 +331,7 @@ def render_message(
     is_latest: bool = False,
     process: dict | None = None,
     citations: list[dict[str, Any]] | None = None,
+    process_steps: list[str] | None = None,
     **kwargs,
 ) -> None:
     """메시지를 렌더링하는 통합 엔진.
@@ -345,6 +346,7 @@ def render_message(
     msg_id = kwargs.get("msg_id", f"msg_{msg_index}")
     citations = citations or kwargs.get("citations")
     cancelled = bool(kwargs.get("cancelled", False))
+    process_steps = process_steps or kwargs.get("process_steps") or []
 
     with (
         st.chat_message(role, avatar=avatar_icon)
@@ -378,7 +380,7 @@ def render_message(
                     "citations": citations,
                     "metrics": metrics,
                     "model": kwargs.get("model", ""),
-                    "process_steps": [],
+                    "process_steps": process_steps,
                     "cancelled": cancelled,
                     "msg_id": msg_id,
                 },
@@ -616,6 +618,7 @@ def _render_unified_timeline(current_sid: str) -> None:
             process=msg.get("process"),
             cancelled=msg.get("cancelled", False),
             citations=msg.get("citations"),
+            process_steps=msg.get("process_steps"),
         )
 
     logger.debug(
@@ -780,6 +783,7 @@ def _run_active_stream_in_timeline(
     documents: list[Any] = []
     metrics: dict[str, Any] = {}
     citations: list[dict[str, Any]] = []
+    process_steps: list[str] = []
     _raw_json_parts: list[str] = []
     _fa_scan_pos = 0
 
@@ -798,7 +802,7 @@ def _run_active_stream_in_timeline(
                         "citations": citations,
                         "metrics": metrics,
                         "model": model_name,
-                        "process_steps": [],
+                        "process_steps": process_steps[-10:],
                         "cancelled": False,
                         "msg_id": msg_id,
                     },
@@ -844,6 +848,10 @@ def _run_active_stream_in_timeline(
                     body_ph.markdown(accumulated + " ▌", unsafe_allow_html=False)
                 if chunk.thought:
                     thought += chunk.thought
+                if chunk.status:
+                    step = chunk.status
+                    if not process_steps or process_steps[-1] != step:
+                        process_steps.append(step)
                 _meta = chunk.metadata or {}
                 if _meta.get("documents"):
                     documents = _meta["documents"]
@@ -898,6 +906,7 @@ def _run_active_stream_in_timeline(
         documents=documents,
         metrics=metrics,
         citations=citations,
+        process_steps=process_steps[-10:],
         processed_content=None,
         session_id=current_sid,
     )
