@@ -610,11 +610,15 @@ async def preprocess(
                 cached = None
             if (
                 isinstance(cached, dict)
-                and cached.get("response") is not None
+                and isinstance(cached.get("response"), str)
+                and cached[
+                    "response"
+                ].strip()  # 빈 문자열/공백/Nones는 히트로 취급하지 않음
                 and float(cached.get("confidence", 0.0)) >= QUERY_CACHE_MIN_CONF
             ):
+                response = cached["response"]
                 is_cached = True
-                cached_response = str(cached["response"])
+                cached_response = response
                 intent = "general"  # 라우터가 generate로 단축 라우팅
                 logger.info("[RAG] [PREPROCESS] 쿼리 캐시 히트 — generate 단축 경로")
 
@@ -1399,8 +1403,21 @@ async def generate(
                 )
             _emit_query_timing(_query_timings)
             return {"response": cached_response}
-        # cached_response가 비어 있으면(예외적) 정상 생성 경로로 폴백하지 않고
-        # 빈 응답을 반환한다 — 캐시 무결성 보장.
+        # cached_response가 비어 있으면(오염된 캐시 항목 등) 정상 생성 경로로
+        # 폴백하지 않고 빈 컨텍스트로 LLM을 호출하지 않도록 무정보 안내를 반환한다.
+        # (Tier 2 방어: 기존 오염 캐시가 있어도 환각 생성 차단)
+        logger.warning(
+            "[RAG] [GENERATE] 캐시 히트이나 응답이 비어 있음 — 무정보 안내 반환"
+        )
+        if writer is not None:
+            await _dispatch_event(
+                "response_chunk",
+                {"content": no_info_msg},
+                writer=writer,
+                config=config,
+            )
+        _emit_query_timing(_query_timings)
+        return {"response": no_info_msg}
 
     # R4-04: 검색 청크 인젝션 패턴 스캔 — 발견된 청크는 컨텍스트에서 제외하고 경고를 남긴다.
     # 격리 결과도 R1a-03과 동일한 원칙으로 노드 반환을 통해 최종 상태에 반영한다.

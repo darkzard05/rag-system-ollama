@@ -293,3 +293,87 @@ async def test_generate_general_intent_invokes_llm(monkeypatch):
     # is_cached=False 이므로 cached 단축 경로를 건너뛰고 astream 으로 생성.
     assert len(llm_astream_calls) >= 1
     assert result["response"]  # non-empty answer produced
+
+
+# ----------------------------------------------------------------------------
+# (f) empty cached response is NOT treated as a hit (Tier 1)
+# ----------------------------------------------------------------------------
+@pytest.mark.asyncio
+async def test_preprocess_empty_response_is_miss(monkeypatch):
+    """response="" (또는 공백) + 고신뢰도여도 is_cached=False 여야 한다.
+
+    빈 응답이 히트로 취급되면 retrieve 가 우회되고 빈 컨텍스트로 LLM 이 호출되어
+    환각이 발생한다 (수정 전 결함). 이를 회귀 방지한다.
+    """
+    monkeypatch.setattr("core.graph_builder.QUERY_CACHE_ENABLED", True)
+    monkeypatch.setattr("core.graph_builder.QUERY_CACHE_MIN_CONF", 0.85)
+
+    for empty_val in ["", "   "]:
+        cached_value = {"response": empty_val, "confidence": 0.99}
+        fake_cm = _make_cache_manager(cached_value)
+
+        state = _base_state("reusable query")
+        with (
+            patch("core.graph_builder.get_cache_manager", return_value=fake_cm),
+            patch.object(
+                SessionManager,
+                "get",
+                return_value="somefilehash",
+            ),
+            patch("core.graph_builder._ensure_query_cache_embedder", new=AsyncMock()),
+        ):
+            result = await preprocess(state, _base_config(), writer=None)
+
+        assert result["is_cached"] is False, f"empty response {empty_val!r} must miss"
+        assert result["cached_response"] is None
+        assert result["intent"] != "general"
+
+
+# ----------------------------------------------------------------------------
+# (g) polluted empty cache entry at generate returns no_info (Tier 2)
+# ----------------------------------------------------------------------------
+@pytest.mark.asyncio
+async def test_generate_polluted_empty_cache_returns_no_info(monkeypatch):
+    """is_cached=True 이나 cached_response="" (오염된 캐시) 일 때 generate 는
+    빈 컨텍스트 LLM 호출 없이 무정보 안내 메시지를 반환한다."""
+    monkeypatch.setattr("core.graph_builder.QUERY_CACHE_ENABLED", True)
+
+    llm = MagicMock()
+    llm.bind.return_value = llm
+    llm_calls: list[int] = []
+
+    async def fake_astream(*args, **kwargs):  # pragma: no cover - must not run
+        llm_calls.append(1)
+        raise AssertionError("empty-cache path must NOT call LLM")
+
+    async def fake_ainvoke(*args, **kwargs):  # pragma: no cover - must not run
+        llm_calls.append(1)
+        raise AssertionError("empty-cache path must NOT call LLM")
+
+    llm.astream = fake_astream
+    llm.ainvoke = fake_ainvoke
+
+    captured_events: list[dict] = []
+    state = _base_state(
+        "reusable query",
+        is_cached=True,
+        cached_response="",  # 오염된 빈 응답
+        intent="general",
+        relevant_docs=[],
+    )
+    config = _base_config()
+    config["configurable"]["llm"] = llm
+
+    with patch(
+        "core.graph_builder.adispatch_custom_event",
+        side_effect=lambda name, data, config=None: captured_events.append(
+            {"name": name, "data": dict(data)}
+        ),
+    ):
+        result = await generate(state, config, writer=None)
+
+    assert len(llm_calls) == 0, "LLM must not be called on empty cached response"
+    # 무정보 안내 메시지가 반환되어야 함 (빈 문자열 아님)
+    assert isinstance(result["response"], str)
+    assert result["response"].strip()
+    assert result["response"] != ""
