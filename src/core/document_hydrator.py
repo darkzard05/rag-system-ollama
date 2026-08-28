@@ -13,6 +13,7 @@ from typing import Any
 from langchain_core.documents import Document
 
 from cache.coord_cache import coord_cache
+from common.exceptions import CoordCacheReadError
 
 logger = logging.getLogger(__name__)
 
@@ -85,7 +86,17 @@ async def hydrate_documents(docs: list[Document]) -> None:
                     if page not in seen_pages:
                         seen_pages.add(page)
                         page_nums.append(page)
-            coords_map = await coord_cache.get_coords_batch(file_hash, page_nums)
+            try:
+                coords_map = await coord_cache.get_coords_batch(file_hash, page_nums)
+            except CoordCacheReadError as e:
+                logger.warning(
+                    f"[HYDRATE] 좌표 캐시 읽기 실패 ({os.path.basename(path)}, "
+                    f"file_hash={file_hash}): {e}"
+                )
+                # 실패를 명시적 per-file 마커로 기록하고 다른 파일 수화는 계속한다.
+                for doc in docs_in_file:
+                    doc.metadata["coord_cache_error"] = True
+                continue
 
             for doc in docs_in_file:
                 pages = doc.metadata.get("pages") or (
