@@ -329,6 +329,7 @@ class ResourceCoordinator:
         )
         self.clients = ClientPool()
         self._build_locks: dict[str, asyncio.Lock] = {}
+        self._in_flight: set[str] = set()
         self._build_call_counter = 0
         self._build_failures: dict[str, tuple[int, float]] = {}
         self._inference_semaphore: asyncio.Semaphore | None = None
@@ -344,6 +345,7 @@ class ResourceCoordinator:
         self.retrievers.clear()
         self.clients = ClientPool()
         self._build_locks.clear()
+        self._in_flight.clear()
         self._build_call_counter = 0
         self._build_failures.clear()
         self._inference_semaphore = None
@@ -351,18 +353,29 @@ class ResourceCoordinator:
         self._semaphore_loop = None
 
     def _get_build_lock(self, key: str) -> asyncio.Lock:
-        if key not in self._build_locks:
-            self._build_locks[key] = asyncio.Lock()
-        return self._build_locks[key]
+        # Stable per-key lock: created once and reused for the lifetime of the
+        # coordinator. Using setdefault guarantees a concurrent caller for the
+        # same key always receives the SAME lock object, so only one build can
+        # run at a time (prevents double-build via lock recycling).
+        return self._build_locks.setdefault(key, asyncio.Lock())
 
     def _cleanup_build_locks(self) -> None:
-        """Remove build locks for keys no longer tracked in any pool."""
+        """Remove build locks for keys no longer tracked in any pool.
+
+        Keys currently being built (in-flight) are NEVER deleted: deleting an
+        in-flight lock would let a concurrent caller acquire a fresh lock and
+        double-build the same key.
+        """
         active_keys: set[str] = set()
         for pool in [self.models, self.retrievers]:
             if hasattr(pool, "_pool"):
                 active_keys.update(pool._pool.keys())
 
-        stale_keys = [k for k in self._build_locks if k not in active_keys]
+        stale_keys = [
+            k
+            for k in self._build_locks
+            if k not in active_keys and k not in self._in_flight
+        ]
         for k in stale_keys:
             del self._build_locks[k]
 
@@ -517,35 +530,39 @@ class ResourceCoordinator:
 
         lock = self._get_build_lock(key)
         async with lock:
-            self._build_call_counter += 1
-            if self._build_call_counter >= 50:
-                self._build_call_counter = 0
-                self._cleanup_build_locks()
-
-            # [R3b-03] 실패 네거티브 캐시 — 회로 차단 상태면 재빌드를 시도하지 않고 즉시 실패.
-            self._check_build_circuit(key)
-
-            res = pool.get(key)
-            if res is not None:
-                return res
-
-            if build_fn is None:
-                raise ValueError(
-                    f"Resource '{key}' not found in {pool.name} and no build_fn provided."
-                )
-
+            self._in_flight.add(key)
             try:
-                if asyncio.iscoroutinefunction(build_fn):
-                    res = await build_fn(*args, **kwargs)
-                else:
-                    # [이벤트 루프 차단 방지] 무거운 sync 모델 로드는 워커 스레드에서 실행
-                    res = await asyncio.to_thread(build_fn, *args, **kwargs)
-            except Exception:
-                self._record_build_failure(key)
-                raise
-            self._build_failures.pop(key, None)
-            await pool.put(key, res)
-            return res
+                self._build_call_counter += 1
+                if self._build_call_counter >= 50:
+                    self._build_call_counter = 0
+                    self._cleanup_build_locks()
+
+                # [R3b-03] 실패 네거티브 캐시 — 회로 차단 상태면 재빌드를 시도하지 않고 즉시 실패.
+                self._check_build_circuit(key)
+
+                res = pool.get(key)
+                if res is not None:
+                    return res
+
+                if build_fn is None:
+                    raise ValueError(
+                        f"Resource '{key}' not found in {pool.name} and no build_fn provided."
+                    )
+
+                try:
+                    if asyncio.iscoroutinefunction(build_fn):
+                        res = await build_fn(*args, **kwargs)
+                    else:
+                        # [이벤트 루프 차단 방지] 무거운 sync 모델 로드는 워커 스레드에서 실행
+                        res = await asyncio.to_thread(build_fn, *args, **kwargs)
+                except Exception:
+                    self._record_build_failure(key)
+                    raise
+                self._build_failures.pop(key, None)
+                await pool.put(key, res)
+                return res
+            finally:
+                self._in_flight.discard(key)
 
     async def get_llm(self, model_name: str, **kwargs) -> Any:
         from core.model_loader import load_llm
