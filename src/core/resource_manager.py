@@ -208,6 +208,11 @@ class ModelPool(BaseResourcePool[Any]):
         ):
             if not eviction_allowed(self.name):
                 return False
+            # 주의: Ollama는 별도 프로세스라 이 핸들 evict는 호스트 RAM을 해방하지
+            # 못한다. 효과 없는 퇴출→즉시 재로드(~수십 초) 비용만 발생하므로
+            # 기본값은 config에서 비활성화되어 있다. 활성 시에도 쿨다운(30s)으로
+            # 무한 쓰래시만 막을 뿐, 실제 메모리 반납은 Ollama keep_alive=0 호출이
+            # 필요하다(후속 개선 과제).
             logger.warning(
                 "[ModelPool] Host RAM pressure detected (Ollama fallback). "
                 "Triggering eviction."

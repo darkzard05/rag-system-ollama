@@ -8,6 +8,7 @@ import contextlib
 import hashlib
 import logging
 import os
+import re
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any
@@ -113,6 +114,20 @@ def _extraction_progress_pct(page_number: int, total_pages: int) -> int:
     return round(5 + 40 * (page_number / total_pages))
 
 
+# 단글자 볼드 드롭캡 정규화: "**M** odeling" -> "Modeling".
+# PyMuPDF4LLM이 헤딩의 볼드 단글자를 "**X** " 형태로 추출하여 단어 중간에
+# 공백이 끼워지는 왜곡을 유발하므로, 청킹/임베딩 전에 단글자 볼드만 좁게 교정한다.
+# 멀티글자 볼드 (**CM3**)나 강조는 보존한다.
+_RE_BOLD_INITIAL = re.compile(r"\*\*([A-Za-z])\*\*\s+")
+
+
+def _normalize_markdown_bold_dropcaps(markdown: str) -> str:
+    """단글자 볼드 드롭캡 패턴을 교정합니다 (예: '**M** odeling' -> 'Modeling')."""
+    if not markdown:
+        return markdown
+    return _RE_BOLD_INITIAL.sub(r"\1", markdown)
+
+
 def _extract_markdown_via_thread(
     file_path: str,
     *,
@@ -130,24 +145,27 @@ def _extract_markdown_via_thread(
     """
     import pymupdf4llm
 
+    def _extract() -> list:
+        return pymupdf4llm.to_markdown(
+            doc,
+            page_chunks=True,
+            extract_words=extract_words,
+            table_strategy=table_strategy,
+            graphics_limit=graphics_limit,
+            fontsize_limit=fontsize_limit,
+            ignore_code=ignore_code,
+            write_images=write_images,
+            margins=margins,
+        )
+
     with open_pdf_document(file_path) as doc:
         try:
-            return pymupdf4llm.to_markdown(
-                doc,
-                page_chunks=True,
-                extract_words=extract_words,
-                table_strategy=table_strategy,
-                graphics_limit=graphics_limit,
-                fontsize_limit=fontsize_limit,
-                ignore_code=ignore_code,
-                write_images=write_images,
-                margins=margins,
-            )
+            chunks: Any = _extract()
         except Exception as layout_error:
             logger.warning(
                 f"[RAG] [PDF] PyMuPDF4LLM 추출 오류 ({layout_error}). 테이블 제외 후 재시도합니다."
             )
-            return pymupdf4llm.to_markdown(
+            chunks = pymupdf4llm.to_markdown(
                 doc,
                 page_chunks=True,
                 extract_words=extract_words,
@@ -158,6 +176,12 @@ def _extract_markdown_via_thread(
                 write_images=False,
                 margins=margins,
             )
+    # 청킹/임베딩 전 단글자 볼드 드롭캡 왜곡 교정 (F2)
+    if isinstance(chunks, list):
+        for chunk in chunks:
+            if isinstance(chunk, dict) and isinstance(chunk.get("text"), str):
+                chunk["text"] = _normalize_markdown_bold_dropcaps(chunk["text"])
+    return chunks
 
 
 def _extract_page_c_engine(

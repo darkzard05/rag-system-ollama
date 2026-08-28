@@ -250,10 +250,15 @@ async def _warmup_models() -> None:
 
 
 # [WARMUP] 부팅 시 1회 프리웜을 백그라운드 워커에 제출(비차단, 비치명적).
-try:
-    _async_worker.submit(_warmup_models())
-except Exception as e:
-    logger.warning(f"[WARMUP] 모델 프리웜 실패 — 첫 쿼리에서 로드됨: {e}")
+# Streamlit은 스크립트 rerun 시 모듈 최상위 코드를 재실행하므로, 가드 없으면
+# 매 rerun마다 프리웜이 중복 제출되어 LLM astream("warmup") 이多次 실행된다.
+# session_state 플래그로 1회만 제출되도록 보장한다.
+if not st.session_state.get("_warmup_submitted", False):
+    try:
+        _async_worker.submit(_warmup_models())
+        st.session_state["_warmup_submitted"] = True
+    except Exception as e:
+        logger.warning(f"[WARMUP] 모델 프리웜 실패 — 첫 쿼리에서 로드됨: {e}")
 
 
 async def _bg_rebuild_task(

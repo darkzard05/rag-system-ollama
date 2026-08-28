@@ -86,6 +86,19 @@ def normalize_latex_delimiters(text: str) -> str:
     return text
 
 
+# [F5] 포맷 컨텍스트 토큰([doc:..] [section:..] [page:..] [score:..])을 본문에서
+# 제거한다. 이 토큰은 검색 컨텍스트용이므로 최종 답변 본문에 그대로 노출되면 지저분.
+# 인라인 인용 앵커([1] 등)는 보존한다.
+_RE_CONTEXT_TOKEN = re.compile(r"\s*\[(doc|section|page|score):[^\]]*\]")
+
+
+def strip_context_tokens(text: str) -> str:
+    """최종 답변 본문에서 컨텍스트 메타토큰([doc:..] 등)을 제거합니다."""
+    if not text:
+        return text
+    return _RE_CONTEXT_TOKEN.sub(" ", text).strip()
+
+
 def _build_line_boxes(coords: list, page_val: int, content: str) -> list[dict]:
     """단일 페이지 좌표에서 줄 단위 하이라이트 박스 annotation 목록 생성."""
     # [고도화] 연속성 기반 텍스트 매칭 (Sequence Matching)

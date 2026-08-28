@@ -842,6 +842,9 @@ async def preprocess(
         "is_cached": is_cached,
         "cached_response": cached_response,
         "search_weights": weights,
+        # 초단문 쿼리(<5자)는 그레이더 과해석(오타/타 문서에서의 환각) 위험이 커
+        # strict 모드로 다룬다. grade_documents에서 활용한다.
+        "short_query": len(query) < 5,
         # 턴 시작 시 이전 턴의 재작성 쿼리 잔재 제거 (reset_or_append 리듀서의 리셋 신호)
         "search_queries": [],
         "retry_count": 0,
@@ -1164,6 +1167,20 @@ async def grade_documents(
             "route": "transform",
             "retry_count": 1,
         }
+
+    # [F4] 초단문 쿼리 strict 가드: 5자 미만 쿼리는 그레이더가 임의로 확장 해석
+    # (예: "cm3" -> CM3 모델)할 위험이 커 환각 소지가 있다. 검색된 문서 중 어디에도
+    # 원문 토큰이 존재하지 않으면 오타/타 문서로 판단해 재검색(transform)으로
+    # 라우팅한다. 정상 매칭(예: CM3 논문에 "CM3" 존재) 시에는 통과시켜 기존 흐름 유지.
+    if get_state_attr(state, "short_query", False):
+        _q = str(get_state_attr(state, "input", "")).strip().lower()
+        _hit = _q and any(_q in (d.page_content or "").lower() for d in docs)
+        if not _hit:
+            logger.info(
+                f"[RAG] [GRADE] 초단문 쿼리 '{_q}' 가 검색 문서에 무존재 — 재검색 라우팅"
+            )
+            _grade_op.__exit__(None, None, None)
+            return {"intent": "transform", "route": "transform", "retry_count": 1}
 
     # Wave 3 grade reduction: 동일 세션 내 동일 (query, doc-set) 반복 질의 시
     # 이전 LLM 판단을 재사용한다 (메모 해시 miss 시에만 LLM 호출).

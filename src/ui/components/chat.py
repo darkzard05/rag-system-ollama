@@ -20,6 +20,7 @@ from common.utils import (
     apply_tooltips_to_response,
     fast_hash,
     normalize_latex_delimiters,
+    strip_context_tokens,
 )
 from core.session import SessionManager
 from ui.components.common import (
@@ -365,6 +366,8 @@ def render_message(
                         html.escape(content) if role == "assistant" else content
                     )
                     display_text = normalize_latex_delimiters(display_text)
+                    if role == "assistant":
+                        display_text = strip_context_tokens(display_text)
                     st.markdown(display_text, unsafe_allow_html=(role == "assistant"))
             ui_error(f"Error: {error}")
             return
@@ -398,6 +401,9 @@ def render_message(
                 display_text = html.escape(display_text)
 
             display_text = normalize_latex_delimiters(display_text)
+            # [F5] 본문에 컨텍스트 메타토큰([doc:..] [score:..] 등)이 노출되지 않도록 제거
+            if role == "assistant":
+                display_text = strip_context_tokens(display_text)
             if role == "assistant" and documents:
                 # RC-A: 완료된 메시지 본문은 매 script run마다 변하지 않으므로
                 # tooltips 주입 결과(문서 스캔 O(docs))를 msg_id로 캐시해 재수행을

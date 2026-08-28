@@ -52,7 +52,9 @@ models:
 
   # Ollama는 별도 프로세스라 torch.cuda 미사용 시 VRAM 퇴출이 영원히 안 떠짐.
   # 호스트 RAM 압력 폴백으로 퇴출을 유도할지 (기본 배포= Ollama).
-  enable_ollama_pressure_fallback: true
+  # F3: 핸들 evict가 Ollama host RAM을 해방하지 못해 무효한 퇴출→재로드만
+  # 유발하므로 기본 비활성화. 실제 메모리 반납은 Ollama keep_alive=0 이 필요.
+  enable_ollama_pressure_fallback: false
   # 호스트 RAM 압력(host_pressure_exceeded) 임계값(%). 기본 배포(Ollama/CPU)에서
   # 모델 퇴출을 유도하는 RAM 점유율 상한. 90%는 너무 높아 조기 퇴출을 막으므로 85%로 완화.
   host_pressure_threshold: 85.0
@@ -284,7 +286,9 @@ cache_security:
 # --- 전역 캐시 활성화 설정 ---
 global_cache:
   # 벡터 저장소(인덱싱 결과) 캐시 사용 여부
-  enable_vector_cache: true
+  # 테스트 기간: 문서 분석(인덱싱) 시 캐시 저장을 끄고 매번 새로 임베딩/검증하기 위해 false.
+  # 테스트 종료 후 true 로 복구.
+  enable_vector_cache: false
 
 # --- 채팅 UI 설정 ---
 ui:

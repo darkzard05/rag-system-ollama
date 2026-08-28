@@ -166,7 +166,7 @@ OLLAMA_TIMEOUT: int = _get_env(
 )
 ENABLE_OLLAMA_PRESSURE_FALLBACK: bool = _get_env(
     "ENABLE_OLLAMA_PRESSURE_FALLBACK",
-    _models_config.get("enable_ollama_pressure_fallback", True),
+    _models_config.get("enable_ollama_pressure_fallback", False),
     lambda x: str(x).lower() == "true",
 )
 HOST_PRESSURE_THRESHOLD: float = _get_env(
