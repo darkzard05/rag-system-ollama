@@ -330,3 +330,35 @@ class EmbeddingModelError(PDFProcessingError):
             final_details["reason"] = reason
 
         super().__init__(message, final_details)
+
+
+class CoordCacheReadError(PDFProcessingError):
+    """
+    PDF 하이라이트 좌표 캐시를 읽는 데 실패했을 때 발생하는 오류.
+
+    원인:
+    - 캐시 DB 손상 (SQLite 파일 깨짐 등)
+    - 디스크 I/O 오류 (권한 부족, 공간 부족 등)
+    - blob 역직렬화(parse) 실패
+
+    복구 전략:
+    - 캐시 재구성(재생성)
+    - 디스크 상태 / 권한 확인
+
+    실패를 조용히 빈 값으로 반환하지 않고 명시적으로 노출하여,
+    상위 핸들러(except PDFProcessingError)가 이를 일관되게 처리하도록 합니다.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        details: dict[Any, Any] | None = None,
+    ):
+        """
+        좌표 캐시 읽기 오류 초기화.
+
+        Args:
+            message: 사용자 친화적 오류 메시지
+            details: 디버깅용 추가 정보 (파일 경로, 원인 등)
+        """
+        super().__init__(message, details)
