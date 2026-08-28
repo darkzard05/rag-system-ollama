@@ -191,6 +191,13 @@ def extract_annotations_from_docs(documents: list) -> list[dict]:
         ).lower()
         file_path = meta.get("file_path") or meta.get("source")
 
+        # coord_cache_error: 좌표 캐시 읽기 실패로 좌표를 전혀 얻을 수 없음.
+        # 일반 '좌표 없음'과 구분하기 위해 on-demand fitz 추출(일반 경로)을
+        # 건너뛰어 이 문서는 빈 하이라이트로 남긴다. (실패를 명시적으로 표시)
+        if meta.get("coord_cache_error"):
+            logger.info(f"[HIGHLIGHT] coord_cache_error: 하이라이트 생략 ({file_path})")
+            continue
+
         # 다중 페이지 청크: 페이지별 좌표(page_coords)로 줄 단위 하이라이트 생성
         page_coords = meta.get("page_coords")  # dict[int, list] | None
         if page_coords:

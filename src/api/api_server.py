@@ -384,7 +384,13 @@ def _doc_to_source(doc: Any, max_chars: int = 200, suffix: str = "") -> dict[str
         "page": metadata.get("page"),
         "content": content + suffix,
     }
-    for key in ("pages", "page_coords", "word_coords", "file_hash"):
+    for key in (
+        "pages",
+        "page_coords",
+        "word_coords",
+        "file_hash",
+        "coord_cache_error",
+    ):
         if metadata.get(key) is not None:
             source[key] = metadata[key]
     return source

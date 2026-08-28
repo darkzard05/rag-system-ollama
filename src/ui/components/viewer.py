@@ -13,7 +13,12 @@ from common.config import MSG_PDF_VIEWER_NO_FILE
 from common.exceptions import PDFProcessingError
 from common.utils import safe_cache_data
 from core.session import SessionManager
-from ui.components.common import navigate_to_page, show_pdf_error, ui_error
+from ui.components.common import (
+    get_doc_metadata,
+    navigate_to_page,
+    show_pdf_error,
+    ui_error,
+)
 from ui.widget_keys import (
     MANUAL_NAV_TS_KEY,
     PDF_NAV_INPUT_KEY,
@@ -22,6 +27,28 @@ from ui.widget_keys import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _render_coord_cache_warnings() -> None:
+    """좌표 캐시 읽기 실패 문서마다 per-source 경고를 출력합니다.
+
+    coord_cache_error 마커는 document_hydrator가 실패한 파일 단위로 설정하며,
+    세션 documents에서 감지해 사용자에게 '하이라이트를 불러올 수 없습니다'를
+    명시적으로 보여준다. 다른 소스 렌더링을 막지 않는다.
+    """
+    documents = SessionManager.get("documents", []) or []
+    if not documents:
+        return
+    warned_sources: set[str] = set()
+    for doc in documents:
+        meta = get_doc_metadata(doc)
+        if not meta.get("coord_cache_error"):
+            continue
+        source = meta.get("file_path") or meta.get("source") or "문서"
+        if source in warned_sources:
+            continue
+        warned_sources.add(source)
+        st.warning("하이라이트를 불러올 수 없습니다 (좌표 캐시 읽기 실패).")
 
 
 @safe_cache_data(ttl=60, show_spinner=False)
@@ -222,6 +249,7 @@ def render_pdf_area():
     """
     try:
         state = _resolve_pdf_state()
+        _render_coord_cache_warnings()
         if state is None:
             pdf_path = SessionManager.get("pdf_file_path")
             if pdf_path and os.path.exists(os.path.abspath(str(pdf_path))):
