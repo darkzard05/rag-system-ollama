@@ -22,6 +22,7 @@ import aiosqlite
 import orjson
 
 from common.config import PROJECT_ROOT
+from common.exceptions import CoordCacheReadError
 
 MAX_CACHE_SIZE_MB = 500
 CACHE_TTL_DAYS = 7
@@ -417,7 +418,10 @@ class CoordCacheManager:
             return await self._submit(self._get_coords_batch_impl(file_hash, page_nums))
         except Exception as e:
             logger.error(f"좌표 캐시 배치 로드 실패 ({file_hash}): {e}")
-            return {}
+            raise CoordCacheReadError(
+                f"좌표 캐시 배치 로드 실패 ({file_hash})",
+                details={"file_hash": file_hash, "cause": str(e)},
+            ) from e
 
     async def _get_coords_batch_impl(
         self, file_hash: str, page_nums: list[int]
@@ -448,7 +452,14 @@ class CoordCacheManager:
             return await self._submit(self._get_coords_impl(file_hash, page_num))
         except Exception as e:
             logger.error(f"좌표 캐시 로드 실패 ({file_hash}, p{page_num}): {e}")
-            return None
+            raise CoordCacheReadError(
+                f"좌표 캐시 로드 실패 ({file_hash}, p{page_num})",
+                details={
+                    "file_hash": file_hash,
+                    "page_num": page_num,
+                    "cause": str(e),
+                },
+            ) from e
 
     async def _get_coords_impl(
         self, file_hash: str, page_num: int
