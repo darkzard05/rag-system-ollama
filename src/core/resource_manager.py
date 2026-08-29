@@ -19,6 +19,7 @@ from typing import Any, Generic, ParamSpec, TypeVar
 
 from common.config import (
     ENABLE_OLLAMA_PRESSURE_FALLBACK,
+    HOST_PRESSURE_THRESHOLD,
     MAX_CACHED_MODELS,
     MAX_CONCURRENT_INFERENCE,
     MAX_RESOURCE_POOL_SIZE,
@@ -87,12 +88,13 @@ class BaseResourcePool(Generic[T]):
         CUDA 정리 훅을 이 지점에서 수행할 수 있습니다.
         """
         for key in list(self._pool.keys()):
-            if key not in self._pinned_keys:
-                res = self._pool.pop(key)
-                self._current_bytes -= self._get_resource_size(res)
-                logger.info(f"[{self.name}Pool] Evicting: {key}")
-                del res
-                return True
+            if key in self._pinned_keys:
+                continue
+            res = self._pool.pop(key)
+            self._current_bytes -= self._get_resource_size(res)
+            logger.info(f"[{self.name}Pool] Evicting: {key}")
+            del res
+            return True
         return False
 
     async def _evict_one(self) -> bool:
@@ -241,11 +243,17 @@ class RetrieverPool(BaseResourcePool[Any]):
 
     async def check_memory_pressure(self) -> bool:
         """시스템 RAM 사용량을 확인하고 임계값 초과 시 리소스를 퇴출합니다."""
+        # 단일 문서 풀에서는 퇴출할 다른 문서가 없다. 유일 문서를 퇴출하면
+        # 즉시 재빌드(전체 재파싱) 루프로 이어지므로 퇴출하지 않는다.
+        if len(self._pool) <= 1:
+            return False
         try:
             import psutil
 
             mem = psutil.virtual_memory()
-            if mem.percent > 85:
+            # HOST_PRESSURE_THRESHOLD 사용(모델 풀과 정책 통일). 동일 mem 객체로
+            # 임계값·while 체크를 모두 수행해 불필요한 psutil 호출을 피한다.
+            if mem.percent > HOST_PRESSURE_THRESHOLD:
                 if not eviction_allowed(self.name):
                     return False
                 logger.warning(
@@ -527,11 +535,12 @@ class ResourceCoordinator:
         Retrieves a resource or builds it atomically if not present.
         If build_fn is None and resource is missing, raises ValueError.
         """
-        # [Proactive Eviction] Trigger pressure checks before acquisition
+        # [Proactive Eviction] Models: check VRAM pressure before acquisition.
+        # Retrievers: defer the memory-pressure check until AFTER a missing
+        # get (see below) — a present doc must never be evicted just to be
+        # immediately rebuilt.
         if pool is self.models:
             await self.models.check_vram_pressure()
-        elif pool is self.retrievers:
-            await self.retrievers.check_memory_pressure()
 
         lock = self._get_build_lock(key)
         async with lock:
@@ -548,6 +557,12 @@ class ResourceCoordinator:
                 res = pool.get(key)
                 if res is not None:
                     return res
+
+                # [Proactive Eviction] Only trigger retriever eviction when the
+                # resource is actually missing and must be rebuilt. A present doc
+                # is never evicted just to be immediately rebuilt (churn loop).
+                if pool is self.retrievers:
+                    await self.retrievers.check_memory_pressure()
 
                 if build_fn is None:
                     raise ValueError(
@@ -665,8 +680,8 @@ class ResourceCoordinator:
     async def register_retrievers(
         self, file_hash: str, vector_store: Any, bm25_retriever: Any
     ):
-        # [Proactive Eviction] Ensure space before registering new retrievers
-        await self.retrievers.check_memory_pressure()
+        # 새로 빌드된 리트리버를 등록 단계에서 자체 퇴출하지 않는다.
+        # 호스트 압력은 get_or_build 에서 부재 시에만 처리한다.
         await self.retrievers.put(file_hash, (vector_store, bm25_retriever))
 
     async def unregister_retrievers(self, file_hash: str):

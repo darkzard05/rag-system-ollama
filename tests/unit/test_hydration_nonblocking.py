@@ -63,6 +63,9 @@ def astream_env() -> Iterator[dict[str, Any]]:
     registry = MagicMock()
     registry.get_breaker.return_value = breaker
     manager = MagicMock()
+    # 다중 문서 세션 시뮬레이션: 단일 문서면 unpin이 생략되는 새 동작
+    # (무한 churn 방지) 과 구분하기 위해 2개 항목 풀을 세팅한다.
+    manager.retrievers._pool = {"doc1": "r1", "doc2": "r2"}
     session_manager = MagicMock()
     session_manager.get.return_value = None
     session_manager.get_messages.return_value = []

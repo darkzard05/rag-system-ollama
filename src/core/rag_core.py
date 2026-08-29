@@ -155,7 +155,10 @@ class RAGSystem:
                 "performance": combined_perf,
             }
         finally:
-            get_resource_manager().unpin_retrievers(file_hash)
+            # 단일 문서 세션에서는 마지막 문서를 쿼리 사이에 퇴출 가능하게
+            # 풀지 않는다(즉시 재빌드 루프 방지). 다중 문서일 때만 언핀.
+            if len(get_resource_manager().retrievers._pool) > 1:
+                get_resource_manager().unpin_retrievers(file_hash)
 
     async def astream(self, query: str, model_name: str | None = None):
         self._ensure_session_context()
@@ -232,7 +235,10 @@ class RAGSystem:
                         await t
                     except (Exception, asyncio.CancelledError) as te:
                         logger.error(f"[RAG] 문서 하이드레이션 실패: {te}")
-                get_resource_manager().unpin_retrievers(file_hash)
+                # 단일 문서 세션에서는 마지막 문서를 쿼리 사이에 퇴출 가능하게
+                # 풀지 않는다(즉시 재빌드 루프 방지). 다중 문서일 때만 언핀.
+                if len(get_resource_manager().retrievers._pool) > 1:
+                    get_resource_manager().unpin_retrievers(file_hash)
 
         return _consumer()
 

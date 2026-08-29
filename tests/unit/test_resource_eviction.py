@@ -131,6 +131,21 @@ async def test_retriever_memory_pressure_eviction():
         assert pool.get("res1") is None
 
 
+@pytest.mark.asyncio
+async def test_retriever_single_doc_no_eviction_under_pressure():
+    """Regression: a single-document pool must NOT evict its only doc under
+    memory pressure (would trigger an immediate full re-parse rebuild loop)."""
+    pool = RetrieverPool("Retriever", item_limit=10, byte_limit=10**9)
+    await pool.put("only_doc", MockResource(name="only_doc"))
+
+    with patch("psutil.virtual_memory") as mock_vm:
+        mock_vm.return_value = MagicMock(percent=97.8)
+        evicted = await pool.check_memory_pressure()
+
+    assert evicted is False
+    assert pool.get("only_doc") is not None
+
+
 # --- Tests for ModelPool (VRAM Pressure) ---
 
 
