@@ -618,8 +618,18 @@ class _GraphCache:
         self._lock: asyncio.Lock | None = None
 
     def get_lock(self) -> asyncio.Lock:
-        """지연 초기화된 단일 그래프 빌드 락을 반환합니다 (매 호출 동일 객체)."""
-        if self._lock is None:
+        """지연 초기화된 단일 그래프 빌드 락을 반환합니다.
+
+        asyncio.Lock 은 최초 acquire 시점에 event loop 에 바인딩되므로, 생성 직후
+        ``_loop`` 는 ``None`` 입니다. 테스트/워커처럼 함수 단위로 루프가 교체되는
+        환경에서 캐시된 락을 무조건 재사용하면 ``bound to a different event loop``
+        오류가 나므로, 이미 바인딩된 루프가 현재 루프와 다를 때만 새 락으로
+        재생성합니다 (``_loop is None`` 인 미바인딩 락은 같은 객체로 재사용).
+        """
+        if self._lock is None or (
+            self._lock._loop is not None
+            and self._lock._loop is not asyncio.get_event_loop()
+        ):
             self._lock = asyncio.Lock()
         return self._lock
 

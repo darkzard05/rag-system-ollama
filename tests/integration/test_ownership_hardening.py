@@ -14,7 +14,7 @@ fail-closed(미등록 세션은 최초 인증 사용자가 점유하며 타인 �
 import asyncio
 import io
 from pathlib import Path
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from httpx import ASGITransport, AsyncClient
@@ -110,6 +110,13 @@ async def test_concurrent_upload_second_rejected(client, pdf_override, auth_over
         patch(
             "core.resource_manager.ResourceCoordinator.get_embedder_for_session",
             new_callable=AsyncMock,
+        ),
+        # Pin path: use_embedder(model_name=...) lazily imports and builds the
+        # real embedding model; stub it so the concurrent-upload test never
+        # touches Ollama. The pin is a no-op for the injected key.
+        patch(
+            "core.model_loader.load_embedding_model",
+            return_value=MagicMock(),
         ),
     ):
         auth_override["user_id"] = "user-a"

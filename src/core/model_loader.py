@@ -93,6 +93,17 @@ def _get_psutil():
 logger = logging.getLogger(__name__)
 
 
+def _host_pressure_exceeded() -> bool:
+    """동적 참조로 호스트 RAM 압력을 확인합니다.
+
+    모듈 레벨 import 가 아닌 런타임 조회를 쓰므로, 테스트가
+    ``common.system_pressure.host_pressure_exceeded`` 를 패치해 동작을 격리할 수
+    있습니다 (로컬 import 는 패치 무효화).
+    """
+
+    return host_pressure_exceeded()
+
+
 class ModelManager:
     """
     시스템 전체의 모델 인스턴스를 관리하는 중앙 클래스 (LRU 캐시 적용).
@@ -184,6 +195,8 @@ class ModelManager:
     @classmethod
     async def _check_memory_pressure(cls):
         """현재 VRAM/RAM 사용량을 확인하고 압박 시 가장 오래된 모델을 방출합니다."""
+        # 동적 참조: 테스트가 common.config.ENABLE_OLLAMA_PRESSURE_FALLBACK 를
+        # monkeypatch 해 동작을 격리할 수 있도록 (모듈 레벨 import 는 패치 무효화).
 
         # 1. GPU VRAM 체크 (사용 가능한 경우)
         _torch = _get_torch()
@@ -212,7 +225,7 @@ class ModelManager:
         if (
             ENABLE_OLLAMA_PRESSURE_FALLBACK
             and ollama_backend_active()
-            and host_pressure_exceeded(threshold=90.0)
+            and _host_pressure_exceeded()
         ):
             if not eviction_allowed("model_manager"):
                 return False

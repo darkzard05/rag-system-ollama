@@ -15,7 +15,7 @@ import time
 from collections import OrderedDict
 from collections.abc import Callable
 from contextlib import asynccontextmanager
-from typing import Any, Generic, ParamSpec, TypeVar
+from typing import Any, Generic, ParamSpec, TypeVar, cast
 
 from common.config import (
     ENABLE_OLLAMA_PRESSURE_FALLBACK,
@@ -47,6 +47,19 @@ _BUILD_FAILURE_LIMIT = 3
 _BUILD_CIRCUIT_TTL_SECONDS = 60.0
 
 logger = logging.getLogger(__name__)
+
+
+def _host_pressure_exceeded() -> bool:
+    """동적 참조로 호스트 RAM 압력을 확인합니다.
+
+    모듈 레벨 import 가 아닌 런타임 조회를 쓰므로, 테스트가
+    ``common.system_pressure.host_pressure_exceeded`` 를 패치해 동작을 격리할 수
+    있습니다 (로컬 import 는 패치 무효화).
+    """
+    from common.system_pressure import host_pressure_exceeded
+
+    return host_pressure_exceeded()
+
 
 # [PRESSURE] 퇴출 스로틀 상수 (초). 호스트 RAM 압력 기반 퇴출은 Ollama처럼 별도
 # 프로세스 백엔드에서 파이썬 측 핸들 퇴출이 호스트 RAM을 줄이지 못해 조건이 영구히
@@ -210,6 +223,9 @@ class ModelPool(BaseResourcePool[Any]):
     """LLM 및 임베딩 모델 전용 풀. VRAM 압력을 감지하여 퇴출을 유도합니다."""
 
     async def check_vram_pressure(self) -> bool:
+        # 동적 참조: 테스트가 common.config.ENABLE_OLLAMA_PRESSURE_FALLBACK 를
+        # monkeypatch 해 동작을 격리할 수 있도록 (모듈 레벨 import 는 패치 무효화).
+
         try:
             import torch
 
@@ -231,7 +247,7 @@ class ModelPool(BaseResourcePool[Any]):
         if (
             ENABLE_OLLAMA_PRESSURE_FALLBACK
             and ollama_backend_active()
-            and host_pressure_exceeded()
+            and _host_pressure_exceeded()
         ):
             if not eviction_allowed(self.name):
                 return False
@@ -391,11 +407,27 @@ class ResourceCoordinator:
         self._semaphore_loop = None
 
     def _get_build_lock(self, key: str) -> asyncio.Lock:
-        # Stable per-key lock: created once and reused for the lifetime of the
-        # coordinator. Using setdefault guarantees a concurrent caller for the
-        # same key always receives the SAME lock object, so only one build can
-        # run at a time (prevents double-build via lock recycling).
-        return self._build_locks.setdefault(key, asyncio.Lock())
+        # Stable per-key lock: a concurrent caller for the same key always
+        # receives the SAME lock object, so only one build can run at a time
+        # (prevents double-build via lock recycling).
+        #
+        # asyncio.Lock binds to the running event loop on first acquire (its
+        # bound loop is None until then). Under per-test event-loop swapping
+        # (pytest-asyncio mode=auto) a lock cached from a previous loop raises
+        # ``bound to a different event loop`` on the next test. We therefore
+        # reuse an unbound lock, but recreate one whose bound loop differs from
+        # the current loop.
+        existing = self._build_locks.get(key)
+        if existing is None:
+            self._build_locks[key] = asyncio.Lock()
+        else:
+            # asyncio.Lock._loop is private; cast to Any to read the bound loop
+            # (None until first acquire). Recreate if it is bound to a different
+            # loop than the current one (per-test loop swapping breaks reuse).
+            bound_loop = cast("Any", existing)._loop
+            if bound_loop is not None and bound_loop is not asyncio.get_event_loop():
+                self._build_locks[key] = asyncio.Lock()
+        return self._build_locks[key]
 
     def _cleanup_build_locks(self) -> None:
         """Remove build locks for keys no longer tracked in any pool.
@@ -755,8 +787,15 @@ class ResourceCoordinator:
         self, model_name: str | None = None, embedder: Any | None = None
     ):
         if embedder is not None:
-            key = self.models.key_for_object(embedder)
-            self.models.pin(key)
+            # Pin only when the embedder is a pool-managed resource. Callers may
+            # pass an external (e.g. test/mock) embedder that is never subject to
+            # pool eviction; pinning it would raise KeyError via key_for_object.
+            try:
+                key = self.models.key_for_object(embedder)
+            except KeyError:
+                key = None
+            if key is not None:
+                self.models.pin(key)
             emb = embedder
         else:
             from common.config import DEFAULT_EMBEDDING_MODEL
@@ -769,7 +808,8 @@ class ResourceCoordinator:
         try:
             yield emb
         finally:
-            self.models.unpin(key)
+            if key is not None:
+                self.models.unpin(key)
 
     @asynccontextmanager
     async def use_llm(self, model_name: str, **kwargs):
@@ -789,8 +829,14 @@ class ResourceCoordinator:
         target = model_name or RERANKER_MODEL_NAME
         key = f"flashrank_{target}"
         if ranker is not None:
-            k2 = self.models.key_for_object(ranker)
-            self.models.pin(k2)
+            # Pin only when the ranker is a pool-managed resource; external
+            # (test/mock) rankers are never evicted, so key_for_object raises.
+            try:
+                k2 = self.models.key_for_object(ranker)
+            except KeyError:
+                k2 = None
+            if k2 is not None:
+                self.models.pin(k2)
             rk = ranker
         else:
 
@@ -803,7 +849,8 @@ class ResourceCoordinator:
         try:
             yield rk
         finally:
-            self.models.unpin(k2)
+            if k2 is not None:
+                self.models.unpin(k2)
 
     async def get_retrievers(
         self,
