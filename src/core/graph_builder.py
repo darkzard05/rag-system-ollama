@@ -26,6 +26,7 @@ from api.schemas import AggregatedSearchResult, AnswerStructure, GraphState
 from common.config import (
     ANALYSIS_PROTOCOL,
     DEFAULT_EMBEDDING_MODEL,
+    DEFAULT_OLLAMA_MODEL,
     GRADING_CONFIG,
     GRADING_ENABLED,
     MAX_CONCURRENT_INFERENCE,
@@ -38,6 +39,7 @@ from common.config import (
 )
 from common.utils import count_tokens_rough, fast_hash
 from core.model_loader import ModelManager
+from core.resource_manager import get_resource_manager
 from core.session import SessionManager
 from services.monitoring.performance_monitor import (
     OperationType,
@@ -755,12 +757,22 @@ def _sanitize_channel_value(value: Any) -> Any:
     )
 
 
-async def _safe_invoke(llm: Any, prompt: str, config: dict) -> Any:
-    """Safely invoke an LLM with async fallback."""
-    res = llm.ainvoke(prompt, config=config)
-    if asyncio.iscoroutine(res):
-        return await res
-    return res
+async def _safe_invoke(
+    llm: Any, prompt: str, config: dict, model_name: str = DEFAULT_OLLAMA_MODEL
+) -> Any:
+    """Safely invoke an LLM with async fallback, pinning it for the call duration.
+
+    Pins the model via the coordinator so it cannot be evicted mid-inference
+    (use-after-free defect) while the underlying ainvoke is in flight.
+    """
+    from core.resource_manager import get_resource_manager
+
+    coordinator = get_resource_manager()
+    async with coordinator.use_llm(model_name=model_name):
+        res = llm.ainvoke(prompt, config=config)
+        if asyncio.iscoroutine(res):
+            return await res
+        return res
 
 
 async def preprocess(
@@ -1294,14 +1306,21 @@ async def grade_documents(
         try:
             async with ModelManager.inference_session():
                 json_llm = llm.bind(response_format={"type": "json_object"})
-                result = await _safe_invoke(json_llm, unified_prompt, call_config)
+                result = await _safe_invoke(
+                    json_llm,
+                    unified_prompt,
+                    call_config,
+                    model_name=DEFAULT_OLLAMA_MODEL,
+                )
             content = result.content if hasattr(result, "content") else str(result)
             data = json.loads(content)
             parsed = UnifiedGradeRewriteResponse(**data)
         except (json.JSONDecodeError, ValueError, TypeError) as e:
             logger.debug(f"[RAG] [GRADE] JSON 모드 실패, 수동 파싱 시도: {e}")
             async with ModelManager.inference_session():
-                raw_res = await _safe_invoke(llm, unified_prompt, call_config)
+                raw_res = await _safe_invoke(
+                    llm, unified_prompt, call_config, model_name=DEFAULT_OLLAMA_MODEL
+                )
             raw_content = (
                 raw_res.content if hasattr(raw_res, "content") else str(raw_res)
             )
@@ -1740,43 +1759,45 @@ async def generate(
         # 이스케이프 없는 큰따옴표를 넣어 json.loads가 실패(Expecting ',' delimiter)하는
         # 깨진 JSON 출력을 막는다.
         json_llm = llm.bind(response_format={"type": "json_object"})
-        async for chunk in json_llm.astream([sys_msg, human_msg], config=config):
-            if hasattr(llm, "_convert_chunk_to_thought_and_content"):
-                content_chunk, thought_chunk = (
-                    llm._convert_chunk_to_thought_and_content(chunk)
-                )
-            else:
-                # Fallback for LLMs without thought/content separation.
-                # R4-08: content가 리스트(복합 콘텐츠)면 텍스트 블록을 병합해
-                # str+list TypeError를 방지한다 (hasattr 분기 구조는 유지).
-                content_chunk = _coerce_chunk_content(
-                    chunk.content if hasattr(chunk, "content") else str(chunk)
-                )
-                thought_chunk = ""
-            if content_chunk and ttft_ms is None:
-                ttft_ms = (time.perf_counter() - gen_start) * 1000
+        coordinator = get_resource_manager()
+        async with coordinator.use_llm(model_name=DEFAULT_OLLAMA_MODEL):
+            async for chunk in json_llm.astream([sys_msg, human_msg], config=config):
+                if hasattr(llm, "_convert_chunk_to_thought_and_content"):
+                    content_chunk, thought_chunk = (
+                        llm._convert_chunk_to_thought_and_content(chunk)
+                    )
+                else:
+                    # Fallback for LLMs without thought/content separation.
+                    # R4-08: content가 리스트(복합 콘텐츠)면 텍스트 블록을 병합해
+                    # str+list TypeError를 방지한다 (hasattr 분기 구조는 유지).
+                    content_chunk = _coerce_chunk_content(
+                        chunk.content if hasattr(chunk, "content") else str(chunk)
+                    )
+                    thought_chunk = ""
+                if content_chunk and ttft_ms is None:
+                    ttft_ms = (time.perf_counter() - gen_start) * 1000
 
-            if thought_chunk:
-                full_thought += thought_chunk
-            if content_chunk:
-                full_response += content_chunk
-            if hasattr(chunk, "response_metadata") and chunk.response_metadata:
-                last_metadata = chunk.response_metadata
+                if thought_chunk:
+                    full_thought += thought_chunk
+                if content_chunk:
+                    full_response += content_chunk
+                if hasattr(chunk, "response_metadata") and chunk.response_metadata:
+                    last_metadata = chunk.response_metadata
 
-            # 원시 JSON 청크도 항상 UI로 전송한다.
-            # 구조화 모드(raw_json=True)에서는 파싱 전 원시 토큰을 먼저 띄우고,
-            # 파싱 후 final_answer로 대체되도록 한다.
-            if (content_chunk or thought_chunk) and writer is not None:
-                await _dispatch_event(
-                    "response_chunk",
-                    {
-                        "content": content_chunk,
-                        "thought": thought_chunk,
-                        "raw_json": use_structured_output,
-                    },
-                    writer=writer,
-                    config=config,
-                )
+                # 원시 JSON 청크도 항상 UI로 전송한다.
+                # 구조화 모드(raw_json=True)에서는 파싱 전 원시 토큰을 먼저 띄우고,
+                # 파싱 후 final_answer로 대체되도록 한다.
+                if (content_chunk or thought_chunk) and writer is not None:
+                    await _dispatch_event(
+                        "response_chunk",
+                        {
+                            "content": content_chunk,
+                            "thought": thought_chunk,
+                            "raw_json": use_structured_output,
+                        },
+                        writer=writer,
+                        config=config,
+                    )
 
     generate_ms = (time.perf_counter() - gen_start) * 1000
     logger.info(
@@ -2099,7 +2120,9 @@ async def verify_answer(
         human_msg = HumanMessage(content=verify_prompt)
 
         async with ModelManager.inference_session():
-            response = await llm.ainvoke([sys_msg, human_msg], config=config)
+            coordinator = get_resource_manager()
+            async with coordinator.use_llm(model_name=DEFAULT_OLLAMA_MODEL):
+                response = await llm.ainvoke([sys_msg, human_msg], config=config)
 
         import json
 

@@ -114,10 +114,14 @@ class SemanticChunkerEmbeddingsMixin:
                 batch_indices = missing_indices[b_idx : b_idx + len(batch)]
 
                 try:
-                    # [최적화] 동기 임베딩 생성을 비동기 스레드로 분리
-                    batch_vecs = await asyncio.to_thread(
-                        self.embedder.embed_documents, batch
-                    )
+                    # [최적화] 동기 임베딩 생성을 비동기 스레드로 분리 (embed 동안 모델 pin)
+                    from core.resource_manager import get_resource_manager
+
+                    coordinator = get_resource_manager()
+                    async with coordinator.use_embedder(embedder=self.embedder):
+                        batch_vecs = await asyncio.to_thread(
+                            self.embedder.embed_documents, batch
+                        )
 
                     for batch_text, vec in zip(batch, batch_vecs, strict=False):
                         vec_np = np.array(vec, dtype="float32")
@@ -205,7 +209,13 @@ class SemanticChunkerEmbeddingsMixin:
         """차원 불일치/None 캐시 벡터에 대해 해당 텍스트를 재임베딩하여 복구합니다."""
         norm_text = " ".join(text.split())
         try:
-            vecs = await asyncio.to_thread(self.embedder.embed_documents, [norm_text])
+            from core.resource_manager import get_resource_manager
+
+            coordinator = get_resource_manager()
+            async with coordinator.use_embedder(embedder=self.embedder):
+                vecs = await asyncio.to_thread(
+                    self.embedder.embed_documents, [norm_text]
+                )
         except Exception as e:
             raise ValueError(f"[Chunker] 캐시 벡터 복구 재임베딩 실패: {e}") from e
         if not vecs:

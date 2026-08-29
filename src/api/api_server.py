@@ -460,11 +460,16 @@ async def upload_document(
 
         # [중요] RAGSystem 클래스를 통해 세션 격리 보장
         rag_sys = RAGSystem(session_id=session_id)
-        msg, cache_used = await rag_sys.build_pipeline(
-            file_path=str(persisted_path),
-            file_name=file.filename,
-            embedder=embedder,
-        )
+        # [수정] 빌드 전체 동안 embedder 를 pin 하여 모델 축출 use-after-free 방지.
+        # 명시적 model_name 으로 획득+pin (key_for_object 역산 의존 제거).
+        async with get_resource_manager().use_embedder(
+            model_name=embedding_model or DEFAULT_EMBEDDING_MODEL
+        ):
+            msg, cache_used = await rag_sys.build_pipeline(
+                file_path=str(persisted_path),
+                file_name=file.filename,
+                embedder=embedder,
+            )
 
         SessionManager.set(
             "last_uploaded_file_name", file.filename, session_id=session_id

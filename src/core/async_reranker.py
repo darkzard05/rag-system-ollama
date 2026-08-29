@@ -100,7 +100,11 @@ class AsyncSemanticReranker:
             self._query_emb_cache.move_to_end(query)
             return cached
 
-        vec = await asyncio.to_thread(self.embedder.embed_query, query)
+        from core.resource_manager import get_resource_manager
+
+        coordinator = get_resource_manager()
+        async with coordinator.use_embedder(embedder=self.embedder):
+            vec = await asyncio.to_thread(self.embedder.embed_query, query)
         vec_np = np.array(vec, dtype="float32")
         self._query_emb_cache[query] = vec_np
         self._query_emb_cache.move_to_end(query)
@@ -135,11 +139,15 @@ class AsyncSemanticReranker:
             # [R3b-06] batch_size 단위로 분할해 embed_documents 호출 — 후보 풀 확대 시
             # 단일 대형 배열 요청(Ollama /api/embed 한도) 회귀를 방지한다.
             embedded: list[list[float]] = []
+            from core.resource_manager import get_resource_manager
+
+            coordinator = get_resource_manager()
             for start in range(0, len(texts), self.batch_size):
                 batch = texts[start : start + self.batch_size]
-                embedded.extend(
-                    await asyncio.to_thread(self.embedder.embed_documents, batch)
-                )
+                async with coordinator.use_embedder(embedder=self.embedder):
+                    embedded.extend(
+                        await asyncio.to_thread(self.embedder.embed_documents, batch)
+                    )
             for idx, vec in zip(indices_needing_emb, embedded, strict=False):
                 vec_np = np.array(vec, dtype="float32")
                 vecs[idx] = vec_np
@@ -194,8 +202,10 @@ class AsyncCrossEncoderReranker:
             from flashrank import RerankRequest
 
             from core.model_loader import ModelManager
+            from core.resource_manager import get_resource_manager
 
             ranker = await ModelManager.get_flashranker()
+            coordinator = get_resource_manager()
             request = RerankRequest(
                 query=query,
                 passages=[
@@ -204,7 +214,8 @@ class AsyncCrossEncoderReranker:
                 ],
             )
             # (2) 로드/추론 실패 → 폴백 (재시도 정책은 회로 차단기가 담당)
-            results = await asyncio.to_thread(ranker.rerank, request)
+            async with coordinator.use_flashranker(ranker=ranker):
+                results = await asyncio.to_thread(ranker.rerank, request)
         except (ImportError, ModuleNotFoundError) as e:
             logger.error(
                 f"[RERANK] FlashRank 의존성 부재 ({e}) — semantic 폴백 고정",

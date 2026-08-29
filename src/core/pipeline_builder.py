@@ -22,6 +22,7 @@ from common.config import (
     DEFAULT_EMBEDDING_MODEL,
     DEFAULT_OLLAMA_MODEL,
     ENABLE_VECTOR_CACHE,
+    RERANKER_MODEL_NAME,
     RETRIEVER_CONFIG,
 )
 from common.exceptions import EmptyPDFError, InsufficientChunksError, VectorStoreError
@@ -63,21 +64,29 @@ async def _preload_model() -> None:
     try:
         from core.model_loader import ModelManager
 
+        coordinator = get_resource_manager()
+
         # 1) 임베더 워밍 — 첫 쿼리 시 임베딩 모델 콜드 스타트(~10s) 방지.
         # embed_query는 블로킹 HTTP 호출이므로 to_thread로 실행해 이벤트 루프를 막지 않습니다.
-        embedder = await ModelManager.get_embedder(DEFAULT_EMBEDDING_MODEL)
-        await asyncio.to_thread(embedder.embed_query, "warmup")
+        # 사용 기간 동안 use_embedder CM 으로 pin 하여 퇴출에 의한 use-after-free 방지.
+        async with coordinator.use_embedder(model_name=DEFAULT_EMBEDDING_MODEL):
+            embedder = await ModelManager.get_embedder(DEFAULT_EMBEDDING_MODEL)
+            await asyncio.to_thread(embedder.embed_query, "warmup")
         logger.info("[RAG] [PRELOAD] 임베딩 워밍 완료")
 
         # 2) FlashRank 워밍 — 첫 쿼리 시 리랭커 lazy 로드(~10s) 방지.
-        await ModelManager.get_flashranker()
+        # 획득 기간 동안 use_flashranker CM 으로 pin.
+        async with coordinator.use_flashranker(model_name=RERANKER_MODEL_NAME):
+            await ModelManager.get_flashranker()
         logger.info("[RAG] [PRELOAD] FlashRank 워밍 완료")
 
         # 3) LLM 프리로드 — 클라이언트 생성만으로는 Ollama 콜드 모델 로드가 첫 쿼리
         # 시점까지 지연되므로, 실질 워밍 추론을 1회 실행해 콜드 스타트를 선행합니다.
         # invoke는 블로킹 HTTP 호출이므로 to_thread로 실행해 이벤트 루프를 막지 않습니다.
-        llm = await ModelManager.get_llm(DEFAULT_OLLAMA_MODEL)
-        await asyncio.to_thread(llm.invoke, "warmup")
+        # 사용 기간 동안 use_llm CM 으로 pin 하여 퇴출에 의한 use-after-free 방지.
+        async with coordinator.use_llm(model_name=DEFAULT_OLLAMA_MODEL):
+            llm = await ModelManager.get_llm(DEFAULT_OLLAMA_MODEL)
+            await asyncio.to_thread(llm.invoke, "warmup")
         logger.info("[RAG] [PRELOAD] LLM 워밍 추론 완료")
         logger.info(f"[RAG] [PRELOAD] 모델 프리로드 완료: {DEFAULT_OLLAMA_MODEL}")
     except Exception:

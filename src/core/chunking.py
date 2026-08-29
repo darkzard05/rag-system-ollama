@@ -125,9 +125,13 @@ async def _embed_documents_chunks(
     chunks: list[Document], embedder: Embeddings
 ) -> list[np.ndarray]:
     """Generate embeddings for document chunks asynchronously (CPU-offloaded)."""
-    raw_vectors = await asyncio.to_thread(
-        embedder.embed_documents, [d.page_content for d in chunks]
-    )
+    from core.resource_manager import get_resource_manager
+
+    coordinator = get_resource_manager()
+    async with coordinator.use_embedder(embedder=embedder):
+        raw_vectors = await asyncio.to_thread(
+            embedder.embed_documents, [d.page_content for d in chunks]
+        )
     return [np.array(v) for v in raw_vectors]
 
 

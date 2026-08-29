@@ -306,15 +306,19 @@ async def _warmup_models() -> None:
     - 모델 로드/쿼리 경로는 건드리지 않고 프리웜 전용 throwaway 토큰만 소비.
     """
     from common.config import DEFAULT_OLLAMA_MODEL
+    from core.resource_manager import get_resource_manager
 
-    llm = await ModelManager.get_llm(DEFAULT_OLLAMA_MODEL)
-    embedder = await ModelManager.get_embedder(None)
+    coordinator = get_resource_manager()
 
     # Throwaway 토큰: 임베더 1회, LLM minimal 스트리밍 → 즉시 중단.
-    await embedder.aembed_query("warmup")
+    async with coordinator.use_embedder(model_name=DEFAULT_EMBEDDING_MODEL):
+        embedder = await ModelManager.get_embedder(None)
+        await embedder.aembed_query("warmup")
 
-    async for _ in llm.astream("warmup"):
-        break
+    async with coordinator.use_llm(model_name=DEFAULT_OLLAMA_MODEL):
+        llm = await ModelManager.get_llm(DEFAULT_OLLAMA_MODEL)
+        async for _ in llm.astream("warmup"):
+            break
 
     logger.info("[WARMUP] LLM+임베더 프리웜 완료")
 

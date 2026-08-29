@@ -66,19 +66,44 @@ class BaseResourcePool(Generic[T]):
         self.item_limit = item_limit
         self.byte_limit = byte_limit
         self._pool: OrderedDict[str, T] = OrderedDict()
-        self._pinned_keys: set[str] = set()
+        self._pinned_keys: dict[str, int] = {}
         self._current_bytes = 0
         self._lock = threading.Lock()
 
     def pin(self, key: str):
-        """리소스가 사용 중임을 표시하여 퇴출을 방지합니다."""
+        """리소스가 사용 중임을 표시하여 퇴출을 방지합니다 (참조 카운트)."""
         with self._lock:
-            self._pinned_keys.add(key)
+            self._pinned_keys[key] = self._pinned_keys.get(key, 0) + 1
 
     def unpin(self, key: str):
-        """리소스 사용 완료를 표시하여 퇴출 가능하게 합니다."""
+        """리소스 사용 완료를 표시하여 퇴출 가능하게 합니다 (참조 카운트)."""
         with self._lock:
-            self._pinned_keys.discard(key)
+            count = self._pinned_keys.get(key, 0) - 1
+            if count <= 0:
+                self._pinned_keys.pop(key, None)
+            else:
+                self._pinned_keys[key] = count
+
+    def is_pinned(self, key: str) -> bool:
+        """해당 키가 현재 사용 중(pin 카운트 > 0)인지 반환합니다."""
+        with self._lock:
+            return self._pinned_keys.get(key, 0) > 0
+
+    def key_for_object(self, obj: Any) -> str:
+        """풀에 저장된 객체에서 역산한 키를 반환합니다.
+
+        동일성(identity) 매칭을 사용합니다 (모델/리트리버는 풀 내 싱글톤).
+        객체가 풀에 없으면 KeyError — 호출부가 잘못된/이미 퇴출된 객체를
+        전달한 경우이며, DEFAULT 키로 silently 폴백해선 안 됩니다.
+        """
+        with self._lock:
+            for k, v in self._pool.items():
+                if v is obj:
+                    return k
+            raise KeyError(
+                f"Object {obj!r} is not present in pool '{self.name}'; "
+                "cannot derive pin key (it may have been evicted)."
+            )
 
     def _evict_one_locked(self) -> bool:
         """가장 오래된 unpinned 리소스를 하나 퇴출합니다 (호출자가 _lock 보유 가정).
@@ -584,6 +609,67 @@ class ResourceCoordinator:
             finally:
                 self._in_flight.discard(key)
 
+    async def get_or_pin(
+        self,
+        pool: BaseResourcePool[Any],
+        key: str,
+        build_fn: Callable[..., Any] | None = None,
+        *args: Any,
+        **kwargs: Any,
+    ) -> tuple[Any, str]:
+        """Acquire + pin atomically (fixes use-after-free eviction race).
+
+        Must pin inside the pool's ``_lock`` critical section right after the
+        object is fetched/inserted, so no concurrent ``check_vram_pressure`` can
+        evict the key in the gap between acquire and a separate caller-side pin.
+        Returns ``(resource, key)``; caller must ``unpin(key)`` when done.
+        """
+        if pool is self.models:
+            await self.models.check_vram_pressure()
+
+        lock = self._get_build_lock(key)
+        async with lock:
+            self._in_flight.add(key)
+            try:
+                self._build_call_counter += 1
+                if self._build_call_counter >= 50:
+                    self._build_call_counter = 0
+                    self._cleanup_build_locks()
+
+                self._check_build_circuit(key)
+
+                res = pool.get(key)
+                if res is not None:
+                    pool.pin(key)
+                    return res, key
+
+                if pool is self.retrievers:
+                    await self.retrievers.check_memory_pressure()
+
+                if build_fn is None:
+                    raise ValueError(
+                        f"Resource '{key}' not found in {pool.name} and no build_fn provided."
+                    )
+
+                try:
+                    if asyncio.iscoroutinefunction(build_fn):
+                        res = await build_fn(*args, **kwargs)
+                    else:
+                        res = await asyncio.to_thread(build_fn, *args, **kwargs)
+                except Exception:
+                    self._record_build_failure(key)
+                    raise
+                self._build_failures.pop(key, None)
+                # put() already holds _lock internally; pin() also acquires it,
+                # so do NOT wrap pin in a second `with pool._lock` (non-reentrant
+                # threading.Lock would deadlock). Atomicity is preserved: this
+                # coroutine runs put() then pin() with no await in between.
+                await pool.put(key, res)
+                pool.pin(key)
+                return res, key
+            finally:
+                self._in_flight.discard(key)
+
     async def get_llm(self, model_name: str, **kwargs) -> Any:
         from core.model_loader import load_llm
 
@@ -659,6 +745,65 @@ class ResourceCoordinator:
         return await self.get_or_build(
             self.models, f"flashrank_{target}", _build, target
         )
+
+    # --- 사용부 컨텍스트 매니저: get_or_pin 이 원자 획득+pin, CM 은 unpin 만. ---
+    # 풀 객체를 이미 가진 호출부는 embedder=/ranker= 전달(key_for_object 역산,
+    # 풀 밖 객체면 KeyError). 아니면 model_name 으로 획득.
+
+    @asynccontextmanager
+    async def use_embedder(
+        self, model_name: str | None = None, embedder: Any | None = None
+    ):
+        if embedder is not None:
+            key = self.models.key_for_object(embedder)
+            self.models.pin(key)
+            emb = embedder
+        else:
+            from common.config import DEFAULT_EMBEDDING_MODEL
+            from core.model_loader import load_embedding_model
+
+            name = model_name or DEFAULT_EMBEDDING_MODEL
+            emb, key = await self.get_or_pin(
+                self.models, name, load_embedding_model, name
+            )
+        try:
+            yield emb
+        finally:
+            self.models.unpin(key)
+
+    @asynccontextmanager
+    async def use_llm(self, model_name: str, **kwargs):
+        key = f"llm_{model_name}"
+        from core.model_loader import load_llm
+
+        llm, _ = await self.get_or_pin(self.models, key, load_llm, model_name, **kwargs)
+        try:
+            yield llm
+        finally:
+            self.models.unpin(key)
+
+    @asynccontextmanager
+    async def use_flashranker(
+        self, model_name: str | None = None, ranker: Any | None = None
+    ):
+        target = model_name or RERANKER_MODEL_NAME
+        key = f"flashrank_{target}"
+        if ranker is not None:
+            k2 = self.models.key_for_object(ranker)
+            self.models.pin(k2)
+            rk = ranker
+        else:
+
+            def _build(name):
+                from flashrank import Ranker
+
+                return Ranker(model_name=name, cache_dir=MODEL_CACHE_DIR)
+
+            rk, k2 = await self.get_or_pin(self.models, key, _build, target)
+        try:
+            yield rk
+        finally:
+            self.models.unpin(k2)
 
     async def get_retrievers(
         self,
