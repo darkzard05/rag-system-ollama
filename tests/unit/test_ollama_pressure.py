@@ -57,11 +57,10 @@ async def test_baseline_no_cuda_no_eviction(monkeypatch):
     """torch.cuda.is_available()=False + 플래그 ON + Ollama 여도,
     호스트 RAM 압력이 없으면 퇴출 안 함 — 수정 전 dead-code 계약."""
     _patch_backend(monkeypatch, ollama=True)
-    monkeypatch.setattr(config_mod, "ENABLE_OLLAMA_PRESSURE_FALLBACK", True)
     with (
         patch("torch.cuda.is_available", return_value=False),
-        patch("common.system_pressure.host_pressure_exceeded", return_value=False),
-        patch("common.system_pressure.ollama_backend_active", return_value=True),
+        patch("core.resource_manager._host_pressure_exceeded", return_value=False),
+        patch("core.resource_manager._ollama_backend_active", return_value=True),
     ):
         pool = _make_pool()
         result = await pool.check_vram_pressure()
@@ -77,11 +76,11 @@ async def test_baseline_no_cuda_no_eviction(monkeypatch):
 async def test_ollama_fallback_fires_eviction_at_92pct(monkeypatch):
     """torch.cuda=False + RAM 92% + 플래그 ON + Ollama → True 및 _evict_one 호출."""
     _patch_backend(monkeypatch, ollama=True)
-    monkeypatch.setattr(config_mod, "ENABLE_OLLAMA_PRESSURE_FALLBACK", True)
+    monkeypatch.setattr("core.resource_manager.ENABLE_OLLAMA_PRESSURE_FALLBACK", True)
     with (
         patch("torch.cuda.is_available", return_value=False),
-        patch("common.system_pressure.host_pressure_exceeded", return_value=True),
-        patch("common.system_pressure.ollama_backend_active", return_value=True),
+        patch("core.resource_manager._host_pressure_exceeded", return_value=True),
+        patch("core.resource_manager._ollama_backend_active", return_value=True),
     ):
         pool = _make_pool()
         with patch.object(pool, "_evict_one", new=MagicMock()) as evict:
@@ -95,11 +94,10 @@ async def test_ollama_fallback_fires_eviction_at_92pct(monkeypatch):
 async def test_ollama_fallback_no_eviction_at_70pct(monkeypatch):
     """torch.cuda=False + RAM 70% + 플래그 ON + Ollama → False (미만)."""
     _patch_backend(monkeypatch, ollama=True)
-    monkeypatch.setattr(config_mod, "ENABLE_OLLAMA_PRESSURE_FALLBACK", True)
     with (
         patch("torch.cuda.is_available", return_value=False),
-        patch("common.system_pressure.host_pressure_exceeded", return_value=False),
-        patch("common.system_pressure.ollama_backend_active", return_value=True),
+        patch("core.resource_manager._host_pressure_exceeded", return_value=False),
+        patch("core.resource_manager._ollama_backend_active", return_value=True),
     ):
         pool = _make_pool()
         result = await pool.check_vram_pressure()
@@ -117,8 +115,8 @@ async def test_flag_off_disables_fallback(monkeypatch):
     _patch_backend(monkeypatch, ollama=True)
     with (
         patch("torch.cuda.is_available", return_value=False),
-        patch("common.system_pressure.host_pressure_exceeded", return_value=True),
-        patch("common.system_pressure.ollama_backend_active", return_value=True),
+        patch("core.resource_manager._host_pressure_exceeded", return_value=True),
+        patch("core.resource_manager._ollama_backend_active", return_value=True),
         patch("core.resource_manager.ENABLE_OLLAMA_PRESSURE_FALLBACK", False),
     ):
         pool = _make_pool()
@@ -132,8 +130,8 @@ async def test_hf_backend_not_triggered_by_host_ram(monkeypatch):
     _patch_backend(monkeypatch, ollama=False)
     with (
         patch("torch.cuda.is_available", return_value=False),
-        patch("common.system_pressure.host_pressure_exceeded", return_value=True),
-        patch("common.system_pressure.ollama_backend_active", return_value=False),
+        patch("core.resource_manager._host_pressure_exceeded", return_value=True),
+        patch("core.resource_manager._ollama_backend_active", return_value=False),
         patch("core.resource_manager.ENABLE_OLLAMA_PRESSURE_FALLBACK", True),
     ):
         pool = _make_pool()
@@ -150,11 +148,11 @@ async def test_hf_backend_not_triggered_by_host_ram(monkeypatch):
 async def test_model_manager_ollama_fallback_fires(monkeypatch):
     """ModelManager 도 Ollama + RAM>90% + 플래그 ON 에서 _evict_oldest_model 호출."""
     _patch_backend(monkeypatch, ollama=True)
-    monkeypatch.setattr(config_mod, "ENABLE_OLLAMA_PRESSURE_FALLBACK", True)
+    monkeypatch.setattr("core.model_loader.ENABLE_OLLAMA_PRESSURE_FALLBACK", True)
     with (
         patch("torch.cuda.is_available", return_value=False),
-        patch("common.system_pressure.host_pressure_exceeded", return_value=True),
-        patch("common.system_pressure.ollama_backend_active", return_value=True),
+        patch("core.model_loader._host_pressure_exceeded", return_value=True),
+        patch("core.model_loader._ollama_backend_active", return_value=True),
         patch.object(ModelManager, "_evict_oldest_model", new=MagicMock()) as evict,
     ):
         evict.side_effect = _async_none
@@ -169,8 +167,8 @@ async def test_model_manager_flag_off_no_fallback(monkeypatch):
     _patch_backend(monkeypatch, ollama=True)
     with (
         patch("torch.cuda.is_available", return_value=False),
-        patch("common.system_pressure.host_pressure_exceeded", return_value=True),
-        patch("common.system_pressure.ollama_backend_active", return_value=True),
+        patch("core.model_loader._host_pressure_exceeded", return_value=True),
+        patch("core.model_loader._ollama_backend_active", return_value=True),
         patch("core.model_loader.ENABLE_OLLAMA_PRESSURE_FALLBACK", False),
     ):
         result = await ModelManager._check_memory_pressure()

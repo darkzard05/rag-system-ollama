@@ -52,8 +52,6 @@ from common.config import (
 from common.exceptions import EmbeddingModelError
 from common.system_pressure import (
     eviction_allowed,
-    host_pressure_exceeded,
-    ollama_backend_active,
 )
 from services.monitoring.performance_monitor import (
     OperationType,
@@ -68,6 +66,11 @@ def _get_torch():
     if _torch is None:
         try:
             import torch as _torch_module
+
+            # 서브모듈을 명시적으로 로드해야 테스트의
+            # patch("torch.cuda.is_available") 가 일관되게 적용된다
+            # (lazy 로딩 시 패치가 누수됨).
+            import torch.cuda  # noqa: F401
 
             _torch = _torch_module
         except ImportError:
@@ -96,12 +99,25 @@ logger = logging.getLogger(__name__)
 def _host_pressure_exceeded() -> bool:
     """동적 참조로 호스트 RAM 압력을 확인합니다.
 
-    모듈 레벨 import 가 아닌 런타임 조회를 쓰므로, 테스트가
-    ``common.system_pressure.host_pressure_exceeded`` 를 패치해 동작을 격리할 수
-    있습니다 (로컬 import 는 패치 무효화).
+    ``sys.modules`` 에서 모듈을 조회해 호출하므로, ``common.system_pressure`` 와
+    ``src.common.system_pressure`` 별칭이 다른 객체로 매핑된 환경(conftest)에서도
+    테스트 패치가 일관되게 적용됩니다 (로컬 import 는 패치 무효화).
     """
+    import common.system_pressure as sp
 
-    return host_pressure_exceeded()
+    return sp.host_pressure_exceeded()
+
+
+def _ollama_backend_active() -> bool:
+    """동적 참조로 Ollama 백엔드 여부를 확인합니다.
+
+    ``sys.modules`` 에서 모듈을 조회해 호출하므로, ``common.system_pressure`` 와
+    ``src.common.system_pressure`` 별칭이 다른 객체로 매핑된 환경(conftest)에서도
+    테스트 패치가 일관되게 적용됩니다 (로컬 import 는 패치 무효화).
+    """
+    import common.system_pressure as sp
+
+    return sp.ollama_backend_active()
 
 
 class ModelManager:
@@ -195,8 +211,10 @@ class ModelManager:
     @classmethod
     async def _check_memory_pressure(cls):
         """현재 VRAM/RAM 사용량을 확인하고 압박 시 가장 오래된 모델을 방출합니다."""
-        # 동적 참조: 테스트가 common.config.ENABLE_OLLAMA_PRESSURE_FALLBACK 를
-        # monkeypatch 해 동작을 격리할 수 있도록 (모듈 레벨 import 는 패치 무효화).
+        # ENABLE_OLLAMA_PRESSURE_FALLBACK 는 모듈 레벨 import 를 사용하므로,
+        # 테스트는 core.model_loader.ENABLE_OLLAMA_PRESSURE_FALLBACK 를 패치해
+        # 동작을 격리할 수 있다 (runtime 재import 는 conftest 별칭으로 인해
+        # 서로 다른 모듈 객체를 볼 수 있어 패치가 누수된다).
 
         # 1. GPU VRAM 체크 (사용 가능한 경우)
         _torch = _get_torch()
@@ -224,7 +242,7 @@ class ModelManager:
         # 2. Ollama 압력 폴백 (torch.cuda 미사용 기본 배포)
         if (
             ENABLE_OLLAMA_PRESSURE_FALLBACK
-            and ollama_backend_active()
+            and _ollama_backend_active()
             and _host_pressure_exceeded()
         ):
             if not eviction_allowed("model_manager"):

@@ -33,7 +33,6 @@ from common.exceptions import LLMInferenceError, ResourceBuildError
 from common.system_pressure import (
     eviction_allowed,
     host_pressure_exceeded,
-    ollama_backend_active,
 )
 
 T = TypeVar("T")
@@ -52,13 +51,25 @@ logger = logging.getLogger(__name__)
 def _host_pressure_exceeded() -> bool:
     """동적 참조로 호스트 RAM 압력을 확인합니다.
 
-    모듈 레벨 import 가 아닌 런타임 조회를 쓰므로, 테스트가
-    ``common.system_pressure.host_pressure_exceeded`` 를 패치해 동작을 격리할 수
-    있습니다 (로컬 import 는 패치 무효화).
+    ``sys.modules`` 에서 모듈을 조회해 호출하므로, ``common.system_pressure`` 와
+    ``src.common.system_pressure`` 별칭이 다른 객체로 매핑된 환경(conftest)에서도
+    테스트 패치가 일관되게 적용됩니다 (로컬 import 는 패치 무효화).
     """
-    from common.system_pressure import host_pressure_exceeded
+    import common.system_pressure as sp
 
-    return host_pressure_exceeded()
+    return sp.host_pressure_exceeded()
+
+
+def _ollama_backend_active() -> bool:
+    """동적 참조로 Ollama 백엔드 여부를 확인합니다.
+
+    ``sys.modules`` 에서 모듈을 조회해 호출하므로, ``common.system_pressure`` 와
+    ``src.common.system_pressure`` 별칭이 다른 객체로 매핑된 환경(conftest)에서도
+    테스트 패치가 일관되게 적용됩니다 (로컬 import 는 패치 무효화).
+    """
+    import common.system_pressure as sp
+
+    return sp.ollama_backend_active()
 
 
 # [PRESSURE] 퇴출 스로틀 상수 (초). 호스트 RAM 압력 기반 퇴출은 Ollama처럼 별도
@@ -223,11 +234,14 @@ class ModelPool(BaseResourcePool[Any]):
     """LLM 및 임베딩 모델 전용 풀. VRAM 압력을 감지하여 퇴출을 유도합니다."""
 
     async def check_vram_pressure(self) -> bool:
-        # 동적 참조: 테스트가 common.config.ENABLE_OLLAMA_PRESSURE_FALLBACK 를
-        # monkeypatch 해 동작을 격리할 수 있도록 (모듈 레벨 import 는 패치 무효화).
+        # ENABLE_OLLAMA_PRESSURE_FALLBACK 는 모듈 레벨 import 를 사용하므로,
+        # 테스트는 core.resource_manager.ENABLE_OLLAMA_PRESSURE_FALLBACK 를 패치해
+        # 동작을 격리할 수 있다 (runtime 재import 는 conftest 별칭으로 인해
+        # 서로 다른 모듈 객체를 볼 수 있어 패치가 누수된다).
 
         try:
             import torch
+            import torch.cuda
 
             if torch.cuda.is_available():
                 device = torch.cuda.current_device()
@@ -246,7 +260,7 @@ class ModelPool(BaseResourcePool[Any]):
 
         if (
             ENABLE_OLLAMA_PRESSURE_FALLBACK
-            and ollama_backend_active()
+            and _ollama_backend_active()
             and _host_pressure_exceeded()
         ):
             if not eviction_allowed(self.name):
