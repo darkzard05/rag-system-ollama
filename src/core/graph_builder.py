@@ -12,7 +12,7 @@ import re
 import threading
 import time
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, cast
 
 from langchain_core.callbacks.manager import adispatch_custom_event
 from langchain_core.documents import Document
@@ -627,8 +627,10 @@ class _GraphCache:
         재생성합니다 (``_loop is None`` 인 미바인딩 락은 같은 객체로 재사용).
         """
         if self._lock is None or (
-            self._lock._loop is not None
-            and self._lock._loop is not asyncio.get_event_loop()
+            # asyncio.Lock._loop is private; cast to Any to read the bound loop
+            # (None until first acquire). Recreate if bound to a different loop.
+            cast("Any", self._lock)._loop is not None
+            and cast("Any", self._lock)._loop is not asyncio.get_event_loop()
         ):
             self._lock = asyncio.Lock()
         return self._lock
