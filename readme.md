@@ -55,8 +55,8 @@
 ## 🛠️ Tech Stack
 <!-- TECH_STACK_START -->
 - **Streamlit**: 1.60.0
-- **LangChain**: 1.3.0+
-- **LangGraph**: 1.2.0+
+- **LangChain**: 1.3.0
+- **LangGraph**: 1.2.0
 - **PyMuPDF4LLM**: latest
 - **Ollama**: 0.6.1
 - **FastAPI**: 0.133.1
