@@ -76,12 +76,13 @@ def test_build_status_banner_lifecycle():
     sid = _app_session_id()
     assert not at.exception
 
-    # Phase 1 — analysis running. Seed a build_progress message exactly like
+    # Phase 1 — analysis running. Seed the session store exactly like
     # main.py's _bg_rebuild_task (main.py:203-213); the native renderer reads
-    # the message, not session keys.
+    # these session keys (chat.py:466-477), not the message dict. The added
+    # build_progress message mirrors main.py but is skipped in the timeline
+    # (chat.py:597-601).
     SessionManager.set("is_building_rag", True, sid)
     SessionManager.set("rebuild_status", "문서 분석 중...", sid)
-    SessionManager.set("status_logs", ["로그1", "로그2"], sid)
     SessionManager.add_message(
         "system",
         "📄 문서 분석 시작",
@@ -106,23 +107,27 @@ def test_build_status_banner_lifecycle():
     assert at.status[0].state != "error", at.status[0].state
     cancel_labels = [b.label for b in at.button]
     assert "Cancel Analysis" in cancel_labels, cancel_labels
-    logs_exp = next((e for e in at.expander if e.label == "Progress log"), None)
-    assert logs_exp is not None, [e.label for e in at.expander]
-    log_text = "".join(t.value for t in logs_exp.text)
-    assert "로그1" in log_text, log_text
-    assert "로그2" in log_text, log_text
+    # Current UI (chat.py:492-505): native st.status + st.progress + "% complete"
+    # caption; the legacy "Progress log" expander was removed in 139c3e1.
+    # NOTE: AppTest (1.60.0) exposes no `at.progress` element; the observable
+    # proof of the progress render is the "% complete" caption surfaced from
+    # inside the st.status container.
+    captions = " ".join(c.value for c in at.caption)
+    assert "0% complete" in captions, captions
+    assert not any(
+        e.label == "Progress log" or "진행 로그" in e.label for e in at.expander
+    ), [e.label for e in at.expander]
+    assert "로그1" not in captions, captions
+    assert "로그2" not in captions, captions
     # 구형 도크(expander)는 제거되어서는 안 됨 → 네이티브 st.status로만 표시
     assert not any("⏳" in e.label for e in at.expander), at.expander
     assert not at.exception
 
-    # Phase 2 — analysis finished: transition the build_progress message to
-    # done (pdf_processed flips; build flag cleared). The native st.status
-    # stays rendered in the "complete" state.
-    msgs = SessionManager.get_messages(session_id=sid)
-    bmsg = next(m for m in msgs if m.get("msg_type") == "build_progress")
-    bmsg["status"] = "분석 완료"
-    bmsg["progress"] = 100
-    bmsg["done"] = True
+    # Phase 2 — analysis finished: drive the done state via the SESSION keys
+    # the renderer actually reads (chat.py:466-477). The message-dict mutation
+    # was the pre-139c3e1 contract and is ignored today.
+    SessionManager.set("rebuild_done", True, sid)
+    SessionManager.set("rebuild_progress", 100, sid)
     SessionManager.set("is_building_rag", False, sid)
     SessionManager.set("pdf_processed", True, sid)
     at.run(timeout=_RUN_TIMEOUT)
