@@ -201,6 +201,84 @@ def test_cleanup_expired_sessions():
     assert sid_new in SessionManager._fallback_sessions
 
 
+def test_evict_stuck_generating_session_frees_graph_thread():
+    """Evicting a stuck (stale + generating) session must free its graph thread.
+
+    Regression: a broken generation left ``is_generating_answer`` stuck True
+    while ``last_accessed`` was not refreshed. Such sessions must be evicted and
+    their LangGraph checkpoint thread (keyed by session_id) released, otherwise
+    memory leaks for every dead stream.
+    """
+    stuck = "stuck_sid"
+    fresh = "fresh_sid"
+
+    SessionManager.init_session(stuck)
+    SessionManager.init_session(fresh)
+
+    now = time.time()
+    SessionManager._fallback_sessions[stuck]["is_generating_answer"] = True
+    SessionManager._fallback_sessions[stuck]["last_accessed"] = now - (
+        SessionManager.MAX_GENERATION_SECONDS + 100
+    )
+    SessionManager._fallback_sessions[fresh]["is_generating_answer"] = False
+    SessionManager._fallback_sessions[fresh]["last_accessed"] = now
+
+    with patch("core.graph_builder.delete_graph_thread") as mock_del_thread:
+        SessionManager._evict_oldest_session_locked()
+
+    assert stuck not in SessionManager._fallback_sessions
+    assert fresh in SessionManager._fallback_sessions
+    mock_del_thread.assert_called_once_with(stuck)
+
+
+def test_evict_protects_healthy_generating_session():
+    """A live (fresh) generation must never be killed; only idle sessions evict.
+
+    ``_evict_oldest_session_locked`` picks the session with the smallest
+    ``last_accessed``. The idle session is oldest, so it is evicted while the
+    actively streaming session (fresh ``last_accessed``) stays untouched.
+    """
+    gen = "gen_sid"
+    idle = "idle_sid"
+
+    SessionManager.init_session(gen)
+    SessionManager.init_session(idle)
+
+    now = time.time()
+    SessionManager._fallback_sessions[gen]["is_generating_answer"] = True
+    SessionManager._fallback_sessions[gen]["last_accessed"] = now
+    SessionManager._fallback_sessions[idle]["is_generating_answer"] = False
+    SessionManager._fallback_sessions[idle]["last_accessed"] = now - 5000
+
+    SessionManager._evict_oldest_session_locked()
+
+    assert gen in SessionManager._fallback_sessions
+    assert idle not in SessionManager._fallback_sessions
+
+
+def test_evict_no_deadlock_lock_held():
+    """Eviction must complete without deadlock while ``_map_lock`` is held.
+
+    The real caller invokes ``_evict_oldest_session_locked`` already holding
+    ``_map_lock``; if it re-acquires the same non-reentrant lock it would
+    deadlock. This test exercises that exact call shape.
+    """
+    SessionManager.init_session("default")
+    SessionManager.init_session("stuck")
+
+    now = time.time()
+    SessionManager._fallback_sessions["stuck"]["is_generating_answer"] = True
+    SessionManager._fallback_sessions["stuck"]["last_accessed"] = now - (
+        SessionManager.MAX_GENERATION_SECONDS + 100
+    )
+
+    with SessionManager._map_lock:
+        SessionManager._evict_oldest_session_locked()
+
+    assert "stuck" not in SessionManager._fallback_sessions
+    assert "default" in SessionManager._fallback_sessions
+
+
 # --- Error Handling & Edge Cases ---
 
 

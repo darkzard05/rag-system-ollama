@@ -116,6 +116,14 @@ class SessionManager:
     _session_locks: dict[str, threading.Lock] = {}
     _map_lock = threading.Lock()
 
+    # 생성 중인 세션을 퇴출 대상에서 제외할 최대 시간(초).
+    # 합법적인 생성/스트리밍은 이보다 짧으므로, 이 시간보다 오래 last_accessed가
+    # 갱신되지 않은 채 is_generating_answer가 True인 세션은 끊긴(tab close/재시작)
+    # 세션으로 간주하고 퇴출합니다.
+    MAX_GENERATION_SECONDS = (
+        1800  # 30 min; > any legit generation so live streams survive
+    )
+
     # Pluggable UI-sync adapter. When installed (via set_ui_sync), session state
     # is mirrored into the live UI (e.g. Streamlit) without core importing any
     # UI framework. None means "no UI layer attached" -> core uses only the
@@ -223,20 +231,25 @@ class SessionManager:
         """
         oldest_sid: str | None = None
         oldest_ts = float("inf")
+        now = time.time()
         for candidate, state in cls._fallback_sessions.items():
             if candidate == "default":
                 continue
-            if state.get("is_generating_answer"):
+            # 생성 중인 세션은 last_accessed가 갱신되는 동안(=활성 스트리밍)만
+            # 보호한다. 끊긴 세션은 is_generating_answer가 True로 굳어 있어도
+            # MAX_GENERATION_SECONDS 이상 유휴 상태이므로 퇴출 대상에 포함한다.
+            if (
+                state.get("is_generating_answer")
+                and (now - state.get("last_accessed", 0.0))
+                <= cls.MAX_GENERATION_SECONDS
+            ):
                 continue
             ts = state.get("last_accessed", 0)
             if ts < oldest_ts:
                 oldest_ts = ts
                 oldest_sid = candidate
         if oldest_sid is not None:
-            del cls._fallback_sessions[oldest_sid]
-            lock = cls._session_locks.get(oldest_sid)
-            if lock is None or not lock.locked():
-                cls._session_locks.pop(oldest_sid, None)
+            cls._delete_session_locked(oldest_sid)
             logger.warning(
                 f"[SESSION] 활성 세션 상한({MAX_ACTIVE_SESSIONS}) 도달, "
                 f"가장 오래된 세션 퇴출: {oldest_sid}"
@@ -584,13 +597,72 @@ class SessionManager:
             return False
 
     @classmethod
+    def _delete_session_locked(
+        cls, session_id: str, pdf_path: str | None = None
+    ) -> str | None:
+        """_map_lock 보유 상태에서 세션을 정리합니다.
+
+        호출자가 _map_lock을 이미 잡고 있어야 하며, 이 메서드는 락을 획득하지
+        않습니다. 무거운 참조 해제, 세션 딕셔너리/락 제거, 그래프 체크포인터
+        thread 정리를 수행합니다. 물리적 PDF 파일 삭제는 락 외부에서 처리하도록
+        pdf_path를 반환합니다(호출자가 락 해제 후 삭제).
+        """
+        if session_id not in cls._fallback_sessions:
+            return None
+        state = cls._fallback_sessions[session_id]
+
+        # 물리적 파일 경로만 수집(실제 삭제는 락 해제 후). 호출자가 이미 pdf_path를
+        # 넘겼으면(퇴출 경로) 그 값을 우선 사용한다.
+        if pdf_path is None:
+            pdf_path = state.get("pdf_file_path")
+            if pdf_path and state.get("pdf_library_path") == pdf_path:
+                pdf_path = (
+                    None  # PDF 라이브러리 파일은 보존 정책으로 관리 (세션 정리와 분리)
+                )
+
+        # 무거운 객체 명시적 참조 해제 (메모리 누수 방지)
+        heavy_keys = [
+            "rag_engine",
+            "llm",
+            "embedder",
+            "active_faiss_retriever",
+            "active_bm25_retriever",
+        ]
+        for k in heavy_keys:
+            if k in state:
+                state[k] = None
+
+        del cls._fallback_sessions[session_id]
+
+        if session_id in cls._session_locks:
+            # 잡히지 않은 락만 제거. 스트리밍 스레드가 잡고 있는 락을
+            # pop하면 이후 동일 sid에 새 락이 생성되어 상호배제가 깨집니다.
+            lock = cls._session_locks[session_id]
+            if not lock.locked():
+                del cls._session_locks[session_id]
+
+        logger.info(f"[SESSION] 세션 삭제 완료: {session_id}")
+
+        # R1a-02/R1b-02: 그래프 체크포인터(InMemorySaver)의 해당 thread도 함께 제거해
+        # 세션 삭제 후에도 체크포인트가 메모리에 잔존하는 누수를 차단한다.
+        # thread_id는 pipeline_builder에서 session_id와 동일하게 주입된다.
+        try:
+            from core.graph_builder import delete_graph_thread
+
+            delete_graph_thread(session_id)
+        except Exception as e:
+            logger.warning(f"[SESSION] 체크포인터 thread 정리 실패 ({session_id}): {e}")
+
+        # 물리적 PDF 삭제는 호출자가 락 해제 후 수행하도록 경로만 반환.
+        return pdf_path
+
+    @classmethod
     def delete_session(cls, session_id: str) -> bool:
         """세션을 삭제하고 무거운 객체의 참조를 명시적으로 해제합니다.
 
         물리적 파일 삭제는 _map_lock 밖에서 수행하여, Windows 파일 락
         백오프(sleep) 동안 전역 세션 접근이 블로킹되지 않도록 합니다.
         """
-        pdf_path = None
         with cls._map_lock:
             if session_id not in cls._fallback_sessions:
                 return False
@@ -603,41 +675,12 @@ class SessionManager:
                     None  # PDF 라이브러리 파일은 보존 정책으로 관리 (세션 정리와 분리)
                 )
 
-            # 무거운 객체 명시적 참조 해제 (메모리 누수 방지)
-            heavy_keys = [
-                "rag_engine",
-                "llm",
-                "embedder",
-                "active_faiss_retriever",
-                "active_bm25_retriever",
-            ]
-            for k in heavy_keys:
-                if k in state:
-                    state[k] = None
-
-            del cls._fallback_sessions[session_id]
-
-            if session_id in cls._session_locks:
-                # 잡히지 않은 락만 제거. 스트리밍 스레드가 잡고 있는 락을
-                # pop하면 이후 동일 sid에 새 락이 생성되어 상호배제가 깨집니다.
-                lock = cls._session_locks[session_id]
-                if not lock.locked():
-                    del cls._session_locks[session_id]
-
-            logger.info(f"[SESSION] 세션 삭제 완료: {session_id}")
-
+            # 락 보유 상태에서 무거운 참조/그래프 thread 정리 위임.
+            pdf_path = cls._delete_session_locked(session_id, pdf_path)
+        # 물리적 PDF 삭제는 _map_lock 밖에서 수행하여, Windows 파일 락
+        # 백오프(sleep) 동안 전역 세션 접근이 블로킹되지 않도록 합니다.
         if pdf_path:
             cls.safe_remove_file(pdf_path)
-
-        # R1a-02/R1b-02: 그래프 체크포인터(InMemorySaver)의 해당 thread도 함께 제거해
-        # 세션 삭제 후에도 체크포인트가 메모리에 잔존하는 누수를 차단한다.
-        # thread_id는 pipeline_builder에서 session_id와 동일하게 주입된다.
-        try:
-            from core.graph_builder import delete_graph_thread
-
-            delete_graph_thread(session_id)
-        except Exception as e:
-            logger.warning(f"[SESSION] 체크포인터 thread 정리 실패 ({session_id}): {e}")
         return True
 
     @classmethod
