@@ -161,6 +161,12 @@ class TestConcurrentAccess(unittest.TestCase):
             for future in as_completed(futures):
                 future.result()
 
+        # 300개 작업이 모두 반영되어야 한다: 읽기/쓰기 150회씩,
+        # 초기 set(0..9) 이후 쓰기 키(1,3,5,7,9)는 마지막 기록 값, 나머지는 초기 값 유지.
+        assert read_count[0] == 150, f"reads lost: {read_count[0]}"
+        assert write_count[0] == 150, f"writes lost: {write_count[0]}"
+        stored = [SessionManager.get(f"key_{i}", session_id=sid) for i in range(10)]
+        assert all(v is not None for v in stored), f"missing keys: {stored}"
         logger.info(
             "Mixed operations verified (%d reads, %d writes)",
             read_count[0],
@@ -227,6 +233,9 @@ class TestRaceConditions(unittest.TestCase):
 
         # Note: get+set은 원자적이지 않으므로 최종 값은 100보다 작을 수 있음
         final_count = SessionManager.get("counter", 0, session_id=sid)
+        # 레이스로 인해 일부 증가분이 유실될 수 있으나, 절대 100을 초과하거나
+        # 전부 유실(0)되어서는 안 된다.
+        assert 1 <= final_count <= 100, f"counter out of bounds: {final_count}"
         logger.info("Counter race condition test: final count = %d/100", final_count)
 
     def test_atomic_add_status_log(self):
