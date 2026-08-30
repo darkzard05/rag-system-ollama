@@ -424,7 +424,12 @@ async def _bg_rebuild_task(
             error=error_msg,
             session_id=session_id,
         )
-        SessionManager.add_message("assistant", error_msg, session_id=session_id)
+        SessionManager.add_message(
+            "assistant",
+            error_msg,
+            msg_type="build_error",
+            session_id=session_id,
+        )
     finally:
         SessionManager.set("rebuild_done", True, session_id=session_id)
         SessionManager.set("is_building_rag", False, session_id=session_id)
@@ -460,7 +465,12 @@ async def _bg_update_qa_chain(session_id: str) -> None:
         error_msg = f"Failed to update the QA chain: {e}"
         logger.error(f"QA 업데이트 실패: {e}", exc_info=True)
         SessionManager.add_status_log(error_msg, session_id=session_id)
-        SessionManager.add_message("assistant", error_msg, session_id=session_id)
+        SessionManager.add_message(
+            "assistant",
+            error_msg,
+            msg_type="build_error",
+            session_id=session_id,
+        )
     finally:
         SessionManager.set("rag_build_complete_flag", True, session_id=session_id)
         SessionManager.set("is_swapping_model", False, session_id=session_id)
@@ -486,7 +496,12 @@ def _update_qa_chain(session_id: str | None = None) -> None:
         error_msg = f"Failed to update the QA chain: {e}"
         logger.error(f"QA 업데이트 실패: {e}", exc_info=True)
         SessionManager.add_status_log(error_msg, session_id=sid)
-        SessionManager.add_message("assistant", error_msg, session_id=sid)
+        SessionManager.add_message(
+            "assistant",
+            error_msg,
+            msg_type="build_error",
+            session_id=sid,
+        )
     finally:
         SessionManager.set("rag_build_complete_flag", True, session_id=sid)
 
@@ -504,7 +519,12 @@ def _post_upload_error(error_msg: str, session_id: str | None = None) -> None:
     sid = session_id or SessionManager.get_session_id()
     # error_msg는 이미 "❌ " 접두사를 포함하므로 중복해서 붙이지 않는다.
     SessionManager.add_status_log(error_msg, session_id=sid)
-    SessionManager.add_message("assistant", error_msg, session_id=sid)
+    SessionManager.add_message(
+        "assistant",
+        error_msg,
+        msg_type="build_error",
+        session_id=sid,
+    )
 
 
 def on_file_upload() -> None:
