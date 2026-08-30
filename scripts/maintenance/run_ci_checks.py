@@ -39,6 +39,10 @@ INTEGRATION_FILES = [
     "tests/integration/test_pdf_library_retention.py",
     "tests/integration/test_stream_error_isolation.py",
     "tests/integration/test_api_endpoints.py",
+    # Ollama 비의존 UI 렌더러 + 세션 동시성 가드 (이전 CI 누락분).
+    # test_chat_expander_verify_b.py: _render_build_progress_block의 유일한 가드.
+    "tests/integration/test_chat_expander_verify_b.py",
+    "tests/integration/test_thread_safety.py",
 ]
 
 # Must stay identical to ci.yml coverage gate.
@@ -78,6 +82,19 @@ def run_unit_with_coverage() -> bool:
     return _run(cmd, "unit+coverage")
 
 
+def run_scripts_import_sweep() -> bool:
+    # scripts/과 tests/는 pytest 컬렉션·ruff 제외 범위라 리팩터링으로 인한
+    # 끊긴 first-party 참조가 모든 기존 게이트에서 은닉된다. 이 스윕이 그 백스톱이다.
+    cmd = [
+        sys.executable,
+        "scripts/maintenance/check_imports.py",
+        "--paths",
+        "scripts",
+        "tests",
+    ]
+    return _run(cmd, "scripts-import-sweep")
+
+
 def main() -> int:
     # Ensure src is importable (CI sets PYTHONPATH=workspace/src; mimic it).
     os.environ["PYTHONPATH"] = (
@@ -85,6 +102,7 @@ def main() -> int:
     )
 
     passed = True
+    passed &= run_scripts_import_sweep()
     passed &= run_integration()
     # Run unit coverage regardless, but only report overall failure if either failed.
     passed &= run_unit_with_coverage()
