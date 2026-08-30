@@ -49,15 +49,26 @@ ignore = [
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
 pythonpath = ["src", "."]
+testpaths = ["tests"]
 markers = [
     "e2e: end-to-end browser tests requiring a running Streamlit app",
     "perf: performance/benchmark tests",
     "stability: resource/stability tests",
 ]
 filterwarnings = [
-    "ignore::DeprecationWarning",
-    "ignore::pytest.PytestDeprecationWarning",
-    "ignore::RuntimeWarning",
+    "ignore:pytest.PytestDeprecationWarning",
+    # 선별된 서드파티 경고만 억제 — 전역 DeprecationWarning/RuntimeWarning
+    # 블랭킷은 향후 의존성의 실제 deprecation을 은닉한다.
+    # 주의: StarletteDeprecationWarning은 UserWarning의 서브클래스다
+    # (DeprecationWarning가 아님).
+    "ignore:Using `httpx` with `starlette.testclient` is deprecated:UserWarning",
+    "ignore:`langchain-community` is being sunset.*:DeprecationWarning",
+    "ignore:.*allowed_objects.*jsonplus:DeprecationWarning",
+    "ignore:.*allowed_objects.*JsonPlusSerializer:DeprecationWarning",
+    # run_in_background_worker._with_session: 테스트에서 AsyncWorker.submit이
+    # mock될 때 생성된 코루틴이 소비되지 않아 GC 시점에 발생하는 테스트 전용
+    # 아티팩트(프로덕션에서는 전용 루프에서 await됨).
+    "ignore:coroutine 'run_in_background_worker.<locals>._with_session' was never awaited:RuntimeWarning",
 ]
 
 [tool.ruff.lint.isort]

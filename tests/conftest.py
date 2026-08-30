@@ -102,8 +102,19 @@ def session_context():
 
 @pytest.fixture(scope="session", autouse=True)
 def _disable_preload_in_tests():
-    """pytest-asyncio의 함수 스코프 루프 교체로 프리로드 태스크가 락을 잡고 좌초되는 데드락을 차단합니다."""
-    import core.pipeline_builder as pb
+    """프리로드 스케줄링이 pytest-asyncio의 함수 스코프 루프 교체와 충돌해
+    모델 Lock을 잡은 태스크가 좌초되는 데드락을 원천 차단합니다.
 
-    pb._preload_scheduled = True
-    return
+    소스의 실제 가드(pipeline_builder._schedule_model_preload)는
+    ``IS_UNIT_TEST``/``IS_CI_TEST`` 환경변수이므로, 세션 전역으로 그 환경변수를
+    설정해 스케줄 태스크 생성을 막고 세션 종료 시 원값을 복원합니다.
+    """
+    import os
+
+    prev = os.environ.get("IS_UNIT_TEST")
+    os.environ["IS_UNIT_TEST"] = "true"
+    yield
+    if prev is None:
+        os.environ.pop("IS_UNIT_TEST", None)
+    else:
+        os.environ["IS_UNIT_TEST"] = prev
