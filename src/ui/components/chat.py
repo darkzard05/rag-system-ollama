@@ -636,9 +636,20 @@ def _render_unified_timeline(current_sid: str) -> None:
                 == msg.get("msg_id")
             )
             if is_active:
-                _run_active_stream_in_timeline(
-                    msg, current_sid, query=msg.get("query", "")
-                )
+                # [DEFENSE-IN-DEPTH] 핵심 타임아웃 회수(watchdog)와 병행하는
+                # best-effort 보강: 스트림 소비 경로가 L922/938 리셋에 도달하기
+                # 전에 비정상 종료(setup 예외 등)하면 플래그가 True로 고착된다.
+                # 정상/오류 경로는 이미 False로 리셋하므로 가드로 no-op 처리되고,
+                # 비정상 탈출 시에만 강제 리셋해 입력창 고착을 막는다.
+                try:
+                    _run_active_stream_in_timeline(
+                        msg, current_sid, query=msg.get("query", "")
+                    )
+                finally:
+                    if SessionManager.get("is_generating_answer", False, current_sid):
+                        SessionManager.set(
+                            "is_generating_answer", False, current_sid=current_sid
+                        )
                 continue
             with st.chat_message("assistant", avatar=AVATARS["assistant"]):
                 _draw_streaming_message(msg, current_sid)
