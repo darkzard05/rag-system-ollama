@@ -11,7 +11,7 @@ from langchain_core.embeddings import Embeddings
 
 from common.config import RETRIEVER_CONFIG
 from common.exceptions import VectorStoreError
-from common.text_utils import bm25_tokenizer
+from common.text_utils import bm25_tokenizer, has_bm25_tokens
 from core.session import SessionManager
 
 logger = logging.getLogger(__name__)
@@ -217,8 +217,20 @@ def create_vector_store(
 
 
 def create_bm25_retriever(docs: list[Document]) -> Any:
-    """BM25 리트리버를 생성합니다."""
+    """BM25 리트리버를 생성합니다.
+
+    코퍼스의 모든 문서가 ``bm25_tokenizer`` 로 빈 토큰 목록을 만들면
+    ``rank_bm25._calc_idf`` 가 0으로 나눗셈(``ZeroDivisionError``)을 일으키므로,
+    이 경우 ``None`` 을 반환해 호출부가 벡터 전용 검색으로 폴백하게 합니다.
+    (하류의 ``graph_builder`` 는 ``bm25`` 가 falsy면 BM25 검색을 건너뜁니다.)
+    """
     from langchain_community.retrievers import BM25Retriever
+
+    if not has_bm25_tokens([doc.page_content for doc in docs]):
+        logger.warning(
+            "[BM25] 코퍼스에 유효 토큰이 없어 BM25 생성을 건너뜁니다 (vector-only 폴백)."
+        )
+        return None
 
     retriever = BM25Retriever.from_documents(docs, preprocess_func=bm25_tokenizer)
     retriever.k = RETRIEVER_CONFIG["search_kwargs"]["k"]

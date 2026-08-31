@@ -20,7 +20,7 @@ from common.config import (
     VECTOR_STORE_CACHE_DIR,
     VECTOR_STORE_CONFIG,
 )
-from common.text_utils import bm25_tokenizer
+from common.text_utils import bm25_tokenizer, has_bm25_tokens
 from common.utils import fast_hash
 from security.cache_security import (
     CacheIntegrityError,
@@ -391,10 +391,14 @@ class VectorStoreCache:
                 bm25_doc_dicts = orjson.loads(file_handle.read())
             bm25_docs = _deserialize_docs(bm25_doc_dicts)
 
-            bm25_retriever = BM25Retriever.from_documents(
-                bm25_docs, preprocess_func=bm25_tokenizer
-            )
-            bm25_retriever.k = RETRIEVER_CONFIG.get("search_kwargs", {}).get("k", 5)
+            # 빈-토큰 코퍼스는 rank_bm25의 0나눗셈(ZeroDivisionError)을 유발하므로
+            # BM25 구성을 건너뛰어 벡터 전용 폴백으로 처리한다.
+            bm25_retriever = None
+            if has_bm25_tokens([doc.page_content for doc in bm25_docs]):
+                bm25_retriever = BM25Retriever.from_documents(
+                    bm25_docs, preprocess_func=bm25_tokenizer
+                )
+                bm25_retriever.k = RETRIEVER_CONFIG.get("search_kwargs", {}).get("k", 5)
 
             logger.info(f"RAG 캐시 안전 로드 완료 (Pickle-free): '{self.cache_dir}'")
             result = (doc_splits, vector_store, bm25_retriever)

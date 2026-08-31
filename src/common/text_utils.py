@@ -70,3 +70,14 @@ def bm25_tokenizer(text: str) -> list[str]:
 
     # 중복 제거 및 짧은 토큰 필터링 (불용어 제외)
     return list(dict.fromkeys(final_tokens))
+
+
+def has_bm25_tokens(corpus: list[str]) -> bool:
+    """코퍼스에 BM25 토크나이저가 생성할 유효 토큰이 하나라도 있는지 확인합니다.
+
+    ``rank_bm25`` 는 모든 문서가 빈 토큰 목록을 가질 때 ``nd``(단어→문서빈도)가
+    비어 ``self.idf`` 가 ``{}`` 가 되고, ``BM25Okapi._calc_idf`` 에서
+    ``idf_sum / len(self.idf)`` 가 0으로 나뉘어 ``ZeroDivisionError`` 를 일으킵니다.
+    이 조건을 사전에 감지해 BM25 생성을 우회(벡터 전용 폴백)하는 데 사용합니다.
+    """
+    return any(bm25_tokenizer(text) for text in corpus)
