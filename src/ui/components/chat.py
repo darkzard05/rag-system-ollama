@@ -735,9 +735,16 @@ def render_chat_messages_area() -> None:
     """Renders the chat column: unified timeline (streaming included)."""
     current_sid = SessionManager.get_session_id()
 
-    # 분석 상태 블록을 타임라인 흐름 안에 둔다(별도 위치 배치 시 시작 메시지
-    # 말풍선이 블록 아래로 밀려 흐리게 노출되는 레이아웃 충돌을 방지).
-    _render_build_progress_fragment(current_sid)
+    # 분석 상태 블록은 타임라인 흐름 안에 둔다(별도 배치 시 시작 말풍선과
+    # 레이아웃 충돌). 폴링(1.5s)은 빌드/취소 진행 중에만 필요하다 — 진행 중에는
+    # 전체 rerun이 없어 진행 바가 고착되기 때문. 그 외 상태는 정적 block이 렌더하므로
+    # 유휴 폴링 타이머가 없다 (fix-001-polling-fragments).
+    is_building = bool(SessionManager.get("is_building_rag", False, current_sid))
+    is_cancelling = bool(SessionManager.get("rebuild_cancelled", False, current_sid))
+    if is_building or is_cancelling:
+        _render_build_progress_fragment(current_sid)
+    else:
+        _render_build_progress_block(current_sid)
 
     # 통합 타임라인 렌더. 스트리밍 메시지도 단일 pass로 직접 렌더하므로
     # 익스팬더 위치가 안정적으로 유지된다.
@@ -943,7 +950,12 @@ def _run_active_stream_in_timeline(
                 error=_friendly_stream_error(exc),
                 session_id=current_sid,
             )
-            return
+            # [FIX-STREAM-ERROR-VISIBLE] 실패를 저장만 하고 삼키면 사용자 화면에는
+            # 빈 어시스턴트 버블만 남는다(Momus-APPROVE-WITH-CHANGES 재지향 P0).
+            # 위 add_message는 동일 msg_id로 streaming 플레이스홀더를 대체하므로,
+            # rerun 1회로 타임라인이 error가 담긴 general 브랜치를 렌더하게 한다.
+            # is_generating_answer는 이미 False라 rerun 후 재진입(무한 루프)하지 않는다.
+            st.rerun()
 
     # 스트리밍 정상 완료: 최종 스냅샷을 ``general``로 확정(폴링 대신 명시적 저장).
     SessionManager.set("is_generating_answer", False, current_sid=current_sid)
