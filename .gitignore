@@ -106,6 +106,7 @@ streamlit_output.txt
 logs/*.log.*
 
 # Root scratch / debug files
+qatemp/
 reproduce_issue.py
 inspect_chat_input.py
 test_patch_behavior.py

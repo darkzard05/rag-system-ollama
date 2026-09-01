@@ -22,6 +22,7 @@ from __future__ import annotations
 import argparse
 import ast
 import importlib
+import importlib.util
 import sys
 from pathlib import Path
 
@@ -59,6 +60,24 @@ def _resolve_module(module: str) -> tuple[object | None, Exception | None]:
         return None, err
 
 
+def _has_submodule(module: str, name: str) -> bool:
+    """Whether ``from module import name`` targets an existing submodule.
+
+    ``importlib.util.find_spec`` is order-independent (unlike ``hasattr``,
+    which only sees submodules already bound as package attributes). Returns
+    False on any import failure so the caller falls back to a name check.
+    """
+    if module.startswith("src."):
+        module = module[len("src.") :]
+    if not module:
+        return False
+    try:
+        spec = importlib.util.find_spec(f"{module}.{name}")
+    except (ImportError, AttributeError, ModuleNotFoundError, ValueError):
+        return False
+    return spec is not None
+
+
 def _check_file(path: Path) -> list[str]:
     try:
         tree = ast.parse(path.read_text(encoding="utf-8"))
@@ -78,6 +97,8 @@ def _check_file(path: Path) -> list[str]:
                 continue
             for alias in node.names:
                 if alias.name == "*":
+                    continue
+                if _has_submodule(node.module, alias.name):
                     continue
                 if not hasattr(module_obj, alias.name):
                     issues.append(f"{path}: name {alias.name!r} not in {node.module}")
