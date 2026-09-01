@@ -312,36 +312,47 @@ def _store_grade_memo(state: Any, docs: list, decision: dict, sid: str) -> None:
 # Per-stage latency tracing (Wave 1)
 # ----------------------------------------------------------------------------
 # Every query emits ONE consolidated `[QUERY][TIMING]` line aggregating the
-# duration (ms) of each pipeline stage. Single-threaded LangGraph node
-# execution means at most one node runs at a time, so a module-level
-# threading.local buffer keyed by query lifecycle is safe: `preprocess`
-# (always-runs-first node) resets it at the start of every query, and
-# `generate` (terminal node) reads it once and emits the line before each
-# return. The buffer is captured into a local at generate entry so retries
-# (which re-run retrieve/grade) accumulate correctly.
+# duration (ms) of each pipeline stage. The buffer is a ContextVar (not
+# threading.local): concurrent queries from different sessions run as asyncio
+# tasks on the SAME thread, so a threading.local buffer would be shared and
+# cross-contaminate stage timings between sessions. A ContextVar scopes the
+# buffer to the current asyncio task/context instead.
+#
+# `preprocess` (always-runs-first node) resets it to a fresh per-query dict at
+# the start of every query; `generate` (terminal node) reads a snapshot once and
+# emits the line before each return. The buffer is a mutable dict captured into a
+# local at generate entry so retries (which re-run retrieve/grade) accumulate
+# correctly. A speculative generate task created via `asyncio.ensure_future`
+# inherits a shallow copy of the context that references the SAME dict, so
+# accumulation across the main and speculative tasks is preserved while different
+# queries (different tasks) keep distinct dicts.
 # ============================================================================
 
-_stage_timing_local = threading.local()
+_stage_timing_var: contextvars.ContextVar[dict[str, float]] = contextvars.ContextVar(
+    "_stage_timing_var"
+)
 
 
 def _reset_stage_timings() -> None:
     """Clear per-query stage timing buffer (called at preprocess start)."""
-    _stage_timing_local.stages = {
-        "preprocess_ms": 0.0,
-        "retrieve_ms": 0.0,
-        "grade_ms": 0.0,
-        "generate_total_ms": 0.0,
-        "ttft_ms": 0.0,
-    }
+    _stage_timing_var.set(
+        {
+            "preprocess_ms": 0.0,
+            "retrieve_ms": 0.0,
+            "grade_ms": 0.0,
+            "generate_total_ms": 0.0,
+            "ttft_ms": 0.0,
+        }
+    )
 
 
 def _add_stage_ms(stage: str, ms: float) -> None:
     """Accumulate a stage duration into the per-query buffer."""
-    if not hasattr(_stage_timing_local, "stages"):
+    stages = _stage_timing_var.get(None)
+    if stages is None:
         _reset_stage_timings()
-    _stage_timing_local.stages[stage] = _stage_timing_local.stages.get(
-        stage, 0.0
-    ) + float(ms)
+        stages = _stage_timing_var.get()
+    stages[stage] = stages.get(stage, 0.0) + float(ms)
 
 
 def _enter_stage(operation_type: OperationType, **metadata: Any) -> Any:
@@ -1620,7 +1631,7 @@ async def generate(
             return await spec_task
 
     # [TIMING] 쿼리당 버퍼를 로컬에 캡처 (재시도로 retrieve/grade가 재실행되어도 누적 유지)
-    _query_timings = dict(getattr(_stage_timing_local, "stages", {}))
+    _query_timings = dict(_stage_timing_var.get({}))
     cfg = config.get("configurable", {})
     llm = cfg.get("llm")
     if not llm:
