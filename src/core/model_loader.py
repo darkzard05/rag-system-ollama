@@ -11,6 +11,7 @@ import itertools
 import logging
 import os
 import re
+import time
 from collections import OrderedDict
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, TypeVar
@@ -28,6 +29,23 @@ def _build_offloop(builder: Callable[[], T]) -> T:
     동일하게 동작하도록 모델 생성부를 한 곳으로 모읍니다.
     """
     return builder()
+
+
+# Ollama 임베딩 콜드스타트 레이스 대응 재시도 파라미터.
+# Ollama Go 서버는 임베딩 백엔드(llama-server)가 아직 스폰 중/재시작 중일 때
+# 내부 연결 실패(연결 거부)를 HTTP 400 + 연결 거부 문자열로 반환한다. 이는
+# 일시적 상태이므로 멱등한 임베딩 호출에 한해 지수 백오프로 재시도한다.
+_EMBED_RETRY_MAX_ATTEMPTS = 3
+_EMBED_RETRY_BACKOFF_SECONDS = (1, 3, 9)
+
+
+def _is_embed_transient_failure(exc: BaseException) -> bool:
+    """연결 거부형 오류 본문만 재시도 대상으로 한정한다."""
+    text = str(exc)
+    return any(
+        marker in text
+        for marker in ("actively refused", "connection refused", "connectex")
+    )
 
 
 if TYPE_CHECKING:
@@ -439,13 +457,35 @@ def load_embedding_model(
                             "Please ensure Ollama is running and the model is loaded."
                         )
                         raise ValueError(msg)
-                    return self._client.embed(
-                        self.model,
-                        texts,
-                        truncate=self.truncate,
-                        options=self._default_params,
-                        keep_alive=self.keep_alive,
-                    )["embeddings"]
+                    last_exc: Exception | None = None
+                    for attempt in range(_EMBED_RETRY_MAX_ATTEMPTS):
+                        try:
+                            return self._client.embed(
+                                self.model,
+                                texts,
+                                truncate=self.truncate,
+                                options=self._default_params,
+                                keep_alive=self.keep_alive,
+                            )["embeddings"]
+                        except Exception as exc:
+                            last_exc = exc
+                            if not _is_embed_transient_failure(exc):
+                                raise
+                            if attempt + 1 >= _EMBED_RETRY_MAX_ATTEMPTS:
+                                break
+                            wait = _EMBED_RETRY_BACKOFF_SECONDS[
+                                min(attempt, len(_EMBED_RETRY_BACKOFF_SECONDS) - 1)
+                            ]
+                            logger.info(
+                                "[MODEL] [EMBED] 임베딩 콜드스타트 감지, "
+                                "재시도 %d/%d (대기 %ds)",
+                                attempt + 2,
+                                _EMBED_RETRY_MAX_ATTEMPTS,
+                                wait,
+                            )
+                            time.sleep(wait)
+                    assert last_exc is not None
+                    raise last_exc
 
             logger.info(
                 f"[MODEL] [LOAD] Ollama 임베딩 엔진 사용 | 모델: {clean_model_name}"
