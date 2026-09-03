@@ -58,12 +58,12 @@ from langchain_core.prompts import ChatPromptTemplate
 # isort: off
 from src.api.streaming_handler import StreamingResponseHandler
 from src.common.config import (
-    ANALYSIS_PROTOCOL,
     DEFAULT_EMBEDDING_MODEL,
     DEFAULT_OLLAMA_MODEL,
     EVAL_JUDGE_MODEL,
     OLLAMA_NUM_CTX,
     OLLAMA_NUM_PREDICT,
+    TOKEN_ESTIMATION_PROXY,
 )
 from src.common.logging_config import setup_logging
 from src.common.utils import count_tokens_rough
@@ -325,7 +325,7 @@ def _estimate_prompt_tokens(query: str, docs: list[Any]) -> int:
     human_msg 구성과 동일 (graph_builder.py:499-501).
     """
     context = format_context(docs) if docs else "일상적인 대화입니다."
-    prompt = f"{ANALYSIS_PROTOCOL}\n\n[Context]\n{context}\n\n[Question]\n{query}"
+    prompt = f"{TOKEN_ESTIMATION_PROXY}\n\n[Context]\n{context}\n\n[Question]\n{query}"
     return count_tokens_rough(prompt)
 
 

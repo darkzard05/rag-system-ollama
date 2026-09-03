@@ -228,9 +228,14 @@ VECTOR_STORE_CACHE_DIR: str = str(
 # prompts 섹션은 config.yml의 rag.prompts 아래에 있음
 _rag_config = _config.get("rag", {})
 _prompts_config = _rag_config.get("prompts") or {}
+PROMPT_COMPONENTS: dict = _prompts_config.get("components", {})
+TOKEN_ESTIMATION_PROXY: str = _prompts_config.get("token_estimation_proxy", "")
 ANALYSIS_PROTOCOL: str = _prompts_config.get("analysis_protocol", "")
 GRADING_CONFIG: dict = _prompts_config.get("grading", {})
 PROMPT_TEMPLATES_CONFIG: dict = _prompts_config.get("prompt_templates", {})
+GRADE_PROMPT_CONFIG: dict = _prompts_config.get("grade", {})
+VERIFY_PROMPT_CONFIG: dict = _prompts_config.get("verify", {})
+GENERATE_PROMPT_CONFIG: dict = _prompts_config.get("generate", {})
 
 # --- 6. 보안 및 캐시 (Security & Global Cache) ---
 _cache_security_config = _config.get("cache_security", {})

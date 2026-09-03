@@ -27,6 +27,8 @@ from common.config import (
     ANALYSIS_PROTOCOL,
     DEFAULT_EMBEDDING_MODEL,
     DEFAULT_OLLAMA_MODEL,
+    GENERATE_PROMPT_CONFIG,
+    GRADE_PROMPT_CONFIG,
     GRADING_CONFIG,
     GRADING_ENABLED,
     MAX_CONCURRENT_INFERENCE,
@@ -36,6 +38,8 @@ from common.config import (
     QUERY_CACHE_ENABLED,
     QUERY_CACHE_MIN_CONF,
     QUERY_CACHE_TTL,
+    TOKEN_ESTIMATION_PROXY,
+    VERIFY_PROMPT_CONFIG,
 )
 from common.utils import count_tokens_rough, doc_stable_id, fast_hash
 from core.model_loader import ModelManager
@@ -1331,17 +1335,27 @@ async def grade_documents(
         [f"DOC {i + 1}: {d.page_content}" for i, d in enumerate(test_docs)]
     )
 
-    # 통합 프롬프트: 평가 + 재작성 동시 지시
+    grade_system = GRADE_PROMPT_CONFIG.get(
+        "system_message",
+        "당신은 문서 관련성 평가자이자 검색 쿼리 최적화 전문가입니다.",
+    )
+    grade_template = GRADE_PROMPT_CONFIG.get("human_message_template", "")
     unified_prompt = (
-        "당신은 문서 관련성 평가자이자 검색 쿼리 최적화 전문가입니다.\n\n"
-        f"[질문]\n{query}\n\n"
-        f"[검색된 문서 (상위 3개)]\n{context_text}\n\n"
-        "[작업]\n"
-        "1. 위 문서들이 질문에 답하기에 충분한지 평가하세요 (is_relevant: true/false)\n"
-        "2. 충분하지 않다면, 더 나은 검색 결과를 위한 최적화된 쿼리를 작성하세요 (optimized_query)\n"
-        "3. 판단 근거(reason)와 관련 엔티티(relevant_entities)도 포함하세요.\n\n"
-        '출력은 반드시 JSON 형식이어야 합니다. (예: {"action": "generate", "is_relevant": true, '
-        '"relevant_entities": ["A"], "reason": "...", "optimized_query": null})'
+        f"{grade_system}\n\n" + grade_template.format(query=query, context=context_text)
+        if grade_template
+        else (
+            f"{grade_system}\n\n"
+            f"[질문]\n{query}\n\n"
+            f"[검색된 문서 (상위 3개)]\n{context_text}\n\n"
+            "[작업]\n"
+            "1. 위 문서들이 질문에 답하기에 충분한지 평가하세요 (is_relevant: true/false)\n"
+            "2. 충분하지 않다면, 더 나은 검색 결과를 위한 최적화된 쿼리를 작성하세요 "
+            "(optimized_query)\n"
+            "3. 판단 근거(reason)와 관련 엔티티(relevant_entities)도 포함하세요.\n\n"
+            '출력은 반드시 JSON 형식이어야 합니다. (예: {"action": "generate", '
+            '"is_relevant": true, "relevant_entities": ["A"], "reason": "...", '
+            '"optimized_query": null})'
+        )
     )
 
     call_config = (
@@ -1544,7 +1558,7 @@ def _estimate_ctx_tokens(docs: list, query: str) -> int:
     """
     if not docs:
         return count_tokens_rough(
-            f"{ANALYSIS_PROTOCOL}\n\n[Context]\n\n[Question]\n{query}"
+            f"{TOKEN_ESTIMATION_PROXY}\n\n[Context]\n\n[Question]\n{query}"
         )
     context = "".join(
         f"[doc:{_doc_stable_id(d)}] "
@@ -1555,7 +1569,7 @@ def _estimate_ctx_tokens(docs: list, query: str) -> int:
         for d in docs
     )
     return count_tokens_rough(
-        f"{ANALYSIS_PROTOCOL}\n\n[Context]\n{context}\n\n[Question]\n{query}"
+        f"{TOKEN_ESTIMATION_PROXY}\n\n[Context]\n{context}\n\n[Question]\n{query}"
     )
 
 
@@ -1592,7 +1606,7 @@ def _apply_ctx_guard(docs: list, query: str) -> tuple[list, str, int]:
             removed += 1
             context = format_context(ranked)
             est = count_tokens_rough(
-                f"{ANALYSIS_PROTOCOL}\n\n[Context]\n{context}\n\n[Question]\n{query}"
+                f"{TOKEN_ESTIMATION_PROXY}\n\n[Context]\n{context}\n\n[Question]\n{query}"
             )
         docs = ranked
         logger.info(f"[RAG] [CTX] trimmed {removed} docs, est tokens={est}")
@@ -1796,7 +1810,10 @@ async def generate(
 
     sys_msg = SystemMessage(content=formatted_prompt)
     human_msg = HumanMessage(
-        content="Think step by step, then output ONLY the JSON object."
+        content=GENERATE_PROMPT_CONFIG.get(
+            "human_message",
+            "Think step by step, then output ONLY the JSON object.",
+        )
     )
 
     full_response = ""
@@ -2137,36 +2154,32 @@ async def verify_answer(
             "verification_route": "regenerate",
             "verification_issues": [f"유효하지 않은 인용: {invalid_citations}"],
         }
-    # Faithfulness 검증: LLM으로 컨텍스트 기반 답변 검증
-    verify_prompt = f"""당신은 답변 검증 전문가입니다. 아래 [Context]와 [Answer]를 보고 답변이 컨텍스트에 충실한지 판단하십시오.
-
-[Context]
-{context}
-
-[Answer]
-{answer}
-
-[Question]
-{query}
-
-다음 JSON 형식으로만 답변하십시오:
-{{
-  "faithful": true/false,
-  "issues": ["문제점1", "문제점2"]  // faithful이 false일 때만 채움
-}}
-
-판단 기준:
-1. 답변의 모든 핵심 주장이 컨텍스트에 근거하는가?
-2. 컨텍스트에 없는 정보를 추측하여 답변했는가?
-3. 인용된 내용이 실제 컨텍스트와 일치하는가?
-"""
+    verify_sys_text = VERIFY_PROMPT_CONFIG.get(
+        "system_message",
+        "답변의 충실도를 엄격하게 평가하십시오. 컨텍스트에 없는 내용이 있으면 faithful: false로 판단하십시오.",
+    )
+    verify_template = VERIFY_PROMPT_CONFIG.get("human_message_template", "")
+    if verify_template:
+        verify_prompt = verify_template.format(
+            context=context, answer=answer, query=query
+        )
+    else:
+        verify_prompt = (
+            f"당신은 답변 검증 전문가입니다. 아래 [Context]와 [Answer]를 보고 "
+            f"답변이 컨텍스트에 충실한지 판단하십시오.\n\n"
+            f"[Context]\n{context}\n\n[Answer]\n{answer}\n\n[Question]\n{query}\n\n"
+            f"다음 JSON 형식으로만 답변하십시오:\n"
+            f'{{"faithful": true/false, "issues": ["문제점1"]}}\n\n'
+            f"판단 기준:\n"
+            f"1. 답변의 모든 핵심 주장이 컨텍스트에 근거하는가?\n"
+            f"2. 컨텍스트에 없는 정보를 추측하여 답변했는가?\n"
+            f"3. 인용된 내용이 실제 컨텍스트와 일치하는가?"
+        )
 
     try:
         from langchain_core.messages import HumanMessage, SystemMessage
 
-        sys_msg = SystemMessage(
-            content="답변의 충실도를 엄격하게 평가하십시오. 컨텍스트에 없는 내용이 있으면 faithful: false로 판단하십시오."
-        )
+        sys_msg = SystemMessage(content=verify_sys_text)
         human_msg = HumanMessage(content=verify_prompt)
 
         async with ModelManager.inference_session():
