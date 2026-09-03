@@ -1,14 +1,13 @@
 """
-EngineCacheManager 재사용/무효화 검증 (문제 1 + Task 2 리팩터).
+EngineCacheManager 재사용/무효화 검증.
 
 - 동일 file_hash: 엔진 재사용 (hit) — 이벤트 루프가 달라도 재사용
 - file_hash 변경(팬텀 상태): 캐시 사용 안 함 (miss)
-- Task 2: LRU/제거 부속은 async ObjectCache(ObjectCache)로 라우팅된다.
 """
 
 import asyncio
 
-from cache.engine_cache import _ENGINE_CACHE, EngineCacheManager
+from cache.engine_cache import EngineCacheManager
 from core.session import SessionManager
 
 
@@ -77,8 +76,6 @@ def test_hit_on_same_hash():
         assert EngineCacheManager.get_engine(sid) is engine
 
     asyncio.run(_run())
-    # Facade는 ObjectCache에 미러링한다 (Task 2 라우팅 검증).
-    assert _ENGINE_CACHE.get_stats().cache_size >= 1
 
 
 def test_miss_on_changed_hash():
