@@ -84,11 +84,11 @@ jobs:
   test:
     # Single-job, single-environment CI. The local pre-push hook
     # (.pre-commit-config.yaml) runs the exact same gates (ruff, mypy, bandit,
-    # pip-audit, run_ci_checks.py) on the developer's Windows + Python 3.11
+    # pip-audit, run_ci_checks.py) on the developer's Windows + Python 3.10
     # environment, so a green hook guarantees a green CI here. Keeping CI to one
     # env that matches the local dev box means "hook passed" => "CI passed"
     # holds without a multi-OS/version matrix.
-    name: Test (Windows Py 3.11)
+    name: Test (Windows Py 3.10)
     needs: [lint-and-static-analysis, security-scan]
     runs-on: windows-latest
     env:

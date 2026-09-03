@@ -23,7 +23,15 @@ repos:
         args: ["src/"]
         pass_filenames: false
         stages: [pre-push]
-        additional_dependencies: ["tokenize-rt==5.2.0"]
+        additional_dependencies:
+          # CI parity: mirrors ci.yml `pip install ... types-PyYAML types-psutil
+          # types-requests` so the pre-push mypy deep-checks the SAME modules CI
+          # does, instead of silently degrading them to `Any` via
+          # ignore_missing_imports. Keep in sync with ci.yml line ~39.
+          - "tokenize-rt==5.2.0"
+          - "types-PyYAML"
+          - "types-psutil"
+          - "types-requests"
 
 -   repo: local
     hooks:

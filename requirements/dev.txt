@@ -14,5 +14,5 @@ httpx>=0.28.1
 # Code Quality
 pre-commit==3.5.0
 pip-audit>=2.8.0
-mypy==1.11.0
+mypy==1.15.0
 bandit==1.8.3
