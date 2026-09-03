@@ -1223,14 +1223,33 @@ async def grade_documents(
     # 원문 토큰이 존재하지 않으면 오타/타 문서로 판단해 재검색(transform)으로
     # 라우팅한다. 정상 매칭(예: CM3 논문에 "CM3" 존재) 시에는 통과시켜 기존 흐름 유지.
     if get_state_attr(state, "short_query", False):
+        import re
+
         _q = str(get_state_attr(state, "input", "")).strip().lower()
-        _hit = _q and any(_q in (d.page_content or "").lower() for d in docs)
+        # 관련성은 LLM grade가 보던 상위 grade_top_n 문서 기준으로만 판정한다.
+        # (전체 docs는 상위 3 밖의 노이즈 문서가 포함될 수 있어 긍정 오판 여지)
+        # 단어 경계 매칭으로 서브스트링 오탐("cm3"가 "ACM3" 등에 걸림)을 방지한다.
+        _top_n = int(GRADING_CONFIG.get("grade_top_n", 3))
+        _pat = re.compile(rf"\b{re.escape(_q)}\b")
+        _hit = _q and any(
+            _pat.search((d.page_content or "").lower()) for d in docs[:_top_n]
+        )
         if not _hit:
             logger.info(
                 f"[RAG] [GRADE] 초단문 쿼리 '{_q}' 가 검색 문서에 무존재 — 재검색 라우팅"
             )
             _grade_op.__exit__(None, None, None)
             return {"intent": "transform", "route": "transform", "retry_count": 1}
+        # fast-path: 원문 토큰이 상위 문서에 단어 경계로 존재하면 관련성이 확실하므로
+        # LLM grade 호출을 생략하고 바로 generate 로 직행한다 (5자 미만 키워드 환각 방지
+        # 가드는 _hit 검사를 통과한 시점에 이미 충족 — 토큰 존재가 답변 근거를 보장).
+        grade_ms = (time.perf_counter() - grade_start) * 1000
+        logger.info(
+            f"[RAG] [GRADE][TIMING] grade_ms={grade_ms:.1f} short_query_fast_path=True"
+        )
+        _add_stage_ms("grade_ms", grade_ms)
+        _grade_op.__exit__(None, None, None)
+        return {"intent": "generate", "route": "generate"}
 
     # Wave 3 grade reduction: 동일 세션 내 동일 (query, doc-set) 반복 질의 시
     # 이전 LLM 판단을 재사용한다 (메모 해시 miss 시에만 LLM 호출).

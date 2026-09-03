@@ -251,3 +251,57 @@ def test_structured_output_schema_retains_citations_key():
 
     prompt = PROMPT_TEMPLATES_CONFIG.get("structured_output", "")
     assert '"citations"' in prompt
+
+
+@pytest.mark.asyncio
+async def test_grade_documents_short_query_fast_path():
+    """초단문 쿼리 토큰이 상위 문서에 단어 경계로 존재하면 LLM grade 를 생략하고 generate 로 직행한다."""
+    state = {
+        "input": "cm3",
+        "short_query": True,
+        "relevant_docs": [
+            # 상위 문서에 "cm3"가 단어 경계로 존재 → fast-path (LLM grade 생략)
+            Document(
+                page_content="CM3 is a multimodal model from Meta.",
+                metadata={"rerank_score": 0.6},
+            ),
+            Document(
+                page_content="Other content here.", metadata={"rerank_score": 0.4}
+            ),
+        ],
+        "retry_count": 0,
+        "is_cached": False,
+        "intent": "rag",
+    }
+    mock_llm = MagicMock()
+    config = {"configurable": {"llm": mock_llm}}
+
+    result = await grade_documents(state, config, writer=MockWriter())
+    assert result == {"intent": "generate", "route": "generate"}
+    # fast-path 는 LLM grade 를 호출하지 않아야 한다.
+    mock_llm.bind.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_grade_documents_short_query_no_hit_transform():
+    """초단문 쿼리 토큰이 상위 문서에 없으면 기존 strict 가드대로 재검색(transform) 으로 라우팅한다."""
+    state = {
+        "input": "cm3",
+        "short_query": True,
+        "relevant_docs": [
+            Document(
+                page_content="Nothing to do with the token.",
+                metadata={"rerank_score": 0.6},
+            ),
+            Document(page_content="Also unrelated.", metadata={"rerank_score": 0.4}),
+        ],
+        "retry_count": 0,
+        "is_cached": False,
+        "intent": "rag",
+    }
+    mock_llm = MagicMock()
+    config = {"configurable": {"llm": mock_llm}}
+
+    result = await grade_documents(state, config, writer=MockWriter())
+    assert result == {"intent": "transform", "route": "transform", "retry_count": 1}
+    mock_llm.bind.assert_not_called()
