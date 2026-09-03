@@ -12,7 +12,9 @@ from services.optimization.caching_optimizer import ObjectCache
 logger = logging.getLogger(__name__)
 
 # LRU/제거/통계 부속은 async ObjectCache 가 담당하며, EngineCacheManager는
-# SessionManager 기반 저장소 + 루프/해시 검증을 수행하는 FACADE입니다.
+# SessionManager 기반 저장소 + 문서 해시(file_hash) 검증을 수행하는 FACADE입니다.
+# (유효성 검증은 이벤트 루프 id 가 아닌 file_hash 단독 기준이다 — set/get 이 서로
+# 다른 이벤트 루프에서 실행되므로 루프 id 로 묶으면 항상 무효화된다.)
 # caller(rag_core.py, pipeline_builder.py)는 동기 호출(await 없음)이지만, 그
 # 호출은 이미 실행 중인 이벤트 루프 안에서 일어날 수 있습니다. 따라서 async
 # ObjectCache 는 별도 백그라운드 스레드의 전용 루프에서
@@ -61,31 +63,18 @@ class EngineCacheManager:
 
     @staticmethod
     def get_engine(session_id: str) -> Any | None:
-        try:
-            current_loop = asyncio.get_running_loop()
-            current_loop_id = id(current_loop)
-        except RuntimeError:
-            current_loop_id = 0
-
+        # 문서 해시만 무효화 키로 사용한다 (이유는 모듈 상단 주석 참조).
         rag_engine = SessionManager.get("rag_engine", session_id=session_id)
-        cached_loop_id = SessionManager.get(
-            "rag_engine_loop_id", 0, session_id=session_id
-        )
         cached_file_hash = SessionManager.get(
             "rag_engine_file_hash", session_id=session_id
         )
         current_file_hash = SessionManager.get("file_hash", session_id=session_id)
 
-        if (
-            not rag_engine
-            or cached_loop_id != current_loop_id
-            or cached_file_hash != current_file_hash
-        ):
+        if not rag_engine or cached_file_hash != current_file_hash:
             if rag_engine:
                 logger.info(
                     "[RAG] [ENGINE] 캐시 무효화 "
-                    f"(loop: {cached_loop_id}->{current_loop_id}, "
-                    f"file_hash: {cached_file_hash!r}->{current_file_hash!r})"
+                    f"(file_hash: {cached_file_hash!r}->{current_file_hash!r})"
                 )
             # 미러된 ObjectCache 에서도 제거(정합성). 실패해도 조회 결과엔 영향 없음.
             with contextlib.suppress(Exception):  # noqa: BLE001 - 방어적 무시
@@ -99,19 +88,12 @@ class EngineCacheManager:
 
     @staticmethod
     def set_engine(session_id: str, engine: Any) -> None:
-        try:
-            current_loop = asyncio.get_running_loop()
-            current_loop_id = id(current_loop)
-        except RuntimeError:
-            current_loop_id = 0
-
         # 엔진이 참조하는 문서의 해시를 함께 기록해, 이후 file_hash가 바뀌면
         # get_engine이 이전 문서 기준 엔진을 반환하지 않게 합니다 (팬텀 상태 방지).
         file_hash = SessionManager.get("file_hash", session_id=session_id)
         SessionManager.set("rag_engine", engine, session_id=session_id)
-        SessionManager.set("rag_engine_loop_id", current_loop_id, session_id=session_id)
         SessionManager.set("rag_engine_file_hash", file_hash, session_id=session_id)
-        logger.info(f"[RAG] [ENGINE] 엔진 캐시됨 (loop_id={current_loop_id})")
+        logger.info("[RAG] [ENGINE] 엔진 캐시됨")
 
         # LRU/제거 부속을 async ObjectCache 로 라우팅 (Facade 책임).
         try:
