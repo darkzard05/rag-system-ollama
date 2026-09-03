@@ -17,7 +17,7 @@ from cache.engine_cache import EngineCacheManager
 from common.circuit_breaker import get_circuit_breaker_registry
 from common.exceptions import VectorStoreError
 from common.retry import retry_stream
-from common.utils import fast_hash
+from common.utils import doc_stable_id
 from core.document_hydrator import hydrate_documents
 from core.pipeline_builder import PipelineBuilder, prepare_query_config_or_build
 from core.resource_manager import get_resource_manager
@@ -63,13 +63,7 @@ def _dedup_docs(docs: list, seen: set[str]) -> list:
     """
     kept: list = []
     for _d in docs:
-        _meta = getattr(_d, "metadata", None) or {}
-        _content = getattr(_d, "page_content", "") or ""
-        _key = (
-            str(_meta.get("doc_id"))
-            if _meta.get("doc_id") is not None
-            else fast_hash(_content)
-        )
+        _key = doc_stable_id(_d)
         if _key in seen:
             continue
         seen.add(_key)

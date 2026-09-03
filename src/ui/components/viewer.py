@@ -11,6 +11,7 @@ import streamlit as st
 
 from common.config import MSG_PDF_VIEWER_NO_FILE
 from common.exceptions import PDFProcessingError
+from common.pdf_utils import get_pdf_page_count
 from common.utils import safe_cache_data
 from core.session import SessionManager
 from ui.components.common import (
@@ -72,23 +73,11 @@ def _get_pdf_total_pages(pdf_path: str) -> int | None:
 
     st.cache_data 캐시 계층은 캐시 함수가 raise한 예외를 재전파하므로
     손상된 PDF가 스크립트를 죽이지 않도록 반드시 여기서 소화한다.
+    실제 열기/페이지 수 계산은 공용 ``get_pdf_page_count`` 에 위임한다 (R: Group 7).
     """
-    import pymupdf as fitz
-
     if not os.path.exists(pdf_path):
         return None
-    try:
-        with fitz.open(pdf_path) as doc:
-            return len(doc)
-    except PDFProcessingError as e:
-        logger.error(f"PDF 페이지 수 조회 실패: {e}")
-        return None
-    except (RuntimeError, ValueError) as e:
-        logger.error(f"PDF 페이지 수 조회 실패: {e}")
-        return None
-    except Exception as e:
-        logger.error(f"PDF 페이지 수 조회 실패: {e}", exc_info=True)
-        return None
+    return get_pdf_page_count(pdf_path)
 
 
 # ---------------------------------------------------------------------------

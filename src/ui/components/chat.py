@@ -18,7 +18,7 @@ import streamlit as st
 from common.config import DEFAULT_OLLAMA_MODEL, MSG_CHAT_GUIDE
 from common.utils import (
     apply_tooltips_to_response,
-    fast_hash,
+    doc_stable_id,
     normalize_latex_delimiters,
     strip_context_tokens,
 )
@@ -55,27 +55,13 @@ def _handle_page_jump(p: int) -> None:
     st.rerun()
 
 
-def _doc_stable_id(doc: object) -> str:
-    """문서의 안정 식별자(doc_id 메타 또는 content 해시)를 반환합니다."""
-    meta = get_doc_metadata(doc)
-    content = ""
-    if hasattr(doc, "page_content"):
-        content = getattr(doc, "page_content", "") or ""
-    else:
-        content = doc.get("page_content", "") if isinstance(doc, dict) else ""
-    doc_id = meta.get("doc_id")
-    if doc_id is not None:
-        return str(doc_id)
-    return fast_hash(content)
-
-
 def _handle_doc_jump(doc_id: str) -> None:
     """인용의 안정 doc_id로 문서를 찾아 첫 페이지로 이동합니다."""
     docs = SessionManager.get("documents", []) or []
     target_page = 1
     found = False
     for d in docs:
-        if _doc_stable_id(d) == doc_id:
+        if doc_stable_id(d) == doc_id:
             found = True
             page = get_doc_metadata(d).get("page")
             with contextlib.suppress(ValueError, TypeError):
@@ -105,7 +91,7 @@ def _render_citation_anchors(
     """
     if not citations:
         return
-    doc_ids = {_doc_stable_id(d) for d in (documents or [])}
+    doc_ids = {doc_stable_id(d) for d in (documents or [])}
     with st.container():
         st.caption("Sources")
         for idx, cit in enumerate(citations):
@@ -182,7 +168,7 @@ def _render_references_content(
     # P3: citations[] 기반 doc 점프 (안정 doc_id).
     doc_citations = [c for c in (citations or []) if c.get("doc_id") is not None]
     if doc_citations:
-        doc_ids = {_doc_stable_id(d) for d in (documents or [])}
+        doc_ids = {doc_stable_id(d) for d in (documents or [])}
         st.caption("By doc")
         for idx, cit in enumerate(doc_citations):
             sid = str(cit.get("doc_id"))

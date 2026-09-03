@@ -17,6 +17,7 @@ import numpy as np
 import xxhash
 from langchain_core.embeddings import Embeddings
 
+from common.similarity import cosine_distance
 from services.optimization.caching_optimizer import CacheManager
 
 logger = logging.getLogger(__name__)
@@ -274,8 +275,8 @@ class SemanticChunkerEmbeddingsMixin:
         """인접 combined 벡터 간 유사도를 1-cos_sim 거리로 변환합니다."""
         distances = []
         for i in range(len(combined_embeddings_arr) - 1):
-            similarity = np.dot(
+            similarity = cosine_distance(
                 combined_embeddings_arr[i], combined_embeddings_arr[i + 1]
             )
-            distances.append(1.0 - float(similarity))
+            distances.append(float(similarity))
         return distances

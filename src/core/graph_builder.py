@@ -37,7 +37,7 @@ from common.config import (
     QUERY_CACHE_MIN_CONF,
     QUERY_CACHE_TTL,
 )
-from common.utils import count_tokens_rough, fast_hash
+from common.utils import count_tokens_rough, doc_stable_id, fast_hash
 from core.model_loader import ModelManager
 from core.resource_manager import get_resource_manager
 from core.session import SessionManager
@@ -262,6 +262,21 @@ def _repair_json(blob: str) -> str | None:
         return repaired
     except (json.JSONDecodeError, ValueError):
         return None
+
+
+def _strip_json_fence(raw: str) -> str:
+    """LLM 응답에서 ```json / ``` 코드 펜스를 제거합니다. (R: Group 8)
+
+    구조화(1.2)와 verify 노드에서 동일 스트리핑을 중복하던 것을 단일 헬퍼로 통합.
+    """
+    s = raw.strip()
+    if s.startswith("```json"):
+        s = s[7:]
+    if s.startswith("```"):
+        s = s[3:]
+    if s.endswith("```"):
+        s = s[:-3]
+    return s.strip()
 
 
 # ----------------------------------------------------------------------------
@@ -997,7 +1012,7 @@ async def retrieve_and_rerank(
     for source, res in results.items():
         node_results = []
         for doc in res:
-            doc_id = doc.metadata.get("doc_id", fast_hash(doc.page_content))
+            doc_id = doc_stable_id(doc)
             raw_score = doc.metadata.get("score")
             if raw_score is None:
                 logger.debug(
@@ -1091,7 +1106,7 @@ async def retrieve_and_rerank(
         # [R3b-02] 6자 미만 쿼리는 리랭킹을 생략하되 rerank_score(RRF 집계 점수)를 기록해
         # grade short-circuit이 0.0으로만 평가되는 것을 방지한다.
         for doc in ranked_docs:
-            doc_key = doc.metadata.get("doc_id", fast_hash(doc.page_content))
+            doc_key = doc_stable_id(doc)
             doc.metadata["rerank_score"] = rrf_scores.get(doc_key, 0.0)
     else:
         ranked_docs, _ = await reranker.rerank(
@@ -1443,10 +1458,10 @@ def _doc_stable_id(doc: Document) -> str:
 
     `format_context`, `_estimate_ctx_tokens`, verify 노드 모두 동일한 식별자를
     사용해야 하므로 단일 진원(single source of truth)으로 추출합니다.
-    `doc_id` 메타데이터가 있으면 그것을, 없으면 page_content 해시를 사용합니다
-    (graph_builder.py:382 / rag_core.py:69 와 동일 패턴).
+    `doc_id` 메타데이터가 있으면 그것을, 없으면 page_content 해시를 사용합니다.
+    공용 구현은 `common.utils.doc_stable_id` 를 참조합니다 (R: 중복 통합).
     """
-    return str(doc.metadata.get("doc_id", fast_hash(doc.page_content)))
+    return doc_stable_id(doc)
 
 
 # verify 노드와 테스트에서 공유하는 안정-id 인용 검증 정규식.
@@ -1838,14 +1853,7 @@ async def generate(
     # Phase 1.2: 구조화된 답변 파싱 (JSON 출력 기대)
     parsed_answer = None
     parse_failed = False
-    json_str = full_response.strip()
-    if json_str.startswith("```json"):
-        json_str = json_str[7:]
-    if json_str.startswith("```"):
-        json_str = json_str[3:]
-    if json_str.endswith("```"):
-        json_str = json_str[:-3]
-    json_str = json_str.strip()
+    json_str = _strip_json_fence(full_response)
 
     def _extract_partial(json_blob: str) -> dict[str, Any]:
         """깨진 JSON에서 final_answer/citations를 비파괴 복구한다.
@@ -2151,14 +2159,7 @@ async def verify_answer(
 
         content = response.content if hasattr(response, "content") else str(response)
         # JSON 추출
-        json_str = content.strip()
-        if json_str.startswith("```json"):
-            json_str = json_str[7:]
-        if json_str.startswith("```"):
-            json_str = json_str[3:]
-        if json_str.endswith("```"):
-            json_str = json_str[:-3]
-        json_str = json_str.strip()
+        json_str = _strip_json_fence(content)
 
         result = json.loads(json_str)
         faithful = result.get("faithful", True)

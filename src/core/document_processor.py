@@ -4,8 +4,6 @@ PyMuPDF4LLM을 사용하여 초고속으로 구조적 마크다운을 추출하�
 """
 
 import asyncio
-import contextlib
-import hashlib
 import logging
 import os
 import re
@@ -18,6 +16,8 @@ from langchain_core.documents import Document
 from common.exceptions import (
     PDFProcessingError,
 )
+from common.pdf_utils import open_pdf_document
+from common.utils import compute_file_hash as _utils_compute_file_hash
 from core.session import SessionManager
 from services.monitoring.performance_monitor import (
     OperationType,
@@ -28,19 +28,11 @@ logger = logging.getLogger(__name__)
 
 
 def compute_file_hash(file_path: str, data: bytes | None = None) -> str:
-    """파일 또는 데이터의 SHA256 해시를 계산합니다."""
-    sha256_hash = hashlib.sha256()
-    try:
-        if data is not None:
-            sha256_hash.update(data)
-        else:
-            with open(file_path, "rb") as f:
-                for byte_block in iter(lambda: f.read(8192), b""):
-                    sha256_hash.update(byte_block)
-        return sha256_hash.hexdigest()
-    except Exception as e:
-        logger.error(f"해시 계산 실패: {e}")
-        return ""
+    """파일 또는 데이터의 SHA256 해시를 계산합니다.
+
+    공용 구현은 ``common.utils.compute_file_hash`` 를 참조합니다 (R: Group 4).
+    """
+    return _utils_compute_file_hash(file_path, data=data)
 
 
 def _to_float(value: Any) -> float | None:
@@ -84,27 +76,6 @@ def _words_bbox(words: list[Any]) -> list[float] | None:
     if not xs0:
         return None
     return [min(xs0), min(ys0), max(xs1), max(ys1)]
-
-
-@contextlib.contextmanager
-def open_pdf_document(file_path: str):
-    """PDF 파일을 자동으로 정리하는 컨텍스트 매니저.
-
-    모든 재시도 경로에서 안전하게 리소스를 정리합니다.
-    """
-    import pymupdf as fitz
-
-    doc = None
-    try:
-        doc = fitz.open(file_path)
-        yield doc
-    finally:
-        if doc:
-            try:
-                doc.close()
-                logger.debug(f"[RAG] [PDF] 파일 핸들 정리 완료: {file_path}")
-            except Exception as e:
-                logger.warning(f"[RAG] [PDF] 파일 종료 중 오류: {e}")
 
 
 def _extraction_progress_pct(page_number: int, total_pages: int) -> int:

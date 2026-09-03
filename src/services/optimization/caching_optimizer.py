@@ -21,6 +21,7 @@ from typing import Any, Generic, TypeVar
 
 import numpy as np
 
+from common.similarity import normalize_vector
 from common.utils import fast_hash
 from services.monitoring.performance_monitor import (
     OperationType,
@@ -439,9 +440,7 @@ class SemanticCache(CacheBackend[T]):
             try:
                 # 쿼리 임베딩
                 query_embedding = await self._embed(key)
-                query_embedding = query_embedding / (
-                    np.linalg.norm(query_embedding) + 1e-10
-                )
+                query_embedding = normalize_vector(query_embedding, eps=1e-10)
 
                 # [최적화] 캐시된 행렬 사용
                 if self._cached_matrix is None:

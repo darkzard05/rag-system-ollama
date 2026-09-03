@@ -11,6 +11,7 @@ import re
 import numpy as np
 
 from common.constants import ChunkingConstants
+from common.similarity import cosine_similarity
 
 logger = logging.getLogger(__name__)
 
@@ -79,7 +80,7 @@ class SemanticChunkerMergeMixin:
 
                 # 2. 유사도 기반 지능적 병합
                 if not should_merge and merged_len <= self.max_chunk_size:
-                    sim = float(np.dot(current_chunk["vector"], chunk["vector"]))
+                    sim = cosine_similarity(current_chunk["vector"], chunk["vector"])
                     if sim > (ChunkingConstants.SIMILARITY_MERGE_THRESHOLD / 100.0):
                         should_merge = True
 
@@ -147,7 +148,7 @@ class SemanticChunkerMergeMixin:
 
             # 최근 3개의 청크와 비교하여 중복 여부 확인 (대량 문서 내 반복 구간 처리)
             for prev in pruned[-3:]:
-                sim = float(np.dot(current_vec, prev["vector"]))
+                sim = cosine_similarity(current_vec, prev["vector"])
                 if sim > threshold:
                     is_dup = True
                     break

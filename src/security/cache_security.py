@@ -10,7 +10,6 @@
 """
 
 import contextlib
-import hashlib
 import hmac
 import json
 import logging
@@ -22,6 +21,7 @@ from pathlib import Path
 from pydantic import BaseModel, Field, field_validator
 
 from common.config import CACHE_EXPECTED_DIR_MODE, CACHE_EXPECTED_FILE_MODE
+from common.utils import compute_file_hash as utils_compute_file_hash
 from security import crypto_utils
 
 logger = logging.getLogger(__name__)
@@ -137,13 +137,13 @@ class CacheSecurityManager:
 
     @staticmethod
     def compute_file_hash(file_path: str, algorithm: str = "sha256") -> str:
+        """파일 해시 계산 (공용 구현 위임, R: Group 4).
+
+        파일이 없으면 ``FileNotFoundError`` 를 raise 하는 기존 계약을 유지한다.
+        """
         if not os.path.exists(file_path):
             raise FileNotFoundError(f"파일 없음: {file_path}")
-        hasher = hashlib.new(algorithm)
-        with open(file_path, "rb") as f:
-            while chunk := f.read(8192):
-                hasher.update(chunk)
-        return hasher.hexdigest()
+        return utils_compute_file_hash(file_path, algorithm=algorithm)
 
     def compute_integrity_hmac(self, data: bytes, algorithm: str = "sha256") -> str:
         if not self.hmac_secret:

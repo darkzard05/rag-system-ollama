@@ -13,6 +13,7 @@ from langchain_core.documents import Document
 from langchain_core.embeddings import Embeddings
 
 from common.config import RERANKER_ENGINE
+from common.similarity import cosine_similarity_batch
 
 logger = logging.getLogger(__name__)
 
@@ -165,10 +166,8 @@ class AsyncSemanticReranker:
     def _cosine_similarity_batch(
         query_vec: np.ndarray, doc_vecs: np.ndarray
     ) -> np.ndarray:
-        """벡터화된 코사인 유사도 계산 (NumPy einsum 활용)."""
-        query_norm = query_vec / (np.linalg.norm(query_vec) + 1e-9)
-        doc_norms = doc_vecs / (np.linalg.norm(doc_vecs, axis=1, keepdims=True) + 1e-9)
-        return np.dot(doc_norms, query_norm)
+        """벡터화된 코사인 유사도 계산 (공용 구현 위임, R: Group 6)."""
+        return cosine_similarity_batch(query_vec, doc_vecs, eps=1e-9)
 
 
 class AsyncCrossEncoderReranker:
