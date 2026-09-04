@@ -2,8 +2,8 @@
 단위 테스트: 쿼리 캐시 배선 (T5/T6) 검증.
 
 대상:
-- core.graph_builder.preprocess() : 세맨틱 쿼리 캐시 조회 wire
-- core.graph_builder.generate()   : is_cached 단축 경로 (LLM 미호출)
+- core.graph.graph_builder.preprocess() : 세맨틱 쿼리 캐시 조회 wire
+- core.graph.graph_builder.generate()   : is_cached 단축 경로 (LLM 미호출)
 - core.pipeline_builder.PipelineBuilder._invalidate_caches_on_index() : 재인덱싱 무효화
 
 모든 테스트는 격리된 mock seam 을 사용하며 실제 Ollama/네트워크 호출은 없다.
@@ -16,7 +16,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from core.graph_builder import generate, preprocess
+from core.graph.graph_builder import generate, preprocess
 from core.pipeline_builder import GRADE_MEMO_KEY, PipelineBuilder
 from core.session import SessionManager
 from services.optimization.caching_optimizer import get_cache_manager
@@ -72,7 +72,7 @@ def _make_cache_manager(get_return: object) -> MagicMock:
 def patch_cache_manager():
     """get_cache_manager() 가 지정한 페이크를 반환하도록 전역 패치."""
     with patch(
-        "core.graph_builder.get_cache_manager",
+        "core.graph.graph_builder.get_cache_manager",
         side_effect=lambda *a, **k: get_cache_manager(),
     ) as p:
         yield p
@@ -84,14 +84,14 @@ def patch_cache_manager():
 @pytest.mark.asyncio
 async def test_preprocess_cache_disabled_is_miss(monkeypatch):
     """QUERY_CACHE_ENABLED=False 이면 항상 is_cached=False, cached_response=None."""
-    monkeypatch.setattr("core.graph_builder.QUERY_CACHE_ENABLED", False)
-    monkeypatch.setattr("core.graph_builder.QUERY_CACHE_MIN_CONF", 0.85)
+    monkeypatch.setattr("core.graph.graph_builder.QUERY_CACHE_ENABLED", False)
+    monkeypatch.setattr("core.graph.graph_builder.QUERY_CACHE_MIN_CONF", 0.85)
 
     # get() 이 절대 호출되지 않아야 하므로 실패하는 페이크로 교체해도 안전.
     fake_cm = _make_cache_manager({"response": "cached answer", "confidence": 0.99})
 
     state = _base_state("reusable query")
-    with patch("core.graph_builder.get_cache_manager", return_value=fake_cm):
+    with patch("core.graph.graph_builder.get_cache_manager", return_value=fake_cm):
         result = await preprocess(state, _base_config(), writer=None)
 
     assert result["is_cached"] is False
@@ -107,8 +107,8 @@ async def test_generate_cache_hit_zero_llm_calls(
     monkeypatch,
 ):
     """캐시 히트 시 generate 는 LLM.astream/ainvoke 를 호출하지 않고 cached 를 스트리밍."""
-    monkeypatch.setattr("core.graph_builder.QUERY_CACHE_ENABLED", True)
-    monkeypatch.setattr("core.graph_builder.QUERY_CACHE_MIN_CONF", 0.85)
+    monkeypatch.setattr("core.graph.graph_builder.QUERY_CACHE_ENABLED", True)
+    monkeypatch.setattr("core.graph.graph_builder.QUERY_CACHE_MIN_CONF", 0.85)
 
     cached_value = {"response": "cached answer", "confidence": 0.99}
     fake_cm = _make_cache_manager(cached_value)
@@ -142,9 +142,9 @@ async def test_generate_cache_hit_zero_llm_calls(
     config["configurable"]["llm"] = llm
 
     with (
-        patch("core.graph_builder.get_cache_manager", return_value=fake_cm),
+        patch("core.graph.graph_builder.get_cache_manager", return_value=fake_cm),
         patch(
-            "core.graph_builder.adispatch_custom_event",
+            "core.graph.graph_builder.adispatch_custom_event",
             side_effect=lambda name, data, config=None: captured_events.append(
                 {"name": name, "data": dict(data)}
             ),
@@ -168,21 +168,21 @@ async def test_generate_cache_hit_zero_llm_calls(
 @pytest.mark.asyncio
 async def test_preprocess_cache_hit_marks_cached(monkeypatch):
     """preprocess 가 캐시 히트를 감지해 is_cached=True, intent=general 로 라우팅."""
-    monkeypatch.setattr("core.graph_builder.QUERY_CACHE_ENABLED", True)
-    monkeypatch.setattr("core.graph_builder.QUERY_CACHE_MIN_CONF", 0.85)
+    monkeypatch.setattr("core.graph.graph_builder.QUERY_CACHE_ENABLED", True)
+    monkeypatch.setattr("core.graph.graph_builder.QUERY_CACHE_MIN_CONF", 0.85)
 
     cached_value = {"response": "cached answer", "confidence": 0.99}
     fake_cm = _make_cache_manager(cached_value)
 
     state = _base_state("reusable query")
     with (
-        patch("core.graph_builder.get_cache_manager", return_value=fake_cm),
+        patch("core.graph.graph_builder.get_cache_manager", return_value=fake_cm),
         patch.object(
             SessionManager,
             "get",
             return_value="somefilehash",
         ),
-        patch("core.graph_builder._ensure_query_cache_embedder", new=AsyncMock()),
+        patch("core.graph.graph_builder._ensure_query_cache_embedder", new=AsyncMock()),
     ):
         result = await preprocess(state, _base_config(), writer=None)
 
@@ -197,21 +197,21 @@ async def test_preprocess_cache_hit_marks_cached(monkeypatch):
 @pytest.mark.asyncio
 async def test_preprocess_low_confidence_is_miss(monkeypatch):
     """confidence 0.5 (< QUERY_CACHE_MIN_CONF 0.85) 이면 is_cached=False."""
-    monkeypatch.setattr("core.graph_builder.QUERY_CACHE_ENABLED", True)
-    monkeypatch.setattr("core.graph_builder.QUERY_CACHE_MIN_CONF", 0.85)
+    monkeypatch.setattr("core.graph.graph_builder.QUERY_CACHE_ENABLED", True)
+    monkeypatch.setattr("core.graph.graph_builder.QUERY_CACHE_MIN_CONF", 0.85)
 
     cached_value = {"response": "low conf answer", "confidence": 0.5}
     fake_cm = _make_cache_manager(cached_value)
 
     state = _base_state("reusable query")
     with (
-        patch("core.graph_builder.get_cache_manager", return_value=fake_cm),
+        patch("core.graph.graph_builder.get_cache_manager", return_value=fake_cm),
         patch.object(
             SessionManager,
             "get",
             return_value="somefilehash",
         ),
-        patch("core.graph_builder._ensure_query_cache_embedder", new=AsyncMock()),
+        patch("core.graph.graph_builder._ensure_query_cache_embedder", new=AsyncMock()),
     ):
         result = await preprocess(state, _base_config(), writer=None)
 
@@ -254,7 +254,7 @@ async def test_invalidate_caches_on_index_clears(monkeypatch):
 @pytest.mark.asyncio
 async def test_generate_general_intent_invokes_llm(monkeypatch):
     """is_cached=False 인 일반 인사(general) 경로는 LLM.astream 을 호출한다."""
-    monkeypatch.setattr("core.graph_builder.QUERY_CACHE_ENABLED", True)
+    monkeypatch.setattr("core.graph.graph_builder.QUERY_CACHE_ENABLED", True)
 
     llm = MagicMock()
     llm.bind.return_value = llm
@@ -282,7 +282,7 @@ async def test_generate_general_intent_invokes_llm(monkeypatch):
     config["configurable"]["llm"] = llm
 
     with patch(
-        "core.graph_builder.adispatch_custom_event",
+        "core.graph.graph_builder.adispatch_custom_event",
         side_effect=lambda name, data, config=None: captured_events.append(
             {"name": name, "data": dict(data)}
         ),
@@ -305,8 +305,8 @@ async def test_preprocess_empty_response_is_miss(monkeypatch):
     빈 응답이 히트로 취급되면 retrieve 가 우회되고 빈 컨텍스트로 LLM 이 호출되어
     환각이 발생한다 (수정 전 결함). 이를 회귀 방지한다.
     """
-    monkeypatch.setattr("core.graph_builder.QUERY_CACHE_ENABLED", True)
-    monkeypatch.setattr("core.graph_builder.QUERY_CACHE_MIN_CONF", 0.85)
+    monkeypatch.setattr("core.graph.graph_builder.QUERY_CACHE_ENABLED", True)
+    monkeypatch.setattr("core.graph.graph_builder.QUERY_CACHE_MIN_CONF", 0.85)
 
     for empty_val in ["", "   "]:
         cached_value = {"response": empty_val, "confidence": 0.99}
@@ -314,13 +314,13 @@ async def test_preprocess_empty_response_is_miss(monkeypatch):
 
         state = _base_state("reusable query")
         with (
-            patch("core.graph_builder.get_cache_manager", return_value=fake_cm),
+            patch("core.graph.graph_builder.get_cache_manager", return_value=fake_cm),
             patch.object(
                 SessionManager,
                 "get",
                 return_value="somefilehash",
             ),
-            patch("core.graph_builder._ensure_query_cache_embedder", new=AsyncMock()),
+            patch("core.graph.graph_builder._ensure_query_cache_embedder", new=AsyncMock()),
         ):
             result = await preprocess(state, _base_config(), writer=None)
 
@@ -336,7 +336,7 @@ async def test_preprocess_empty_response_is_miss(monkeypatch):
 async def test_generate_polluted_empty_cache_returns_no_info(monkeypatch):
     """is_cached=True 이나 cached_response="" (오염된 캐시) 일 때 generate 는
     빈 컨텍스트 LLM 호출 없이 무정보 안내 메시지를 반환한다."""
-    monkeypatch.setattr("core.graph_builder.QUERY_CACHE_ENABLED", True)
+    monkeypatch.setattr("core.graph.graph_builder.QUERY_CACHE_ENABLED", True)
 
     llm = MagicMock()
     llm.bind.return_value = llm
@@ -365,7 +365,7 @@ async def test_generate_polluted_empty_cache_returns_no_info(monkeypatch):
     config["configurable"]["llm"] = llm
 
     with patch(
-        "core.graph_builder.adispatch_custom_event",
+        "core.graph.graph_builder.adispatch_custom_event",
         side_effect=lambda name, data, config=None: captured_events.append(
             {"name": name, "data": dict(data)}
         ),

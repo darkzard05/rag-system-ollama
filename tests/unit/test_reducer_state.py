@@ -2,11 +2,11 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from core.graph_builder import preprocess, rewrite_query
+from core.graph.graph_builder import preprocess, rewrite_query
 
 
 @pytest.mark.asyncio
-@patch("core.graph_builder.adispatch_custom_event")
+@patch("core.graph.graph_builder.adispatch_custom_event")
 async def test_rewrite_query_reducer_logic(mock_dispatch):
     """search_queries가 이미 있으면 rewrite_query는 순수 passthrough(빈 델타)를 반환합니다.
 
@@ -36,7 +36,7 @@ async def test_rewrite_query_reducer_logic(mock_dispatch):
 
 
 @pytest.mark.asyncio
-@patch("core.graph_builder.adispatch_custom_event")
+@patch("core.graph.graph_builder.adispatch_custom_event")
 async def test_rewrite_query_fallback_no_increment(mock_dispatch):
     """search_queries가 없어도 폴백은 retry_count를 반환하지 않습니다 (R1a-01).
 

@@ -16,7 +16,7 @@ import pytest
 from langchain_core.documents import Document
 
 from api.schemas import reset_or_add
-from core.graph_builder import grade_documents, rewrite_query
+from core.graph.graph_builder import grade_documents, rewrite_query
 
 
 @pytest.fixture
@@ -86,11 +86,11 @@ async def test_hardcap_prevents_third_retry() -> None:
     전환해야 한다. 재작성 횟수는 정확히 2회(max_retries), retry_count는 2가 되어야
     한다. 현재 결함 시 rewrite 1회 + retry_count=3으로 실패.
     """
-    from core.graph_builder import (
+    from core.graph.graph_builder import (
         build_graph,
         invalidate_graph_cache,
     )
-    from core.graph_builder import (
+    from core.graph.graph_builder import (
         rewrite_query as _rewrite_query,
     )
 
@@ -135,7 +135,7 @@ async def test_hardcap_prevents_third_retry() -> None:
             patch(
                 "core.async_reranker.get_async_reranker", new_callable=AsyncMock
             ) as mock_get,
-            patch("core.graph_builder.rewrite_query", new=counting_rewrite),
+            patch("core.graph.graph_builder.rewrite_query", new=counting_rewrite),
             patch("aiosqlite.connect", side_effect=Exception("force InMemorySaver")),
         ):
             reranker = AsyncMock()

@@ -107,7 +107,7 @@ class RAGSystem:
         file_hash = SessionManager.get("file_hash", session_id=self.session_id)
         if not file_hash:
             return None
-        from .graph_builder import build_graph
+        from .graph.graph_builder import build_graph
 
         rag_engine = await build_graph()
         EngineCacheManager.set_engine(self.session_id, rag_engine)
@@ -136,7 +136,7 @@ class RAGSystem:
                 result = await rag_engine.ainvoke({"input": query}, config=config)
             docs = result.get("relevant_docs", [])
             await hydrate_documents(docs)
-            from .graph_builder import format_context
+            from .graph.graph_builder import format_context
 
             # perf_report = monitor.get_report() # 이전 코드
             perf_report = monitor.generate_report()

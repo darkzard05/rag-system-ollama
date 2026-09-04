@@ -7,9 +7,9 @@ import pytest_asyncio
 from langchain_core.documents import Document
 from langgraph.graph import StateGraph, START, END
 
-from core.graph_builder import _merge_adjacent_chunks
+from core.graph.graph_builder import _merge_adjacent_chunks
 
-from core.graph_builder import (
+from core.graph.graph_builder import (
     preprocess,
     retrieve_and_rerank,
     grade_documents,
@@ -79,7 +79,7 @@ def mock_retrievers():
 @pytest_asyncio.fixture
 async def compiled_workflow():
     """실제 graph_builder.build_graph()와 동일한 구조의 테스트용 그래프를 생성합니다."""
-    from core.graph_builder import invalidate_graph_cache, build_graph
+    from core.graph.graph_builder import invalidate_graph_cache, build_graph
 
     invalidate_graph_cache()
     with patch("aiosqlite.connect", side_effect=Exception("force InMemorySaver")):
@@ -278,7 +278,7 @@ async def test_merge_adjacent_chunks_merges_consecutive_sections():
 @pytest.mark.asyncio
 async def test_workflow_cache_hit_path(mock_llm):
     """캐시 적중 시 즉시 종료 테스트"""
-    from core.graph_builder import invalidate_graph_cache, build_graph
+    from core.graph.graph_builder import invalidate_graph_cache, build_graph
 
     llm, _json_llm = mock_llm
 
@@ -295,8 +295,8 @@ async def test_workflow_cache_hit_path(mock_llm):
     invalidate_graph_cache()
     try:
         with (
-            patch("core.graph_builder.preprocess", new=_mock_preprocess),
-            patch("core.graph_builder.generate", new=_mock_generate),
+            patch("core.graph.graph_builder.preprocess", new=_mock_preprocess),
+            patch("core.graph.graph_builder.generate", new=_mock_generate),
             patch("aiosqlite.connect", side_effect=Exception("force InMemorySaver")),
         ):
             compiled_workflow = await build_graph()

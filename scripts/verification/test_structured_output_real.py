@@ -5,7 +5,7 @@ from typing import Any
 
 from langchain_ollama import ChatOllama
 
-from core.graph_builder import UnifiedGradeRewriteResponse
+from core.graph.graph_builder import UnifiedGradeRewriteResponse
 
 
 def _parse_unified_json(content: Any) -> dict:

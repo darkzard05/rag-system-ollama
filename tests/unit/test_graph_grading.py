@@ -6,7 +6,7 @@ import pytest
 from langchain_core.documents import Document
 
 from common.config import GRADING_CONFIG
-from core.graph_builder import grade_documents
+from core.graph.graph_builder import grade_documents
 
 
 class MockWriter:
@@ -196,7 +196,7 @@ async def test_grade_documents_short_circuit_above_threshold():
 
 
 @pytest.mark.asyncio
-@patch("core.graph_builder.adispatch_custom_event", new_callable=AsyncMock)
+@patch("core.graph.graph_builder.adispatch_custom_event", new_callable=AsyncMock)
 async def test_grade_documents_calls_llm_below_threshold(
     mock_adispatch: AsyncMock,
 ):

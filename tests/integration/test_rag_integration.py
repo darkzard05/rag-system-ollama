@@ -38,7 +38,7 @@ from common.exceptions import (
     VectorStoreError,
 )
 from common.logging_config import get_logger
-from core.graph_builder import build_graph
+from core.graph.graph_builder import build_graph
 from core.rag_core import RAGSystem
 
 logger = get_logger(__name__)

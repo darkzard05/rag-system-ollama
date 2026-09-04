@@ -5,11 +5,11 @@ from unittest.mock import MagicMock, patch, AsyncMock
 
 import pytest
 from langchain_core.documents import Document
-from core.graph_builder import grade_documents
+from core.graph.graph_builder import grade_documents
 
 
 @pytest.mark.asyncio
-@patch("core.graph_builder.adispatch_custom_event", new_callable=AsyncMock)
+@patch("core.graph.graph_builder.adispatch_custom_event", new_callable=AsyncMock)
 async def test_grade_documents_short_circuit_high_score(mock_dispatch):
     """리랭킹 점수가 높을 때 LLM 호출 없이 generate로 전이되는지 확인합니다."""
     # 1. 고득점 문서 준비
@@ -40,7 +40,7 @@ async def test_grade_documents_short_circuit_high_score(mock_dispatch):
 
 
 @pytest.mark.asyncio
-@patch("core.graph_builder.adispatch_custom_event", new_callable=AsyncMock)
+@patch("core.graph.graph_builder.adispatch_custom_event", new_callable=AsyncMock)
 async def test_grade_documents_proceeds_to_llm_on_low_score(mock_dispatch):
     """점수가 낮을 때 기존처럼 LLM 평가를 수행하는지 확인합니다."""
     # 1. 저득점 문서 준비

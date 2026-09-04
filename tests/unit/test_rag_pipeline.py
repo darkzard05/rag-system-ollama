@@ -152,7 +152,7 @@ async def test_aquery_success(rag_system):
             return_value=mock_monitor,
         ),
         patch("services.monitoring.performance_monitor.OperationType", mock_op_type),
-        patch("core.graph_builder.format_context", return_value="context"),
+        patch("core.graph.graph_builder.format_context", return_value="context"),
     ):
         mock_session.get.return_value = mock_engine
         mock_manager_instance = MagicMock()

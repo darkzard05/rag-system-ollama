@@ -67,7 +67,7 @@ from src.common.config import (
 )
 from src.common.logging_config import setup_logging
 from src.common.utils import count_tokens_rough
-from src.core.graph_builder import format_context
+from src.core.graph.graph_builder import format_context
 from src.core.model_loader import ModelManager
 from src.core.rag_core import RAGSystem
 # isort: on

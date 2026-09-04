@@ -13,7 +13,7 @@ import pytest
 from langchain_core.documents import Document
 from langchain_core.messages import AIMessageChunk
 
-from core.graph_builder import generate
+from core.graph.graph_builder import generate
 from core.model_loader import ModelManager
 
 _NUM_CTX = 8192
@@ -63,10 +63,10 @@ async def _run_generate(mock_llm: MagicMock, docs, fake_count) -> tuple:
     config = {"configurable": {"llm": mock_llm}}
 
     with (
-        patch("core.graph_builder.OLLAMA_NUM_CTX", _NUM_CTX),
-        patch("core.graph_builder.OLLAMA_NUM_PREDICT", _NUM_PREDICT),
-        patch("core.graph_builder.count_tokens_rough", side_effect=fake_count),
-        patch("core.graph_builder.adispatch_custom_event", new=AsyncMock()),
+        patch("core.graph.graph_builder.OLLAMA_NUM_CTX", _NUM_CTX),
+        patch("core.graph.graph_builder.OLLAMA_NUM_PREDICT", _NUM_PREDICT),
+        patch("core.graph.graph_builder.count_tokens_rough", side_effect=fake_count),
+        patch("core.graph.graph_builder.adispatch_custom_event", new=AsyncMock()),
         patch.object(ModelManager, "inference_session", _patch_inference_session()),
     ):
         result = await generate(state, config, writer=MagicMock())

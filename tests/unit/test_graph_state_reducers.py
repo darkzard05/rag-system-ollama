@@ -6,7 +6,7 @@ retrieve_and_rerank가 이전 턴의 stale 재작성 쿼리를 사용했다. 새
 """
 
 from api.schemas import reset_or_add, reset_or_append
-from core.graph_builder import preprocess
+from core.graph.graph_builder import preprocess
 
 
 class MockWriter:

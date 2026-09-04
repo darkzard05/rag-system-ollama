@@ -9,7 +9,7 @@
 
 from langchain_core.documents import Document
 
-from core.graph_builder import _doc_stable_id, _validate_cited_doc_ids, format_context
+from core.graph.graph_builder import _doc_stable_id, _validate_cited_doc_ids, format_context
 
 
 def _make_doc(stable_id: str, content: str, page: int = 1) -> Document:

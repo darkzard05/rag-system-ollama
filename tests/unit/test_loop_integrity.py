@@ -37,7 +37,7 @@ async def test_engine_recompilation_on_loop_change():
 
             async def get_engine():
                 # Invalidate the singleton graph cache so build_graph() recompiles
-                from core.graph_builder import invalidate_graph_cache
+                from core.graph.graph_builder import invalidate_graph_cache
 
                 invalidate_graph_cache()
                 # This call should trigger re-compilation because loop id will be different

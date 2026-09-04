@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from langchain_core.documents import Document
 
-from core.graph_builder import grade_documents
+from core.graph.graph_builder import grade_documents
 
 
 def json_response(**fields):
@@ -14,7 +14,7 @@ def json_response(**fields):
 
 
 @pytest.mark.asyncio
-@patch("core.graph_builder.adispatch_custom_event")
+@patch("core.graph.graph_builder.adispatch_custom_event")
 async def test_grade_documents_relevant(mock_dispatch):
     # Setup
     llm = MagicMock()
@@ -45,7 +45,7 @@ async def test_grade_documents_relevant(mock_dispatch):
 
 
 @pytest.mark.asyncio
-@patch("core.graph_builder.adispatch_custom_event")
+@patch("core.graph.graph_builder.adispatch_custom_event")
 async def test_grade_documents_irrelevant(mock_dispatch):
     # Setup
     llm = MagicMock()
@@ -77,7 +77,7 @@ async def test_grade_documents_irrelevant(mock_dispatch):
 
 
 @pytest.mark.asyncio
-@patch("core.graph_builder.adispatch_custom_event")
+@patch("core.graph.graph_builder.adispatch_custom_event")
 async def test_grade_documents_ambiguous_term_case(mock_dispatch):
     """cm3 vs CM3 모델과 같은 중의적 용어 상황 테스트"""
     # Setup
@@ -114,7 +114,7 @@ async def test_grade_documents_ambiguous_term_case(mock_dispatch):
 
 
 @pytest.mark.asyncio
-@patch("core.graph_builder.adispatch_custom_event")
+@patch("core.graph.graph_builder.adispatch_custom_event")
 async def test_grade_documents_rewrite_integration(mock_dispatch):
     """rewrite는 별도 노드 호출이 아닌 grade_documents의 rewrite 경로로 통합 검증합니다."""
     # Setup
@@ -148,7 +148,7 @@ async def test_grade_documents_rewrite_integration(mock_dispatch):
 
 
 @pytest.mark.asyncio
-@patch("core.graph_builder.adispatch_custom_event")
+@patch("core.graph.graph_builder.adispatch_custom_event")
 async def test_structured_output_failure_fallback(mock_dispatch):
     """JSON 모드와 수동 파싱 폴백 경로 모두 실패 시 기본값(transform)으로 폴백합니다."""
     # Setup - LLM이 에러를 던질 때 (JSON 모드 + 폴백 경로 모두 ValueError)

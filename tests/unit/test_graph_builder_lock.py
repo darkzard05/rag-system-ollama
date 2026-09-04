@@ -14,7 +14,7 @@ from unittest.mock import patch
 
 import pytest
 
-import core.graph_builder as gb
+import core.graph.graph_builder as gb
 
 
 @pytest.mark.asyncio
@@ -70,7 +70,7 @@ async def test_concurrent_build_graph_compiles_exactly_once():
 @pytest.mark.asyncio
 async def test_invalidate_uses_unified_cache_roundtrip():
     """invalidate → rebuild 가 통합 ObjectCache 를 통해 동작해야 한다 (R8/R13 폴드)."""
-    from core.graph_builder import _GRAPH_CACHE_KEY, _graph_object_cache
+    from core.graph.graph_builder import _GRAPH_CACHE_KEY, _graph_object_cache
 
     gb.invalidate_graph_cache()
     graph = await gb.build_graph()

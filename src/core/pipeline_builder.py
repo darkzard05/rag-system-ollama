@@ -28,7 +28,7 @@ from common.config import (
 from common.exceptions import EmptyPDFError, InsufficientChunksError, VectorStoreError
 from core.chunking import split_documents
 from core.document_processor import compute_file_hash, load_pdf_docs
-from core.graph_builder import build_graph
+from core.graph.graph_builder import build_graph
 from core.resource_manager import get_resource_manager
 from core.retriever_factory import create_bm25_retriever, create_vector_store
 from core.session import SessionManager

@@ -12,7 +12,7 @@ from langchain_core.documents import Document
 from langchain_core.messages import AIMessageChunk, SystemMessage
 
 from common.config import ANALYSIS_PROTOCOL
-from core.graph_builder import _split_injection_docs, generate
+from core.graph.graph_builder import _split_injection_docs, generate
 from core.model_loader import ModelManager
 
 
@@ -81,7 +81,7 @@ async def test_generate_excludes_flagged_doc_and_adds_reinforcement():
     config = {"configurable": {"llm": mock_llm}}
 
     with (
-        patch("core.graph_builder.adispatch_custom_event", new=AsyncMock()),
+        patch("core.graph.graph_builder.adispatch_custom_event", new=AsyncMock()),
         patch.object(ModelManager, "inference_session", _patch_inference_session()),
     ):
         result = await generate(state, config, writer=MagicMock())

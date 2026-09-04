@@ -1,5 +1,5 @@
 from langchain_core.documents import Document
-from src.core.graph_builder import _merge_adjacent_chunks, format_context
+from src.core.graph.graph_builder import _merge_adjacent_chunks, format_context
 
 
 def test_metadata_to_context_string_conversion():

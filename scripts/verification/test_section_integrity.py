@@ -9,7 +9,7 @@ sys.path.append(str(Path(__file__).parent.parent.parent / "src"))
 
 from core.document_processor import load_pdf_docs
 from core.chunking import split_documents
-from core.graph_builder import _merge_adjacent_chunks
+from core.graph.graph_builder import _merge_adjacent_chunks
 from core.model_loader import ModelManager
 from common.config import DEFAULT_EMBEDDING_MODEL
 

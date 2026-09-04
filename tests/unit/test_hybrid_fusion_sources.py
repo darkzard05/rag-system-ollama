@@ -22,7 +22,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 from langchain_core.documents import Document
 
-from core.graph_builder import retrieve_and_rerank
+from core.graph.graph_builder import retrieve_and_rerank
 from core.search_aggregator import AggregationStrategy, SearchResultAggregator
 
 # NOTE: search_bm25_with_scores / search_faiss_with_scores는 점수 주입 테스트 내부에서

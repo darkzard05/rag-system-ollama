@@ -10,8 +10,8 @@ from unittest.mock import MagicMock
 import pytest
 from langchain_core.documents import Document
 
-import core.graph_builder as gb
-from core.graph_builder import _apply_ctx_guard
+import core.graph.graph_builder as gb
+from core.graph.graph_builder import _apply_ctx_guard
 
 
 def _make_docs(n: int, content_size: int) -> list[Document]:

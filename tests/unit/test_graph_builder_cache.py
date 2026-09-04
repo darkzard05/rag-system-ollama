@@ -10,7 +10,7 @@ Phase 3 회귀 테스트: build_graph()는 프로세스 전역 캐시를 반환�
 
 import asyncio
 
-from core.graph_builder import build_graph, invalidate_graph_cache
+from core.graph.graph_builder import build_graph, invalidate_graph_cache
 
 
 def test_build_graph_returns_process_global_cached_object() -> None:

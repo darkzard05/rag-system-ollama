@@ -13,7 +13,7 @@
 
 from langchain_core.documents import Document
 
-from core.graph_builder import _filter_min_section_len
+from core.graph.graph_builder import _filter_min_section_len
 
 
 def _doc(text: str) -> Document:

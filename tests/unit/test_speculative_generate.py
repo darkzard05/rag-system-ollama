@@ -20,7 +20,7 @@ from langchain_core.documents import Document
 from langchain_core.messages import AIMessageChunk
 
 from common.config import MAX_CONCURRENT_INFERENCE
-from core.graph_builder import (
+from core.graph.graph_builder import (
     _spec_registry,
     _SpecGenerate,
     generate,
@@ -78,7 +78,7 @@ async def test_no_overlap_when_concurrency_bound_is_one():
     }
     config = {"configurable": {"llm": _json_llm("generate"), "thread_id": "t1"}}
     with patch(
-        "core.graph_builder.MAX_CONCURRENT_INFERENCE",
+        "core.graph._speculative_gen.MAX_CONCURRENT_INFERENCE",
         min(MAX_CONCURRENT_INFERENCE, 1),
     ):
         assert _spec_overlap_disabled()
@@ -124,7 +124,9 @@ async def test_generate_adopts_speculative_task_and_replays_buffer():
     }
     config = {"configurable": {"llm": MagicMock(), "thread_id": thread_id}}
 
-    with patch("core.graph_builder.adispatch_custom_event", side_effect=fake_dispatch):
+    with patch(
+        "core.graph.graph_builder.adispatch_custom_event", side_effect=fake_dispatch
+    ):
         result = await generate(state, config, writer=MagicMock())
 
     assert result == {"response": "답변"}
@@ -179,9 +181,11 @@ async def test_speculative_generate_cancelled_on_transform_route():
     }
 
     with (
-        patch("core.graph_builder.MAX_CONCURRENT_INFERENCE", 2),
-        patch("core.graph_builder.generate", side_effect=_slow_generate),
-        patch("core.graph_builder.adispatch_custom_event", side_effect=fake_dispatch),
+        patch("core.graph._speculative_gen.MAX_CONCURRENT_INFERENCE", 2),
+        patch("core.graph.graph_builder.generate", side_effect=_slow_generate),
+        patch(
+            "core.graph.graph_builder.adispatch_custom_event", side_effect=fake_dispatch
+        ),
     ):
         # grade_documents가 시작한 speculative generate(_slow_generate)가 실행되도록 양보
         grade_task = asyncio.ensure_future(grade_documents(state, config, writer=None))
@@ -258,15 +262,17 @@ async def test_speculative_overlap_generates_route_adopts_single_llm_call():
     }
 
     with (
-        patch("core.graph_builder.MAX_CONCURRENT_INFERENCE", 2),
+        patch("core.graph._speculative_gen.MAX_CONCURRENT_INFERENCE", 2),
         patch(
-            "core.graph_builder.OLLAMA_NUM_CTX",
+            "core.graph.graph_builder.OLLAMA_NUM_CTX",
             8192,
         ),
-        patch("core.graph_builder.OLLAMA_NUM_PREDICT", 2048),
-        patch("core.graph_builder.count_tokens_rough", return_value=10),
+        patch("core.graph.graph_builder.OLLAMA_NUM_PREDICT", 2048),
+        patch("core.graph.graph_builder.count_tokens_rough", return_value=10),
         patch.object(ModelManager, "inference_session", _mock_session()),
-        patch("core.graph_builder.adispatch_custom_event", side_effect=fake_dispatch),
+        patch(
+            "core.graph.graph_builder.adispatch_custom_event", side_effect=fake_dispatch
+        ),
     ):
         # 실제 실행 모델: grade가 route=generate를 반환하면 런타임이 generate를
         # 다시 호출하고, speculative task를 채택(단일 astream 호출 완료)한다.
@@ -321,9 +327,11 @@ async def test_speculative_cancelled_on_grade_llm_error_path():
     config = {"configurable": {"llm": llm, "thread_id": thread_id}}
 
     with (
-        patch("core.graph_builder.MAX_CONCURRENT_INFERENCE", 2),
-        patch("core.graph_builder.generate", side_effect=_slow_generate),
-        patch("core.graph_builder.adispatch_custom_event", side_effect=fake_dispatch),
+        patch("core.graph._speculative_gen.MAX_CONCURRENT_INFERENCE", 2),
+        patch("core.graph.graph_builder.generate", side_effect=_slow_generate),
+        patch(
+            "core.graph.graph_builder.adispatch_custom_event", side_effect=fake_dispatch
+        ),
     ):
         grade_task = asyncio.ensure_future(grade_documents(state, config, writer=None))
         await asyncio.wait_for(started["ran"].wait(), timeout=2)

@@ -15,7 +15,7 @@ from langchain_core.documents import Document
 
 import core.async_reranker as ar
 from common.config import GRADING_CONFIG
-from core.graph_builder import grade_documents, retrieve_and_rerank
+from core.graph.graph_builder import grade_documents, retrieve_and_rerank
 
 
 @pytest.fixture(autouse=True)
@@ -87,7 +87,7 @@ async def test_flashrank_engine_does_not_fire_below_sigmoid_threshold():
 
     with (
         patch.object(ar, "_rerank_engine_active", "flashrank"),
-        patch("core.graph_builder.adispatch_custom_event", new_callable=AsyncMock),
+        patch("core.graph.graph_builder.adispatch_custom_event", new_callable=AsyncMock),
     ):
         result = await grade_documents(_grade_state(score), config, writer=None)
 

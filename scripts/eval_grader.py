@@ -7,7 +7,7 @@ import os
 sys.path.append(os.path.join(os.getcwd(), "src"))
 
 from langchain_core.documents import Document
-from core.graph_builder import grade_documents
+from core.graph.graph_builder import grade_documents
 from core.model_loader import ModelManager
 from langchain_core.runnables import RunnableConfig
 

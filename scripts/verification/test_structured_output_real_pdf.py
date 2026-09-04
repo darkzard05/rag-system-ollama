@@ -8,7 +8,7 @@ sys.path.append(os.path.abspath("src"))
 
 from langchain_ollama import ChatOllama
 from langchain_core.documents import Document
-from core.graph_builder import grade_documents, rewrite_query
+from core.graph.graph_builder import grade_documents, rewrite_query
 from core.document_processor import load_pdf_docs
 
 # 로깅 설정 (내부 동작 확인용)

@@ -5,7 +5,7 @@
 keyword+semantic 동시 매칭 시 폴백되어 기본 가중치(ENSEMBLE_WEIGHTS)를 사용한다.
 """
 
-from core.graph_builder import preprocess
+from core.graph.graph_builder import preprocess
 
 
 class MockWriter:

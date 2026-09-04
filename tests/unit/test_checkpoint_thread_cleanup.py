@@ -18,7 +18,7 @@ from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
 from langgraph.graph import END, START, StateGraph
 
 from api.schemas import GraphState
-from core.graph_builder import (
+from core.graph.graph_builder import (
     _graph_cache,
     build_graph,
     delete_graph_thread,
@@ -134,7 +134,7 @@ async def test_graph_checkpointer_disables_pickle_fallback():
 
 def test_pickle_fallback_false_raises_explicit_error():
     """pickle_fallback=False에서 직렬화 불가 객체는 명시적 예외를 던져야 한다."""
-    from core.graph_builder import _sanitize_channel_value
+    from core.graph.graph_builder import _sanitize_channel_value
 
     class _Exotic:
         pass
@@ -149,7 +149,7 @@ def test_pickle_fallback_false_raises_explicit_error():
 
 def test_channel_sanitizer_keeps_pure_types():
     """위생화는 순수 타입(int/str/float/bool/None/list/dict)을 그대로 유지한다."""
-    from core.graph_builder import _sanitize_channel_value
+    from core.graph.graph_builder import _sanitize_channel_value
 
     value: Any = {"a": 1, "b": ["x", None, True, 1.5], "c": {"d": "e"}}
     assert _sanitize_channel_value(value) == value
@@ -167,7 +167,7 @@ async def test_invalidate_rebuilds_graph_through_unified_cache():
     다시 통합 캐시에 기록해야 한다. 단일 전역 asyncio.Lock + 이중 확인 불변식은
     그대로 preserved 된다.
     """
-    from core.graph_builder import _GRAPH_CACHE_KEY, _graph_object_cache
+    from core.graph.graph_builder import _GRAPH_CACHE_KEY, _graph_object_cache
 
     invalidate_graph_cache()
     await build_graph()

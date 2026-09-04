@@ -52,7 +52,7 @@ from src.common.config import (  # noqa: E402
     MSG_ERROR_OLLAMA_NOT_RUNNING,
 )
 from src.common.logging_config import setup_logging  # noqa: E402
-from src.core import graph_builder as _graph_builder  # noqa: E402
+from src.core.graph import graph_builder as _graph_builder  # noqa: E402
 from src.core.document_processor import compute_file_hash  # noqa: E402
 from src.core.model_loader import ModelManager  # noqa: E402
 from src.core.rag_core import RAGSystem  # noqa: E402

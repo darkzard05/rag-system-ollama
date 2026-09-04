@@ -6,7 +6,7 @@ F2 게이트 검증: 구조화(structured / raw_json) 모드 실시간성(TTFT) 
 - `generate()` 가 완료되기 **이전**에 첫 `response_chunk`(빈 content 가 아닌 원시 JSON
   토큰)가 수신되는지 — 즉 TTFT(time-to-first-token) 가 생성 완료 시점보다 빠른지
 
-소스 수정 없이 `core.graph_builder.adispatch_custom_event` 를 monkeypatch 하여
+소스 수정 없이 `core.graph.graph_builder.adispatch_custom_event` 를 monkeypatch 하여
 `(timestamp, event_name, data)` 를 캡처한다 (writer 게이트는 truthy writer 로 통과).
 """
 
@@ -18,7 +18,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 from langchain_core.documents import Document
 
-from core.graph_builder import generate
+from core.graph.graph_builder import generate
 from core.model_loader import ModelManager
 
 
@@ -71,8 +71,8 @@ async def test_structured_stream_ttft_first_chunk_before_completion():
     docs = [Document(page_content="context doc")]
 
     with (
-        patch("core.graph_builder.PROMPT_TEMPLATES_CONFIG", prompt_config),
-        patch("core.graph_builder.adispatch_custom_event", new=captured._append_async),
+        patch("core.graph.graph_builder.PROMPT_TEMPLATES_CONFIG", prompt_config),
+        patch("core.graph.graph_builder.adispatch_custom_event", new=captured._append_async),
         patch.object(ModelManager, "inference_session", _NullAsyncCtx),
     ):
         completion_time = time.perf_counter()

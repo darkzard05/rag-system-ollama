@@ -16,7 +16,7 @@ from unittest.mock import patch
 
 import pytest
 
-import core.graph_builder as gb
+import core.graph.graph_builder as gb
 
 
 @pytest.mark.asyncio

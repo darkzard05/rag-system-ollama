@@ -8,7 +8,7 @@ sys.path.append(os.path.abspath("src"))
 
 from langchain_core.runnables import RunnableConfig
 from langchain_core.embeddings import Embeddings
-from core.graph_builder import retrieve_and_rerank
+from core.graph.graph_builder import retrieve_and_rerank
 from core.document_processor import load_pdf_docs
 from core.retriever_factory import create_vector_store, create_bm25_retriever
 from core.model_loader import ModelManager

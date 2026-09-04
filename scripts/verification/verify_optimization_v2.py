@@ -8,7 +8,7 @@ from langchain_core.documents import Document
 # 프로젝트 루트 추가
 sys.path.append(os.path.abspath("src"))
 
-from core.graph_builder import UnifiedGradeRewriteResponse, _merge_adjacent_chunks
+from core.graph.graph_builder import UnifiedGradeRewriteResponse, _merge_adjacent_chunks
 
 
 def test_context_merging():

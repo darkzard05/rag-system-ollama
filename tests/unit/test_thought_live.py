@@ -8,7 +8,7 @@ Todo 4 검증: 사고(thought) 라이브 스트리밍 경로.
      one-shot reasoning emit(content="", thought==parsed.reasoning) 만 발생하는지
      (원시 JSON 토큰이 thought 를 오염시키지 않아야 함)
 
-소스 수정 없이 `core.graph_builder.generate` 의 모듈 레벨 `adispatch_custom_event` 를
+소스 수정 없이 `core.graph.graph_builder.generate` 의 모듈 레벨 `adispatch_custom_event` 를
 monkeypatch 하여 이벤트를 캡처한다.
 """
 
@@ -21,7 +21,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 from langchain_core.documents import Document
 
-from core.graph_builder import generate
+from core.graph.graph_builder import generate
 from core.model_loader import ModelManager
 
 
@@ -79,8 +79,8 @@ async def test_non_structured_thought_interleaved():
     docs = [Document(page_content="context doc")]
 
     with (
-        patch("core.graph_builder.PROMPT_TEMPLATES_CONFIG", prompt_config),
-        patch("core.graph_builder.adispatch_custom_event", new=captured._append_async),
+        patch("core.graph.graph_builder.PROMPT_TEMPLATES_CONFIG", prompt_config),
+        patch("core.graph.graph_builder.adispatch_custom_event", new=captured._append_async),
         patch.object(ModelManager, "inference_session", _NullAsyncCtx),
     ):
         result = await generate(
@@ -156,8 +156,8 @@ async def test_structured_thought_one_shot():
     docs = [Document(page_content="context doc")]
 
     with (
-        patch("core.graph_builder.PROMPT_TEMPLATES_CONFIG", prompt_config),
-        patch("core.graph_builder.adispatch_custom_event", new=captured._append_async),
+        patch("core.graph.graph_builder.PROMPT_TEMPLATES_CONFIG", prompt_config),
+        patch("core.graph.graph_builder.adispatch_custom_event", new=captured._append_async),
         patch.object(ModelManager, "inference_session", _NullAsyncCtx),
     ):
         result = await generate(

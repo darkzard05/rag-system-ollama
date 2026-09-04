@@ -4,7 +4,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from core.graph_builder import verify_answer
+from core.graph.graph_builder import verify_answer
 
 
 class _NullWriter:

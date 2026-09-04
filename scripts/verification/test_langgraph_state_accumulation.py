@@ -12,7 +12,7 @@ from langchain_core.documents import Document
 from langgraph.graph import END, START, StateGraph
 
 from api.schemas import GraphState
-from core.graph_builder import grade_documents, preprocess, rewrite_query
+from core.graph.graph_builder import grade_documents, preprocess, rewrite_query
 
 
 async def test_langgraph_state_accumulation():

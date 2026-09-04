@@ -6,7 +6,7 @@
 
 from langchain_core.documents import Document
 
-from core.graph_builder import _merge_adjacent_chunks
+from core.graph.graph_builder import _merge_adjacent_chunks
 
 
 def _doc(content: str, chunk_index: int, section: str, score: float) -> Document:

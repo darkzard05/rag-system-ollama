@@ -223,7 +223,7 @@ def test_evict_stuck_generating_session_frees_graph_thread():
     SessionManager._fallback_sessions[fresh]["is_generating_answer"] = False
     SessionManager._fallback_sessions[fresh]["last_accessed"] = now
 
-    with patch("core.graph_builder.delete_graph_thread") as mock_del_thread:
+    with patch("core.graph.graph_builder.delete_graph_thread") as mock_del_thread:
         SessionManager._evict_oldest_session_locked()
 
     assert stuck not in SessionManager._fallback_sessions

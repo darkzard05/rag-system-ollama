@@ -126,7 +126,7 @@ async def test_get_async_reranker_semantic_engine_returns_semantic():
 @pytest.mark.asyncio
 async def test_retrieve_and_rerank_uses_cross_encoder_in_auto_mode():
     """(d) retrieve_and_rerank가 get_async_reranker 반환 랭커의 rerank를 사용"""
-    from core.graph_builder import retrieve_and_rerank
+    from core.graph.graph_builder import retrieve_and_rerank
 
     docs = _make_docs(5)
     bm25 = AsyncMock()

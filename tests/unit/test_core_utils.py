@@ -1,7 +1,7 @@
 from langchain_core.documents import Document
 
 from common.utils import apply_tooltips_to_response, normalize_latex_delimiters
-from core.graph_builder import _merge_adjacent_chunks
+from core.graph.graph_builder import _merge_adjacent_chunks
 
 # --- Test _merge_adjacent_chunks ---
 

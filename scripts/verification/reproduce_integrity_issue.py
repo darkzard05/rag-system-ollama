@@ -8,7 +8,7 @@ from pathlib import Path
 sys.path.append(str(Path(__file__).parent.parent.parent / "src"))
 
 from langchain_core.documents import Document
-from core.graph_builder import _merge_adjacent_chunks
+from core.graph.graph_builder import _merge_adjacent_chunks
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)

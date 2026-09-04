@@ -6,7 +6,7 @@ from pathlib import Path
 # 프로젝트 루트 추가
 sys.path.append(str(Path(__file__).parent.parent.parent / "src"))
 
-from core.graph_builder import preprocess
+from core.graph.graph_builder import preprocess
 from langchain_core.runnables import RunnableConfig
 
 logging.basicConfig(level=logging.INFO)
