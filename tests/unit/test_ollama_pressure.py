@@ -163,13 +163,24 @@ async def test_model_manager_ollama_fallback_fires(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_model_manager_flag_off_no_fallback(monkeypatch):
-    """ModelManager 플래그 OFF + RAM>90% 에서 퇴출 안 함."""
+    """ModelManager 플래그 OFF + RAM>90% 에서 퇴출 안 함.
+
+    시스템 RAM 경로(_check_memory_pressure 세 번째 폴백: mem.percent > 95)를
+    함께 스텁하지 않으면 실제 호스트 RAM 이 95% 를 넘는 환경에서 이 테스트가
+    flaky 하게 실패한다 (플래그 OFF 로 Ollama 경로만 막히고 시스템 RAM 경로가
+    그대로 True 를 반환). psutil.virtual_memory 를 낮은 percent 로 고정해
+    시스템 RAM 경로를 차단한다.
+    """
     _patch_backend(monkeypatch, ollama=True)
     with (
         patch("torch.cuda.is_available", return_value=False),
         patch("core.model_loader._host_pressure_exceeded", return_value=True),
         patch("core.model_loader._ollama_backend_active", return_value=True),
         patch("core.model_loader.ENABLE_OLLAMA_PRESSURE_FALLBACK", False),
+        patch(
+            "psutil.virtual_memory",
+            return_value=MagicMock(percent=50),
+        ),
     ):
         result = await ModelManager._check_memory_pressure()
     assert result is False
