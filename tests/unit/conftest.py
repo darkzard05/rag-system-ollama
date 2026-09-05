@@ -42,3 +42,16 @@ def _reset_session_manager_per_test():
     if _src_mgr is not None:
         _src_mgr.SessionManager.reset()
         _src_mgr.SessionManager.set_ui_sync(None)
+
+
+@pytest.fixture(autouse=True)
+def _clear_memo_instances_per_test():
+    """격리: 테스트 간 메모이 래퍼(_memo_instances) 상태 누수 차단.
+
+    모델 풀 공유로 프로세스 내 동일 래퍼가 테스트 간 잔존하므로, 각 테스트
+    종료 후 등록된 모든 래퍼의 캐시·단일-flight·통계를 초기화한다.
+    """
+    yield
+    from core.embedding_memo import clear_memo_instances  # lazy, 순환 방지
+
+    clear_memo_instances()

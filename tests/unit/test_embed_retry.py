@@ -48,8 +48,8 @@ def _make_real_embedder():
         from core.model_loader import load_embedding_model
 
         inst = load_embedding_model("nomic-embed-text")
-    # _client 주입 (실제 Ollama 연결 없이)
-    inst._client = mock.MagicMock()
+    # _client 주입 (실제 Ollama 연결 없이) — 래퍼(_memo_wrap)가 inst가 되므로 내부로 주입
+    inst._inner._client = mock.MagicMock()
     return inst
 
 
@@ -98,18 +98,18 @@ class TestEmbedDocumentsRetry:
         """1회 시도 즉시 성공 → 재시도 발동 없음."""
         inst = _make_real_embedder()
         expected = [[0.1, 0.2]]
-        inst._client.embed.return_value = {"embeddings": expected}
+        inst._inner._client.embed.return_value = {"embeddings": expected}
 
         result = inst.embed_documents(["hello"])
 
         assert result == expected
-        assert inst._client.embed.call_count == 1
+        assert inst._inner._client.embed.call_count == 1
 
     def test_success_after_two_failures(self) -> None:
         """2회 실패(color refused) 후 3회차 성공 → 최종 성공."""
         inst = _make_real_embedder()
         expected = [[0.3, 0.4]]
-        inst._client.embed.side_effect = [
+        inst._inner._client.embed.side_effect = [
             _transient_exc(),
             _transient_exc(),
             {"embeddings": expected},
@@ -119,13 +119,13 @@ class TestEmbedDocumentsRetry:
             result = inst.embed_documents(["hello"])
 
         assert result == expected
-        assert inst._client.embed.call_count == 3
+        assert inst._inner._client.embed.call_count == 3
 
     def test_all_attempts_fail_raises_original_exception(self) -> None:
         """3회 모두 연결 거부 → 원본 예외 재발생."""
         inst = _make_real_embedder()
         original = _transient_exc("actively refused it.")
-        inst._client.embed.side_effect = original
+        inst._inner._client.embed.side_effect = original
 
         with (
             mock.patch("time.sleep"),
@@ -133,22 +133,22 @@ class TestEmbedDocumentsRetry:
         ):
             inst.embed_documents(["hello"])
 
-        assert inst._client.embed.call_count == _EMBED_RETRY_MAX_ATTEMPTS
+        assert inst._inner._client.embed.call_count == _EMBED_RETRY_MAX_ATTEMPTS
 
     def test_non_retryable_exception_propagates_immediately(self) -> None:
         """재시도 대상이 아닌 예외(model not found 등) → 즉시 전파, 재시도 안 함."""
         inst = _make_real_embedder()
-        inst._client.embed.side_effect = _non_retryable_exc()
+        inst._inner._client.embed.side_effect = _non_retryable_exc()
 
         with pytest.raises(Exception, match="not found"):
             inst.embed_documents(["hello"])
 
-        assert inst._client.embed.call_count == 1
+        assert inst._inner._client.embed.call_count == 1
 
     def test_retry_logging_on_transient_failure(self) -> None:
         """재시도 발동 시 logger.info 가 호출되는지 검증."""
         inst = _make_real_embedder()
-        inst._client.embed.side_effect = [
+        inst._inner._client.embed.side_effect = [
             _transient_exc(),
             {"embeddings": [[0.5]]},
         ]
@@ -167,7 +167,7 @@ class TestEmbedDocumentsRetry:
     def test_backoff_wait_seconds_respected(self) -> None:
         """백오프 대기 시간이 정책대로 time.sleep 에 전달되는지 검증."""
         inst = _make_real_embedder()
-        inst._client.embed.side_effect = [
+        inst._inner._client.embed.side_effect = [
             _transient_exc(),
             _transient_exc(),
             {"embeddings": [[0.6]]},
@@ -185,7 +185,7 @@ class TestEmbedDocumentsRetry:
     def test_no_client_raises_value_error(self) -> None:
         """_client 가 None 일 때 ValueError 발생 (재시도 없음)."""
         inst = _make_real_embedder()
-        inst._client = None
+        inst._inner._client = None
 
         with pytest.raises(ValueError, match="not initialized"):
             inst.embed_documents(["hello"])
