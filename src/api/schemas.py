@@ -68,6 +68,10 @@ class GraphState(TypedDict):
     performance: dict[str, Any] | None
     search_weights: dict[str, float] | None  # 👈 동적 가중치 추가
     is_cached: bool
+    cached_response: (
+        str | None
+    )  # preprocess:333 반환 키 (FIX-1: LangGraph 채널 드롭 방지)
+    short_query: bool  # preprocess:337 반환 키 (FIX-1: fast path 채널 드롭 방지)
     retry_count: Annotated[int, reset_or_add]
 
 
