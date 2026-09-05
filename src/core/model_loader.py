@@ -48,6 +48,19 @@ def _is_embed_transient_failure(exc: BaseException) -> bool:
     )
 
 
+def _memo_wrap(embedder: Embeddings) -> Embeddings:
+    """쿼리 임베딩 메모이제이션 래퍼. env 토글(기본 on), 생성 시 1회 평가.
+
+    FAISS 검색·시맨틱 리랭커·세맨틱 쿼리 캐시 등 모든 소비 경로가 풀을 통해
+    동일 래퍼 인스턴스를 받도록 반환 지점에서 래핑한다. off면 순수 위임.
+    """
+    if os.getenv("MEMOIZE_EMBEDDING_QUERY", "1") != "1":
+        return embedder
+    from core.embedding_memo import MemoizingEmbedding  # 순환 방지 lazy import
+
+    return MemoizingEmbedding(embedder)
+
+
 if TYPE_CHECKING:
     from langchain_core.embeddings import Embeddings
 
@@ -431,7 +444,9 @@ def load_embedding_model(
         from langchain_core.embeddings import FakeEmbeddings
 
         logger.info(f"[TEST] [MOCK] 가짜 임베딩 모델 로드됨 (모델명: {model_key})")
-        return FakeEmbeddings(size=1536)  # nomic-embed-text 등 주요 모델 크기에 맞춤
+        return _memo_wrap(
+            FakeEmbeddings(size=1536)
+        )  # nomic-embed-text 등 주요 모델 크기에 맞춤
 
     try:
         result: Embeddings
@@ -568,7 +583,7 @@ def load_embedding_model(
                 f"[MODEL] [LOAD] HF 임베딩 모델 로드 성공 | 엔진: {display_device} (Backend: {backend})"
             )
 
-        return result
+        return _memo_wrap(result)
 
     except Exception as e:
         logger.error(f"임베딩 모델 로드 실패: {e}")
