@@ -334,16 +334,16 @@ class ClientPool:
         self._async_client = None
         self._client_loop = None
         self._lock = threading.Lock()
+        self._sync_host: str = ""
+        self._async_host: str = ""
 
     def get_sync_client(self, host: str):
         with self._lock:
-            if (
-                self._sync_client is None
-                or getattr(self._sync_client, "base_url", "") != host
-            ):
+            if self._sync_host != host or self._sync_client is None:
                 import ollama
 
                 self._sync_client = ollama.Client(host=host)
+                self._sync_host = host
             return self._sync_client
 
     async def get_async_client(self, host: str):
@@ -358,7 +358,7 @@ class ClientPool:
         if (
             self._async_client is None
             or self._client_loop != current_loop
-            or getattr(self._async_client, "base_url", "") != host
+            or self._async_host != host
         ):
             if self._async_client:
                 with contextlib.suppress(Exception):
@@ -368,6 +368,7 @@ class ClientPool:
 
             self._async_client = ollama.AsyncClient(host=host)
             self._client_loop = current_loop
+            self._async_host = host
 
         return self._async_client
 

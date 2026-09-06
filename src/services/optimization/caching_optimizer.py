@@ -460,6 +460,14 @@ class SemanticCache(CacheBackend[T]):
                 # 임계값 이상인 경우 반환
                 if best_similarity >= threshold:
                     entry = self.cache[best_match]
+                    if entry.is_expired():
+                        self._update_matrix(best_match, action="remove")
+                        del self.cache[best_match]
+                        self.embeddings.pop(best_match, None)
+                        self.stats.total_misses += 1
+                        self.stats.total_expirations += 1
+                        logger.debug(f"[SemanticCache] 만료된 항목 제거: {best_match}")
+                        return None
                     entry.touch()
                     self.stats.total_hits += 1
                     logger.debug(f"[SemanticCache] 히트: 유사도 {best_similarity:.3f}")

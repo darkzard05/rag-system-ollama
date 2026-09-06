@@ -3,7 +3,30 @@ import asyncio
 import numpy as np
 import pytest
 
-from services.optimization.caching_optimizer import DiskCache
+from common.utils import fast_hash
+from services.optimization.caching_optimizer import DiskCache, SemanticCache
+
+
+class _FakeEmbedder:
+    """Deterministic embedding model for SemanticCache tests.
+
+    Returns the same normalized vector for the same text so that
+    exact-key lookups always match above any threshold.
+    """
+
+    def __init__(self, dim: int = 384) -> None:
+        self._dim = dim
+        self._rng = np.random.default_rng(0)
+        self._vectors: dict[str, np.ndarray] = {}
+
+    async def embed_query(self, text: str) -> np.ndarray:
+        if text not in self._vectors:
+            vec = self._rng.normal(size=self._dim)
+            norm = np.linalg.norm(vec)
+            if norm > 0:
+                vec = vec / norm
+            self._vectors[text] = vec
+        return self._vectors[text]
 
 
 def _mock_manager(monkeypatch, secret=None, verify_ok=True):
@@ -83,3 +106,37 @@ async def test_disk_cache_expiration(tmp_path, monkeypatch):
     await asyncio.sleep(0.2)
 
     assert await disk_cache.get(key) is None
+
+
+@pytest.mark.asyncio
+async def test_semantic_cache_non_expired_entry_returned():
+    cache = SemanticCache(embedding_model=_FakeEmbedder(), similarity_threshold=0.95)
+
+    query = "hello world"
+    await cache.set(query, "stored_value", ttl_seconds=60)
+
+    cached_key = fast_hash(query)
+    assert cached_key in cache.cache
+    assert cached_key in cache.embeddings
+
+    result = await cache.get(query)
+    assert result == "stored_value"
+
+
+@pytest.mark.asyncio
+async def test_semantic_cache_expired_entry_not_returned():
+    cache = SemanticCache(embedding_model=_FakeEmbedder(), similarity_threshold=0.95)
+
+    query = "hello world"
+    await cache.set(query, "stored_value", ttl_seconds=1)
+
+    cached_key = fast_hash(query)
+    assert cached_key in cache.cache
+    assert cached_key in cache.embeddings
+
+    await asyncio.sleep(1.1)
+
+    result = await cache.get(query)
+    assert result is None
+    assert cached_key not in cache.cache
+    assert cached_key not in cache.embeddings
