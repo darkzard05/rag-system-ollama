@@ -125,7 +125,7 @@ async def test_generate_adopts_speculative_task_and_replays_buffer():
     config = {"configurable": {"llm": MagicMock(), "thread_id": thread_id}}
 
     with patch(
-        "core.graph.graph_builder.adispatch_custom_event", side_effect=fake_dispatch
+        "core.graph._generate.adispatch_custom_event", side_effect=fake_dispatch
     ):
         result = await generate(state, config, writer=MagicMock())
 
@@ -182,9 +182,9 @@ async def test_speculative_generate_cancelled_on_transform_route():
 
     with (
         patch("core.graph._speculative_gen.MAX_CONCURRENT_INFERENCE", 2),
-        patch("core.graph.graph_builder.generate", side_effect=_slow_generate),
+        patch("core.graph._generate.generate", side_effect=_slow_generate),
         patch(
-            "core.graph.graph_builder.adispatch_custom_event", side_effect=fake_dispatch
+            "core.graph._generate.adispatch_custom_event", side_effect=fake_dispatch
         ),
     ):
         # grade_documents가 시작한 speculative generate(_slow_generate)가 실행되도록 양보
@@ -264,14 +264,15 @@ async def test_speculative_overlap_generates_route_adopts_single_llm_call():
     with (
         patch("core.graph._speculative_gen.MAX_CONCURRENT_INFERENCE", 2),
         patch(
-            "core.graph.graph_builder.OLLAMA_NUM_CTX",
+            "core.graph._generate.OLLAMA_NUM_CTX",
             8192,
         ),
-        patch("core.graph.graph_builder.OLLAMA_NUM_PREDICT", 2048),
-        patch("core.graph.graph_builder.count_tokens_rough", return_value=10),
+        patch("core.graph._generate.OLLAMA_NUM_PREDICT", 2048),
+        patch("core.graph._generate.count_tokens_rough", return_value=10),
         patch.object(ModelManager, "inference_session", _mock_session()),
+        patch("core.graph._grade.adispatch_custom_event", side_effect=fake_dispatch),
         patch(
-            "core.graph.graph_builder.adispatch_custom_event", side_effect=fake_dispatch
+            "core.graph._generate.adispatch_custom_event", side_effect=fake_dispatch
         ),
     ):
         # 실제 실행 모델: grade가 route=generate를 반환하면 런타임이 generate를
@@ -328,9 +329,9 @@ async def test_speculative_cancelled_on_grade_llm_error_path():
 
     with (
         patch("core.graph._speculative_gen.MAX_CONCURRENT_INFERENCE", 2),
-        patch("core.graph.graph_builder.generate", side_effect=_slow_generate),
+        patch("core.graph._generate.generate", side_effect=_slow_generate),
         patch(
-            "core.graph.graph_builder.adispatch_custom_event", side_effect=fake_dispatch
+            "core.graph._generate.adispatch_custom_event", side_effect=fake_dispatch
         ),
     ):
         grade_task = asyncio.ensure_future(grade_documents(state, config, writer=None))

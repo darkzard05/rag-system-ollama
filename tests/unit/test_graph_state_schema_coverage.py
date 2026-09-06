@@ -35,6 +35,34 @@ GRAPH_NODE_FUNCS = {
 GRAPH_BUILDER_PATH = SRC_DIR / "core" / "graph" / "graph_builder.py"
 SCHEMAS_PATH = SRC_DIR / "api" / "schemas.py"
 
+# Step 2: preprocess 는 core.graph._preprocess 로 이동됨.
+# Step 3: retrieve_and_rerank 는 core.graph._retrieve 로 이동됨.
+# Step 4: grade_documents / rewrite_query 는 core.graph._grade 로 이동됨.
+# Step 5: generate / format_context 등은 core.graph._generate 로 이동됨.
+# 노드별 소스 후보 파일 (추후 분리되는 모듈은 여기에 추가).
+NODE_FUNC_SOURCE_PATHS: dict[str, list[Path]] = {
+    "preprocess": [
+        SRC_DIR / "core" / "graph" / "_preprocess.py",
+        GRAPH_BUILDER_PATH,
+    ],
+    "retrieve_and_rerank": [
+        SRC_DIR / "core" / "graph" / "_retrieve.py",
+        GRAPH_BUILDER_PATH,
+    ],
+    "grade_documents": [
+        SRC_DIR / "core" / "graph" / "_grade.py",
+        GRAPH_BUILDER_PATH,
+    ],
+    "rewrite_query": [
+        SRC_DIR / "core" / "graph" / "_grade.py",
+        GRAPH_BUILDER_PATH,
+    ],
+    "generate": [
+        SRC_DIR / "core" / "graph" / "_generate.py",
+        GRAPH_BUILDER_PATH,
+    ],
+}
+
 
 def _collect_return_keys(
     func_def: ast.FunctionDef | ast.AsyncFunctionDef,
@@ -104,19 +132,20 @@ def test_graph_state_declares_cached_response_and_short_query():
 )
 def test_every_node_return_keys_are_declared_in_schema(func_name: str):
     """그래프 노드의 모든 반환 dict 키 ⊆ GraphState 스키마 집합 (부분집합)."""
-    src = GRAPH_BUILDER_PATH.read_text(encoding="utf-8")
-    tree = ast.parse(src)
-
     func_def = None
-    for node in ast.walk(tree):
-        if (
-            isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
-            and node.name == func_name
-        ):
-            func_def = node
+    for src_path in NODE_FUNC_SOURCE_PATHS.get(func_name, [GRAPH_BUILDER_PATH]):
+        tree = ast.parse(src_path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if (
+                isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+                and node.name == func_name
+            ):
+                func_def = node
+                break
+        if func_def is not None:
             break
     if func_def is None:
-        pytest.fail(f"graph_builder.py 에 노드 함수 {func_name!r} 을 찾지 못했습니다.")
+        pytest.fail(f"스플릿 후 노드 함수 {func_name!r} 을 소스에서 찾지 못했습니다.")
 
     decl_keys = _graph_state_declared_keys()
     returned_keys = _collect_return_keys(func_def)

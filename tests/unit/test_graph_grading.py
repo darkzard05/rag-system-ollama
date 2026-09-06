@@ -196,7 +196,7 @@ async def test_grade_documents_short_circuit_above_threshold():
 
 
 @pytest.mark.asyncio
-@patch("core.graph.graph_builder.adispatch_custom_event", new_callable=AsyncMock)
+@patch("core.graph._grade.adispatch_custom_event", new_callable=AsyncMock)
 async def test_grade_documents_calls_llm_below_threshold(
     mock_adispatch: AsyncMock,
 ):

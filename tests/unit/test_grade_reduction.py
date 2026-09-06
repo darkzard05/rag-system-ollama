@@ -126,13 +126,13 @@ async def _patch_grade_deps(decision: dict):
     fake_mm.inference_session = _null_session  # type: ignore[attr-defined]
 
     with (
-        patch("core.graph.graph_builder.SessionManager", store),
-        patch("core.graph.graph_builder.ModelManager", fake_mm),
+        patch("core.graph._grade.SessionManager", store),
+        patch("core.graph._grade.ModelManager", fake_mm),
         patch(
             "core.async_reranker.get_active_rerank_engine",
             return_value="flashrank",
         ),
-        patch("core.graph.graph_builder.adispatch_custom_event", new=AsyncMock()),
+        patch("core.graph._grade.adispatch_custom_event", new=AsyncMock()),
     ):
         yield store, llm, json_llm
 
@@ -143,7 +143,7 @@ async def _patch_grade_deps(decision: dict):
 @pytest.mark.asyncio
 async def test_memo_reuse_same_docset_calls_llm_once(monkeypatch):
     """T8: 동일 상태 재호출 시 LLM 호출 횟수 == 1 (메모 히트)."""
-    monkeypatch.setattr("core.graph.graph_builder.GRADING_ENABLED", True)
+    monkeypatch.setattr("core.graph._grade.GRADING_ENABLED", True)
 
     # rewrite 판단이 메모에 "transform" 으로 저장되도록 설정.
     decision = {
@@ -179,7 +179,7 @@ async def test_memo_reuse_same_docset_calls_llm_once(monkeypatch):
 @pytest.mark.asyncio
 async def test_different_docset_forces_fresh_grade(monkeypatch):
     """T8: doc_id-set 이 바뀌면 메모 miss → LLM 이 다시 호출된다."""
-    monkeypatch.setattr("core.graph.graph_builder.GRADING_ENABLED", True)
+    monkeypatch.setattr("core.graph._grade.GRADING_ENABLED", True)
 
     decision = {
         "action": "generate",
@@ -209,7 +209,7 @@ async def test_different_docset_forces_fresh_grade(monkeypatch):
 @pytest.mark.asyncio
 async def test_opt_out_grading_disabled_returns_generate_no_llm(monkeypatch):
     """T9: GRADING_ENABLED=False → LLM 미호출, {"intent":"generate","route":"generate"}."""
-    monkeypatch.setattr("core.graph.graph_builder.GRADING_ENABLED", False)
+    monkeypatch.setattr("core.graph._grade.GRADING_ENABLED", False)
 
     docs = _docs(["doc-a1", "doc-a2"])
     state = _base_state("any query", relevant_docs=docs)
@@ -240,7 +240,7 @@ async def test_opt_out_grading_disabled_returns_generate_no_llm(monkeypatch):
 @pytest.mark.asyncio
 async def test_is_cached_short_circuit_skips_llm(monkeypatch):
     """T5: is_cached=True 단축 경로는 LLM 을 호출하지 않고 {"route":"generate"} 반환."""
-    monkeypatch.setattr("core.graph.graph_builder.GRADING_ENABLED", True)
+    monkeypatch.setattr("core.graph._grade.GRADING_ENABLED", True)
 
     docs = _docs(["doc-a1", "doc-a2"])
     state = _base_state("any query", relevant_docs=docs, is_cached=True)
@@ -264,7 +264,7 @@ async def test_is_cached_short_circuit_skips_llm(monkeypatch):
 @pytest.mark.asyncio
 async def test_normal_path_reaches_llm_and_returns_valid_route(monkeypatch):
     """안전 단축 없이 일반 경로가 LLM 에 도달하고 유효한 route 를 반환."""
-    monkeypatch.setattr("core.graph.graph_builder.GRADING_ENABLED", True)
+    monkeypatch.setattr("core.graph._grade.GRADING_ENABLED", True)
 
     decision = {
         "action": "generate",

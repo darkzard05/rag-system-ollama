@@ -56,7 +56,7 @@ async def test_generate_fallback_merges_list_content():
     assert not hasattr(mock_llm, "_convert_chunk_to_thought_and_content")
 
     with (
-        patch("core.graph.graph_builder.adispatch_custom_event", new=AsyncMock()),
+        patch("core.graph._glue.adispatch_custom_event", new=AsyncMock()),
         patch.object(ModelManager, "inference_session", _patch_inference_session()),
     ):
         result = await generate(state, config, writer=MagicMock())
@@ -93,7 +93,7 @@ async def test_generate_fallback_mixed_content_blocks():
     config = {"configurable": {"llm": mock_llm}}
 
     with (
-        patch("core.graph.graph_builder.adispatch_custom_event", new=AsyncMock()),
+        patch("core.graph._glue.adispatch_custom_event", new=AsyncMock()),
         patch.object(ModelManager, "inference_session", _patch_inference_session()),
     ):
         result = await generate(state, config, writer=MagicMock())

@@ -6,7 +6,7 @@ Todo 1 검증: AstroStream 원시 JSON(raw_json) 라이브 스트리밍 경로.
 - (b) 파싱 전 원시 토큰 emit이 파싱 후 one-shot reasoning emit보다 먼저 발생하는지(타이밍)
 - (c) JSON 파싱 실패 시 `parse_failed=True` 가 반환되고 예외가 새어나오지 않는지
 
-소스 수정 없이 `core.graph.graph_builder.generate` 의 모듈 레벨 `adispatch_custom_event` 를
+소스 수정 없이 `core.graph._glue.generate` 경로의 모듈 레벨 `adispatch_custom_event` 를
 monkeypatch 하여 이벤트를 캡처한다 (writer 게이트는 truthy writer 로 통과).
 """
 
@@ -82,8 +82,8 @@ async def test_raw_json_live_5_tokens():
     docs = [Document(page_content="context doc")]
 
     with (
-        patch("core.graph.graph_builder.PROMPT_TEMPLATES_CONFIG", prompt_config),
-        patch("core.graph.graph_builder.adispatch_custom_event", new=captured._append_async),
+        patch("core.graph._generate.PROMPT_TEMPLATES_CONFIG", prompt_config),
+        patch("core.graph._glue.adispatch_custom_event", new=captured._append_async),
         patch.object(ModelManager, "inference_session", _NullAsyncCtx),
     ):
         result = await generate(
@@ -153,8 +153,8 @@ async def test_parse_failure_preserves_flag():
 
     result = None
     with (
-        patch("core.graph.graph_builder.PROMPT_TEMPLATES_CONFIG", prompt_config),
-        patch("core.graph.graph_builder.adispatch_custom_event", new=captured._append_async),
+        patch("core.graph._generate.PROMPT_TEMPLATES_CONFIG", prompt_config),
+        patch("core.graph._glue.adispatch_custom_event", new=captured._append_async),
         patch.object(ModelManager, "inference_session", _NullAsyncCtx),
     ):
         # 예외가 새어나오지 않아야 한다 (내부에서 폴백 처리).

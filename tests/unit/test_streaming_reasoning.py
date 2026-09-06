@@ -25,7 +25,7 @@ class MockChunk(AIMessageChunk):
 
 
 @pytest.mark.asyncio
-@patch("core.graph.graph_builder.adispatch_custom_event")
+@patch("core.graph._glue.adispatch_custom_event")
 async def test_generate_streams_thought_and_content(mock_dispatch):
     """generate 노드가 사고 과정과 답변 본문을 실시간으로 StreamWriter로 전달하는지 테스트"""
 

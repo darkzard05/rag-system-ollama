@@ -71,8 +71,8 @@ async def test_structured_stream_ttft_first_chunk_before_completion():
     docs = [Document(page_content="context doc")]
 
     with (
-        patch("core.graph.graph_builder.PROMPT_TEMPLATES_CONFIG", prompt_config),
-        patch("core.graph.graph_builder.adispatch_custom_event", new=captured._append_async),
+        patch("core.graph._generate.PROMPT_TEMPLATES_CONFIG", prompt_config),
+        patch("core.graph._glue.adispatch_custom_event", new=captured._append_async),
         patch.object(ModelManager, "inference_session", _NullAsyncCtx),
     ):
         completion_time = time.perf_counter()

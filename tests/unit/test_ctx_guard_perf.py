@@ -10,7 +10,7 @@ from unittest.mock import MagicMock
 import pytest
 from langchain_core.documents import Document
 
-import core.graph.graph_builder as gb
+import core.graph._generate as ggen
 from core.graph.graph_builder import _apply_ctx_guard
 
 
@@ -35,14 +35,14 @@ def patch_tokens(monkeypatch):
     def fake_count(text: str) -> int:
         return len(text) // 4 + 1
 
-    monkeypatch.setattr(gb, "count_tokens_rough", fake_count)
+    monkeypatch.setattr(ggen, "count_tokens_rough", fake_count)
     return fake_count
 
 
 def test_ctx_guard_trims_with_few_format_calls(patch_tokens, monkeypatch):
     """예산 초과 시 트리밍되나 format_context 호출은 최대 6회."""
     fmt = MagicMock(side_effect=lambda docs: f"<ctx:{len(docs)}>")
-    monkeypatch.setattr(gb, "format_context", fmt)
+    monkeypatch.setattr(ggen, "format_context", fmt)
 
     docs = _make_docs(20, content_size=10_000)
     query = "질문입니다"
@@ -63,7 +63,7 @@ def test_ctx_guard_trims_with_few_format_calls(patch_tokens, monkeypatch):
 def test_ctx_guard_no_trim_when_fits(monkeypatch):
     """예산 내 문서는 트리밍되지 않고 format_context 호출 = 2회."""
     fmt = MagicMock(side_effect=lambda docs: f"<ctx:{len(docs)}>")
-    monkeypatch.setattr(gb, "format_context", fmt)
+    monkeypatch.setattr(ggen, "format_context", fmt)
 
     # 작은 문서: 예산 내에 들어옴
     docs = _make_docs(20, content_size=10)
@@ -80,8 +80,8 @@ def test_ctx_guard_no_trim_when_fits(monkeypatch):
 def test_ctx_guard_min_two_docs_always(monkeypatch):
     """매우 큰 문서라도 최소 2문서는 유지된다."""
     fmt = MagicMock(side_effect=lambda docs: f"<ctx:{len(docs)}>")
-    monkeypatch.setattr(gb, "format_context", fmt)
-    monkeypatch.setattr(gb, "count_tokens_rough", lambda t: 1_000_000)
+    monkeypatch.setattr(ggen, "format_context", fmt)
+    monkeypatch.setattr(ggen, "count_tokens_rough", lambda t: 1_000_000)
     docs = _make_docs(20, content_size=50_000)
 
     trimmed, _, removed = _apply_ctx_guard(docs, "q")

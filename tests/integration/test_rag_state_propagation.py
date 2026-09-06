@@ -203,7 +203,7 @@ class TestShortQueryFastPath:
                     new=_make_fake_retrieve(canned_docs),
                 ),
                 patch(
-                    "core.graph.graph_builder.get_resource_manager",
+                    "core.graph._verify.get_resource_manager",
                     return_value=_StubCoordinator(),
                 ),
                 # _safe_invoke 는 함수 내부에서 core.resource_manager 를 import
@@ -259,7 +259,7 @@ class TestQueryCachePropagation:
                     new=_make_fake_retrieve([]),
                 ),
                 patch(
-                    "core.graph.graph_builder.get_resource_manager",
+                    "core.graph._verify.get_resource_manager",
                     return_value=_StubCoordinator(),
                 ),
                 patch(
@@ -267,16 +267,16 @@ class TestQueryCachePropagation:
                     return_value=_StubCoordinator(),
                 ),
                 # value import — graph_builder.QUERY_CACHE_ENABLED 를 패치
-                patch("core.graph.graph_builder.QUERY_CACHE_ENABLED", True),
+                patch("core.graph._preprocess.QUERY_CACHE_ENABLED", True),
                 # _ensure_query_cache_embedder: no-op (캐시 조회 전 임베더 준비)
                 patch(
-                    "core.graph.graph_builder._ensure_query_cache_embedder",
+                    "core.graph._preprocess._ensure_query_cache_embedder",
                     new=AsyncMock(),
                 ),
                 # get_cache_manager(): 팩토리 대역 — preprocess 는
                 # `await get_cache_manager().get(...)` 호출
                 patch(
-                    "core.graph.graph_builder.get_cache_manager",
+                    "core.graph._preprocess.get_cache_manager",
                     return_value=cm,
                 ),
                 # SessionManager.get("file_hash") truthy → has_doc=True
@@ -315,19 +315,19 @@ class TestQueryCachePropagation:
                     new=_make_fake_retrieve([]),
                 ),
                 patch(
-                    "core.graph.graph_builder.get_resource_manager",
+                    "core.graph._verify.get_resource_manager",
                     return_value=_StubCoordinator(),
                 ),
                 patch(
                     "core.resource_manager.get_resource_manager",
                     return_value=_StubCoordinator(),
                 ),
-                patch("core.graph.graph_builder.QUERY_CACHE_ENABLED", True),
+                patch("core.graph._preprocess.QUERY_CACHE_ENABLED", True),
                 patch(
-                    "core.graph.graph_builder._ensure_query_cache_embedder",
+                    "core.graph._preprocess._ensure_query_cache_embedder",
                     new=AsyncMock(),
                 ),
-                patch("core.graph.graph_builder.get_cache_manager", return_value=cm),
+                patch("core.graph._preprocess.get_cache_manager", return_value=cm),
                 patch.object(gb.SessionManager, "get", return_value="fake-file-hash"),
             ):
                 graph = _fresh_graph()
@@ -382,7 +382,7 @@ class TestTransformBranch:
                     new=_make_fake_retrieve(unrelated_docs),
                 ),
                 patch(
-                    "core.graph.graph_builder.get_resource_manager",
+                    "core.graph._verify.get_resource_manager",
                     return_value=_StubCoordinator(),
                 ),
                 patch(
@@ -423,7 +423,7 @@ class TestTransformBranch:
                     new=_make_fake_retrieve(unrelated_docs),
                 ),
                 patch(
-                    "core.graph.graph_builder.get_resource_manager",
+                    "core.graph._verify.get_resource_manager",
                     return_value=_StubCoordinator(),
                 ),
                 patch(

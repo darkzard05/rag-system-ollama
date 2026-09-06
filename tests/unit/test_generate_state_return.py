@@ -63,10 +63,10 @@ async def _run_generate(mock_llm: MagicMock, docs, fake_count) -> tuple:
     config = {"configurable": {"llm": mock_llm}}
 
     with (
-        patch("core.graph.graph_builder.OLLAMA_NUM_CTX", _NUM_CTX),
-        patch("core.graph.graph_builder.OLLAMA_NUM_PREDICT", _NUM_PREDICT),
-        patch("core.graph.graph_builder.count_tokens_rough", side_effect=fake_count),
-        patch("core.graph.graph_builder.adispatch_custom_event", new=AsyncMock()),
+        patch("core.graph._generate.OLLAMA_NUM_CTX", _NUM_CTX),
+        patch("core.graph._generate.OLLAMA_NUM_PREDICT", _NUM_PREDICT),
+        patch("core.graph._generate.count_tokens_rough", side_effect=fake_count),
+        patch("core.graph._glue.adispatch_custom_event", new=AsyncMock()),
         patch.object(ModelManager, "inference_session", _patch_inference_session()),
     ):
         result = await generate(state, config, writer=MagicMock())

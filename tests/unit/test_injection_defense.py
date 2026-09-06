@@ -81,7 +81,7 @@ async def test_generate_excludes_flagged_doc_and_adds_reinforcement():
     config = {"configurable": {"llm": mock_llm}}
 
     with (
-        patch("core.graph.graph_builder.adispatch_custom_event", new=AsyncMock()),
+        patch("core.graph._glue.adispatch_custom_event", new=AsyncMock()),
         patch.object(ModelManager, "inference_session", _patch_inference_session()),
     ):
         result = await generate(state, config, writer=MagicMock())
