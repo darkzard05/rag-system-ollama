@@ -14,6 +14,12 @@ them (``SessionManager.set``/``add_message`` never touch these keys), so
 ``sync_session()`` can never overwrite them. Adding them to the protection set
 would only add needless snapshot/restore work and could resurrect a stale
 clicked state after a sync.
+
+Note: ``sync_session()`` no longer snapshots/restores widget keys (``UIBridge``
+removed that block — Streamlit 1.54 forbids script-side assignment to widget
+keys, which crashed the run). ``INTERACTIVE_KEYS`` is retained purely as a
+documentation registry of widget-bound keys; the sync mirrors only store keys
+and never writes widget keys.
 """
 
 # ---------------------------------------------------------------------------

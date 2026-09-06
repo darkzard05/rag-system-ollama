@@ -605,8 +605,12 @@ def _process_uploaded_file(uploaded_file) -> None:
         SessionManager.reset_for_new_file(session_id=sid)
         # 새 문서는 항상 1페이지부터 열이도록 PDF 네비게이션 위젯 상태와
         # 일회성 점프 키(pdf_target_page)를 초기화합니다. pdf_nav_input_v6는
-        # INTERACTIVE_KEYS에 속해 스냅샷/복원되므로 직접 session_state를
-        # 갱신하여 이전 문서의 마지막 페이지 값이 재사용되지 않게 합니다.
+        # INTERACTIVE_KEYS(위젯 키)에 속하지만, sync_session은 더 이상 위젯 키를
+        # 스냅샷/복원하지 않습니다 (Streamlit 1.54는 스크립트 측 위젯 키 대입을
+        # 금지). viewer.py/common.py/main.py에서의 pdf_nav_input_v6 직접 스크립트
+        # 대입은 기존에 존재하던 것으로 저장소에 의해 더티 처리되지 않으므로
+        # sync가 이 키를 덮어쓰지 않습니다 — 여기서 직접 session_state를 갱신하여
+        # 이전 문서의 마지막 페이지 값이 재사용되지 않게 합니다.
         st.session_state["pdf_nav_input_v6"] = 1
         st.session_state.pop("pdf_target_page", None)
         old_path = SessionManager.get("pdf_file_path")

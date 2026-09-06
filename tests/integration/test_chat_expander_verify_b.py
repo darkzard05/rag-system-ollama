@@ -21,9 +21,12 @@ AppTest idioms that work (streamlit 1.54.0):
   created during the first boot, so drive state with
   `SessionManager.set(key, value, session_id=_app_session_id())` between
   `.run()` calls — the UI reads everything through `SessionManager.get()`.
-- `UIBridge.sync_session()` (src/ui/bridge.py:54) is a no-op here because
-  `ContextManager.get_current_session_id()` is never set by the app, so state
-  written to the store is never clobbered by widget sync.
+- `UIBridge.sync_session()` (src/ui/bridge.py:54) actually runs under AppTest —
+  `SessionManager.get_session_id()` resolves the real "test session id" from the
+  script-run context (LocalScriptRunner), so it is not a no-op. It is safe
+  because it only mirrors store keys and never writes widget keys. The old code
+  was a no-op and that masked a latent widget-key write crash (snapshot/restore
+  block removed; Streamlit 1.54 forbids script-side widget-key assignment).
 - A single `st.rerun()` inside the script is executed by AppTest within the
   same `.run()` call, so the post-streaming rerun settles and the returned
   tree reflects the final idle state.
