@@ -14,6 +14,7 @@ import time
 import weakref
 from collections import OrderedDict
 from dataclasses import dataclass, field
+from typing import Any
 
 import numpy as np
 from langchain_core.embeddings import Embeddings
@@ -72,6 +73,22 @@ class MemoizingEmbedding(Embeddings):
             "in_flight": 0,
         }
         _memo_instances.add(self)
+
+    @property
+    def model(self) -> Any:
+        """내부 임베더의 모델 식별자를 위임합니다.
+
+        데코레이터 래퍼는 모델명을 노출하지 않으면 자신이 감싼 임베더의
+        ``model``/``model_name`` 이 없으면 ``embedding_memo`` 캐시 키의 기준이
+        ``default_model`` 로 폴백되어, 서로 다른 임베더(가짜/실제)가 같은 캐시
+        키 공간을 공유하게 된다. (FAISS 차원 불일치 사고의 근본 원인)
+        """
+        return getattr(self._inner, "model", None)
+
+    @property
+    def model_name(self) -> Any:
+        """내부 임베더의 모델명을 위임합니다 (``model`` 미보유 임베더 대비)."""
+        return getattr(self._inner, "model_name", None)
 
     def embed_documents(self, texts: list[str]) -> list[list[float]]:
         """메모이제이션 없이 내부 임베더로 순수 위임한다."""

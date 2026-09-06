@@ -23,7 +23,9 @@
 import asyncio
 import concurrent.futures
 import logging
+import os
 import re
+import tempfile
 from pathlib import Path
 from typing import cast
 
@@ -91,11 +93,26 @@ class EmbeddingBasedSemanticChunker(
         # 라운드트립을 건너뛴다. 메모리 레이어(L1)도 함께 두어 동일 프로세스 내
         # 반복 조회는 디스크 I/O 없이 처리한다. 디스크 경로는 전역 MODEL_CACHE_DIR
         # 하위의 embedding_cache 로 격리해 기타 응답 캐시와 혼재되지 않게 한다.
+        #
+        # [안전장치] 테스트 환경(IS_UNIT_TEST/IS_CI_TEST)에서는 가짜 임베더
+        # (FakeEmbeddings 등)가 생성한 벡터가 프로덕션 캐시 공간을 오염하지
+        # 않도록 디스크 캐시 경로를 OS 임시 디렉토리로 분리한다. 가짜 임베더는
+        # 실제 모델과 출력 차원이 다를 수 있어(1536 vs 768), 프로덕션 경로에
+        # 기록되면 이후 chunker가 그 벡터를 히트해 FAISS 인덱스-쿼리 차원
+        # 불일치(assert d == self.d)를 유발했다.
+        _is_test_env = (
+            os.getenv("IS_UNIT_TEST") == "true" or os.getenv("IS_CI_TEST") == "true"
+        )
+        _embedding_cache_dir = (
+            str(Path(tempfile.gettempdir()) / "embedding_cache_test")
+            if _is_test_env
+            else str(Path(MODEL_CACHE_DIR) / "embedding_cache")
+        )
         self.cache_manager = cache_manager or CacheManager(
             enable_memory_cache=True,
             enable_semantic_cache=False,
             enable_disk_cache=True,
-            disk_cache_dir=str(Path(MODEL_CACHE_DIR) / "embedding_cache"),
+            disk_cache_dir=_embedding_cache_dir,
         )
 
         # [최적화] 모델 식별을 위한 이름 추출 (Ollama 및 HuggingFace 지원 강화)

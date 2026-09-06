@@ -1,6 +1,10 @@
-import pytest
 import asyncio
+import tempfile
+import uuid
+from pathlib import Path
+
 import numpy as np
+import pytest
 from langchain_core.documents import Document
 from core.semantic_chunker import EmbeddingBasedSemanticChunker
 
@@ -255,12 +259,13 @@ async def test_cache_version_field_present():
 
 
 @pytest.mark.asyncio
-async def test_default_cache_manager_is_memory_only():
+async def test_default_cache_manager_isolates_test_env_cache():
     """청커 전용 캐시는 L1 메모리 + L3 영구 디스크 캐시를 사용한다.
 
     영구 디스크 캐시는 동일 콘텐츠(해시 키) 재수집 시 Ollama 왕복을 건너뛰기 위해
-    켜져 있으며, 전역 응답 캐시와 혼재되지 않도록 ``embedding_cache`` 하위 디렉터리로
-    격리된다 (세맨틱 캐시는 임베딩 키에 부적합하므로 비활성)."""
+    켜져 있으며, 테스트 환경(IS_UNIT_TEST)에서는 프로덕션 ``embedding_cache`` 를
+    가짜 임베더가 오염시키지 않도록 OS 임시 격리 경로(``embedding_cache_test``)를
+    사용한다 (세맨틱 캐시는 임베딩 키에 부적합하므로 비활성)."""
     embedder = MockEmbeddings(dimension=32)
     chunker = EmbeddingBasedSemanticChunker(
         embedder=embedder,
@@ -272,14 +277,16 @@ async def test_default_cache_manager_is_memory_only():
     assert chunker.cache_manager.memory_cache is not None
     assert chunker.cache_manager.disk_cache is not None
     assert chunker.cache_manager.enable_disk_cache is True
-    # 디스크 캐시는 embedding_cache 전용 하위 경로로 격리
-    assert chunker.cache_manager.disk_cache.cache_dir.name == "embedding_cache"
+    # 테스트 환경: 디스크 캐시는 프로덕션 embedding_cache 가 아닌 임시 격리 경로 사용
+    assert chunker.cache_manager.disk_cache.cache_dir.name == "embedding_cache_test"
 
 
 @pytest.mark.asyncio
 async def test_chunking_does_not_write_response_cache_to_disk(tmp_path, monkeypatch):
     """청킹 실행 후 전역 ./model_cache/response_cache (응답 캐시)에는 임베딩 항목이
-    기록되지 않아야 한다. 대신 임베딩 전용 embedding_cache 하위 디렉터리에 영속화된다."""
+    기록되지 않아야 한다. 테스트 환경에서는 프로덕션 ``embedding_cache`` 도 건드리지
+    않고, 가짜 임베더 벡터는 OS 임시 격리 경로(``embedding_cache_test``)에만
+    영속화된다."""
     # 전역 디스크 캐시 디렉터리를 tmp_path 로 리다이렉트하여 격리
     # (MODEL_CACHE_DIR 은 common.config 에서 import 시점에 상수로 바인딩되므로
     #  환경변수가 아닌 해당 모듈 속성을 직접 monkeypatch 해야 반영됨)
@@ -297,18 +304,24 @@ async def test_chunking_does_not_write_response_cache_to_disk(tmp_path, monkeypa
         max_chunk_size=500,
     )
 
-    text = "A sufficiently long sentence for embedding cache test. " * 8
+    text = (
+        f"A uniquely generated sentence {uuid.uuid4()} for embedding cache test. " * 8
+    )
+    test_cache = Path(tempfile.gettempdir()) / "embedding_cache_test"
+    test_cache_before = len(list(test_cache.glob("*.cache")))
     await chunker.split_text(text)
 
-    # 청커는 전역 응답 캐시(response_cache)에 쓰지 않고, 전용 embedding_cache 로 격리
+    # 청커는 전역 응답 캐시(response_cache)에 쓰지 않는다
     assert list(response_cache.glob("*.cache")) == [], (
         "Chunker leaked embedding vectors into the shared response_cache"
     )
+    # 테스트 환경: 프로덕션 embedding_cache 경로에도 쓰지 않는다 (가짜 벡터 오염 방지)
     embedding_cache = model_cache / "embedding_cache"
-    assert embedding_cache.exists(), (
-        "Chunker should persist embedding cache under embedding_cache dir"
+    assert list(embedding_cache.glob("*.cache")) == [], (
+        "Chunker must not write fake vectors into PROD embedding_cache from test env"
     )
-    assert len(list(embedding_cache.glob("*.cache"))) > 0
+    # 임베딩 벡터는 OS 임시 격리 경로에 영속화된다
+    assert len(list(test_cache.glob("*.cache"))) > test_cache_before
 
 
 @pytest.mark.asyncio
