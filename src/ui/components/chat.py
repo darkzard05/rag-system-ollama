@@ -676,7 +676,8 @@ def _draw_streaming_message(msg: dict[str, Any], current_sid: str) -> None:
     """스트리밍 메시지를 그립니다 (단일 pass 렌더).
 
     표준 리팩터 이후 스트리밍은 별도 스레드/fragment 폴링 없이 단일 script run
-    안에서 ``_run_standard_streaming_turn``이 ``stream_chunks``를 동기 소비하며
+    안에서 라이브 렌더 셸(``_run_active_stream_in_timeline``)이 순수 코어
+    ``consume_stream_into_message``를 ``on_chunk`` 콜백과 함께 동기 소비하며
     본문을 갱신한다. 따라서 이 함수는 렌더 시점에 msg 딕셔너리를 한 번 읽어
     익스팬더("Answer details")를 먼저 그리고 그 아래에 본문을 그린다.
     """
@@ -798,6 +799,10 @@ def render_chat_input_area() -> None:
                 session_id=current_sid,
             )
             SessionManager.set("is_generating_answer", True, current_sid)
+            # [Phase2-Oracle] 이전 턴에 잔존한 스테일 취소 플래그 제거: 동기 단일-런
+            # 동안 큐에 쌓인 Stop 클릭은 런 종료 후에만 반영되므로, 다음 제출 시
+            # 플래그를 항상 초기화해야 새 질문이 오작동 취소되지 않는다.
+            SessionManager.set("generation_cancel", False, current_sid)
             SessionManager.set("active_stream_msg_id", stream_msg_id, current_sid)
             logger.debug(
                 "[PERF] submit handler: setup took %.3fs (before st.rerun)",
@@ -821,9 +826,12 @@ def _run_active_stream_in_timeline(
 
     입력 영역(입력창 아래)이 아니라 메시지 스크롤 컨테이너 내부에 렌더하므로
     질문 → "Answer details" 익스팬더 → 스트리밍 본문 순서가 보장된다. 렌더와
-    스트림 소비를 동일 script run에서 함께 수행해 깜빡임을 막는다.
+    스트림 소비를 동일 script run에서 함께 수행해 깜빡임을 막는다. 실제
+    누적/영속화는 순수 코어 ``consume_stream_into_message``(streaming.py)에
+    위임하고, 이 함수는 ``on_chunk`` 콜백으로 받은 스냅샷으로 본문/익스팬더만
+    그리는 렌더 전용 셸이다.
     """
-    from ui.components.streaming import stream_chunks
+    from ui.components.streaming import consume_stream_into_message
 
     msg_id = msg.get("msg_id", "")
     model_name = SessionManager.get("last_selected_model", session_id=current_sid) or ""
@@ -834,8 +842,6 @@ def _run_active_stream_in_timeline(
     metrics: dict[str, Any] = {}
     citations: list[dict[str, Any]] = []
     process_steps: list[str] = []
-    _raw_json_parts: list[str] = []
-    _fa_scan_pos = 0
 
     # 라이브 렌더 컨테이너: 매 chunk 본문/익스팬더를 갱신.
     with st.chat_message("assistant", avatar=AVATARS["assistant"]):
@@ -874,53 +880,48 @@ def _run_active_stream_in_timeline(
                 session_id=current_sid,
             )
 
+        def _on_chunk(snapshot: dict[str, Any]) -> None:
+            """코어가 청크마다 방출하는 스냅샷으로 라이브 본문/익스팬더를 갱신한다."""
+            nonlocal accumulated, thought, documents, metrics, citations, process_steps
+            new_accumulated = snapshot["accumulated"]
+            new_thought = snapshot["thought"]
+            new_documents = snapshot["documents"]
+            new_metrics = snapshot["metrics"]
+            new_citations = snapshot["citations"]
+            new_process_steps = snapshot["process_steps"]
+
+            aux_changed = (
+                new_thought != thought
+                or new_documents != documents
+                or new_metrics != metrics
+                or new_citations != citations
+                or new_process_steps != process_steps
+            )
+            accumulated, thought, documents, metrics, citations, process_steps = (
+                new_accumulated,
+                new_thought,
+                new_documents,
+                new_metrics,
+                new_citations,
+                new_process_steps,
+            )
+            body_ph.markdown(accumulated + " ▌", unsafe_allow_html=False)
+            if aux_changed:
+                _render_aux()
+
         # 초기 프레임: 빈 본문이라도 익스팬더를 바로 붙여 순서를 고정.
         _render_aux()
         body_ph.markdown("", unsafe_allow_html=False)
         _persist()
 
         try:
-            for chunk in stream_chunks(query, model_name, current_sid):
-                if chunk.content:
-                    if getattr(chunk, "raw_json", False):
-                        from ui.components.streaming import (
-                            _extract_final_answer_delta,
-                        )
-
-                        _raw_json_parts.append(chunk.content)
-                        blob = "".join(_raw_json_parts)
-                        delta, _fa_scan_pos = _extract_final_answer_delta(
-                            blob, _fa_scan_pos
-                        )
-                        accumulated += delta
-                    else:
-                        accumulated += chunk.content
-                    body_ph.markdown(accumulated + " ▌", unsafe_allow_html=False)
-                if chunk.thought:
-                    thought += chunk.thought
-                if chunk.status:
-                    step = chunk.status
-                    if not process_steps or process_steps[-1] != step:
-                        process_steps.append(step)
-                _meta = chunk.metadata or {}
-                if _meta.get("documents"):
-                    documents = _meta["documents"]
-                if chunk.performance:
-                    metrics = chunk.performance
-                if getattr(chunk, "citations", None):
-                    citations = chunk.citations or []
-                if (
-                    chunk.thought
-                    or _meta.get("documents")
-                    or chunk.performance
-                    or getattr(chunk, "citations", None)
-                ):
-                    _render_aux()
-                _persist()
-            # 루프 정상 종료: 마지막 청크 이후에야 확정되는 메타데이터(문서/측정값/생각)가
-            # 있으면 누락 없이 익스팬더에 반영한다. (스트림 consumer는 metadata를 늦게
-            # 내보내는 경우가 있어, 루프 중 마지막 _render_aux 호출만으로는 불완전할 수 있음)
-            _render_aux()
+            consume_stream_into_message(
+                current_sid,
+                query,
+                model_name,
+                msg_id=msg_id,
+                on_chunk=_on_chunk,
+            )
         except Exception as exc:  # noqa: BLE001 - 스트림 레벨 오류를 사용자에게 노출
             logger.exception("[CHAT] 스트리밍 중 오류: %s", exc)
             SessionManager.set("is_generating_answer", False, current_sid=current_sid)
@@ -943,26 +944,9 @@ def _run_active_stream_in_timeline(
             # is_generating_answer는 이미 False라 rerun 후 재진입(무한 루프)하지 않는다.
             st.rerun()
 
-    # 스트리밍 정상 완료: 최종 스냅샷을 ``general``로 확정(폴링 대신 명시적 저장).
-    SessionManager.set("is_generating_answer", False, current_sid=current_sid)
-    # [FIX-STREAM-COMPLETE] 활성 run이 끝나면 이 run의 프레임이 화면에 고착된다.
-    # 그 프레임은 아직 `msg_type="streaming"` 확정 전(또는 활성 disabled 입력창) 상태라,
-    # "Answer details" 익스팬더(측정값/문서/생각)가 반영되지 않은 채 커서(▌)만 남고,
-    # 입력창도 disabled로 굳어 다음 질문 때까지 갱신되지 않는다(실측 재현 확인).
-    # 폴링 fragment 제거 이후 결정론적 전환은 명시적 rerun 1회로 보장한다.
-    # 이 rerun으로 타임라인이 `general` 브랜치를 타며 익스팬더를 즉시 렌더하고,
-    # 입력창도 `is_generating_answer=False`에 맞춰 정상 활성화된다.
-    SessionManager.add_message(
-        "assistant",
-        accumulated,
-        msg_type="general",
-        msg_id=msg_id,
-        thought=thought,
-        documents=documents,
-        metrics=metrics,
-        citations=citations,
-        process_steps=process_steps[-10:],
-        processed_content=None,
-        session_id=current_sid,
-    )
+    # 스트림 정상 완료: 코어가 이미 최종 general 메시지 + 플래그 클리어를
+    # 수행했으므로(중복 add_message 금지) 라이브 익스팬더를 최종 메타데이터로
+    # 갱신한 뒤 rerun 1회로 전환을 확정한다. 이 rerun은 타임라인이 general
+    # 브랜치를 타며 입력창도 is_generating_answer=False에 맞춰 정상 활성화된다.
+    _render_aux()
     st.rerun()

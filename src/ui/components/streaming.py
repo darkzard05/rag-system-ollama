@@ -19,7 +19,7 @@ import re
 import threading
 import time
 import uuid
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from concurrent.futures import CancelledError
 from typing import Any
 
@@ -379,24 +379,50 @@ def stream_content(query: str, model_name: str, session_id: str) -> Iterator[str
 
 
 def consume_stream_into_message(
-    sid: str, query: str, model_name: str
+    sid: str,
+    query: str,
+    model_name: str,
+    *,
+    msg_id: str | None = None,
+    on_chunk: Callable[[dict[str, Any]], None] | None = None,
 ) -> dict[str, Any] | None:
     """위젯 없이 ``stream_chunks``를 동기 소비해 메시지를 영속화한다.
 
-    표준 스트리밍 리팩터의 순수 로직 코어: 백그라운드 스레드 없이 단일
-    호출 안에서 청크를 순회하며 본문(raw_json 시 final_answer만 추출),
-    thought/documents/metrics/citations를 누적하고, 완료 시 어시스턴트
-    메시지(content)를 SessionManager에 영속화한다. UI 렌더(``_run_standard_
-    streaming_turn``)와 단위 테스트가 동일 코어를 재사용한다.
+    순수 로직 코어: 백그라운드 스레드 없이 단일 호출 안에서 청크를 순회하며
+    본문(raw_json 시 final_answer만 추출), thought/documents/metrics/citations
+    를 누적하고, 완료 시 어시스턴트 메시지(content)를 SessionManager에
+    영속화한다. UI 렌더는 ``on_chunk`` 콜백(라이브 렌더 셸: ``_run_active_
+    stream_in_timeline``)과 단위 테스트가 동일 코어를 재사용한다.
+
+    ``msg_id``가 주어지면 새 uuid를 만들지 않고 해당 메시지를 플레이스홀더/
+    최종 영속화에 재사용한다. 플레이스홀더는 기존 메시지가 ``streaming``
+    타입이면 ``streaming``을 유지해 타임라인의 스트리밍 브랜치와 일관되게
+    하며, 최종 영속화 시 ``general``로 전환한다. ``msg_id``가 없으면 기존
+    동작(자체 uuid + general 플레이스홀더)을 유지한다.
+
+    ``on_chunk``: 처리된 각 청크 직후 및 스트림 종료 시(최종 스냅샷) 1회
+    추가 호출되며, ``{"accumulated", "thought", "documents", "metrics",
+    "citations", "process_steps", "cancelled"}`` 형식의 스냅샷 dict를 받는다.
+    렌더/위젯 코드는 코어에 두지 않는다(on_chunk가 유일한 접합부).
 
     반환: 영속화된 어시스턴트 메시지 dict (실패 시 error 필드 포함).
     """
-    msg_id = str(uuid.uuid4())
+    resolved_id: str = msg_id or str(uuid.uuid4())
+
+    # 플레이스홀더 타입 결정: 호출자가 전달한 기존 메시지가 streaming이면
+    # streaming을 유지한다(타임라인 스트리밍 브랜치 일관성). 그 외에는
+    # 기존 동작과 동일하게 general.
+    placeholder_type = "general"
+    if msg_id is not None:
+        existing = _target_message_dict(sid, resolved_id)
+        if existing is not None and existing.get("msg_type") == "streaming":
+            placeholder_type = "streaming"
+
     SessionManager.add_message(
         role="assistant",
         content="",
-        msg_type="general",
-        msg_id=msg_id,
+        msg_type=placeholder_type,
+        msg_id=resolved_id,
         thought="",
         documents=[],
         metrics={},
@@ -413,6 +439,20 @@ def consume_stream_into_message(
     process_steps: list[str] = []
     raw_json_parts: list[str] = []
     fa_scan_pos = 0
+
+    def _emit(cancelled: bool) -> None:
+        if on_chunk is not None:
+            on_chunk(
+                {
+                    "accumulated": accumulated,
+                    "thought": thought,
+                    "documents": documents,
+                    "metrics": metrics,
+                    "citations": citations,
+                    "process_steps": list(process_steps),
+                    "cancelled": cancelled,
+                }
+            )
 
     try:
         for chunk in stream_chunks(query, model_name, sid):
@@ -435,6 +475,7 @@ def consume_stream_into_message(
                     metrics = chunk.performance
                 if getattr(chunk, "citations", None):
                     citations = chunk.citations or []
+                _emit(False)
                 continue
             if getattr(chunk, "raw_json", False):
                 raw_json_parts.append(chunk.content)
@@ -452,6 +493,7 @@ def consume_stream_into_message(
                 metrics = chunk.performance
             if getattr(chunk, "citations", None):
                 citations = chunk.citations or []
+            _emit(False)
     except Exception as exc:  # noqa: BLE001 - 스트림 레벨 오류를 메시지에 보존
         logger.exception("[CHAT] 스트리밍 소비 오류: %s", exc)
         SessionManager.set("is_generating_answer", False, current_sid=sid)
@@ -459,7 +501,7 @@ def consume_stream_into_message(
             "assistant",
             accumulated,
             msg_type="general",
-            msg_id=msg_id,
+            msg_id=resolved_id,
             thought=thought,
             documents=documents,
             metrics=metrics,
@@ -468,7 +510,8 @@ def consume_stream_into_message(
             error=friendly_error_message(exc),
             session_id=sid,
         )
-        return _target_message_dict(sid, msg_id)
+        _emit(False)
+        return _target_message_dict(sid, resolved_id)
 
     cancelled = bool(SessionManager.get("generation_cancel", False, session_id=sid))
     SessionManager.set("is_generating_answer", False, current_sid=sid)
@@ -476,7 +519,7 @@ def consume_stream_into_message(
         "assistant",
         accumulated,
         msg_type="general",
-        msg_id=msg_id,
+        msg_id=resolved_id,
         thought=thought,
         documents=documents,
         metrics=metrics,
@@ -488,9 +531,11 @@ def consume_stream_into_message(
     )
     # 확정 상태 저장이 클리어보다 먼저 수행되어야 한다 (G4 순서 함정 회귀 방지).
     SessionManager.set("generation_cancel", False, current_sid=sid)
+    # 스트림 종료 스냅샷을 1회 더 전달 (최종 누적 메타데이터를 라이브 렌더에 반영).
+    _emit(cancelled)
     # 완료 턴의 PDF 주석 반영 (기존 백그라운드 스레드 finally 역할을 동기 수행).
-    _finalize_pdf_side_effects(sid, msg_id)
-    return _target_message_dict(sid, msg_id)
+    _finalize_pdf_side_effects(sid, resolved_id)
+    return _target_message_dict(sid, resolved_id)
 
 
 def _target_message_dict(sid: str, msg_id: str) -> dict[str, Any] | None:
