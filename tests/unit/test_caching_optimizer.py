@@ -170,17 +170,14 @@ async def test_semantic_cache_expired_entry_not_returned():
 
 
 @pytest.mark.asyncio
-async def test_get_disabled_when_query_embedding_none():
-    embedder = _BoomEmbedder()
-    cache = SemanticCache(embedding_model=embedder, similarity_threshold=0.95)
+async def test_get_embeds_internally_when_query_embedding_none():
+    cache = SemanticCache(embedding_model=_FakeEmbedder(), similarity_threshold=0.95)
 
-    embedding = make_query_embedding()
-    await cache.set("q", "stored_value", query_embedding=embedding)
+    await cache.set("q", "stored_value")
 
     result = await cache.get("q")
 
-    assert result is None
-    assert not embedder.called
+    assert result == "stored_value"
 
 
 @pytest.mark.asyncio
@@ -198,13 +195,13 @@ async def test_get_uses_provided_query_embedding_without_embedding_call():
 
 
 @pytest.mark.asyncio
-async def test_set_disabled_when_query_embedding_none():
+async def test_set_embeds_internally_when_query_embedding_none():
     cache = SemanticCache(embedding_model=_FakeEmbedder(), similarity_threshold=0.95)
 
-    await cache.set("q", "value", query_embedding=None)
+    await cache.set("q", "value")
 
-    assert cache.cache_size == 0
-    assert await cache.get("q", query_embedding=make_query_embedding()) is None
+    assert cache.cache_size == 1
+    assert await cache.get("q") == "value"
 
 
 @pytest.mark.asyncio

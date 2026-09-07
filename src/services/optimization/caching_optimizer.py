@@ -434,24 +434,26 @@ class SemanticCache(CacheBackend[T]):
         """
         의미적으로 유사한 항목 조회 (NumPy 벡터화 최적화)
 
-        B10 계약: query_embedding=None 이면 캐시 비활성화(항상 None 반환);
-        제공된 임베딩은 재임베딩 대신 사용한다.
+        B10 최적화: query_embedding 제공 시 재임베딩을 생략한다.
+        미제공 시에는 기존 계약대로 내부 ``_embed`` 로 임베딩한다 (B10 회귀 수정).
         """
         if query_embedding is None:
-            return None
-
-        if not self.embedding_model or not self.embeddings:
-            return None
+            # B10 회귀 수정: 임베딩을 제공하지 않은 호출(기존 API)은
+            # 내부 재임베딩으로 정상 동작해야 한다 — 캐시 비활성화가 아니다.
+            if not self.embedding_model or not self.embeddings:
+                return None
+            embed_vec = await self._embed(key)
+            query_vec = normalize_vector(embed_vec, eps=1e-10)
+        else:
+            # 호출자 제공 벡터 사용 — `_embed` 호출 없음
+            query_vec = normalize_vector(
+                np.asarray(query_embedding, dtype=np.float64), eps=1e-10
+            )
 
         with self.lock:
             threshold = similarity_threshold or self.similarity_threshold
 
             try:
-                # 쿼리 임베딩 (호출자 제공 벡터 사용 — `_embed` 호출 없음)
-                query_vec = normalize_vector(
-                    np.asarray(query_embedding, dtype=np.float64), eps=1e-10
-                )
-
                 # [최적화] 캐시된 행렬 사용
                 if self._cached_matrix is None:
                     self._update_matrix()
@@ -500,11 +502,15 @@ class SemanticCache(CacheBackend[T]):
     ) -> None:
         """값 저장 및 벡터 정규화
 
-        B10 계약: query_embedding=None 이면 캐시에 저장하지 않는다(비활성화);
-        제공된 임베딩은 재임베딩 대신 사용한다.
+        B10 최적화: query_embedding 제공 시 재임베딩을 생략한다.
+                미제공 시에는 기존 계약대로 내부 ``_embed`` 로 임베딩한다 (B10 회귀 수정).
         """
         if query_embedding is None:
-            return
+            # 미설정 embedder여도 _embed는 해시 기반 벡터를 항상 반환하므로
+            # 재임베딩 없이는 저장하지 않는 B10 계약은 유지하지 않는다.
+            query_vec = np.asarray(await self._embed(key), dtype=np.float64)
+        else:
+            query_vec = np.asarray(query_embedding, dtype=np.float64)
 
         with self.lock:
             try:
@@ -515,7 +521,6 @@ class SemanticCache(CacheBackend[T]):
 
                 cache_key = fast_hash(key)
 
-                query_vec = np.asarray(query_embedding, dtype=np.float64)
                 # [최적화] 저장 시 미리 정규화하여 get 단계의 연산 감소
                 norm = np.linalg.norm(query_vec)
                 if norm > 0:
