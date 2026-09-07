@@ -17,6 +17,8 @@ from typing import Any, TypeVar
 
 from langchain_core.embeddings import Embeddings
 
+from common.config import is_test_env
+
 T = TypeVar("T")
 
 
@@ -580,7 +582,7 @@ def load_embedding_model(
     )
 
     # [최적화] CI/유닛 테스트 환경에서는 실제 모델 로드 없이 가짜 임베딩 모델 반환
-    if os.getenv("IS_CI_TEST") == "true" or os.getenv("IS_UNIT_TEST") == "true":
+    if is_test_env():
         from langchain_core.embeddings import FakeEmbeddings
 
         logger.info(f"[TEST] [MOCK] 가짜 임베딩 모델 로드됨 (모델명: {model_key})")
@@ -781,7 +783,7 @@ def get_available_models() -> list[str]:
 
 def load_llm(model_name: str) -> Any:
     # [최적화] CI/유닛 테스트 환경에서는 Ollama 서버 없이도 동작하도록 가짜 LLM 반환
-    if os.getenv("IS_CI_TEST") == "true" or os.getenv("IS_UNIT_TEST") == "true":
+    if is_test_env():
         from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
         from langchain_core.messages import AIMessage
 

@@ -7,7 +7,7 @@ Core RAG engine orchestrating document processing, semantic chunking, hybrid ret
 | Component | Location | Role |
 |-----------|----------|------|
 | RAG Orchestrator | `src/core/rag_core.py` | Main `RAGSystem` interface and lifecycle management |
-| LangGraph Workflow | `src/core/graph_builder.py` | Self-correcting RAG graph (preprocess, retrieve, grade, rewrite, generate) |
+| LangGraph Workflow | `src/core/graph/` | Self-correcting RAG graph (preprocess, retrieve, grade, rewrite, generate); `graph_builder.py` wires `_preprocess.py`/`_verify.py`/`_generate.py` modules |
 | Semantic Chunking | `src/core/semantic_chunker.py` | Embedding-based semantic text splitting |
 | Hybrid Retrieval | `src/core/retriever_factory.py` | BM25 + Vector (FAISS) hybrid search logic |
 | Session Management | `src/core/session/` | Thread-safe `SessionManager` |
@@ -21,7 +21,7 @@ Core RAG engine orchestrating document processing, semantic chunking, hybrid ret
 
 ## WHERE TO LOOK
 - **Modify RAG Pipeline**: `src/core/rag_core.py`
-- **Update Workflow Logic**: `src/core/graph_builder.py`
+- **Update Workflow Logic**: `src/core/graph/graph_builder.py`
 - **Adjust Chunking Strategy**: `src/core/semantic_chunker.py`
 - **Tweak Retrieval/Reranking**: `src/core/retriever_factory.py` or `src/core/async_reranker.py`
 - **Manage Session State**: `src/core/session/manager.py`

@@ -23,7 +23,6 @@
 import asyncio
 import concurrent.futures
 import logging
-import os
 import re
 import tempfile
 from pathlib import Path
@@ -33,7 +32,7 @@ import numpy as np
 from langchain_core.documents import Document
 from langchain_core.embeddings import Embeddings
 
-from common.config import MODEL_CACHE_DIR
+from common.config import MODEL_CACHE_DIR, is_test_env
 from core.semantic_chunker_breakpoints import SemanticChunkerBreakpointsMixin
 from core.semantic_chunker_embeddings import SemanticChunkerEmbeddingsMixin
 from core.semantic_chunker_merge import SemanticChunkerMergeMixin
@@ -100,9 +99,7 @@ class EmbeddingBasedSemanticChunker(
         # 실제 모델과 출력 차원이 다를 수 있어(1536 vs 768), 프로덕션 경로에
         # 기록되면 이후 chunker가 그 벡터를 히트해 FAISS 인덱스-쿼리 차원
         # 불일치(assert d == self.d)를 유발했다.
-        _is_test_env = (
-            os.getenv("IS_UNIT_TEST") == "true" or os.getenv("IS_CI_TEST") == "true"
-        )
+        _is_test_env = is_test_env()
         _embedding_cache_dir = (
             str(Path(tempfile.gettempdir()) / "embedding_cache_test")
             if _is_test_env

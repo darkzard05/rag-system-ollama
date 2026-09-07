@@ -8,7 +8,6 @@ from __future__ import annotations
 import asyncio
 import copy
 import logging
-import os
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -24,6 +23,7 @@ from common.config import (
     ENABLE_VECTOR_CACHE,
     RERANKER_MODEL_NAME,
     RETRIEVER_CONFIG,
+    is_test_env,
 )
 from common.exceptions import EmptyPDFError, InsufficientChunksError, VectorStoreError
 from core.chunking import split_documents
@@ -102,7 +102,7 @@ async def _schedule_model_preload() -> None:
     # 프리로드 태스크가 루프 닫힘 시 모델별 Lock을 잡은 채 좌초되어 후속 테스트가
     # get_or_build의 Lock.acquire에서 영원히 대기하는 데드락을 유발합니다.
     # 테스트에서는 프리로드 스케줄을 건너뛰어 태스크 생성 자체를 원천 차단합니다.
-    if os.getenv("IS_CI_TEST") == "true" or os.getenv("IS_UNIT_TEST") == "true":
+    if is_test_env():
         logger.info("[RAG] [PRELOAD] 테스트 환경 — 프리로드 스킵")
         return
     current_loop = asyncio.get_running_loop()
