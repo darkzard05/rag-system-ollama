@@ -426,11 +426,20 @@ class SemanticCache(CacheBackend[T]):
             return self.stats
 
     async def get(
-        self, key: str, similarity_threshold: float | None = None
+        self,
+        key: str,
+        similarity_threshold: float | None = None,
+        query_embedding: list | None = None,
     ) -> T | None:
         """
         의미적으로 유사한 항목 조회 (NumPy 벡터화 최적화)
+
+        B10 계약: query_embedding=None 이면 캐시 비활성화(항상 None 반환);
+        제공된 임베딩은 재임베딩 대신 사용한다.
         """
+        if query_embedding is None:
+            return None
+
         if not self.embedding_model or not self.embeddings:
             return None
 
@@ -438,9 +447,10 @@ class SemanticCache(CacheBackend[T]):
             threshold = similarity_threshold or self.similarity_threshold
 
             try:
-                # 쿼리 임베딩
-                query_embedding = await self._embed(key)
-                query_embedding = normalize_vector(query_embedding, eps=1e-10)
+                # 쿼리 임베딩 (호출자 제공 벡터 사용 — `_embed` 호출 없음)
+                query_vec = normalize_vector(
+                    np.asarray(query_embedding, dtype=np.float64), eps=1e-10
+                )
 
                 # [최적화] 캐시된 행렬 사용
                 if self._cached_matrix is None:
@@ -450,7 +460,7 @@ class SemanticCache(CacheBackend[T]):
                     return None
 
                 # 코사인 유사도 계산 (행렬-벡터 내적)
-                similarities = np.dot(self._cached_matrix, query_embedding)
+                similarities = np.dot(self._cached_matrix, query_vec)
 
                 # 가장 유사한 항목 찾기
                 max_idx = np.argmax(similarities)
@@ -481,8 +491,21 @@ class SemanticCache(CacheBackend[T]):
                 self.stats.total_misses += 1
                 return None
 
-    async def set(self, key: str, value: T, ttl_seconds: float = 0) -> None:
-        """값 저장 및 벡터 정규화"""
+    async def set(
+        self,
+        key: str,
+        value: T,
+        ttl_seconds: float = 0,
+        query_embedding: list | None = None,
+    ) -> None:
+        """값 저장 및 벡터 정규화
+
+        B10 계약: query_embedding=None 이면 캐시에 저장하지 않는다(비활성화);
+        제공된 임베딩은 재임베딩 대신 사용한다.
+        """
+        if query_embedding is None:
+            return
+
         with self.lock:
             try:
                 ttl = ttl_seconds if ttl_seconds > 0 else self.default_ttl
@@ -492,13 +515,11 @@ class SemanticCache(CacheBackend[T]):
 
                 cache_key = fast_hash(key)
 
-                query_embedding = None
-                if self.embedding_model:
-                    query_embedding = await self._embed(key)
-                    # [최적화] 저장 시 미리 정규화하여 get 단계의 연산 감소
-                    norm = np.linalg.norm(query_embedding)
-                    if norm > 0:
-                        query_embedding = query_embedding / norm
+                query_vec = np.asarray(query_embedding, dtype=np.float64)
+                # [최적화] 저장 시 미리 정규화하여 get 단계의 연산 감소
+                norm = np.linalg.norm(query_vec)
+                if norm > 0:
+                    query_vec = query_vec / norm
 
                 entry = CacheEntry(
                     key=cache_key,
@@ -510,9 +531,8 @@ class SemanticCache(CacheBackend[T]):
                 )
 
                 self.cache[cache_key] = entry
-                if query_embedding is not None:
-                    self.embeddings[cache_key] = query_embedding
-                    self._update_matrix()  # 행렬 업데이트
+                self.embeddings[cache_key] = query_vec
+                self._update_matrix()  # 행렬 업데이트
                 self.stats.cache_size = len(self.cache)
 
             except Exception as e:
