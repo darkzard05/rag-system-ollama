@@ -278,6 +278,23 @@ EVAL_JUDGE_MODEL: str = _get_env(
     _evaluation_config.get("judge_model", "qwen3:4b-instruct-2507-q4_K_M"),
 )
 
+# --- 6.6 CORS 설정 (CORS) ---
+_cors_config = _config.get("cors", {})
+
+
+def _parse_allow_origins(value: Any) -> list[str]:
+    """cors.allow_origins boundary 정규화: None→[], str→[str], list→[str]."""
+    if value is None:
+        return []
+    if isinstance(value, str):
+        return [value]
+    return [str(item) for item in value if item] if isinstance(value, list) else []
+
+
+CORS_ALLOW_ORIGINS: list[str] = _parse_allow_origins(
+    _cors_config.get("allow_origins", [])
+)
+
 # --- 7. UI 메시지 (UI) ---
 _ui_config = _config.get("ui", {})
 

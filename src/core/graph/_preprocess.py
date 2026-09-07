@@ -75,11 +75,14 @@ async def preprocess(
     cached_response: str | None = None
     if QUERY_CACHE_ENABLED:
         sid = _get_session_id(config)
-        has_doc = bool(SessionManager.get("file_hash", session_id=sid, default=None))
+        file_hash = SessionManager.get("file_hash", session_id=sid, default=None)
+        has_doc = bool(file_hash)
         if has_doc:
             await _ensure_query_cache_embedder()
             try:
-                cached = await get_cache_manager().get(query, use_semantic=True)
+                # D17 — cache key namespaced by file_hash so cross-document queries can't collide.
+                cache_key = f"{file_hash}:{query}"
+                cached = await get_cache_manager().get(cache_key, use_semantic=True)
             except Exception as e:  # noqa: BLE001 - 캐시 실패는 정상 경로로 폴백
                 logger.warning(f"[RAG] [CACHE] 조회 실패 — 우회: {e}")
                 cached = None

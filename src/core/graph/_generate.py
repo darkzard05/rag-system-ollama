@@ -163,6 +163,48 @@ _INJECTION_PATTERNS = re.compile(
     re.IGNORECASE,
 )
 
+# R4-04 보강 (D18): 한국어/일본어 지시 오버라이드 문구. 데이터가 시스템 지시를 덮어쓰려는
+# 표현("이전 지시를 무시", "上記の指示を無視")을 격리한다. 법률 문서의 일반 명사 오탐을
+# 줄이기 위해 지시-무시/지시-따르지 형태의 오버라이드 동작에 한정한다.
+_INJECTION_PATTERNS_CJK = re.compile(
+    r"(?:"
+    r"(?:이전\s+)?(?:지시|명령)(?:을|를)?\s*무시"  # 이전 지시를 무시하고
+    r"|지시\s*(?:를|을)?\s*따르지"  # 지시를 따르지 마라
+    r"|위의\s+지시"  # 위의 지시
+    r"|시스템\s*프롬프트\s*(?:를|을)?\s*무시"  # 시스템 프롬프트를 무시
+    r"|(?:以降の|上記の|この)?指示\s*(?:を)?\s*(?:無視|無効)"  # 上記の指示を無視
+    r"|指示に従っ"  # 指示に従って
+    r"|システム\s*プロンプト\s*(?:を)?\s*(?:無視|無効)"  # システムプロンプトを無視
+    r")",
+    re.IGNORECASE,
+)
+
+
+def _matches_injection_pattern(text: str) -> bool:
+    """텍스트에서 영어/CJK 인젝션 패턴을 OR 매칭합니다 (R4-04/D18)."""
+    return (
+        _INJECTION_PATTERNS.search(text) is not None
+        or _INJECTION_PATTERNS_CJK.search(text) is not None
+    )
+
+
+def _doc_content(d: Document) -> str:
+    return d.page_content if isinstance(d.page_content, str) else ""
+
+
+def _doc_injection_flag(d: Document) -> bool:
+    """콘텐츠 또는 문자열 메타데이터 값이 인젝션 패턴과 매칭하면 True를 반환합니다.
+
+    콘텐츠와 메타데이터가 동일한 스캔 경로(_matches_injection_pattern)를 공유해
+    어느 필드에서 감지됐든 같은 기준으로 격리된다.
+    """
+    if _matches_injection_pattern(_doc_content(d)):
+        return True
+    return any(
+        isinstance(value, str) and _matches_injection_pattern(value)
+        for value in d.metadata.values()
+    )
+
 
 def _split_injection_docs(
     docs: list[Document],
@@ -175,8 +217,7 @@ def _split_injection_docs(
     clean: list[Document] = []
     flagged: list[Document] = []
     for d in docs:
-        content = d.page_content if isinstance(d.page_content, str) else ""
-        if _INJECTION_PATTERNS.search(content):
+        if _doc_injection_flag(d):
             flagged.append(d)
         else:
             clean.append(d)
@@ -296,9 +337,15 @@ async def generate(
     if docs:
         clean_docs, flagged_docs = _split_injection_docs(docs)
         if flagged_docs:
+            metadata_only = sum(
+                1
+                for d in flagged_docs
+                if not _matches_injection_pattern(_doc_content(d))
+            )
             logger.warning(
                 f"[RAG] [INJECTION] 프롬프트 인젝션 패턴 감지 → "
-                f"{len(flagged_docs)}개 청크 격리 (총 {len(docs)}개 중)"
+                f"{len(flagged_docs)}개 청크 격리 (총 {len(docs)}개 중, "
+                f"메타데이터 전용 {metadata_only}개)"
             )
             SessionManager.add_status_log(
                 "검색 문서 중 프롬프트 인젝션 패턴이 감지되어 답변 생성에서 제외되었습니다.",
@@ -571,9 +618,12 @@ async def generate(
         conf = float(result.get("confidence", 0.0))
         if query_for_cache and conf >= QUERY_CACHE_MIN_CONF:
             sid = _get_session_id(config)
-            if bool(SessionManager.get("file_hash", session_id=sid, default=None)):
+            file_hash = SessionManager.get("file_hash", session_id=sid, default=None)
+            if file_hash:
                 await _ensure_query_cache_embedder()
                 try:
+                    # D17 — cache key namespaced by file_hash so cross-document queries can't collide.
+                    query_for_cache = f"{file_hash}:{query_for_cache}"
                     await get_cache_manager().set(
                         query_for_cache,
                         {

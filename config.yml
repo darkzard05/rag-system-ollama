@@ -352,6 +352,12 @@ cache_security:
   expected_file_mode: 0o644
   expected_dir_mode: 0o755
 
+# --- CORS 설정 ---
+cors:
+  # D20: 브라우저 교차-오리진 허용 목록. 단일 오리진만 명시적으로 등록.
+  # 기본값 [] = 모든 브라우저 교차-오리진 차단 (API는 키 인증 + 로컬 사용):
+  allow_origins: []
+
 # --- 전역 캐시 활성화 설정 ---
 global_cache:
   # 벡터 저장소(인덱싱 결과) 캐시 사용 여부

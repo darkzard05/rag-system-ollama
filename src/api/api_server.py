@@ -23,6 +23,7 @@ from fastapi import (
     Request,
     UploadFile,
 )
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
@@ -38,7 +39,11 @@ from api.streaming_handler import (
     get_adaptive_controller,
     get_streaming_handler,
 )
-from common.config import DEFAULT_EMBEDDING_MODEL, DEFAULT_OLLAMA_MODEL
+from common.config import (
+    CORS_ALLOW_ORIGINS,
+    DEFAULT_EMBEDDING_MODEL,
+    DEFAULT_OLLAMA_MODEL,
+)
 from common.constants import FilePathConstants
 from core.document_processor import compute_file_hash
 from core.rag_core import RAGSystem
@@ -101,6 +106,17 @@ app = FastAPI(
     description="Ollama와 LangGraph 기반의 고도화된 RAG 시스템 API",
     version="2.0.0",
     lifespan=lifespan,
+)
+
+# D20: CORS는 기본 차단(allow_origins=[]) — 브라우저 교차-오리진 요청은
+# config.yml의 cors.allow_origins에 명시적으로 등록된 오리진만 허용한다.
+# allow_credentials=True와 "*"는 함께 사용할 수 없으므로 와일드카드를 금지한다.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=list(CORS_ALLOW_ORIGINS),
+    allow_credentials=True,
+    allow_methods=["GET", "POST", "DELETE"],
+    allow_headers=["Authorization", "Content-Type"],
 )
 
 # --- 보안 및 인증 설정 ---

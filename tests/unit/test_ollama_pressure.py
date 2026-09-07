@@ -43,10 +43,6 @@ async def _async_true() -> bool:
     return True
 
 
-async def _async_none() -> None:
-    return None
-
-
 # ---------------------------------------------------------------------------
 # Baseline: 기존(수정 전) 동작 핀 - CUDA 경로 안 탈 때 호스트 RAM 압력 없으면 미발동
 # ---------------------------------------------------------------------------
@@ -145,20 +141,23 @@ async def test_hf_backend_not_triggered_by_host_ram(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_model_manager_ollama_fallback_fires(monkeypatch):
-    """ModelManager 도 Ollama + RAM>90% + 플래그 ON 에서 _evict_oldest_model 호출."""
+async def test_model_manager_ollama_fallback_detects_pressure(monkeypatch):
+    """ModelManager 도 Ollama + RAM>90% + 플래그 ON 이면 True 반환 (감지만, 퇴출 없음).
+
+    C15: _check_memory_pressure 는 압력 감지만 수행 — 퇴출 부작용은 ModelPool
+    으로 이관되어 제거되었으므로 이 테스트는 더 이상 퇴출 로직을 참조하지 않는다.
+    eviction_allowed 는 전역 30s 쿨다운에 영향받지 않도록 스텁한다 (감지 계약만 검증).
+    """
     _patch_backend(monkeypatch, ollama=True)
     monkeypatch.setattr("core.model_loader.ENABLE_OLLAMA_PRESSURE_FALLBACK", True)
     with (
         patch("torch.cuda.is_available", return_value=False),
         patch("core.model_loader._host_pressure_exceeded", return_value=True),
         patch("core.model_loader._ollama_backend_active", return_value=True),
-        patch.object(ModelManager, "_evict_oldest_model", new=MagicMock()) as evict,
+        patch("core.model_loader.eviction_allowed", return_value=True),
     ):
-        evict.side_effect = _async_none
         result = await ModelManager._check_memory_pressure()
     assert result is True
-    assert evict.called
 
 
 @pytest.mark.asyncio
@@ -181,6 +180,41 @@ async def test_model_manager_flag_off_no_fallback(monkeypatch):
             "psutil.virtual_memory",
             return_value=MagicMock(percent=50),
         ),
+    ):
+        result = await ModelManager._check_memory_pressure()
+    assert result is False
+
+
+# ---------------------------------------------------------------------------
+# ModelManager 시스템 RAM 폴백 (>95) 감지 계약 — 퇴출 부작용 없음 (C15)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_model_manager_system_ram_fallback_detects_pressure(monkeypatch):
+    """mem.percent > 95: 시스템 RAM 폴백 경로가 압력을 감지해 True 반환 (퇴출 없음)."""
+    _patch_backend(monkeypatch, ollama=True)
+    with (
+        patch("torch.cuda.is_available", return_value=False),
+        patch("core.model_loader._host_pressure_exceeded", return_value=False),
+        patch("core.model_loader._ollama_backend_active", return_value=True),
+        patch("core.model_loader.ENABLE_OLLAMA_PRESSURE_FALLBACK", True),
+        patch("psutil.virtual_memory", return_value=MagicMock(percent=96)),
+    ):
+        result = await ModelManager._check_memory_pressure()
+    assert result is True
+
+
+@pytest.mark.asyncio
+async def test_model_manager_system_ram_fallback_boundary_95(monkeypatch):
+    """경계 계약 유지: mem.percent == 95 는 (>95) 초과가 아니므로 False."""
+    _patch_backend(monkeypatch, ollama=True)
+    with (
+        patch("torch.cuda.is_available", return_value=False),
+        patch("core.model_loader._host_pressure_exceeded", return_value=False),
+        patch("core.model_loader._ollama_backend_active", return_value=True),
+        patch("core.model_loader.ENABLE_OLLAMA_PRESSURE_FALLBACK", True),
+        patch("psutil.virtual_memory", return_value=MagicMock(percent=95)),
     ):
         result = await ModelManager._check_memory_pressure()
     assert result is False
