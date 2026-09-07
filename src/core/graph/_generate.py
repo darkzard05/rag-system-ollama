@@ -350,6 +350,18 @@ async def generate(
     )
     formatted_prompt = safe_prompt.format(context=context, query=query)
 
+    # B8: verify → regenerate 재시도 시 이전 검증 실패 사유를 프롬프트에 주입한다.
+    # 사유가 없으면(정상 경로) formatted_prompt를 건드리지 않아 byte-identical 유지.
+    verification_issues = get_state_attr(state, "verification_issues", None)
+    if verification_issues:
+        issue_lines = "\n".join(f"- {issue}" for issue in verification_issues)
+        issues_section = (
+            "이전 답변이 아래 사유로 검증 실패했습니다. "
+            "위 사유를 해결하여 다시 답변하십시오:\n"
+            f"{issue_lines}"
+        )
+        formatted_prompt = f"{formatted_prompt}\n\n[{issues_section}]"
+
     sys_msg = SystemMessage(content=formatted_prompt)
     human_msg = HumanMessage(
         content=GENERATE_PROMPT_CONFIG.get(

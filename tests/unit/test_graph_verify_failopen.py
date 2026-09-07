@@ -1,6 +1,5 @@
-import random
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -49,10 +48,10 @@ def config_with_ok_llm():
 
 
 def _enable_verification(monkeypatch):
-    monkeypatch.setattr("common.config.VERIFICATION_ENABLED", True)
-    monkeypatch.setattr("common.config.VERIFICATION_SAMPLE_RATE", 1.0)
-    # 샘플링 조기 리턴 방지
-    monkeypatch.setattr(random, "random", lambda: 0.0)
+    # D19: 샘플링은 _verify 모듈 레벨 상수 기반 결정적 해시(_should_verify)로
+    # 전환됨 — rate=1.0이면 항상 검증하므로 random 패치는 더 이상 필요 없다.
+    monkeypatch.setattr("core.graph._verify.VERIFICATION_ENABLED", True)
+    monkeypatch.setattr("core.graph._verify.VERIFICATION_SAMPLE_RATE", 1.0)
 
 
 @pytest.mark.asyncio

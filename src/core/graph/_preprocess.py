@@ -107,5 +107,9 @@ async def preprocess(
         "short_query": len(query) < 5,
         # 턴 시작 시 이전 턴의 재작성 쿼리 잔재 제거 (reset_or_append 리듀서의 리셋 신호)
         "search_queries": [],
+        # 턴 시작 시 이전 턴의 검색 문서 잔재 제거 (B7: retrieve_and_rerank/grade가
+        # 이 키를 턴 간 누적/유지해 문서 없음 턴에서 이전 턴 문서가 프롬프트로 새는
+        # cross-turn state leakage 방지). 빈 리스트로 교체해 격리한다.
+        "relevant_docs": [],
         "retry_count": 0,
     }

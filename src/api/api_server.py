@@ -40,7 +40,6 @@ from api.streaming_handler import (
 )
 from common.config import DEFAULT_EMBEDDING_MODEL, DEFAULT_OLLAMA_MODEL
 from common.constants import FilePathConstants
-from common.exceptions import PDFProcessingError
 from core.document_processor import compute_file_hash
 from core.rag_core import RAGSystem
 from core.resource_manager import get_resource_manager
@@ -659,9 +658,14 @@ async def stream_query_rag(
                 batch_buffer.clear()
 
             yield sse_handler.format_sse_event("end", {"status": "done"}, event_counter)
-        except (RuntimeError, ValueError, ConnectionError, PDFProcessingError) as e:
-            logger.error(f"Streaming error (Session: {sid}): {e}")
+        # fail-closed for the stream: any unexpected exception becomes a
+        # user-visible SSE [error] event instead of breaking the response body
+        # mid-stream. Broad by design; exc_info=True keeps it diagnosable.
+        except Exception as e:
+            logger.error(f"Streaming error (Session: {sid}): {e}", exc_info=True)
             yield sse_handler.format_sse_error(str(e))
+            # 클라이언트가 [error] 후 [end]를 받아야 연결을 해제(블로킹 해제)한다.
+            yield sse_handler.format_sse_event("end", {"status": "done"}, event_counter)
 
     return StreamingResponse(
         event_generator(),
