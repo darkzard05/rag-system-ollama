@@ -1,14 +1,15 @@
 """
 스트리밍 응답 처리 - Task 12
 실시간 토큰 스트리밍, SSE 지원, UI 업데이트 최적화
+
+PHASE 3-P1: 버퍼/상태 머신/SSE 헬퍼/적응형 컨트롤러를 별도 모듈로 분리하고,
+하위 호환성을 위해 하단에서 재-export합니다.
 """
 
 import logging
 import time
 from collections.abc import AsyncIterator, Callable, Coroutine
-from dataclasses import dataclass, field
-from datetime import datetime
-from enum import Enum
+from dataclasses import dataclass
 from typing import Any, cast
 
 from services.monitoring.performance_monitor import (
@@ -17,6 +18,24 @@ from services.monitoring.performance_monitor import (
 )
 
 logger = logging.getLogger(__name__)
+
+__all__ = [
+    "AdaptiveStreamingController",
+    "PriorityStreamBuffer",
+    "ServerSentEventsHandler",
+    "StreamChunk",
+    "StreamingMetrics",
+    "StreamingResponseBuilder",
+    "StreamingResponseHandler",
+    "StreamingState",
+    "StreamingStateContext",
+    "StreamingStateMachine",
+    "TokenStreamBuffer",
+    "create_streaming_state_machine",
+    "get_adaptive_controller",
+    "get_streaming_handler",
+    "gzip_compress",
+]
 
 
 @dataclass
@@ -51,110 +70,6 @@ class StreamingMetrics:
     avg_chunk_size: float = 0.0
     min_latency: float = float("inf")
     max_latency: float = 0.0
-
-
-class TokenStreamBuffer:
-    """
-    토큰 버퍼 - 효율적인 버퍼링 및 배치 처리
-    """
-
-    def __init__(self, buffer_size: int = 10, timeout_ms: float = 100.0):
-        self.buffer_size = buffer_size
-        self.timeout_ms = timeout_ms
-        self.buffer: list[str] = []
-        self.last_flush_time: float = time.time()
-        self.token_count = 0  # [추가] 처리된 누적 토큰 수 추적
-        self.is_first_token: bool = True
-
-    def add_token(self, token: str) -> str | None:
-        self.buffer.append(token)
-        self.token_count += 1
-        current_time = time.time()
-
-        # [최적화] 첫 토큰은 버퍼링 없이 즉시 전송 (TTFT 우선)
-        if self.is_first_token:
-            self.is_first_token = False
-            return self.flush()
-
-        if (len(self.buffer) >= self.buffer_size) or (
-            (current_time - self.last_flush_time) * 1000 >= self.timeout_ms
-        ):
-            return self.flush()
-
-        return None
-
-    def flush(self) -> str | None:
-        if not self.buffer:
-            return None
-
-        content = "".join(self.buffer)
-        self.buffer.clear()
-        self.last_flush_time = time.time()
-        return content
-
-    def reset(self) -> None:
-        self.buffer.clear()
-        self.last_flush_time = time.time()
-        self.is_first_token = True
-        self.token_count = 0
-
-
-class PriorityStreamBuffer:
-    """
-    우선순위 기반 이중 버퍼 - Content(고우선) vs Thought(저우선) 분리
-    Phase 2.2: thought가 content 블로킹하지 않도록 분리
-    """
-
-    def __init__(
-        self,
-        content_buffer_size: int = 1,
-        content_timeout_ms: float = 10.0,
-        thought_buffer_size: int = 5,
-        thought_timeout_ms: float = 100.0,
-    ):
-        # Content 버퍼: 즉시 플러시 (size=1, timeout=10ms)
-        self.content_buffer = TokenStreamBuffer(content_buffer_size, content_timeout_ms)
-        # Thought 버퍼: 배치 처리 (size=5, timeout=100ms)
-        self.thought_buffer = TokenStreamBuffer(thought_buffer_size, thought_timeout_ms)
-
-    # 호환성 속성 (adaptive controller용)
-    @property
-    def buffer_size(self) -> int:
-        return self.content_buffer.buffer_size
-
-    @buffer_size.setter
-    def buffer_size(self, value: int) -> None:
-        self.content_buffer.buffer_size = value
-
-    def add_token(self, token: str) -> str | None:
-        """호환용: content 버퍼에 추가"""
-        return self.content_buffer.add_token(token)
-
-    def add_content(self, token: str) -> str | None:
-        """Content 토큰 추가 - 즉시 반환"""
-        return self.content_buffer.add_token(token)
-
-    def add_thought(self, token: str) -> str | None:
-        """Thought 토큰 추가 - 배치 반환"""
-        return self.thought_buffer.add_token(token)
-
-    def flush(self) -> str | None:
-        """호환용: content 버퍼 플러시"""
-        return self.content_buffer.flush()
-
-    def flush_content(self) -> str | None:
-        return self.content_buffer.flush()
-
-    def flush_thought(self) -> str | None:
-        return self.thought_buffer.flush()
-
-    def flush_all(self) -> tuple[str | None, str | None]:
-        """두 버퍼 모두 플러시"""
-        return self.flush_content(), self.flush_thought()
-
-    def reset(self) -> None:
-        self.content_buffer.reset()
-        self.thought_buffer.reset()
 
 
 class StreamingResponseHandler:
@@ -552,382 +467,26 @@ class StreamingResponseHandler:
         return self.metrics
 
 
-class ServerSentEventsHandler:
-    @staticmethod
-    def format_sse_event(
-        event_type: str, data: dict[str, Any], event_id: int | None = None
-    ) -> str:
-        import orjson
-
-        lines = []
-        if event_id is not None:
-            lines.append(f"id: {event_id}")
-        if event_type:
-            lines.append(f"event: {event_type}")
-        json_data = orjson.dumps(data).decode("utf-8")
-        lines.append(f"data: {json_data}")
-        lines.append("")
-        return "\n".join(lines) + "\n"
-
-    @staticmethod
-    def format_sse_error(error_message: str, error_code: int = 500) -> str:
-        data = {
-            "error": error_message,
-            "code": error_code,
-            "timestamp": datetime.now().isoformat(),
-        }
-        return ServerSentEventsHandler.format_sse_event("error", data)
-
-    @staticmethod
-    def format_sse_keepalive(message: str = "keep-alive") -> str:
-        return f": {message}\n\n"
-
-    @staticmethod
-    def format_sse_batch(
-        events: list[tuple[str | None, dict[str, Any], int | None]],
-    ) -> str:
-        """
-        여러 SSE 이벤트를 배치로 직렬화합니다.
-        Phase 2.4: 네트워크 라운드트립 감소용 배치 포장
-        """
-        import orjson
-
-        if not events:
-            return ""
-
-        lines = []
-        for event_type, data, event_id in events:
-            if event_id is not None:
-                lines.append(f"id: {event_id}")
-            if event_type:
-                lines.append(f"event: {event_type}")
-            json_data = orjson.dumps(data).decode("utf-8")
-            lines.append(f"data: {json_data}")
-            lines.append("")
-        return "\n".join(lines) + "\n"
-
-    @staticmethod
-    def gzip_compress(data: str) -> bytes:
-        """SSE 데이터 gzip 압축 (압축 임계값은: 1KB)"""
-        import gzip
-
-        if len(data) < 1024:
-            return data.encode("utf-8")
-        return gzip.compress(data.encode("utf-8"))
-
-
-class StreamingResponseBuilder:
-    def __init__(self, max_buffer_size: int = 100000):
-        self.chunks: list[StreamChunk] = []
-        self.max_buffer_size = max_buffer_size
-        self.total_content = ""
-
-    def add_chunk(self, chunk: StreamChunk) -> None:
-        if len(self.total_content) + len(chunk.content) > self.max_buffer_size:
-            while self.chunks and len(self.total_content) > self.max_buffer_size * 0.8:
-                removed = self.chunks.pop(0)
-                self.total_content = self.total_content[len(removed.content) :]
-        self.chunks.append(chunk)
-        self.total_content += chunk.content
-
-    def get_content(self) -> str:
-        return self.total_content
-
-    def get_chunks(self) -> list[StreamChunk]:
-        return self.chunks
-
-    def reset(self) -> None:
-        self.chunks.clear()
-        self.total_content = ""
-
-
-class AdaptiveStreamingController:
-    """
-    적응형 스트리밍 컨트롤러 v2 - Phase 2.3
-    - EWMA(Exponentially Weighted Moving Average) 지연 추정
-    - 클라이언트 프로파일(streamlit/api/websocket)별 최적화
-    """
-
-    # 클라이언트 프로파일 설정
-    PROFILES = {
-        "streamlit": {"alpha": 0.3, "target_latency_ms": 50, "priority": "low_latency"},
-        "api": {"alpha": 0.2, "target_latency_ms": 200, "priority": "throughput"},
-        "websocket": {"alpha": 0.25, "target_latency_ms": 100, "priority": "balanced"},
-    }
-
-    def __init__(
-        self,
-        initial_buffer_size: int = 1,
-        min_buffer_size: int = 1,
-        max_buffer_size: int = 10,
-        client_profile: str = "streamlit",
-    ):
-        self.current_buffer_size = initial_buffer_size
-        self.min_buffer_size = min_buffer_size
-        self.max_buffer_size = max_buffer_size
-        self.client_profile = client_profile
-        self.profile_config = self.PROFILES.get(
-            client_profile, self.PROFILES["streamlit"]
-        )
-
-        # EWMA 상태
-        self.ewma_latency: float | None = None
-        self.alpha = cast(float, self.profile_config["alpha"])
-        self.target_latency_ms = cast(float, self.profile_config["target_latency_ms"])
-
-        # 메트릭
-        self.latency_samples: list[float] = []
-        self.max_samples = 50
-        self.buffer_adjustments = 0
-        self.profile_switches = 0
-
-    def record_latency(self, latency_ms: float) -> None:
-        self.latency_samples.append(latency_ms)
-        if len(self.latency_samples) > self.max_samples:
-            self.latency_samples.pop(0)
-
-        # EWMA 업데이트
-        if self.ewma_latency is None:
-            self.ewma_latency = latency_ms
-        else:
-            self.ewma_latency = (
-                self.alpha * latency_ms + (1 - self.alpha) * self.ewma_latency
-            )
-
-        self._adjust_buffer_size()
-
-    def _adjust_buffer_size(self) -> None:
-        if self.ewma_latency is None:
-            return
-
-        target = self.target_latency_ms
-        ewma = self.ewma_latency
-
-        # 목표 지연 대비 버퍼 크기 조정
-        if ewma > target * 1.5:  # 지연이 목표의 1.5배 초과
-            new_size = min(self.current_buffer_size + 1, self.max_buffer_size)
-            if new_size != self.current_buffer_size:
-                self.current_buffer_size = new_size
-                self.buffer_adjustments += 1
-        elif ewma < target * 0.7:  # 지연이 목표의 70% 미만
-            new_size = max(self.current_buffer_size - 1, self.min_buffer_size)
-            if new_size != self.current_buffer_size:
-                self.current_buffer_size = new_size
-                self.buffer_adjustments += 1
-
-    def set_client_profile(self, profile: str) -> None:
-        """클라이언트 프로파일 동적 전환"""
-        if profile in self.PROFILES and profile != self.client_profile:
-            old_profile = self.client_profile
-            self.client_profile = profile
-            self.profile_config = self.PROFILES[profile]
-            self.alpha = cast(float, self.profile_config["alpha"])
-            self.target_latency_ms = cast(
-                float, self.profile_config["target_latency_ms"]
-            )
-            self.ewma_latency = None  # 리셋
-            self.profile_switches += 1
-            logger.info(
-                f"[AdaptiveStreaming] 프로파일 변경: {old_profile} -> {profile}"
-            )
-
-    def get_buffer_size(self) -> int:
-        return self.current_buffer_size
-
-    def get_metrics(self) -> dict[str, object]:
-        metrics = {
-            "current_buffer_size": self.current_buffer_size,
-            "client_profile": self.client_profile,
-            "target_latency_ms": self.target_latency_ms,
-            "ewma_latency_ms": self.ewma_latency or 0.0,
-            "buffer_adjustments": self.buffer_adjustments,
-            "profile_switches": self.profile_switches,
-            "sample_count": len(self.latency_samples),
-        }
-        if self.latency_samples:
-            metrics.update(
-                {
-                    "avg_latency_ms": sum(self.latency_samples)
-                    / len(self.latency_samples),
-                    "min_latency_ms": min(self.latency_samples),
-                    "max_latency_ms": max(self.latency_samples),
-                }
-            )
-        return metrics
-
-
 def get_streaming_handler() -> StreamingResponseHandler:
     return StreamingResponseHandler()
 
 
-def get_adaptive_controller(
-    client_profile: str = "streamlit",
-) -> AdaptiveStreamingController:
-    return AdaptiveStreamingController(client_profile=client_profile)
-
-
-# Phase 2.5: Streaming State Machine
-
-
-class StreamingState(Enum):
-    """스트리밍 상태 머신의 상태"""
-
-    IDLE = "idle"
-    INITIALIZING = "initializing"
-    STREAMING = "streaming"
-    BUFFERING = "buffering"
-    FLUSHING = "flushing"
-    COMPLETED = "completed"
-    ERROR = "error"
-    CANCELLED = "cancelled"
-
-
-@dataclass
-class StreamingStateContext:
-    """스트리밍 상태 머신의 컨텍스트"""
-
-    state: StreamingState = StreamingState.IDLE
-    current_chunk: StreamChunk | None = None
-    buffer: PriorityStreamBuffer | None = None
-    error: Exception | None = None
-    metadata: dict[str, Any] = field(default_factory=dict)
-
-    # 전이 이력 (디버그용)
-    transition_history: list[tuple[StreamingState, StreamingState, float]] = field(
-        default_factory=list
-    )
-
-    def transition_to(self, new_state: StreamingState) -> None:
-        """상태 전이 수행"""
-        import time
-
-        old_state = self.state
-        self.state = new_state
-        self.transition_history.append((old_state, new_state, time.time()))
-        logger.debug(
-            f"[StreamingStateMachine] 상태 전이: {old_state.value} -> {new_state.value}"
-        )
-
-
-class StreamingStateMachine:
-    """
-    스트리밍 상태 머신 - Phase 2.5
-    명시적 상태 전이로 스트리밍 라이프사이클 관리
-    """
-
-    # 유효한 상태 전이 정의
-    VALID_TRANSITIONS = {
-        StreamingState.IDLE: [StreamingState.INITIALIZING, StreamingState.CANCELLED],
-        StreamingState.INITIALIZING: [
-            StreamingState.STREAMING,
-            StreamingState.ERROR,
-            StreamingState.CANCELLED,
-        ],
-        StreamingState.STREAMING: [
-            StreamingState.BUFFERING,
-            StreamingState.FLUSHING,
-            StreamingState.COMPLETED,
-            StreamingState.ERROR,
-            StreamingState.CANCELLED,
-        ],
-        StreamingState.BUFFERING: [
-            StreamingState.STREAMING,
-            StreamingState.FLUSHING,
-            StreamingState.ERROR,
-            StreamingState.CANCELLED,
-        ],
-        StreamingState.FLUSHING: [
-            StreamingState.STREAMING,
-            StreamingState.COMPLETED,
-            StreamingState.ERROR,
-            StreamingState.CANCELLED,
-        ],
-        StreamingState.COMPLETED: [StreamingState.IDLE],
-        StreamingState.ERROR: [StreamingState.IDLE],
-        StreamingState.CANCELLED: [StreamingState.IDLE],
-    }
-
-    def __init__(self, context: StreamingStateContext | None = None):
-        self.context = context or StreamingStateContext()
-
-    def can_transition(self, new_state: StreamingState) -> bool:
-        """전이 가능 여부 확인"""
-        return new_state in self.VALID_TRANSITIONS.get(self.context.state, [])
-
-    def transition(self, new_state: StreamingState) -> bool:
-        """상태 전이 시도 (성공 시 True, 실패 시 False)"""
-        if self.can_transition(new_state):
-            self.context.transition_to(new_state)
-            return True
-        logger.warning(
-            f"[StreamingStateMachine] 유효하지 않은 전이: {self.context.state.value} -> {new_state.value}"
-        )
-        return False
-
-    def force_transition(self, new_state: StreamingState) -> None:
-        """강제 상태 전이 (에러 복구 등)"""
-        self.context.transition_to(new_state)
-
-    def initialize(self, buffer: PriorityStreamBuffer) -> bool:
-        """스트리밍 초기화"""
-        if self.transition(StreamingState.INITIALIZING):
-            self.context.buffer = buffer
-            return self.transition(StreamingState.STREAMING)
-        return False
-
-    def on_chunk_received(self, chunk: StreamChunk) -> bool:
-        """청크 수신 시 호출"""
-        if self.context.state == StreamingState.STREAMING:
-            self.context.current_chunk = chunk
-            return True
-        return False
-
-    def on_buffer_full(self) -> bool:
-        """버퍼 가득 참 시 호출"""
-        return self.transition(StreamingState.BUFFERING)
-
-    def on_flush_start(self) -> bool:
-        """플러시 시작 시 호출"""
-        return self.transition(StreamingState.FLUSHING)
-
-    def on_flush_complete(self) -> bool:
-        """플러시 완료 시 호출"""
-        if self.context.state == StreamingState.FLUSHING:
-            return self.transition(StreamingState.STREAMING)
-        return False
-
-    def complete(self) -> bool:
-        """스트리밍 완료"""
-        if self.transition(StreamingState.FLUSHING):
-            return self.transition(StreamingState.COMPLETED)
-        return False
-
-    def error(self, error: Exception) -> bool:
-        """에러 발생"""
-        self.context.error = error
-        return self.transition(StreamingState.ERROR)
-
-    def cancel(self) -> bool:
-        """스트리밍 취소"""
-        return self.transition(StreamingState.CANCELLED)
-
-    def reset(self) -> None:
-        """상태 머신 리셋"""
-        self.context = StreamingStateContext()
-
-    def get_state(self) -> StreamingState:
-        """현재 상태 반환"""
-        return self.context.state
-
-    def get_history(self) -> list[tuple[str, str, float]]:
-        """전이 이력 반환"""
-        return [
-            (old.value, new.value, ts)
-            for old, new, ts in self.context.transition_history
-        ]
-
-
-# 편의 함수
-def create_streaming_state_machine() -> StreamingStateMachine:
-    """스트리밍 상태 머신 생성"""
-    return StreamingStateMachine()
+# PHASE 3-P1: 분리된 모듈 재-export (하위 호환성 계약 유지)
+# isort: off
+from api.stream_buffers import PriorityStreamBuffer, TokenStreamBuffer  # noqa: E402
+from api.stream_state_machine import (  # noqa: E402
+    StreamingState,
+    StreamingStateContext,
+    StreamingStateMachine,
+    create_streaming_state_machine,
+)
+from api.sse_helpers import (  # noqa: E402
+    ServerSentEventsHandler,
+    StreamingResponseBuilder,
+    gzip_compress,
+)
+from api.adaptive_controller import (  # noqa: E402
+    AdaptiveStreamingController,
+    get_adaptive_controller,
+)
+# isort: on
