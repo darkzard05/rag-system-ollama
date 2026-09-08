@@ -325,6 +325,9 @@ _ui_config = _config.get("ui", {})
 
 _ui_streaming = _ui_config.get("streaming", {})
 UI_STREAMING_TIMEOUT: int = _ui_streaming.get("timeout_seconds", 30)
+UI_STREAM_WORKERS: int = _get_env(
+    "UI_STREAM_WORKERS", _ui_streaming.get("max_workers", 3), int
+)
 
 _ui_messages = _ui_config.get("messages", {})
 MSG_CHAT_GUIDE: str = _ui_messages.get("chat_guide", "PDF를 업로드한 후 질문해 보세요")

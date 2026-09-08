@@ -20,7 +20,6 @@ import threading
 import time
 import uuid
 from collections.abc import Callable, Iterator
-from concurrent.futures import CancelledError
 from typing import Any
 
 from streamlit.runtime.scriptrunner import add_script_run_ctx
@@ -29,6 +28,13 @@ from api.streaming_handler import StreamChunk, get_streaming_handler
 from common.config import (
     MSG_ERROR_OLLAMA_NOT_RUNNING,
     UI_STREAMING_TIMEOUT,
+)
+from common.stream_worker import (
+    acquire_stream_slot,
+    cancel_stream,
+    register_stream,
+    release_stream_slot,
+    unregister_stream,
 )
 from common.utils import (
     extract_annotations_from_docs,
@@ -257,15 +263,34 @@ def stream_chunks(
     구간에서 매달려도 해당 스트림만 지연되고 빌드/다른 스트림을 정지시키지
     않는다.
 
-    취소 갭: 타임아웃 시 ``_stop_event`` 로 협조적 취소를 요청하지만, LangGraph/
-    LLM 내부의 동기 호출 구간에서는 다음 await 지점에서만 취소가 반영됩니다.
-    join(2s)이 타임아웃되면 daemon 스레드는 LLM 호출이 끝날 때까지 RAG 작업을
-    계속 실행합니다 (리소스는 rag_core finally에서 해제됨).
+    취소: 타임아웃/사용자 중단 시 ``cancel_stream(run_id)``가 실제 취소를
+    요청한다. ``loop.call_soon_threadsafe(task.cancel)``로 이벤트 루프에 즉시
+    전달되어 협조적 ``_stop_event``와 무관하게 하드 취소되며, 이어서 3초
+    바운드 join으로 스레드 종료를 기다린다. ``_stop_event``는 다음 await
+    지점에서 즉시 반응하는 협조적 백스톱으로 함께 유지한다. join(3s)이
+    타임아웃되면 daemon 스레드가 남을 수 있지만 루프/스트림 슬롯은
+    finally에서 해제된다.
     """
     q: queue.Queue = queue.Queue()
     _stop_event = threading.Event()
+    run_id = f"stream-{session_id}-{uuid.uuid4().hex[:8]}"
 
     def bg_task() -> None:
+        if not acquire_stream_slot(timeout=30):
+            logger.warning(
+                f"[CHAT][STREAM] 동시 스트림 슬롯 획득 실패 (run_id={run_id})"
+            )
+            q.put(
+                (
+                    "error",
+                    RuntimeError(
+                        "동시 스트림 실행 한도를 초과했습니다. "
+                        "잠시 후 다시 시도해 주세요."
+                    ),
+                )
+            )
+            q.put(("done", None))
+            return
         SessionManager.set_session_id(session_id or "default")
 
         async def run() -> None:
@@ -304,8 +329,18 @@ def stream_chunks(
                 q.put(("done", None))
 
         try:
-            asyncio.run(run())
-        except CancelledError:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            try:
+                task = loop.create_task(run())
+                register_stream(run_id, loop, task)
+                loop.run_until_complete(task)
+            finally:
+                unregister_stream(run_id)
+                release_stream_slot()
+                if not loop.is_closed():
+                    loop.close()
+        except asyncio.CancelledError:
             logger.info("[CHAT] 스트리밍 작업이 취소되었습니다")
         except Exception as e:
             logger.error(f"[CHAT] 백그라운드 작업 오류: {e}", exc_info=True)
@@ -338,6 +373,7 @@ def stream_chunks(
                         f"[CHAT] 스트리밍 타임아웃 ({_max_timeouts}회 연속): "
                         "백그라운드 작업이 응답하지 않음"
                     )
+                    cancel_stream(run_id)  # 실시간 취소: task.cancel() 전달
                     raise TimeoutError(
                         "스트리밍 응답을 기다리는 동안 시간이 초과되었습니다. "
                         "네트워크 및 모델 상태를 확인해주세요."
@@ -352,12 +388,15 @@ def stream_chunks(
                 raise
     finally:
         _stop_event.set()
+        # 하드 취소: 스레드가 아직 살아 있을 때만 시도한다. 정상 완료 경로
+        # (done 수신)에서는 이미 unregister된 run_id에 대해 stream_worker가
+        # 불필요한 경고를 남기는 것을 방지한다.
         if t.is_alive():
-            t.join(timeout=2)
+            cancel_stream(run_id)  # real cancel via task.cancel()
+            t.join(timeout=3)
             if t.is_alive():
                 logger.warning(
-                    f"[CHAT] 스트림 스레드가 제한 시간 내 종료되지 않음 "
-                    f"(취소는 다음 await에서만 반영됨): {t.name}"
+                    f"[CHAT] Stream thread did not exit after cancel: {t.name}"
                 )
             else:
                 logger.debug(f"[CHAT] Stream thread cleanup: {t.name}")
