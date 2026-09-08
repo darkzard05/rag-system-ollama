@@ -77,7 +77,9 @@ ruff check .
 ruff format .
 mypy src
 pytest tests/unit
-python scripts/test_full_pipeline.py
+python -m pytest tests/integration/test_pipeline_build_once.py
+# Archived (live Ollama/PDF dependent, not pytest-collected):
+#   python scripts/archive/test_full_pipeline.py
 
 # CI also enforces (see .github/workflows/ci.yml)
 bandit -r src/ -ll

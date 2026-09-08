@@ -10,7 +10,8 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent.parent
-for _path in (str(ROOT), str(ROOT / "scripts")):
+# eval_quality.py는 scripts/evaluation/로 이동됨 (Phase D MOVE).
+for _path in (str(ROOT), str(ROOT / "scripts" / "evaluation")):
     if _path not in sys.path:
         sys.path.append(_path)
 
