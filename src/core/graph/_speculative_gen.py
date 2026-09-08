@@ -70,6 +70,12 @@ def _adopt_speculative_generate(
         return None
     if spec.adopter is not None:
         return None
+    if spec.task.cancelled() or (
+        spec.task.done() and spec.task.exception() is not None
+    ):
+        logger.warning("[RAG] [SPEC] dead spec task — falling back to fresh generate")
+        spec.buffer.clear()
+        return None
     spec.adopter = thread_id
     return spec.task, spec.buffer
 

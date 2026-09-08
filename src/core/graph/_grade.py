@@ -5,6 +5,7 @@ backward compat.
 """
 
 import logging
+import sys
 import time
 from typing import Any
 
@@ -114,6 +115,7 @@ async def grade_documents(
     grade_start = time.perf_counter()
     _grade_op = _enter_stage(OperationType.LLM_INFERENCE)
     _grade_op.__enter__()
+    _grade_op_exited = False
 
     retry_count = get_state_attr(state, "retry_count", 0)
     max_retries = GRADING_CONFIG.get("max_retries", 2)
@@ -122,6 +124,7 @@ async def grade_documents(
             f"[RAG] [GRADE] 최대 재시도 횟수({retry_count}/{max_retries}) 도달. 즉시 생성 단계로 이동."
         )
         _grade_op.__exit__(None, None, None)
+        _grade_op_exited = True
         return {"intent": "generate", "route": "generate"}
 
     docs = get_state_attr(state, "relevant_docs")
@@ -130,6 +133,7 @@ async def grade_documents(
         # R1a-01: 증가는 grade 단일 지점에서만. "문서 없음" 경로가 루프 종료를
         # rewrite 폴백의 간접 증가에 의존하던 취약 결합을 명시적 델타 +1로 해소.
         _grade_op.__exit__(None, None, None)
+        _grade_op_exited = True
         return {
             "intent": "transform",
             "route": "transform",
@@ -157,6 +161,7 @@ async def grade_documents(
                 f"[RAG] [GRADE] 초단문 쿼리 '{_q}' 가 검색 문서에 무존재 — 재검색 라우팅"
             )
             _grade_op.__exit__(None, None, None)
+            _grade_op_exited = True
             return {"intent": "transform", "route": "transform", "retry_count": 1}
         # fast-path: 원문 토큰이 상위 문서에 단어 경계로 존재하면 관련성이 확실하므로
         # LLM grade 호출을 생략하고 바로 generate 로 직행한다 (5자 미만 키워드 환각 방지
@@ -167,6 +172,7 @@ async def grade_documents(
         )
         _add_stage_ms("grade_ms", grade_ms)
         _grade_op.__exit__(None, None, None)
+        _grade_op_exited = True
         return {"intent": "generate", "route": "generate"}
 
     # Wave 3 grade reduction: 동일 세션 내 동일 (query, doc-set) 반복 질의 시
@@ -191,6 +197,7 @@ async def grade_documents(
             logger.info(f"[RAG] [GRADE][TIMING] grade_ms={grade_ms:.1f} memo_hit=True")
             _add_stage_ms("grade_ms", grade_ms)
             _grade_op.__exit__(None, None, None)
+            _grade_op_exited = True
             # [FIX] 메모 히트 시에도 재시도 카운터를 누적해야 한다.
             # 메모 재사용 경로가 retry_count 를 반환하지 않으면 reset_or_add
             # 리듀서가 카운터를 증가시키지 않아 hardcap(>= max_retries)에
@@ -230,6 +237,7 @@ async def grade_documents(
         logger.info(f"[RAG] [GRADE][TIMING] grade_ms={grade_ms:.1f} short_circuit=True")
         _add_stage_ms("grade_ms", grade_ms)
         _grade_op.__exit__(None, None, None)
+        _grade_op_exited = True
         return {"intent": "generate", "route": "generate"}
 
     query = get_state_attr(state, "input")
@@ -281,9 +289,8 @@ async def grade_documents(
     # PHASE 2: Eagerly start generate (buffered) so its LLM round-trip overlaps
     # with the grade LLM call below. Adopted by generate on the common
     # route=generate path; cancelled if grade routes to transform.
-    _start_speculative_generate(state, config, writer)
-
     try:
+        _start_speculative_generate(state, config, writer)
         if llm is None:
             raise ValueError("LLM is not initialized")
 
@@ -329,6 +336,7 @@ async def grade_documents(
             )
             _add_stage_ms("grade_ms", grade_ms)
             _grade_op.__exit__(None, None, None)
+            _grade_op_exited = True
             # PHASE 2: route=generate → keep the warm speculative generate; the
             # real generate node adopts it (single LLM call, started earlier).
             return {"intent": "generate", "route": "generate"}
@@ -348,6 +356,7 @@ async def grade_documents(
             )
             _add_stage_ms("grade_ms", grade_ms)
             _grade_op.__exit__(None, None, None)
+            _grade_op_exited = True
             # PHASE 2: route=transform → discard the speculative generate; its
             # buffered output must never reach the user.
             _cancel_speculative_generate(config)
@@ -369,6 +378,7 @@ async def grade_documents(
         )
         _add_stage_ms("grade_ms", grade_ms)
         _grade_op.__exit__(None, None, None)
+        _grade_op_exited = True
         # PHASE 2: LLM/JSON 오류로 route=transform이 되면 speculative generate를
         # 취소·폐기해야 한다 (미노출 + 레지스트리 정리 → 이후 동일 thread_id 겹침 재활성).
         _cancel_speculative_generate(config)
@@ -377,6 +387,14 @@ async def grade_documents(
             "route": "transform",
             "retry_count": 1,
         }
+
+    except Exception:
+        logger.exception("[RAG] [GRADE] unrecoverable error — canceling speculative")
+        _cancel_speculative_generate(config)
+        if not _grade_op_exited:
+            _grade_op.__exit__(*sys.exc_info())
+            _grade_op_exited = True
+        raise  # re-panic: preserve original error for graph error handling
 
 
 async def rewrite_query(

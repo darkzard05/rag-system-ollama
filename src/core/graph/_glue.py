@@ -76,8 +76,14 @@ def _start_speculative_generate(
     if not thread_id:
         return None
     if thread_id in _spec_registry:
-        # One speculative generate per query; ignore duplicate triggers.
-        return None
+        stale = _spec_registry.pop(thread_id, None)
+        if stale is not None and stale.adopter is None:
+            stale.task.cancel()
+            stale.buffer.clear()
+            logger.warning(
+                "[RAG] [SPEC] stale orphan cancelled (thread_id=%s)", thread_id
+            )
+    # fall through to register a fresh speculative task
 
     _spec_generate_events.set([])
     from core.graph._generate import generate
