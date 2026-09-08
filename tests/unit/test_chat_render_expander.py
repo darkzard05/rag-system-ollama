@@ -20,7 +20,10 @@ def _render(**kwargs) -> MagicMock:
     expander/popover/container/chat_message/columns 컨텍스트 매니저는 모두 동일
     mock_st를 반환하므로 본문/캡션/익스팬더 호출을 한 mock에서 관찰할 수 있습니다.
     """
-    with patch("ui.components.chat.st") as mock_st:
+    with (
+        patch("ui.components.chat.st") as mock_st,
+        patch("ui.components.chat_references.st", mock_st),
+    ):
         mock_st.container.return_value.__enter__.return_value = mock_st
         mock_st.chat_message.return_value.__enter__.return_value = mock_st
         mock_st.popover.return_value.__enter__.return_value = mock_st

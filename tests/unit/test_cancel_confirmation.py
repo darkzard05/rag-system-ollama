@@ -108,7 +108,10 @@ def test_streaming_status_shows_cancelling_caption():
     )
     SessionManager.set("generation_cancel", True, sid)
 
-    with patch("ui.components.chat.st") as mock_st:
+    with (
+        patch("ui.components.chat.st") as mock_st,
+        patch("ui.components.chat_references.st", mock_st),
+    ):
         mock_st.chat_message.return_value.__enter__.return_value = MagicMock()
         expander_holder = MagicMock()
         mock_st.expander.return_value.__enter__.return_value = expander_holder

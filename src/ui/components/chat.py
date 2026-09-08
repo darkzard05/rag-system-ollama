@@ -3,306 +3,35 @@
 
 모든 이벤트(문서 업로드, 분석 진행, 대화 메시지, 생각 과정)를
 단일 연대기순 타임라인으로 렌더링합니다.
+
+구조 (P3 모듈 분리):
+- ``chat_references``: 참조 (페이지/doc 점프) 렌더.
+- ``chat_build``: 문서 분석 (빌드) 진행 렌더.
+- 본 모듈: 메시지/타임라인/스트리밍 렌더 및 위 모듈 재-export.
 """
 
-import contextlib
 import html
 import logging
 import time
 import uuid
-from collections.abc import Callable
 from typing import Any
 
 import streamlit as st
 
-from common.config import DEFAULT_OLLAMA_MODEL, MSG_CHAT_GUIDE
+from common.config import MSG_CHAT_GUIDE
 from common.utils import (
     apply_tooltips_to_response,
-    doc_stable_id,
     normalize_latex_delimiters,
     strip_context_tokens,
 )
 from core.session import SessionManager
-from ui.components.common import (
-    AVATARS,
-    get_doc_metadata,
-    navigate_to_page,
-    status_line,
-    ui_error,
-)
-from ui.widget_keys import (
-    MAIN_CHAT_INPUT_KEY,
-    cancel_rebuild_key,
-    jump_key,
-)
+from ui.components.common import AVATARS, status_line, ui_error
+from ui.widget_keys import MAIN_CHAT_INPUT_KEY
 
 logger = logging.getLogger(__name__)
 
 # 본문 하단 "Answer complete" 캡션에 노출할 참조 페이지 미리보기 최대 수.
 PREVIEW_PAGES_MAX = 4
-
-
-def _handle_page_jump(p: int) -> None:
-    """참조 페이지 이동 버튼 콜백입니다."""
-    SessionManager.set(
-        "pdf_target_page",
-        {"page": int(p), "source": "manual", "ts": time.time()},
-    )
-    navigate_to_page(int(p))
-    st.toast(f"Moving to page {p}...")
-    # 전체 리런이 필요하다 (뷰어 fragment가 run_every=2.0으로 폴링 중이어도
-    # popover 점프는 즉시 반영되어야 하므로 st.rerun()으로 전체 재실행).
-    st.rerun()
-
-
-def _handle_doc_jump(doc_id: str) -> None:
-    """인용의 안정 doc_id로 문서를 찾아 첫 페이지로 이동합니다."""
-    docs = SessionManager.get("documents", []) or []
-    target_page = 1
-    found = False
-    for d in docs:
-        if doc_stable_id(d) == doc_id:
-            found = True
-            page = get_doc_metadata(d).get("page")
-            with contextlib.suppress(ValueError, TypeError):
-                if page is not None:
-                    target_page = int(page)
-            break
-    if not found:
-        # doc_id만으로 페이지를 알 수 없으면 1p 기준으로 이동한다.
-        target_page = 1
-    SessionManager.set(
-        "pdf_target_page",
-        {"page": target_page, "source": "citation", "ts": time.time()},
-    )
-    navigate_to_page(target_page)
-    st.toast("Moving to cited document...")
-    st.rerun()
-
-
-def _render_citation_anchors(
-    citations: list[dict[str, Any]], documents: list[Any] | None
-) -> None:
-    """citations[] 배열을 클릭 가능한 출처 앵커로 렌더합니다.
-
-    PRIMARY 소스는 citations[] (안정 doc_id 기반)이며, 인라인 [doc:N] 폴백은
-    apply_tooltips_to_response가 담당합니다. doc_id가 documents에서 실제 문서를
-    가리키면 점프 버튼을 노출합니다.
-    """
-    if not citations:
-        return
-    doc_ids = {doc_stable_id(d) for d in (documents or [])}
-    with st.container():
-        st.caption("Sources")
-        for idx, cit in enumerate(citations):
-            sid = str(cit.get("doc_id", ""))
-            span = cit.get("text_span") or cit.get("section") or f"Source {idx + 1}"
-            label = html.escape(str(span))[:160]
-            if sid in doc_ids:
-                if st.button(
-                    f"{idx + 1}. {label}",
-                    key=f"cit_doc_{sid}_{idx}",
-                    use_container_width=True,
-                ):
-                    _handle_doc_jump(sid)
-            else:
-                st.markdown(
-                    f'<span data-doc-id="{html.escape(sid)}">{idx + 1}. {label}</span>',
-                    unsafe_allow_html=True,
-                )
-
-
-def _extract_reference_pages(documents: list[Any]) -> list[int]:
-    """문서 메타데이터에서 참조 페이지 번호 목록을 추출합니다."""
-    pages: set[int] = set()
-    for d in documents:
-        meta = get_doc_metadata(d)
-        with contextlib.suppress(ValueError, TypeError):
-            page = meta.get("page")
-            if page is not None:
-                pages.add(int(page))
-            for pg in meta.get("pages") or []:
-                pages.add(int(pg))
-    return sorted(pages)
-
-
-def _render_references_content(
-    msg_id: str,
-    documents: list[Any] | None,
-    on_page_jump: Callable[[int], None] | None = None,
-    citations: list[dict[str, Any]] | None = None,
-    generating: bool = False,
-) -> bool:
-    """참조 콘텐츠(페이지/doc 점프 버튼)를 렌더링합니다.
-
-    통합 익스팬더 내부에서 직접 호출되므로 popover 래퍼 없이 본문만 그립니다.
-    렌더된 참조가 있으면 True, 없으면 False를 반환합니다.
-
-    generating=True(스트리밍 중)에는 매 chunk rerun마다 동일 위젯이 재생성되므로
-    key를 소비하는 st.button 대신 정적 markdown으로 페이지/doc을 표시합니다.
-    key가 필요한 상호작용 점프 버튼은 완료 후(generating=False, 단일 rerun)에만
-    렌더하므로 StreamlitDuplicateElementKey 충돌을 피합니다.
-    """
-    rendered = False
-    if not documents and not citations:
-        return rendered
-
-    pages = _extract_reference_pages(documents or [])
-    if pages:
-        st.caption("By page")
-        if generating:
-            # 스트리밍 중: key 없는 정적 표시 (중복 등록 방지).
-            st.markdown(" · ".join(f"`{p}p`" for p in pages))
-        else:
-            cols = st.columns(min(len(pages), 5))
-            for idx, p in enumerate(pages):
-                clicked = cols[idx % len(cols)].button(
-                    f"{p}p",
-                    key=jump_key(msg_id, p, idx),
-                    use_container_width=True,
-                )
-                if clicked and on_page_jump is not None:
-                    on_page_jump(p)
-        rendered = True
-
-    # P3: citations[] 기반 doc 점프 (안정 doc_id).
-    doc_citations = [c for c in (citations or []) if c.get("doc_id") is not None]
-    if doc_citations:
-        doc_ids = {doc_stable_id(d) for d in (documents or [])}
-        st.caption("By doc")
-        for idx, cit in enumerate(doc_citations):
-            sid = str(cit.get("doc_id"))
-            if sid in doc_ids:
-                label = cit.get("section") or cit.get("text_span") or f"doc {sid}"
-                if generating:
-                    # 스트리밍 중: key 없는 정적 표시.
-                    st.markdown(
-                        f'{idx + 1}. <span data-doc-id="{html.escape(sid)}">'
-                        f"{html.escape(label)}</span>",
-                        unsafe_allow_html=True,
-                    )
-                else:
-                    if st.button(
-                        f"{idx + 1}. {label}",
-                        key=f"pop_doc_{msg_id}_{sid}_{idx}",
-                        use_container_width=True,
-                    ):
-                        _handle_doc_jump(sid)
-        rendered = True
-    return rendered
-
-
-def render_generation_expander(
-    msg: dict[str, Any],
-    *,
-    expanded: bool,
-    generating: bool,
-    status_text: str = "Answer generation",
-    process_override: dict[str, Any] | None = None,
-) -> None:
-    """답변 말풍선 상단(질문↔답변 사이)에 **단일 고정 익스팬더**를 렌더합니다.
-
-    메트릭·생성 단계·상위 점수·사고 과정·참조를 모두 이 익스팬더 안에 수납해
-    산개되던 부가 정보(별도 Metrics 익스팬더, References popover, 완료 후
-    generation 익스팬더)를 하나로 통합한다. 기본값은 접힘(expanded=False).
-
-    스트리밍 중과 완료 후 동일 위젯을 재사용해, 생성 완료 시 상태 박스가
-    증발하던 문제를 해결한다. 본문은 매 렌더 **무조건** 작성하므로 fragment
-    폴링(0.5s)으로 st.expander가 재생성되어도 내용이 비지 않는다.
-
-    - generating=True: 기본 접힘 유지, 내부 st.spinner로 진행 표시
-    - generating=False: 접은 상태(완료 후 유지), 정적 헤더만
-    - cancelled 메시지는 추론 로그를 감춰 전체 추론 완료로 오인되지 않게 함
-    - process_override: 완료 메시지처럼 이미 계산된 process dict가 있으면
-      재파생(process_steps 의존) 대신 직접 사용한다.
-    """
-    thought = msg.get("thought", "") or ""
-    cancelled = bool(msg.get("cancelled", False))
-    show_thought = bool(thought and thought.strip() and not cancelled)
-    documents = msg.get("documents") or []
-    citations = msg.get("citations") or []
-    metrics = msg.get("metrics") or {}
-    msg_id = msg.get("msg_id") or ""
-
-    # ui.components 내부 순환 의존을 피하기 위해 lazy import
-    from ui.components.streaming import _build_process
-
-    process = process_override or _build_process(msg) or {}
-    steps = process.get("steps") or []
-    sections = process.get("sections") or []
-    top_scores = [
-        s
-        for s in (process.get("top_scores") or [])
-        if isinstance(s, dict) and "section" in s and "score" in s
-    ]
-    perf = process.get("perf") or {}
-
-    # 메트릭(완료 메시지에 실린 metrics)도 익스팬더 수납 대상.
-    retrieved = (
-        len(documents) if documents else (process or {}).get("retrieved_count", 0)
-    )
-    total_time = metrics.get("total_time", 0)
-    has_metrics = bool(total_time or retrieved)
-    has_block = bool(
-        steps or sections or top_scores or perf or show_thought or has_metrics
-    )
-
-    # 완료 메시지인데 표시할 내용이 없으면 익스팬더 자체를 렌더하지 않는다.
-    # 빈 익스팬더 헤더가 대화 줄 간격(패딩+익스팬더)을 키워 간격 과대를 유발한다.
-    # 생성 중(generating=True)에는 항상 익스팬더를 열어 진행 표시/깜빡임을 방지한다.
-    if not generating and not (has_block or documents or citations):
-        return
-
-    with st.expander("Answer details", expanded=expanded):
-        if generating:
-            with st.spinner(status_text):
-                pass  # spinner는 헤더 아래 진행 표시용(본문은 아래 즉시 작성)
-
-        if not (has_block or documents or citations):
-            # 생성 중인데 아직 표시할 내용이 없으면 진행 캡션만 노출.
-            st.caption("Preparing...")
-            return
-
-        if steps:
-            st.markdown(" · ".join(steps))
-        if sections:
-            st.caption(" · ".join(sections))
-        if top_scores:
-            st.caption(
-                ", ".join(f"{s['section']} {s['score']:.3f}" for s in top_scores)
-            )
-
-        # 메트릭: Time / Retrieved / Model (UX-3: 기본 접힘 익스팬더 내 수납).
-        parts = []
-        if isinstance(total_time, (int, float)):
-            parts.append(f"Time: {total_time:.1f}s")
-        if retrieved:
-            parts.append(f"Retrieved: {retrieved} chunks")
-        model = (
-            msg.get("model", "")
-            or SessionManager.get("last_selected_model", "")
-            or DEFAULT_OLLAMA_MODEL
-        )
-        if model:
-            parts.append(f"Model: {model}")
-        if parts:
-            st.caption(status_line(*parts))
-
-        if show_thought:
-            st.markdown("**Thinking process**")
-            st.markdown(thought)
-
-        # 참조(페이지/doc 점프) — 기존 References popover 내용을 익스팬더 안으로 통합.
-        if documents or citations:
-            st.divider()
-            st.caption("References")
-            _render_references_content(
-                msg_id,
-                documents,
-                on_page_jump=_handle_page_jump,
-                citations=citations,
-                generating=generating,
-            )
 
 
 def render_message(
@@ -429,115 +158,6 @@ def render_message(
                 )
             else:
                 st.caption("Answer complete")
-
-
-def _cancel_rebuild(sid: str) -> None:
-    """문서 분석 재구축 취소 요청 콜백입니다."""
-    SessionManager.set("rebuild_cancelled", True, session_id=sid)
-    st.rerun()
-
-
-def _render_build_progress_block(sid: str) -> None:
-    """문서 분석 상태 블록을 단독 렌더합니다 (전용 폴링 fragment가 호출).
-
-    리팩터링에서 타임라인 폴링이 제거된 뒤, 빌드 도중에는 전체 rerun이
-    발생하지 않아 ``st.progress`` 가 0%에 고착되던 결함(진행 바 동결)을
-    해결하기 위해 분리했다. ``_report_progress``(main.py)가 갱신하는
-    ``rebuild_progress`` 상태만 읽어 주기적(``run_every``)으로 다시 그린다.
-
-    분석 블록은 대화의 일부로 영구 잔존한다(빌드 완료/취소/에러 후에도 남아
-    타임라인 기록으로 남는다). 빌드가 한 번도 시작되지 않은 초기 상태에서만
-    렌더하지 않는다.
-    """
-    is_building = bool(SessionManager.get("is_building_rag", False, sid))
-    is_cancelling = bool(SessionManager.get("rebuild_cancelled", False, sid))
-    is_done = bool(SessionManager.get("rebuild_done", False, sid))
-    has_doc = bool(SessionManager.get("last_uploaded_file_name", "", sid))
-
-    # 빌드가 한 번도 시작되지 않은 초기 상태(업로드 전)에서는 노출하지 않는다.
-    if not (is_building or is_cancelling or is_done or has_doc):
-        return
-
-    progress = int(SessionManager.get("rebuild_progress", 0, sid))
-    status_text = str(SessionManager.get("rebuild_status", "", sid) or "")
-    error = SessionManager.get("pdf_processing_error", "", sid) or ""
-
-    if error:
-        label, state, expanded = "Analysis failed/cancelled", "error", True
-    elif progress >= 100 or is_done:
-        label, state, expanded = "Analysis complete", "complete", False
-    elif is_cancelling:
-        label, state, expanded = "Cancelling analysis...", "running", True
-    else:
-        label, state, expanded = (
-            f"Analyzing document: {status_text}",
-            "running",
-            True,
-        )
-
-    with (
-        st.chat_message("system", avatar=AVATARS["building"]),
-        st.status(label, expanded=expanded, state=state),
-    ):
-        st.progress(progress / 100)
-        st.caption(f"{progress}% complete")
-        if state == "running" and not is_cancelling:
-            st.button(
-                "Cancel Analysis",
-                key=cancel_rebuild_key(sid),
-                on_click=_cancel_rebuild,
-                args=(sid,),
-                use_container_width=True,
-            )
-
-
-@st.fragment(run_every=1.5)
-def _render_build_progress_fragment(sid: str) -> None:
-    """빌드 상태 블록 전용 폴링 fragment.
-
-    전체 rerun 없이 1.5초마다 ``rebuild_progress`` 를 다시 읽어 진행 바를
-    갱신한다(타임라인 폴링이 제거된 빈틈을 메움). 빌드 완료 후에는
-    ``run_in_background_worker._on_complete`` 의 rerun이 최종 100%를 확정한다.
-    완료/취소/에러 상태에서도 블록은 그대로 남아 대화 기록으로 잔존한다.
-    """
-    _render_build_progress_block(sid)
-
-
-def _render_guidance_panel() -> None:
-    """빈 대화 상태의 단일 가이드 메시지를 렌더링합니다."""
-    st.chat_message("system").markdown(MSG_CHAT_GUIDE)
-
-
-def _render_doc_context_inline(sid: str) -> None:
-    """문서 컨텍스트를 타임라인 첫 메시지로 렌더링합니다 (네이티브)."""
-    file_name = str(SessionManager.get("last_uploaded_file_name", "", sid) or "")
-    if not file_name:
-        pdf_path = str(SessionManager.get("pdf_file_path", "", sid) or "")
-        if pdf_path:
-            file_name = pdf_path.replace("\\", "/").rsplit("/", 1)[-1]
-    if not file_name:
-        return
-
-    is_building = bool(SessionManager.get("is_building_rag", False, sid))
-    is_ready = SessionManager.is_ready_for_chat(session_id=sid)
-    has_error = bool(SessionManager.get("pdf_processing_error", "", sid))
-
-    doc_stats = SessionManager.get("doc_stats", {}, sid) or {}
-    doc_loaded = bool(SessionManager.get("pdf_processed", False, sid))
-    cache_tag = ""
-    if doc_loaded and doc_stats:
-        cache_tag = " [cached]" if doc_stats.get("cache_used") else " [new]"
-
-    with st.chat_message("system", avatar=AVATARS["document"]):
-        if is_building:
-            st.caption(status_line(file_name, f"Analyzing...{cache_tag}"))
-            # 진행 상황은 메시지 루프에서 build_progress 타입으로 처리
-        elif has_error:
-            st.caption(status_line(file_name, f"Error{cache_tag}"))
-        elif is_ready:
-            st.caption(status_line(file_name, f"Ready{cache_tag}"))
-        else:
-            st.caption(status_line(file_name, f"Waiting...{cache_tag}"))
 
 
 def _render_unified_timeline(current_sid: str) -> None:
@@ -950,3 +570,44 @@ def _run_active_stream_in_timeline(
     # 브랜치를 타며 입력창도 is_generating_answer=False에 맞춰 정상 활성화된다.
     _render_aux()
     st.rerun()
+
+
+# isort: off
+from ui.components.chat_references import (  # noqa: E402
+    _extract_reference_pages,
+    _handle_doc_jump,
+    _handle_page_jump,
+    _render_citation_anchors,
+    _render_references_content,
+    render_generation_expander,
+)
+from ui.components.chat_build import (  # noqa: E402
+    _cancel_rebuild,
+    _render_build_progress_block,
+    _render_build_progress_fragment,
+    _render_doc_context_inline,
+    _render_guidance_panel,
+)
+# isort: on
+
+# P3 분리된 모듈의 재-export 목록: 본 모듈의 공개 API로 유지한다
+# (F401 의도적 무시 — 내부 호출자는 본문에서 재-export된 이름을 사용).
+__all__ = [
+    "_cancel_rebuild",
+    "_extract_reference_pages",
+    "_friendly_stream_error",
+    "_handle_doc_jump",
+    "_handle_page_jump",
+    "_render_build_progress_block",
+    "_render_build_progress_fragment",
+    "_render_citation_anchors",
+    "_render_doc_context_inline",
+    "_render_guidance_panel",
+    "_render_references_content",
+    "_render_unified_timeline",
+    "_resolve_chat_input_state",
+    "render_chat_input_area",
+    "render_chat_messages_area",
+    "render_generation_expander",
+    "render_message",
+]
