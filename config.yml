@@ -45,6 +45,13 @@ models:
   # 호스트 RAM 압력(host_pressure_exceeded, 기본 임계값 90%) 초과 시
   # 자동으로 1로 강등(degrade)되어 VRAM/메모리 폭주를 막는다.
   # 값은 반드시 정수 >= 1. 0 이하/비정수면 로드 시 ValueError 발생.
+  #
+  # [감사 결과: speculative overlap] 2 이상으로 올리면 grade→generate
+  # speculative 겹침(_spec_overlap_enabled)이 활성화되어 평균 응답 지연이
+  # 줄어든다. 단, 1에서 겹침은 완전히 비활성(동작 변경 없음)이며, 2 이상은
+  # host RAM 압력 85% 미만 환경에서만 실측 검증 후 적용할 것 (로컬
+  # VRAM/RAM 제약 환경에서는 OOM 회귀 가능). 안전 상한: host 압력 미만에서
+  # 2까지 권장, 3 이상은 추가 메모리 검증 필수.
   max_concurrent_inference: 1
 
   # Ollama HTTP 요청 및 추론 세마포어 획득 타임아웃 (초)

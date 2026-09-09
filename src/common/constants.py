@@ -15,6 +15,11 @@ _PROJECT_ROOT = Path(__file__).parent.parent.parent
 # 모듈 레벨 상수 (IntEnum 외부에서 직접 import 가능)
 MAX_MESSAGE_HISTORY = 100
 
+# T8 계약: 세션별 grade 결정 메모 키. pipeline_builder(무효화)와
+# core.graph._grade(저장)가 공유하는 단일 정의 (순환 import 방지를 위해
+# 이 leaf 모듈에 위치).
+GRADE_MEMO_KEY = "grade_decision_memo"
+
 
 class ChunkingConstants(IntEnum):
     """문서 청킹 관련 상수"""

@@ -21,6 +21,7 @@ from common.config import (
     GRADING_CONFIG,
     GRADING_ENABLED,
 )
+from common.constants import GRADE_MEMO_KEY
 from common.utils import fast_hash
 from core.graph._glue import _get_session_id, _start_speculative_generate
 from core.graph._grading_glue import _add_stage_ms, _enter_stage
@@ -35,13 +36,11 @@ logger = logging.getLogger(__name__)
 
 # ----------------------------------------------------------------------------
 # Wave 3 grade reduction — memoization contract (T8).
-# MUST stay byte-equal to ``GRADE_MEMO_KEY`` in ``core/pipeline_builder.py``
-# (line ~41). We deliberately use the literal instead of importing it because
-# pipeline_builder imports ``build_graph`` from this module at module scope,
-# so ``from core.pipeline_builder import GRADE_MEMO_KEY`` would be a circular
-# import. pipeline_builder owns the canonical definition + re-index invalidation;
-# this module only stores into the same key.
-_GRADE_MEMO_KEY = "grade_decision_memo"
+# 공용 키는 ``common.constants.GRADE_MEMO_KEY``에서 단일 정의로 공유한다.
+# pipeline_builder는 동일 키로 무효화, 본 모듈은 저장만 담당한다.
+# (이전에는 순환 import 회피를 위해 문자열 리터럴을 중복 정의했으나,
+#  leaf 모듈인 common.constants로 이동해 단일 정의로 통합했다.)
+_GRADE_MEMO_KEY = GRADE_MEMO_KEY
 
 
 def _grade_memo_key(state: Any, docs: list) -> str:

@@ -25,6 +25,7 @@ from common.config import (
     RETRIEVER_CONFIG,
     is_test_env,
 )
+from common.constants import GRADE_MEMO_KEY
 from common.exceptions import EmptyPDFError, InsufficientChunksError, VectorStoreError
 from core.chunking import split_documents
 from core.document_processor import compute_file_hash, load_pdf_docs
@@ -35,11 +36,6 @@ from core.session import SessionManager
 from services.optimization.caching_optimizer import get_cache_manager
 
 logger = logging.getLogger(__name__)
-
-
-# T8 계약: 세션별 grade 결정 메모 키 (T8이 이 키로 memo를 저장하고,
-# 본 모듈이 동일 키로 무효화합니다. 신규 문서 인덱싱 시 staleness 방지).
-GRADE_MEMO_KEY = "grade_decision_memo"
 
 
 # --- 모델 프리로드 (1회성, 비차단) ---

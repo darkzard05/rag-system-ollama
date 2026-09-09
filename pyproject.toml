@@ -41,6 +41,7 @@ ignore = [
 # 특정 파일별 무시 설정
 [tool.ruff.lint.per-file-ignores]
 "src/main.py" = ["E402", "F401"] # Streamlit 초기화 및 조건부 임포트 허용
+"src/_bg_indexing.py" = ["E402", "F401"] # main.py 와 동일한 sys.path 부트스트랩 패턴
 "src/core/rag_core.py" = ["E402"] # 지연 임포트 허용
 "src/core/model_loader.py" = ["E402"] # 지연 임포트 허용
 "src/common/utils.py" = ["E402"] # 지연 임포트 허용
