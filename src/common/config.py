@@ -15,6 +15,31 @@ from dotenv import load_dotenv
 load_dotenv()
 logger = logging.getLogger(__name__)
 
+# ---------------------------------------------------------------------------
+# 테스트 환경 감지 단일 진입점 (Phase 4: IS_CI_TEST/IS_UNIT_TEST 중앙화)
+# ---------------------------------------------------------------------------
+_TEST_MODE_WARNED: bool = False
+
+
+def is_test_env() -> bool:
+    """테스트 환경 감지 단일 진입점 (Phase 4: IS_CI_TEST/IS_UNIT_TEST 중앙화).
+
+    매 호출 시점의 env를 그대로 읽는다(캐시하지 않음). 테스트가
+    monkeypatch.delenv/setenv로 동적으로 플래그를 토글하며 실제 로직을
+    검증할 수 있어야 하므로, 런타임 중간에 env가 뒤집혀도 그것을 존중한다.
+    프로덕션에서 실수로 env가 설정된 경우 가시적 경고를 남긴다.
+    """
+    global _TEST_MODE_WARNED  # noqa: PLW0603
+    test_mode = os.getenv("IS_CI_TEST") == "true" or os.getenv("IS_UNIT_TEST") == "true"
+    if test_mode and not _TEST_MODE_WARNED:
+        _TEST_MODE_WARNED = True
+        logger.warning(
+            "테스트 환경 플래그 감지 (IS_CI_TEST/IS_UNIT_TEST) "
+            "— 프로덕션 실행이면 env를 제거하십시오."
+        )
+    return test_mode
+
+
 PROJECT_ROOT = Path(__file__).parent.parent.parent
 CONFIG_PATH = PROJECT_ROOT / "config.yml"
 
@@ -278,11 +303,31 @@ EVAL_JUDGE_MODEL: str = _get_env(
     _evaluation_config.get("judge_model", "qwen3:4b-instruct-2507-q4_K_M"),
 )
 
+# --- 6.6 CORS 설정 (CORS) ---
+_cors_config = _config.get("cors", {})
+
+
+def _parse_allow_origins(value: Any) -> list[str]:
+    """cors.allow_origins boundary 정규화: None→[], str→[str], list→[str]."""
+    if value is None:
+        return []
+    if isinstance(value, str):
+        return [value]
+    return [str(item) for item in value if item] if isinstance(value, list) else []
+
+
+CORS_ALLOW_ORIGINS: list[str] = _parse_allow_origins(
+    _cors_config.get("allow_origins", [])
+)
+
 # --- 7. UI 메시지 (UI) ---
 _ui_config = _config.get("ui", {})
 
 _ui_streaming = _ui_config.get("streaming", {})
 UI_STREAMING_TIMEOUT: int = _ui_streaming.get("timeout_seconds", 30)
+UI_STREAM_WORKERS: int = _get_env(
+    "UI_STREAM_WORKERS", _ui_streaming.get("max_workers", 3), int
+)
 
 _ui_messages = _ui_config.get("messages", {})
 MSG_CHAT_GUIDE: str = _ui_messages.get("chat_guide", "PDF를 업로드한 후 질문해 보세요")

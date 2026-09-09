@@ -75,11 +75,14 @@ async def preprocess(
     cached_response: str | None = None
     if QUERY_CACHE_ENABLED:
         sid = _get_session_id(config)
-        has_doc = bool(SessionManager.get("file_hash", session_id=sid, default=None))
+        file_hash = SessionManager.get("file_hash", session_id=sid, default=None)
+        has_doc = bool(file_hash)
         if has_doc:
             await _ensure_query_cache_embedder()
             try:
-                cached = await get_cache_manager().get(query, use_semantic=True)
+                # D17 — cache key namespaced by file_hash so cross-document queries can't collide.
+                cache_key = f"{file_hash}:{query}"
+                cached = await get_cache_manager().get(cache_key, use_semantic=True)
             except Exception as e:  # noqa: BLE001 - 캐시 실패는 정상 경로로 폴백
                 logger.warning(f"[RAG] [CACHE] 조회 실패 — 우회: {e}")
                 cached = None
@@ -107,5 +110,9 @@ async def preprocess(
         "short_query": len(query) < 5,
         # 턴 시작 시 이전 턴의 재작성 쿼리 잔재 제거 (reset_or_append 리듀서의 리셋 신호)
         "search_queries": [],
+        # 턴 시작 시 이전 턴의 검색 문서 잔재 제거 (B7: retrieve_and_rerank/grade가
+        # 이 키를 턴 간 누적/유지해 문서 없음 턴에서 이전 턴 문서가 프롬프트로 새는
+        # cross-turn state leakage 방지). 빈 리스트로 교체해 격리한다.
+        "relevant_docs": [],
         "retry_count": 0,
     }

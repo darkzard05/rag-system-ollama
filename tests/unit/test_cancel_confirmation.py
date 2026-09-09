@@ -108,7 +108,10 @@ def test_streaming_status_shows_cancelling_caption():
     )
     SessionManager.set("generation_cancel", True, sid)
 
-    with patch("ui.components.chat.st") as mock_st:
+    with (
+        patch("ui.components.chat.st") as mock_st,
+        patch("ui.components.chat_references.st", mock_st),
+    ):
         mock_st.chat_message.return_value.__enter__.return_value = MagicMock()
         expander_holder = MagicMock()
         mock_st.expander.return_value.__enter__.return_value = expander_holder
@@ -148,3 +151,53 @@ def test_render_message_shows_cancelled_caption():
     captions = [c.args[0] for c in mock_st.caption.call_args_list]
     assert any("Stopped · Partial answer preserved" in c for c in captions)
     assert not any("Answer complete" in c for c in captions)
+
+
+def test_stop_trigger_sets_generation_cancel():
+    """B9(a): request_generation_stop이 generation_cancel만 True로 바꾼다."""
+    from ui.components.sidebar import request_generation_stop
+
+    sid = "test_stop_trigger"
+    SessionManager.reset_all_state(sid)
+    SessionManager.set_session_id(sid)
+    SessionManager.set("foo", "bar", sid)
+
+    request_generation_stop(sid)
+
+    assert SessionManager.get("generation_cancel", False, sid) is True
+    # 다른 상태는 변경되지 않는다
+    assert SessionManager.get("foo", None, sid) == "bar"
+    assert SessionManager.get("is_generating_answer", False, sid) is False
+
+
+def test_on_chunk_receives_accumulation_snapshots_in_order():
+    """B9: on_chunk 콜백이 청크마다 스냅샷을 올바른 누적 순서로 받는다."""
+    sid = "test_on_chunk"
+    SessionManager.reset_all_state(sid)
+    SessionManager.set_session_id(sid)
+
+    def fake_stream(query: str, model_name: str, session_id: str):
+        yield _fake_chunk(content="A")
+        yield _fake_chunk(status="단계1", thought="생각 ")
+        yield _fake_chunk(content="B", performance={"t": 1})
+
+    collector = []
+
+    from ui.components.streaming import consume_stream_into_message
+
+    with patch("ui.components.streaming.stream_chunks", fake_stream):
+        consume_stream_into_message(sid, "질문", "model", on_chunk=collector.append)
+
+    # per-chunk 3회 + 스트림 종료 1회
+    assert len(collector) == 4
+    # 누적 순서
+    assert collector[0]["accumulated"] == "A"
+    assert collector[1]["accumulated"] == "A"  # 상태/생각 청크 (본문 없음)
+    assert collector[2]["accumulated"] == "AB"
+    # 최종 스냅샷은 전체 콘텐츠를 담는다
+    final = collector[-1]
+    assert final["accumulated"] == "AB"
+    assert final["thought"] == "생각 "
+    assert final["process_steps"] == ["단계1"]
+    assert final["metrics"] == {"t": 1}
+    assert final["cancelled"] is False

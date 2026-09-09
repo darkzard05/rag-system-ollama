@@ -12,9 +12,6 @@ Features:
 - Real-time metrics collection
 """
 
-import csv
-import os
-import queue
 import threading
 import time
 from collections import deque
@@ -24,16 +21,13 @@ from enum import Enum
 from typing import Any
 
 try:
-    from common.config import PROJECT_ROOT
     from common.logging_config import get_logger
 
     logger = get_logger(__name__)
 except ImportError:
     import logging
-    from pathlib import Path
 
     logger = logging.getLogger(__name__)
-    PROJECT_ROOT = Path(__file__).parent.parent.parent.parent
 
 
 def _get_psutil() -> Any:
@@ -362,105 +356,7 @@ class PerformanceMonitor:
         self._operations: list[OperationMetrics] = []
         self._max_operations = 10000
 
-        # [경로 고정] CWD와 무관하게 항상 <루트>/logs/로 수렴
-        self.csv_path = PROJECT_ROOT / "logs" / "performance_metrics.csv"
-        self.jsonl_path = (
-            PROJECT_ROOT
-            / "logs"
-            / "eval"
-            / f"qa_history_{datetime.now().strftime('%Y%m')}.jsonl"
-        )
-        self._init_csv()
-        self._init_jsonl()
-
-        # [최적화] 비동기 로깅을 위한 큐와 스레드 설정
-        self._log_queue: queue.Queue[Any] = queue.Queue()
-        self._stop_event = threading.Event()
-        self._log_thread = threading.Thread(target=self._logging_worker, daemon=True)
-        self._log_thread.start()
-
-        logger.info("[System] [Monitor] 성능 모니터링 시스템 활성화 (비동기 I/O)")
-
-    def _init_csv(self):
-        """CSV 파일 초기화 및 헤더 작성"""
-        try:
-            if not os.path.exists(os.path.dirname(self.csv_path)):
-                os.makedirs(os.path.dirname(self.csv_path), exist_ok=True)
-
-            if not os.path.exists(self.csv_path):
-                with open(self.csv_path, "w", newline="", encoding="utf-8") as f:
-                    writer = csv.writer(f)
-                    writer.writerow(
-                        [
-                            "Timestamp",
-                            "Model",
-                            "TTFT",
-                            "Thinking_Time",
-                            "Answer_Time",
-                            "Total_Time",
-                            "Tokens",
-                            "TPS",
-                            "Query",
-                        ]
-                    )
-        except Exception as e:
-            logger.error(f"Failed to initialize performance CSV: {e}")
-
-    def _init_jsonl(self):
-        """JSONL 폴더 초기화"""
-        try:
-            os.makedirs(os.path.dirname(self.jsonl_path), exist_ok=True)
-        except Exception as e:
-            logger.error(f"Failed to initialize JSONL directory: {e}")
-
-    def _logging_worker(self):
-        """백그라운드에서 CSV 및 JSONL 기록을 처리하는 워커 스레드"""
-        import json
-
-        while not (self._stop_event.is_set() and self._log_queue.empty()):
-            try:
-                data_entry = self._log_queue.get(timeout=1.0)
-                try:
-                    # 데이터 타입에 따라 처리 (리스트면 CSV, 딕셔너리면 JSONL)
-                    if isinstance(data_entry, list):
-                        with open(
-                            self.csv_path, "a", newline="", encoding="utf-8"
-                        ) as f:
-                            writer = csv.writer(f)
-                            writer.writerow(data_entry)
-                    elif isinstance(data_entry, dict):
-                        with open(self.jsonl_path, "a", encoding="utf-8") as f:
-                            f.write(json.dumps(data_entry, ensure_ascii=False) + "\n")
-                except Exception as e:
-                    print(f"[Monitor] 로깅 쓰기 오류: {e}")
-                finally:
-                    self._log_queue.task_done()
-            except Exception:
-                continue
-
-    def log_to_csv(self, data: dict[str, Any]):
-        """성능 데이터를 큐에 삽입 (CSV용)"""
-        try:
-            row = [
-                datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                data.get("model", "unknown"),
-                round(data.get("ttft", 0), 3),
-                round(data.get("thinking", 0), 3),
-                round(data.get("answer", 0), 3),
-                round(data.get("total", 0), 3),
-                data.get("tokens", 0),
-                round(data.get("tps", 0), 2),
-                data.get("query", "")[:100],
-            ]
-            self._log_queue.put(row)
-        except Exception as e:
-            logger.error(f"Failed to queue metrics for CSV: {e}")
-
-    def stop(self):
-        """모니터링 시스템 종료 및 남은 로그 플러시"""
-        self._stop_event.set()
-        if self._log_thread.is_alive():
-            self._log_thread.join(timeout=2.0)
+        logger.info("[System] [Monitor] 성능 모니터링 시스템 활성화")
 
     # ========================================================================
     # Context Manager Support for Tracking

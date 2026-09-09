@@ -174,6 +174,56 @@ async def test_model_vram_pressure_eviction():
         assert pool.get("res1") is None
 
 
+# --- _evict_one (async wrapper contract; C15 port) ---------------------------
+
+
+@pytest.mark.asyncio
+async def test_evict_one_removes_oldest_and_returns_true():
+    """_evict_one removes the oldest unpinned entry and returns True."""
+    pool: BaseResourcePool = BaseResourcePool("Test", item_limit=10, byte_limit=10**9)
+    await pool.put("res1", MockResource(name="res1"))
+    await pool.put("res2", MockResource(name="res2"))
+
+    evicted = await pool._evict_one()
+
+    assert evicted is True
+    assert pool.get("res1") is None
+    assert pool.get("res2") is not None
+
+
+@pytest.mark.asyncio
+async def test_evict_one_returns_false_when_empty():
+    """_evict_one on an empty pool returns False (nothing to evict)."""
+    pool: BaseResourcePool = BaseResourcePool("Test", item_limit=10, byte_limit=10**9)
+    assert await pool._evict_one() is False
+
+
+@pytest.mark.asyncio
+async def test_model_pool_evict_one_removes_entry_and_cleans_cuda():
+    """ModelPool._evict_one removes the entry and runs the CUDA cleanup hook."""
+    pool = ModelPool("Model", item_limit=10, byte_limit=10**9)
+    await pool.put("res1", MockResource(name="res1"))
+
+    with patch.object(pool, "_cleanup_cuda", new=MagicMock()) as cleanup:
+        evicted = await pool._evict_one()
+
+    assert evicted is True
+    assert pool.get("res1") is None
+    cleanup.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_model_pool_evict_one_empty_skips_cuda_cleanup():
+    """ModelPool._evict_one on an empty pool returns False without CUDA cleanup."""
+    pool = ModelPool("Model", item_limit=10, byte_limit=10**9)
+
+    with patch.object(pool, "_cleanup_cuda", new=MagicMock()) as cleanup:
+        evicted = await pool._evict_one()
+
+    assert evicted is False
+    cleanup.assert_not_called()
+
+
 # --- ResourceCoordinator Integration ---
 
 

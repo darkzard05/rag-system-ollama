@@ -8,7 +8,6 @@ from __future__ import annotations
 import asyncio
 import copy
 import logging
-import os
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -24,7 +23,9 @@ from common.config import (
     ENABLE_VECTOR_CACHE,
     RERANKER_MODEL_NAME,
     RETRIEVER_CONFIG,
+    is_test_env,
 )
+from common.constants import GRADE_MEMO_KEY
 from common.exceptions import EmptyPDFError, InsufficientChunksError, VectorStoreError
 from core.chunking import split_documents
 from core.document_processor import compute_file_hash, load_pdf_docs
@@ -35,11 +36,6 @@ from core.session import SessionManager
 from services.optimization.caching_optimizer import get_cache_manager
 
 logger = logging.getLogger(__name__)
-
-
-# T8 계약: 세션별 grade 결정 메모 키 (T8이 이 키로 memo를 저장하고,
-# 본 모듈이 동일 키로 무효화합니다. 신규 문서 인덱싱 시 staleness 방지).
-GRADE_MEMO_KEY = "grade_decision_memo"
 
 
 # --- 모델 프리로드 (1회성, 비차단) ---
@@ -102,7 +98,7 @@ async def _schedule_model_preload() -> None:
     # 프리로드 태스크가 루프 닫힘 시 모델별 Lock을 잡은 채 좌초되어 후속 테스트가
     # get_or_build의 Lock.acquire에서 영원히 대기하는 데드락을 유발합니다.
     # 테스트에서는 프리로드 스케줄을 건너뛰어 태스크 생성 자체를 원천 차단합니다.
-    if os.getenv("IS_CI_TEST") == "true" or os.getenv("IS_UNIT_TEST") == "true":
+    if is_test_env():
         logger.info("[RAG] [PRELOAD] 테스트 환경 — 프리로드 스킵")
         return
     current_loop = asyncio.get_running_loop()

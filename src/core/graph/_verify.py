@@ -4,6 +4,7 @@
 ``graph_builder.py`` 는 하위 호환을 위해 이 이름을 re-export 한다.
 """
 
+import hashlib
 import logging
 import re
 from typing import Any
@@ -13,7 +14,12 @@ from langchain_core.runnables import RunnableConfig
 from langgraph.types import StreamWriter
 
 from api.schemas import GraphState
-from common.config import DEFAULT_OLLAMA_MODEL, VERIFY_PROMPT_CONFIG
+from common.config import (
+    DEFAULT_OLLAMA_MODEL,
+    VERIFICATION_ENABLED,
+    VERIFICATION_SAMPLE_RATE,
+    VERIFY_PROMPT_CONFIG,
+)
 from core.graph._generate import format_context
 from core.graph._graph_utils import _doc_stable_id, get_state_attr
 from core.graph._json_utils import _strip_json_fence
@@ -48,28 +54,42 @@ def _validate_cited_doc_ids(answer: str, docs: list[Document]) -> list[str]:
     return invalid
 
 
+def _should_verify(query: str, doc_ids: list[str]) -> bool:
+    """결정적 해시 기반 검증 샘플링 결정 (D19).
+
+    query와 정렬된 doc stable-id 집합을 sha256으로 해시해 [0, 1) 구간 bucket으로
+    변환한 뒤 VERIFICATION_SAMPLE_RATE와 비교한다. 동일 입력 → 동일 결정이므로
+    검증 실패 케이스를 재현할 수 있고, rate=1.0이면 항상 검증, rate=0.0이면
+    절대 검증하지 않는다. 문서가 없으면 doc_ids=[""]로 처리해 빈-문서 쿼리도
+    결정적 버킷을 갖는다.
+    """
+    stable_doc_ids = doc_ids or [""]
+    stable_input = f"{query}::{','.join(sorted(stable_doc_ids))}"
+    digest = hashlib.sha256(stable_input.encode()).hexdigest()
+    bucket = int(digest, 16) % 10000 / 10000.0
+    return bucket < VERIFICATION_SAMPLE_RATE
+
+
 # Phase 1.5: Post-Generation Verification Node
 async def verify_answer(
     state: GraphState, config: RunnableConfig, *, writer: StreamWriter
 ) -> dict[str, Any]:
     """생성된 답변의 충실도(Faithfulness)와 인용 일관성을 검증합니다."""
-    import random
-
-    from common.config import VERIFICATION_ENABLED, VERIFICATION_SAMPLE_RATE
+    # 검증 대상 데이터 (샘플링 결정에 필요 — D19 결정적 해시 입력).
+    # random 샘플링과 달리 동일 query+docs는 항상 동일 결정을 내린다.
+    answer = get_state_attr(state, "response", "")
+    docs = get_state_attr(state, "relevant_docs") or []
+    query = get_state_attr(state, "input", "")
+    doc_ids = [_doc_stable_id(d) for d in docs]
 
     # 샘플링: 프로덕션에서는 일부만 검증
-    if not VERIFICATION_ENABLED or random.random() > VERIFICATION_SAMPLE_RATE:
+    if not VERIFICATION_ENABLED or not _should_verify(query, doc_ids):
         return {"verification_route": "end"}
 
     cfg = config.get("configurable", {})
     llm = cfg.get("llm")
     if not llm:
         return {"verification_route": "end"}
-
-    # 검증 대상 데이터
-    answer = get_state_attr(state, "response", "")
-    docs = get_state_attr(state, "relevant_docs") or []
-    query = get_state_attr(state, "input", "")
 
     # 컨텍스트 구성
     context = format_context(docs) if docs else ""

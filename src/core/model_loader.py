@@ -7,148 +7,62 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import itertools
 import logging
-import os
-import re
 import time
-from collections import OrderedDict
-from collections.abc import Callable
-from typing import TYPE_CHECKING, Any, TypeVar
+from typing import Any
 
-T = TypeVar("T")
-
-
-def _build_offloop(builder: Callable[[], T]) -> T:
-    """무거운 동기 모델 생성자를 안전하게 실행합니다.
-
-    ``load_embedding_model``은 동기 함수이므로, 비동기 경로에서는
-    ``ResourceCoordinator.get_or_build``가 이미 ``asyncio.to_thread``로 이
-    함수를 워커 스레드에서 실행합니다(이때 실행 중인 루프가 없음). Streamlit
-    시작점 등 동기 진입부에서는 인라인으로 실행됩니다. 본 헬퍼는 두 경로 모두
-    동일하게 동작하도록 모델 생성부를 한 곳으로 모읍니다.
-    """
-    return builder()
-
-
-# Ollama 임베딩 콜드스타트 레이스 대응 재시도 파라미터.
-# Ollama Go 서버는 임베딩 백엔드(llama-server)가 아직 스폰 중/재시작 중일 때
-# 내부 연결 실패(연결 거부)를 HTTP 400 + 연결 거부 문자열로 반환한다. 이는
-# 일시적 상태이므로 멱등한 임베딩 호출에 한해 지수 백오프로 재시도한다.
-_EMBED_RETRY_MAX_ATTEMPTS = 3
-_EMBED_RETRY_BACKOFF_SECONDS = (1, 3, 9)
-
-
-def _is_embed_transient_failure(exc: BaseException) -> bool:
-    """연결 거부형 오류 본문만 재시도 대상으로 한정한다."""
-    text = str(exc)
-    return any(
-        marker in text
-        for marker in ("actively refused", "connection refused", "connectex")
-    )
-
-
-def _memo_wrap(embedder: Embeddings) -> Embeddings:
-    """쿼리 임베딩 메모이제이션 래퍼. env 토글(기본 on), 생성 시 1회 평가.
-
-    FAISS 검색·시맨틱 리랭커·세맨틱 쿼리 캐시 등 모든 소비 경로가 풀을 통해
-    동일 래퍼 인스턴스를 받도록 반환 지점에서 래핑한다. off면 순수 위임.
-    """
-    if os.getenv("MEMOIZE_EMBEDDING_QUERY", "1") != "1":
-        return embedder
-    from core.embedding_memo import MemoizingEmbedding  # 순환 방지 lazy import
-
-    return MemoizingEmbedding(embedder)
-
-
-if TYPE_CHECKING:
-    from langchain_core.embeddings import Embeddings
+from langchain_core.embeddings import Embeddings
 
 from common.config import (
     DEFAULT_EMBEDDING_MODEL,
+    EMBEDDING_BATCH_SIZE,
     EMBEDDING_DEVICE,
     ENABLE_OLLAMA_PRESSURE_FALLBACK,
-    MAX_CACHED_MODELS,
     MODEL_CACHE_DIR,
-    MSG_ERROR_OLLAMA_NOT_RUNNING,
     OLLAMA_BASE_URL,
-    OLLAMA_KEEP_ALIVE,
-    OLLAMA_NUM_CTX,
-    OLLAMA_NUM_PREDICT,
-    OLLAMA_TEMPERATURE,
-    OLLAMA_THINKING,
-    OLLAMA_TIMEOUT,
-    OLLAMA_TOP_P,
+    is_test_env,
 )
 from common.exceptions import EmbeddingModelError
-from common.system_pressure import (
-    eviction_allowed,
+from common.system_pressure import eviction_allowed
+from core._loaders import (  # noqa: F401 — re-exports for backward compat
+    _EMBED_PAYLOAD_CAP_CHARS,
+    _EMBED_REQUEST_TIMEOUT_SECONDS,
+    _EMBED_RETRY_BACKOFF_SECONDS,
+    _EMBED_RETRY_MAX_ATTEMPTS,
+    T,
+    _aembed_retry_loop,
+    _build_offloop,
+    _fetch_available_models_cached,
+    _get_psutil,
+    _get_torch,
+    _host_pressure_exceeded,
+    _is_embed_transient_failure,
+    _keep_alive_seconds,
+    _memo_wrap,
+    _ollama_backend_active,
+    _PayloadCappedEmbeddings,
+    _split_by_payload_size,
+    _warmup_models,
+    get_available_models,
+    load_llm,
 )
-from services.monitoring.performance_monitor import (
-    OperationType,
-    get_performance_monitor,
-)
-
-_torch = None
-
-
-def _get_torch():
-    global _torch
-    if _torch is None:
-        try:
-            import torch as _torch_module
-
-            # 서브모듈을 명시적으로 로드해야 테스트의
-            # patch("torch.cuda.is_available") 가 일관되게 적용된다
-            # (lazy 로딩 시 패치가 누수됨).
-            import torch.cuda  # noqa: F401
-
-            _torch = _torch_module
-        except ImportError:
-            _torch = None
-    return _torch
-
-
-_psutil = None
-
-
-def _get_psutil():
-    global _psutil
-    if _psutil is None:
-        try:
-            import psutil as _psutil_module
-
-            _psutil = _psutil_module
-        except ImportError:
-            _psutil = None
-    return _psutil
-
 
 logger = logging.getLogger(__name__)
 
 
-def _host_pressure_exceeded() -> bool:
-    """동적 참조로 호스트 RAM 압력을 확인합니다.
-
-    ``sys.modules`` 에서 모듈을 조회해 호출하므로, ``common.system_pressure`` 와
-    ``src.common.system_pressure`` 별칭이 다른 객체로 매핑된 환경(conftest)에서도
-    테스트 패치가 일관되게 적용됩니다 (로컬 import 는 패치 무효화).
-    """
-    import common.system_pressure as sp
-
-    return sp.host_pressure_exceeded()
-
-
-def _ollama_backend_active() -> bool:
-    """동적 참조로 Ollama 백엔드 여부를 확인합니다.
-
-    ``sys.modules`` 에서 모듈을 조회해 호출하므로, ``common.system_pressure`` 와
-    ``src.common.system_pressure`` 별칭이 다른 객체로 매핑된 환경(conftest)에서도
-    테스트 패치가 일관되게 적용됩니다 (로컬 import 는 패치 무효화).
-    """
-    import common.system_pressure as sp
-
-    return sp.ollama_backend_active()
+# ============================================================================
+# Module layout (model-loader split)
+# ----------------------------------------------------------------------------
+# 개별 모델 로더/보조 계층은 ``core._loaders`` 로 분리되었다 (load_embedding_model
+# 의 페이로드 분할·재시도 보조, load_llm, get_available_models, _warmup_models,
+# _PayloadCappedEmbeddings, _get_torch/_get_psutil, _host_pressure_exceeded/
+# _ollama_backend_active 등). 위 import 는 분리 이전 import 경로
+# (``core.model_loader.<symbol>``)에 대한 하위 호환 재수출이다.
+# 본 파일에는 ModelManager 퍼사드와, 테스트가 ``core.model_loader`` 네임스페이스
+# 를 패치(patch)하는 계약에 묶인 요소(_resolve_embedding_batch_size, 그리고
+# load_embedding_model 내부의 _NoTruncateOllamaEmbeddings — logger/
+# EMBEDDING_BATCH_SIZE 를 모듈 전역으로 참조)를 유지한다.
+# ============================================================================
 
 
 class ModelManager:
@@ -162,10 +76,6 @@ class ModelManager:
     _locks: dict[str, asyncio.Lock] = {}
     _inference_semaphore: asyncio.Semaphore | None = None
     _inference_semaphore_bound: int | None = None
-
-    # [수정] LRU 캐시로 변경
-    _instances: OrderedDict[str, Any] = OrderedDict()
-    MAX_CACHED_MODELS = MAX_CACHED_MODELS
 
     _sync_client = None
     _async_client = None
@@ -241,7 +151,7 @@ class ModelManager:
 
     @classmethod
     async def _check_memory_pressure(cls):
-        """현재 VRAM/RAM 사용량을 확인하고 압박 시 가장 오래된 모델을 방출합니다."""
+        """현재 VRAM/RAM 사용량을 확인하고 압박 여부를 반환합니다 (퇴출은 ModelPool 소관)."""
         # ENABLE_OLLAMA_PRESSURE_FALLBACK 는 모듈 레벨 import 를 사용하므로,
         # 테스트는 core.model_loader.ENABLE_OLLAMA_PRESSURE_FALLBACK 를 패치해
         # 동작을 격리할 수 있다 (runtime 재import 는 conftest 별칭으로 인해
@@ -265,7 +175,6 @@ class ModelManager:
                     logger.warning(
                         f"[ModelManager] VRAM 압박 감지 ({usage_pct:.1f}%). 자원 방출을 시작합니다."
                     )
-                    await cls._evict_oldest_model()
                     return True
             except Exception as e:
                 logger.debug(f"VRAM 체크 실패 (무시): {e}")
@@ -282,7 +191,6 @@ class ModelManager:
                 "[ModelManager] 호스트 RAM 압박 감지 (Ollama 폴백, >90%). "
                 "자원 방출을 시작합니다."
             )
-            await cls._evict_oldest_model()
             return True
 
         # 3. 시스템 RAM 체크 (폴백)
@@ -293,26 +201,8 @@ class ModelManager:
                 logger.warning(
                     f"[ModelManager] 시스템 RAM 부족 ({mem.percent}%). 자원 방출을 시작합니다."
                 )
-                await cls._evict_oldest_model()
                 return True
         return False
-
-    @classmethod
-    async def _evict_oldest_model(cls):
-        """가장 오래된 모델을 방출하고 메모리를 정리합니다."""
-        if not cls._instances:
-            return
-        key, instance = cls._instances.popitem(last=False)
-        logger.info(f"[ModelManager] 가장 오래된 모델 방출: {key}")
-        del instance
-        import gc
-
-        gc.collect()
-        import torch
-
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
-            logger.info("[ModelManager] GPU 캐시 비우기 완료 (torch.cuda.empty_cache)")
 
     @classmethod
     async def get_flashranker(cls, model_name: str | None = None) -> Any:
@@ -357,71 +247,39 @@ class ModelManager:
         await get_resource_manager().clear_vram()
 
 
-async def _warmup_models() -> None:
-    """[WARMUP] 시작 시 LLM+임베더를 1회 프리웜하여 첫 쿼리 TTFT를 제거한다.
+def _resolve_embedding_batch_size(target_device: str) -> int:
+    """HF 내부 ``encode_kwargs.batch_size`` 값을 config 엔진에서 해석한다.
 
-    - LLM / 임베더 각각 한 번씩만 로드(캐시 히트 보장).
-    - 임베더는 ``None`` 전달로 설정 기본 모델 사용(앱 정상 로드 경로와 동일).
-    - LLM은 ``keep_alive=OLLAMA_KEEP_ALIVE``(로더 기본값)로 빌드되어 즉시
-      축출되지 않는다.
-    - 호출부에서 비치명적으로 감싸야 하므로 여기선 예외를 잡지 않는다.
-    - 모델 로드/쿼리 경로는 건드리지 않고 프리웜 전용 throwaway 토큰만 소비.
+    ``EMBEDDING_BATCH_SIZE``(config.yml의 ``embedding_batch_size``, 기본 "auto")
+    를 그대로 소비한다: "auto" → device 기본값(cuda=32, 그 외=16), 양의 정수 →
+    그대로, 숫자 문자열("8") → 파싱, 그 외(0/음수/bool/비숫자) → 기본 16 + 경고.
     """
-    from common.config import DEFAULT_OLLAMA_MODEL
-    from core.resource_manager import get_resource_manager
-
-    coordinator = get_resource_manager()
-
-    # Throwaway 토큰: 임베더 1회, LLM minimal 스트리밍 → 즉시 중단.
-    async with coordinator.use_embedder(model_name=DEFAULT_EMBEDDING_MODEL):
-        embedder = await ModelManager.get_embedder(None)
-        await embedder.aembed_query("warmup")
-
-    async with coordinator.use_llm(model_name=DEFAULT_OLLAMA_MODEL):
-        llm = await ModelManager.get_llm(DEFAULT_OLLAMA_MODEL)
-        async for _ in llm.astream("warmup"):
-            break
-
-    logger.info("[WARMUP] LLM+임베더 프리웜 완료")
-
-
-def _fetch_available_models_cached() -> list[str]:
-    """Ollama 모델 목록을 가져옵니다. (UI 종속성 제거)"""
-    try:
-        import ollama
-
-        client = ollama.Client(host=OLLAMA_BASE_URL, timeout=5)
-        ollama_response = client.list()
-        models = []
-        if hasattr(ollama_response, "models"):
-            for model in ollama_response.models:
-                name = getattr(model, "model", None) or (
-                    model.get("model") if isinstance(model, dict) else None
-                )
-                if name:
-                    models.append(name)
-        elif isinstance(ollama_response, dict) and "models" in ollama_response:
-            for model in ollama_response["models"]:
-                name = model.get("model") or model.get("name")
-                if name:
-                    models.append(name)
-        models.sort()
-        return models
-    except Exception as e:
-        logger.warning(f"Ollama 모델 목록 조회 실패: {e}")
-        return []
-
-
-def _keep_alive_seconds() -> int:
-    """OLLAMA_KEEP_ALIVE(기본 "30m")를 초 단위 정수로 변환.
-
-    OllamaEmbeddings.keep_alive는 ``int | None`` 타입이므로 문자열을 그대로
-    넘기면 pydantic 검증 오류가 발생한다. 파싱 실패 시 1800초(30분)로 폴백한다.
-    """
-    match = re.fullmatch(r"(\d+)m", OLLAMA_KEEP_ALIVE.strip())
-    if match:
-        return int(match.group(1)) * 60
-    return 1800
+    raw = EMBEDDING_BATCH_SIZE
+    invalid = 16
+    if isinstance(raw, bool) or not isinstance(raw, (int, str)):
+        logger.warning(
+            "[MODEL] [EMBED] EMBEDDING_BATCH_SIZE 유효하지 않음, 기본 16 사용: %r",
+            raw,
+        )
+        return invalid
+    if isinstance(raw, str):
+        normalized = raw.strip().lower()
+        if normalized == "auto":
+            return 32 if target_device == "cuda" else 16
+        if normalized.isdigit() and int(normalized) >= 1:
+            return int(normalized)
+        logger.warning(
+            "[MODEL] [EMBED] EMBEDDING_BATCH_SIZE 유효하지 않음, 기본 16 사용: %r",
+            raw,
+        )
+        return invalid
+    if raw >= 1:
+        return raw
+    logger.warning(
+        "[MODEL] [EMBED] EMBEDDING_BATCH_SIZE 유효하지 않음, 기본 16 사용: %r",
+        raw,
+    )
+    return invalid
 
 
 def load_embedding_model(
@@ -440,7 +298,7 @@ def load_embedding_model(
     )
 
     # [최적화] CI/유닛 테스트 환경에서는 실제 모델 로드 없이 가짜 임베딩 모델 반환
-    if os.getenv("IS_CI_TEST") == "true" or os.getenv("IS_UNIT_TEST") == "true":
+    if is_test_env():
         from langchain_core.embeddings import FakeEmbeddings
 
         logger.info(f"[TEST] [MOCK] 가짜 임베딩 모델 로드됨 (모델명: {model_key})")
@@ -461,27 +319,53 @@ def load_embedding_model(
             # truncate를 생성자로 받지도 않으므로, 서브클래스에서 명시적으로
             # truncate=False를 전달해 과잉 입력을 에러로 표면화한다.
             class _NoTruncateOllamaEmbeddings(OllamaEmbeddings):
-                """Ollama 임베딩 — `/api/embed` truncate=False 명시."""
+                """Ollama 임베딩 — `/api/embed` truncate=False 명시.
+
+                [B11] 동기·비동기 공용 단일 시도 코어(``_embed_once``)를 기준으로
+                재시도 루프를 두 갈래로 갖는다: 동기(``_embed_with_retry``)는
+                기존대로 ``time.sleep`` 백오프, 비동기(``_aembed_with_retry``)는
+                시도별 ``asyncio.wait_for`` 타임아웃 + ``await asyncio.sleep``.
+                양쪽 모두 페이로드 크기 선분할을 적용한다.
+                """
 
                 truncate: bool = False
 
                 def embed_documents(self, texts: list[str]) -> list[list[float]]:
+                    return self._embed_with_retry(texts)
+
+                async def aembed_documents(self, texts: list[str]) -> list[list[float]]:
+                    return await self._aembed_with_retry(texts)
+
+                async def aembed_query(self, text: str) -> list[float]:
+                    return (await self._aembed_with_retry([text]))[0]
+
+                def _embed_once(self, texts: list[str]) -> list[list[float]]:
+                    """단일 시도: 페이로드 크기 분할 → 그룹별 1회 모델 호출."""
                     if not self._client:
                         msg = (
                             "Ollama client is not initialized. "
                             "Please ensure Ollama is running and the model is loaded."
                         )
                         raise ValueError(msg)
-                    last_exc: Exception | None = None
-                    for attempt in range(_EMBED_RETRY_MAX_ATTEMPTS):
-                        try:
-                            return self._client.embed(
+                    results: list[list[float]] = []
+                    for group in _split_by_payload_size(texts):
+                        results.extend(
+                            self._client.embed(
                                 self.model,
-                                texts,
+                                group,
                                 truncate=self.truncate,
                                 options=self._default_params,
                                 keep_alive=self.keep_alive,
                             )["embeddings"]
+                        )
+                    return results
+
+                def _embed_with_retry(self, texts: list[str]) -> list[list[float]]:
+                    """동기 재시도 루프 (기존 시맨틱 유지, 분할 추가)."""
+                    last_exc: Exception | None = None
+                    for attempt in range(_EMBED_RETRY_MAX_ATTEMPTS):
+                        try:
+                            return self._embed_once(texts)
                         except Exception as exc:
                             last_exc = exc
                             if not _is_embed_transient_failure(exc):
@@ -501,6 +385,18 @@ def load_embedding_model(
                             time.sleep(wait)
                     assert last_exc is not None
                     raise last_exc
+
+                async def _aembed_with_retry(
+                    self, texts: list[str]
+                ) -> list[list[float]]:
+                    """비동기 재시도 루프 — 시도별 wait_for(1회 모델 왕복 상한)."""
+                    return await _aembed_retry_loop(
+                        lambda: asyncio.wait_for(
+                            asyncio.to_thread(self._embed_once, texts),
+                            timeout=_EMBED_REQUEST_TIMEOUT_SECONDS,
+                        ),
+                        "임베딩 콜드스타트 감지",
+                    )
 
             logger.info(
                 f"[MODEL] [LOAD] Ollama 임베딩 엔진 사용 | 모델: {clean_model_name}"
@@ -528,7 +424,8 @@ def load_embedding_model(
 
             display_device = "GPU" if target_device == "cuda" else "CPU"
             SessionManager.set("current_embedding_device", display_device)
-            batch_size = 32 if target_device == "cuda" else 16
+            # [B11] config 엔진(EMBEDDING_BATCH_SIZE)에서 batch_size 해석
+            batch_size = _resolve_embedding_batch_size(target_device)
 
             # [최적화] ONNX 백엔드 활성화 (CPU/GPU 모두 지원)
             backend = "default"
@@ -570,11 +467,14 @@ def load_embedding_model(
                 pass
 
             def _build_hf() -> Embeddings:
-                return HuggingFaceEmbeddings(
-                    model_name=model_key,
-                    model_kwargs=model_kwargs,
-                    encode_kwargs=encode_kwargs,
-                    cache_folder=MODEL_CACHE_DIR,
+                # [B11] 페이로드 크기 선분할+비동기 타임아웃 래퍼로 감싼다.
+                return _PayloadCappedEmbeddings(
+                    HuggingFaceEmbeddings(
+                        model_name=model_key,
+                        model_kwargs=model_kwargs,
+                        encode_kwargs=encode_kwargs,
+                        cache_folder=MODEL_CACHE_DIR,
+                    )
                 )
 
             result = _build_offloop(_build_hf)
@@ -588,46 +488,3 @@ def load_embedding_model(
     except Exception as e:
         logger.error(f"임베딩 모델 로드 실패: {e}")
         raise EmbeddingModelError(model=model_key, reason=str(e)) from e
-
-
-def get_available_models() -> list[str]:
-    models = _fetch_available_models_cached()
-    from common.config import DEFAULT_OLLAMA_MODEL
-
-    return models or [DEFAULT_OLLAMA_MODEL, MSG_ERROR_OLLAMA_NOT_RUNNING]
-
-
-def load_llm(model_name: str) -> Any:
-    # [최적화] CI/유닛 테스트 환경에서는 Ollama 서버 없이도 동작하도록 가짜 LLM 반환
-    if os.getenv("IS_CI_TEST") == "true" or os.getenv("IS_UNIT_TEST") == "true":
-        from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
-        from langchain_core.messages import AIMessage
-
-        logger.info(f"[TEST] [MOCK] 가짜 LLM 로드됨 (모델명: {model_name})")
-        return GenericFakeChatModel(
-            messages=itertools.cycle(
-                [
-                    AIMessage(
-                        content="안녕하세요! RAG 시스템 테스트 응답입니다. <thinking>테스트 생각 중...</thinking> 질문에 답변해 드릴게요."
-                    ),
-                    "이것은 두 번째 테스트 스트리밍 조각입니다.",
-                ]
-            )
-        )
-
-    with get_performance_monitor().track_operation(
-        OperationType.PDF_LOADING, {"model": model_name}
-    ):
-        from core.custom_ollama import DeepThinkingChatOllama
-
-        return DeepThinkingChatOllama(
-            model=model_name,
-            num_predict=OLLAMA_NUM_PREDICT,
-            top_p=OLLAMA_TOP_P,
-            num_ctx=OLLAMA_NUM_CTX,
-            temperature=OLLAMA_TEMPERATURE,
-            reasoning=OLLAMA_THINKING,
-            base_url=OLLAMA_BASE_URL,
-            keep_alive=OLLAMA_KEEP_ALIVE,
-            timeout=OLLAMA_TIMEOUT,
-        )

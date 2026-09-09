@@ -48,7 +48,6 @@ rag-system-ollama/
 | `build_graph` | Function | `src/core/graph_builder.py` | LangGraph state graph construction |
 | `CoordCacheManager` | Class | `src/cache/coord_cache.py` | Manages PDF coordinate caching |
 | `SessionManager` | Class | `src/core/session/manager.py` | Thread-safe state management (import: `from core.session import SessionManager`) |
-| `ContextManager` | Class | `src/core/session/context.py` | Thread-safety context for background tasks |
 | `UIBridge` | Class | `src/ui/bridge.py` | Syncs `SessionManager` ↔ Streamlit state |
 | `ResourceManager` | Class | `src/core/resource_manager.py` | LRU model/retriever pools with VRAM pressure eviction |
 | `ModelManager` | Class | `src/core/model_loader.py` | LLM/embedding/flashrank facade |
@@ -78,7 +77,9 @@ ruff check .
 ruff format .
 mypy src
 pytest tests/unit
-python scripts/test_full_pipeline.py
+python -m pytest tests/integration/test_pipeline_build_once.py
+# Archived (live Ollama/PDF dependent, not pytest-collected):
+#   python scripts/archive/test_full_pipeline.py
 
 # CI also enforces (see .github/workflows/ci.yml)
 bandit -r src/ -ll

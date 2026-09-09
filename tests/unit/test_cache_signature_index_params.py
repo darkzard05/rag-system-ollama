@@ -44,6 +44,26 @@ def _patch_index_params(monkeypatch, index_params: dict) -> None:
     )
 
 
+_BASE_SEMANTIC_CONFIG = {
+    "enabled": True,
+    "breakpoint_threshold_type": "percentile",
+    "breakpoint_threshold_value": 0.6,
+    "min_chunk_size": 100,
+    "max_chunk_size": 1500,
+    "similarity_threshold": 0.3,
+    "sentence_split_regex": r"(?<=[.!?])\s+",
+}
+
+
+def _patch_semantic_config(monkeypatch, semantic_config: dict) -> None:
+    monkeypatch.setattr(
+        vc_module,
+        "SEMANTIC_CHUNKER_CONFIG",
+        dict(semantic_config),
+        raising=False,
+    )
+
+
 def test_signature_changes_when_use_l2_norm_changes(tmp_path, monkeypatch):
     """Given: use_l2_norm 토글 / When: 캐시 인스턴스 생성 / Then: cache_dir이 달라야 함."""
     _patch_base(monkeypatch)
@@ -124,6 +144,61 @@ def test_signature_stable_for_equivalent_index_params(tmp_path, monkeypatch):
     cache_b = _make_cache(tmp_path)
 
     assert cache_a.cache_dir == cache_b.cache_dir
+
+
+def test_signature_changes_when_breakpoint_threshold_value_changes(
+    tmp_path, monkeypatch
+):
+    """Given: breakpoint_threshold_value 0.6 → 0.8 / When: 캐시 생성 / Then: cache_dir이 달라야 함."""
+    _patch_base(monkeypatch)
+    _patch_index_params(monkeypatch, dict(_DEFAULT_INDEX_PARAMS))
+    _patch_semantic_config(
+        monkeypatch, {**_BASE_SEMANTIC_CONFIG, "breakpoint_threshold_value": 0.6}
+    )
+    cache_a = _make_cache(tmp_path)
+
+    _patch_semantic_config(
+        monkeypatch, {**_BASE_SEMANTIC_CONFIG, "breakpoint_threshold_value": 0.8}
+    )
+    cache_b = _make_cache(tmp_path)
+
+    assert cache_a.cache_dir != cache_b.cache_dir
+
+
+def test_signature_changes_when_min_chunk_size_changes(tmp_path, monkeypatch):
+    """Given: min_chunk_size 100 → 200 / When: 캐시 생성 / Then: cache_dir이 달라야 함."""
+    _patch_base(monkeypatch)
+    _patch_index_params(monkeypatch, dict(_DEFAULT_INDEX_PARAMS))
+    _patch_semantic_config(
+        monkeypatch, {**_BASE_SEMANTIC_CONFIG, "min_chunk_size": 100}
+    )
+    cache_a = _make_cache(tmp_path)
+
+    _patch_semantic_config(
+        monkeypatch, {**_BASE_SEMANTIC_CONFIG, "min_chunk_size": 200}
+    )
+    cache_b = _make_cache(tmp_path)
+
+    assert cache_a.cache_dir != cache_b.cache_dir
+
+
+def test_signature_changes_when_sentence_split_regex_changes(tmp_path, monkeypatch):
+    """Given: sentence_split_regex 패턴 변경 / When: 캐시 생성 / Then: cache_dir이 달라야 함."""
+    _patch_base(monkeypatch)
+    _patch_index_params(monkeypatch, dict(_DEFAULT_INDEX_PARAMS))
+    _patch_semantic_config(
+        monkeypatch,
+        {**_BASE_SEMANTIC_CONFIG, "sentence_split_regex": r"(?<=[.!?])\s+"},
+    )
+    cache_a = _make_cache(tmp_path)
+
+    _patch_semantic_config(
+        monkeypatch,
+        {**_BASE_SEMANTIC_CONFIG, "sentence_split_regex": r"(?<=[.!?。])\s+"},
+    )
+    cache_b = _make_cache(tmp_path)
+
+    assert cache_a.cache_dir != cache_b.cache_dir
 
 
 def test_load_rejects_older_schema_version(tmp_path):

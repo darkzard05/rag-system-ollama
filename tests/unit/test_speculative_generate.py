@@ -15,11 +15,14 @@ import json
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
 from langchain_core.documents import Document
 from langchain_core.messages import AIMessageChunk
 
 from common.config import MAX_CONCURRENT_INFERENCE
+from core.graph._glue import _start_speculative_generate
+from core.graph._speculative_gen import _adopt_speculative_generate
 from core.graph.graph_builder import (
     _spec_registry,
     _SpecGenerate,
@@ -183,9 +186,7 @@ async def test_speculative_generate_cancelled_on_transform_route():
     with (
         patch("core.graph._speculative_gen.MAX_CONCURRENT_INFERENCE", 2),
         patch("core.graph._generate.generate", side_effect=_slow_generate),
-        patch(
-            "core.graph._generate.adispatch_custom_event", side_effect=fake_dispatch
-        ),
+        patch("core.graph._generate.adispatch_custom_event", side_effect=fake_dispatch),
     ):
         # grade_documents가 시작한 speculative generate(_slow_generate)가 실행되도록 양보
         grade_task = asyncio.ensure_future(grade_documents(state, config, writer=None))
@@ -271,9 +272,7 @@ async def test_speculative_overlap_generates_route_adopts_single_llm_call():
         patch("core.graph._generate.count_tokens_rough", return_value=10),
         patch.object(ModelManager, "inference_session", _mock_session()),
         patch("core.graph._grade.adispatch_custom_event", side_effect=fake_dispatch),
-        patch(
-            "core.graph._generate.adispatch_custom_event", side_effect=fake_dispatch
-        ),
+        patch("core.graph._generate.adispatch_custom_event", side_effect=fake_dispatch),
     ):
         # 실제 실행 모델: grade가 route=generate를 반환하면 런타임이 generate를
         # 다시 호출하고, speculative task를 채택(단일 astream 호출 완료)한다.
@@ -330,9 +329,7 @@ async def test_speculative_cancelled_on_grade_llm_error_path():
     with (
         patch("core.graph._speculative_gen.MAX_CONCURRENT_INFERENCE", 2),
         patch("core.graph._generate.generate", side_effect=_slow_generate),
-        patch(
-            "core.graph._generate.adispatch_custom_event", side_effect=fake_dispatch
-        ),
+        patch("core.graph._generate.adispatch_custom_event", side_effect=fake_dispatch),
     ):
         grade_task = asyncio.ensure_future(grade_documents(state, config, writer=None))
         await asyncio.wait_for(started["ran"].wait(), timeout=2)
@@ -343,3 +340,186 @@ async def test_speculative_cancelled_on_grade_llm_error_path():
     assert thread_id not in _spec_registry
     # speculative generate의 이벤트는 절대 전달되지 않음 (미노출)
     assert dispatched == []
+
+
+# ---------------------------------------------------------------------------
+# Step 1.5 Regression Tests (Issue 1 fix)
+# Plan: .omo/plans/top3-fixes.md lines 93-114
+#   A) catch-all except → speculative cancel + _grade_op.__exit__ + re-raise
+#   B) registry hit → stale orphan cancelled, fresh task registered
+#   C) adopt skips a dead (cancelled) task
+#   D) double start on same thread_id → first cancelled, fresh second
+# ---------------------------------------------------------------------------
+# 겹침 토글 기법: 기존 테스트와 동일하게
+# ``patch("core.graph._speculative_gen.MAX_CONCURRENT_INFERENCE", 2)`` 을 사용한다.
+# _spec_overlap_enabled() 는 _speculative_gen 모듈 전역 MAX_CONCURRENT_INFERENCE 를
+# 읽으므로 그 네임스페이스에서 패치해야 한다 (config.yml 기본값은 1).
+async def _pending_generate(state, config, *, writer):
+    """미완료 상태로 유지되는 (패치용) generate — 취소 가능한 pending task."""
+    await asyncio.sleep(60)
+    return {"response": "never"}
+
+
+async def _drain_tasks(tasks: list[asyncio.Task]) -> None:
+    """이벤트 루프를 돌려 취소(cancel)를 처리한 뒤 task 상태를 확정한다."""
+    for task in tasks:
+        if not task.done():
+            task.cancel()
+    await asyncio.gather(*tasks, return_exceptions=True)
+
+
+# ---------------------------------------------------------------------------
+# Step 1.5 Test A: 포착 튜플 밖 예외 → 특기 task 취소 + _grade_op.__exit__ + 재발사
+# ---------------------------------------------------------------------------
+@pytest.mark.asyncio
+async def test_exception_safety_cancel_and_exit():
+    """grade LLM 호출이 포착 튜플(RuntimeError, ValueError, JSONDecodeError) 밖의
+    예외(httpx.ConnectError)로 panic하면 speculative generate가 취소·registry에서
+    정리되고, _grade_op.__exit__ 이 호출되며, 예외가 그대로 재발사된다
+    (Step 1.5 Test A)."""
+    exited: list[tuple] = []
+
+    def _tracker(*_args):  # _enter_stage(OperationType.LLM_INFERENCE) 호출 대응
+        tracker = MagicMock()
+        tracker.__exit__.side_effect = lambda *args: exited.append(args)
+        return tracker
+
+    # 기존 _mock_session()은 __aexit__ 가 truthy(AsyncMock 기본값)라 with 블록
+    # 내부 예외를 삼킨다 — 여기서는 예외가 전파되도록 __aexit__=False 로 만든다.
+    def _mock_session_no_suppress():
+        sess = MagicMock()
+        sess.return_value.__aenter__ = AsyncMock()
+        sess.return_value.__aexit__ = AsyncMock(return_value=False)
+        return sess
+
+    started: dict[str, asyncio.Event] = {"ran": asyncio.Event()}
+
+    async def _slow_generate(state, config, *, writer):
+        started["ran"].set()  # speculative task 가 실제 시작됨을 보장
+        await asyncio.sleep(10)  # panic 이 결정될 때까지 미완료 유지
+        return {"response": "never"}
+
+    async def _raise_connect(llm, prompt, config, model_name="default"):
+        # 루프 양보를 한 번 준 뒤 예외를 던진다 — 양보 덕분에 speculative
+        # task(_slow_generate)가 ran 을 set 하고 시작하는 것이 보장된다.
+        await asyncio.sleep(0)
+        raise httpx.ConnectError("simulated connection failure")
+
+    thread_id = "panic-1"
+    state = {
+        "input": "예외 안전성 질문 (Step 1.5 Test A)",
+        "relevant_docs": [
+            Document(page_content="패닉 문서", metadata={"rerank_score": 0.3})
+        ],
+        "retry_count": 0,
+        "is_cached": False,
+        "intent": "rag",
+    }
+    config = {"configurable": {"llm": _json_llm("generate"), "thread_id": thread_id}}
+
+    with (
+        patch("core.graph._speculative_gen.MAX_CONCURRENT_INFERENCE", 2),
+        patch("core.graph._generate.generate", side_effect=_slow_generate),
+        patch("core.graph._grade._enter_stage", side_effect=_tracker),
+        patch.object(ModelManager, "inference_session", _mock_session_no_suppress()),
+        patch("core.graph._grade._safe_invoke", side_effect=_raise_connect),
+    ):
+        grade_task = asyncio.ensure_future(grade_documents(state, config, writer=None))
+        await asyncio.wait_for(started["ran"].wait(), timeout=2)
+        with pytest.raises(httpx.ConnectError):
+            await grade_task
+
+    # (a) speculative task 가 thread_id 기준으로 registry 에서 정리됨 (orphan 없음)
+    assert thread_id not in _spec_registry
+    # (b) _grade_op.__exit__ 이 예외 정보와 함께 호출됨 (tracker 스파이)
+    assert exited
+    assert exited[-1][0] is httpx.ConnectError
+    # (c) 예외가 catch-all 에서 삼켜지지 않고 재발사됨 — 위 pytest.raises 로 검증
+
+
+# ---------------------------------------------------------------------------
+# Step 1.5 Test B: registry hit → stale orphan 취소 + 새 task 등록
+# ---------------------------------------------------------------------------
+@pytest.mark.asyncio
+async def test_registry_hit_cancels_stale_orphan():
+    """동일 thread_id 에 이미 orphan 이 registry 에 있으면 _start_speculative_generate
+    재진입 시 stale task 를 취소·버퍼 폐기하고 새 task 를 등록한다 — registry 에는
+    정확히 하나의 entry 만 남는다 (Step 1.5 Test B)."""
+    thread_id = "stale-1"
+    stale = asyncio.ensure_future(asyncio.sleep(60))
+    _spec_registry[thread_id] = _SpecGenerate(task=stale, buffer=[], adopter=None)
+
+    state = {"input": "질문", "relevant_docs": [], "is_cached": False}
+    config = {"configurable": {"thread_id": thread_id}}
+
+    with (
+        patch("core.graph._speculative_gen.MAX_CONCURRENT_INFERENCE", 2),
+        patch("core.graph._generate.generate", side_effect=_pending_generate),
+    ):
+        assert _start_speculative_generate(state, config, writer=None) == thread_id
+        fresh = _spec_registry[thread_id].task
+
+    await _drain_tasks([stale])
+    assert stale.cancelled()  # stale task 취소됨
+    assert fresh is not stale  # 새 task 가 (재)등록됨
+    assert thread_id in _spec_registry
+    assert len(_spec_registry) == 1  # orphan 없이 정확히 하나
+
+    await _drain_tasks([fresh])  # pending task 정리 (후속 테스트 누수 방지)
+
+
+# ---------------------------------------------------------------------------
+# Step 1.5 Test C: 죽은(cancelled) task 는 채택하지 않음
+# ---------------------------------------------------------------------------
+@pytest.mark.asyncio
+async def test_adopt_skips_dead_task():
+    """registry 의 speculative task 가 이미 취소(cancelled) 상태면
+    _adopt_speculative_generate 는 None 을 반환하고, entry 를 제거하며,
+    버퍼를 폐기한다 (Step 1.5 Test C)."""
+    thread_id = "dead-1"
+    buf = [SimpleNamespace(name="graph_status", data={"status": "x"}, config=None)]
+
+    task = asyncio.create_task(asyncio.sleep(60))
+    task.cancel()
+    await _drain_tasks([task])  # CancelledError 전달 → cancelled() True 확정
+    assert task.cancelled()
+
+    _spec_registry[thread_id] = _SpecGenerate(task=task, buffer=buf)
+    config = {"configurable": {"thread_id": thread_id}}
+
+    result = _adopt_speculative_generate(config)
+
+    assert result is None  # 죽은 task 를 채택하지 않음
+    assert thread_id not in _spec_registry
+    assert buf == []  # dead task 의 버퍼는 폐기됨
+
+
+# ---------------------------------------------------------------------------
+# Step 1.5 Test D: 동일 thread_id 이중 시작 → 첫 task 취소, 두 번째 새로 등록
+# ---------------------------------------------------------------------------
+@pytest.mark.asyncio
+async def test_double_start_same_thread_id():
+    """동일 thread_id 에 _start_speculative_generate 를 두 번 호출하면
+    첫 task 가 취소되고 두 번째 task 가 새로 등록된다 — registry 에는
+    정확히 하나 (Step 1.5 Test D)."""
+    thread_id = "double-1"
+    state = {"input": "질문", "relevant_docs": [], "is_cached": False}
+    config = {"configurable": {"thread_id": thread_id}}
+
+    with (
+        patch("core.graph._speculative_gen.MAX_CONCURRENT_INFERENCE", 2),
+        patch("core.graph._generate.generate", side_effect=_pending_generate),
+    ):
+        assert _start_speculative_generate(state, config, writer=None) == thread_id
+        first = _spec_registry[thread_id].task
+
+        assert _start_speculative_generate(state, config, writer=None) == thread_id
+        second = _spec_registry[thread_id].task
+
+    await _drain_tasks([first])
+    assert first.cancelled()  # 첫 task 취소됨
+    assert second is not first  # 두 번째는 새 task
+    assert thread_id in _spec_registry
+    assert len(_spec_registry) == 1  # orphan 없이 정확히 하나
+
+    await _drain_tasks([second])  # pending task 정리 (후속 테스트 누수 방지)

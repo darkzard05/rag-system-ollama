@@ -176,6 +176,14 @@ def _build_config_signature(embedding_model_name: str) -> str:
             # [R3a-03] semantic chunker 정규화 배선(T8) — 정규화 전후 벡터가
             # 달라도 캐시 히트되지 않도록 서명에 반영.
             "semantic_chunker_normalize": SEMANTIC_CHUNKER_NORMALIZE,
+            # [A3] semantic chunker 파라미터 — 분할 설정이 바뀌면 서로 다른 청크가
+            # 생성되므로 캐시 디렉터리가 달라져야 스테일 벡터 캐시를 방지.
+            "breakpoint_threshold_type": semantic.get("breakpoint_threshold_type"),
+            "breakpoint_threshold_value": semantic.get("breakpoint_threshold_value"),
+            "min_chunk_size": semantic.get("min_chunk_size"),
+            "max_chunk_size": semantic.get("max_chunk_size"),
+            "similarity_threshold": semantic.get("similarity_threshold"),
+            "sentence_split_regex": semantic.get("sentence_split_regex"),
         },
         option=orjson.OPT_SORT_KEYS,
     )

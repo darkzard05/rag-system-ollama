@@ -40,6 +40,35 @@ def _extract_page_words_sync(
         return None
 
 
+async def _hydrate_page(
+    doc: Document,
+    coords_map: dict[int, list[dict[str, Any]]],
+    page_num: int,
+) -> tuple[int, list[Any] | None, bool]:
+    """단일 페이지 좌표를 캐시에서 읽거나 병렬로 추출합니다.
+
+    반환: (page_num, coords, was_fresh). was_fresh=True는 이 분기가 실제
+    추출(캐시 미스)을 수행했음을, 캐시 적중이면 False를 의미한다. bbox
+    폴백 포함 양쪽 시도 모두 fresh로 간주하며, 추출 실패 시 예외 없이
+    (page_num, None, True)를 반환해 해당 페이지가 그냥 좌표 없이 남게
+    한다. 저장(``coord_cache.save_coords``)은 호출하지 않는다.
+    """
+    path = doc.metadata["file_path"]
+    coords = coords_map.get(page_num)
+    if coords:
+        return page_num, coords, False
+
+    logger.info(f"[HYDRATE] 정밀 좌표 추출: {os.path.basename(path)} P{page_num}")
+    chunk_bbox = doc.metadata.get("bbox")
+    coords = await asyncio.to_thread(
+        _extract_page_words_sync, path, page_num, chunk_bbox
+    )
+    # Fallback: bbox-scoped extract failed -> retry whole page
+    if not coords and chunk_bbox is not None:
+        coords = await asyncio.to_thread(_extract_page_words_sync, path, page_num, None)
+    return page_num, coords, True
+
+
 async def hydrate_documents(docs: list[Document]) -> None:
     """문서 리스트의 좌표 데이터를 캐시에서 복구하거나, 없으면 즉시 추출(Lazy)합니다.
 
@@ -106,25 +135,22 @@ async def hydrate_documents(docs: list[Document]) -> None:
                 )
                 page_coords: dict[int, list] = {}
 
+                # 파일의 페이지들을 병렬로 캐시-읽기/추출한다. 저장(fresh)
+                # 여부는 gather 결과를 페이지 순서대로 재조립할 때 결정한다.
+                results = await asyncio.gather(
+                    *(_hydrate_page(doc, coords_map, page_num) for page_num in pages)
+                )
+                result_map: dict[int, tuple[list[Any] | None, bool]] = {
+                    page_num: (coords, was_fresh)
+                    for page_num, coords, was_fresh in results
+                }
+
                 for page_num in pages:
-                    coords = coords_map.get(page_num)
-
-                    if not coords:
-                        logger.info(
-                            f"[HYDRATE] 정밀 좌표 추출: {os.path.basename(path)} P{page_num}"
-                        )
-                        chunk_bbox = doc.metadata.get("bbox")
-                        coords = await asyncio.to_thread(
-                            _extract_page_words_sync, path, page_num, chunk_bbox
-                        )
-                        # Fallback: bbox-scoped extract failed -> retry whole page
-                        if not coords and chunk_bbox is not None:
-                            coords = await asyncio.to_thread(
-                                _extract_page_words_sync, path, page_num, None
-                            )
-                        if coords:
-                            await coord_cache.save_coords(file_hash, page_num, coords)
-
+                    coords, was_fresh = result_map[page_num]
+                    # 캐시 적중 페이지는 재저장하지 않는다 (기존 추출 데이터
+                    # 보존 + 불필요한 I/O 방지). 추출(fresh) 성공 시에만 저장.
+                    if was_fresh and coords is not None:
+                        await coord_cache.save_coords(file_hash, page_num, coords)
                     if coords:
                         page_coords[page_num] = coords
 

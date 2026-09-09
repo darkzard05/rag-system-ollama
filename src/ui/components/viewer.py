@@ -52,8 +52,15 @@ def _render_coord_cache_warnings() -> None:
         st.warning("하이라이트를 불러올 수 없습니다 (좌표 캐시 읽기 실패).")
 
 
-@safe_cache_data(ttl=60, show_spinner=False)
+@safe_cache_data(ttl=300, show_spinner=False)
 def _get_pdf_bytes(pdf_path: str) -> bytes:
+    """PDF 바이트를 반환한다 — B13: pdf_path 단위 세션 캐시 (NB4).
+
+    st.cache_data 기반 캐시로 동일 pdf_path 는 300s 동안 디스크를 재읽지 않고
+    서빙된다 (fragment 폴링/리런 시 반복 재전송 완화). 파일 없음/읽기 실패는
+    b"" 로 소화되며, 빈 값도 300s 캐시되는 것은 B13의 최소 완화로 허용한다
+    (전체 해상도는 컴포넌트 업그레이드 항목으로 이연).
+    """
     if not os.path.exists(pdf_path):
         return b""
     try:

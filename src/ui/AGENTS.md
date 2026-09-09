@@ -7,7 +7,7 @@ Streamlit-based frontend orchestration for the RAG system, managing the two-colu
 - `ui.py`: Main layout orchestration and global CSS injection.
 - `bridge.py`: Real-time synchronization between `SessionStore` and `st.session_state` (with interactive key preservation).
 - `components/`: Modular UI elements.
-    - `chat.py`: Unified conversational timeline (single-pass render, no polling fragment), streaming message rendering, native status/expander components. `_run_standard_streaming_turn` consumes `stream_chunks` synchronously within one script run.
+    - `chat.py`: Unified conversational timeline (single-pass render, no polling fragment), streaming message rendering, native status/expander components. Live streaming shell (`_run_active_stream_in_timeline`) routes through `consume_stream_into_message` with an `on_chunk` callback for live rendering.
     - `streaming.py`: Async stream consumption bridge (`stream_chunks`, background worker inside) and `consume_stream_into_message` pure helper that persists the assistant message (content/thought/docs/metrics/citations, cancel detection, PDF side-effects) without a background thread.
     - `viewer.py`: PDF rendering fragment (`@st.fragment(run_every=2.0)`), page navigation, annotation display.
     - `sidebar.py`: Global settings and session controls.
