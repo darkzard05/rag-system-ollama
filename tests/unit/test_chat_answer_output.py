@@ -271,3 +271,39 @@ def test_thought_rendered_safe_by_default():
             assert block.proto.allow_html is False
     finally:
         os.remove(script_path)
+
+
+# ---------------------------------------------------------------------------
+# DEFECT-1 end-to-end regression tests via _drive_turn
+# ---------------------------------------------------------------------------
+
+
+def test_regression_inner_quote_truncation_gone():
+    """qwen3:4b-style inner quotes → full value, no truncation."""
+    sid = "test_defect1_inner_quote"
+
+    def _stream(q: str, m: str, s: str):
+        yield _fake_chunk(
+            content='{"final_answer":"The answer is "critical" and fully extracted","reasoning":"x"}',
+            raw_json=True,
+        )
+
+    msg_id = _drive_turn(sid, _stream)
+    msg = _target_message(sid, msg_id)
+    assert msg["content"] == 'The answer is "critical" and fully extracted'
+
+
+def test_regression_escape_literal_not_persisted():
+    """\\n inside final_answer → actual newline char, not literal \\n."""
+    sid = "test_defect1_escape_literal"
+
+    def _stream(q: str, m: str, s: str):
+        yield _fake_chunk(
+            content='{"final_answer":"Line1\\nLine2","reasoning":"x"}',
+            raw_json=True,
+        )
+
+    msg_id = _drive_turn(sid, _stream)
+    msg = _target_message(sid, msg_id)
+    assert "Line1\nLine2" in msg["content"]
+    assert "Line1\\nLine2" not in msg["content"]
