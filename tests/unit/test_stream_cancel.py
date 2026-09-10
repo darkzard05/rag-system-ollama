@@ -32,10 +32,12 @@ import time
 import uuid
 from collections.abc import AsyncGenerator, AsyncIterator, Callable, Generator
 from typing import Any
+from unittest.mock import MagicMock, patch
 
 import pytest
 
 import common.config as config
+from api.streaming_handler import StreamChunk, StreamingResponseHandler
 from common import stream_worker
 from core.rag_core import RAGSystem
 from ui.components.streaming import stream_chunks
@@ -455,3 +457,242 @@ def test_ui_stream_workers_env_override(monkeypatch):
         # The reload bakes the env-derived value into the module constant;
         # restore the pre-test value so later tests read the original bound.
         config.UI_STREAM_WORKERS = original
+
+
+# ---------------------------------------------------------------------------
+# DEFECT-2: Split timeout + _remaining queue-level drain tests
+# ---------------------------------------------------------------------------
+
+
+def test_cancel_preserves_tail_tokens():
+    """Cancel mid-stream: remaining content+thought flushed to _remaining.
+
+    Real handler with content_buffer_size=5 processes a scripted event stream
+    yielding 8 content tokens + 1 thought token via messages mode (buffered).
+    After consuming a few chunks the generator is closed — the ``_remaining``
+    list must receive the flush tail (content remainder + thought + perf).
+    """
+    handler = StreamingResponseHandler(content_buffer_size=5)
+
+    class _FakeChunk:
+        def __init__(self, content: str = "", thought: str = "") -> None:
+            self.content = content
+            self.content_blocks: list[Any] = []
+            self.additional_kwargs: dict[str, Any] = {}
+            if thought:
+                self.additional_kwargs["thought"] = thought
+
+    async def scripted_events():  # type: ignore[return]
+        for i in range(8):
+            yield ("messages", (_FakeChunk(content=f"tok{i} "), {}))
+        yield ("messages", (_FakeChunk(thought="reasoning here"), {}))
+
+    remaining: list[StreamChunk] = []
+    consumed: list[StreamChunk] = []
+
+    async def _run() -> None:
+        gen = handler.stream_graph_events(
+            scripted_events(),
+            _remaining=remaining,
+        )
+        try:
+            async for chunk in gen:
+                consumed.append(chunk)
+                if len(consumed) >= 3:
+                    break
+        finally:
+            await gen.aclose()
+
+    asyncio.run(_run())
+
+    assert len(remaining) >= 1
+    for c in remaining:
+        assert isinstance(c, StreamChunk)
+
+
+def test_pre_chunk_timeout_allows_long_setup(monkeypatch):
+    """Before the first chunk arrives, effective timeout = UI_STREAMING_SETUP_TIMEOUT.
+
+    Queue.get is scripted: 2×Empty, then ("chunk", …), then ("done", None).
+    The Empty calls must pass ``timeout=SETUP_TIMEOUT`` (300), not the
+    inter-chunk value (60).  No TimeoutError is raised.
+    """
+    import queue as _q
+
+    import ui.components.streaming as sm
+
+    monkeypatch.setattr(sm, "UI_STREAMING_SETUP_TIMEOUT", 300)
+    monkeypatch.setattr(sm, "UI_STREAMING_TIMEOUT", 60)
+    monkeypatch.setattr(sm, "UI_STREAMING_HARD_TIMEOUT", 0)
+
+    call_idx = 0
+    recorded_timeouts: list[float | None] = []
+
+    def _scripted_get(self: Any, timeout: Any = None) -> Any:
+        nonlocal call_idx
+        recorded_timeouts.append(timeout)
+        call_idx += 1
+        if call_idx <= 2:
+            raise _q.Empty
+        if call_idx == 3:
+            return ("chunk", MagicMock())
+        return ("done", None)
+
+    monkeypatch.setattr(_q.Queue, "get", _scripted_get)
+
+    async def _hang(*a: Any, **kw: Any) -> None:
+        await asyncio.sleep(9999)
+
+    mock_handler = MagicMock()
+    mock_handler.stream_graph_events.side_effect = lambda gen, **kw: _hang()
+
+    with (
+        patch("core.rag_core.RAGSystem.astream", side_effect=_hang),
+        patch(
+            "src.ui.components.streaming.get_streaming_handler",
+            return_value=mock_handler,
+        ),
+    ):
+        list(stream_chunks("q", "m", "s"))
+
+    assert recorded_timeouts[0] == 300
+    assert recorded_timeouts[1] == 300
+    assert recorded_timeouts[2] == 300
+    assert recorded_timeouts[3] == 60
+
+
+def test_inter_chunk_timeout_strikes_after_first_chunk(monkeypatch):
+    """After first chunk, effective timeout switches to UI_STREAMING_TIMEOUT.
+
+    Scripted queue: 2×Empty (setup phase, timeout=300), 1 chunk (switches
+    phase), 3×Empty (inter-chunk phase, timeout=60) → TimeoutError after the
+    3 post-first strikes.  Recorded timeouts prove the switch.
+    """
+    import queue as _q
+
+    import ui.components.streaming as sm
+
+    monkeypatch.setattr(sm, "UI_STREAMING_SETUP_TIMEOUT", 300)
+    monkeypatch.setattr(sm, "UI_STREAMING_TIMEOUT", 60)
+    monkeypatch.setattr(sm, "UI_STREAMING_HARD_TIMEOUT", 0)
+
+    call_idx = 0
+    recorded_timeouts: list[float | None] = []
+
+    def _scripted_get(self: Any, timeout: Any = None) -> Any:
+        nonlocal call_idx
+        recorded_timeouts.append(timeout)
+        call_idx += 1
+        if call_idx <= 2:
+            raise _q.Empty
+        if call_idx == 3:
+            return ("chunk", MagicMock())
+        if call_idx <= 6:
+            raise _q.Empty
+        return ("done", None)
+
+    monkeypatch.setattr(_q.Queue, "get", _scripted_get)
+
+    async def _hang(*a: Any, **kw: Any) -> None:
+        await asyncio.sleep(9999)
+
+    mock_handler = MagicMock()
+    mock_handler.stream_graph_events.side_effect = lambda gen, **kw: _hang()
+
+    with (
+        patch("core.rag_core.RAGSystem.astream", side_effect=_hang),
+        patch(
+            "src.ui.components.streaming.get_streaming_handler",
+            return_value=mock_handler,
+        ),
+        pytest.raises(TimeoutError),
+    ):
+        list(stream_chunks("q", "m", "s"))
+
+    assert recorded_timeouts[0] == 300
+    assert recorded_timeouts[1] == 300
+    assert recorded_timeouts[2] == 300
+    for t in recorded_timeouts[3:6]:
+        assert t == 60
+
+
+def test_hard_cancel_no_tokens_to_lose(monkeypatch):
+    """Zero chunks produced; cancel fires after strikes → done in queue."""
+    import queue as _q
+
+    import ui.components.streaming as sm
+
+    monkeypatch.setattr(sm, "UI_STREAMING_SETUP_TIMEOUT", 300)
+    monkeypatch.setattr(sm, "UI_STREAMING_TIMEOUT", 0.01)
+    monkeypatch.setattr(sm, "UI_STREAMING_HARD_TIMEOUT", 0)
+
+    call_idx = 0
+
+    def _scripted_get(self: Any, timeout: Any = None) -> Any:
+        nonlocal call_idx
+        call_idx += 1
+        if call_idx == 1:
+            raise _q.Empty
+        return ("done", None)
+
+    monkeypatch.setattr(_q.Queue, "get", _scripted_get)
+
+    async def _hang(*a: Any, **kw: Any) -> None:
+        await asyncio.sleep(9999)
+
+    mock_handler = MagicMock()
+    mock_handler.stream_graph_events.side_effect = lambda gen, **kw: _hang()
+
+    with (
+        patch("core.rag_core.RAGSystem.astream", side_effect=_hang),
+        patch(
+            "src.ui.components.streaming.get_streaming_handler",
+            return_value=mock_handler,
+        ),
+    ):
+        result = list(stream_chunks("q", "m", "s"))
+
+    assert result == []
+
+
+def test_hard_timeout_ceiling_aborts_hung_stream(monkeypatch):
+    """Hard ceiling triggers TimeoutError regardless of strike count.
+
+    UI_STREAMING_HARD_TIMEOUT is set to a tiny value (0.001s) and
+    q.get effective timeout to 0.01s.  On the second loop iteration
+    the ceiling check fires (> 0.001s elapsed) before the 3-strike
+    mechanism can trigger.
+    """
+    import queue as _q
+
+    import ui.components.streaming as sm
+
+    monkeypatch.setattr(sm, "UI_STREAMING_TIMEOUT", 0.01)
+    monkeypatch.setattr(sm, "UI_STREAMING_SETUP_TIMEOUT", 0.01)
+    monkeypatch.setattr(sm, "UI_STREAMING_HARD_TIMEOUT", 0.001)
+
+    async def _never_return(*a: Any, **kw: Any) -> Any:
+        await asyncio.sleep(0.1)
+
+        async def _empty():  # type: ignore[return]
+            if False:
+                yield
+
+        return _empty()
+
+    async def _empty_stream(*a: Any, **kw: Any) -> Any:  # type: ignore[return]
+        if False:
+            yield
+
+    mock_handler = MagicMock()
+    mock_handler.stream_graph_events.side_effect = lambda gen, **kw: _empty_stream()
+
+    with (
+        patch("core.rag_core.RAGSystem.astream", side_effect=_never_return),
+        patch(
+            "src.ui.components.streaming.get_streaming_handler",
+            return_value=mock_handler,
+        ),
+        pytest.raises(TimeoutError, match="절대 상한"),
+    ):
+        list(stream_chunks("q", "m", "s"))

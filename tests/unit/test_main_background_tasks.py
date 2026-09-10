@@ -6,6 +6,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -211,6 +212,8 @@ class TestMainBackgroundTasks(unittest.TestCase):
                 return_value=mock_handler,
             ),
             patch("src.ui.components.streaming.UI_STREAMING_TIMEOUT", 0.01),
+            patch("src.ui.components.streaming.UI_STREAMING_SETUP_TIMEOUT", 0.01),
+            patch("src.ui.components.streaming.UI_STREAMING_HARD_TIMEOUT", 0),
             pytest.raises(TimeoutError),
         ):
             list(
@@ -270,3 +273,48 @@ class TestMainBackgroundTasks(unittest.TestCase):
         messages = SessionManager.get_messages(session_id="test_session")
         # 어시스턴트 역할로 에러 메시지가 추가되어야 함 (현재 구현 기준)
         assert any("LLM Load Failed Mock Error" in m["content"] for m in messages)
+
+    def test_bg_task_drains_remaining_on_cancelled_error(self):
+        """CancelledError mid-iteration: _remaining flushed chunks land in queue before 'done'."""
+        import contextlib as _ctx
+        import queue as _q
+
+        from api.streaming_handler import StreamingResponseHandler
+
+        handler = StreamingResponseHandler(content_buffer_size=5)
+
+        async def scripted_events():  # type: ignore[return]
+            for i in range(5):
+                yield ("custom", {"content": f"tok{i} "})
+
+        remaining: list[Any] = []
+        q: _q.Queue = _q.Queue()
+
+        async def _simulated_run() -> None:
+            event_stream = handler.stream_graph_events(
+                scripted_events(),
+                _remaining=remaining,
+            )
+            try:
+                async for chunk in event_stream:
+                    q.put(("chunk", chunk))
+                    if q.qsize() >= 2:
+                        raise asyncio.CancelledError()
+            except asyncio.CancelledError:
+                pass
+            finally:
+                with _ctx.suppress(Exception):
+                    await event_stream.aclose()
+                for c in remaining:
+                    q.put(("chunk", c))
+                q.put(("done", None))
+
+        asyncio.run(_simulated_run())
+
+        items: list[tuple[str, Any]] = []
+        while not q.empty():
+            items.append(q.get_nowait())
+
+        assert items[-1] == ("done", None)
+        chunk_items = [i for i in items if i[0] == "chunk"]
+        assert len(chunk_items) >= 3
