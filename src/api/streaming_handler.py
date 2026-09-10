@@ -97,11 +97,14 @@ class StreamingResponseHandler:
         self.first_token_time: float | None = None
         self.last_chunk_time: float | None = None
         self.node_metadata: dict[str, Any] = {}
+        self._last_chunk_raw_json: bool = False
 
     async def stream_graph_events(
         self,
         event_stream: AsyncIterator[tuple[str, Any]],
         adaptive_controller: Any = None,
+        *,
+        _remaining: list[StreamChunk] | None = None,
     ) -> AsyncIterator[StreamChunk]:
         """
         astream(stream_mode=["messages", "custom"])의 이벤트를 소비하여
@@ -116,6 +119,7 @@ class StreamingResponseHandler:
         self.first_token_time = None
         self.buffer.reset()
         self.node_metadata = {}
+        self._last_chunk_raw_json = False
         # Adaptive controller와의 호환성을 위해 버퍼 크기 속성 제공
         self.buffer_size = self.buffer.content_buffer.buffer_size
 
@@ -164,6 +168,7 @@ class StreamingResponseHandler:
                             self.chunk_index += 1
 
                         if content:
+                            self._last_chunk_raw_json = bool(raw_json)
                             yield StreamChunk(
                                 content=content,
                                 timestamp=current_time,
@@ -260,6 +265,7 @@ class StreamingResponseHandler:
                             if content:
                                 if self.first_token_time is None:
                                     self.first_token_time = current_time
+                                self._last_chunk_raw_json = False
 
                                 # Phase 2.2: content는 즉시 플러시되는 content 버퍼에 추가
                                 buffered_content = self.buffer.add_content(content)
@@ -320,6 +326,7 @@ class StreamingResponseHandler:
             # Phase 2.2: 두 버퍼 모두 플러시
             remaining_content, remaining_thought = self.buffer.flush_all()
 
+            final_chunk: StreamChunk | None = None
             if remaining_content:
                 final_chunk = StreamChunk(
                     content=remaining_content,
@@ -327,11 +334,12 @@ class StreamingResponseHandler:
                     token_count=len(remaining_content.split()),
                     chunk_index=self.chunk_index,
                     is_final=True,
+                    raw_json=self._last_chunk_raw_json,
                 )
                 self.metrics.total_tokens += final_chunk.token_count
                 self.metrics.chunk_count += 1
-                yield final_chunk
 
+            thought_chunk: StreamChunk | None = None
             if remaining_thought:
                 thought_chunk = StreamChunk(
                     content="",
@@ -342,7 +350,17 @@ class StreamingResponseHandler:
                     is_thought=True,
                 )
                 self.chunk_index += 1
-                yield thought_chunk
+
+            if _remaining is not None:
+                if final_chunk is not None:
+                    _remaining.append(final_chunk)
+                if thought_chunk is not None:
+                    _remaining.append(thought_chunk)
+            else:
+                if final_chunk is not None:
+                    yield final_chunk
+                if thought_chunk is not None:
+                    yield thought_chunk
 
             self.metrics.total_time = time.time() - (self.start_time or time.time())
             if self.first_token_time and self.start_time:
@@ -362,12 +380,16 @@ class StreamingResponseHandler:
                 "token_count": self.metrics.total_tokens,
             }
 
-            yield StreamChunk(
+            perf_chunk = StreamChunk(
                 content="",
                 timestamp=time.time(),
                 is_final=True,
                 performance=final_performance,
             )
+            if _remaining is not None:
+                _remaining.append(perf_chunk)
+            else:
+                yield perf_chunk
 
     async def stream_response(
         self,

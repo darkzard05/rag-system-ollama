@@ -27,6 +27,8 @@ from streamlit.runtime.scriptrunner import add_script_run_ctx
 from api.streaming_handler import StreamChunk, get_streaming_handler
 from common.config import (
     MSG_ERROR_OLLAMA_NOT_RUNNING,
+    UI_STREAMING_HARD_TIMEOUT,
+    UI_STREAMING_SETUP_TIMEOUT,
     UI_STREAMING_TIMEOUT,
 )
 from common.stream_worker import (
@@ -43,6 +45,8 @@ from core.session import SessionManager
 from ui.components.common import get_doc_metadata
 
 logger = logging.getLogger(__name__)
+
+_clock = time.monotonic
 
 _GENERIC_STREAMING_MSG = "An error occurred while generating the answer."
 
@@ -127,64 +131,153 @@ def _build_process(msg: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _extract_final_answer_delta(buffer: str, start: int) -> tuple[str, int]:
-    """Incrementally pull the growing `final_answer` string value out of a
-    partial JSON buffer. Returns (new_delta_text, new_scan_pos).
+_ESCAPE_DECODE: dict[str, str] = {
+    "n": "\n",
+    '"': '"',
+    "\\": "\\",
+    "t": "\t",
+    "/": "/",
+}
 
-    Tracks the `final_answer` key's string value char-by-char, honoring
-    escapes (\\\", \\\\, \\n, \\/) and nested braces. If the value is not yet
-    inside a complete-enough structure, returns ("", start). `start` lets us
-    resume scanning so only newly-arrived characters are emitted.
+_DELIMITERS = (":", ",", "}", "]")
+
+
+def _extract_final_answer_delta(
+    buffer: str,
+    start: int,
+    _key_pos: list[int] | None = None,
+) -> tuple[str, int]:
+    """Incrementally pull the growing ``final_answer`` string value out of a
+    partial JSON buffer.  Returns ``(delta_text, new_scan_pos)``.
+
+    State-machine scanner that honours escape sequences (decoded, not
+    literal), delimiter-aware close, pending-escape defer-to-next-call
+    semantics, and optional key-position caching via *``_key_pos``* (an
+    in-place ``list[int]``).
     """
     n = len(buffer)
     key = '"final_answer"'
 
-    # 1) Locate the "final_answer" key. ALWAYS search from the start of the
-    #    buffer: `start` tracks the value-scan offset, not the key position,
-    #    so incremental calls must re-find the key from 0.
-    idx = buffer.find(key, 0)
-    if idx == -1:
-        return "", 0
-    # Ensure it is a real key (followed by optional whitespace + colon).
-    after_key = idx + len(key)
-    lead = buffer[after_key:].lstrip()
-    if not lead.startswith(":"):
-        return "", 0
+    # --- Phase 1: key search (the ONLY str.find in the implementation) ---
+    key_idx: int
+    if _key_pos is not None and _key_pos[0] >= 0:
+        key_idx = _key_pos[0]
+    else:
+        key_idx = buffer.find(key, 0)
+        if _key_pos is not None:
+            _key_pos[0] = key_idx
+        if key_idx == -1:
+            return "", 0
 
-    # 2) The first '"' after the key is the value's opening quote. Skip past
-    #    the colon to locate it (the key's own closing quote is before it).
-    quote_idx = buffer.find('"', after_key)
-    if quote_idx == -1:
-        return "", 0
+    # --- Phase 2: verify key is followed by optional ws + colon ---
+    after_key = key_idx + len(key)
+    j = after_key
+    while j < n and buffer[j] in " \t\n\r":
+        j += 1
+    if j >= n or buffer[j] != ":":
+        return "", start
 
-    # How many value chars were already emitted before this call.
-    emit_from = max(0, start - (quote_idx + 1))
+    # --- Phase 3: find value's opening quote (char-by-char after colon) ---
+    i = j + 1
+    while i < n and buffer[i] in " \t\n\r":
+        i += 1
+    if i >= n or buffer[i] != '"':
+        return "", start
 
-    # 3) Copy characters until the matching unescaped closing quote, emitting
-    #    only the slice that is NEW since `start` (no duplication).
-    i = quote_idx + 1
+    open_quote = i
+    value_start = open_quote + 1
+
+    # ``start`` counts decoded value chars already emitted (not buffer offset).
+    emit_from = start
+
+    # --- Phase 4: value scan with escape decode ---
+    i = value_start
     delta_chars: list[str] = []
+    pending_escape = False
+    pending_u: str | None = None  # e.g. "\\u00" – holds incomplete \\uXXXX
+
     while i < n:
         ch = buffer[i]
+
+        # Deferred escape from previous call --------------------------------
+        if pending_escape:
+            pending_escape = False
+            decoded = _ESCAPE_DECODE.get(ch)
+            if decoded is not None:
+                delta_chars.append(decoded)
+                i += 1
+                continue
+            if ch == "u":
+                pending_u = "\\u"
+                i += 1
+                continue
+            # Unknown escape: emit both chars literally.
+            delta_chars.append("\\")
+            delta_chars.append(ch)
+            i += 1
+            continue
+
+        # Deferred \\uXXXX from previous call -------------------------------
+        if pending_u is not None:
+            if ch in "0123456789abcdefABCDEF" and len(pending_u) < 6:
+                pending_u += ch
+                i += 1
+                if len(pending_u) == 6:
+                    hex_str = pending_u[2:]
+                    try:
+                        delta_chars.append(chr(int(hex_str, 16)))
+                    except ValueError:
+                        delta_chars.append(pending_u)
+                    pending_u = None
+                continue
+            else:
+                # Non-hex terminates \\u: emit literal and reprocess ch.
+                delta_chars.append(pending_u)
+                pending_u = None
+                continue
+
+        # Normal characters --------------------------------------------------
         if ch == "\\":
-            # Emit the escaped pair verbatim; skip the escape + next char.
             if i + 1 < n:
+                nxt = buffer[i + 1]
+                decoded = _ESCAPE_DECODE.get(nxt)
+                if decoded is not None:
+                    delta_chars.append(decoded)
+                    i += 2
+                    continue
+                if nxt == "u":
+                    pending_u = "\\u"
+                    i += 2
+                    continue
+                # Unknown escape: emit both literally.
                 delta_chars.append(ch)
-                delta_chars.append(buffer[i + 1])
+                delta_chars.append(nxt)
                 i += 2
                 continue
-            # Trailing backslash: incomplete escape, stop scanning.
-            break
+            # Trailing backslash at end-of-buffer: defer.
+            pending_escape = True
+            i += 1
+            continue
+
         if ch == '"':
-            # Found the closing quote → value complete.
-            new_delta = "".join(delta_chars)[emit_from:]
-            return new_delta, i + 1
+            # Delimiter-aware close: value terminates only when the next char
+            # is a JSON delimiter or the buffer is exhausted.
+            nxt = buffer[i + 1] if i + 1 < n else ""
+            if nxt in _DELIMITERS or nxt == "":
+                new_delta = "".join(delta_chars)[emit_from:]
+                return new_delta, len(delta_chars)
+            # Unescaped inner quote – treat as content.
+            delta_chars.append(ch)
+            i += 1
+            continue
+
         delta_chars.append(ch)
         i += 1
 
-    # Value still open; emit only chars we have not emitted yet.
+    # Value still open – emit only chars not yet delivered; pending escape/u
+    # are held for the next call and NOT emitted in this delta.
     new_delta = "".join(delta_chars)[emit_from:]
-    return new_delta, i
+    return new_delta, len(delta_chars)
 
 
 _FA_RE = re.compile(r'"final_answer"\s*:\s*"(.*)', re.DOTALL)
@@ -295,6 +388,7 @@ def stream_chunks(
 
         async def run() -> None:
             event_stream: Any = None
+            remaining_chunks: list[Any] = []
             try:
                 from core.rag_core import RAGSystem
 
@@ -304,7 +398,10 @@ def stream_chunks(
                 rag_sys = RAGSystem(session_id=sid)
                 event_generator = await rag_sys.astream(query, model_name=model_name)
                 handler = get_streaming_handler()
-                event_stream = handler.stream_graph_events(event_generator)
+                event_stream = handler.stream_graph_events(
+                    event_generator,
+                    _remaining=remaining_chunks,
+                )
                 logger.info(
                     "[CHAT][STREAM] astream 준비 완료 (%.2fs) — 첫 청크 대기",
                     time.perf_counter() - _t_setup,
@@ -326,6 +423,8 @@ def stream_chunks(
                 if event_stream is not None:
                     with contextlib.suppress(Exception):
                         await event_stream.aclose()
+                for c in remaining_chunks:
+                    q.put(("chunk", c))
                 q.put(("done", None))
 
         try:
@@ -354,17 +453,37 @@ def stream_chunks(
     # 연속 타임아웃 카운터: 짧은 지연으로 인한 오탐지 방지
     _timeout_count = 0
     _max_timeouts = 3
+    _first_chunk_received = False
+    _stream_started = _clock()
 
     try:
         while True:
+            # 절대 상한 타임아웃 (hard ceiling) 점검
+            if (
+                UI_STREAMING_HARD_TIMEOUT > 0
+                and (_clock() - _stream_started) >= UI_STREAMING_HARD_TIMEOUT
+            ):
+                cancel_stream(run_id)
+                raise TimeoutError(
+                    "스트리밍 절대 상한 타임아웃이 초과되었습니다. "
+                    "네트워크 및 모델 상태를 확인해주세요."
+                ) from None
+
+            setup_to = (
+                UI_STREAMING_SETUP_TIMEOUT
+                if UI_STREAMING_SETUP_TIMEOUT > 0
+                else UI_STREAMING_TIMEOUT
+            )
+            effective = setup_to if not _first_chunk_received else UI_STREAMING_TIMEOUT
             try:
-                msg_type, data = q.get(timeout=UI_STREAMING_TIMEOUT)
+                msg_type, data = q.get(timeout=effective)
                 _timeout_count = 0  # 성공 시 카운터 리셋
                 if msg_type == "done":
                     break
                 elif msg_type == "error":
                     raise data
                 else:
+                    _first_chunk_received = True
                     yield data
             except queue.Empty:
                 _timeout_count += 1
@@ -478,6 +597,7 @@ def consume_stream_into_message(
     process_steps: list[str] = []
     raw_json_parts: list[str] = []
     fa_scan_pos = 0
+    fa_key_pos: list[int] = [-1]
 
     def _emit(cancelled: bool) -> None:
         if on_chunk is not None:
@@ -519,7 +639,9 @@ def consume_stream_into_message(
             if getattr(chunk, "raw_json", False):
                 raw_json_parts.append(chunk.content)
                 blob = "".join(raw_json_parts)
-                delta, fa_scan_pos = _extract_final_answer_delta(blob, fa_scan_pos)
+                delta, fa_scan_pos = _extract_final_answer_delta(
+                    blob, fa_scan_pos, fa_key_pos
+                )
                 accumulated += delta
             else:
                 accumulated += chunk.content
