@@ -6,6 +6,8 @@ Task 12의 streaming_handler.py에서 분리 (PHASE 3-P1)
 import logging
 from typing import cast
 
+from common.config import UI_CONTENT_BUFFER_SIZE
+
 logger = logging.getLogger(__name__)
 
 __all__ = ["AdaptiveStreamingController", "get_adaptive_controller"]
@@ -129,4 +131,6 @@ class AdaptiveStreamingController:
 def get_adaptive_controller(
     client_profile: str = "streamlit",
 ) -> AdaptiveStreamingController:
-    return AdaptiveStreamingController(client_profile=client_profile)
+    return AdaptiveStreamingController(
+        client_profile=client_profile, initial_buffer_size=UI_CONTENT_BUFFER_SIZE
+    )

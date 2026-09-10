@@ -12,6 +12,7 @@ from collections.abc import AsyncIterator, Callable, Coroutine
 from dataclasses import dataclass
 from typing import Any, cast
 
+from common.config import UI_CONTENT_BUFFER_SIZE
 from services.monitoring.performance_monitor import (
     OperationType,
     get_performance_monitor,
@@ -80,7 +81,7 @@ class StreamingResponseHandler:
 
     def __init__(
         self,
-        content_buffer_size: int = 1,
+        content_buffer_size: int = UI_CONTENT_BUFFER_SIZE,
         content_timeout_ms: float = 10.0,
         thought_buffer_size: int = 5,
         thought_timeout_ms: float = 100.0,
@@ -490,7 +491,7 @@ class StreamingResponseHandler:
 
 
 def get_streaming_handler() -> StreamingResponseHandler:
-    return StreamingResponseHandler()
+    return StreamingResponseHandler(content_buffer_size=UI_CONTENT_BUFFER_SIZE)
 
 
 # PHASE 3-P1: 분리된 모듈 재-export (하위 호환성 계약 유지)

@@ -18,6 +18,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 from langchain_core.documents import Document
 
+from api.streaming_handler import StreamingResponseHandler, get_streaming_handler
 from core.graph.graph_builder import generate
 from core.model_loader import ModelManager
 
@@ -94,4 +95,60 @@ async def test_structured_stream_ttft_first_chunk_before_completion():
     assert first_chunk_time < completion_time, (
         f"first_chunk_time={first_chunk_time} must be < "
         f"completion_time={completion_time} (TTFT violation)"
+    )
+
+
+class _FakeChunk:
+    """messages 모드 청크 객체 — handler 가 ``hasattr(chunk_obj, 'content')`` 로 소비."""
+
+    def __init__(self, content: str = "") -> None:
+        self.content = content
+        self.content_blocks: list[dict[str, object]] = []
+        self.additional_kwargs: dict[str, object] = {}
+
+
+async def _scripted_tokens(n: int, initial_delay_s: float = 0.05):
+    """첫 토큰 전 지연(모델 콜드 스타트 시뮬레이션) + n 개 콘텐츠 토큰."""
+    await asyncio.sleep(initial_delay_s)
+    for i in range(n):
+        yield ("messages", (_FakeChunk(content=f"tok{i} "), {}))
+
+
+async def _measure_first_chunk(handler) -> tuple[str, float]:
+    """스트림을 끝까지 소비하며 첫 콘텐츠 청크 내용과 first_token_latency 측정."""
+    first_content: str | None = None
+    async for chunk in handler.stream_graph_events(_scripted_tokens(8)):
+        if chunk.content and first_content is None:
+            first_content = chunk.content
+    assert first_content is not None, "첫 콘텐츠 청크를 찾지 못했습니다."
+    return first_content, handler.metrics.first_token_latency or 0.0
+
+
+@pytest.mark.asyncio
+async def test_ttft_unaffected_by_buffer_size():
+    """기본 설정(버퍼 크기 4)의 TTFT가 size=1 기준과 동일함을 입증한다.
+
+    ``TokenStreamBuffer.add_token`` 의 첫 토큰 바이패스는 버퍼 크기와 무관하게
+    첫 콘텐츠 토큰을 즉시 flush 하므로, 크기 4(기본 config)와 크기 1(기존
+    의미) 모두 첫 콘텐츠 청크가 정확히 첫 토큰에서 방출되어야 한다. 구조적
+    증거(첫 청크 내용 == 첫 토큰)와 실측 first_token_latency 의 일치를 단언한다.
+    """
+    # 기본 설정 — get_streaming_handler() 는 call-time 으로 UI_CONTENT_BUFFER_SIZE
+    # (config.yml ui.streaming.content_buffer_size, 기본 4) 를 읽는다.
+    default_handler = get_streaming_handler()
+    assert default_handler.buffer.buffer_size == 4
+
+    default_first, default_ttft = await _measure_first_chunk(default_handler)
+
+    # 기존 size=1 의미 기준선
+    baseline_handler = StreamingResponseHandler(content_buffer_size=1)
+    baseline_first, baseline_ttft = await _measure_first_chunk(baseline_handler)
+
+    # 첫 토큰 바이패스 보존: 두 경우 모두 첫 콘텐츠 청크가 정확히 첫 토큰.
+    assert default_first == "tok0 "
+    assert baseline_first == "tok0 "
+    # 첫 토큰 지연(TTFT) 동일 — 0.05s 콜드 스타트 지연이 지배하므로 측정이 안정적.
+    assert abs(default_ttft - baseline_ttft) < 0.05, (
+        f"TTFT changed with buffer size: default={default_ttft:.4f}s vs "
+        f"baseline={baseline_ttft:.4f}s"
     )
