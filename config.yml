@@ -382,6 +382,14 @@ ui:
     # 동시 UI 스트리밍 워커의 최대 수 (스트림 슬롯 게이팅).
     # env UI_STREAM_WORKERS 로 재정의할 수 있습니다.
     max_workers: 3
+    # 첫 청크 도착 전 스트라이크 타임아웃 (초). 미설정/0이면 timeout_seconds로 폴백.
+    setup_timeout_seconds: 300
+    # 절대 상한 타임아웃 (초) — 스트림 시작부터 측정, 스트라이크 수와 무관하게 적용. 0이면 비활성.
+    hard_timeout_seconds: 600
+    # 콘텐츠 버퍼 크기 — 콘텐츠 토큰을 모아 한 번에 렌더링하는 단위 (유효 범위 1..16).
+    # 1 = 토큰마다 즉시 렌더링 (TTFT 우선, 재렌더링 최다). 16 초과 값은 경고와 함께 16으로 클램프됩니다.
+    # env 로 재정의하지 않으며 config.yml 에서만 설정합니다.
+    content_buffer_size: 4
   messages:
     pdf_viewer_no_file: "No PDF to preview. Please upload a file from the sidebar."
     # 빈 대화 상태의 단일 가이드 (Phase B: 가이드 5→1 통합)

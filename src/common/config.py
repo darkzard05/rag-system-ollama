@@ -325,9 +325,23 @@ _ui_config = _config.get("ui", {})
 
 _ui_streaming = _ui_config.get("streaming", {})
 UI_STREAMING_TIMEOUT: int = _ui_streaming.get("timeout_seconds", 30)
+_ui_setup = _ui_streaming.get("setup_timeout_seconds", 0)
+UI_STREAMING_SETUP_TIMEOUT: int = (
+    _ui_setup if _ui_setup and _ui_setup > 0 else UI_STREAMING_TIMEOUT
+)
+UI_STREAMING_HARD_TIMEOUT: int = _ui_streaming.get("hard_timeout_seconds", 0)
 UI_STREAM_WORKERS: int = _get_env(
     "UI_STREAM_WORKERS", _ui_streaming.get("max_workers", 3), int
 )
+
+_raw_cbs = _ui_streaming.get("content_buffer_size", 4)
+if not 1 <= _raw_cbs <= 16:
+    logger.warning(
+        "[CONFIG] content_buffer_size=%s 가 1..16 범위를 벗어나 16으로 클램프합니다.",
+        _raw_cbs,
+    )
+    _raw_cbs = max(1, min(16, _raw_cbs))
+UI_CONTENT_BUFFER_SIZE: int = _raw_cbs
 
 _ui_messages = _ui_config.get("messages", {})
 MSG_CHAT_GUIDE: str = _ui_messages.get("chat_guide", "PDF를 업로드한 후 질문해 보세요")
