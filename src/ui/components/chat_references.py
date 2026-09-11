@@ -281,9 +281,13 @@ def render_generation_expander(
         if parts:
             st.caption(status_line(*parts))
 
-        if show_thought:
-            st.markdown("**Thinking process**")
-            st.markdown(thought)
+        # 네이티브 thinking 없는 모델에는 "없음"을 솔직 표기(생성 중/취소 시 생략).
+        if not cancelled:
+            if thought.strip():
+                st.markdown("**Thinking process**")
+                st.markdown(thought)
+            elif not generating:
+                st.caption("이 모델은 사고 과정을 지원하지 않습니다")
 
         # 참조(페이지/doc 점프) — 기존 References popover 내용을 익스팬더 안으로 통합.
         if documents or citations:
