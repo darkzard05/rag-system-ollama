@@ -3,10 +3,12 @@
 Phase B: 4분기 → 3분기 (생성 중 / 미준비 / 준비됨) 단순화에 맞춰 기대값 동기화.
 """
 
-from core.session import SessionManager
-from ui.components.chat import _resolve_chat_input_state
+from unittest.mock import patch
 
-_PLACEHOLDER_GENERATING = "AI가 답변을 생성 중입니다..."
+from core.session import SessionManager
+from ui.components.chat import _resolve_chat_input_state, render_chat_input_area
+
+_PLACEHOLDER_GENERATING = "AI가 답변을 생성 중입니다... · ■ 버튼으로 중지할 수 있습니다"
 _PLACEHOLDER_NOT_READY = "Upload a PDF and ask a question"
 _PLACEHOLDER_READY = "Ask a follow-up question..."
 
@@ -78,3 +80,32 @@ def test_ready_enables_input():
 
     assert disabled is False
     assert placeholder == _PLACEHOLDER_READY
+
+
+def test_render_chat_input_area_generating_shows_status_caption() -> None:
+    """UX-4: 생성 중 입력 영역에 상태 캡션이 placeholder 텍스트로 표시된다."""
+    sid = "input_area_generating"
+    _reset_session(sid)
+    SessionManager.set_session_id(sid)
+    SessionManager.set("is_generating_answer", True, sid)
+
+    with patch("ui.components.chat.st") as mock_st:
+        mock_st.chat_input.return_value = None
+        render_chat_input_area()
+
+    captions = [call.args[0] for call in mock_st.caption.call_args_list if call.args]
+    assert _PLACEHOLDER_GENERATING in captions
+
+
+def test_render_chat_input_area_idle_has_no_status_caption() -> None:
+    """UX-4: 비생성 상태에서는 상태 캡션이 렌더되지 않는다."""
+    sid = "input_area_idle"
+    _reset_session(sid)
+    SessionManager.set_session_id(sid)
+    SessionManager.set("is_generating_answer", False, sid)
+
+    with patch("ui.components.chat.st") as mock_st:
+        mock_st.chat_input.return_value = None
+        render_chat_input_area()
+
+    mock_st.caption.assert_not_called()

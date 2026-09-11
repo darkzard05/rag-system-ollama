@@ -751,13 +751,20 @@ def _clear_aux_state(sid: str) -> None:
 
 
 def _content_generator(
-    query: str, model_name: str, sid: str, msg_id: str
+    query: str,
+    model_name: str,
+    sid: str,
+    msg_id: str,
+    on_status: Callable[[str, float], None] | None = None,
 ) -> Iterator[str]:
     """``st.write_stream`` 호환 content 제너레이터 + 부가 정보 누적.
 
     스트리밍 중 content만 yield하고, thought/metrics/citations 등은
     session_state에 기록하여 완료 후 렌더링에 사용한다.
     ``generation_cancel`` 시에도 부분 응답을 영속화한다.
+
+    ``on_status``는 상태 전환 시에만 호출된다 (상태 텍스트 변경 또는 첫
+    콘텐츠 yield 직후). yield 내용은 ``on_status`` 유무와 무관하게 동일하다.
     """
     accumulated = ""
     thought = ""
@@ -765,7 +772,20 @@ def _content_generator(
     metrics: dict[str, Any] = {}
     citations: list[dict[str, Any]] = []
     process_steps: list[str] = []
+    _content_started = False
     raw_json_extractor = _FinalAnswerExtractor()
+
+    _t_status_start = _clock()
+    _last_reported_status: str | None = None
+
+    def _report_status(text: str) -> None:
+        nonlocal _last_reported_status
+        if on_status is None:
+            return
+        if text == _last_reported_status:
+            return
+        _last_reported_status = text
+        on_status(text, _clock() - _t_status_start)
 
     # 초기 aux state 기록 — 첫 청크 전 중단 시 빈 expander 방지
     _write_aux_state(
@@ -784,7 +804,13 @@ def _content_generator(
         for chunk in stream_chunks(query, model_name, sid):
             if SessionManager.get("generation_cancel", False, session_id=sid):
                 break
+            if chunk.status:
+                _report_status(chunk.status)
             if chunk.content:
+                if not _content_started:
+                    _content_started = True
+                    if not chunk.status:
+                        _report_status("응답 생성 중...")
                 if getattr(chunk, "raw_json", False):
                     delta = raw_json_extractor.feed(chunk.content)
                     accumulated += delta

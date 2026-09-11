@@ -12,11 +12,6 @@ from common.config import (
 from core.session import SessionManager
 
 
-def request_generation_stop(sid: str) -> None:
-    """생성 중인 답변을 중단하도록 중단 플래그를 세팅한다 (단일 소스)."""
-    SessionManager.set("generation_cancel", True, session_id=sid)
-
-
 def _render_sidebar_logo():
     """Render the brand logo at the top of the sidebar (C8: theme-driven CSS)."""
     st.markdown(

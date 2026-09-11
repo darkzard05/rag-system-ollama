@@ -11,7 +11,8 @@
 
 from unittest.mock import MagicMock, patch
 
-from ui.components.chat import render_message
+from core.session import SessionManager
+from ui.components.chat import _draw_streaming_message, render_message
 
 
 def _render(**kwargs) -> MagicMock:
@@ -172,3 +173,52 @@ def test_completed_assistant_message_opens_expander():
         wrap_in_container=False,
     )
     assert "Answer details" in _expander_labels(mock_st)
+
+
+# ---------------------------------------------------------------------------
+# T14: UX-3 중립 잔존 처리 — _draw_streaming_message 엣지케이스
+# ---------------------------------------------------------------------------
+
+
+def test_draw_streaming_message_empty_placeholder_shows_neutral_caption() -> None:
+    """content 없는 스트리밍 플레이스홀더 → 중립 '중단' 캡션, expander/error 없음."""
+    sid = "render_empty_stream"
+    SessionManager.reset_all_state(sid)
+
+    with (
+        patch("ui.components.chat.st") as mock_st,
+        patch("ui.components.chat.render_generation_expander") as mock_expander,
+    ):
+        _draw_streaming_message(
+            {"role": "assistant", "content": "", "msg_type": "streaming"},
+            sid,
+        )
+
+    texts = [call.args[0] for call in mock_st.caption.call_args_list if call.args]
+    assert any("생성이 중단되었습니다" in text for text in texts)
+    mock_expander.assert_not_called()
+    mock_st.error.assert_not_called()
+
+
+def test_draw_streaming_message_with_content_keeps_generating_expander() -> None:
+    """content 있는 스트리밍 메시지 → expander generating=True 유지 (회귀 가드)."""
+    sid = "render_content_stream"
+    SessionManager.reset_all_state(sid)
+
+    with (
+        patch("ui.components.chat.st") as mock_st,
+        patch("ui.components.chat.render_generation_expander") as mock_expander,
+    ):
+        _draw_streaming_message(
+            {"role": "assistant", "content": "부분 답변", "msg_type": "streaming"},
+            sid,
+        )
+
+    mock_expander.assert_called_once()
+    assert mock_expander.call_args.kwargs["generating"] is True
+    neutral = [
+        call.args[0]
+        for call in mock_st.caption.call_args_list
+        if call.args and "생성이 중단되었습니다" in call.args[0]
+    ]
+    assert neutral == []

@@ -153,23 +153,6 @@ def test_render_message_shows_cancelled_caption():
     assert not any("Answer complete" in c for c in captions)
 
 
-def test_stop_trigger_sets_generation_cancel():
-    """B9(a): request_generation_stop이 generation_cancel만 True로 바꾼다."""
-    from ui.components.sidebar import request_generation_stop
-
-    sid = "test_stop_trigger"
-    SessionManager.reset_all_state(sid)
-    SessionManager.set_session_id(sid)
-    SessionManager.set("foo", "bar", sid)
-
-    request_generation_stop(sid)
-
-    assert SessionManager.get("generation_cancel", False, sid) is True
-    # 다른 상태는 변경되지 않는다
-    assert SessionManager.get("foo", None, sid) == "bar"
-    assert SessionManager.get("is_generating_answer", False, sid) is False
-
-
 def test_on_chunk_receives_accumulation_snapshots_in_order():
     """B9: on_chunk 콜백이 청크마다 스냅샷을 올바른 누적 순서로 받는다."""
     sid = "test_on_chunk"

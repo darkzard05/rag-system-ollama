@@ -304,12 +304,22 @@ def _draw_streaming_message(msg: dict[str, Any], current_sid: str) -> None:
     표준 리팩터 이후 스트리밍은 별도 스레드/fragment 폴링 없이 단일 script run
     안에서 라이브 렌더 셸(``_run_active_stream_in_timeline``)이 순수 코어
     ``consume_stream_into_message``를 ``on_chunk`` 콜백과 함께 동기 소비하며
-    본문을 갱신한다. 따라서 이 함수는 렌더 시점에 msg 딕셔너리를 한 번 읽어
-    익스팬더("Answer details")를 먼저 그리고 그 아래에 본문을 그린다.
+    본문을 갱신한다.
+
+    현재 이 함수는 비활성/폴백 브랜치에서 렌더 시점의 msg 스냅샷을 한 번 읽어
+    익스팬더("Answer details")를 먼저 그리고 그 아래에 본문을 그린다. 내용이
+    없는(■ 중지로 영속을 건너뛴) 플레이스홀더는 [UX-3] 조기 분기에서 중립
+    캡션("생성이 중단되었습니다")으로 처리한다.
     """
     # 스트리밍 중 오류가 실린 메시지는 즉시 표면화
     if msg.get("error"):
         st.error(str(msg.get("error")))
+        return
+
+    # [UX-3] 내용이 없는(■ 중지로 영속을 건너뛴) 스트리밍 플레이스홀더:
+    # "Generating..." 거짓 진행 표시 금지. 중립 문구로 처리하고 진행 expander 생략.
+    if not msg.get("content"):
+        st.caption("생성이 중단되었습니다 · 표시할 답변이 없습니다")
         return
 
     status_text = msg.get("status", "Generating...")
@@ -371,7 +381,7 @@ def _resolve_chat_input_state(sid: str) -> tuple[str, bool]:
     is_swapping = bool(SessionManager.get("is_swapping_model", False, sid))
 
     if is_generating:
-        return "AI가 답변을 생성 중입니다...", False
+        return "AI가 답변을 생성 중입니다... · ■ 버튼으로 중지할 수 있습니다", False
     if is_swapping:
         return "Switching models, please wait...", True
     if not is_ready:
@@ -393,6 +403,16 @@ def render_chat_input_area() -> None:
     # 생성 중에도 위젯을 disabled로 계속 렌더(입력창 소실 방지).
     input_placeholder, input_disabled = _resolve_chat_input_state(current_sid)
 
+    # [UX-4] 생성 진행 중 시각적 어포던스: 입력창 위 상태 캡션.
+    # submit_mode="stop"의 ■ 중지 버튼과 함께 "생성 중"임을 명시한다.
+    # (캡션 수명은 자리표시자와 동일 — 다음 rerun에서 갱신/소거)
+    if SessionManager.get("is_generating_answer", False, current_sid):
+        st.caption(input_placeholder)
+
+    # [UX-3] 실사용 취소 = 네이티브 ■ 중지(submit_mode="stop") — ScriptRunner가
+    # StopException(BaseException)을 발생시켜 영속화(아래 :628-645)를 건너뛴다.
+    # generation_cancel 플래그는 프로그래매틱 전용(현재 src 호출자 없음)이며
+    # 영속 메시지의 cancelled 마커로만 쓰인다.
     user_query = st.chat_input(
         input_placeholder,
         disabled=False,
@@ -594,14 +614,33 @@ def _render_streaming_with_write_stream(
     model_name = SessionManager.get("last_selected_model", session_id=current_sid) or ""
 
     with st.chat_message("assistant", avatar=AVATARS["assistant"]):
+        # [UX-1/UX-2] 프리토큰/생성 중 라이브 상태 캡션.
+        # write_stream과 동일 script run 안에서 _content_generator의 on_status
+        # 콜백으로 갱신된다 (구 렌더러 aux_ph/body_ph 패턴의 후속 — 폴링 없음).
+        status_ph = st.empty()
+        status_ph.caption("AI가 답변을 생성 중입니다... ▍")
+
+        def _on_status(status_text: str, elapsed_sec: float) -> None:
+            status_ph.caption(f"{status_text} · {elapsed_sec:.0f}s ▍")
+
         # st.write_stream — 스트리밍 텍스트 표시
         response = None
         try:
             response = st.write_stream(
-                _content_generator(query, model_name, current_sid, msg_id),
+                _content_generator(
+                    query,
+                    model_name,
+                    current_sid,
+                    msg_id,
+                    on_status=_on_status,
+                ),
             )
         except Exception as exc:
             response = f"오류가 발생했습니다: {exc}"
+        finally:
+            # 완료/예외/■ 중지(StopException — BaseException) 모두에서 실행되어
+            # 잘못된 "생성 중" 잔상이 남지 않는다. 플레이스홀더는 매 run의 일시 요소.
+            status_ph.empty()
 
         # aux state 읽기 후 즉시 정리 (잔여 데이터 방지)
         aux_state = SessionManager.get(_AUX_STATE_KEY, {}, current_sid) or {}
