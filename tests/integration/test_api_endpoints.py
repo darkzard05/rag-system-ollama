@@ -5,6 +5,7 @@ Tests FastAPI endpoints directly without running a separate uvicorn server.
 
 import asyncio
 import json
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -199,3 +200,163 @@ async def test_upload_flow_mocked(async_client, mock_rag_resources, auth_headers
         data = response.json()
         assert data["filename"] == "test.pdf"
         assert "message" in data
+
+
+def _parse_sse_frames(lines: list[str]) -> list[tuple[str | None, Any]]:
+    """SSE line 목록을 (event_type, data) 프레임 목록으로 파싱합니다."""
+    frames: list[tuple[str | None, Any]] = []
+    current_event: str | None = None
+    for line in lines:
+        if line.startswith("event: "):
+            current_event = line[len("event: ") :].strip()
+        elif line.startswith("data: "):
+            raw = line[len("data: ") :]
+            try:
+                frames.append((current_event, json.loads(raw)))
+            except json.JSONDecodeError:
+                frames.append((current_event, raw))
+    return frames
+
+
+def _assert_end_is_last_frame(
+    frames: list[tuple[str | None, Any]],
+) -> None:
+    """마지막 프레임이 ``event: end`` (status=done) 임을 검증합니다."""
+    last_event, last_data = frames[-1]
+    assert last_event == "end"
+    assert last_data == {"status": "done"}
+
+
+@pytest.mark.asyncio
+async def test_stream_query_emits_citations_and_metrics(
+    async_client, mock_rag_resources, mock_session_manager, auth_headers
+):
+    """``citations`` / ``metrics`` 이벤트가 SSE 프레임으로 전송되는지 검증"""
+    events = [
+        ("custom", {"citations": [{"source": "S", "page": 1}]}),
+        (
+            "updates",
+            {"generate": {"performance": {"token_count": 5, "input_token_count": 3}}},
+        ),
+    ]
+
+    async def astream_impl(query: str, model_name: str | None = None):
+        async def _stream():
+            for mode, data in events:
+                yield (mode, data)
+                await asyncio.sleep(0.005)
+
+        return _stream()
+
+    with patch.object(
+        api_server.RAGSystem, "astream", new_callable=AsyncMock
+    ) as mock_astream:
+        mock_astream.side_effect = astream_impl
+
+        payload = {"query": "인용과 성능을 요청합니다", "use_cache": True}
+        async with async_client.stream(
+            "POST", "/api/v1/stream_query", json=payload, headers=auth_headers
+        ) as response:
+            assert response.status_code == 200
+            lines = [line async for line in response.aiter_lines()]
+
+    frames = _parse_sse_frames(lines)
+    event_types = [event for event, _ in frames]
+
+    assert "citations" in event_types
+    citations_frames = [data for event, data in frames if event == "citations"]
+    assert citations_frames, "event: citations 프레임이 존재해야 합니다."
+    assert citations_frames[0] == {"citations": [{"source": "S", "page": 1}]}
+
+    assert "metrics" in event_types
+    metrics_frames = [data for event, data in frames if event == "metrics"]
+    assert metrics_frames, "event: metrics 프레임이 존재해야 합니다."
+    matched = any(
+        data.get("metrics", {}).get("token_count") == 5
+        and data.get("metrics", {}).get("input_token_count") == 3
+        for data in metrics_frames
+    )
+    assert matched, "metrics 페이로드에 token_count/input_token_count가 있어야 합니다."
+
+    assert "error" not in event_types
+    _assert_end_is_last_frame(frames)
+
+
+@pytest.mark.asyncio
+async def test_stream_query_emits_keepalive_on_stall(
+    async_client, mock_rag_resources, mock_session_manager, auth_headers
+):
+    """스트림이 지연(stall)될 때 keepalive comment 프레임을 발행하는지 검증"""
+    with patch("api.routes_chat.SSE_KEEPALIVE_INTERVAL_SECONDS", 0.05):
+
+        async def stall_astream_impl(query: str, model_name: str | None = None):
+            async def _stream():
+                await asyncio.sleep(0.2)
+                yield ("custom", {"content": "hello"})
+
+            return _stream()
+
+        with patch.object(
+            api_server.RAGSystem, "astream", new_callable=AsyncMock
+        ) as mock_astream:
+            mock_astream.side_effect = stall_astream_impl
+
+            payload = {"query": "지연 응답 요청", "use_cache": True}
+            async with async_client.stream(
+                "POST", "/api/v1/stream_query", json=payload, headers=auth_headers
+            ) as response:
+                assert response.status_code == 200
+                lines = [line async for line in response.aiter_lines()]
+
+    keepalives = [i for i, line in enumerate(lines) if line == ": keep-alive"]
+    assert keepalives, "stall 동안 keepalive 프레임이 발행되어야 합니다."
+    first_data_idx = next(
+        i for i, line in enumerate(lines) if line.startswith("data: ")
+    )
+    assert all(i < first_data_idx for i in keepalives), (
+        "keepalive는 첫 데이터 프레임보다 앞서야 합니다."
+    )
+
+    frames = _parse_sse_frames(lines)
+    event_types = [event for event, _ in frames]
+    assert "error" not in event_types
+    _assert_end_is_last_frame(frames)
+
+
+@pytest.mark.asyncio
+async def test_stream_query_no_keepalive_when_flowing(
+    async_client, mock_rag_resources, mock_session_manager, auth_headers
+):
+    """스트림이 원활히 흐르면 keepalive comment 프레임이 없어야 한다"""
+    with patch("api.routes_chat.SSE_KEEPALIVE_INTERVAL_SECONDS", 0.05):
+
+        async def flowing_astream_impl(query: str, model_name: str | None = None):
+            async def _stream():
+                for content in ("alpha ", "beta ", "gamma"):
+                    yield ("custom", {"content": content})
+                    await asyncio.sleep(0.005)
+
+            return _stream()
+
+        with patch.object(
+            api_server.RAGSystem, "astream", new_callable=AsyncMock
+        ) as mock_astream:
+            mock_astream.side_effect = flowing_astream_impl
+
+            payload = {"query": "연속 응답 요청", "use_cache": True}
+            async with async_client.stream(
+                "POST", "/api/v1/stream_query", json=payload, headers=auth_headers
+            ) as response:
+                assert response.status_code == 200
+                lines = [line async for line in response.aiter_lines()]
+
+    assert not any(line == ": keep-alive" for line in lines), (
+        "흐르는 스트림에는 keepalive 프레임이 없어야 합니다."
+    )
+    assert any(line.startswith("data: ") for line in lines), (
+        "콘텐츠 데이터 프레임이 존재해야 합니다."
+    )
+    frames = _parse_sse_frames(lines)
+    event_types = [event for event, _ in frames]
+    assert "error" not in event_types
+    _assert_end_is_last_frame(frames)

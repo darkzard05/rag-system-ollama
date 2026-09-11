@@ -67,7 +67,7 @@ class PriorityStreamBuffer:
         thought_buffer_size: int = 5,
         thought_timeout_ms: float = 100.0,
     ):
-        # Content 버퍼: 즉시 플러시 (size=1, timeout=10ms)
+        # Content 버퍼: 즉시 플러시 지향 — 크기는 호출자가 config(UI_CONTENT_BUFFER_SIZE)로 지정 (기본 1 = 토큰마다 즉시).
         self.content_buffer = TokenStreamBuffer(content_buffer_size, content_timeout_ms)
         # Thought 버퍼: 배치 처리 (size=5, timeout=100ms)
         self.thought_buffer = TokenStreamBuffer(thought_buffer_size, thought_timeout_ms)

@@ -10,9 +10,11 @@
 으로 호출 시점에 읽습니다(모듈 수준 import 시 순환 참조 + 패치 미적용 문제 회피).
 """
 
+import asyncio
 import logging
 import time
-from typing import Any
+from collections.abc import AsyncGenerator
+from typing import Any, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
@@ -29,8 +31,10 @@ from api._deps import (
     verify_token,
 )
 from api.schemas import QueryRequest, QueryResponse
+from api.stream_events import chunk_to_stream_events
 from api.streaming_handler import (
     ServerSentEventsHandler,
+    StreamChunk,
     get_adaptive_controller,
     get_streaming_handler,
 )
@@ -38,6 +42,32 @@ from api.streaming_handler import (
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+# 프록시/게이트웨이 유휴 타임아웃 방지용 keepalive 간격 (초).
+# nginx default: 60s, Azure APIM: ~4min; SSE comment frame `: ...\n\n`은
+# EventSource가 무시하므로 클라이언트에 영향 없음.
+SSE_KEEPALIVE_INTERVAL_SECONDS: float = 15.0
+
+
+def chunk_to_sse_entries(
+    chunk: StreamChunk, event_counter: int
+) -> tuple[list[tuple[str | None, dict[str, Any], int | None]], int]:
+    """StreamChunk → SSE entry list. ``"sources"`` docs are hydrated via
+    ``_doc_to_source``; all other payloads pass through verbatim."""
+    entries: list[tuple[str | None, dict[str, Any], int | None]] = []
+    for event in chunk_to_stream_events(chunk):
+        if event.type == "sources":
+            payload: dict[str, Any] = {
+                "documents": [
+                    _doc_to_source(d, max_chars=100)
+                    for d in event.payload.get("documents", [])
+                ],
+            }
+        else:
+            payload = event.payload
+        entries.append((event.type, payload, event_counter))
+        event_counter += 1
+    return entries, event_counter
 
 
 @router.post("/api/v1/query", response_model=QueryResponse)
@@ -94,6 +124,15 @@ async def stream_query_rag(
 ):
     """
     인증된 세션에 대해 실시간 스트리밍(SSE) 응답을 제공합니다.
+
+    SSE 이벤트 타입 (6종, canonical order):
+      - ``status``   → payload ``{"message": str, "node": str | None}``
+      - ``message``  → payload ``{"content": str}``
+      - ``thought``  → payload ``{"content": str}``
+      - ``sources``  → payload ``{"documents": [...]}``
+      - ``citations``→ payload ``{"citations": [...]}``
+      - ``metrics``  → payload ``{"metrics": {...}}``
+    모든 스트림은 ``event: end`` (payload ``{"status": "done"}``)로 종료됩니다.
     """
     srv = _app_server_module()
     sid = request.session_id or "default"
@@ -132,77 +171,50 @@ async def stream_query_rag(
         batch_size = 10  # 10개 이벤트마다 배치 전송
         event_counter = 0
 
-        try:
-            # RAGSystem이 직접 생성한 스트림 이벤트를 핸들러에 전달
-            async for chunk in handler.stream_graph_events(
+        stream_gen = cast(
+            AsyncGenerator[StreamChunk, None],
+            handler.stream_graph_events(
                 await rag_sys.astream(request.query, model_name=request.model_name),
                 adaptive_controller=controller,
-            ):
+            ),
+        )
+        stream_it = stream_gen.__aiter__()
+        waiter: asyncio.Task[Any] | None = None
+
+        try:
+            while True:
+                if waiter is None:
+                    waiter = asyncio.ensure_future(anext(stream_it))
+                done, _ = await asyncio.wait(
+                    {waiter}, timeout=SSE_KEEPALIVE_INTERVAL_SECONDS
+                )
+                if not done:
+                    # asyncio.wait (NOT wait_for): wait_for cancels the pending
+                    # anext task -> upstream LLM stream would be cancelled on
+                    # every stall. wait keeps it alive across keepalive frames.
+                    yield sse_handler.format_sse_keepalive()
+                    continue
+                try:
+                    chunk = waiter.result()
+                except StopAsyncIteration:
+                    break
+                waiter = None
                 # 클라이언트 연결 끊김 확인 (자원 보호)
                 if await fastapi_request.is_disconnected():
                     logger.info(f"[API] Client disconnected, stopping stream: {sid}")
                     break
-
-                # 1. 상태 업데이트 처리
+                entries, event_counter = chunk_to_sse_entries(chunk, event_counter)
+                batch_buffer.extend(entries)
                 if chunk.status:
-                    batch_buffer.append(
-                        (
-                            "status",
-                            {"message": chunk.status, "node": chunk.node_name},
-                            event_counter,
-                        )
-                    )
-                    event_counter += 1
-                    # 비동기 제너레이터 내에서도 명시적 세션 ID 사용 (최적화: 직접 호출)
                     srv.SessionManager.add_status_log(chunk.status, session_id=sid)
-
-                # 2. 메시지(답변 및 사고 과정) 처리
-                if chunk.content:
-                    batch_buffer.append(
-                        (
-                            "message",
-                            {"content": chunk.content},
-                            event_counter,
-                        )
-                    )
-                    event_counter += 1
-
-                if chunk.thought:
-                    batch_buffer.append(
-                        (
-                            "thought",
-                            {"content": chunk.thought},
-                            event_counter,
-                        )
-                    )
-                    event_counter += 1
-
-                # 3. 메타데이터(문서) 처리
-                if chunk.metadata and "documents" in chunk.metadata:
-                    docs = [
-                        _doc_to_source(d, max_chars=100)
-                        for d in chunk.metadata["documents"]
-                    ]
-                    batch_buffer.append(
-                        (
-                            "sources",
-                            {"documents": docs},
-                            event_counter,
-                        )
-                    )
-                    event_counter += 1
-
-                # 배치 크기 도달 시 전송
                 if len(batch_buffer) >= batch_size:
                     yield sse_handler.format_sse_batch(batch_buffer)
                     batch_buffer.clear()
-
-            # 남은 버퍼 전송
             if batch_buffer:
                 yield sse_handler.format_sse_batch(batch_buffer)
                 batch_buffer.clear()
-
             yield sse_handler.format_sse_event("end", {"status": "done"}, event_counter)
+            # INVARIANT: exactly one end per stream - success path above OR error path below, never both.
         # fail-closed for the stream: any unexpected exception becomes a
         # user-visible SSE [error] event instead of breaking the response body
         # mid-stream. Broad by design; exc_info=True keeps it diagnosable.
@@ -211,6 +223,10 @@ async def stream_query_rag(
             yield sse_handler.format_sse_error(str(e))
             # 클라이언트가 [error] 후 [end]를 받아야 연결을 해제(블로킹 해제)한다.
             yield sse_handler.format_sse_event("end", {"status": "done"}, event_counter)
+        finally:
+            if waiter is not None and not waiter.done():
+                waiter.cancel()
+            await stream_gen.aclose()
 
     return StreamingResponse(
         event_generator(),

@@ -12,7 +12,12 @@ from collections.abc import AsyncIterator, Callable, Coroutine
 from dataclasses import dataclass
 from typing import Any, cast
 
-from common.config import UI_CONTENT_BUFFER_SIZE
+from common.config import (
+    UI_CONTENT_BUFFER_SIZE,
+    UI_STREAMING_CONTENT_TIMEOUT_MS,
+    UI_STREAMING_THOUGHT_BUFFER_SIZE,
+    UI_STREAMING_THOUGHT_TIMEOUT_MS,
+)
 from services.monitoring.performance_monitor import (
     OperationType,
     get_performance_monitor,
@@ -73,6 +78,11 @@ class StreamingMetrics:
     max_latency: float = 0.0
 
 
+def _estimate_tokens(text: str) -> int:
+    """토큰 수 추정 — 한국어/영어 혼용 고려 간이 계산 (char//2)."""
+    return max(1, len(text) // 2)
+
+
 class StreamingResponseHandler:
     """
     스트리밍 응답 처리기 - 실시간 토큰 스트리밍
@@ -82,9 +92,9 @@ class StreamingResponseHandler:
     def __init__(
         self,
         content_buffer_size: int = UI_CONTENT_BUFFER_SIZE,
-        content_timeout_ms: float = 10.0,
-        thought_buffer_size: int = 5,
-        thought_timeout_ms: float = 100.0,
+        content_timeout_ms: float = UI_STREAMING_CONTENT_TIMEOUT_MS,
+        thought_buffer_size: int = UI_STREAMING_THOUGHT_BUFFER_SIZE,
+        thought_timeout_ms: float = UI_STREAMING_THOUGHT_TIMEOUT_MS,
     ):
         self.buffer = PriorityStreamBuffer(
             content_buffer_size,
@@ -173,9 +183,7 @@ class StreamingResponseHandler:
                             yield StreamChunk(
                                 content=content,
                                 timestamp=current_time,
-                                token_count=max(
-                                    1, len(content) // 2
-                                ),  # 한국어/영어 혼용 고려 간이 계산
+                                token_count=_estimate_tokens(content),
                                 chunk_index=self.chunk_index,
                                 raw_json=raw_json,
                             )
@@ -274,7 +282,7 @@ class StreamingResponseHandler:
                                     chunk = StreamChunk(
                                         content=buffered_content,
                                         timestamp=current_time,
-                                        token_count=max(1, len(buffered_content) // 4),
+                                        token_count=_estimate_tokens(buffered_content),
                                         chunk_index=self.chunk_index,
                                     )
                                     self.metrics.total_tokens += chunk.token_count
@@ -300,6 +308,7 @@ class StreamingResponseHandler:
                                 perf = node_output.get("performance")
                                 if perf:
                                     self.node_metadata.update(perf)
+                                    # or-패턴: total_tokens==0일 때만 perf 값으로 대체
                                     self.metrics.total_tokens = (
                                         self.metrics.total_tokens
                                         or perf.get("token_count", 0)
@@ -332,7 +341,7 @@ class StreamingResponseHandler:
                 final_chunk = StreamChunk(
                     content=remaining_content,
                     timestamp=time.time(),
-                    token_count=len(remaining_content.split()),
+                    token_count=_estimate_tokens(remaining_content),
                     chunk_index=self.chunk_index,
                     is_final=True,
                     raw_json=self._last_chunk_raw_json,
@@ -491,7 +500,12 @@ class StreamingResponseHandler:
 
 
 def get_streaming_handler() -> StreamingResponseHandler:
-    return StreamingResponseHandler(content_buffer_size=UI_CONTENT_BUFFER_SIZE)
+    return StreamingResponseHandler(
+        content_buffer_size=UI_CONTENT_BUFFER_SIZE,
+        content_timeout_ms=UI_STREAMING_CONTENT_TIMEOUT_MS,
+        thought_buffer_size=UI_STREAMING_THOUGHT_BUFFER_SIZE,
+        thought_timeout_ms=UI_STREAMING_THOUGHT_TIMEOUT_MS,
+    )
 
 
 # PHASE 3-P1: 분리된 모듈 재-export (하위 호환성 계약 유지)

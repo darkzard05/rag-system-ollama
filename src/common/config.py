@@ -342,6 +342,13 @@ if not 1 <= _raw_cbs <= 16:
     )
     _raw_cbs = max(1, min(16, _raw_cbs))
 UI_CONTENT_BUFFER_SIZE: int = _raw_cbs
+UI_STREAMING_CONTENT_TIMEOUT_MS: float = float(
+    _ui_streaming.get("content_timeout_ms", 10.0)
+)
+UI_STREAMING_THOUGHT_BUFFER_SIZE: int = int(_ui_streaming.get("thought_buffer_size", 5))
+UI_STREAMING_THOUGHT_TIMEOUT_MS: float = float(
+    _ui_streaming.get("thought_timeout_ms", 100.0)
+)
 
 _ui_messages = _ui_config.get("messages", {})
 MSG_CHAT_GUIDE: str = _ui_messages.get("chat_guide", "PDF를 업로드한 후 질문해 보세요")
