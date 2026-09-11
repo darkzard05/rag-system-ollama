@@ -144,7 +144,7 @@ def test_build_status_banner_lifecycle():
 
 
 def test_chat_input_state_machine_during_generation():
-    """(b) input DISABLED while generating, ENABLED when idle."""
+    """(b) input ENABLED while generating (submit_mode=stop), ENABLED when idle."""
     SessionManager.reset()
     at = AppTest.from_file("src/main.py").run(timeout=_RUN_TIMEOUT)
     sid = _app_session_id()
@@ -157,21 +157,17 @@ def test_chat_input_state_machine_during_generation():
     assert at.chat_input[0].disabled is False
     assert not at.exception
 
-    # Generating → disabled.
-    # NOTE: we use a NON-user message here deliberately. A user message would
-    # enter the blocking streaming loop (chat.py:346-377) which, once the mocked
-    # stream completes, resets is_generating_answer=False and calls st.rerun()
-    # BEFORE render_chat_input_area() runs (ui.py renders the input after the
-    # messages area) — so the post-run tree could never show the disabled input.
-    # The disabled decision (_resolve_chat_input_state) depends solely on
-    # is_generating_answer, so this exercises the exact state machine without
-    # entering the streaming loop. The real user-message streaming path is
-    # covered by test_streamed_answer_renders_thought_expander_and_reenables.
+    # Generating → still enabled so the native stop button (submit_mode="stop")
+    # can render in place of the send button (UI입력통합). The disabled decision
+    # (_resolve_chat_input_state) depends solely on is_generating_answer, so this
+    # exercises the exact state machine without entering the streaming loop. The
+    # real user-message streaming path is covered by
+    # test_streamed_answer_renders_thought_expander_and_reenables.
     SessionManager.add_message("assistant", "준비 완료", session_id=sid)
     SessionManager.set("is_generating_answer", True, sid)
     at.run(timeout=_RUN_TIMEOUT)
 
-    assert at.chat_input[0].disabled is True
+    assert at.chat_input[0].disabled is False
     assert not at.exception
 
     # Back to idle → enabled

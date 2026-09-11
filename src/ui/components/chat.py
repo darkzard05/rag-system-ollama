@@ -26,6 +26,12 @@ from common.utils import (
 )
 from core.session import SessionManager
 from ui.components.common import AVATARS, status_line, ui_error
+from ui.components.streaming import (
+    _AUX_STATE_KEY,
+    _clear_aux_state,
+    _content_generator,
+    _finalize_pdf_side_effects,
+)
 from ui.widget_keys import MAIN_CHAT_INPUT_KEY
 
 logger = logging.getLogger(__name__)
@@ -248,7 +254,7 @@ def _render_unified_timeline(current_sid: str) -> None:
                 # 정상/오류 경로는 이미 False로 리셋하므로 가드로 no-op 처리되고,
                 # 비정상 탈출 시에만 강제 리셋해 입력창 고착을 막는다.
                 try:
-                    _run_active_stream_in_timeline(
+                    _render_streaming_with_write_stream(
                         msg, current_sid, query=msg.get("query", "")
                     )
                 finally:
@@ -365,7 +371,7 @@ def _resolve_chat_input_state(sid: str) -> tuple[str, bool]:
     is_swapping = bool(SessionManager.get("is_swapping_model", False, sid))
 
     if is_generating:
-        return "AI is generating your answer...", True
+        return "AI가 답변을 생성 중입니다...", False
     if is_swapping:
         return "Switching models, please wait...", True
     if not is_ready:
@@ -388,10 +394,13 @@ def render_chat_input_area() -> None:
     input_placeholder, input_disabled = _resolve_chat_input_state(current_sid)
 
     user_query = st.chat_input(
-        input_placeholder, disabled=input_disabled, key=MAIN_CHAT_INPUT_KEY
+        input_placeholder,
+        disabled=False,
+        key=MAIN_CHAT_INPUT_KEY,
+        submit_mode="stop",
     )
 
-    if user_query and not input_disabled:
+    if user_query:
         query_text = user_query.strip()
         if query_text:
             _t_submit = time.perf_counter()
@@ -570,6 +579,73 @@ def _run_active_stream_in_timeline(
     # 브랜치를 타며 입력창도 is_generating_answer=False에 맞춰 정상 활성화된다.
     _render_aux()
     st.rerun()
+
+
+def _render_streaming_with_write_stream(
+    msg: dict[str, Any], current_sid: str, query: str
+) -> None:
+    """st.write_stream 기반 스트리밍 렌더 (비블로킹).
+
+    텍스트는 ``st.write_stream``으로 표시하고, 부가 정보(thought/metrics/
+    citations)는 완료 후 렌더링한다. ``submit_mode="stop"``과 호환되어
+    사용자가 중지 시 부분 응답이 표시되고 영속화된다.
+    """
+    msg_id = msg.get("msg_id", "")
+    model_name = SessionManager.get("last_selected_model", session_id=current_sid) or ""
+
+    with st.chat_message("assistant", avatar=AVATARS["assistant"]):
+        # st.write_stream — 스트리밍 텍스트 표시
+        response = None
+        try:
+            response = st.write_stream(
+                _content_generator(query, model_name, current_sid, msg_id),
+            )
+        except Exception as exc:
+            response = f"오류가 발생했습니다: {exc}"
+
+        # aux state 읽기 후 즉시 정리 (잔여 데이터 방지)
+        aux_state = SessionManager.get(_AUX_STATE_KEY, {}, current_sid) or {}
+        _clear_aux_state(current_sid)
+
+        # expander는 chat_message 블록 안에서 렌더
+        render_generation_expander(
+            {
+                "thought": aux_state.get("thought", ""),
+                "documents": aux_state.get("documents", []),
+                "citations": aux_state.get("citations", []),
+                "metrics": aux_state.get("metrics", {}),
+                "model": model_name,
+                "process_steps": aux_state.get("process_steps", [])[-10:],
+                "cancelled": bool(
+                    SessionManager.get("generation_cancel", False, current_sid)
+                ),
+                "msg_id": msg_id,
+            },
+            expanded=False,
+            generating=False,
+        )
+
+    # chat_message 블록 바깥 — 메시지 영속화
+    cancelled = bool(SessionManager.get("generation_cancel", False, current_sid))
+    error_text = aux_state.get("error")
+    SessionManager.add_message(
+        "assistant",
+        str(response) if response else "",
+        msg_type="general",
+        msg_id=msg_id,
+        thought=aux_state.get("thought", ""),
+        documents=aux_state.get("documents", []),
+        metrics=aux_state.get("metrics", {}),
+        citations=aux_state.get("citations", []),
+        process_steps=aux_state.get("process_steps", [])[-10:],
+        processed_content=None,
+        cancelled=cancelled,
+        error=_friendly_stream_error(Exception(error_text)) if error_text else None,
+        session_id=current_sid,
+    )
+    SessionManager.set("is_generating_answer", False, current_sid=current_sid)
+    SessionManager.set("generation_cancel", False, current_sid=current_sid)
+    _finalize_pdf_side_effects(current_sid, msg_id)
 
 
 # isort: off

@@ -3,8 +3,6 @@ Sidebar settings and management component.
 (Accessibility: CSS classes instead of label_visibility="collapsed")
 """
 
-import functools
-
 import streamlit as st
 
 from common.config import (
@@ -17,21 +15,6 @@ from core.session import SessionManager
 def request_generation_stop(sid: str) -> None:
     """생성 중인 답변을 중단하도록 중단 플래그를 세팅한다 (단일 소스)."""
     SessionManager.set("generation_cancel", True, session_id=sid)
-
-
-@st.fragment(run_every=1.5)
-def render_stop_generation_fragment() -> None:
-    """생성 중일 때 사이드바에 중지 버튼을 렌더한다 (1.5초 폴링 fragment)."""
-    if not SessionManager.get("is_generating_answer", False):
-        return
-    sid = SessionManager.get_session_id()
-    st.button(
-        "⏹ 중지",
-        key="stop_generation_btn",
-        type="primary",
-        on_click=functools.partial(request_generation_stop, sid),
-        use_container_width=True,
-    )
 
 
 def _render_sidebar_logo():
@@ -61,7 +44,6 @@ def render_settings_content(
 ):
     """Render the settings content (callable outside the sidebar)."""
     _render_sidebar_logo()
-    render_stop_generation_fragment()
     _render_settings_internal(
         file_uploader_callback,
         model_selector_callback,

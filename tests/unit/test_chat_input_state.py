@@ -6,7 +6,7 @@ Phase B: 4분기 → 3분기 (생성 중 / 미준비 / 준비됨) 단순화에 �
 from core.session import SessionManager
 from ui.components.chat import _resolve_chat_input_state
 
-_PLACEHOLDER_GENERATING = "AI is generating your answer..."
+_PLACEHOLDER_GENERATING = "AI가 답변을 생성 중입니다..."
 _PLACEHOLDER_NOT_READY = "Upload a PDF and ask a question"
 _PLACEHOLDER_READY = "Ask a follow-up question..."
 
@@ -24,14 +24,15 @@ def _make_ready(sid: str) -> None:
     SessionManager.set("pdf_processing_error", None, sid)
 
 
-def test_generating_disables_input():
+def test_generating_enables_input_for_stop_button():
+    """생성 중에도 disabled=False를 유지하여 submit_mode=stop의 중지 버튼 표시를 보장한다."""
     sid = "input_state_gen"
     _reset_session(sid)
     SessionManager.set("is_generating_answer", True, sid)
 
     placeholder, disabled = _resolve_chat_input_state(sid)
 
-    assert disabled is True
+    assert disabled is False
     assert placeholder == _PLACEHOLDER_GENERATING
 
 
