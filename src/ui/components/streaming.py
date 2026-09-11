@@ -6,8 +6,9 @@
   AsyncWorker 루프를 공유하지 않아 스트림이 매달려도 빌드 등이 정지되지 않는다.
 - consume_stream_into_message: ``stream_chunks``를 단일 script run 안에서
   동기 소비해 어시스턴트 메시지를 영속화한다 (백그라운드 스레드 없음).
-  content/thought/documents/metrics/citations 누적, raw_json의 final_answer
-  추출, 사용자 중단(cancelled) 감지, PDF 주석 반영을 포함한다.
+  ``api.stream_events.chunk_to_stream_events`` 공유 매핑을 통해 여섯 가지
+  표준 이벤트 종류(status/message/thought/sources/citations/metrics)를
+  통일적으로 처리한다.
 - _finalize_pdf_side_effects: 완료 턴의 PDF 주석 반영을 담당한다.
 """
 
@@ -24,6 +25,7 @@ from typing import Any
 
 from streamlit.runtime.scriptrunner import add_script_run_ctx
 
+from api.stream_events import chunk_to_stream_events
 from api.streaming_handler import StreamChunk, get_streaming_handler
 from common.config import (
     MSG_ERROR_OLLAMA_NOT_RUNNING,
@@ -303,6 +305,36 @@ def _recover_final_answer(blob: str) -> str | None:
     return value.strip()
 
 
+class _FinalAnswerExtractor:
+    """structured 모드 raw_json 청크 → final_answer 증분 추출 헬퍼.
+
+    consume_stream_into_message / _content_generator / stream_content 세
+    소비자가 공유한다. feed(content)마다 내부 blob에 원문을 순서대로
+    누적하고, _extract_final_answer_delta의 상태 머신(스캔 위치 + 키 위치
+    캐시)으로 새로 디코드된 delta만 반환한다. 모든 delta의 연결(join)은
+    final_answer 값과 정확히 같다(순서 불변, \\uXXXX/CJK 디코드 포함).
+    스트림/제너레이터당 인스턴스 1개를 만들고 chunk마다 feed() 호출.
+    """
+
+    def __init__(self) -> None:
+        self._parts: list[str] = []
+        self._scan_pos = 0
+        self._key_pos: list[int] = [-1]
+
+    def feed(self, content: str) -> str:
+        """raw_json 청크의 content를 누적하고 새 final_answer delta를 반환.
+
+        키 미발견 등 아직 출력할 문자가 없으면 ""를 반환한다. 호출자는
+        yield 직전에 ``if delta:`` 가드로 빈 문자열을 걸러야 한다.
+        """
+        self._parts.append(content)
+        blob = "".join(self._parts)
+        delta, self._scan_pos = _extract_final_answer_delta(
+            blob, self._scan_pos, self._key_pos
+        )
+        return delta
+
+
 def _finalize_pdf_side_effects(sid: str, msg_id: str) -> None:
     """완료된 스트리밍 턴의 PDF 주석을 반영합니다.
 
@@ -526,14 +558,23 @@ def stream_content(query: str, model_name: str, session_id: str) -> Iterator[str
 
     표준 스트리밍 패턴(``st.chat_message`` 안에서 ``st.write_stream``)에서
     토큰 본문만 점진적으로 흘리기 위해 ``stream_chunks``의 ``content``
-    델타만 yield 한다. thought/documents/metrics/citations 같은 부가 정보는
-    호출자가 별도로 소비할 수 있도록 ``stream_chunks``를 직접 사용한다.
+    델타만 yield 한다. structured 모드에서는 final_answer delta만 yield —
+    원시 JSON은 절대 흘러나오지 않는다. thought/documents/metrics/citations
+    같은 부가 정보는 호출자가 별도로 소비할 수 있도록 ``stream_chunks``를
+    직접 사용한다. 키(``final_answer``) 도착 전에는 아무것도 yield하지
+    않는다(delta 도착 지연).
 
     취소/타임아웃 가드는 ``stream_chunks`` 내부 큐 브릿지가 그대로 보장한다.
     """
+    raw_json_extractor = _FinalAnswerExtractor()
     for chunk in stream_chunks(query, model_name, session_id):
         if chunk.content:
-            yield chunk.content
+            if getattr(chunk, "raw_json", False):
+                delta = raw_json_extractor.feed(chunk.content)
+                if delta:
+                    yield delta
+            else:
+                yield chunk.content
 
 
 def consume_stream_into_message(
@@ -595,9 +636,7 @@ def consume_stream_into_message(
     metrics: dict[str, Any] = {}
     citations: list[dict[str, Any]] = []
     process_steps: list[str] = []
-    raw_json_parts: list[str] = []
-    fa_scan_pos = 0
-    fa_key_pos: list[int] = [-1]
+    raw_json_extractor = _FinalAnswerExtractor()
 
     def _emit(cancelled: bool) -> None:
         if on_chunk is not None:
@@ -619,41 +658,30 @@ def consume_stream_into_message(
             if SessionManager.get("generation_cancel", False, session_id=sid):
                 logger.info("[CHAT] 사용자가 답변 생성을 중단했습니다.")
                 break
-            if not chunk.content:
-                if chunk.thought:
-                    thought += chunk.thought
-                # 상태(파이프라인 단계) 청크 누적 → 완료 시 process_steps에 보존.
-                if chunk.status:
-                    step = chunk.status
+            if chunk.content:
+                # content는 raw_json/final_answer 처리 때문에
+                # chunk.content로 직접 누적한다 (message 이벤트는 SSE 경로
+                # 전용; 여기선 누적 목적으로만 사용).
+                if getattr(chunk, "raw_json", False):
+                    delta = raw_json_extractor.feed(chunk.content)
+                    accumulated += delta
+                else:
+                    accumulated += chunk.content
+            for ev in chunk_to_stream_events(chunk):
+                if ev.type == "status":
+                    step = ev.payload["message"]
                     if not process_steps or process_steps[-1] != step:
                         process_steps.append(step)
-                _meta = chunk.metadata or {}
-                if _meta.get("documents"):
-                    documents = _meta["documents"]
-                if chunk.performance:
-                    metrics = chunk.performance
-                if getattr(chunk, "citations", None):
-                    citations = chunk.citations or []
-                _emit(False)
-                continue
-            if getattr(chunk, "raw_json", False):
-                raw_json_parts.append(chunk.content)
-                blob = "".join(raw_json_parts)
-                delta, fa_scan_pos = _extract_final_answer_delta(
-                    blob, fa_scan_pos, fa_key_pos
-                )
-                accumulated += delta
-            else:
-                accumulated += chunk.content
-            if chunk.thought:
-                thought += chunk.thought
-            _meta = chunk.metadata or {}
-            if _meta.get("documents"):
-                documents = _meta["documents"]
-            if chunk.performance:
-                metrics = chunk.performance
-            if getattr(chunk, "citations", None):
-                citations = chunk.citations or []
+                elif ev.type == "thought":
+                    thought += ev.payload["content"]
+                elif ev.type == "sources":
+                    if ev.payload["documents"]:
+                        documents = ev.payload["documents"]
+                elif ev.type == "metrics":
+                    metrics = ev.payload["metrics"]
+                elif ev.type == "citations":
+                    citations = ev.payload["citations"]
+                # "message"는 위 content 분기에서 이미 처리됨 (payload 미사용)
             _emit(False)
     except Exception as exc:  # noqa: BLE001 - 스트림 레벨 오류를 메시지에 보존
         logger.exception("[CHAT] 스트리밍 소비 오류: %s", exc)
@@ -703,3 +731,115 @@ def _target_message_dict(sid: str, msg_id: str) -> dict[str, Any] | None:
     """세션에서 msg_id에 해당하는 메시지 dict를 반환한다."""
     messages = SessionManager.get_messages(session_id=sid)
     return next((m for m in messages if m.get("msg_id") == msg_id), None)
+
+
+# ---------------------------------------------------------------------------
+# st.write_stream 호환 content 제너레이터 + 부가 정보 누적
+# ---------------------------------------------------------------------------
+
+_AUX_STATE_KEY = "stream_active_aux"
+
+
+def _write_aux_state(sid: str, state: dict) -> None:
+    """세션에 스트리밍 부가 정보(thought/metrics 등)를 기록한다."""
+    SessionManager.set(_AUX_STATE_KEY, state, session_id=sid)
+
+
+def _clear_aux_state(sid: str) -> None:
+    """세션의 스트리밍 부가 정보를 정리한다."""
+    SessionManager.set(_AUX_STATE_KEY, None, session_id=sid)
+
+
+def _content_generator(
+    query: str, model_name: str, sid: str, msg_id: str
+) -> Iterator[str]:
+    """``st.write_stream`` 호환 content 제너레이터 + 부가 정보 누적.
+
+    스트리밍 중 content만 yield하고, thought/metrics/citations 등은
+    session_state에 기록하여 완료 후 렌더링에 사용한다.
+    ``generation_cancel`` 시에도 부분 응답을 영속화한다.
+    """
+    accumulated = ""
+    thought = ""
+    documents: list[Any] = []
+    metrics: dict[str, Any] = {}
+    citations: list[dict[str, Any]] = []
+    process_steps: list[str] = []
+    raw_json_extractor = _FinalAnswerExtractor()
+
+    # 초기 aux state 기록 — 첫 청크 전 중단 시 빈 expander 방지
+    _write_aux_state(
+        sid,
+        {
+            "thought": "",
+            "documents": [],
+            "metrics": {},
+            "citations": [],
+            "process_steps": [],
+            "complete": False,
+        },
+    )
+
+    try:
+        for chunk in stream_chunks(query, model_name, sid):
+            if SessionManager.get("generation_cancel", False, session_id=sid):
+                break
+            if chunk.content:
+                if getattr(chunk, "raw_json", False):
+                    delta = raw_json_extractor.feed(chunk.content)
+                    accumulated += delta
+                    if delta:
+                        yield delta
+                else:
+                    accumulated += chunk.content
+                    yield chunk.content
+            if chunk.thought:
+                thought += chunk.thought
+            if chunk.status and (
+                not process_steps or process_steps[-1] != chunk.status
+            ):
+                process_steps.append(chunk.status)
+            meta = chunk.metadata or {}
+            if meta.get("documents"):
+                documents = meta["documents"]
+            if chunk.performance:
+                metrics = chunk.performance
+            if getattr(chunk, "citations", None):
+                citations = chunk.citations or []
+            _write_aux_state(
+                sid,
+                {
+                    "thought": thought,
+                    "documents": documents,
+                    "metrics": metrics,
+                    "citations": citations,
+                    "process_steps": process_steps,
+                    "complete": False,
+                },
+            )
+    except Exception as exc:
+        _write_aux_state(
+            sid,
+            {
+                "thought": thought,
+                "documents": documents,
+                "metrics": metrics,
+                "citations": citations,
+                "process_steps": process_steps,
+                "error": str(exc),
+                "complete": False,
+            },
+        )
+        raise
+    finally:
+        _write_aux_state(
+            sid,
+            {
+                "thought": thought,
+                "documents": documents,
+                "metrics": metrics,
+                "citations": citations,
+                "process_steps": process_steps,
+                "complete": True,
+            },
+        )
