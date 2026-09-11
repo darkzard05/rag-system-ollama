@@ -299,7 +299,6 @@ rag:
         {
           "type": "object",
           "properties": {
-            "reasoning": {"type": "string", "description": "단계별 추론 과정"},
             "final_answer": {"type": "string", "description": "최종 사용자 답변"},
             "citations": {
               "type": "array",
@@ -317,7 +316,7 @@ rag:
             },
             "confidence": {"type": "number", "minimum": 0.0, "maximum": 1.0, "default": 0.8, "description": "답변 신뢰도 (0.0-1.0)"}
           },
-          "required": ["reasoning", "final_answer", "citations", "confidence"],
+          "required": ["final_answer", "citations", "confidence"],
           "additionalProperties": false
         }
         </JSON_Schema>
@@ -329,7 +328,7 @@ rag:
         [doc:0] [section:모델 구조] [page:3] [score:0.95] DeepSeek-R1은 671B 파라미터를 가진 MoE 모델입니다.
         [doc:1] [section:비교] [page:5] [score:0.87] GPT-4는 1.76T 파라미터로 추정��니다.
         Output:
-        {"reasoning": "문서 0에서 DeepSeek-R1이 671B 파라미터를 가진 MoE 모델임을 확인함. 문서 1은 GPT-4 비교 정보이나 질문 대상은 DeepSeek-R1이므로 문서 0을 근거로 답변함.", "final_answer": "DeepSeek-R1은 671B 파라미터를 가진 MoE(Mixture of Experts) 모델입니다.", "citations": [{"doc_id": 0, "text_span": "671B 파라미터를 가진 MoE 모델입니다", "section": "모델 구조", "page": 3, "score": 0.95}], "confidence": 0.95}
+        {"final_answer": "DeepSeek-R1은 671B 파라미터를 가진 MoE(Mixture of Experts) 모델입니다.", "citations": [{"doc_id": 0, "text_span": "671B 파라미터를 가진 MoE 모델입니다", "section": "모델 구조", "page": 3, "score": 0.95}], "confidence": 0.95}
 
         Example 2:
         Question: "비교 대상 모델들의 파라미터 수 차이는?"
@@ -337,7 +336,7 @@ rag:
         [doc:0] [section:모델 구조] [page:3] [score:0.95] DeepSeek-R1은 671B 파라미터를 가진 MoE 모델입니다.
         [doc:1] [section:비교] [page:5] [score:0.87] GPT-4는 1.76T 파라미터로 추정��니다.
         Output:
-        {"reasoning": "문서 0에서 DeepSeek-R1 671B, 문서 1에서 GPT-4 1.76T 파라미터 확인. 두 모델 간 약 1.09T 파라미터 차이가 남.", "final_answer": "DeepSeek-R1(671B)과 GPT-4(1.76T) 간 약 1.09T 파라미터 차이가 있습니다.", "citations": [{"doc_id": 0, "text_span": "671B 파라미터", "section": "모델 구조", "page": 3, "score": 0.95}, {"doc_id": 1, "text_span": "1.76T 파라미터", "section": "비교", "page": 5, "score": 0.87}], "confidence": 0.9}
+        {"final_answer": "DeepSeek-R1(671B)과 GPT-4(1.76T) 간 약 1.09T 파라미터 차이가 있습니다.", "citations": [{"doc_id": 0, "text_span": "671B 파라미터", "section": "모델 구조", "page": 3, "score": 0.95}, {"doc_id": 1, "text_span": "1.76T 파라미터", "section": "비교", "page": 5, "score": 0.87}], "confidence": 0.9}
         </Few_Shot_Examples>
 
 

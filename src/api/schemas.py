@@ -146,7 +146,6 @@ class Citation(BaseModel):
 class AnswerStructure(BaseModel):
     """구조화된 답변 스키마 (LLM 구조화 출력용)"""
 
-    reasoning: str = Field(description="단계별 추론 과정")
     final_answer: str = Field(description="최종 사용자 답변")
     citations: list[Citation] = Field(
         default_factory=list, description="인용 목록 [doc:N] 참조"

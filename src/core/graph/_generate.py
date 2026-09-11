@@ -514,29 +514,11 @@ async def generate(
             json_str = repaired
         parsed_data = json.loads(json_str)
 
-        # LLM 출력 필드명 매핑: thinking → reasoning (일부 모델 호환성)
-        if "thinking" in parsed_data and "reasoning" not in parsed_data:
-            parsed_data["reasoning"] = parsed_data.pop("thinking")
-            logger.debug("[RAG] [GENERATE] 'thinking' 필드를 'reasoning'으로 매핑함")
-
         parsed_answer = AnswerStructure(**parsed_data)
         logger.info(
             f"[RAG] [GENERATE] 구조화된 답변 파싱 성공: prompt_version={prompt_version}"
         )
 
-        # 구조화된 출력 모드일 때: 파싱된 final_answer를 UI로 스트리밍
-        if (
-            use_structured_output
-            and parsed_answer
-            and parsed_answer.reasoning
-            and writer is not None
-        ):
-            await _dispatch_event(
-                "response_chunk",
-                {"content": "", "thought": parsed_answer.reasoning},
-                writer=writer,
-                config=config,
-            )
         # P3: 인라인 [doc:...] 폴백과 별도로 citations[] 자체를 스트림에 태워
         # 안정적 doc_id 기반 렌더링을 가능케 한다.
         if parsed_answer and writer is not None:
@@ -575,7 +557,6 @@ async def generate(
                     "하이라이팅 좌표 정확도 저하 가능"
                 )
         parsed_answer = AnswerStructure(
-            reasoning=full_thought or "추론 과정 파싱 실패",
             final_answer=recovered.get("final_answer", full_response),
             citations=recovered.get("citations", []),
             confidence=0.5,
@@ -585,7 +566,7 @@ async def generate(
     output_tokens = last_metadata.get("eval_count", 0)
     result: dict[str, Any] = {
         "response": parsed_answer.final_answer if parsed_answer else full_response,
-        "thought": parsed_answer.reasoning if parsed_answer else full_thought,
+        "thought": full_thought,
         "citations": [c.model_dump() for c in parsed_answer.citations]
         if parsed_answer
         else [],
