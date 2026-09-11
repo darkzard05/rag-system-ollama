@@ -3,7 +3,7 @@ Todo 1 검증: AstroStream 원시 JSON(raw_json) 라이브 스트리밍 경로.
 
 - (a) 구조화 모드(PROMPT_TEMPLATES_CONFIG에 "structured_output" 존재)에서 LLM이
      내보내는 원시 JSON 토큰들이 `raw_json=True` 플래그와 함께 실시간(라이브) 전송되는지
-- (b) 파싱 전 원시 토큰 emit이 파싱 후 one-shot reasoning emit보다 먼저 발생하는지(타이밍)
+- (b) 강제 reasoning 제거 후 thought 재-emit이 없고 원시 토큰만 emit되는지
 - (c) JSON 파싱 실패 시 `parse_failed=True` 가 반환되고 예외가 새어나오지 않는지
 
 소스 수정 없이 `core.graph._glue.generate` 경로의 모듈 레벨 `adispatch_custom_event` 를
@@ -55,13 +55,12 @@ async def test_raw_json_live_5_tokens():
     tokens = [
         '{"final_answer":"Hel',
         "lo wor",
-        'ld","reasoning',
-        '":"r","confidence',
-        '":0.9}',
+        'ld","conf',
+        'idence":0.9',
+        "}",
     ]
     assert json.loads("".join(tokens)) == {
         "final_answer": "Hello world",
-        "reasoning": "r",
         "confidence": 0.9,
     }
 
@@ -93,30 +92,20 @@ async def test_raw_json_live_5_tokens():
         )
 
     responses = [c for c in captured if c["name"] == "response_chunk"]
-    assert len(responses) == 6, (
-        f"expected 6 response_chunk (5 raw + 1 thought), got {len(responses)}"
+    assert len(responses) == 5, (
+        f"expected 5 response_chunk (raw only, no thought re-emit), got {len(responses)}"
     )
 
-    raw_events = responses[:5]
-    thought_event = responses[5]
-
     # 5개 원시 emit 이 각각 raw_json=True, content==토큰
-    for i, ev in enumerate(raw_events):
+    for i, ev in enumerate(responses):
         assert ev["data"]["raw_json"] is True, f"raw emit {i} missing raw_json flag"
         assert ev["data"]["content"] == tokens[i], f"raw emit {i} content mismatch"
         assert ev["data"]["thought"] == "", f"raw emit {i} must not carry thought"
 
-    # one-shot reasoning emit: content="" / thought == parsed reasoning "r"
-    assert thought_event["data"]["content"] == ""
-    assert thought_event["data"]["thought"] == "r"
-
-    # 타이밍: 첫 원시 emit 이 completion(thought) emit 보다 먼저
-    first_raw_ts = raw_events[0]["ts"]
-    completion_ts = thought_event["ts"]
-    assert first_raw_ts < completion_ts, "raw emits must precede completion emit"
-
+    # 네이티브 thinking 추출이 없는 LLM이라 thought는 빈 상태로 영속된다.
     assert result["parse_failed"] is False
     assert result["response"] == "Hello world"
+    assert result["thought"] == ""
 
 
 @pytest.mark.asyncio

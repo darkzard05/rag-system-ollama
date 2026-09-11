@@ -4,8 +4,8 @@ Todo 4 검증: 사고(thought) 라이브 스트리밍 경로.
 - (a) 비구조화 모드(PROMPT_TEMPLATES_CONFIG={})에서 LLM이 thought/content 를 분리
      산출할 때, thought 가 content 와 인터리브되어 라이브 전송되는지
      (벌크 duplicate reasoning emit 가 없어야 함)
-- (b) 구조화 모드에서 스트리밍 중 thought 채널은 비어있고, 완료 시점에 단 1회의
-     one-shot reasoning emit(content="", thought==parsed.reasoning) 만 발생하는지
+- (b) 구조화 모드에서 스트리밍 중 thought 채널은 비어있고, 강제 reasoning 제거로
+     완료 시점에도 one-shot reasoning emit 이 없이 원시 토큰만 전송되는지
      (원시 JSON 토큰이 thought 를 오염시키지 않아야 함)
 
 소스 수정 없이 `core.graph._glue.generate` 경로의 모듈 레벨 `adispatch_custom_event` 를
@@ -127,19 +127,22 @@ async def test_non_structured_thought_interleaved():
 
 
 @pytest.mark.asyncio
-async def test_structured_thought_one_shot():
-    """구조화 모드: 스트리밍 중 thought 비어있고 완료 시 단 1회 one-shot reasoning emit."""
+async def test_structured_thought_stays_empty():
+    """구조화 모드: thought 채널이 비어있고 완료 시 thought 재-emit이 없다."""
     captured = _Captured()
     prompt_config = {"structured_output": "CTX:{context} Q:{query}"}
 
-    # 원시 JSON 에 reasoning 필드 포함
+    # 강제 reasoning 없는 원시 JSON
     tokens = [
         '{"final_answer":"Hel',
-        'lo world","reasoning',
-        '":"step by step","confidence',
-        '":0.9}',
+        "lo wor",
+        'ld","confidence":',
+        "0.9}",
     ]
-    assert json.loads("".join(tokens))["reasoning"] == "step by step"
+    assert json.loads("".join(tokens)) == {
+        "final_answer": "Hello world",
+        "confidence": 0.9,
+    }
 
     llm = MagicMock()
     llm.bind.return_value = llm
@@ -167,22 +170,18 @@ async def test_structured_thought_one_shot():
         )
 
     responses = [c for c in captured if c["name"] == "response_chunk"]
-    assert len(responses) == 5, (
-        f"expected 5 response_chunk (4 raw + 1 thought), got {len(responses)}"
+    assert len(responses) == len(tokens), (
+        f"expected {len(tokens)} response_chunk (raw only, no thought re-emit), "
+        f"got {len(responses)}"
     )
 
-    raw_events = responses[:4]
-    thought_event = responses[4]
-
-    # 스트리밍 중 thought 채널은 비어있어야 함 (원시 JSON 이 thought 를 오염 X)
-    for i, ev in enumerate(raw_events):
+    # 스트리밍 내내 thought 채널은 비어있어야 함 (원시 JSON 이 thought 를 오염 X)
+    for i, ev in enumerate(responses):
         assert ev["data"]["thought"] == "", f"raw emit {i} must not carry thought"
         assert ev["data"]["raw_json"] is True
         assert ev["data"]["content"] == tokens[i]
 
-    # 완료 시점 정확히 1회의 one-shot thought emit
-    assert thought_event["data"]["content"] == ""
-    assert thought_event["data"]["thought"] == "step by step"
-
+    # 강제 reasoning 제거 후 thought 는 빈 상태로 영속된다 (native 추출 없는 LLM).
     assert result["parse_failed"] is False
     assert result["response"] == "Hello world"
+    assert result["thought"] == ""
