@@ -115,3 +115,32 @@ def test_malformed_dict_token_self_cleans(
     assert state is not None
     assert state["current_page"] == 2
     assert SessionManager.get("pdf_target_page", session_id=SID) is None
+
+
+def test_token_cleaned_when_no_pdf_loaded(
+    pdf_state: dict[str, object],
+) -> None:
+    """PDF 미로드 시 토큰은 self-clean 되어 이후 로드 때 재점프하지 않는다."""
+    SessionManager.set("pdf_file_path", None, SID)
+    _set_token({"page": 5, "source": "manual", "ts": time.time()})
+    pdf_state["pdf_target_page"] = "token-in-session-state"
+
+    state = viewer_module._resolve_pdf_state()
+    assert state is None
+    assert SessionManager.get("pdf_target_page", session_id=SID) is None
+    assert "pdf_target_page" not in pdf_state
+
+
+def test_token_cleaned_when_total_pages_unavailable(
+    pdf_state: dict[str, object],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """파일 손상 등으로 페이지 수를 알 수 없어도 토큰은 self-clean 된다."""
+    monkeypatch.setattr(viewer_module, "_get_pdf_total_pages", lambda path: None)
+    _set_token({"page": 5, "source": "manual", "ts": time.time()})
+    pdf_state["pdf_target_page"] = "token-in-session-state"
+
+    state = viewer_module._resolve_pdf_state()
+    assert state is None
+    assert SessionManager.get("pdf_target_page", session_id=SID) is None
+    assert "pdf_target_page" not in pdf_state

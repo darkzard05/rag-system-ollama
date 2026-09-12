@@ -152,6 +152,10 @@ def _resolve_pdf_state() -> dict | None:
     """
     pdf_path_raw = SessionManager.get("pdf_file_path")
     if not pdf_path_raw:
+        # PDF를 소비할 수 없는 상태: 일회성 점프 토큰이 남아 이후 PDF 로드 시
+        # 옛 문서 페이지로 자동 점프하지 않도록 self-clean 한다.
+        SessionManager.delete(PDF_TARGET_PAGE_KEY)
+        st.session_state.pop(PDF_TARGET_PAGE_KEY, None)
         return None
 
     pdf_path = os.path.abspath(pdf_path_raw)
@@ -166,6 +170,9 @@ def _resolve_pdf_state() -> dict | None:
         total_pages = None
 
     if not total_pages:
+        # 파일 삭제/손상 등으로 페이지 수를 알 수 없음: 토큰 self-clean.
+        SessionManager.delete(PDF_TARGET_PAGE_KEY)
+        st.session_state.pop(PDF_TARGET_PAGE_KEY, None)
         return None
 
     # Handle external page navigation (e.g., from chat references)
