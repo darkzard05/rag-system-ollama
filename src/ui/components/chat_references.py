@@ -115,13 +115,17 @@ def _render_references_content(
         else:
             cols = st.columns(min(len(pages), 5))
             for idx, p in enumerate(pages):
-                clicked = cols[idx % len(cols)].button(
+                # P0 수정: 렌더 단계 인라인 호출(on_page_jump(p))은 진행 중인
+                # rerun에서 이미 인스턴스화된 pdf_nav_input_v6 위젯 키에 대한
+                # 스크립트 페이즈 대입을 유발해 StreamlitAPIException으로 점프가
+                # 실패했다. on_click 콜백으로 위젯키 대입을 콜백 페이즈로 옮긴다.
+                cols[idx % len(cols)].button(
                     f"{p}p",
                     key=jump_key(msg_id, p, idx),
                     use_container_width=True,
+                    on_click=on_page_jump,
+                    args=(int(p),),
                 )
-                if clicked and on_page_jump is not None:
-                    on_page_jump(p)
         rendered = True
 
     # P3: citations[] 기반 doc 점프 (안정 doc_id).
@@ -141,12 +145,15 @@ def _render_references_content(
                         unsafe_allow_html=True,
                     )
                 else:
-                    if st.button(
+                    # P0 수정: 페이지 버튼과 동일 — 렌더 단계 인라인
+                    # _handle_doc_jump(sid) 호출을 on_click 콜백으로 전환.
+                    st.button(
                         f"{idx + 1}. {label}",
                         key=f"pop_doc_{msg_id}_{sid}_{idx}",
                         use_container_width=True,
-                    ):
-                        _handle_doc_jump(sid)
+                        on_click=_handle_doc_jump,
+                        args=(sid,),
+                    )
         rendered = True
     return rendered
 

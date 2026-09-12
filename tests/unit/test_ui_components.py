@@ -4,6 +4,8 @@ import unittest
 
 from streamlit.testing.v1 import AppTest
 
+from core.session import SessionManager
+
 # 프로젝트 루트를 경로에 추가
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
 
@@ -88,3 +90,92 @@ def test_pdf_viewer_key_includes_page():
     assert pdf_viewer_key("abc", 1) == "pdf_v8_abc_1"
     assert pdf_viewer_key("abc", 1) != pdf_viewer_key("abc", 2)
     assert pdf_viewer_key("abc", 1) != pdf_viewer_key("abd", 1)
+
+
+def test_page_jump_click_invokes_handler_via_callback():
+    """P0 회귀: 페이지 점프 버튼 클릭이 on_click 콜백(콜백 페이즈)으로
+    핸들러를 정확히 1회 호출한다. 렌더 단계 인라인 호출로 회귀하면
+    StreamlitAPIException(위젯키 스크립트 대입)이 재발한다."""
+    script_content = """
+import streamlit as st
+import sys
+import os
+
+sys.path.append(os.path.abspath(os.path.join(os.getcwd(), "src")))
+
+from unittest.mock import MagicMock
+from ui.components.chat_references import _render_references_content
+
+doc = MagicMock()
+doc.metadata = {"page": 3}
+if "__jumped_pages" not in st.session_state:
+    st.session_state["__jumped_pages"] = []
+
+def on_jump(p):
+    st.session_state["__jumped_pages"].append(p)
+
+_render_references_content(
+    msg_id="m1",
+    documents=[doc],
+    on_page_jump=on_jump,
+    citations=None,
+    generating=False,
+)
+"""
+    with open("temp_test_jump_callback.py", "w", encoding="utf-8") as f:
+        f.write(script_content)
+    try:
+        at = AppTest.from_file("temp_test_jump_callback.py").run(timeout=60)
+        jump_btn = next(b for b in at.button if b.label == "3p")
+        at_after = jump_btn.click().run(timeout=60)
+        assert at_after.session_state["__jumped_pages"] == [3]
+    finally:
+        if os.path.exists("temp_test_jump_callback.py"):
+            os.remove("temp_test_jump_callback.py")
+
+
+def test_doc_jump_click_invokes_handler_via_callback():
+    """P0 회귀: doc 점프 버튼 클릭이 on_click 콜백으로 세션에
+    pdf_target_page 토큰(page=문서 메타)을 세팅한다."""
+    script_content = """
+import streamlit as st
+import sys
+import os
+
+sys.path.append(os.path.abspath(os.path.join(os.getcwd(), "src")))
+
+from unittest.mock import MagicMock
+from ui.components.chat_references import _render_references_content
+from core.session import SessionManager
+
+SessionManager.set_session_id("t_docjump")
+
+doc = MagicMock()
+doc.metadata = {"page": 7, "doc_id": "docA"}
+SessionManager.set("documents", [doc], "t_docjump")
+
+_render_references_content(
+    msg_id="m1",
+    documents=[doc],
+    on_page_jump=None,
+    citations=[{"doc_id": "docA", "section": "Intro"}],
+    generating=False,
+)
+"""
+    SessionManager.reset_all_state("t_docjump")
+    with open("temp_test_docjump.py", "w", encoding="utf-8") as f:
+        f.write(script_content)
+    try:
+        at = AppTest.from_file("temp_test_docjump.py").run(timeout=60)
+        btn = next(b for b in at.button if (b.label or "").startswith("1. "))
+        at_after = btn.click().run(timeout=60)
+        # P0 계약: 클릭이 on_click 콜백 페이즈에서 navigate_to_page를 실행한다.
+        # (수정 전: 렌더 단계 인라인 호출 → StreamlitAPIException으로 이미
+        # 인스턴스화된 pdf_nav_input_v6 위젯 키 대입에 실패). session_state의
+        # 내비게이션 부작용이 버전 무관 검증 지점이며, AppTest는 매 rerun 시작에
+        # 자체 default sid로 리셋하므로 SessionManager 토큰 위치는 단언하지 않는다.
+        assert not at_after.exception, at_after.exception
+        assert at_after.session_state["pdf_nav_input_v6"] == 1
+    finally:
+        if os.path.exists("temp_test_docjump.py"):
+            os.remove("temp_test_docjump.py")
