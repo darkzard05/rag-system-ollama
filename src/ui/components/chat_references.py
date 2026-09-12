@@ -2,7 +2,6 @@
 
 ``chat.py`` (P3 분리)에서 이동한 참조 전용 렌더 함수들을 모아둔다:
 - ``_handle_page_jump`` / ``_handle_doc_jump`` — 참조 페이지/doc 이동 콜백
-- ``_render_citation_anchors`` — citations[] → 클릭 가능한 출처 앵커
 - ``_extract_reference_pages`` — 문서 메타데이터에서 참조 페이지 추출
 - ``_render_references_content`` — 익스팬더 내 페이지/doc 점프 본문
 - ``render_generation_expander`` — 답변 세부정보(메트릭/단계/참조) 통합 익스팬더
@@ -29,7 +28,6 @@ __all__ = [
     "_extract_reference_pages",
     "_handle_doc_jump",
     "_handle_page_jump",
-    "_render_citation_anchors",
     "_render_references_content",
     "render_generation_expander",
 ]
@@ -71,38 +69,6 @@ def _handle_doc_jump(doc_id: str) -> None:
     navigate_to_page(target_page)
     st.toast("Moving to cited document...")
     st.rerun()
-
-
-def _render_citation_anchors(
-    citations: list[dict[str, Any]], documents: list[Any] | None
-) -> None:
-    """citations[] 배열을 클릭 가능한 출처 앵커로 렌더합니다.
-
-    PRIMARY 소스는 citations[] (안정 doc_id 기반)이며, 인라인 [doc:N] 폴백은
-    apply_tooltips_to_response가 담당합니다. doc_id가 documents에서 실제 문서를
-    가리키면 점프 버튼을 노출합니다.
-    """
-    if not citations:
-        return
-    doc_ids = {doc_stable_id(d) for d in (documents or [])}
-    with st.container():
-        st.caption("Sources")
-        for idx, cit in enumerate(citations):
-            sid = str(cit.get("doc_id", ""))
-            span = cit.get("text_span") or cit.get("section") or f"Source {idx + 1}"
-            label = html.escape(str(span))[:160]
-            if sid in doc_ids:
-                if st.button(
-                    f"{idx + 1}. {label}",
-                    key=f"cit_doc_{sid}_{idx}",
-                    use_container_width=True,
-                ):
-                    _handle_doc_jump(sid)
-            else:
-                st.markdown(
-                    f'<span data-doc-id="{html.escape(sid)}">{idx + 1}. {label}</span>',
-                    unsafe_allow_html=True,
-                )
 
 
 def _extract_reference_pages(documents: list[Any]) -> list[int]:
@@ -249,54 +215,84 @@ def render_generation_expander(
     with st.expander("Answer details", expanded=expanded):
         if generating:
             with st.spinner(status_text):
-                pass  # spinner는 헤더 아래 진행 표시용(본문은 아래 즉시 작성)
+                pass
 
         if not (has_block or documents or citations):
-            # 생성 중인데 아직 표시할 내용이 없으면 진행 캡션만 노출.
             st.caption("Preparing...")
             return
 
-        if steps:
-            st.markdown(" · ".join(steps))
-        if sections:
-            st.caption(" · ".join(sections))
-        if top_scores:
-            st.caption(
-                ", ".join(f"{s['section']} {s['score']:.3f}" for s in top_scores)
-            )
-
-        # 메트릭: Time / Retrieved / Model (UX-3: 기본 접힘 익스팬더 내 수납).
-        parts = []
-        if isinstance(total_time, (int, float)):
-            parts.append(f"Time: {total_time:.1f}s")
-        if retrieved:
-            parts.append(f"Retrieved: {retrieved} chunks")
         model = (
             msg.get("model", "")
             or SessionManager.get("last_selected_model", "")
             or DEFAULT_OLLAMA_MODEL
         )
-        if model:
-            parts.append(f"Model: {model}")
-        if parts:
-            st.caption(status_line(*parts))
 
-        # 네이티브 thinking 없는 모델에는 "없음"을 솔직 표기(생성 중/취소 시 생략).
-        if not cancelled:
-            if thought.strip():
-                st.markdown("**Thinking process**")
-                st.markdown(thought)
-            elif not generating:
-                st.caption("이 모델은 사고 과정을 지원하지 않습니다")
+        has_process = bool(show_thought or steps or top_scores)
+        has_references = bool(documents or citations)
+        has_metrics = bool(total_time or perf.get("total_time") or retrieved or model)
+
+        tab_defs = []
+        if has_process:
+            tab_defs.append("Process")
+        if has_references:
+            tab_defs.append("References")
+        if has_metrics:
+            tab_defs.append("Metrics")
+
+        tabs = st.tabs(tab_defs)
+        tab_idx = 0
+
+        if has_process:
+            with tabs[tab_idx]:
+                if show_thought:
+                    with st.expander("Thought", expanded=False):
+                        st.markdown(thought)
+                if steps:
+                    st.markdown(" · ".join(steps))
+                if top_scores:
+                    st.caption(
+                        ", ".join(
+                            f"{s['section']} {s['score']:.3f}" for s in top_scores
+                        )
+                    )
+            tab_idx += 1
+
+        if has_references:
+            with tabs[tab_idx]:
+                _render_references_content(
+                    msg_id,
+                    documents,
+                    on_page_jump=_handle_page_jump,
+                    citations=citations,
+                    generating=generating,
+                )
+            tab_idx += 1
+
+        if has_metrics:
+            with tabs[tab_idx]:
+                parts = []
+                final_time = total_time if total_time else perf.get("total_time", 0)
+                if isinstance(final_time, (int, float)) and final_time > 0:
+                    parts.append(f"Time: {final_time:.1f}s")
+                model = (
+                    msg.get("model", "")
+                    or SessionManager.get("last_selected_model", "")
+                    or DEFAULT_OLLAMA_MODEL
+                )
+                if model:
+                    parts.append(f"Model: {model}")
+                if parts:
+                    st.caption(status_line(*parts))
+            tab_idx += 1
 
         # 참조(페이지/doc 점프) — 기존 References popover 내용을 익스팬더 안으로 통합.
-        if documents or citations:
-            st.divider()
-            st.caption("References")
-            _render_references_content(
-                msg_id,
-                documents,
-                on_page_jump=_handle_page_jump,
-                citations=citations,
-                generating=generating,
-            )
+        # if documents or citations:
+        #     st.divider()
+        #     st.caption("References")
+        #     _render_references_content(
+        #         msg_id,
+        #         documents,
+        #         on_page_jump=_handle_page_jump,
+        #         citations=citations,
+        #         generating=generating,
+        #     )

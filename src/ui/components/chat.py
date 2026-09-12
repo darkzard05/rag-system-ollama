@@ -692,7 +692,6 @@ from ui.components.chat_references import (  # noqa: E402
     _extract_reference_pages,
     _handle_doc_jump,
     _handle_page_jump,
-    _render_citation_anchors,
     _render_references_content,
     render_generation_expander,
 )
@@ -715,7 +714,6 @@ __all__ = [
     "_handle_page_jump",
     "_render_build_progress_block",
     "_render_build_progress_fragment",
-    "_render_citation_anchors",
     "_render_doc_context_inline",
     "_render_guidance_panel",
     "_render_references_content",
