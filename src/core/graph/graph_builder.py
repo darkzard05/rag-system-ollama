@@ -28,11 +28,6 @@ from core.graph._grade import (  # noqa: F401 — re-exports for backward compat
     grade_documents,
     rewrite_query,
 )
-from core.graph._grading_glue import (  # noqa: F401 — re-exports for backward compat
-    _add_stage_ms,
-    _reset_stage_timings,
-    _stage_timing_var,
-)
 from core.graph._graph_cache import (  # noqa: F401 — re-exports for backward compat
     _GRAPH_CACHE_KEY,
     _graph_cache,
@@ -40,9 +35,12 @@ from core.graph._graph_cache import (  # noqa: F401 — re-exports for backward 
     delete_graph_thread,
     invalidate_graph_cache,
 )
-from core.graph._graph_utils import (
-    _doc_stable_id,  # noqa: F401 — re-exports for backward compat
-    _sanitize_channel_value,  # noqa: F401 — re-exports for backward compat
+from core.graph._graph_internals import (  # noqa: F401 — re-exports for backward compat
+    _add_stage_ms,
+    _doc_stable_id,
+    _reset_stage_timings,
+    _sanitize_channel_value,
+    _stage_timing_var,
     get_state_attr,
 )
 from core.graph._preprocess import preprocess  # noqa: F401 — re-exports (back-compat)
@@ -80,6 +78,9 @@ logger = logging.getLogger(__name__)
 #   (MAX_CONCURRENT_INFERENCE, _adopt/_cancel/_replay_spec_events,
 #   _spec_generate_events, _spec_overlap_enabled, _SpecEvent), _RE_VERIFY_DOC_CITATION
 #   and _coerce_chunk_content/_estimate_ctx_tokens.
+#
+# Batch 4 (pruning): _graph_utils/_json_utils/_grading_glue merged into a single
+# _graph_internals module; graph_builder re-exports from _graph_internals only.
 #
 # Speculative-overlap safety (IMPORTANT): speculative generate events are buffered
 # via a ContextVar and are NEVER surfaced on the transform route; they only overlap

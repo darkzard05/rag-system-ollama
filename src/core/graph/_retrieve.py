@@ -17,8 +17,7 @@ from api.schemas import AggregatedSearchResult, GraphState
 from common.config import GRADING_CONFIG
 from common.utils import doc_stable_id
 from core.graph._glue import _get_session_id
-from core.graph._grading_glue import _add_stage_ms, _enter_stage
-from core.graph._graph_utils import get_state_attr
+from core.graph._graph_internals import _add_stage_ms, _enter_stage, get_state_attr
 from core.session import SessionManager
 from services.monitoring.performance_monitor import OperationType
 

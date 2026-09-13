@@ -21,8 +21,11 @@ from common.config import (
     VERIFY_PROMPT_CONFIG,
 )
 from core.graph._generate import format_context
-from core.graph._graph_utils import _doc_stable_id, get_state_attr
-from core.graph._json_utils import _strip_json_fence
+from core.graph._graph_internals import (
+    _doc_stable_id,
+    _strip_json_fence,
+    get_state_attr,
+)
 from core.model_loader import ModelManager
 from core.resource_manager import get_resource_manager
 

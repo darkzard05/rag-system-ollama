@@ -14,7 +14,6 @@ from typing import Any
 
 from langchain_core.embeddings import Embeddings
 
-from cache.engine_cache import EngineCacheManager
 from cache.vector_cache import VectorStoreCache
 from common.config import (
     DEFAULT_EMBEDDING_MODEL,
@@ -320,6 +319,11 @@ class PipelineBuilder:
         )
         # 엔진과 file_hash 해시 메타데이터를 일관되게 캐싱합니다.
         # EngineCacheManager.get_engine이 해시 불일치(팬텀 상태)를 검출하게 합니다.
+        # 지연 import: pruning/batch-4 이후 클래스는 core.rag_core 에 있으며,
+        # 모듈 상단 import 는 rag_core 초기화 사이클(pipeline_builder->rag_core)을
+        # 만들 수 있어 사용 시점에 가져온다.
+        from core.rag_core import EngineCacheManager
+
         EngineCacheManager.set_engine(self.session_id, workflow)
 
         if on_progress:

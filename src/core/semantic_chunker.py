@@ -1,19 +1,13 @@
 """
-임베딩 기반 의미론적 텍스트 분할기 — 오케스트레이션 모듈.
+임베딩 기반 의미론적 텍스트 분할기 — 단일 파일 통합 모듈.
 
 이 모듈은 문서를 문장 단위로 우선 분할한 후, 인접 문장 간의 임베딩 유사도를
 계산하여 유사도가 낮은 지점을 경계로 선택합니다. 이를 통해 의미론적으로
 일관성 있는 청크를 생성합니다.
 
-[R2-10] 958줄 모노리스를 관심사별 믹스인 모듈로 분리했습니다.
-본 모듈은 클래스 뼈대 + ``__init__`` + ``split_text``/``split_documents``
-오케스트레이션만 담당합니다.
-
-- ``semantic_chunker_sentences.py``: 문장 분할/리플로우/짧은 문장 병합
-- ``semantic_chunker_embeddings.py``: 임베딩 생성/캐시/거리 계산
-- ``semantic_chunker_breakpoints.py``: 브레이크포인트 탐색/헤더 패턴
-- ``semantic_chunker_merge.py``: 청크 병합/중복제거/그룹화/섹션 제목
-- ``semantic_chunker_metadata.py``: 청크→문서 메타데이터 역매핑
+[R2-10] 배치 3에서 5개 믹스인 하위 모듈을 본 단일 파일로 통합했습니다.
+본 모듈은 전체 청커(문장 분할, 임베딩/거리 계산, 브레이크포인트 탐색, 청크
+병합, 메타데이터 역매핑)를 모두 포함합니다.
 
 공개 API(``EmbeddingBasedSemanticChunker.split_documents``·``_split_sentences``·
 ``__init__`` 시그니처)는 기존과 동일하게 유지되어 외부 import 경로가 그대로
