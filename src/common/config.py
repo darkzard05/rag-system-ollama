@@ -201,10 +201,9 @@ HOST_PRESSURE_THRESHOLD: float = _get_env(
 )
 
 # --- 2. 임베딩 설정 (Embeddings) ---
-_embedding_config = _config.get("embeddings", {})
 DEFAULT_EMBEDDING_MODEL: str = _get_env(
     "DEFAULT_EMBEDDING_MODEL",
-    _embedding_config.get("default_embedding", "nomic-embed-text-v2-moe"),
+    "nomic-embed-text-v2-moe",
 )
 AVAILABLE_EMBEDDING_MODELS: list[str] = [DEFAULT_EMBEDDING_MODEL]
 
@@ -253,7 +252,6 @@ VECTOR_STORE_CACHE_DIR: str = str(
 # prompts 섹션은 config.yml의 rag.prompts 아래에 있음
 _rag_config = _config.get("rag", {})
 _prompts_config = _rag_config.get("prompts") or {}
-PROMPT_COMPONENTS: dict = _prompts_config.get("components", {})
 TOKEN_ESTIMATION_PROXY: str = _prompts_config.get("token_estimation_proxy", "")
 ANALYSIS_PROTOCOL: str = _prompts_config.get("analysis_protocol", "")
 GRADING_CONFIG: dict = _prompts_config.get("grading", {})
@@ -361,44 +359,7 @@ MSG_ERROR_OLLAMA_NOT_RUNNING: str = _ui_config.get(
     "Ollama 서버에 연결할 수 없습니다. 서버가 실행 중인지 확인해 주세요.",
 )
 
-MSG_ERROR_EMBEDDING_FAILED: str = _ui_config.get(
-    "error_embedding_failed",
-    "임베딩 생성에 실패했습니다. 모델 설정이나 입력을 확인해 주세요.",
-)
-
-MSG_ERROR_VECTOR_STORE_FAILED: str = _ui_config.get(
-    "error_vector_store_failed",
-    "벡터 저장소 작업에 실패했습니다. 캐시 디렉터리 권한을 확인해 주세요.",
-)
-
-MSG_ERROR_GENERIC: str = _ui_config.get(
-    "error_generic",
-    "알 수 없는 오류가 발생했습니다. 잠시 후 다시 시도해 주세요.",
-)
-
-MSG_ERROR_PARSE_FAILED: str = _ui_config.get(
-    "error_parse_failed",
-    "문서 파싱에 실패했습니다. 파일 형식을 확인해 주세요.",
-)
-
-# --- 8. 에러 메시지 (Errors) ---
-_error_config = _config.get("errors", {})
-MSG_ERROR_OLLAMA_NOT_RUNNING = _error_config.get(
-    "ollama_not_running", MSG_ERROR_OLLAMA_NOT_RUNNING
-)
-MSG_ERROR_EMBEDDING_FAILED = _error_config.get(
-    "embedding_failed", MSG_ERROR_EMBEDDING_FAILED
-)
-MSG_ERROR_VECTOR_STORE_FAILED = _error_config.get(
-    "vector_store_failed", MSG_ERROR_VECTOR_STORE_FAILED
-)
-MSG_ERROR_GENERIC = _error_config.get("generic", MSG_ERROR_GENERIC)
-MSG_ERROR_PARSE_FAILED = _error_config.get("parse_failed", MSG_ERROR_PARSE_FAILED)
-
 # --- 9. 검증 설정 (Verification) ---
 _verification_config = _config.get("verification", {})
 VERIFICATION_ENABLED: bool = _verification_config.get("enabled", False)
 VERIFICATION_SAMPLE_RATE: float = _verification_config.get("sample_rate", 0.1)
-
-# --- 10. 스트리밍 설정 (Streaming) ---
-_streaming_config = _config.get("streaming", {})
