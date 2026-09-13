@@ -18,13 +18,13 @@ from langgraph.graph import END, START, StateGraph
 
 from api.schemas import GraphState
 from core.graph._generate import (  # noqa: F401 — re-exports for backward compat
+    QUERY_CACHE_ENABLED,
     _apply_ctx_guard,
     _split_injection_docs,
     format_context,
     generate,
 )
 from core.graph._grade import (  # noqa: F401 — re-exports for backward compat
-    UnifiedGradeRewriteResponse,
     grade_documents,
     rewrite_query,
 )
@@ -45,9 +45,7 @@ from core.graph._graph_utils import (
     _sanitize_channel_value,  # noqa: F401 — re-exports for backward compat
     get_state_attr,
 )
-from core.graph._preprocess import (  # noqa: F401 — re-exports for backward compat
-    preprocess,
-)
+from core.graph._preprocess import preprocess  # noqa: F401 — re-exports (back-compat)
 from core.graph._retrieve import (  # noqa: F401 — re-exports for backward compat
     _MIN_CONTEXT_SECTION_LEN,
     _filter_min_section_len,
@@ -69,36 +67,23 @@ logger = logging.getLogger(__name__)
 # ============================================================================
 # Module layout (graph-builder split)
 # ----------------------------------------------------------------------------
-# The LangGraph nodes/helpers now live in ``core.graph`` submodules. The names
-# imported above are re-exported for backward compatibility with the pre-split
-# import surface (``core.graph.graph_builder.<symbol>``):
-#   _graph_cache     — build cache + thread cleanup (delete/invalidate)
-#   _graph_utils     — _doc_stable_id, _sanitize_channel_value, get_state_attr
-#   _grading_glue    — per-stage latency tracing (_add_stage_ms, _emit_query_timing)
-#   _json_utils      — JSON recovery helpers
-#   _speculative_gen — eager/overlap generation machinery (_spec_* types)
-#   _glue            — _get_session_id, _dispatch_event, _start_speculative_generate
-#   _preprocess      — preprocess node
-#   _retrieve        — retrieve_and_rerank + _MIN_CONTEXT_SECTION_LEN helpers
-#   _grade           — grade_documents / rewrite_query + UnifiedGradeRewriteResponse
-#   _generate        — generate + format_context + injection/cache guards
-#   _verify          — verify_answer + cited-doc validation
+# The LangGraph nodes/helpers now live in ``core.graph`` submodules. The imports
+# above are re-exported for backward compatibility with the pre-split import
+# surface (``core.graph.graph_builder.<symbol>``); every re-exported name is
+# consumed by src/, tests/, or scripts/ (verified repo-wide — pruning/batch-2).
+# build_graph() itself only uses the node functions, _graph_cache, and
+# get_state_attr.
+#
+# Removed in earlier pruning batches (zero consumers, unused in build_graph):
+#   _glue helpers, _grading_glue timing emitters, _grade memo helpers,
+#   _graph_cache internals, _json_utils, speculative-overlap control names
+#   (MAX_CONCURRENT_INFERENCE, _adopt/_cancel/_replay_spec_events,
+#   _spec_generate_events, _spec_overlap_enabled, _SpecEvent), _RE_VERIFY_DOC_CITATION
+#   and _coerce_chunk_content/_estimate_ctx_tokens.
 #
 # Speculative-overlap safety (IMPORTANT): speculative generate events are buffered
 # via a ContextVar and are NEVER surfaced on the transform route; they only overlap
 # when MAX_CONCURRENT_INFERENCE > 1.
-#
-# Removed from re-export (no external string references, unused in build_graph):
-#   _glue: _dispatch_event, _get_session_id, _start_speculative_generate
-#   _grading_glue: _emit_query_timing, _enter_stage
-#   _grade: _GRADE_MEMO_KEY, _grade_memo_key, _store_grade_memo
-#   _generate: _coerce_chunk_content, _estimate_ctx_tokens
-#   _graph_cache: _CompiledGraphEntry, _get_graph_cache_loop, _graph_cache_loop_state,
-#       _GraphCache, _GraphCacheLoopState, _run_graph_cache_coro
-#   _speculative_gen: MAX_CONCURRENT_INFERENCE, _adopt_speculative_generate,
-#       _cancel_speculative_generate, _replay_spec_events, _spec_generate_events,
-#       _spec_overlap_enabled, _SpecEvent
-#   _verify: _RE_VERIFY_DOC_CITATION
 # ============================================================================
 
 

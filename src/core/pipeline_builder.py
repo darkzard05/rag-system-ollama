@@ -10,7 +10,6 @@ import copy
 import logging
 import time
 from collections.abc import Callable
-from dataclasses import dataclass
 from typing import Any
 
 from langchain_core.embeddings import Embeddings
@@ -40,19 +39,11 @@ logger = logging.getLogger(__name__)
 
 # --- 모델 프리로드 (1회성, 비차단) ---
 # _register_and_finalize 완료 시 기본 Ollama 모델을 백그라운드로 로드하여
-# 첫 쿼리 시 LLM 콜드 스타트 지연을 완화합니다.
-# 프리로드 상태(락/루프/스케줄 플래그)를 단일 홀더에 캡슐화하여
-# 모듈 전역 mutable 상태의 접근을 한 객체로 모읍니다 (테스트 용이성).
-@dataclass
-class _PreloadState:
-    """모델 프리로드 1회성 스케줄링 상태를 보관하는 모듈 전역 홀더."""
-
-    lock: asyncio.Lock | None = None
-    loop: asyncio.AbstractEventLoop | None = None
-    scheduled: bool = False
-
-
-_preload_state = _PreloadState()
+# 첫 쿼리 시 LLM 콜드 스타트 지연을 완화합니다. 단일 인스턴스 스케줄링 상태는
+# 테스트가 직접 리셋할 수 있도록 모듈 스칼라로 노출합니다.
+_preload_lock: asyncio.Lock | None = None
+_preload_loop: asyncio.AbstractEventLoop | None = None
+_preload_scheduled: bool = False
 
 
 async def _preload_model() -> None:
@@ -96,22 +87,22 @@ async def _schedule_model_preload() -> None:
     """모델 프리로드 태스크를 1회만 스케줄링합니다. (이벤트 루프 변경 시 락 재생성)"""
     # 테스트 환경(CI/유닛)에서는 pytest-asyncio가 테스트마다 이벤트 루프를 교체하므로
     # 프리로드 태스크가 루프 닫힘 시 모델별 Lock을 잡은 채 좌초되어 후속 테스트가
-    # get_or_build의 Lock.acquire에서 영원히 대기하는 데드락을 유발합니다.
-    # 테스트에서는 프리로드 스케줄을 건너뛰어 태스크 생성 자체를 원천 차단합니다.
+    # Lock.acquire에서 영원히 대기하는 데드락을 유발합니다.
+    global _preload_lock, _preload_loop, _preload_scheduled
     if is_test_env():
         logger.info("[RAG] [PRELOAD] 테스트 환경 — 프리로드 스킵")
         return
     current_loop = asyncio.get_running_loop()
-    if _preload_state.lock is not None and _preload_state.loop is current_loop:
-        lock = _preload_state.lock
+    if _preload_lock is not None and _preload_loop is current_loop:
+        lock = _preload_lock
     else:
         lock = asyncio.Lock()
-        _preload_state.lock = lock
-        _preload_state.loop = current_loop
+        _preload_lock = lock
+        _preload_loop = current_loop
     async with lock:
-        if _preload_state.scheduled:
+        if _preload_scheduled:
             return
-        _preload_state.scheduled = True
+        _preload_scheduled = True
         try:
             asyncio.create_task(_preload_model())
         except Exception:

@@ -25,23 +25,8 @@ from services.monitoring.performance_monitor import (
 
 logger = logging.getLogger(__name__)
 
-__all__ = [
-    "AdaptiveStreamingController",
-    "PriorityStreamBuffer",
-    "ServerSentEventsHandler",
-    "StreamChunk",
-    "StreamingMetrics",
-    "StreamingResponseBuilder",
-    "StreamingResponseHandler",
-    "StreamingState",
-    "StreamingStateContext",
-    "StreamingStateMachine",
-    "TokenStreamBuffer",
-    "create_streaming_state_machine",
-    "get_adaptive_controller",
-    "get_streaming_handler",
-    "gzip_compress",
-]
+# Contract: all 15 names must stay importable from `from api.streaming_handler import (...)`.
+__all__ = ["AdaptiveStreamingController", "PriorityStreamBuffer", "ServerSentEventsHandler", "StreamChunk", "StreamingMetrics", "StreamingResponseBuilder", "StreamingResponseHandler", "StreamingState", "StreamingStateContext", "StreamingStateMachine", "TokenStreamBuffer", "create_streaming_state_machine", "get_adaptive_controller", "get_streaming_handler", "gzip_compress"]  # fmt: skip
 
 
 @dataclass
