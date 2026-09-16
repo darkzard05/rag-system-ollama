@@ -24,8 +24,13 @@ from common.config import (
 from common.constants import GRADE_MEMO_KEY
 from common.utils import fast_hash
 from core.graph._glue import _get_session_id, _start_speculative_generate
-from core.graph._grading_glue import _add_stage_ms, _enter_stage
-from core.graph._graph_utils import _doc_stable_id, _safe_invoke, get_state_attr
+from core.graph._graph_internals import (
+    _add_stage_ms,
+    _doc_stable_id,
+    _enter_stage,
+    _safe_invoke,
+    get_state_attr,
+)
 from core.graph._speculative_gen import _cancel_speculative_generate
 from core.model_loader import ModelManager
 from core.session import SessionManager

@@ -32,22 +32,18 @@ from common.config import (
 )
 from common.utils import count_tokens_rough
 from core.graph._glue import _dispatch_event, _get_session_id
-from core.graph._grading_glue import (
-    _emit_query_timing,
-    _enter_stage,
-    _stage_timing_var,
-)
-from core.graph._graph_utils import (
+from core.graph._graph_internals import (
     _doc_stable_id,
+    _emit_query_timing,
     _ensure_query_cache_embedder,
-    _sanitize_channel_value,
-    get_state_attr,
-)
-from core.graph._json_utils import (
+    _enter_stage,
     _extract_partial_answer,
     _recover_citations,
     _repair_json,
+    _sanitize_channel_value,
+    _stage_timing_var,
     _strip_json_fence,
+    get_state_attr,
 )
 from core.graph._speculative_gen import _adopt_speculative_generate
 from core.model_loader import ModelManager

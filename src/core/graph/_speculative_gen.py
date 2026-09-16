@@ -98,12 +98,3 @@ def _cancel_speculative_generate(config: RunnableConfig) -> None:
     spec.task.cancel()
     spec.buffer.clear()
     logger.info("[RAG] [SPEC] route=transform → speculative generate 취소 (미노출)")
-
-
-def _replay_spec_events(
-    buffer_token: contextvars.Token[list[_SpecEvent]],
-) -> list[_SpecEvent]:
-    """Return the buffered speculative events and clear them from the context."""
-    events = _spec_generate_events.get([])
-    _spec_generate_events.reset(buffer_token)
-    return events
