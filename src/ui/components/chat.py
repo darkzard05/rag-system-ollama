@@ -301,15 +301,11 @@ def _render_unified_timeline(current_sid: str) -> None:
 def _draw_streaming_message(msg: dict[str, Any], current_sid: str) -> None:
     """스트리밍 메시지를 그립니다 (단일 pass 렌더).
 
-    표준 리팩터 이후 스트리밍은 별도 스레드/fragment 폴링 없이 단일 script run
-    안에서 라이브 렌더 셸(``_run_active_stream_in_timeline``)이 순수 코어
-    ``consume_stream_into_message``를 ``on_chunk`` 콜백과 함께 동기 소비하며
-    본문을 갱신한다.
-
-    현재 이 함수는 비활성/폴백 브랜치에서 렌더 시점의 msg 스냅샷을 한 번 읽어
-    익스팬더("Answer details")를 먼저 그리고 그 아래에 본문을 그린다. 내용이
-    없는(■ 중지로 영속을 건너뛴) 플레이스홀더는 [UX-3] 조기 분기에서 중립
-    캡션("생성이 중단되었습니다")으로 처리한다.
+    라이브 스트리밍은 ``_render_streaming_with_write_stream``이 ``st.write_stream``
+    기반으로 동일 script run 안에서 처리한다. 이 함수는 그 비활성/폴백 브랜치로,
+    렌더 시점의 msg 스냅샷을 한 번 읽어 익스팬더("Answer details")를 먼저 그리고
+    그 아래에 본문을 그린다. 내용이 없는(■ 중지로 영속을 건너뛴) 플레이스홀더는
+    [UX-3] 조기 분기에서 중립 캡션("생성이 중단되었습니다")으로 처리한다.
     """
     # 스트리밍 중 오류가 실린 메시지는 즉시 표면화
     if msg.get("error"):
@@ -468,208 +464,131 @@ def _friendly_stream_error(exc: Exception) -> str:
     return friendly_error_message(exc)
 
 
-def _run_active_stream_in_timeline(
-    msg: dict[str, Any], current_sid: str, query: str
-) -> None:
-    """활성 스트리밍 메시지를 대화 타임라인 안에서 라이브 렌더한다.
-
-    입력 영역(입력창 아래)이 아니라 메시지 스크롤 컨테이너 내부에 렌더하므로
-    질문 → "Answer details" 익스팬더 → 스트리밍 본문 순서가 보장된다. 렌더와
-    스트림 소비를 동일 script run에서 함께 수행해 깜빡임을 막는다. 실제
-    누적/영속화는 순수 코어 ``consume_stream_into_message``(streaming.py)에
-    위임하고, 이 함수는 ``on_chunk`` 콜백으로 받은 스냅샷으로 본문/익스팬더만
-    그리는 렌더 전용 셸이다.
-    """
-    from ui.components.streaming import consume_stream_into_message
-
-    msg_id = msg.get("msg_id", "")
-    model_name = SessionManager.get("last_selected_model", session_id=current_sid) or ""
-
-    accumulated = ""
-    thought = ""
-    documents: list[Any] = []
-    metrics: dict[str, Any] = {}
-    citations: list[dict[str, Any]] = []
-    process_steps: list[str] = []
-
-    # 라이브 렌더 컨테이너: 매 chunk 본문/익스팬더를 갱신.
-    with st.chat_message("assistant", avatar=AVATARS["assistant"]):
-        aux_ph = st.empty()  # 부가 정보(thought/docs/metrics) 고정 슬롯
-        body_ph = st.empty()  # 본문 고정 슬롯
-
-        def _render_aux() -> None:
-            aux_ph.empty()
-            with aux_ph:
-                render_generation_expander(
-                    {
-                        "thought": thought,
-                        "documents": documents or [],
-                        "citations": citations,
-                        "metrics": metrics,
-                        "model": model_name,
-                        "process_steps": process_steps[-10:],
-                        "cancelled": False,
-                        "msg_id": msg_id,
-                    },
-                    expanded=False,
-                    generating=True,
-                )
-
-        def _persist() -> None:
-            SessionManager.add_message(
-                "assistant",
-                accumulated,
-                msg_type="streaming",
-                msg_id=msg_id,
-                thought=thought,
-                documents=documents,
-                metrics=metrics,
-                citations=citations,
-                processed_content=None,
-                session_id=current_sid,
-            )
-
-        def _on_chunk(snapshot: dict[str, Any]) -> None:
-            """코어가 청크마다 방출하는 스냅샷으로 라이브 본문/익스팬더를 갱신한다."""
-            nonlocal accumulated, thought, documents, metrics, citations, process_steps
-            new_accumulated = snapshot["accumulated"]
-            new_thought = snapshot["thought"]
-            new_documents = snapshot["documents"]
-            new_metrics = snapshot["metrics"]
-            new_citations = snapshot["citations"]
-            new_process_steps = snapshot["process_steps"]
-
-            aux_changed = (
-                new_thought != thought
-                or new_documents != documents
-                or new_metrics != metrics
-                or new_citations != citations
-                or new_process_steps != process_steps
-            )
-            accumulated, thought, documents, metrics, citations, process_steps = (
-                new_accumulated,
-                new_thought,
-                new_documents,
-                new_metrics,
-                new_citations,
-                new_process_steps,
-            )
-            body_ph.markdown(accumulated + " ▌", unsafe_allow_html=False)
-            if aux_changed:
-                _render_aux()
-
-        # 초기 프레임: 빈 본문이라도 익스팬더를 바로 붙여 순서를 고정.
-        _render_aux()
-        body_ph.markdown("", unsafe_allow_html=False)
-        _persist()
-
-        try:
-            consume_stream_into_message(
-                current_sid,
-                query,
-                model_name,
-                msg_id=msg_id,
-                on_chunk=_on_chunk,
-            )
-        except Exception as exc:  # noqa: BLE001 - 스트림 레벨 오류를 사용자에게 노출
-            logger.exception("[CHAT] 스트리밍 중 오류: %s", exc)
-            SessionManager.set("is_generating_answer", False, current_sid=current_sid)
-            SessionManager.add_message(
-                "assistant",
-                accumulated or "",
-                msg_type="general",
-                msg_id=msg_id,
-                thought=thought,
-                documents=documents,
-                metrics=metrics,
-                citations=citations,
-                error=_friendly_stream_error(exc),
-                session_id=current_sid,
-            )
-            # [FIX-STREAM-ERROR-VISIBLE] 실패를 저장만 하고 삼키면 사용자 화면에는
-            # 빈 어시스턴트 버블만 남는다(Momus-APPROVE-WITH-CHANGES 재지향 P0).
-            # 위 add_message는 동일 msg_id로 streaming 플레이스홀더를 대체하므로,
-            # rerun 1회로 타임라인이 error가 담긴 general 브랜치를 렌더하게 한다.
-            # is_generating_answer는 이미 False라 rerun 후 재진입(무한 루프)하지 않는다.
-            st.rerun()
-
-    # 스트림 정상 완료: 코어가 이미 최종 general 메시지 + 플래그 클리어를
-    # 수행했으므로(중복 add_message 금지) 라이브 익스팬더를 최종 메타데이터로
-    # 갱신한 뒤 rerun 1회로 전환을 확정한다. 이 rerun은 타임라인이 general
-    # 브랜치를 타며 입력창도 is_generating_answer=False에 맞춰 정상 활성화된다.
-    _render_aux()
-    st.rerun()
-
-
 def _render_streaming_with_write_stream(
     msg: dict[str, Any], current_sid: str, query: str
 ) -> None:
     """st.write_stream 기반 스트리밍 렌더 (비블로킹).
 
-    텍스트는 ``st.write_stream``으로 표시하고, 부가 정보(thought/metrics/
-    citations)는 완료 후 렌더링한다. ``submit_mode="stop"``과 호환되어
-    사용자가 중지 시 부분 응답이 표시되고 영속화된다.
+    부가 정보(익스팬더)는 텍스트보다 **위**에 표시된다: 진행 중 ``aux_ph``에
+    spinner 포함 익스팬더가 먼저 렌더링되고, ``write_stream``이 그 아래에
+    텍스트를 표시한다. 완료 시 ``finally``에서 최종 메타데이터로 갱신된다.
+    ``submit_mode="stop"``과 호환되어 사용자가 중지 시 부분 응답이 표시되고
+    영속화된다.
     """
     msg_id = msg.get("msg_id", "")
     model_name = SessionManager.get("last_selected_model", session_id=current_sid) or ""
 
-    with st.chat_message("assistant", avatar=AVATARS["assistant"]):
-        # [UX-1/UX-2] 프리토큰/생성 중 라이브 상태 캡션.
-        # write_stream과 동일 script run 안에서 _content_generator의 on_status
-        # 콜백으로 갱신된다 (구 렌더러 aux_ph/body_ph 패턴의 후속 — 폴링 없음).
-        status_ph = st.empty()
-        status_ph.caption("AI가 답변을 생성 중입니다... ▍")
+    aux_state: dict[str, Any] = {}
+    stop_hit = False
+    stop_exc: BaseException | None = None
+    response = None
+    try:
+        with st.chat_message("assistant", avatar=AVATARS["assistant"]):
+            # [UX-1/UX-2] 프리토큰/생성 중 라이브 상태 캡션.
+            # write_stream과 동일 script run 안에서 _content_generator의 on_status
+            # 콜백으로 갱신된다 (구 렌더러 aux_ph/body_ph 패턴의 후속 — 폴링 없음).
+            aux_ph = st.empty()  # 부가 정보(expander) 고정 슬롯 — 텍스트보다 위
+            status_ph = st.empty()
+            status_ph.caption("AI가 답변을 생성 중입니다... ▍")
 
-        def _on_status(status_text: str, elapsed_sec: float) -> None:
-            status_ph.caption(f"{status_text} · {elapsed_sec:.0f}s ▍")
+            def _on_status(status_text: str, elapsed_sec: float) -> None:
+                status_ph.caption(f"{status_text} · {elapsed_sec:.0f}s ▍")
 
-        # st.write_stream — 스트리밍 텍스트 표시
-        response = None
-        try:
-            response = st.write_stream(
-                _content_generator(
-                    query,
-                    model_name,
-                    current_sid,
-                    msg_id,
-                    on_status=_on_status,
-                ),
-            )
-        except Exception as exc:
-            response = f"오류가 발생했습니다: {exc}"
-        finally:
-            # 완료/예외/■ 중지(StopException — BaseException) 모두에서 실행되어
-            # 잘못된 "생성 중" 잔상이 남지 않는다. 플레이스홀더는 매 run의 일시 요소.
-            status_ph.empty()
+            def _on_aux(aux: dict[str, Any]) -> None:
+                # 생성 중 부가 정보(thought/docs/metrics...)가 바뀔 때마다
+                # 고정 슬롯의 익스팬더를 그 자리에서 갱신한다 (task 1 설계대로
+                # generating=True 렌더는 key 없음 — 완료 후 finally에서 keyed
+                # 최종 렌더가 권위적 상태를 대체한다).
+                aux_ph.empty()
+                with aux_ph:
+                    render_generation_expander(
+                        {
+                            "thought": aux.get("thought", ""),
+                            "documents": aux.get("documents", []),
+                            "citations": aux.get("citations", []),
+                            "metrics": aux.get("metrics", {}),
+                            "model": model_name,
+                            "process_steps": (aux.get("process_steps") or [])[-10:],
+                            "cancelled": False,
+                            "msg_id": msg_id,
+                        },
+                        expanded=False,
+                        generating=True,
+                        status_text="AI가 답변을 생성 중입니다... ▍",
+                    )
 
-        # aux state 읽기 후 즉시 정리 (잔여 데이터 방지)
-        aux_state = SessionManager.get(_AUX_STATE_KEY, {}, current_sid) or {}
-        _clear_aux_state(current_sid)
+            aux_ph.empty()
+            with aux_ph:
+                render_generation_expander(
+                    {
+                        "thought": msg.get("thought", ""),
+                        "documents": msg.get("documents") or [],
+                        "citations": msg.get("citations") or [],
+                        "metrics": msg.get("metrics") or {},
+                        "model": model_name,
+                        "process_steps": (msg.get("process_steps") or [])[-10:],
+                        "cancelled": False,
+                        "msg_id": msg_id,
+                    },
+                    expanded=False,
+                    generating=True,
+                    status_text="AI가 답변을 생성 중입니다... ▍",
+                )
 
-        # expander는 chat_message 블록 안에서 렌더
-        render_generation_expander(
-            {
-                "thought": aux_state.get("thought", ""),
-                "documents": aux_state.get("documents", []),
-                "citations": aux_state.get("citations", []),
-                "metrics": aux_state.get("metrics", {}),
-                "model": model_name,
-                "process_steps": aux_state.get("process_steps", [])[-10:],
-                "cancelled": bool(
-                    SessionManager.get("generation_cancel", False, current_sid)
-                ),
-                "msg_id": msg_id,
-            },
-            expanded=False,
-            generating=False,
-        )
+            # st.write_stream — 스트리밍 텍스트 표시
+            response = None
+            try:
+                response = st.write_stream(
+                    _content_generator(
+                        query,
+                        model_name,
+                        current_sid,
+                        msg_id,
+                        on_status=_on_status,
+                        on_aux=_on_aux,
+                    ),
+                )
+            except Exception as exc:
+                response = f"오류가 발생했습니다: {exc}"
+            finally:
+                # 완료/예외/■ 중지(StopException — BaseException) 모두에서 실행되어
+                # 잘못된 "생성 중" 잔상이 남지 않는다. 플레이스홀더는 매 run의 일시 요소.
+                status_ph.empty()
+                aux_state = SessionManager.get(_AUX_STATE_KEY, {}, current_sid) or {}
+                aux_ph.empty()
+                if aux_state:
+                    cancelled = bool(
+                        SessionManager.get("generation_cancel", False, current_sid)
+                    )
+                    with aux_ph:
+                        render_generation_expander(
+                            {
+                                "thought": aux_state.get("thought", ""),
+                                "documents": aux_state.get("documents", []),
+                                "citations": aux_state.get("citations", []),
+                                "metrics": aux_state.get("metrics", {}),
+                                "model": model_name,
+                                "process_steps": aux_state.get("process_steps", [])[
+                                    -10:
+                                ],
+                                "cancelled": cancelled,
+                                "msg_id": msg_id,
+                            },
+                            expanded=False,
+                            generating=False,
+                        )
+    except BaseException as _stop_exc:
+        stop_hit = True  # ■ 사용자 중지 — 부분 응답 영속화 후 재발생
+        stop_exc = _stop_exc
 
     # chat_message 블록 바깥 — 메시지 영속화
-    cancelled = bool(SessionManager.get("generation_cancel", False, current_sid))
+    cancelled = stop_hit or bool(
+        SessionManager.get("generation_cancel", False, current_sid)
+    )
     error_text = aux_state.get("error")
     SessionManager.add_message(
         "assistant",
-        str(response) if response else "",
+        str(response) if response else (aux_state.get("content") or ""),
         msg_type="general",
         msg_id=msg_id,
         thought=aux_state.get("thought", ""),
@@ -684,7 +603,10 @@ def _render_streaming_with_write_stream(
     )
     SessionManager.set("is_generating_answer", False, current_sid=current_sid)
     SessionManager.set("generation_cancel", False, current_sid=current_sid)
+    _clear_aux_state(current_sid)
     _finalize_pdf_side_effects(current_sid, msg_id)
+    if stop_hit and stop_exc is not None:
+        raise stop_exc  # StopException 재발생 — Streamlit 중지 UX 유지
 
 
 # isort: off

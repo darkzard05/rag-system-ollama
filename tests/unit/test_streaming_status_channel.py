@@ -24,6 +24,13 @@ from collections.abc import Iterator
 from typing import Any
 from unittest.mock import MagicMock, patch
 
+import pytest
+
+try:
+    from streamlit.runtime.scriptrunner_utils.exceptions import StopException
+except ImportError:  # pragma: no cover — Streamlit < 1.60 호환
+    from streamlit.runtime.scriptrunner import StopException
+
 os.environ.setdefault("IS_CI_TEST", "true")
 
 import ui.components.chat as chat_mod  # noqa: E402
@@ -220,4 +227,83 @@ def test_status_caption_created_and_cleared_around_write_stream() -> None:
     assert len(messages) == 1
     assert messages[0]["role"] == "assistant"
     assert messages[0]["content"] == _ANSWER_TEXT
+    assert messages[0]["msg_id"] == "mid"
+
+
+def test_content_generator_calls_on_aux_only_on_changes() -> None:
+    """aux-state가 실제로 바뀐 청크에서만 on_aux가 호출된다.
+
+    변경 없는 청크(동일 documents 반복)와 content-only 청크에서는 추가
+    호출이 없고, on_aux 유무가 yield 내용을 바꾸지 않는다 (계약 불변).
+    """
+    _FakeSessionManager.reset()
+    called: list[dict[str, Any]] = []
+
+    chunks = [
+        StreamChunk(content="", thought="생각 중"),
+        StreamChunk(content="", metadata={"documents": [{"doc_id": "d1"}]}),
+        StreamChunk(content="", status="관련 지식 검색 중..."),
+        StreamChunk(content="", metadata={"documents": [{"doc_id": "d1"}]}),
+        StreamChunk(content="본문"),
+    ]
+    with (
+        patch.object(streaming_state_mod, "stream_chunks", return_value=iter(chunks)),
+        patch.object(streaming_state_mod, "SessionManager", _FakeSessionManager),
+    ):
+        out = list(
+            streaming_mod._content_generator("q", "m", "s", "mid", on_aux=called.append)
+        )
+
+    # thought / documents / process_steps 변화 → 3회 호출.
+    assert len(called) == 3
+    assert called[0]["thought"] == "생각 중"
+    assert called[1]["documents"] == [{"doc_id": "d1"}]
+    assert called[2]["process_steps"] == ["관련 지식 검색 중..."]
+    # content-only 청크는 aux 변화가 없어 on_aux 미호출, content만 yield된다.
+    assert out == ["본문"]
+    assert called[2]["complete"] is False
+
+
+def test_stop_exception_persists_partial_answer() -> None:
+    """■ 중지(StopException) 시 부분 응답이 cancelled=True로 영속되고 재발생한다.
+
+    제너레이터 ``finally`` 가 ``_AUX_STATE_KEY`` 에 ``content`` 를 기록한 뒤
+    ``StopException`` 이 ``st.write_stream`` 에서 전파되는 시나리오를 가장한다.
+    함수 밖에서 ``except BaseException`` 이 ``StopException`` 을 포착하고,
+    영속화 블록이 실행된 후 ``raise`` 로 재발생하여 Streamlit 중지 UX를
+    유지한다.
+    """
+    _FakeSessionManager.reset()
+    fake = _FakeSessionManager()
+    partial_text = "부분 답변"
+    # 제너레이터 finally가 기록한 aux_state 가장 — content 포함
+    fake.set(
+        streaming_mod._AUX_STATE_KEY,
+        {
+            "content": partial_text,
+            "thought": "",
+            "documents": [],
+            "metrics": {},
+            "citations": [],
+            "process_steps": [],
+        },
+        "s",
+    )
+    fake_st = MagicMock()
+    fake_st.write_stream.side_effect = StopException
+
+    with (
+        patch.object(streaming_state_mod, "SessionManager", fake),
+        patch.object(chat_mod, "SessionManager", fake),
+        patch.object(chat_mod, "st", fake_st),
+        patch.object(chat_mod, "render_generation_expander", MagicMock()),
+        pytest.raises(StopException),
+    ):
+        chat_mod._render_streaming_with_write_stream({"msg_id": "mid"}, "s", "질문")
+
+    messages = fake.get_messages()
+    assert len(messages) == 1
+    assert messages[0]["role"] == "assistant"
+    assert messages[0]["content"] == partial_text
+    assert messages[0]["cancelled"] is True
     assert messages[0]["msg_id"] == "mid"

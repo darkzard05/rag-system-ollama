@@ -107,6 +107,7 @@ def _content_generator(
     sid: str,
     msg_id: str,
     on_status: Callable[[str, float], None] | None = None,
+    on_aux: Callable[[dict[str, Any]], None] | None = None,
 ) -> Iterator[str]:
     """``st.write_stream`` 호환 content 제너레이터 + 부가 정보 누적.
 
@@ -115,7 +116,9 @@ def _content_generator(
     ``generation_cancel`` 시에도 부분 응답을 영속화한다.
 
     ``on_status``는 상태 전환 시에만 호출된다 (상태 텍스트 변경 또는 첫
-    콘텐츠 yield 직후). yield 내용은 ``on_status`` 유무와 무관하게 동일하다.
+    콘텐츠 yield 직후). ``on_aux``는 aux-state(thought/documents/metrics/
+    citations/process_steps)가 변경된 청크에서만 호출된다 (연속 동일 상태는
+    재호출되지 않는다). yield 내용은 두 콜백 유무와 무관하게 동일하다.
     """
     accumulated = ""
     thought = ""
@@ -128,6 +131,7 @@ def _content_generator(
 
     _t_status_start = _clock()
     _last_reported_status: str | None = None
+    _last_on_aux_snapshot: tuple[Any, ...] | None = None
 
     def _report_status(text: str) -> None:
         nonlocal _last_reported_status
@@ -183,17 +187,26 @@ def _content_generator(
                 metrics = chunk.performance
             if getattr(chunk, "citations", None):
                 citations = chunk.citations or []
-            _write_aux_state(
-                sid,
-                {
-                    "thought": thought,
-                    "documents": documents,
-                    "metrics": metrics,
-                    "citations": citations,
-                    "process_steps": process_steps,
-                    "complete": False,
-                },
-            )
+            _aux_state = {
+                "thought": thought,
+                "documents": documents,
+                "metrics": metrics,
+                "citations": citations,
+                "process_steps": process_steps,
+                "complete": False,
+            }
+            _write_aux_state(sid, _aux_state)
+            if on_aux is not None:
+                snapshot = (
+                    thought,
+                    tuple(process_steps),
+                    tuple(documents),
+                    tuple(metrics.items()),
+                    tuple(citations),
+                )
+                if snapshot != _last_on_aux_snapshot:
+                    _last_on_aux_snapshot = snapshot
+                    on_aux(_aux_state)
     except Exception as exc:
         _write_aux_state(
             sid,
@@ -204,6 +217,7 @@ def _content_generator(
                 "citations": citations,
                 "process_steps": process_steps,
                 "error": str(exc),
+                "content": accumulated,
                 "complete": False,
             },
         )
@@ -217,6 +231,7 @@ def _content_generator(
                 "metrics": metrics,
                 "citations": citations,
                 "process_steps": process_steps,
+                "content": accumulated,
                 "complete": True,
             },
         )
