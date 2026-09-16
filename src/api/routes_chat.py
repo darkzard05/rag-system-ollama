@@ -159,9 +159,6 @@ async def stream_query_rag(
     async def event_generator():
         logger.debug(f"[API] Streaming started for session: {sid}")
 
-        # [개선] RAGSystem 클래스를 통해 통합된 인터페이스 호출 (설정 및 리소스 관리 자동화)
-        rag_sys = srv.RAGSystem(session_id=sid)
-
         handler = get_streaming_handler()
         controller = get_adaptive_controller(client_profile="api")
         sse_handler = ServerSentEventsHandler()
@@ -171,14 +168,24 @@ async def stream_query_rag(
         batch_size = 10  # 10개 이벤트마다 배치 전송
         event_counter = 0
 
-        stream_gen = cast(
-            AsyncGenerator[StreamChunk, None],
-            handler.stream_graph_events(
-                await rag_sys.astream(request.query, model_name=request.model_name),
-                adaptive_controller=controller,
-            ),
-        )
-        stream_it = stream_gen.__aiter__()
+        try:
+            # [개선] RAGSystem 클래스를 통해 통합된 인터페이스 호출 (설정 및 리소스 관리 자동화)
+            rag_sys = srv.RAGSystem(session_id=sid)
+            stream_gen = cast(
+                AsyncGenerator[StreamChunk, None],
+                handler.stream_graph_events(
+                    await rag_sys.astream(request.query, model_name=request.model_name),
+                    adaptive_controller=controller,
+                ),
+            )
+            stream_it = stream_gen.__aiter__()
+        except Exception as e:
+            # fail-closed for construction: VectorStoreError 등이 astream 호출
+            # 단계에서 나도 스트림을 끊지 않고 SSE [error]+[end]로 격리한다.
+            logger.error(f"Streaming setup error (Session: {sid}): {e}", exc_info=True)
+            yield sse_handler.format_sse_error(str(e))
+            yield sse_handler.format_sse_event("end", {"status": "done"}, event_counter)
+            return
         waiter: asyncio.Task[Any] | None = None
 
         try:

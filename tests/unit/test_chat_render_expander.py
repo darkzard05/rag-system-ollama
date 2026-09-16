@@ -1,10 +1,10 @@
 """답변 생성 익스팬더(render_message) 엣지케이스 단위 검증.
 
 렌더 경로 보장:
-- Metrics "Retrieved"는 데드 키(retrieved_chunks) 대신 process.retrieved_count 사용
+- 완료 후 하단 상태줄은 "Answer complete · N references · p.X" 형식이며,
+  N은 process.retrieved_count가 아닌 len(documents)를 우선한다
 - 완료 후 영속 익스팬더는 라벨 "Answer details"를 사용 (스트리밍 박스의
-  스피너 status_text="Answer generation"과는 별개). Metrics는 별도 익스팬더가
-  아닌 동일 익스팬더 내 "Retrieved: N chunks" 캡션으로 통합됨.
+  스피너 status_text="Answer generation"과는 별개)
 - Answer details 익스팬더는 top_scores 항목 키 누락 시 KeyError 없이 안전 렌더
 - process=None / 빈 process / cancelled+thought(내용 없음) 시 익스팬더 미노출(빈 본문 방지)
 """
@@ -56,7 +56,7 @@ def _doc(page: int = 1) -> MagicMock:
 
 
 def test_metrics_shows_document_count():
-    """Metrics 익스팬더는 documents가 있을 때만 열리며 실제 청크 수를 표시합니다."""
+    """완료 상태줄은 documents가 있을 때만 열리며 실제 문서 수를 표시합니다."""
     mock_st = _render(
         role="assistant",
         content="답변입니다.",
@@ -66,14 +66,16 @@ def test_metrics_shows_document_count():
         wrap_in_container=False,
     )
     assert "Answer details" in _expander_labels(mock_st)
-    assert "Retrieved: 1 chunks" in _all_text(mock_st)
+    assert "Answer complete" in _all_text(mock_st)
+    assert "1 references" in _all_text(mock_st)
+    assert "p.3" in _all_text(mock_st)
 
 
 def test_metrics_uses_documents_length_over_retrieved_count():
     """documents가 있으면 process.retrieved_count 대신 len(documents)를 우선합니다.
 
-    데드 키 metrics["retrieved_count"] 의존성이 제거되었으므로 retrieved_count는
-    무시되고 실제 문서 수가 표시됩니다.
+    retrieved_count는 완료 상태줄에 노출되지 않으므로 무시되고 실제 문서 수가
+    표시됩니다.
     """
     mock_st = _render(
         role="assistant",
@@ -83,8 +85,8 @@ def test_metrics_uses_documents_length_over_retrieved_count():
         process={"retrieved_count": 99},
         wrap_in_container=False,
     )
-    assert "Retrieved: 2 chunks" in _all_text(mock_st)
-    assert "Retrieved: 99 chunks" not in _all_text(mock_st)
+    assert "2 references" in _all_text(mock_st)
+    assert "99 references" not in _all_text(mock_st)
 
 
 def test_detailed_thinking_skips_missing_keys_in_top_scores():
