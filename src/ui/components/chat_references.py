@@ -41,9 +41,9 @@ def _handle_page_jump(p: int) -> None:
     )
     navigate_to_page(int(p))
     st.toast(f"Moving to page {p}...")
-    # 전체 리런이 필요하다 (뷰어 fragment가 run_every=2.0으로 폴링 중이어도
-    # popover 점프는 즉시 반영되어야 하므로 st.rerun()으로 전체 재실행).
-    st.rerun()
+    # on_click 콜백은 상태만 기록하고, 클릭 자체가 트리거하는 다음 전체 rerun에서
+    # viewer의 _resolve_pdf_state가 pdf_target_page를 소비한다
+    # (st.rerun()은 콜백에서 no-op 경고를 유발하므로 사용하지 않음).
 
 
 def _handle_doc_jump(doc_id: str) -> None:
@@ -68,7 +68,6 @@ def _handle_doc_jump(doc_id: str) -> None:
     )
     navigate_to_page(target_page)
     st.toast("Moving to cited document...")
-    st.rerun()
 
 
 def _extract_reference_pages(documents: list[Any]) -> list[int]:
@@ -173,8 +172,10 @@ def render_generation_expander(
     generation 익스팬더)를 하나로 통합한다. 기본값은 접힘(expanded=False).
 
     스트리밍 중과 완료 후 동일 위젯을 재사용해, 생성 완료 시 상태 박스가
-    증발하던 문제를 해결한다. 본문은 매 렌더 **무조건** 작성하므로 fragment
-    폴링(0.5s)으로 st.expander가 재생성되어도 내용이 비지 않는다.
+    증발하던 문제를 해결한다. 단일 script run 안에서 ``aux_ph`` 고정 슬롯이
+    텍스트보다 위에 익스팬더를 렌더하고, 완료 시 ``finally`` 블록에서 최종
+    메타데이터로 갱신한다. 열림/접힘 상태 영속화를 위해 마지막 렌더에서만
+    key가 적용된다.
 
     - generating=True: 기본 접힘 유지, 내부 st.spinner로 진행 표시
     - generating=False: 접은 상태(완료 후 유지), 정적 헤더만
@@ -219,7 +220,15 @@ def render_generation_expander(
     if not generating and not (has_block or documents or citations):
         return
 
-    with st.expander("Answer details", expanded=expanded):
+    # msg_id 기반 key로 리렌더 간 열림/닫힘 상태를 메시지별로 영속시킨다.
+    # generating=True(라이브 초기 렌더/폴백)에는 key를 주지 않는다: 같은 script
+    # run에서 aux_ph.empty() 후 동일 key 재렌더는 Streamlit 1.60에서
+    # StreamlitDuplicateElementKey를 유발하므로 key는 최종 렌더에만 적용한다.
+    with st.expander(
+        "Answer details",
+        expanded=expanded,
+        key=(f"gen_exp_{msg_id}" if msg_id and not generating else None),
+    ):
         if generating:
             with st.spinner(status_text):
                 pass

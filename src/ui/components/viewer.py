@@ -242,8 +242,9 @@ def render_pdf_area():
 
     run_every 폴링 없이 동작한다(원래 2s 폴링의 소비 대상 재분석 결과):
     - pdf_annotations: 프로덕션 세터가 없음(테스트 경로 `consume_stream_into_message`에만 존재).
-    - pdf_target_page(수동 참조 점프): 유일한 세터 `_handle_page_jump`(chat.py)가 항상
-      `st.rerun()`을 동반하므로 다음 전체 rerun에서 `_resolve_pdf_state`가 소비한다.
+    - pdf_target_page(수동 참조 점프): on_click 콜백(_handle_page_jump/_handle_doc_jump)이
+      설정하고, 버튼 클릭이 유발하는 다음 전체 rerun에서 _resolve_pdf_state가 소비한다.
+      Callback-phase st.rerun()은 no-op 경고를 유발하므로 사용하지 않는다.
     - 페이지/current_page: 네비 컨트롤의 on_click/on_change 콜백이 fragment rerun을
       발생시키고, `pdf_viewer_key`의 페이지 키 변경으로 컴포넌트가 remount된다.
     따라서 모든 뷰어 갱신은 명시적 rerun 경로로 전달되며, 유휴 폴링 타이머가 없어
