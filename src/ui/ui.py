@@ -156,12 +156,13 @@ def render_main_content() -> None:
         logger.debug("[PERF] render_pdf_area took %.3fs", time.perf_counter() - t0)
     with col_chat:
         # [FIX-STREAM-INPUT] Render the input BEFORE the messages area on purpose.
-        # render_chat_messages_area() -> _run_active_stream_in_timeline() runs a
-        # BLOCKING synchronous stream loop inside this same script run; st.chat_input()
+        # render_chat_messages_area() -> _render_unified_timeline() -> for the active
+        # streaming message, _render_streaming_with_write_stream() (st.write_stream +
+        # expander-above aux_ph slot) streams inside this same script run; st.chat_input()
         # must be created BEFORE that loop starts so the widget is already in the DOM
         # while tokens stream (otherwise the input vanishes for the whole generation and
-        # reappears only after). CSS `order:1` on the input wrapper re-pins it visually to
-        # the column bottom, so reordering the DOM does not disturb the bottom-pin layout.
+        # reappears only after). CSS `order:1` on the input wrapper re-pins it visually
+        # to the column bottom, so reordering the DOM does not disturb the bottom-pin layout.
         t0 = time.perf_counter()
         render_chat_input_area()
         logger.debug(
