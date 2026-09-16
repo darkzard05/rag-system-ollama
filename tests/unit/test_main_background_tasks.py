@@ -208,12 +208,12 @@ class TestMainBackgroundTasks(unittest.TestCase):
                 side_effect=never_returning_astream,
             ),
             patch(
-                "src.ui.components.streaming.get_streaming_handler",
+                "ui.components.streaming_runtime.get_streaming_handler",
                 return_value=mock_handler,
             ),
-            patch("src.ui.components.streaming.UI_STREAMING_TIMEOUT", 0.01),
-            patch("src.ui.components.streaming.UI_STREAMING_SETUP_TIMEOUT", 0.01),
-            patch("src.ui.components.streaming.UI_STREAMING_HARD_TIMEOUT", 0),
+            patch("ui.components.streaming_runtime.UI_STREAMING_TIMEOUT", 0.01),
+            patch("ui.components.streaming_runtime.UI_STREAMING_SETUP_TIMEOUT", 0.01),
+            patch("ui.components.streaming_runtime.UI_STREAMING_HARD_TIMEOUT", 0),
             pytest.raises(TimeoutError),
         ):
             list(
