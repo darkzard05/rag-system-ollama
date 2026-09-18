@@ -158,11 +158,14 @@ def render_main_content() -> None:
         # [FIX-STREAM-INPUT] Render the input BEFORE the messages area on purpose.
         # render_chat_messages_area() -> _render_unified_timeline() -> for the active
         # streaming message, _render_streaming_with_write_stream() (st.write_stream +
-        # expander-above aux_ph slot) streams inside this same script run; st.chat_input()
-        # must be created BEFORE that loop starts so the widget is already in the DOM
-        # while tokens stream (otherwise the input vanishes for the whole generation and
-        # reappears only after). CSS `order:1` on the input wrapper re-pins it visually
-        # to the column bottom, so reordering the DOM does not disturb the bottom-pin layout.
+        # expander-above aux_ph slot) streams inside this same script run — the submit
+        # handler must NOT call st.rerun() (that would split submit from streaming and
+        # the submit_mode="stop" stop button never renders; Playwright-verified).
+        # st.chat_input() must be created BEFORE that loop starts so the widget is
+        # already in the DOM while tokens stream (otherwise the input vanishes for the
+        # whole generation and reappears only after). CSS `order:1` on the input wrapper
+        # re-pins it visually to the column bottom, so reordering the DOM does not
+        # disturb the bottom-pin layout.
         t0 = time.perf_counter()
         render_chat_input_area()
         logger.debug(

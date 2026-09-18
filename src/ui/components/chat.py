@@ -439,10 +439,13 @@ def _resolve_chat_input_state(sid: str) -> tuple[str, bool]:
 def render_chat_input_area() -> None:
     """Renders the native st.chat_input() at the bottom of the chat column.
 
-    입력창 영역에는 폴링 fragment를 쓰지 않는다. disabled 상태는
-    ``_resolve_chat_input_state``가 ``is_generating_answer`` 플래그로 결정하며,
-    생성 완료/예외 시 submit 핸들러가 ``st.rerun()`` 1회로 입력창을 정상
-    활성화한다(INT-입력동결 방지). 빌드 진행 바는 이 영역이 아닌 별도의
+    입력창 영역에는 폴링 fragment를 쓰지 않는다. 제출(submit_mode="stop")과
+    스트리밍 소비는 **동일한 script run** 안에서 처리한다: 제출 시 st.rerun()을
+    호출하지 않으면(분할 시 ■ 중지 버튼 미렌더 — Playwright 실측), ui.py가
+    메시지 영역보다 먼저 렌더해 둔 입력창 뒤에서 타임라인의 `mtype=="streaming"`
+    브랜치가 run 후반부에 st.write_stream으로 스트림을 소비한다. 생성 완료/예외/
+    중지는 _render_streaming_with_write_stream의 finally가 is_generating_answer를
+    즉시 False로 리셋한다(INT-입력동결 방지). 빌드 진행 바는 이 영역이 아닌 별도의
     ``_render_build_progress_fragment``(1.5초 폴링)가 담당한다.
     """
     current_sid = SessionManager.get_session_id()
@@ -475,11 +478,14 @@ def render_chat_input_area() -> None:
 
             # [FIX-ORDER] 스트리밍 버블을 입력창 아래(분리)가 아닌 대화 타임라인
             # 안(질문 바로 아래)에 그리려면, 스트리밍 루프를 입력 영역에서 직접
-            # 돌리지 않는다. 대신 `streaming` 타입 플레이스홀더를 추가하고 플래그를
-            # 세운 뒤 1회 rerun. 이후 타임라인의 `mtype=="streaming"` 브랜치가
-            # 동일 script run에서 라이브 렌더 + 스트림 소비를 함께 수행한다
-            # (입력 영역은 DOM상 메시지 스크롤 컨테이너보다 뒤에 방출되므로,
-            #  여기서 렌더하면 입력창 아래에 붙는 원인이었다).
+            # 돌리지 않는다. 대신 `streaming` 타입 플레이스홀더와 플래그를 세운 뒤
+            # **이 동일한 script run의 후반부**(ui.py가 입력 영역을 메시지 영역보다
+            # 먼저 렌더하므로 [FIX-STREAM-INPUT]) 타임라인의 `mtype=="streaming"`
+            # 브랜치가 라이브 렌더 + 스트림 소비를 함께 수행한다.
+            # ⚠️ 여기서 st.rerun()을 호출하지 않는다: rerun은 제출과 스트리밍을
+            # 서로 다른 script run으로 분할해, 프론트엔드 submittedRunScope가
+            # 초기화되어 submit_mode="stop"의 ■ 중지 버튼이 렌더되지 않는다
+            # (Playwright 실측: split-rerun 패턴 stop 버튼 0개 vs 동일 실행 패턴 1개).
             stream_msg_id = str(uuid.uuid4())
             SessionManager.add_message(
                 "assistant",
@@ -501,11 +507,11 @@ def render_chat_input_area() -> None:
             SessionManager.set("generation_cancel", False, current_sid)
             SessionManager.set("active_stream_msg_id", stream_msg_id, current_sid)
             logger.debug(
-                "[PERF] submit handler: setup took %.3fs (before st.rerun)",
+                "[PERF] submit handler: setup took %.3fs",
                 time.perf_counter() - _t_submit,
             )
-            # 타임라인이 라이브 스트리밍을 렌더하도록 명시적 rerun 1회.
-            st.rerun()
+            # 스트림 소비는 이 run의 타임라인 브랜치가 담당하므로 여기서 종료한다.
+            return
 
 
 def _friendly_stream_error(exc: Exception) -> str:
