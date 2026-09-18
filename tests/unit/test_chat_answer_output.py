@@ -243,8 +243,13 @@ def test_streaming_error_generic_message():
     assert SessionManager.get("is_generating_answer", True, sid) is False
 
 
-def test_thought_rendered_safe_by_default():
-    """thought는 unsafe_allow_html=False로 렌더되어 실행 가능한 <script>가 없다."""
+def test_thought_not_rendered_by_default():
+    """thought는 참조 전용 익스팬더(Phase 2)로 인해 화면에 렌더되지 않습니다.
+
+    생성 과정(thought)은 답변 위 프로세스 캡션으로 이동되어, 완료 메시지의
+    익스팬더에는 참조만 노출된다. 따라서 원시 thought(<script> 포함)가
+    마크다운으로 방출되지 않아 XSS 노출 경로가 차단된다.
+    """
     with tempfile.NamedTemporaryFile(
         "w", suffix=".py", delete=False, encoding="utf-8"
     ) as script_content:
@@ -261,14 +266,11 @@ def test_thought_rendered_safe_by_default():
 
         at = AppTest.from_file(script_path).run(timeout=60)
         assert not at.exception
-        # thought 마크다운 청크는 allow_html=False여야 한다 (Streamlit이 정책상
-        # sanitize하므로 실행 가능한 <script> 요소가 렌더되지 않는다).
+        # thought는 익스팬더 밖으로 렌더되지 않는다 (참조 전용 — XSS 경로 차단).
         thought_blocks = [
             m for m in at.markdown if m.proto.body == "<script>alert(1)</script>"
         ]
-        assert thought_blocks, "thought 마크다운 청크가 렌더되지 않음"
-        for block in thought_blocks:
-            assert block.proto.allow_html is False
+        assert not thought_blocks, "thought 마크다운이 렌더되어서는 안 됨"
     finally:
         os.remove(script_path)
 

@@ -18,10 +18,9 @@ from typing import Any
 
 import streamlit as st
 
-from common.config import DEFAULT_OLLAMA_MODEL
 from common.utils import doc_stable_id
 from core.session import SessionManager
-from ui.components.common import get_doc_metadata, navigate_to_page, status_line
+from ui.components.common import get_doc_metadata, navigate_to_page
 from ui.widget_keys import jump_key
 
 __all__ = [
@@ -163,13 +162,11 @@ def render_generation_expander(
     expanded: bool,
     generating: bool,
     status_text: str = "Answer generation",
-    process_override: dict[str, Any] | None = None,
 ) -> None:
-    """답변 말풍선 상단(질문↔답변 사이)에 **단일 고정 익스팬더**를 렌더합니다.
+    """답변 말풍선 상단(질문↔답변 사이)에 **참조 전용 익스팬더**를 렌더합니다.
 
-    메트릭·생성 단계·상위 점수·사고 과정·참조를 모두 이 익스팬더 안에 수납해
-    산개되던 부가 정보(별도 Metrics 익스팬더, References popover, 완료 후
-    generation 익스팬더)를 하나로 통합한다. 기본값은 접힘(expanded=False).
+    생성 단계(Process)·메트릭(Metrics)은 각각 답변 위/아래 캡션으로 이동되어
+    이 익스팬더에는 참조만 남는다. 기본값은 접힘(expanded=False).
 
     스트리밍 중과 완료 후 동일 위젯을 재사용해, 생성 완료 시 상태 박스가
     증발하던 문제를 해결한다. 단일 script run 안에서 ``aux_ph`` 고정 슬롯이
@@ -180,44 +177,16 @@ def render_generation_expander(
     - generating=True: 기본 접힘 유지, 내부 st.spinner로 진행 표시
     - generating=False: 접은 상태(완료 후 유지), 정적 헤더만
     - cancelled 메시지는 추론 로그를 감춰 전체 추론 완료로 오인되지 않게 함
-    - process_override: 완료 메시지처럼 이미 계산된 process dict가 있으면
-      재파생(process_steps 의존) 대신 직접 사용한다.
     """
-    thought = msg.get("thought", "") or ""
-    cancelled = bool(msg.get("cancelled", False))
-    show_thought = bool(thought and thought.strip() and not cancelled)
     documents = msg.get("documents") or []
     citations = msg.get("citations") or []
-    metrics = msg.get("metrics") or {}
     msg_id = msg.get("msg_id") or ""
-
-    # ui.components 내부 순환 의존을 피하기 위해 lazy import
-    from ui.components.streaming import _build_process
-
-    process = process_override or _build_process(msg) or {}
-    steps = process.get("steps") or []
-    sections = process.get("sections") or []
-    top_scores = [
-        s
-        for s in (process.get("top_scores") or [])
-        if isinstance(s, dict) and "section" in s and "score" in s
-    ]
-    perf = process.get("perf") or {}
-
-    # 메트릭(완료 메시지에 실린 metrics)도 익스팬더 수납 대상.
-    retrieved = (
-        len(documents) if documents else (process or {}).get("retrieved_count", 0)
-    )
-    total_time = metrics.get("total_time", 0)
-    has_metrics = bool(total_time or retrieved)
-    has_block = bool(
-        steps or sections or top_scores or perf or show_thought or has_metrics
-    )
+    has_references = bool(documents or citations)
 
     # 완료 메시지인데 표시할 내용이 없으면 익스팬더 자체를 렌더하지 않는다.
     # 빈 익스팬더 헤더가 대화 줄 간격(패딩+익스팬더)을 키워 간격 과대를 유발한다.
     # 생성 중(generating=True)에는 항상 익스팬더를 열어 진행 표시/깜빡임을 방지한다.
-    if not generating and not (has_block or documents or citations):
+    if not generating and not has_references:
         return
 
     # msg_id 기반 key로 리렌더 간 열림/닫힘 상태를 메시지별로 영속시킨다.
@@ -233,73 +202,18 @@ def render_generation_expander(
             with st.spinner(status_text):
                 pass
 
-        if not (has_block or documents or citations):
+        if not has_references:
             st.caption("Preparing...")
             return
 
-        model = (
-            msg.get("model", "")
-            or SessionManager.get("last_selected_model", "")
-            or DEFAULT_OLLAMA_MODEL
+        # 참조 전용 본문 (Process/Metrics는 답변 위/아래 캡션으로 이동).
+        _render_references_content(
+            msg_id,
+            documents,
+            on_page_jump=_handle_page_jump,
+            citations=citations,
+            generating=generating,
         )
-
-        has_process = bool(show_thought or steps or top_scores)
-        has_references = bool(documents or citations)
-        has_metrics = bool(total_time or perf.get("total_time") or retrieved or model)
-
-        tab_defs = []
-        if has_process:
-            tab_defs.append("Process")
-        if has_references:
-            tab_defs.append("References")
-        if has_metrics:
-            tab_defs.append("Metrics")
-
-        tabs = st.tabs(tab_defs)
-        tab_idx = 0
-
-        if has_process:
-            with tabs[tab_idx]:
-                if show_thought:
-                    with st.expander("Thought", expanded=False):
-                        st.markdown(thought)
-                if steps:
-                    st.markdown(" · ".join(steps))
-                if top_scores:
-                    st.caption(
-                        ", ".join(
-                            f"{s['section']} {s['score']:.3f}" for s in top_scores
-                        )
-                    )
-            tab_idx += 1
-
-        if has_references:
-            with tabs[tab_idx]:
-                _render_references_content(
-                    msg_id,
-                    documents,
-                    on_page_jump=_handle_page_jump,
-                    citations=citations,
-                    generating=generating,
-                )
-            tab_idx += 1
-
-        if has_metrics:
-            with tabs[tab_idx]:
-                parts = []
-                final_time = total_time if total_time else perf.get("total_time", 0)
-                if isinstance(final_time, (int, float)) and final_time > 0:
-                    parts.append(f"Time: {final_time:.1f}s")
-                model = (
-                    msg.get("model", "")
-                    or SessionManager.get("last_selected_model", "")
-                    or DEFAULT_OLLAMA_MODEL
-                )
-                if model:
-                    parts.append(f"Model: {model}")
-                if parts:
-                    st.caption(status_line(*parts))
-            tab_idx += 1
 
         # 참조(페이지/doc 점프) — 기존 References popover 내용을 익스팬더 안으로 통합.
         # if documents or citations:

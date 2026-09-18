@@ -31,6 +31,7 @@ from ui.components.streaming_extractors import (
 )
 from ui.components.streaming_runtime import stream_chunks, stream_content
 from ui.components.streaming_state import (
+    _AUX_STATE_KEY,
     _build_process,
     _clear_aux_state,
     _content_generator,
@@ -275,5 +276,3 @@ def consume_stream_into_message(
 # ---------------------------------------------------------------------------
 # st.write_stream 호환 content 제너레이터 + 부가 정보 누적
 # ---------------------------------------------------------------------------
-
-_AUX_STATE_KEY = "stream_active_aux"

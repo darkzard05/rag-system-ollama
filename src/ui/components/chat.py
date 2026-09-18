@@ -40,6 +40,22 @@ logger = logging.getLogger(__name__)
 PREVIEW_PAGES_MAX = 4
 
 
+def _metrics_caption(metrics: dict | None, model: str | None = None) -> str:
+    """완료 캡션(답변 아래)용 메트릭 부분 문자열을 만든다 (Phase 4)."""
+    metrics = metrics or {}
+    parts: list[str] = []
+    total_time = metrics.get("total_time", 0)
+    if isinstance(total_time, (int, float)) and total_time > 0:
+        parts.append(f"{total_time:.1f}s")
+    input_tokens = metrics.get("input_token_count", 0)
+    output_tokens = metrics.get("token_count", 0)
+    if input_tokens or output_tokens:
+        parts.append(f"{int(input_tokens or 0)}→{int(output_tokens or 0)} tok")
+    if model:
+        parts.append(str(model))
+    return status_line(*parts)
+
+
 def render_message(
     role: str,
     content: str,
@@ -110,7 +126,6 @@ def render_message(
                 },
                 expanded=False,
                 generating=False,
-                process_override=process or None,
             )
 
         # 본문 내용
@@ -143,6 +158,7 @@ def render_message(
             st.markdown(display_text, unsafe_allow_html=(role == "assistant"))
 
         # 완료된 어시스턴트 메시지의 하단 상태줄 (기본 노출, 부가 정보는 상단 익스팬더로 통합).
+        metric_txt = _metrics_caption(metrics, kwargs.get("model"))
         if (
             role == "assistant"
             and msg_type == "general"
@@ -160,10 +176,11 @@ def render_message(
                         "Answer complete",
                         f"{len(documents)} references",
                         page_txt,
+                        metric_txt,
                     )
                 )
             else:
-                st.caption("Answer complete")
+                st.caption(status_line("Answer complete", metric_txt))
 
 
 def _render_unified_timeline(current_sid: str) -> None:
@@ -296,6 +313,40 @@ def _render_unified_timeline(current_sid: str) -> None:
 # ---------------------------------------------------------------------------
 # 스트리밍 전용 렌더 (단일 pass, 폴링 없음)
 # ---------------------------------------------------------------------------
+
+# 프로세스 위상 라벨 (Phase 3: 답변 위 자막용). status 텍스트 키워드 기반으로
+# 진행 위상을 추론해 "문서 검색 → 증거 수집 → 답변 생성" 흐름을 표시한다.
+_PROCESS_PHASES: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("문서 검색", ("검색", "fetch", "retriev", "문서")),
+    ("증거 수집", ("증거", "연결", "context", "evidence", "리랭크", "rerank")),
+    ("답변 생성", ("답변", "생성", "generate", "response", "작성")),
+)
+
+
+def _infer_proc_phase(status_text: str) -> int:
+    """status 텍스트가 속한 프로세스 위상 인덱스를 반환한다 (미검출 -1)."""
+    lowered = status_text.lower()
+    for idx, (_label, _keywords) in enumerate(_PROCESS_PHASES):
+        if any(k.lower() in lowered for k in _keywords):
+            return idx
+    return -1
+
+
+def _proc_phase_caption(status_text: str, elapsed_sec: float) -> str:
+    """답변 위 자막용 프로세스 위상 캡션 텍스트를 만든다."""
+    active_idx = _infer_proc_phase(status_text)
+    parts: list[str] = []
+    for idx, (label, _keywords) in enumerate(_PROCESS_PHASES):
+        if active_idx >= 0 and idx == active_idx:
+            parts.append(f"▸ {label}")
+        elif active_idx > idx:
+            parts.append(f"✓ {label}")
+        else:
+            parts.append(label)
+    line = "  ·  ".join(parts)
+    if active_idx == -1 and status_text:
+        line = f"{line}  ·  {status_text}"
+    return f"{line} · {elapsed_sec:.0f}s ▍"
 
 
 def _draw_streaming_message(msg: dict[str, Any], current_sid: str) -> None:
@@ -492,7 +543,8 @@ def _render_streaming_with_write_stream(
             status_ph.caption("AI가 답변을 생성 중입니다... ▍")
 
             def _on_status(status_text: str, elapsed_sec: float) -> None:
-                status_ph.caption(f"{status_text} · {elapsed_sec:.0f}s ▍")
+                # Phase 3: 답변 위 자막 = 프로세스 위상 요약 (검색→수집→생성).
+                status_ph.caption(_proc_phase_caption(status_text, elapsed_sec))
 
             def _on_aux(aux: dict[str, Any]) -> None:
                 # 생성 중 부가 정보(thought/docs/metrics...)가 바뀔 때마다

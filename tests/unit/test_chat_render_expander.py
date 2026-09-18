@@ -90,11 +90,12 @@ def test_metrics_uses_documents_length_over_retrieved_count():
 
 
 def test_detailed_thinking_skips_missing_keys_in_top_scores():
-    """top_scores 항목에 section/score가 없어도 KeyError 없이 안전 렌더."""
+    """참조 전용 익스팬더는 top_scores/thought 등이 없어도 안전 렌더."""
     mock_st = _render(
         role="assistant",
         content="답변입니다.",
         thought="추론입니다.",
+        documents=[_doc(3)],
         process={
             "steps": ["검색"],
             "top_scores": [
@@ -106,9 +107,6 @@ def test_detailed_thinking_skips_missing_keys_in_top_scores():
         wrap_in_container=False,
     )
     assert "Answer details" in _expander_labels(mock_st)
-    # 유효 항목은 포맷 유지, 잘못된 항목은 렌더되지 않아야 함
-    assert "S1 0.912" in _all_text(mock_st)
-    assert "bad" not in _all_text(mock_st)
 
 
 def test_no_detailed_thinking_when_process_none():
@@ -135,12 +133,13 @@ def test_no_detailed_thinking_when_cancelled_without_process():
     assert "Answer details" not in _expander_labels(mock_st)
 
 
-def test_cancelled_hides_thought_but_shows_process():
-    """중단 시 steps는 익스팬더에 노출되나 thought 텍스트는 감춰집니다."""
+def test_cancelled_hides_thought_but_shows_references():
+    """중단 시 thought는 노출되지 않고 참조 익스팬더만 렌더됩니다."""
     mock_st = _render(
         role="assistant",
         content="부분 답변입니다.",
         thought="미완료 추론.",
+        documents=[_doc(1)],
         process={"steps": ["검색"]},
         wrap_in_container=False,
         cancelled=True,
@@ -161,16 +160,17 @@ def test_empty_expander_suppressed_without_content():
 
 
 def test_completed_assistant_message_opens_expander():
-    """완료된 어시스턴트 메시지(thought 포함, 최종 msg_type)는 영속 익스팬더를 엽니다.
+    """완료된 어시스턴트 메시지에 참조가 있으면 영속 익스팬더를 렌더합니다.
 
     참고: 스트리밍 중 본문은 render_message가 아닌 _draw_streaming_message(전용
-    슬롯) 경로로 그려지므로, render_message는 완료된 메시지만 처리한다. 따라서
-    확정 메시지에 thought/문서/메트릭이 있으면 항상 익스팬더가 열린다.
+    슬롯) 경로로 그려지므로, render_message는 완료된 메시지만 처리한다. 확정
+    메시지의 부가 정보는 참조(문서/인용)만 익스팬더에 수납된다 (Phase 2).
     """
     mock_st = _render(
         role="assistant",
         content="답변입니다.",
         thought="추론입니다.",
+        documents=[_doc(5)],
         msg_type="general",
         wrap_in_container=False,
     )
