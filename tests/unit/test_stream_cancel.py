@@ -513,9 +513,12 @@ def test_cancel_preserves_tail_tokens():
 def test_pre_chunk_timeout_allows_long_setup(monkeypatch):
     """Before the first chunk arrives, effective timeout = UI_STREAMING_SETUP_TIMEOUT.
 
-    Queue.get is scripted: 2×Empty, then ("chunk", …), then ("done", None).
-    The Empty calls must pass ``timeout=SETUP_TIMEOUT`` (300), not the
-    inter-chunk value (60).  No TimeoutError is raised.
+    The stop-poll refactor (Defect LS1) slices q.get into
+    _STOP_POLL_INTERVAL_SEC polls, so the raw q.get timeout is no longer the
+    observable contract. A spy on _q_get_with_stop_poll records the effective
+    deadline per iteration instead: setup(300) before the first chunk,
+    inter-chunk(60) after. No TimeoutError is raised, and every q.get poll
+    stays within the poll interval (the stop-responsiveness guarantee).
     """
     import queue as _q
 
@@ -526,11 +529,12 @@ def test_pre_chunk_timeout_allows_long_setup(monkeypatch):
     monkeypatch.setattr(sm, "UI_STREAMING_HARD_TIMEOUT", 0)
 
     call_idx = 0
-    recorded_timeouts: list[float | None] = []
+    poll_timeouts: list[float | None] = []
+    effective_timeouts: list[float] = []
 
     def _scripted_get(self: Any, timeout: Any = None) -> Any:
         nonlocal call_idx
-        recorded_timeouts.append(timeout)
+        poll_timeouts.append(timeout)
         call_idx += 1
         if call_idx <= 2:
             raise _q.Empty
@@ -539,6 +543,14 @@ def test_pre_chunk_timeout_allows_long_setup(monkeypatch):
         return ("done", None)
 
     monkeypatch.setattr(_q.Queue, "get", _scripted_get)
+
+    real_helper = sm._q_get_with_stop_poll
+
+    def _spy(q: Any, timeout: float) -> Any:
+        effective_timeouts.append(timeout)
+        return real_helper(q, timeout)
+
+    monkeypatch.setattr(sm, "_q_get_with_stop_poll", _spy)
 
     async def _hang(*a: Any, **kw: Any) -> None:
         await asyncio.sleep(9999)
@@ -555,18 +567,20 @@ def test_pre_chunk_timeout_allows_long_setup(monkeypatch):
     ):
         list(stream_chunks("q", "m", "s"))
 
-    assert recorded_timeouts[0] == 300
-    assert recorded_timeouts[1] == 300
-    assert recorded_timeouts[2] == 300
-    assert recorded_timeouts[3] == 60
+    # Effective deadline switches from setup(300) to inter-chunk(60).
+    assert effective_timeouts == [300.0, 60.0]
+    # Stop-responsiveness: no q.get poll blocks beyond the poll interval.
+    assert all(t is not None and t <= sm._STOP_POLL_INTERVAL_SEC for t in poll_timeouts)
 
 
 def test_inter_chunk_timeout_strikes_after_first_chunk(monkeypatch):
     """After first chunk, effective timeout switches to UI_STREAMING_TIMEOUT.
 
-    Scripted queue: 2×Empty (setup phase, timeout=300), 1 chunk (switches
-    phase), 3×Empty (inter-chunk phase, timeout=60) → TimeoutError after the
-    3 post-first strikes.  Recorded timeouts prove the switch.
+    A fake monotonic clock (monkeypatched _clock) expires each deadline
+    deterministically: scripted Empty polls advance the fake clock 0.5s each,
+    so a 60s inter-chunk deadline needs 120 polls per strike. 2×Empty (setup,
+    300s deadline) + 1 chunk + 3 expired 60s deadlines → TimeoutError after
+    the 3 post-first strikes. The spy proves the phase switch.
     """
     import queue as _q
 
@@ -576,22 +590,31 @@ def test_inter_chunk_timeout_strikes_after_first_chunk(monkeypatch):
     monkeypatch.setattr(sm, "UI_STREAMING_TIMEOUT", 60)
     monkeypatch.setattr(sm, "UI_STREAMING_HARD_TIMEOUT", 0)
 
+    fake_now = [0.0]
+    monkeypatch.setattr(sm, "_clock", lambda: fake_now[0])
+
     call_idx = 0
-    recorded_timeouts: list[float | None] = []
+    effective_timeouts: list[float] = []
 
     def _scripted_get(self: Any, timeout: Any = None) -> Any:
         nonlocal call_idx
-        recorded_timeouts.append(timeout)
         call_idx += 1
+        fake_now[0] += 0.5  # each poll consumes 0.5s of simulated time
         if call_idx <= 2:
             raise _q.Empty
         if call_idx == 3:
             return ("chunk", MagicMock())
-        if call_idx <= 6:
-            raise _q.Empty
-        return ("done", None)
+        raise _q.Empty  # every post-chunk poll is an empty slot
 
     monkeypatch.setattr(_q.Queue, "get", _scripted_get)
+
+    real_helper = sm._q_get_with_stop_poll
+
+    def _spy(q: Any, timeout: float) -> Any:
+        effective_timeouts.append(timeout)
+        return real_helper(q, timeout)
+
+    monkeypatch.setattr(sm, "_q_get_with_stop_poll", _spy)
 
     async def _hang(*a: Any, **kw: Any) -> None:
         await asyncio.sleep(9999)
@@ -609,11 +632,8 @@ def test_inter_chunk_timeout_strikes_after_first_chunk(monkeypatch):
     ):
         list(stream_chunks("q", "m", "s"))
 
-    assert recorded_timeouts[0] == 300
-    assert recorded_timeouts[1] == 300
-    assert recorded_timeouts[2] == 300
-    for t in recorded_timeouts[3:6]:
-        assert t == 60
+    # setup(300) then three inter-chunk strikes with effective timeout 60.
+    assert effective_timeouts == [300.0, 60.0, 60.0, 60.0]
 
 
 def test_hard_cancel_no_tokens_to_lose(monkeypatch):

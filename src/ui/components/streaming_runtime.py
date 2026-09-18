@@ -40,6 +40,12 @@ _clock = time.monotonic
 
 _GENERIC_STREAMING_MSG = "An error occurred while generating the answer."
 
+# ■ 중지(StopException) 폴링 간격(초). 단일 q.get(timeout=...)은 C 레벨
+# Condition.wait에 메인 스레드를 묶어두어 Streamlit의 네이티브 중지(trace 훅
+# 기반 StopException)가 발화할 수 없다. 이 간격으로 폴링을 쪼개면 최대
+# poll 초 내에 바이트코드 경계로 복귀해 중지 요청이 전달된다.
+_STOP_POLL_INTERVAL_SEC = 0.1
+
 # 원시 예외 서명 → 사용자 친화 메시지 매핑 (config.yml errors 영역 상수 활용)
 _ERROR_SIGNATURES: tuple[tuple[str, str], ...] = (
     ("connection refused", MSG_ERROR_OLLAMA_NOT_RUNNING),
@@ -49,6 +55,29 @@ _ERROR_SIGNATURES: tuple[tuple[str, str], ...] = (
     ("max retries exceeded", MSG_ERROR_OLLAMA_NOT_RUNNING),
     ("연결할 수 없", MSG_ERROR_OLLAMA_NOT_RUNNING),
 )
+
+
+def _q_get_with_stop_poll(
+    q: queue.Queue[tuple[str, Any]], timeout: float
+) -> tuple[str, Any]:
+    """Chunk 대기를 짧은 폴링으로 쪼개 ■ 중지(StopException) 응답성을 확보한다.
+
+    단일 ``q.get(timeout=...)``은 C 레벨 ``Condition.wait``에 메인 스레드를
+    묶어 두기 때문에, Streamlit의 네이티브 중지(``submit_mode="stop"``)가
+    바이트코드 경계 trace 훅으로 주입하는 ``StopException``이 발화하지
+    못한다. ``_STOP_POLL_INTERVAL_SEC`` 간격으로 폴링을 분할하면 각 폴링
+    사이마다 바이트코드 경계로 복귀하여 중지 요청이 즉시 전달되고, 절대
+    대기 ``timeout``은 ``queue.Empty`` 의미(semantics)를 그대로 유지한다.
+    """
+    deadline = _clock() + timeout
+    while True:
+        remaining = deadline - _clock()
+        if remaining <= 0:
+            raise queue.Empty
+        try:
+            return q.get(timeout=min(_STOP_POLL_INTERVAL_SEC, remaining))
+        except queue.Empty:
+            continue
 
 
 def stream_chunks(
@@ -69,7 +98,7 @@ def stream_chunks(
     타임아웃되면 daemon 스레드가 남을 수 있지만 루프/스트림 슬롯은
     finally에서 해제된다.
     """
-    q: queue.Queue = queue.Queue()
+    q: queue.Queue[tuple[str, Any]] = queue.Queue()
     _stop_event = threading.Event()
     run_id = f"stream-{session_id}-{uuid.uuid4().hex[:8]}"
 
@@ -181,7 +210,7 @@ def stream_chunks(
             )
             effective = setup_to if not _first_chunk_received else UI_STREAMING_TIMEOUT
             try:
-                msg_type, data = q.get(timeout=effective)
+                msg_type, data = _q_get_with_stop_poll(q, effective)
                 _timeout_count = 0  # 성공 시 카운터 리셋
                 if msg_type == "done":
                     break
