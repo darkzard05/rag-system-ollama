@@ -665,6 +665,8 @@ def _render_streaming_with_write_stream(
     _finalize_pdf_side_effects(current_sid, msg_id)
     if stop_hit and stop_exc is not None:
         raise stop_exc  # StopException 재발생 — Streamlit 중지 UX 유지
+    # 완료 턴 확정 렌더: ■ 중지 시는 StopException 경로 유지를 위해 rerun 제외.
+    st.rerun()
 
 
 # isort: off
