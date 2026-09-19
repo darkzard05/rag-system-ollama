@@ -356,7 +356,9 @@ def _process_uploaded_file(uploaded_file) -> None:
         st.session_state.pop("pdf_target_page", None)
         old_path = SessionManager.get("pdf_file_path")
         if old_path:
-            SessionManager.safe_remove_file(old_path)
+            still_referenced = SessionManager.get_all_pdf_paths().count(old_path) > 1
+            if not still_referenced:
+                SessionManager.safe_remove_file(old_path)
 
         SessionManager.set("last_uploaded_file_name", uploaded_file.name)
         SessionManager.set("file_hash", uploaded_hash)
@@ -529,6 +531,9 @@ def _handle_pending_tasks() -> None:
     ):
         SessionManager.set("needs_rag_rebuild", False, current_sid)
         SessionManager.set("is_building_rag", True, current_sid)
+        SessionManager.set("active_faiss_retriever", None, current_sid)
+        SessionManager.set("active_bm25_retriever", None, current_sid)
+        SessionManager.delete("active_retriever_hash", current_sid)
 
         current_file_path = SessionManager.get("pdf_file_path", None, current_sid)
         current_file_name = SessionManager.get(

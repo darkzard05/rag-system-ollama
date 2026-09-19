@@ -243,6 +243,60 @@ class TestMainBackgroundTasks(unittest.TestCase):
             "needs_qa_chain_update", session_id="test_session"
         )
 
+    def test_reset_for_new_file_clears_retrievers(self):
+        SessionManager.set(
+            "active_faiss_retriever", object(), session_id="test_session"
+        )
+        SessionManager.set("active_bm25_retriever", object(), session_id="test_session")
+
+        SessionManager.reset_for_new_file(session_id="test_session")
+
+        assert (
+            SessionManager.get("active_faiss_retriever", session_id="test_session")
+            is None
+        )
+        assert (
+            SessionManager.get("active_bm25_retriever", session_id="test_session")
+            is None
+        )
+
+    def test_reset_for_new_file_clears_all_heavy_keys(self):
+        SessionManager.set("rag_engine", object(), session_id="test_session")
+        SessionManager.set(
+            "active_faiss_retriever", object(), session_id="test_session"
+        )
+        SessionManager.set("active_bm25_retriever", object(), session_id="test_session")
+
+        SessionManager.reset_for_new_file(session_id="test_session")
+
+        assert SessionManager.get("rag_engine", session_id="test_session") is None
+        assert (
+            SessionManager.get("active_faiss_retriever", session_id="test_session")
+            is None
+        )
+        assert (
+            SessionManager.get("active_bm25_retriever", session_id="test_session")
+            is None
+        )
+
+    def test_prepare_self_heals_on_retriever_hash_mismatch(self):
+        import asyncio
+
+        from core.pipeline_builder import prepare_query_config_or_build
+
+        sid = "test_self_heal_session"
+        SessionManager.set("llm", object(), session_id=sid)
+        SessionManager.set("embedder", object(), session_id=sid)
+        SessionManager.set("file_hash", "newhash", session_id=sid)
+        SessionManager.set("active_faiss_retriever", object(), session_id=sid)
+        SessionManager.set("active_bm25_retriever", object(), session_id=sid)
+        SessionManager.set("active_retriever_hash", "oldhash", session_id=sid)
+
+        asyncio.run(prepare_query_config_or_build(session_id=sid))
+
+        assert SessionManager.get("active_faiss_retriever", session_id=sid) is None
+        assert SessionManager.get("active_bm25_retriever", session_id=sid) is None
+
     def test_is_ready_for_chat_blocks_during_pending_rag_rebuild(self):
         SessionManager.set("pdf_processed", True, session_id="test_session")
         SessionManager.set("rag_engine", object(), session_id="test_session")

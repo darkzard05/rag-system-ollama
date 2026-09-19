@@ -554,6 +554,8 @@ class SessionManager:
         cls.reset_conversation(session_id)
         cls.set("pdf_processed", False, session_id)
         cls.set("rag_engine", None, session_id)
+        cls.set("active_faiss_retriever", None, session_id)
+        cls.set("active_bm25_retriever", None, session_id)
         cls.set("file_hash", None, session_id)
         cls.set("pdf_processing_error", None, session_id)
         cls.set("rebuild_error", None, session_id)

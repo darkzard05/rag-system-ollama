@@ -160,7 +160,7 @@ class PipelineBuilder:
         )
 
         try:
-            return await self._build_impl(
+            result = await self._build_impl(
                 file_path,
                 file_name,
                 embedder,
@@ -181,6 +181,17 @@ class PipelineBuilder:
                 f"{file_hash!r} -> {prev_file_hash!r}"
             )
             raise
+
+        if (
+            prev_file_hash
+            and prev_file_hash != file_hash
+            and prev_file_hash not in SessionManager.get_active_file_hashes()
+        ):
+            try:
+                await get_resource_manager().unregister_retrievers(prev_file_hash)
+            except Exception as e:
+                logger.warning(f"[RAG] [INDEX] 이전 리트리버 정리 실패 — 우회: {e}")
+        return result
 
     async def _build_impl(
         self,
@@ -427,6 +438,19 @@ async def prepare_query_config_or_build(
     vector_store, bm25_shared = result if result else (None, None)
 
     faiss_ret = SessionManager.get("active_faiss_retriever", session_id=session_id)
+    bm25_ret = SessionManager.get("active_bm25_retriever", session_id=session_id)
+    # [A1-self-heal] 세션 캐시 리트리버가 현재 file_hash와 다르면 폐기 후 재생성.
+    # reset_for_new_file 누락·임베딩 변경 등 어떤 경로로 오염돼도 쿼리 설정 단계에서
+    # 자기 치유된다. 해시 키는 파일 해시에서 파생된 별도 키로 약한 키와 충돌 방지.
+    stored_retriever_hash = SessionManager.get(
+        "active_retriever_hash", session_id=session_id
+    )
+    if stored_retriever_hash is not None and stored_retriever_hash != file_hash:
+        SessionManager.set("active_faiss_retriever", None, session_id=session_id)
+        SessionManager.set("active_bm25_retriever", None, session_id=session_id)
+        SessionManager.delete("active_retriever_hash", session_id=session_id)
+        faiss_ret = None
+        bm25_ret = None
     if not faiss_ret and vector_store:
         faiss_ret = vector_store.as_retriever(
             search_type=RETRIEVER_CONFIG.get("search_type", "similarity"),
@@ -438,6 +462,8 @@ async def prepare_query_config_or_build(
     if not bm25_ret and bm25_shared:
         bm25_ret = copy.copy(bm25_shared)
         SessionManager.set("active_bm25_retriever", bm25_ret, session_id=session_id)
+    if (faiss_ret or bm25_ret) and file_hash:
+        SessionManager.set("active_retriever_hash", file_hash, session_id=session_id)
 
     if bm25_ret:
         bm25_ret.k = RETRIEVER_CONFIG.get("search_kwargs", {}).get("k", 5)
