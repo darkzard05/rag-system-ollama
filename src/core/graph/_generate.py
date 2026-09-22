@@ -31,13 +31,14 @@ from common.config import (
     TOKEN_ESTIMATION_PROXY,
 )
 from common.utils import count_tokens_rough
-from core.graph._glue import _dispatch_event, _get_session_id
-from core.graph._graph_internals import (
+from core.graph._graph_core import (
+    _dispatch_event,
     _doc_stable_id,
     _emit_query_timing,
     _ensure_query_cache_embedder,
     _enter_stage,
     _extract_partial_answer,
+    _get_session_id,
     _recover_citations,
     _repair_json,
     _sanitize_channel_value,

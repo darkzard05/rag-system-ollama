@@ -1,5 +1,9 @@
-"""
-extracted from graph_builder.py Step 3; re-exported for backward compat.
+"""검색 노드 단일 진원 (Phase 2A 병합).
+
+구 ``_preprocess`` (의도 분류 + 쿼리 캐시 확인)와
+구 ``_retrieve`` (하이브리드 검색 + 리랭킹 + 문맥 보강)를 흡수했다.
+노드 I/O 스키마(반환 dict 키)는 변경 없이 유지하며,
+구경로는 alias shim으로 유지한다.
 """
 
 import asyncio
@@ -14,14 +18,126 @@ from langchain_core.runnables import RunnableConfig
 from langgraph.types import StreamWriter
 
 from api.schemas import AggregatedSearchResult, GraphState
-from common.config import GRADING_CONFIG
+from common.config import GRADING_CONFIG, QUERY_CACHE_ENABLED, QUERY_CACHE_MIN_CONF
 from common.utils import doc_stable_id
-from core.graph._glue import _get_session_id
-from core.graph._graph_internals import _add_stage_ms, _enter_stage, get_state_attr
+from core.graph._graph_core import (
+    _add_stage_ms,
+    _ensure_query_cache_embedder,
+    _enter_stage,
+    _get_session_id,
+    _reset_stage_timings,
+    get_state_attr,
+)
 from core.session import SessionManager
 from services.monitoring.performance_monitor import OperationType
+from services.optimization.caching_optimizer import get_cache_manager
 
 logger = logging.getLogger(__name__)
+
+
+# ============================================================================
+# _preprocess 섹션 — 의도 분류 및 캐시 확인 노드 (pure move)
+# ============================================================================
+
+
+async def preprocess(
+    state: GraphState, config: RunnableConfig, *, writer: StreamWriter
+) -> dict[str, Any]:
+    """의도 분류 및 캐시 확인을 수행합니다."""
+    # [TIMING] 매 쿼리 시작 시 스테이지 누적 버퍼 초기화 (preprocess는 항상 최초 실행)
+    _reset_stage_timings()
+    _preprocess_op = _enter_stage(OperationType.QUERY_PROCESSING)
+    _preprocess_op.__enter__()
+    _preprocess_start = time.perf_counter()
+    query = get_state_attr(state, "input", "").strip()
+    logger.info(f"[RAG] [PREPROCESS] 입력 질의: '{query}'")
+
+    import re
+
+    from common.config import DYNAMIC_WEIGHTING_CONFIG, ENSEMBLE_WEIGHTS
+
+    # 1. 의도 분류 및 동적 가중치 결정
+    weights = {"bm25": ENSEMBLE_WEIGHTS[0], "faiss": ENSEMBLE_WEIGHTS[1]}
+    intent = "rag"
+
+    if len(query) < 10 and any(
+        g in query.lower() for g in ["안녕", "hi", "hello", "반가워", "누구"]
+    ):
+        intent = "general"
+        logger.info("[RAG] [PREPROCESS] 일상 대화(General) 의도 감지")
+
+    if DYNAMIC_WEIGHTING_CONFIG.get("enabled", True):
+        keyword_patterns = DYNAMIC_WEIGHTING_CONFIG.get("keyword_patterns", [])
+        is_keyword_heavy = any(re.search(p, query) for p in keyword_patterns)
+
+        semantic_keywords = DYNAMIC_WEIGHTING_CONFIG.get("semantic_keywords", [])
+        is_semantic_heavy = any(k in query for k in semantic_keywords)
+
+        if is_keyword_heavy and not is_semantic_heavy:
+            kw_w = DYNAMIC_WEIGHTING_CONFIG.get("keyword_weight", 0.8)
+            weights = {"bm25": kw_w, "faiss": round(1.0 - kw_w, 1)}
+            logger.info(f"[RAG] [PREPROCESS] 키워드 중심 질의 판단 (BM25: {kw_w})")
+        elif is_semantic_heavy and not is_keyword_heavy:
+            sm_w = DYNAMIC_WEIGHTING_CONFIG.get("semantic_weight", 0.8)
+            weights = {"bm25": round(1.0 - sm_w, 1), "faiss": sm_w}
+            logger.info(f"[RAG] [PREPROCESS] 의미 중심 질의 판단 (FAISS: {sm_w})")
+
+    _preprocess_ms = (time.perf_counter() - _preprocess_start) * 1000
+    _add_stage_ms("preprocess_ms", _preprocess_ms)
+    _preprocess_op.__exit__(None, None, None)
+
+    # 쿼리 응답 캐시 조회 (선택적 opt-in). 세션에 활성 인덱싱 문서가 있을 때만
+    # 후보군으로 삼는다 — 문서 없는 세션의 캐시 히트는 부정확하므로 무시한다.
+    is_cached = False
+    cached_response: str | None = None
+    if QUERY_CACHE_ENABLED:
+        sid = _get_session_id(config)
+        file_hash = SessionManager.get("file_hash", session_id=sid, default=None)
+        has_doc = bool(file_hash)
+        if has_doc:
+            await _ensure_query_cache_embedder()
+            try:
+                # D17 — cache key namespaced by file_hash so cross-document queries can't collide.
+                cache_key = f"{file_hash}:{query}"
+                cached = await get_cache_manager().get(cache_key, use_semantic=True)
+            except Exception as e:  # noqa: BLE001 - 캐시 실패는 정상 경로로 폴백
+                logger.warning(f"[RAG] [CACHE] 조회 실패 — 우회: {e}")
+                cached = None
+            if (
+                isinstance(cached, dict)
+                and isinstance(cached.get("response"), str)
+                and cached[
+                    "response"
+                ].strip()  # 빈 문자열/공백/Nones는 히트로 취급하지 않음
+                and float(cached.get("confidence", 0.0)) >= QUERY_CACHE_MIN_CONF
+            ):
+                response = cached["response"]
+                is_cached = True
+                cached_response = response
+                intent = "general"  # 라우터가 generate로 단축 라우팅
+                logger.info("[RAG] [PREPROCESS] 쿼리 캐시 히트 — generate 단축 경로")
+
+    return {
+        "intent": intent,
+        "is_cached": is_cached,
+        "cached_response": cached_response,
+        "search_weights": weights,
+        # 초단문 쿼리(<5자)는 그레이더 과해석(오타/타 문서에서의 환각) 위험이 커
+        # strict 모드로 다룬다. grade_documents에서 활용한다.
+        "short_query": len(query) < 5,
+        # 턴 시작 시 이전 턴의 재작성 쿼리 잔재 제거 (reset_or_append 리듀서의 리셋 신호)
+        "search_queries": [],
+        # 턴 시작 시 이전 턴의 검색 문서 잔재 제거 (B7: retrieve_and_rerank/grade가
+        # 이 키를 턴 간 누적/유지해 문서 없음 턴에서 이전 턴 문서가 프롬프트로 새는
+        # cross-turn state leakage 방지). 빈 리스트로 교체해 격리한다.
+        "relevant_docs": [],
+        "retry_count": 0,
+    }
+
+
+# ============================================================================
+# _retrieve 섹션 — 문서 검색 및 재순위화 노드 (pure move)
+# ============================================================================
 
 # 최종 컨텍스트에서 유지할 섹션의 최소 길이 임계값(문자 수).
 # 이 값보다 짧은 섹션은 단편 청크로 판단되어 컨텍스트에서 제외된다.

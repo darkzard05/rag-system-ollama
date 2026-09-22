@@ -2,7 +2,7 @@
 LangGraph 기반 자가 교정(Self-Correction) RAG 워크플로우 배선(wiring) 모듈.
 
 6개 LangGraph 노드(preprocess, retrieve_and_rerank, grade_documents, rewrite_query,
-generate, verify_answer)는 ``core.graph`` 패키지의 개별 모듈로 분리되었습니다.
+generate, verify_answer)는 ``core.graph`` 패키지의 병합 모듈로 분리되었습니다.
 이 모듈은 이제 노드들을 조립하는 ``build_graph()`` 와, 분리 이전 import 경로
 (``core.graph.graph_builder.<symbol>``)에 대한 하위 호환 재수출(re-export)만
 유지합니다. 모듈 배치 및 제거된 재수출 목록은 아래 주석을 참고.
@@ -24,39 +24,35 @@ from core.graph._generate import (  # noqa: F401 — re-exports for backward com
     format_context,
     generate,
 )
-from core.graph._grade import (  # noqa: F401 — re-exports for backward compat
+from core.graph._grade_verify import (  # noqa: F401 — re-exports for backward compat
+    _validate_cited_doc_ids,
     grade_documents,
     rewrite_query,
+    verify_answer,
 )
-from core.graph._graph_cache import (  # noqa: F401 — re-exports for backward compat
+from core.graph._graph_core import (  # noqa: F401 — re-exports for backward compat
     _GRAPH_CACHE_KEY,
-    _graph_cache,
-    _graph_object_cache,
-    delete_graph_thread,
-    invalidate_graph_cache,
-)
-from core.graph._graph_internals import (  # noqa: F401 — re-exports for backward compat
     _add_stage_ms,
     _doc_stable_id,
+    _graph_cache,
+    _graph_object_cache,
     _reset_stage_timings,
     _sanitize_channel_value,
     _stage_timing_var,
+    delete_graph_thread,
     get_state_attr,
+    invalidate_graph_cache,
 )
-from core.graph._preprocess import preprocess  # noqa: F401 — re-exports (back-compat)
-from core.graph._retrieve import (  # noqa: F401 — re-exports for backward compat
+from core.graph._retrieval import (  # noqa: F401 — re-exports for backward compat
     _MIN_CONTEXT_SECTION_LEN,
     _filter_min_section_len,
     _merge_adjacent_chunks,
+    preprocess,
     retrieve_and_rerank,
 )
 from core.graph._speculative_gen import (  # noqa: F401 — re-exports for backward compat
     _spec_registry,
     _SpecGenerate,
-)
-from core.graph._verify import (  # noqa: F401 — re-exports for backward compat
-    _validate_cited_doc_ids,
-    verify_answer,
 )
 from core.session import SessionManager  # noqa: F401 — re-exports for backward compat
 
@@ -72,15 +68,12 @@ logger = logging.getLogger(__name__)
 # build_graph() itself only uses the node functions, _graph_cache, and
 # get_state_attr.
 #
-# Removed in earlier pruning batches (zero consumers, unused in build_graph):
-#   _glue helpers, _grading_glue timing emitters, _grade memo helpers,
-#   _graph_cache internals, _json_utils, speculative-overlap control names
-#   (MAX_CONCURRENT_INFERENCE, _adopt/_cancel/_replay_spec_events,
-#   _spec_generate_events, _spec_overlap_enabled, _SpecEvent), _RE_VERIFY_DOC_CITATION
-#   and _coerce_chunk_content/_estimate_ctx_tokens.
-#
-# Batch 4 (pruning): _graph_utils/_json_utils/_grading_glue merged into a single
-# _graph_internals module; graph_builder re-exports from _graph_internals only.
+# Phase 2A (merge): _graph_cache/_graph_internals/_glue → _graph_core 단일 진원,
+# _grade/_verify → _grade_verify, _preprocess/_retrieve → _retrieval 로 병합.
+# graph_builder는 re-export + build_graph() 배선만 유지한다 (import-only 변경).
+# 구경로 7종(_graph_cache/_graph_internals/_glue/_grade/_verify/_preprocess/
+# _retrieve)은 alias shim으로 유지 — deep patch 타깃(core.graph._grade.X 등)이
+# 실 namespace를 계속 가리키도록 sys.modules 별칭을 사용한다.
 #
 # Speculative-overlap safety (IMPORTANT): speculative generate events are buffered
 # via a ContextVar and are NEVER surfaced on the transform route; they only overlap

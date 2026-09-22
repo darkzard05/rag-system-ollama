@@ -1,7 +1,7 @@
 """Top3-Refactor M1: GRADE_MEMO_KEY 단일 정의 계약 검증 테스트."""
 
 from common.constants import GRADE_MEMO_KEY as CONSTANTS_GRADE_MEMO_KEY
-from core.graph import _grade
+from core.graph import _grade_verify as _grade
 from core.pipeline_builder import GRADE_MEMO_KEY as PIPELINE_GRADE_MEMO_KEY
 
 

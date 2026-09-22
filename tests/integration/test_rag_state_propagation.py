@@ -35,7 +35,10 @@ import pytest
 from langchain_core.documents import Document
 
 import core.graph.graph_builder as gb  # noqa: E402
-from core.graph._graph_cache import delete_graph_thread, invalidate_graph_cache
+from core.graph._graph_core import (  # noqa: E402
+    delete_graph_thread,
+    invalidate_graph_cache,
+)
 
 # ---------------------------------------------------------------------------
 # 헬퍼: 그래프 노드 캡처 함정을 회피하는 재빌드

@@ -35,26 +35,25 @@ GRAPH_NODE_FUNCS = {
 GRAPH_BUILDER_PATH = SRC_DIR / "core" / "graph" / "graph_builder.py"
 SCHEMAS_PATH = SRC_DIR / "api" / "schemas.py"
 
-# Step 2: preprocess 는 core.graph._preprocess 로 이동됨.
-# Step 3: retrieve_and_rerank 는 core.graph._retrieve 로 이동됨.
-# Step 4: grade_documents / rewrite_query 는 core.graph._grade 로 이동됨.
+# Phase 2A: preprocess/retrieve_and_rerank 는 core.graph._retrieval 로 병합됨.
+# Phase 2A: grade_documents / rewrite_query 는 core.graph._grade_verify 로 병합됨.
 # Step 5: generate / format_context 등은 core.graph._generate 로 이동됨.
 # 노드별 소스 후보 파일 (추후 분리되는 모듈은 여기에 추가).
 NODE_FUNC_SOURCE_PATHS: dict[str, list[Path]] = {
     "preprocess": [
-        SRC_DIR / "core" / "graph" / "_preprocess.py",
+        SRC_DIR / "core" / "graph" / "_retrieval.py",
         GRAPH_BUILDER_PATH,
     ],
     "retrieve_and_rerank": [
-        SRC_DIR / "core" / "graph" / "_retrieve.py",
+        SRC_DIR / "core" / "graph" / "_retrieval.py",
         GRAPH_BUILDER_PATH,
     ],
     "grade_documents": [
-        SRC_DIR / "core" / "graph" / "_grade.py",
+        SRC_DIR / "core" / "graph" / "_grade_verify.py",
         GRAPH_BUILDER_PATH,
     ],
     "rewrite_query": [
-        SRC_DIR / "core" / "graph" / "_grade.py",
+        SRC_DIR / "core" / "graph" / "_grade_verify.py",
         GRAPH_BUILDER_PATH,
     ],
     "generate": [

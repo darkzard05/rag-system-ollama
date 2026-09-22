@@ -7,7 +7,7 @@
 
 from unittest.mock import patch
 
-from core.graph._verify import _should_verify
+from core.graph._grade_verify import _should_verify
 
 
 def test_should_verify_is_deterministic():
@@ -25,14 +25,14 @@ def test_should_verify_varies_by_query_or_docs():
     - ("질문 A", ["doc-a", "doc-b"]) → bucket 0.3441 (< 0.5, 검증)
     - ("질문 A", ["doc-a"])          → bucket 0.665  (>= 0.5, 미검증)
     """
-    with patch("core.graph._verify.VERIFICATION_SAMPLE_RATE", 0.5):
+    with patch("core.graph._grade_verify.VERIFICATION_SAMPLE_RATE", 0.5):
         assert _should_verify("질문 A", ["doc-a", "doc-b"]) is True
         assert _should_verify("질문 A", ["doc-a"]) is False
 
 
 def test_sample_rate_zero_never_verifies():
     """VERIFICATION_SAMPLE_RATE=0.0이면 어떤 입력도 검증하지 않습니다."""
-    with patch("core.graph._verify.VERIFICATION_SAMPLE_RATE", 0.0):
+    with patch("core.graph._grade_verify.VERIFICATION_SAMPLE_RATE", 0.0):
         for query in ("질문 A", "질문 B", "doc 인용 질문"):
             assert _should_verify(query, ["doc-a"]) is False
         # 빈-문서 쿼리도 결정적 버킷(["",])으로 동일하게 미검증

@@ -21,7 +21,7 @@ from langchain_core.documents import Document
 from langchain_core.messages import AIMessageChunk
 
 from common.config import MAX_CONCURRENT_INFERENCE
-from core.graph._glue import _start_speculative_generate
+from core.graph._graph_core import _start_speculative_generate
 from core.graph._speculative_gen import _adopt_speculative_generate
 from core.graph.graph_builder import (
     _spec_registry,
