@@ -292,24 +292,48 @@ class SessionManager:
 
         # 더티 키와 값을 세션 락 안에서 함께 스냅샷하여 TOCTOU, 부분 읽기,
         # 별칭(UI가 내부 리스트 공유) 문제를 제거합니다.
+        # deliver-then-consume: 쓰기 성공한 키만 더티에서 제거한다. 쓰기 실패 시
+        # 더티를 복원해 다음 sync에서 재시도한다 (영구 desync 방지).
         values: dict[str, Any] = {}
+        target_keys: set[str] = set()
         with cls._acquire_lock(sid):
             if key:
                 if key in state:
                     values[key] = state[key]
+                    target_keys.add(key)
             else:
                 dirty = state["_dirty_keys"].copy()
-                state["_dirty_keys"].clear()
                 for k in dirty:
                     if k in state:
                         values[k] = state[k]
+                        target_keys.add(k)
 
         if not values:
             return
 
         if cls._ui_sync is not None:
+            failed: set[str] = set()
             for k, val in values.items():
-                cls._ui_sync.write(k, val)
+                try:
+                    cls._ui_sync.write(k, val)
+                except (RuntimeError, KeyError, ValueError):
+                    failed.add(k)
+                    logger.error(
+                        "[SESSION] UI 미러링 실패, 더티 복원: %s", k, exc_info=True
+                    )
+            succeeded = target_keys - failed
+            if succeeded or failed:
+                with cls._acquire_lock(sid):
+                    cur = cls._fallback_sessions.get(sid)
+                    if cur is not None:
+                        cur["_dirty_keys"].difference_update(succeeded)
+                        cur["_dirty_keys"].update(failed)
+        else:
+            # 어댑터 미설치(core 단독/테스트) 시에는 기존처럼 소비한다.
+            with cls._acquire_lock(sid):
+                cur = cls._fallback_sessions.get(sid)
+                if cur is not None:
+                    cur["_dirty_keys"].difference_update(target_keys)
 
     @classmethod
     def has_pending_ui_sync(cls, session_id: str | None = None) -> bool:
