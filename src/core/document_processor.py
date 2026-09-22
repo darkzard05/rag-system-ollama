@@ -85,6 +85,18 @@ def _extraction_progress_pct(page_number: int, total_pages: int) -> int:
     return round(5 + 40 * (page_number / total_pages))
 
 
+def emit_progress(
+    on_progress: Callable[[int], Any] | None, pct: int, detail: str = ""
+) -> None:
+    """진행률을 보고합니다. (pct) 및 (pct, detail) 콜백 시그니처를 모두 지원합니다."""
+    if on_progress is None:
+        return
+    try:
+        on_progress(pct, detail=detail)  # type: ignore[call-arg]
+    except TypeError:
+        on_progress(pct)
+
+
 # 단글자 볼드 드롭캡 정규화: "**M** odeling" -> "Modeling".
 # PyMuPDF4LLM이 헤딩의 볼드 단글자를 "**X** " 형태로 추출하여 단어 중간에
 # 공백이 끼워지는 왜곡을 유발하므로, 청킹/임베딩 전에 단글자 볼드만 좁게 교정한다.
@@ -215,7 +227,6 @@ async def load_pdf_docs(
                 "문서 구조 분석 및 마크다운 변환 중",
                 session_id=session_id,
             )
-
             # context manager로 안전하게 PDF 핸들 관리
             with open_pdf_document(file_path) as doc:
                 total_pages = len(doc)
@@ -288,13 +299,17 @@ async def load_pdf_docs(
                                     "tables": [],
                                 }
                             # 진행률 콜백은 메인 스레드에서만 호출(스레드 안전)
-                            if on_progress:
-                                on_progress(
-                                    _extraction_progress_pct(page_idx + 1, total_pages)
-                                )
+                            emit_progress(
+                                on_progress,
+                                _extraction_progress_pct(page_idx + 1, total_pages),
+                                detail=f"Page {page_idx + 1}/{total_pages}",
+                            )
 
-                if on_progress:
-                    on_progress(_extraction_progress_pct(total_pages, total_pages))
+                emit_progress(
+                    on_progress,
+                    _extraction_progress_pct(total_pages, total_pages),
+                    detail="Text extraction complete",
+                )
 
                 docs: list[Document] = []
                 current_section = "Introduction/Root"

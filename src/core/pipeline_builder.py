@@ -26,7 +26,7 @@ from common.config import (
 from common.constants import GRADE_MEMO_KEY
 from common.exceptions import EmptyPDFError, InsufficientChunksError, VectorStoreError
 from core.chunking import split_documents
-from core.document_processor import compute_file_hash, load_pdf_docs
+from core.document_processor import compute_file_hash, emit_progress, load_pdf_docs
 from core.graph.graph_builder import build_graph
 from core.resource_manager import get_resource_manager
 from core.retriever_factory import create_bm25_retriever, create_vector_store
@@ -176,6 +176,7 @@ class PipelineBuilder:
             SessionManager.set(
                 "last_uploaded_file_name", prev_file_name, session_id=self.session_id
             )
+            SessionManager.set("is_building_rag", False, session_id=self.session_id)
             logger.warning(
                 "[RAG] [INDEX] 파이프라인 구축 실패 — file_hash 롤백: "
                 f"{file_hash!r} -> {prev_file_hash!r}"
@@ -231,6 +232,7 @@ class PipelineBuilder:
                     SessionManager.add_status_log(
                         "기존 분석 데이터 발견 (캐시 활용)", session_id=self.session_id
                     )
+                    emit_progress(on_progress, 90, detail="Loading from cache...")
                     await self._register_and_finalize(
                         file_hash,
                         vector_store,
@@ -254,18 +256,20 @@ class PipelineBuilder:
         if not documents:
             raise EmptyPDFError()
 
+        emit_progress(on_progress, 40, detail="Text extraction complete")
+
         # 3. 청크 분할 (Async)
         SessionManager.add_status_log(
             "문맥 최적화 및 청크 분할 중...", session_id=self.session_id
         )
+        emit_progress(on_progress, 45, detail="Splitting documents...")
         doc_splits, vectors = await split_documents(
             documents, embedder=embedder, session_id=self.session_id
         )
         if not doc_splits:
             raise InsufficientChunksError()
 
-        if on_progress:
-            on_progress(60)
+        emit_progress(on_progress, 55, detail="Chunking complete")
 
         _check()
 
@@ -273,6 +277,7 @@ class PipelineBuilder:
         SessionManager.add_status_log(
             "지식 베이스(Vector Index) 생성 중...", session_id=self.session_id
         )
+        emit_progress(on_progress, 60, detail="Building vector index...")
         vector_store_future = asyncio.to_thread(
             create_vector_store,
             doc_splits,
@@ -285,12 +290,13 @@ class PipelineBuilder:
             vector_store_future, bm25_future
         )
 
-        if on_progress:
-            on_progress(85)
+        emit_progress(on_progress, 68, detail="Vector index built")
+        emit_progress(on_progress, 75, detail="BM25 index built")
 
         _check()
 
         # 6. 등록 및 최종화 (캐시 저장 전에 수행 — 실패 시 캐시 미저장)
+        emit_progress(on_progress, 80, detail="Registering retrievers...")
         await self._register_and_finalize(
             file_hash,
             vector_store,
@@ -322,6 +328,7 @@ class PipelineBuilder:
         fresh_build=True 이면 (캐시 재사용이 아닌) 실제 신규/교체 인덱싱이
         완료된 것이므로, 기존 코퍼스와 연결된 캐시/메모를 무효화합니다.
         """
+        emit_progress(on_progress, 85, detail="Building graph workflow...")
         _, workflow = await asyncio.gather(
             get_resource_manager().register_retrievers(
                 file_hash, vector_store, bm25_retriever
@@ -337,8 +344,9 @@ class PipelineBuilder:
 
         EngineCacheManager.set_engine(self.session_id, workflow)
 
-        if on_progress:
-            on_progress(100)
+        emit_progress(on_progress, 95, detail="Graph workflow ready")
+
+        emit_progress(on_progress, 100, detail="Complete")
 
         # 신규 인덱싱 시에만 무효화: 캐시 재사용 빌드는 건드리지 않음.
         if fresh_build:

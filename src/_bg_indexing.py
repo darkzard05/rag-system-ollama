@@ -21,6 +21,7 @@ if _SRC_DIR not in sys.path:
 
 import asyncio
 import logging
+import time
 
 from common.config import DEFAULT_OLLAMA_MODEL
 
@@ -41,6 +42,7 @@ async def _bg_rebuild_task(
     SessionManager.set_session_id(session_id)
     SessionManager.set("rebuild_done", False, session_id=session_id)
     SessionManager.set("rebuild_error", None, session_id=session_id)
+    SessionManager.set("rebuild_start_time", time.time(), session_id=session_id)
     SessionManager.set(
         "rebuild_status", f"Analyzing '{file_name}'...", session_id=session_id
     )
@@ -85,10 +87,11 @@ async def _bg_rebuild_task(
 
         rag_sys = RAGSystem(session_id=session_id)
 
-        def _report_progress(pct: int, msg: str = ""):
+        def _report_progress(pct: int, msg: str = "", detail: str = ""):
+            status_msg = detail or msg or f"Progress {pct}%"
             SessionManager.set("rebuild_progress", pct, session_id=session_id)
-            if msg:
-                SessionManager.set("rebuild_status", msg, session_id=session_id)
+            if status_msg:
+                SessionManager.set("rebuild_status", status_msg, session_id=session_id)
             # 타임라인 진행 메시지 업데이트 (동일 msg_id)
             SessionManager.add_message(
                 "system",
@@ -96,7 +99,7 @@ async def _bg_rebuild_task(
                 msg_type="build_progress",
                 msg_id=build_msg_id,
                 progress=pct,
-                status=msg or f"Progress {pct}%",
+                status=status_msg,
                 cancelable=True,
                 logs=SessionManager.get("status_logs", [], session_id) or [],
                 session_id=session_id,
