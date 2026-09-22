@@ -22,11 +22,12 @@ from common.config import (
 )
 from common.text_utils import bm25_tokenizer, has_bm25_tokens
 from common.utils import fast_hash
+from core.session import SessionManager
 from security.cache_security import (
     CacheIntegrityError,
     CacheTrustError,
 )
-from services.optimization.caching_optimizer import (
+from services.optimization import (
     ObjectCache,
     SyncCacheBridge,
 )
@@ -526,3 +527,44 @@ class VectorStoreCache:
             self._object_cache.delete_sync(self.cache_dir)
             if os.path.exists(staging_dir):
                 shutil.rmtree(staging_dir)
+
+
+# RAG 엔진 캐시 관리자 — Phase 3C 에서 cache/engine_cache.py → core/rag_core.py
+# (pruning/batch-4) 를 거쳐 단일 캐시 홈인 이 모듈로 통합 (원본 그대로, 로거 이름
+# "cache.engine_cache" 네임스페이스 보존 — 로그 필터/캡처 동작 불변).
+# SessionManager 가 엔진의 단일 소스(SSoT)이자 수명주기를 관리한다 (스레드 안전,
+# 세션 생성/삭제 시 정리). 문서 해시(file_hash)가 유효성 키이며, 이벤트 루프 id 는
+# 쓰지 않는다 — set/get 이 서로 다른 이벤트 루프(업로드 빌드=AsyncWorker 루프,
+# 쿼리 스트림=`asyncio.run` 새 루프)에서 실행되므로 루프 id 로 묶으면 항상
+# 무효화된다.
+_engine_cache_logger = logging.getLogger("cache.engine_cache")
+
+
+class EngineCacheManager:
+    @staticmethod
+    def get_engine(session_id: str) -> Any | None:
+        rag_engine = SessionManager.get("rag_engine", session_id=session_id)
+        cached_file_hash = SessionManager.get(
+            "rag_engine_file_hash", session_id=session_id
+        )
+        current_file_hash = SessionManager.get("file_hash", session_id=session_id)
+
+        if not rag_engine or cached_file_hash != current_file_hash:
+            if rag_engine:
+                _engine_cache_logger.info(
+                    "[RAG] [ENGINE] 캐시 무효화 "
+                    f"(file_hash: {cached_file_hash!r}->{current_file_hash!r})"
+                )
+            return None
+
+        _engine_cache_logger.info("[RAG] [ENGINE] 캐시된 rag_engine 사용")
+        return rag_engine
+
+    @staticmethod
+    def set_engine(session_id: str, engine: Any) -> None:
+        # 엔진이 참조하는 문서의 해시를 함께 기록해, 이후 file_hash가 바뀌면
+        # get_engine이 이전 문서 기준 엔진을 반환하지 않게 합니다 (팬텀 상태 방지).
+        file_hash = SessionManager.get("file_hash", session_id=session_id)
+        SessionManager.set("rag_engine", engine, session_id=session_id)
+        SessionManager.set("rag_engine_file_hash", file_hash, session_id=session_id)
+        _engine_cache_logger.info("[RAG] [ENGINE] 엔진 캐시됨")
