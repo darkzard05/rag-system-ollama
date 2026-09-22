@@ -10,7 +10,7 @@ Infrastructure management including deployment, error recovery, and system rollb
 | Rollback | `rollback_system.py` | Handles checkpoints and recovery plans |
 | Error Recovery | `error_recovery.py` | Implements retry policies and timeout management |
 | Migrations | `migration_system.py` | Manages database and schema migrations |
-| Notifications | `notification_system.py` | Centralized system status and error alerting |
+| Notifications | `notification_system.py` *(deleted — consolidated into `services/monitoring/notification_system.py`)* | Centralized system status and error alerting |
 | Task Execution | `task_service.py` | Manages background infrastructure tasks |
 
 ## CONVENTIONS
