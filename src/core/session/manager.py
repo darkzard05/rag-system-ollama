@@ -58,7 +58,7 @@ from contextvars import ContextVar
 from typing import TYPE_CHECKING, Any
 
 from common.constants import MAX_MESSAGE_HISTORY
-from common.retry import retry_with_backoff
+from common.resilience import retry_with_backoff
 
 if TYPE_CHECKING:
     # Type-only import: never executed at runtime, so core stays free of any
