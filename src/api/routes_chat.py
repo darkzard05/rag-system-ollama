@@ -31,10 +31,10 @@ from api._deps import (
     verify_token,
 )
 from api.schemas import QueryRequest, QueryResponse
-from api.stream_events import chunk_to_stream_events
-from api.streaming_handler import (
-    ServerSentEventsHandler,
+from api.sse_helpers import ServerSentEventsHandler
+from api.stream_pipeline import (
     StreamChunk,
+    chunk_to_stream_events,
     get_adaptive_controller,
     get_streaming_handler,
 )

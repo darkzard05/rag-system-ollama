@@ -18,10 +18,9 @@ from typing import Any
 from unittest.mock import MagicMock, patch
 
 import ui.components.streaming as streaming_mod
-import ui.components.streaming_state as streaming_state_mod
+import ui.components.streaming_core as streaming_core_mod
 from api.routes_chat import chunk_to_sse_entries
-from api.stream_events import STREAM_EVENT_TYPES, chunk_to_stream_events
-from api.streaming_handler import StreamChunk
+from api.stream_pipeline import STREAM_EVENT_TYPES, StreamChunk, chunk_to_stream_events
 
 
 class _FakeSessionManager(MagicMock):
@@ -164,7 +163,7 @@ def test_ui_consumer_honors_all_six_event_kinds() -> None:
     with (
         patch.object(streaming_mod, "stream_chunks", return_value=iter(chunks)),
         patch.object(streaming_mod, "SessionManager", _FakeSessionManager),
-        patch.object(streaming_state_mod, "SessionManager", _FakeSessionManager),
+        patch.object(streaming_core_mod, "SessionManager", _FakeSessionManager),
     ):
         result = streaming_mod.consume_stream_into_message(
             "test_sid", "테스트 질문", "test-model", on_chunk=None

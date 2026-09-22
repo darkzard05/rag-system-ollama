@@ -9,7 +9,7 @@ from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from api.streaming_handler import StreamChunk
+    from api.stream_pipeline import StreamChunk
 
 __all__ = [
     "ServerSentEventsHandler",

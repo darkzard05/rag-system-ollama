@@ -1,7 +1,7 @@
 import pytest
 import pytest_asyncio
 from langchain_core.messages import AIMessageChunk
-from src.api.streaming_handler import StreamingResponseHandler
+from api.stream_pipeline import StreamingResponseHandler
 
 
 # 모의 비동기 스트림 생성기

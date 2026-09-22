@@ -37,7 +37,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 import common.config as config
-from api.streaming_handler import StreamChunk, StreamingResponseHandler
+from api.stream_pipeline import StreamChunk, StreamingResponseHandler
 from common import stream_worker
 from core.rag_core import RAGSystem
 from ui.components.streaming import stream_chunks
