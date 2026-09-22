@@ -10,6 +10,7 @@ from common.config import (
     DEFAULT_OLLAMA_MODEL,
 )
 from core.session import SessionManager
+from ui.widget_keys import reset_all_key
 
 
 def _render_sidebar_logo():
@@ -36,6 +37,7 @@ def render_settings_content(
     current_file_name=None,
     current_embedding_model=None,
     available_models=None,
+    ollama_reachable=True,
 ):
     """Render the settings content (callable outside the sidebar)."""
     _render_sidebar_logo()
@@ -49,6 +51,7 @@ def render_settings_content(
         is_swapping_model,
         current_file_name,
         available_models,
+        ollama_reachable,
     )
 
 
@@ -62,9 +65,14 @@ def _render_settings_internal(
     is_swapping_model,
     current_file_name,
     available_models,
+    ollama_reachable=True,
 ):
     """Render the settings section logic (accessibility-optimized)."""
     safe_models = available_models if isinstance(available_models, list) else []
+
+    # DEFECT #6: loading indicator while the LLM model is being swapped.
+    if is_swapping_model:
+        st.info("⏳ Switching model... Please wait.")
 
     # 1. 문서 업로드 섹션
     with st.container(border=True):
@@ -107,15 +115,21 @@ def _render_settings_internal(
             index=def_idx,
             key="model_selector",
             on_change=model_selector_callback,
-            disabled=is_generating or is_swapping_model,
+            disabled=is_generating or is_swapping_model or not ollama_reachable,
         )
 
-        # 모델 새로고침 (Ollama에서 모델 목록 재조회)
+        if not ollama_reachable:
+            st.caption(
+                "Start Ollama to select a model. "
+                "[Installation guide](https://ollama.com/download)"
+            )
+
+        # 모델 새로고침 (Ollama에서 모델 목록 재조회 — 보조 동작이므로 하향)
         if (
             st.button(
                 "Refresh Models",
                 use_container_width=True,
-                type="primary",
+                type="secondary",
                 help="Refresh the list of models available in Ollama.",
                 key="refresh_models_btn",
                 disabled=is_generating,
@@ -161,12 +175,14 @@ def _render_settings_internal(
             new_chat_callback()
 
         # 초기화 (파괴적 동작 — 확인 다이얼로그 + 생성 중 비활성 + 시각 위계 하향)
+        sid = SessionManager.get_session_id()
+        st.divider()
         if st.button(
-            "Reset All",
+            "🗑️ Reset All",
             use_container_width=True,
             type="secondary",
             help="Delete all conversations and data.",
-            key="reset_btn",
+            key=reset_all_key(sid),
             disabled=is_generating,
         ):
             _confirm_reset_all()

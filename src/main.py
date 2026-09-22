@@ -178,6 +178,19 @@ def _load_available_models() -> list[str]:
     return filtered or [DEFAULT_OLLAMA_MODEL]
 
 
+def _is_ollama_reachable() -> bool:
+    """Return True if the cached model list indicates Ollama is reachable.
+
+    Reads the raw cached result from ``_get_available_models_cached`` (no extra
+    blocking call) and checks for the sentinel error string or an empty list.
+    """
+    try:
+        models = _get_available_models_cached()
+    except Exception:
+        return False
+    return bool(models) and MSG_ERROR_OLLAMA_NOT_RUNNING not in models
+
+
 def _warm_available_models() -> None:
     """RC-C: 프로세스 부트 시 Ollama 모델 목록을 비동기 프리워밍합니다.
 
@@ -441,7 +454,9 @@ def on_refresh_models() -> None:
     st.rerun()
 
 
-def _render_app_layout(available_models: list[str] | None = None) -> None:
+def _render_app_layout(
+    available_models: list[str] | None = None, ollama_reachable: bool = True
+) -> None:
     from core.session import SessionManager
     from ui.components.sidebar import render_settings_content
 
@@ -456,6 +471,7 @@ def _render_app_layout(available_models: list[str] | None = None) -> None:
             is_swapping_model=bool(SessionManager.get("is_swapping_model", False)),
             current_file_name=SessionManager.get("last_uploaded_file_name"),
             available_models=available_models,
+            ollama_reachable=ollama_reachable,
         )
 
     from ui.ui import render_main_content
@@ -601,8 +617,17 @@ def main() -> None:
         SessionManager.set("is_generating_answer", False)
 
     available_models = st.session_state.available_models_list
+    ollama_reachable = _is_ollama_reachable()
+
+    if not ollama_reachable:
+        st.error(
+            "Ollama is not reachable. Start the Ollama server before using the app."
+        )
+
     _t_layout = time.perf_counter()
-    _render_app_layout(available_models=available_models)
+    _render_app_layout(
+        available_models=available_models, ollama_reachable=ollama_reachable
+    )
     logger.debug(
         "[PERF] main(): _render_app_layout(sidebar) took %.3fs",
         time.perf_counter() - _t_layout,
