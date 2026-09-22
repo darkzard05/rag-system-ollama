@@ -219,8 +219,9 @@ def test_status_caption_created_and_cleared_around_write_stream() -> None:
     status_ph = fake_st.empty.return_value
     captions = [call.args[0] for call in status_ph.caption.call_args_list if call.args]
     assert captions[0] == _INITIAL_CAPTION
-    # Phase 3: on_status는 프로세스 위상 요약(▸ 답변 생성...)으로 캡션을 갱신한다.
-    assert any("▸ 답변 생성" in text for text in captions)
+    # Phase 3: on_status는 프로세스 위상 요약으로 캡션을 갱신한다. 위상 라벨은
+    # bilingual t() 기반이므로 기본 LANG="en"에서는 영어 라벨이 렌더된다.
+    assert any("▸ Answer Generation" in text for text in captions)
     # finally 블록의 정리가 마지막 메서드 호출이어야 한다.
     assert status_ph.method_calls[-1][0] == "empty"
 

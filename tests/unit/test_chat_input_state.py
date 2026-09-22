@@ -8,7 +8,9 @@ from unittest.mock import patch
 from core.session import SessionManager
 from ui.components.chat import _resolve_chat_input_state, render_chat_input_area
 
-_PLACEHOLDER_GENERATING = "AI가 답변을 생성 중입니다... · ■ 버튼으로 중지할 수 있습니다"
+# Bilingual (DEFECT #8): _resolve_chat_input_state returns t() strings, which are
+# English under the default LANG="en" (see src/ui/strings.py en table).
+_PLACEHOLDER_GENERATING = "AI is generating answer... · Stop with ■ button"
 _PLACEHOLDER_NOT_READY = "Upload a PDF and ask a question"
 _PLACEHOLDER_READY = "Ask a follow-up question..."
 

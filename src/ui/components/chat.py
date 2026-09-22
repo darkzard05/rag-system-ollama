@@ -18,7 +18,6 @@ from typing import Any
 
 import streamlit as st
 
-from common.config import MSG_CHAT_GUIDE
 from common.utils import (
     apply_tooltips_to_response,
     normalize_latex_delimiters,
@@ -32,7 +31,8 @@ from ui.components.streaming import (
     _content_generator,
     _finalize_pdf_side_effects,
 )
-from ui.widget_keys import MAIN_CHAT_INPUT_KEY
+from ui.strings import get_phase_labels, t
+from ui.widget_keys import MAIN_CHAT_INPUT_KEY, SAMPLE_QUESTION_STATE_KEY
 
 logger = logging.getLogger(__name__)
 
@@ -316,17 +316,13 @@ def _render_unified_timeline(current_sid: str) -> None:
 
 # 프로세스 위상 라벨 (Phase 3: 답변 위 자막용). status 텍스트 키워드 기반으로
 # 진행 위상을 추론해 "문서 검색 → 증거 수집 → 답변 생성" 흐름을 표시한다.
-_PROCESS_PHASES: tuple[tuple[str, tuple[str, ...]], ...] = (
-    ("문서 검색", ("검색", "fetch", "retriev", "문서")),
-    ("증거 수집", ("증거", "연결", "context", "evidence", "리랭크", "rerank")),
-    ("답변 생성", ("답변", "생성", "generate", "response", "작성")),
-)
+_PHASE_LABELS = get_phase_labels()
 
 
 def _infer_proc_phase(status_text: str) -> int:
     """status 텍스트가 속한 프로세스 위상 인덱스를 반환한다 (미검출 -1)."""
     lowered = status_text.lower()
-    for idx, (_label, _keywords) in enumerate(_PROCESS_PHASES):
+    for idx, (_label, _keywords) in enumerate(_PHASE_LABELS):
         if any(k.lower() in lowered for k in _keywords):
             return idx
     return -1
@@ -336,7 +332,7 @@ def _proc_phase_caption(status_text: str, elapsed_sec: float) -> str:
     """답변 위 자막용 프로세스 위상 캡션 텍스트를 만든다."""
     active_idx = _infer_proc_phase(status_text)
     parts: list[str] = []
-    for idx, (label, _keywords) in enumerate(_PROCESS_PHASES):
+    for idx, (label, _keywords) in enumerate(_PHASE_LABELS):
         if active_idx >= 0 and idx == active_idx:
             parts.append(f"▸ {label}")
         elif active_idx > idx:
@@ -428,12 +424,17 @@ def _resolve_chat_input_state(sid: str) -> tuple[str, bool]:
     is_swapping = bool(SessionManager.get("is_swapping_model", False, sid))
 
     if is_generating:
-        return "AI가 답변을 생성 중입니다... · ■ 버튼으로 중지할 수 있습니다", False
+        return t("status_generating_with_stop"), False
     if is_swapping:
-        return "Switching models, please wait...", True
+        return t("status_switching_models"), True
     if not is_ready:
-        return MSG_CHAT_GUIDE, True
-    return "Ask a follow-up question...", False
+        return t("chat_guide"), True
+    return t("chat_placeholder_followup"), False
+
+
+def _consume_sample_question() -> str | None:
+    """Pop and return a pending sample question from session state, if any."""
+    return st.session_state.pop(SAMPLE_QUESTION_STATE_KEY, None)
 
 
 def render_chat_input_area() -> None:
@@ -450,6 +451,28 @@ def render_chat_input_area() -> None:
     """
     current_sid = SessionManager.get_session_id()
 
+    pending_sample = _consume_sample_question()
+    if pending_sample and SessionManager.is_ready_for_chat(session_id=current_sid):
+        SessionManager.add_message("user", pending_sample, session_id=current_sid)
+        stream_msg_id = str(uuid.uuid4())
+        SessionManager.add_message(
+            "assistant",
+            "",
+            msg_type="streaming",
+            msg_id=stream_msg_id,
+            query=pending_sample,
+            thought="",
+            documents=[],
+            metrics={},
+            citations=[],
+            processed_content=None,
+            session_id=current_sid,
+        )
+        SessionManager.set("is_generating_answer", True, current_sid)
+        SessionManager.set("generation_cancel", False, current_sid)
+        SessionManager.set("active_stream_msg_id", stream_msg_id, current_sid)
+        return
+
     # 생성 중에도 위젯을 disabled로 계속 렌더(입력창 소실 방지).
     input_placeholder, input_disabled = _resolve_chat_input_state(current_sid)
 
@@ -465,12 +488,15 @@ def render_chat_input_area() -> None:
     # 영속 메시지의 cancelled 마커로만 쓰인다.
     user_query = st.chat_input(
         input_placeholder,
-        disabled=False,
+        disabled=input_disabled,
         key=MAIN_CHAT_INPUT_KEY,
         submit_mode="stop",
     )
 
     if user_query:
+        if input_disabled:
+            st.error(input_placeholder)
+            return
         query_text = user_query.strip()
         if query_text:
             _t_submit = time.perf_counter()
@@ -518,7 +544,7 @@ def _friendly_stream_error(exc: Exception) -> str:
     """원시 예외를 사용자 친화 메시지로 매핑합니다 (lazy import로 순환 의존 회피)."""
     from ui.components.streaming import friendly_error_message
 
-    return friendly_error_message(exc)
+    return str(friendly_error_message(exc))
 
 
 def _render_streaming_with_write_stream(
@@ -539,6 +565,7 @@ def _render_streaming_with_write_stream(
     stop_hit = False
     stop_exc: BaseException | None = None
     response = None
+    stream_error: str | None = None
     try:
         with st.chat_message("assistant", avatar=AVATARS["assistant"]):
             # [UX-1/UX-2] 프리토큰/생성 중 라이브 상태 캡션.
@@ -607,7 +634,8 @@ def _render_streaming_with_write_stream(
                     ),
                 )
             except Exception as exc:
-                response = f"오류가 발생했습니다: {exc}"
+                stream_error = _friendly_stream_error(exc)
+                response = stream_error
             finally:
                 # 완료/예외/■ 중지(StopException — BaseException) 모두에서 실행되어
                 # 잘못된 "생성 중" 잔상이 남지 않는다. 플레이스홀더는 매 run의 일시 요소.
@@ -644,6 +672,10 @@ def _render_streaming_with_write_stream(
         SessionManager.get("generation_cancel", False, current_sid)
     )
     error_text = aux_state.get("error")
+    if error_text:
+        final_error: str | None = _friendly_stream_error(Exception(error_text))
+    else:
+        final_error = stream_error
     SessionManager.add_message(
         "assistant",
         str(response) if response else (aux_state.get("content") or ""),
@@ -656,7 +688,7 @@ def _render_streaming_with_write_stream(
         process_steps=aux_state.get("process_steps", [])[-10:],
         processed_content=None,
         cancelled=cancelled,
-        error=_friendly_stream_error(Exception(error_text)) if error_text else None,
+        error=final_error,
         session_id=current_sid,
     )
     SessionManager.set("is_generating_answer", False, current_sid=current_sid)
