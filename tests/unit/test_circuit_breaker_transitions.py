@@ -15,7 +15,7 @@ from datetime import datetime, timedelta
 
 import pytest
 
-from common.circuit_breaker import (
+from common.resilience import (
     CircuitBreaker,
     CircuitBreakerOpen,
     CircuitBreakerState,

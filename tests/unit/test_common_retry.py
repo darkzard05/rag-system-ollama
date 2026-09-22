@@ -10,7 +10,7 @@ import asyncio
 import httpx
 import pytest
 
-from common.retry import retry_stream, retry_with_backoff
+from common.resilience import retry_stream, retry_with_backoff
 
 
 # ---------------------------------------------------------------------------
@@ -65,10 +65,10 @@ def test_retry_sync_exhaust_then_raise() -> None:
 def test_retry_sync_uses_time_sleep(monkeypatch: pytest.MonkeyPatch) -> None:
     """Sync 경로는 asyncio.sleep 이 아니라 time.sleep 을 써야 합니다."""
     slept: list[float] = []
-    monkeypatch.setattr("common.retry.time.sleep", lambda s: slept.append(s))
+    monkeypatch.setattr("common.resilience.time.sleep", lambda s: slept.append(s))
     async_slept: list[float] = []
     monkeypatch.setattr(
-        "common.retry.asyncio.sleep",
+        "common.resilience.asyncio.sleep",
         lambda s: async_slept.append(s),  # type: ignore[assignment]
     )
     calls = 0

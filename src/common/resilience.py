@@ -1,17 +1,174 @@
 """
-서킷 브레이커 패턴 - Task 14
-상태 기반 에러 관리, 자동 회복
+공통 복원력(resilience) 단일 진원 (Phase 1A 병합).
+
+구 ``common.retry`` (지수 백오프 재시도 + 스트림 재시도)와
+구 ``common.circuit_breaker`` (서킷 브레이커 상태 머신)를 흡수했다.
+내부 로직은 변경 없이 이동했으며, 구경로는 순수 re-export shim으로 유지한다
+(Phase 1 only, Task10에서 제거).
 """
 
+from __future__ import annotations
+
+import asyncio
 import logging
+import time
 from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
 from threading import RLock
-from typing import Any
+from typing import Any, TypeVar
+
+import httpx
 
 logger = logging.getLogger(__name__)
+
+T = TypeVar("T")
+# 동기 콜러블이든 비동기 콜러블이든 수용하기 위한 폭넓은 시그니처 별칭.
+_Retryable = Callable[..., Any]
+
+# retry_stream 이 재시도하는 전송/네트워크 오류 집합.
+_STREAM_RETRY_ON: tuple[type[Exception], ...] = (
+    ConnectionError,
+    TimeoutError,
+    OSError,
+    httpx.RequestError,
+    httpx.TimeoutException,
+)
+
+
+def retry_with_backoff(
+    fn: _Retryable,
+    *,
+    max_retries: int = 3,
+    base_delay: float = 1.0,
+    backoff: float = 2.0,
+    retry_on: tuple[type[Exception], ...] = (Exception,),
+    use_async_sleep: bool = True,
+) -> Any:
+    """값을 반환하는 콜러블에 지수 백오프 재시도를 적용합니다.
+
+    동기 함수면 ``time.sleep``을, 비동기 함수면 ``asyncio.sleep``을 사용합니다.
+    (동기 경로는 항상 ``time.sleep`` — ``use_async_sleep``은 비동기 경로에만 영향.)
+
+    Args:
+        fn: 재시도할 동기/비동기 콜러블.
+        max_retries: 최대 시도 횟수 (1이면 재시도 없음).
+        base_delay: 첫 백오프 지연(초).
+        backoff: 지수 계수.
+        retry_on: 재시도 대상 예외 튜플.
+        use_async_sleep: 비동기 경로에서 ``asyncio.sleep``을 사용할지 여부
+            (기본 True; False면 ``time.sleep`` 사용). 동기 경로는 항상
+            ``time.sleep``을 사용합니다.
+
+    Returns:
+        동기 fn이면 반환값(T), 비동기 fn이면 awaitable(Awaitable[T]).
+    """
+    if asyncio.iscoroutinefunction(fn):
+        return _retry_async(
+            fn, max_retries, base_delay, backoff, retry_on, use_async_sleep
+        )
+    return _retry_sync(fn, max_retries, base_delay, backoff, retry_on, use_async_sleep)
+
+
+def _retry_sync(
+    fn: _Retryable,
+    max_retries: int,
+    base_delay: float,
+    backoff: float,
+    retry_on: tuple[type[Exception], ...],
+    use_async_sleep: bool,  # noqa: ARG001 - sync 경로는 항상 time.sleep
+) -> Any:
+    for attempt in range(max_retries):
+        try:
+            return fn()
+        except retry_on as exc:
+            if attempt == max_retries - 1:
+                raise
+            delay = base_delay * (backoff**attempt)
+            logger.warning(
+                f"[RETRY] Sync retry {attempt + 1}/{max_retries} "
+                f"after {delay:.1f}s: {exc}"
+            )
+            time.sleep(delay)
+    # max_retries == 0 같은 방어 코드 경로; 실제로는 위 루프에서 반환/예외.
+    raise RuntimeError("unreachable: retry loop terminated without result")
+
+
+async def _retry_async(
+    fn: _Retryable,
+    max_retries: int,
+    base_delay: float,
+    backoff: float,
+    retry_on: tuple[type[Exception], ...],
+    use_async_sleep: bool,
+) -> Any:
+    for attempt in range(max_retries):
+        try:
+            return await fn()
+        except retry_on as exc:
+            if attempt == max_retries - 1:
+                raise
+            delay = base_delay * (backoff**attempt)
+            logger.warning(
+                f"[RETRY] Async retry {attempt + 1}/{max_retries} "
+                f"after {delay:.1f}s: {exc}"
+            )
+            if use_async_sleep:
+                await asyncio.sleep(delay)
+            else:
+                time.sleep(delay)
+    raise RuntimeError("unreachable: retry loop terminated without result")
+
+
+async def retry_stream(
+    event_stream_factory: Callable[[], AsyncIterator[T]],
+    *,
+    max_retries: int = 3,
+    base_delay: float = 1.0,
+) -> AsyncIterator[T]:
+    """비동기 제너레이터에 지수 백오프 재시도를 적용합니다.
+
+    ``_stream_with_retry``(rag_core.py) 의미론을 보존합니다:
+
+    - ``async for item in event_stream_factory(): yield item``
+    - 첫 ``yield`` 시 ``yielded_any`` 를 True로 설정.
+    - ``ConnectionError/TimeoutError/OSError/httpx.RequestError/``
+      ``httpx.TimeoutException`` 발생 시:
+        - ``yielded_any`` 가 True 면 재시도하지 않고 재발생 (중복 전송 방지).
+        - 아니면 ``base_delay * 2**attempt`` 대기 후 재시도.
+    - 마지막 시도(``attempt == max_retries - 1``)의 오류는 재시도 없이 재발생.
+    - ``asyncio.CancelledError`` 는 항상 재발생.
+
+    Args:
+        event_stream_factory: 호출 시 ``AsyncIterator[T]`` 를 반환하는 팩토리.
+        max_retries: 최대 시도 횟수.
+        base_delay: 첫 백오프 지연(초).
+
+    Yields:
+        원본 스트림이 내보내는 항목 (T).
+    """
+    for attempt in range(max_retries):
+        yielded_any = False
+        try:
+            async for item in event_stream_factory():
+                yielded_any = True
+                yield item
+            return
+        except _STREAM_RETRY_ON as exc:
+            if yielded_any:
+                # 첫 토큰 이후 오류는 재시도하지 않는다 (중복 전송 방지).
+                raise
+            if attempt == max_retries - 1:
+                raise
+            delay = base_delay * (2**attempt)
+            logger.warning(
+                f"[RETRY] Stream retry {attempt + 1}/{max_retries} "
+                f"after {delay:.1f}s: {exc}"
+            )
+            await asyncio.sleep(delay)
+        except asyncio.CancelledError:
+            raise
 
 
 class CircuitBreakerOpen(Exception):
@@ -356,3 +513,15 @@ def get_circuit_breaker_registry() -> CircuitBreakerRegistry:
     if _circuit_breaker_registry is None:
         _circuit_breaker_registry = CircuitBreakerRegistry()
     return _circuit_breaker_registry
+
+
+__all__ = [
+    "CircuitBreaker",
+    "CircuitBreakerMetrics",
+    "CircuitBreakerOpen",
+    "CircuitBreakerRegistry",
+    "CircuitBreakerState",
+    "get_circuit_breaker_registry",
+    "retry_stream",
+    "retry_with_backoff",
+]
