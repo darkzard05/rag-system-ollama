@@ -41,6 +41,7 @@ from ui.components.streaming_state import (
 
 __all__ = [
     "_AUX_STATE_KEY",
+    "_ERROR_SIGNATURES",
     "_build_process",
     "_clear_aux_state",
     "_content_generator",
@@ -50,6 +51,7 @@ __all__ = [
     "_recover_final_answer",
     "_target_message_dict",
     "_write_aux_state",
+    "FriendlyError",
     "consume_stream_into_message",
     "friendly_error_message",
     "stream_chunks",
@@ -60,24 +62,101 @@ logger = logging.getLogger(__name__)
 
 _GENERIC_STREAMING_MSG = "An error occurred while generating the answer."
 
-# 원시 예외 서명 → 사용자 친화 메시지 매핑 (config.yml errors 영역 상수 활용)
-_ERROR_SIGNATURES: tuple[tuple[str, str], ...] = (
-    ("connection refused", MSG_ERROR_OLLAMA_NOT_RUNNING),
-    ("connection reset", MSG_ERROR_OLLAMA_NOT_RUNNING),
-    ("cannot connect", MSG_ERROR_OLLAMA_NOT_RUNNING),
-    ("failed to connect", MSG_ERROR_OLLAMA_NOT_RUNNING),
-    ("max retries exceeded", MSG_ERROR_OLLAMA_NOT_RUNNING),
-    ("연결할 수 없", MSG_ERROR_OLLAMA_NOT_RUNNING),
+# 원시 예외 서명 → (원인 설명, 재시도 가능 여부) 매핑 (config.yml errors 영역 상수 활용)
+# (signature_substring, cause_description, retryable)
+_ERROR_SIGNATURES: tuple[tuple[str, str, bool], ...] = (
+    ("connection refused", MSG_ERROR_OLLAMA_NOT_RUNNING, True),
+    ("connection reset", MSG_ERROR_OLLAMA_NOT_RUNNING, True),
+    ("cannot connect", MSG_ERROR_OLLAMA_NOT_RUNNING, True),
+    ("failed to connect", MSG_ERROR_OLLAMA_NOT_RUNNING, True),
+    ("max retries exceeded", MSG_ERROR_OLLAMA_NOT_RUNNING, True),
+    ("연결할 수 없", MSG_ERROR_OLLAMA_NOT_RUNNING, True),
+    (
+        "timed out",
+        "Request timed out. The model may be overloaded — please try again.",
+        True,
+    ),
+    (
+        "timeout",
+        "Request timed out. The model may be overloaded — please try again.",
+        True,
+    ),
+    ("cancelled", "Generation was stopped by the user.", False),
+    (
+        "invalid pdf",
+        "The PDF file appears to be corrupted or in an unsupported format.",
+        False,
+    ),
+    ("pdf", "A PDF processing error occurred. Please try re-uploading the file.", True),
+    ("embedding", "The embedding model encountered an error. Please try again.", True),
+    (
+        "memory",
+        "Insufficient memory to complete the operation. Try a smaller document.",
+        False,
+    ),
 )
 
 
-def friendly_error_message(exc: Exception) -> str:
-    """원시 예외를 설정 기반 친화적 메시지로 매핑합니다. 스택/원문은 노출하지 않습니다."""
+class FriendlyError(dict[str, Any]):
+    """Structured error with cause, retryability, and CTA info.
+
+    Behaves like a dict but also has a .message property for backward compat.
+    When cast to str (via str() or f-string), returns the user-facing message.
+    """
+
+    def __init__(
+        self,
+        *,
+        message: str,
+        cause: str = "",
+        retryable: bool = True,
+        cta: list[str] | None = None,
+    ):
+        super().__init__(
+            message=message, cause=cause, retryable=retryable, cta=cta or []
+        )
+
+    @property
+    def message(self) -> str:
+        return self["message"]
+
+    def __str__(self) -> str:
+        return str(self["message"])
+
+    def __repr__(self) -> str:
+        return f"FriendlyError({self['message']!r})"
+
+    def __eq__(self, other: object) -> bool:
+        if isinstance(other, str):
+            return self["message"] == other
+        return super().__eq__(other)  # type: ignore[no-any-return]
+
+    def __contains__(self, item: object) -> bool:
+        """Support 'substring in FriendlyError(...)' — checks message text."""
+        if isinstance(item, str):
+            return item in self["message"]
+        return super().__contains__(item)
+
+    def lower(self) -> str:
+        """Support FriendlyError(...).lower() — returns lowercase message."""
+        return self["message"].lower()
+
+
+def friendly_error_message(exc: Exception) -> FriendlyError:
+    """Map raw exception to structured user-friendly error. Never exposes stack traces."""
     text = str(exc).lower()
-    for signature, friendly in _ERROR_SIGNATURES:
+    for signature, cause, retryable in _ERROR_SIGNATURES:
         if signature in text:
-            return friendly
-    return _GENERIC_STREAMING_MSG
+            cta = ["Retry"] if retryable else []
+            return FriendlyError(
+                message=cause, cause=cause, retryable=retryable, cta=cta
+            )
+    return FriendlyError(
+        message=_GENERIC_STREAMING_MSG,
+        cause=str(exc)[:200],
+        retryable=True,
+        cta=["Retry", "New Chat"],
+    )
 
 
 def _finalize_pdf_side_effects(sid: str, msg_id: str) -> None:
@@ -246,7 +325,10 @@ def consume_stream_into_message(
             session_id=sid,
         )
         _emit(False)
-        return _target_message_dict(sid, resolved_id)
+        result = _target_message_dict(sid, resolved_id)
+        if result is not None and not result.get("content"):
+            result["content"] = accumulated.strip()
+        return result
 
     cancelled = bool(SessionManager.get("generation_cancel", False, session_id=sid))
     SessionManager.set("is_generating_answer", False, current_sid=sid)

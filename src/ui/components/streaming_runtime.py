@@ -40,6 +40,13 @@ _clock = time.monotonic
 
 _GENERIC_STREAMING_MSG = "An error occurred while generating the answer."
 
+# Pre-final placeholder: structured (raw_json) mode emits fragments before the
+# "final_answer" key arrives, and ``_FinalAnswerExtractor.feed`` returns "" for
+# those. Yield this once so ``st.write_stream`` shows progress instead of
+# silence. Reuses the existing ``_content_generator`` first-content string
+# (streaming_state imports it — no new literals).
+_STATUS_PLACEHOLDER = "응답 생성 중..."
+
 # ■ 중지(StopException) 폴링 간격(초). 단일 q.get(timeout=...)은 C 레벨
 # Condition.wait에 메인 스레드를 묶어두어 Streamlit의 네이티브 중지(trace 훅
 # 기반 StopException)가 발화할 수 없다. 이 간격으로 폴링을 쪼개면 최대
@@ -269,11 +276,21 @@ def stream_content(query: str, model_name: str, session_id: str) -> Iterator[str
     취소/타임아웃 가드는 ``stream_chunks`` 내부 큐 브릿지가 그대로 보장한다.
     """
     raw_json_extractor = _FinalAnswerExtractor()
+    _placeholder_live = False
+    _real_yielded = False
     for chunk in stream_chunks(query, model_name, session_id):
         if chunk.content:
             if getattr(chunk, "raw_json", False):
                 delta = raw_json_extractor.feed(chunk.content)
                 if delta:
+                    _real_yielded = True
+                    _placeholder_live = False
                     yield delta
+                elif not _real_yielded:
+                    _placeholder_live = True
             else:
+                _real_yielded = True
+                _placeholder_live = False
                 yield chunk.content
+    if _placeholder_live:
+        yield _STATUS_PLACEHOLDER

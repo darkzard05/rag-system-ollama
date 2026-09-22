@@ -16,7 +16,11 @@ from typing import Any
 from core.session import SessionManager
 from ui.components.common import get_doc_metadata
 from ui.components.streaming_extractors import _FinalAnswerExtractor
-from ui.components.streaming_runtime import _clock, stream_chunks
+from ui.components.streaming_runtime import (
+    _STATUS_PLACEHOLDER,
+    _clock,
+    stream_chunks,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -127,6 +131,8 @@ def _content_generator(
     citations: list[dict[str, Any]] = []
     process_steps: list[str] = []
     _content_started = False
+    _placeholder_live = False
+    _real_yielded = False
     raw_json_extractor = _FinalAnswerExtractor()
 
     _t_status_start = _clock()
@@ -161,19 +167,36 @@ def _content_generator(
                 break
             if chunk.status:
                 _report_status(chunk.status)
+            _yielded_this_chunk = False
             if chunk.content:
                 if not _content_started:
                     _content_started = True
                     if not chunk.status:
-                        _report_status("응답 생성 중...")
+                        _report_status(_STATUS_PLACEHOLDER)
+                        if not _real_yielded:
+                            _placeholder_live = True
                 if getattr(chunk, "raw_json", False):
                     delta = raw_json_extractor.feed(chunk.content)
                     accumulated += delta
                     if delta:
+                        _real_yielded = True
+                        _placeholder_live = False
+                        _yielded_this_chunk = True
                         yield delta
                 else:
                     accumulated += chunk.content
+                    _real_yielded = True
+                    _placeholder_live = False
+                    _yielded_this_chunk = True
                     yield chunk.content
+            if (
+                not chunk.status
+                and not _yielded_this_chunk
+                and not _real_yielded
+                and getattr(chunk, "raw_json", False)
+            ):
+                _report_status(_STATUS_PLACEHOLDER)
+                _placeholder_live = True
             if chunk.thought:
                 thought += chunk.thought
             if chunk.status and (
@@ -207,6 +230,8 @@ def _content_generator(
                 if snapshot != _last_on_aux_snapshot:
                     _last_on_aux_snapshot = snapshot
                     on_aux(_aux_state)
+        if _placeholder_live:
+            yield _STATUS_PLACEHOLDER
     except Exception as exc:
         _write_aux_state(
             sid,
