@@ -4,7 +4,7 @@ import time
 
 import pytest
 
-from services.optimization._backends import CacheEntry, MemoryCache
+from services.optimization.backends import CacheEntry, MemoryCache
 
 
 def test_cache_entry_creation() -> None:

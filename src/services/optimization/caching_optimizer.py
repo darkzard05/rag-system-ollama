@@ -11,7 +11,8 @@ from services.monitoring.performance_monitor import (
     OperationType,
     get_performance_monitor,
 )
-from services.optimization._backends import (  # noqa: F401 — re-exports for backward compat
+from services.optimization._metrics import CacheStatistics
+from services.optimization.backends import (  # noqa: F401 — re-exports for backward compat
     CACHE_FORMAT,
     CACHE_FORMAT_KEY,
     CacheBackend,
@@ -25,7 +26,6 @@ from services.optimization._backends import (  # noqa: F401 — re-exports for b
     T,
     _json_default,
 )
-from services.optimization._metrics import CacheStatistics
 
 logger = logging.getLogger(__name__)
 
@@ -35,7 +35,7 @@ logger = logging.getLogger(__name__)
 # ----------------------------------------------------------------------------
 # 캐시 백엔드 계층(CacheEntry/CacheBackend/MemoryCache/SemanticCache/DiskCache/
 # ObjectCache/SyncCacheBridge + CACHE_FORMAT/CACHE_FORMAT_KEY/_json_default)은
-# ``services.optimization._backends`` 로, 통계(CacheStatistics)는
+# ``services.optimization.backends`` 로, 통계(CacheStatistics)는
 # ``services.optimization._metrics`` 로 분리되었다. 위 import 는 분리 이전
 # import 경로(``services.optimization.caching_optimizer.<symbol>``)에 대한 하위
 # 호환 재수출(re-export)이다. 이 모듈에는 CacheManager 와 get_cache_manager 만

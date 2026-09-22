@@ -4,7 +4,7 @@ import numpy as np
 import pytest
 
 from common.utils import fast_hash
-from services.optimization.caching_optimizer import DiskCache, SemanticCache
+from services.optimization.backends import DiskCache, SemanticCache
 
 
 class _FakeEmbedder:

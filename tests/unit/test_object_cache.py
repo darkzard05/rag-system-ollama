@@ -10,7 +10,7 @@ import time
 
 import pytest
 
-from services.optimization.caching_optimizer import (
+from services.optimization.backends import (
     ObjectCache,
     SyncCacheBridge,
 )
