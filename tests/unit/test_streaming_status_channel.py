@@ -35,7 +35,7 @@ os.environ.setdefault("IS_CI_TEST", "true")
 
 import ui.components.chat as chat_mod  # noqa: E402
 import ui.components.streaming as streaming_mod  # noqa: E402
-import ui.components.streaming_state as streaming_state_mod  # noqa: E402
+import ui.components.streaming_core as streaming_core_mod  # noqa: E402
 from api.streaming_handler import StreamChunk  # noqa: E402
 
 _STATUS_A = StreamChunk(content="", status="관련 지식 검색 중...")
@@ -126,8 +126,8 @@ def _run_generator(
         elapsed.append(seconds)
 
     with (
-        patch.object(streaming_state_mod, "stream_chunks", return_value=iter(chunks)),
-        patch.object(streaming_state_mod, "SessionManager", _FakeSessionManager),
+        patch.object(streaming_core_mod, "stream_chunks", return_value=iter(chunks)),
+        patch.object(streaming_core_mod, "SessionManager", _FakeSessionManager),
     ):
         if with_on_status:
             out = list(
@@ -208,8 +208,8 @@ def test_status_caption_created_and_cleared_around_write_stream() -> None:
     chunks = [_STATUS_A, _CONTENT_1, _STATUS_B, _CONTENT_2]
 
     with (
-        patch.object(streaming_state_mod, "stream_chunks", return_value=iter(chunks)),
-        patch.object(streaming_state_mod, "SessionManager", fake),
+        patch.object(streaming_core_mod, "stream_chunks", return_value=iter(chunks)),
+        patch.object(streaming_core_mod, "SessionManager", fake),
         patch.object(chat_mod, "st", fake_st),
         patch.object(chat_mod, "render_generation_expander", MagicMock()),
         patch.object(chat_mod, "SessionManager", fake),
@@ -249,8 +249,8 @@ def test_content_generator_calls_on_aux_only_on_changes() -> None:
         StreamChunk(content="본문"),
     ]
     with (
-        patch.object(streaming_state_mod, "stream_chunks", return_value=iter(chunks)),
-        patch.object(streaming_state_mod, "SessionManager", _FakeSessionManager),
+        patch.object(streaming_core_mod, "stream_chunks", return_value=iter(chunks)),
+        patch.object(streaming_core_mod, "SessionManager", _FakeSessionManager),
     ):
         out = list(
             streaming_mod._content_generator("q", "m", "s", "mid", on_aux=called.append)
@@ -295,7 +295,7 @@ def test_stop_exception_persists_partial_answer() -> None:
     fake_st.write_stream.side_effect = StopException
 
     with (
-        patch.object(streaming_state_mod, "SessionManager", fake),
+        patch.object(streaming_core_mod, "SessionManager", fake),
         patch.object(chat_mod, "SessionManager", fake),
         patch.object(chat_mod, "st", fake_st),
         patch.object(chat_mod, "render_generation_expander", MagicMock()),

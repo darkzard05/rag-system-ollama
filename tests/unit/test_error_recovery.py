@@ -18,13 +18,11 @@ from __future__ import annotations
 
 import uuid
 from typing import Any
-from unittest.mock import MagicMock, patch
-
-import pytest
+from unittest.mock import patch
 
 from ui.components.streaming import (
-    _GENERIC_STREAMING_MSG,
     _ERROR_SIGNATURES,
+    _GENERIC_STREAMING_MSG,
     friendly_error_message,
 )
 
@@ -105,7 +103,6 @@ class TestErrorRecoveryCTA:
         정보를 포함하지 않는다.
         """
         from ui.components.streaming import consume_stream_into_message
-        from ui.components.streaming_state import _AUX_STATE_KEY
 
         _store: dict[str, Any] = {}
         _messages: list[dict[str, Any]] = []
@@ -153,6 +150,7 @@ class TestErrorRecoveryCTA:
         with (
             patch("ui.components.streaming.stream_chunks", _failing_stream),
             patch("ui.components.streaming.SessionManager", _TestSessionManager),
+            patch("ui.components.streaming_core.SessionManager", _TestSessionManager),
             patch("ui.components.streaming_state.SessionManager", _TestSessionManager),
         ):
             result = consume_stream_into_message("test_sid", "test query", "test-model")
@@ -209,8 +207,8 @@ class TestErrorRecoveryCTA:
 
     def test_error_preserves_partial_content(self) -> None:
         """오류 발생 시 부분 응답이 보존되어야 한다."""
-        from ui.components.streaming import consume_stream_into_message
         from api.streaming_handler import StreamChunk
+        from ui.components.streaming import consume_stream_into_message
 
         _store: dict[str, Any] = {}
         _messages: list[dict[str, Any]] = []
@@ -257,6 +255,7 @@ class TestErrorRecoveryCTA:
         with (
             patch("ui.components.streaming.stream_chunks", _partial_then_fail),
             patch("ui.components.streaming.SessionManager", _TestSessionManager),
+            patch("ui.components.streaming_core.SessionManager", _TestSessionManager),
             patch("ui.components.streaming_state.SessionManager", _TestSessionManager),
         ):
             result = consume_stream_into_message("test_sid", "test query", "test-model")

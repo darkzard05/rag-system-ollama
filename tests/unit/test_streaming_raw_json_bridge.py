@@ -31,8 +31,7 @@ os.environ.setdefault("IS_CI_TEST", "true")
 
 import ui.components.chat as chat_mod  # noqa: E402
 import ui.components.streaming as streaming_mod  # noqa: E402
-import ui.components.streaming_runtime as streaming_runtime_mod  # noqa: E402
-import ui.components.streaming_state as streaming_state_mod  # noqa: E402
+import ui.components.streaming_core as streaming_core_mod  # noqa: E402
 from api.streaming_handler import StreamChunk  # noqa: E402
 
 _FINAL_ANSWER = "안녕하세요, 세상!"
@@ -142,9 +141,9 @@ def _render_with_write_stream(fake: _FakeSessionManager, fake_st: MagicMock) -> 
     """``_render_streaming_with_write_stream`` 5종 패치 하네스 (test 6과 동일)."""
     with (
         patch.object(
-            streaming_state_mod, "stream_chunks", return_value=iter(_RAW_JSON_CHUNKS)
+            streaming_core_mod, "stream_chunks", return_value=iter(_RAW_JSON_CHUNKS)
         ),
-        patch.object(streaming_state_mod, "SessionManager", fake),
+        patch.object(streaming_core_mod, "SessionManager", fake),
         patch.object(chat_mod, "st", fake_st),
         patch.object(chat_mod, "render_generation_expander", MagicMock()),
         patch.object(chat_mod, "SessionManager", fake),
@@ -176,9 +175,9 @@ def test_content_generator_yields_only_final_answer_for_raw_json() -> None:
     """raw_json 청크 3개 → ``_content_generator`` 가 delta 2개만 yield."""
     with (
         patch.object(
-            streaming_state_mod, "stream_chunks", return_value=iter(_RAW_JSON_CHUNKS)
+            streaming_core_mod, "stream_chunks", return_value=iter(_RAW_JSON_CHUNKS)
         ),
-        patch.object(streaming_state_mod, "SessionManager", _FakeSessionManager),
+        patch.object(streaming_core_mod, "SessionManager", _FakeSessionManager),
     ):
         out = list(streaming_mod._content_generator("q", "m", "s", "mid"))
 
@@ -193,8 +192,8 @@ def test_content_generator_mixed_raw_json_and_plain_keeps_plain() -> None:
     """raw_json 3개 + 일반 청크 → 일반 청크는 원문 그대로 yield."""
     chunks = [*_RAW_JSON_CHUNKS, _PLAIN_CHUNK]
     with (
-        patch.object(streaming_state_mod, "stream_chunks", return_value=iter(chunks)),
-        patch.object(streaming_state_mod, "SessionManager", _FakeSessionManager),
+        patch.object(streaming_core_mod, "stream_chunks", return_value=iter(chunks)),
+        patch.object(streaming_core_mod, "SessionManager", _FakeSessionManager),
     ):
         out = list(streaming_mod._content_generator("q", "m", "s", "mid"))
 
@@ -207,9 +206,9 @@ def test_stream_content_yields_only_final_answer_for_raw_json() -> None:
     """content-only 브릿지 ``stream_content`` 도 delta만 yield (no 누적)."""
     with (
         patch.object(
-            streaming_runtime_mod, "stream_chunks", return_value=iter(_RAW_JSON_CHUNKS)
+            streaming_core_mod, "stream_chunks", return_value=iter(_RAW_JSON_CHUNKS)
         ),
-        patch.object(streaming_runtime_mod, "SessionManager", _FakeSessionManager),
+        patch.object(streaming_core_mod, "SessionManager", _FakeSessionManager),
     ):
         out = list(streaming_mod.stream_content("q", "m", "s"))
 
@@ -224,8 +223,8 @@ def test_stream_content_mixed_raw_json_and_plain_keeps_plain() -> None:
     """``stream_content`` 혼합: plain 청크는 원문 그대로 yield."""
     chunks = [*_RAW_JSON_CHUNKS, _PLAIN_CHUNK]
     with (
-        patch.object(streaming_runtime_mod, "stream_chunks", return_value=iter(chunks)),
-        patch.object(streaming_runtime_mod, "SessionManager", _FakeSessionManager),
+        patch.object(streaming_core_mod, "stream_chunks", return_value=iter(chunks)),
+        patch.object(streaming_core_mod, "SessionManager", _FakeSessionManager),
     ):
         out = list(streaming_mod.stream_content("q", "m", "s"))
 
@@ -287,9 +286,9 @@ def test_content_generator_cancel_yields_partial_final_answer() -> None:
     # Phase A — 제너레이터 직접 소비.
     with (
         patch.object(
-            streaming_state_mod, "stream_chunks", return_value=iter(_RAW_JSON_CHUNKS)
+            streaming_core_mod, "stream_chunks", return_value=iter(_RAW_JSON_CHUNKS)
         ),
-        patch.object(streaming_state_mod, "SessionManager", fake),
+        patch.object(streaming_core_mod, "SessionManager", fake),
     ):
         out = list(streaming_mod._content_generator("q", "m", "s", "mid"))
 

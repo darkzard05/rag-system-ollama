@@ -1,15 +1,14 @@
 """
-스트리밍 응답 소비·업데이트 컴포넌트.
+스트리밍 응답 소비·업데이트 컴포넌트 (Phase 2B facade).
 
-- stream_chunks: 비동기 RAG 스트림을 동기 Streamlit 환경에서 소비하는
-  전용-루프 스레드+큐 브릿지 (3회 연속 타임아웃 가드 포함). 공용
-  AsyncWorker 루프를 공유하지 않아 스트림이 매달려도 빌드 등이 정지되지 않는다.
-- consume_stream_into_message: ``stream_chunks``를 단일 script run 안에서
-  동기 소비해 어시스턴트 메시지를 영속화한다 (백그라운드 스레드 없음).
-  ``api.stream_events.chunk_to_stream_events`` 공유 매핑을 통해 여섯 가지
-  표준 이벤트 종류(status/message/thought/sources/citations/metrics)를
-  통일적으로 처리한다.
-- _finalize_pdf_side_effects: 완료 턴의 PDF 주석 반영을 담당한다.
+Public facade for ``streaming_core`` — re-exports all merged symbols for
+backward compatibility and owns the UI-layer concerns that belong outside
+the pure-logic core:
+
+- ``consume_stream_into_message``: synchronously drains ``stream_chunks``
+  inside a single script run and persists the assistant message.
+- ``friendly_error_message`` / ``FriendlyError``: structured error mapping.
+- ``_finalize_pdf_side_effects``: post-turn PDF annotation hydration.
 """
 
 import logging
@@ -17,26 +16,27 @@ import uuid
 from collections.abc import Callable
 from typing import Any
 
-from api.stream_events import chunk_to_stream_events
+from api.stream_pipeline import chunk_to_stream_events
 from common.config import MSG_ERROR_OLLAMA_NOT_RUNNING
 from common.utils import extract_annotations_from_docs
 from core.session import SessionManager
 
-# --- B5.2: extracted units live in sibling modules; re-exported here for
-# backward compat. Every name below remains importable from this module.
-from ui.components.streaming_extractors import (
-    _extract_final_answer_delta,
-    _FinalAnswerExtractor,
-    _recover_final_answer,
-)
-from ui.components.streaming_runtime import stream_chunks, stream_content
-from ui.components.streaming_state import (
+# --- Phase 2B: consolidated core lives in streaming_core.py ---
+# Re-export every merged name so all ``from ui.components.streaming import …``
+# paths (including chat.py, tests, and the old sibling-module stubs) keep
+# working unchanged.
+from ui.components.streaming_core import (  # noqa: E402
     _AUX_STATE_KEY,
     _build_process,
     _clear_aux_state,
     _content_generator,
+    _extract_final_answer_delta,
+    _FinalAnswerExtractor,
+    _recover_final_answer,
     _target_message_dict,
     _write_aux_state,
+    stream_chunks,
+    stream_content,
 )
 
 __all__ = [
@@ -353,8 +353,3 @@ def consume_stream_into_message(
     # 완료 턴의 PDF 주석 반영 (기존 백그라운드 스레드 finally 역할을 동기 수행).
     _finalize_pdf_side_effects(sid, resolved_id)
     return _target_message_dict(sid, resolved_id)
-
-
-# ---------------------------------------------------------------------------
-# st.write_stream 호환 content 제너레이터 + 부가 정보 누적
-# ---------------------------------------------------------------------------

@@ -50,7 +50,7 @@ class TestMainBackgroundTasks(unittest.TestCase):
         SessionManager.set_ui_sync(None)
         SessionManager.set_session_id("test_session")
 
-    @patch("infra.notification_system.SystemNotifier.error")
+    @patch("services.monitoring.notification_system.SystemNotifier.error")
     @patch("core.rag_core.RAGSystem.build_pipeline")
     def test_rebuild_rag_system_exception_handling(
         self, mock_build, mock_notifier_error
@@ -114,7 +114,7 @@ class TestMainBackgroundTasks(unittest.TestCase):
                 patch("src.main.FilePathConstants.TEMP_DIR", temp_dir),
                 patch("src.main.st.session_state", fake_state),
                 patch(
-                    "infra.notification_system.SystemNotifier.success"
+                    "services.monitoring.notification_system.SystemNotifier.success"
                 ) as mock_success,
             ):
                 on_file_upload()
@@ -149,7 +149,9 @@ class TestMainBackgroundTasks(unittest.TestCase):
             tempfile.TemporaryDirectory() as temp_dir,
             patch("src.main.FilePathConstants.TEMP_DIR", temp_dir),
             patch("src.main.st.session_state", fake_state),
-            patch("infra.notification_system.SystemNotifier.success") as mock_success,
+            patch(
+                "services.monitoring.notification_system.SystemNotifier.success"
+            ) as mock_success,
         ):
             on_file_upload()
 
@@ -171,7 +173,9 @@ class TestMainBackgroundTasks(unittest.TestCase):
         fake_state = FakeSessionState({"pdf_uploader": uploaded})
         with (
             patch("src.main.st.session_state", fake_state),
-            patch("infra.notification_system.SystemNotifier.success") as mock_success,
+            patch(
+                "services.monitoring.notification_system.SystemNotifier.success"
+            ) as mock_success,
         ):
             on_file_upload()
 
@@ -309,7 +313,7 @@ class TestMainBackgroundTasks(unittest.TestCase):
 
         assert not SessionManager.is_ready_for_chat(session_id="test_session")
 
-    @patch("infra.notification_system.SystemNotifier.error")
+    @patch("services.monitoring.notification_system.SystemNotifier.error")
     @patch("core.model_loader.load_llm")
     def test_update_qa_chain_exception_handling(
         self, mock_load_llm, mock_notifier_error

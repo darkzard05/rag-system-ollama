@@ -9,7 +9,7 @@ Covers (read-only, no src/ edits):
 - runtime 271-279: ``stream_content`` yields delta only ``if delta:``.
 - manager 486-500: ``add_status_log(..., add_to_chat=False)`` default.
 
-Grep (2026-09-19): ``status_logs`` consumers = ``_bg_indexing.py:101``
+Grep (2026-09-19): ``status_logs`` consumers = ``main.py``
 (progress read), ``manager.py`` (store), ``rag_core.py:280`` (getter);
 ``_on_status`` def/use = ``chat.py:551/605`` only; ``_report_status`` =
 ``streaming_state.py:136/163/168`` only. Zero UI-timeline consumers —

@@ -21,6 +21,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 import ui.components.streaming as streaming_mod
+import ui.components.streaming_core as streaming_core_mod
 import ui.components.streaming_state as streaming_state_mod
 from api.streaming_handler import StreamChunk
 
@@ -252,6 +253,7 @@ class TestStreamingDoesNotBlockEventLoop:
             patch.object(streaming_mod, "stream_chunks", return_value=iter(chunks)),
             patch.object(streaming_mod, "SessionManager", _FakeSessionManager),
             patch.object(streaming_state_mod, "SessionManager", _FakeSessionManager),
+            patch.object(streaming_core_mod, "SessionManager", _FakeSessionManager),
         ):
             result = streaming_mod.consume_stream_into_message(
                 "test_sid", "test query", "test-model"
@@ -274,6 +276,7 @@ class TestStreamingDoesNotBlockEventLoop:
             patch.object(streaming_mod, "stream_chunks", _failing_stream),
             patch.object(streaming_mod, "SessionManager", _FakeSessionManager),
             patch.object(streaming_state_mod, "SessionManager", _FakeSessionManager),
+            patch.object(streaming_core_mod, "SessionManager", _FakeSessionManager),
         ):
             result = streaming_mod.consume_stream_into_message(
                 "test_sid", "test query", "test-model"
