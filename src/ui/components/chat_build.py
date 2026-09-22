@@ -10,12 +10,20 @@
 본 모듈은 ``chat.py``를 import하지 않는다 (순환 의존 방지).
 """
 
+import time
+from typing import Any
+
 import streamlit as st
 
 from common.config import MSG_CHAT_GUIDE
 from core.session import SessionManager
 from ui.components.common import AVATARS, status_line
-from ui.widget_keys import cancel_rebuild_key
+from ui.widget_keys import (
+    SAMPLE_QUESTION_STATE_KEY,
+    cancel_rebuild_key,
+    onboarding_upload_key,
+    sample_question_key,
+)
 
 __all__ = [
     "_cancel_rebuild",
@@ -23,6 +31,13 @@ __all__ = [
     "_render_build_progress_fragment",
     "_render_doc_context_inline",
     "_render_guidance_panel",
+    "get_build_error_actions",
+]
+
+_ONBOARDING_QUESTIONS: list[str] = [
+    "What is this document about?",
+    "Summarize the key points",
+    "What are the main findings?",
 ]
 
 
@@ -30,6 +45,20 @@ def _cancel_rebuild(sid: str) -> None:
     """문서 분석 재구축 취소 요청 콜백입니다."""
     SessionManager.set("rebuild_cancelled", True, session_id=sid)
     st.rerun()
+
+
+def get_build_error_actions(error_msg: str) -> dict[str, Any]:
+    """Return structured build error info with retry CTA.
+
+    Called by test_error_recovery.py and render code.
+    """
+    return {
+        "message": error_msg,
+        "cause": error_msg,
+        "retryable": True,
+        "retry_kind": "rebuild",
+        "cta": ["Retry Analysis"],
+    }
 
 
 def _render_build_progress_block(sid: str) -> None:
@@ -75,7 +104,26 @@ def _render_build_progress_block(sid: str) -> None:
         st.status(label, expanded=expanded, state=state),
     ):
         st.progress(progress / 100)
-        st.caption(f"{progress}% complete")
+        start_time = SessionManager.get("rebuild_start_time", None, sid)
+        if start_time:
+            try:
+                elapsed = int(time.time() - float(start_time))
+            except (TypeError, ValueError):
+                elapsed = 0
+            st.caption(f"{progress}% · {elapsed}s elapsed")
+        else:
+            st.caption(f"{progress}% complete")
+        if error:
+            actions = get_build_error_actions(error)
+            st.error(actions["message"])
+            st.button(
+                "Retry Analysis",
+                key=f"retry_build_{sid}",
+                on_click=lambda: SessionManager.set(
+                    "pdf_processing_error", "", session_id=sid
+                ),
+                use_container_width=True,
+            )
         if state == "running" and not is_cancelling:
             st.button(
                 "Cancel Analysis",
@@ -98,9 +146,39 @@ def _render_build_progress_fragment(sid: str) -> None:
     _render_build_progress_block(sid)
 
 
+def _on_sample_question_click(question: str) -> None:
+    st.session_state[SAMPLE_QUESTION_STATE_KEY] = question
+    st.rerun()
+
+
 def _render_guidance_panel() -> None:
-    """빈 대화 상태의 단일 가이드 메시지를 렌더링합니다."""
-    st.chat_message("system").markdown(MSG_CHAT_GUIDE)
+    """Onboarding empty-state for first-time users with upload CTA and sample questions."""
+    sid = SessionManager.get_session_id()
+
+    if SessionManager.get("last_uploaded_file_name", "", sid):
+        return
+
+    with st.chat_message("system", avatar=AVATARS["assistant"]):
+        st.markdown(MSG_CHAT_GUIDE)
+        st.button(
+            "Upload PDF",
+            key=onboarding_upload_key(sid),
+            on_click=lambda: st.session_state.update({"sidebar_state": "expanded"}),
+            use_container_width=True,
+        )
+        st.caption("Upload a file from the sidebar to get started")
+        st.divider()
+        st.caption("Try a sample question:")
+        cols = st.columns(3)
+        for idx, question in enumerate(_ONBOARDING_QUESTIONS):
+            with cols[idx]:
+                st.button(
+                    question,
+                    key=sample_question_key(sid, idx),
+                    on_click=_on_sample_question_click,
+                    args=(question,),
+                    use_container_width=True,
+                )
 
 
 def _render_doc_context_inline(sid: str) -> None:

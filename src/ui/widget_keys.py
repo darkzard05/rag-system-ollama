@@ -51,14 +51,32 @@ INTERACTIVE_KEYS: frozenset[str] = frozenset(
 )
 
 
+SAMPLE_QUESTION_STATE_KEY: str = "onboarding_sample_question"
+
+
 def cancel_rebuild_key(sid: str) -> str:
     """Widget key for the RAG rebuild cancel button (components/chat.py)."""
     return f"cancel_rebuild_{sid}"
 
 
+def onboarding_upload_key(sid: str) -> str:
+    """Widget key for the onboarding 'Upload PDF' CTA button."""
+    return f"onb_upload_{sid}"
+
+
+def sample_question_key(sid: str, idx: int) -> str:
+    """Widget key for an onboarding sample-question chip."""
+    return f"onb_sample_{sid}_{idx}"
+
+
 def jump_key(msg_id: str, page: int, idx: int) -> str:
     """Widget key for a reference page-jump button (components/chat.py)."""
     return f"jump_{msg_id}_{page}_{idx}"
+
+
+def reset_all_key(sid: str) -> str:
+    """Return a session-scoped key for the Reset All button."""
+    return f"reset_all_{sid}"
 
 
 def pdf_viewer_key(file_hash: str, page: int) -> str:
