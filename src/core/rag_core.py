@@ -260,14 +260,23 @@ class RAGSystem:
                 raise e
             finally:
                 # 하이드레이션은 await가 실패 태스크의 예외를 재발생시키므로
-                # 반드시 try/except로 감싸 로그-온리 실패 의미론을 유지한다.
+                # 반드시 try/except로 감싸 스트림 실패 승격 없이 처리한다.
                 # 완료 대기로 UI 경로의 _finalize_pdf_side_effects가
-                # 좌표 완성 문서를 읽게 보장한다.
+                # 좌표 완성 문서를 읽게 보장한다. 실패는 상태 로그에 남겨
+                # 인용 하이라이트 저하를 UI에 가시화한다 (침묵 성공 방지).
+                hydration_failed = 0
                 for t in hydration_tasks:
                     try:
                         await t
                     except (Exception, asyncio.CancelledError) as te:
+                        hydration_failed += 1
                         logger.error(f"[RAG] 문서 하이드레이션 실패: {te}")
+                if hydration_failed:
+                    SessionManager.add_status_log(
+                        "Citation highlights may be incomplete "
+                        f"({hydration_failed} doc group(s) skipped).",
+                        session_id=self.session_id,
+                    )
                 # 단일 문서 세션에서는 마지막 문서를 쿼리 사이에 퇴출 가능하게
                 # 풀지 않는다(즉시 재빌드 루프 방지). 다중 문서일 때만 언핀.
                 if len(get_resource_manager().retrievers._pool) > 1:

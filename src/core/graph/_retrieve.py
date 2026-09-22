@@ -230,12 +230,18 @@ async def retrieve_and_rerank(
         for doc in ranked_docs:
             doc_key = doc_stable_id(doc)
             doc.metadata["rerank_score"] = rrf_scores.get(doc_key, 0.0)
+            doc.metadata["rerank_engine"] = "rrf"
     else:
         ranked_docs, _ = await reranker.rerank(
             final_docs,
             query=query,
             top_k=rerank_top_k,
         )
+        from core.async_reranker import get_active_rerank_engine
+
+        _engine = get_active_rerank_engine()
+        for doc in ranked_docs:
+            doc.metadata.setdefault("rerank_engine", _engine)
     rerank_ms = (time.perf_counter() - t0) * 1000
     logger.debug(
         f"[RAG] [RETRIEVE] 리랭킹 선별 완료: {len(final_docs)}개 후보 중 {len(ranked_docs)}개 최종 선별"
