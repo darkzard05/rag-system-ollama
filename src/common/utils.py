@@ -438,19 +438,12 @@ def apply_tooltips_to_response(
             else doc.get("page_content", "")
         )
         clean_content = html.escape(content).replace("\n", " ").strip()[:300] + "..."
-        full_match = match.group(0)
-        meta = (
-            getattr(doc, "metadata", {})
-            if hasattr(doc, "metadata")
-            else doc.get("metadata", {})
-        )
-        target_page = meta.get("page", "")
 
         return (
             f'<span class="citation-highlight" title="{clean_content}" '
-            f'data-page="{target_page}" '
-            f'style="color: #0066cc; font-weight: 600; background-color: rgba(0, 102, 204, 0.08); padding: 1px 4px; border-radius: 4px; cursor: help;">'
-            f"{full_match}</span>"
+            f'data-doc-id="{cited_id}" '
+            f'style="color: #007bff; font-weight: 600; text-decoration: underline; text-underline-offset: 3px;">'
+            f"{match.group(0)}</span>"
         )
 
     def replace_citation(match):
