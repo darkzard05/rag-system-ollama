@@ -8,9 +8,10 @@
 - (b) 소비 스레드 확정 시 "중단됨"(``cancelled=True``) 저장이
        ``generation_cancel`` 클리어보다 먼저 수행되어 최종 상태에 중단 정보와
        누적 부분 콘텐츠가 남는다 (Metis G4 순서 함정 회귀 방지).
-- (c) 렌더 조건: 스트리밍 중 ``generation_cancel=True``면 영속 익스팬더의
-       스피너에 "Stopping..."이 표시되고, 확정된(cancelled) 메시지는
-       "Stopped · Partial answer preserved" 캡션이 표시된다.
+- (c) 렌더 조건: 스트리밍 중 ``generation_cancel=True``면 생성 익스팬더에
+       ``status_text="Stopping..."`` (``generating=True``)이 전달되고,
+       확정된(cancelled) 메시지는 하단에
+       "Stopped · Partial answer preserved" 캡션이 표시된다 (완료 문구 미표시).
 """
 
 import threading
@@ -89,7 +90,7 @@ def test_cancel_flow_saves_cancelled_field_and_preserves_partial_content():
 
 
 def test_streaming_status_shows_cancelling_caption():
-    """(c) 스트리밍 중 generation_cancel=True → 영속 익스팬더 라벨/스피너에 "중단 중..." 표시."""
+    """(c) 스트리밍 중 generation_cancel=True → 생성 익스팬더에 "Stopping..." 전달."""
     from ui.components import chat as chat_mod
 
     sid = "test_cancel_render"
@@ -100,7 +101,7 @@ def test_streaming_status_shows_cancelling_caption():
         content="부분 답변",
         msg_type="streaming",
         msg_id="m1",
-        thought="",
+        thought="진행 중 추론",
         documents=[],
         metrics={},
         processed_content=None,
@@ -111,6 +112,7 @@ def test_streaming_status_shows_cancelling_caption():
     with (
         patch("ui.components.chat.st") as mock_st,
         patch("ui.components.chat_references.st", mock_st),
+        patch("ui.components.chat.render_generation_expander") as mock_expander,
     ):
         mock_st.chat_message.return_value.__enter__.return_value = MagicMock()
         expander_holder = MagicMock()
@@ -122,13 +124,11 @@ def test_streaming_status_shows_cancelling_caption():
         # 직접 호출해 렌더 경로를 검증한다.
         chat_mod._render_unified_timeline(sid)
 
-    # 영속 익스팬더 라벨은 "Answer details"(상수)이고, "Stopping..."은
-    # 스트리밍 중 스피너 텍스트로만 노출된다.
-    expander_labels = [c.args[0] for c in mock_st.expander.call_args_list]
-    assert expander_labels
-    assert "Answer details" in expander_labels[0]
-    spinner_text = mock_st.spinner.call_args.args[0]
-    assert "Stopping..." in spinner_text
+    # 취소 요청 시 _draw_streaming_message는 생성 익스팬더를
+    # status_text="Stopping..." (generating=True)으로 렌더한다.
+    mock_expander.assert_called_once()
+    assert mock_expander.call_args.kwargs["generating"] is True
+    assert "Stopping..." in mock_expander.call_args.kwargs["status_text"]
 
 
 def test_render_message_shows_cancelled_caption():

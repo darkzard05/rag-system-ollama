@@ -14,7 +14,6 @@ from __future__ import annotations
 from typing import Any
 from unittest.mock import MagicMock, patch
 
-from common.config import MSG_CHAT_GUIDE
 from common.exceptions import VectorStoreError
 from core.session import SessionManager
 from ui.components.chat import (
@@ -41,14 +40,14 @@ def _user_calls(mock_add: MagicMock) -> list[Any]:
 
 
 def test_resolver_not_ready_returns_guide_and_disabled() -> None:
-    """(a) Resolver maps not-ready to (MSG_CHAT_GUIDE, True)."""
+    """(a) Resolver maps no-file state to (no-PDF placeholder, True)."""
     sid = "dg_gate_resolver"
     _reset_session(sid)
 
     assert SessionManager.is_ready_for_chat(session_id=sid) is False
     placeholder, disabled = _resolve_chat_input_state(sid)
 
-    assert placeholder == MSG_CHAT_GUIDE
+    assert placeholder == "좌측 사이드바에서 PDF 문서를 먼저 업로드해 주세요."
     assert disabled is True
 
 
@@ -90,6 +89,7 @@ def test_submit_refused_guides_via_error_not_body_no_rerun() -> None:
     """(c) RED: not-ready submit guides via st.error, no body, no rerun."""
     sid = "dg_gate_submit_guide"
     _reset_session(sid)
+    expected_placeholder = "좌측 사이드바에서 PDF 문서를 먼저 업로드해 주세요."
 
     with (
         patch("ui.components.chat.st") as mock_st,
@@ -100,14 +100,14 @@ def test_submit_refused_guides_via_error_not_body_no_rerun() -> None:
 
     mock_st.error.assert_called_once()
     err_text = str(mock_st.error.call_args)
-    assert MSG_CHAT_GUIDE in err_text, (
-        f"dead-gate: st.error must show MSG_CHAT_GUIDE, got {err_text!r}"
+    assert expected_placeholder in err_text, (
+        f"dead-gate: st.error must show no-PDF placeholder, got {err_text!r}"
     )
     for call in mock_add.call_args_list:
         args = call.args or ()
         kwargs = call.kwargs or {}
         content = str(args[1]) if len(args) > 1 else str(kwargs.get("content"))
-        assert MSG_CHAT_GUIDE not in content, (
+        assert expected_placeholder not in content, (
             "dead-gate: guide must go via st.error, not message body"
         )
     mock_st.rerun.assert_not_called()

@@ -1,12 +1,19 @@
 """답변 생성 익스팬더(render_message) 엣지케이스 단위 검증.
 
-렌더 경로 보장:
-- 완료 후 하단 상태줄은 "Answer complete · N references · p.X" 형식이며,
-  N은 process.retrieved_count가 아닌 len(documents)를 우선한다
-- 완료 후 영속 익스팬더는 라벨 "Answer details"를 사용 (스트리밍 박스의
-  스피너 status_text="Answer generation"과는 별개)
-- Answer details 익스팬더는 top_scores 항목 키 누락 시 KeyError 없이 안전 렌더
-- process=None / 빈 process / cancelled+thought(내용 없음) 시 익스팬더 미노출(빈 본문 방지)
+렌더 경로 보장 (신규 스펙):
+- 완료 후 하단 상태줄은 핵심 메트릭만 표시 ("1.5s · 5→0 tok" 형식,
+  모델명 제외). "Answer complete" 캡션, 참조 개수("N references"),
+  페이지 미리보기("p.X")는 노출되지 않으며 process.retrieved_count는 무시된다
+- 완료 후 영속 익스팬더 라벨은 내용 조합에 따라 결정
+  (문서만 → "Cited Sources", 추론+문서 → "Sources & Reasoning",
+  추론만 → "Thought Process")
+- 참조 전용 익스팬더는 top_scores/thought 키 누락 시 KeyError 없이 안전 렌더
+  (process는 익스팬더 조건에 사용되지 않음)
+- process=None / 빈 process / thought·문서·인용 모두 없음 시 익스팬더 미노출
+  (빈 본문 방지). 익스팬더는 thought/documents/citations 중 하나라도 있을 때만
+  열리며 expanded = is_latest and bool(thought or documents)
+- 중단(cancelled) 메시지는 thought를 그대로 보여주고 하단에
+  "Stopped · Partial answer preserved" 캡션을 표시한다
 """
 
 from unittest.mock import MagicMock, patch
@@ -56,7 +63,7 @@ def _doc(page: int = 1) -> MagicMock:
 
 
 def test_metrics_shows_document_count():
-    """완료 상태줄은 documents가 있을 때만 열리며 실제 문서 수를 표시합니다."""
+    """완료 상태줄은 핵심 메트릭만 표시하고 문서 전용 익스팬더를 엽니다."""
     mock_st = _render(
         role="assistant",
         content="답변입니다.",
@@ -65,16 +72,19 @@ def test_metrics_shows_document_count():
         process={"retrieved_count": 7},
         wrap_in_container=False,
     )
-    assert "Answer details" in _expander_labels(mock_st)
-    assert "Answer complete" in _all_text(mock_st)
-    assert "1 references" in _all_text(mock_st)
-    assert "p.3" in _all_text(mock_st)
+    assert "Cited Sources" in _expander_labels(mock_st)
+    text = _all_text(mock_st)
+    assert "1.5s" in text
+    assert "5→0 tok" in text
+    assert "Answer complete" not in text
+    assert "references" not in text
+    assert "p.3" not in text
 
 
 def test_metrics_uses_documents_length_over_retrieved_count():
-    """documents가 있으면 process.retrieved_count 대신 len(documents)를 우선합니다.
+    """하단 캡션은 메트릭 전용이며 process.retrieved_count가 노출되지 않습니다.
 
-    retrieved_count는 완료 상태줄에 노출되지 않으므로 무시되고 실제 문서 수가
+    retrieved_count는 상태줄에 노출되지 않으므로 무시되고 핵심 메트릭만
     표시됩니다.
     """
     mock_st = _render(
@@ -85,8 +95,10 @@ def test_metrics_uses_documents_length_over_retrieved_count():
         process={"retrieved_count": 99},
         wrap_in_container=False,
     )
-    assert "2 references" in _all_text(mock_st)
-    assert "99 references" not in _all_text(mock_st)
+    text = _all_text(mock_st)
+    assert "1.5s" in text
+    assert "99" not in text
+    assert "references" not in text
 
 
 def test_detailed_thinking_skips_missing_keys_in_top_scores():
@@ -106,7 +118,7 @@ def test_detailed_thinking_skips_missing_keys_in_top_scores():
         },
         wrap_in_container=False,
     )
-    assert "Answer details" in _expander_labels(mock_st)
+    assert "Sources & Reasoning" in _expander_labels(mock_st)
 
 
 def test_no_detailed_thinking_when_process_none():
@@ -117,11 +129,11 @@ def test_no_detailed_thinking_when_process_none():
         process=None,
         wrap_in_container=False,
     )
-    assert "Answer details" not in _expander_labels(mock_st)
+    assert mock_st.expander.call_args_list == []
 
 
 def test_no_detailed_thinking_when_cancelled_without_process():
-    """중단(+thought)이고 process가 없으면 익스팬더를 열지 않습니다."""
+    """중단(+thought)이고 process가 없어도 추론 익스팬더는 렌더됩니다."""
     mock_st = _render(
         role="assistant",
         content="부분 답변입니다.",
@@ -130,11 +142,12 @@ def test_no_detailed_thinking_when_cancelled_without_process():
         wrap_in_container=False,
         cancelled=True,
     )
-    assert "Answer details" not in _expander_labels(mock_st)
+    assert "Thought Process" in _expander_labels(mock_st)
+    assert "Stopped · Partial answer preserved" in _all_text(mock_st)
 
 
 def test_cancelled_hides_thought_but_shows_references():
-    """중단 시 thought는 노출되지 않고 참조 익스팬더만 렌더됩니다."""
+    """중단 시에도 thought와 참조가 함께 익스팬더에 렌더되고 중단 캡션이 표시됩니다."""
     mock_st = _render(
         role="assistant",
         content="부분 답변입니다.",
@@ -144,8 +157,9 @@ def test_cancelled_hides_thought_but_shows_references():
         wrap_in_container=False,
         cancelled=True,
     )
-    assert "Answer details" in _expander_labels(mock_st)
-    assert "미완료 추론" not in _all_text(mock_st)
+    assert "Sources & Reasoning" in _expander_labels(mock_st)
+    assert "미완료 추론" in _all_text(mock_st)
+    assert "Stopped · Partial answer preserved" in _all_text(mock_st)
 
 
 def test_empty_expander_suppressed_without_content():
@@ -156,7 +170,7 @@ def test_empty_expander_suppressed_without_content():
         process={"steps": [], "sections": [], "top_scores": [], "perf": {}},
         wrap_in_container=False,
     )
-    assert "Answer details" not in _expander_labels(mock_st)
+    assert mock_st.expander.call_args_list == []
 
 
 def test_completed_assistant_message_opens_expander():
@@ -164,7 +178,7 @@ def test_completed_assistant_message_opens_expander():
 
     참고: 스트리밍 중 본문은 render_message가 아닌 _draw_streaming_message(전용
     슬롯) 경로로 그려지므로, render_message는 완료된 메시지만 처리한다. 확정
-    메시지의 부가 정보는 참조(문서/인용)만 익스팬더에 수납된다 (Phase 2).
+    메시지의 추론·참조 부가 정보는 내용 조합에 따른 익스팬더에 수납된다.
     """
     mock_st = _render(
         role="assistant",
@@ -174,7 +188,7 @@ def test_completed_assistant_message_opens_expander():
         msg_type="general",
         wrap_in_container=False,
     )
-    assert "Answer details" in _expander_labels(mock_st)
+    assert "Sources & Reasoning" in _expander_labels(mock_st)
 
 
 # ---------------------------------------------------------------------------
@@ -183,7 +197,7 @@ def test_completed_assistant_message_opens_expander():
 
 
 def test_draw_streaming_message_empty_placeholder_shows_neutral_caption() -> None:
-    """content 없는 스트리밍 플레이스홀더 → 중립 '중단' 캡션, expander/error 없음."""
+    """content 없는 스트리밍 플레이스홀더 → 중립 중단 캡션, expander/error 없음."""
     sid = "render_empty_stream"
     SessionManager.reset_all_state(sid)
 
@@ -197,7 +211,7 @@ def test_draw_streaming_message_empty_placeholder_shows_neutral_caption() -> Non
         )
 
     texts = [call.args[0] for call in mock_st.caption.call_args_list if call.args]
-    assert any("생성이 중단되었습니다" in text for text in texts)
+    assert any("답변 생성이 사용자에 의해 중단되었습니다." in text for text in texts)
     mock_expander.assert_not_called()
     mock_st.error.assert_not_called()
 
@@ -221,6 +235,6 @@ def test_draw_streaming_message_with_content_keeps_generating_expander() -> None
     neutral = [
         call.args[0]
         for call in mock_st.caption.call_args_list
-        if call.args and "생성이 중단되었습니다" in call.args[0]
+        if call.args and "답변 생성이 사용자에 의해 중단되었습니다." in call.args[0]
     ]
     assert neutral == []

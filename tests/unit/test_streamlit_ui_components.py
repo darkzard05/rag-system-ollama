@@ -24,14 +24,12 @@ sys.path.append(str(Path(__file__).parent.parent.parent / "src"))
 
 os.environ.setdefault("IS_CI_TEST", "true")
 
-from common.config import MSG_CHAT_GUIDE  # noqa: E402
-
 _SMOKE_SCRIPT = str(Path(__file__).parent / "_streamlit_ui_smoke.py")
 
 
 class TestStreamlitUIComponents(unittest.TestCase):
     def test_initial_state_elements(self):
-        """Startup UI elements render: brand, guide message, model selectbox."""
+        """Startup UI elements render: brand, onboarding guide, model selectbox."""
         at = AppTest.from_file(_SMOKE_SCRIPT, default_timeout=60).run()
 
         # Sidebar brand (sidebar.py: _render_sidebar_logo)
@@ -39,14 +37,13 @@ class TestStreamlitUIComponents(unittest.TestCase):
             "Sidebar brand 'GraphRAG-Ollama' not rendered"
         )
 
-        # Chat guide message. NOTE: the string is config-driven
-        # (common.config.MSG_CHAT_GUIDE, sourced from config.yml), so we assert
-        # against the imported value rather than a hardcoded literal — the
-        # previous integration test hard-coded a Korean string that no longer
-        # matched the English config value.
+        # Onboarding guide panel. NOTE: the initial chat area no longer shows
+        # the config-driven MSG_CHAT_GUIDE string — with no messages and no
+        # uploaded file, _render_guidance_panel() renders a Korean step-by-step
+        # onboarding card instead, so we assert against that content.
         assert any(
-            MSG_CHAT_GUIDE in str(m.value) for m in at.chat_message[0].markdown
-        ), f"Chat guide message '{MSG_CHAT_GUIDE}' not rendered"
+            "업로드하신 PDF" in str(m.value) for m in at.chat_message[0].markdown
+        ), "Onboarding guide panel not rendered"
 
         # Model + embedding selectboxes (sidebar.py: render_settings_content)
         assert len(at.sidebar.selectbox) >= 1, "No model selectbox rendered"
