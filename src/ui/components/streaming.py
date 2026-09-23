@@ -310,7 +310,7 @@ def consume_stream_into_message(
             _emit(False)
     except Exception as exc:  # noqa: BLE001 - 스트림 레벨 오류를 메시지에 보존
         logger.exception("[CHAT] 스트리밍 소비 오류: %s", exc)
-        SessionManager.set("is_generating_answer", False, current_sid=sid)
+        SessionManager.set("is_generating_answer", False, session_id=sid)
         SessionManager.add_message(
             "assistant",
             accumulated,
@@ -331,7 +331,7 @@ def consume_stream_into_message(
         return result
 
     cancelled = bool(SessionManager.get("generation_cancel", False, session_id=sid))
-    SessionManager.set("is_generating_answer", False, current_sid=sid)
+    SessionManager.set("is_generating_answer", False, session_id=sid)
     SessionManager.add_message(
         "assistant",
         accumulated,
@@ -347,7 +347,7 @@ def consume_stream_into_message(
         session_id=sid,
     )
     # 확정 상태 저장이 클리어보다 먼저 수행되어야 한다 (G4 순서 함정 회귀 방지).
-    SessionManager.set("generation_cancel", False, current_sid=sid)
+    SessionManager.set("generation_cancel", False, session_id=sid)
     # 스트림 종료 스냅샷을 1회 더 전달 (최종 누적 메타데이터를 라이브 렌더에 반영).
     _emit(cancelled)
     # 완료 턴의 PDF 주석 반영 (기존 백그라운드 스레드 finally 역할을 동기 수행).

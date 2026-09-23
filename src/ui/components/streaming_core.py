@@ -69,26 +69,24 @@ _DELIMITERS = (":", ",", "}", "]")
 def _extract_final_answer_delta(
     buffer: str,
     start: int,
-    _key_pos: list[int] | None = None,
+    _key_pos: list[Any] | None = None,
 ) -> tuple[str, int]:
     """Incrementally pull the growing ``final_answer`` string value out of a
-    partial JSON buffer.  Returns ``(delta_text, new_scan_pos)``.
+    partial JSON buffer. Returns ``(delta_text, new_scan_pos)``.
 
-    State-machine scanner that honours escape sequences (decoded, not
-    literal), delimiter-aware close, pending-escape defer-to-next-call
-    semantics, and optional key-position caching via *``_key_pos``* (an
-    in-place ``list[int]``).
+    O(1) amortized incremental scanner preserving all escape sequences
+    (\\n, \\", \\uXXXX) and delimiter-aware close semantics.
     """
     n = len(buffer)
     key = '"final_answer"'
 
-    # --- Phase 1: key search (the ONLY str.find in the implementation) ---
+    # --- Phase 1: key search ---
     key_idx: int
-    if _key_pos is not None and _key_pos[0] >= 0:
+    if _key_pos is not None and len(_key_pos) > 0 and _key_pos[0] >= 0:
         key_idx = _key_pos[0]
     else:
         key_idx = buffer.find(key, 0)
-        if _key_pos is not None:
+        if _key_pos is not None and len(_key_pos) > 0:
             _key_pos[0] = key_idx
         if key_idx == -1:
             return "", 0
@@ -101,7 +99,7 @@ def _extract_final_answer_delta(
     if j >= n or buffer[j] != ":":
         return "", start
 
-    # --- Phase 3: find value's opening quote (char-by-char after colon) ---
+    # --- Phase 3: find value's opening quote ---
     i = j + 1
     while i < n and buffer[i] in " \t\n\r":
         i += 1
@@ -111,19 +109,28 @@ def _extract_final_answer_delta(
     open_quote = i
     value_start = open_quote + 1
 
-    # ``start`` counts decoded value chars already emitted (not buffer offset).
-    emit_from = start
+    # --- Phase 4: incremental value scan ---
+    # _key_pos 구조: [key_idx, raw_pos, pending_escape, pending_u, closed]
+    is_incremental = _key_pos is not None and len(_key_pos) >= 5
 
-    # --- Phase 4: value scan with escape decode ---
-    i = value_start
+    if is_incremental:
+        assert _key_pos is not None  # is_incremental이 None 아님을 보장
+        if _key_pos[4]:  # 이미 닫힌 경우
+            return "", start
+        i = _key_pos[1] if _key_pos[1] >= value_start else value_start
+        pending_escape = bool(_key_pos[2])
+        pending_u = _key_pos[3]
+    else:
+        i = value_start
+        pending_escape = False
+        pending_u = None
+
     delta_chars: list[str] = []
-    pending_escape = False
-    pending_u: str | None = None  # e.g. "\\u00" – holds incomplete \\uXXXX
 
     while i < n:
         ch = buffer[i]
 
-        # Deferred escape from previous call --------------------------------
+        # Deferred escape from previous call
         if pending_escape:
             pending_escape = False
             decoded = _ESCAPE_DECODE.get(ch)
@@ -135,13 +142,12 @@ def _extract_final_answer_delta(
                 pending_u = "\\u"
                 i += 1
                 continue
-            # Unknown escape: emit both chars literally.
             delta_chars.append("\\")
             delta_chars.append(ch)
             i += 1
             continue
 
-        # Deferred \\uXXXX from previous call -------------------------------
+        # Deferred \uXXXX from previous call
         if pending_u is not None:
             if ch in "0123456789abcdefABCDEF" and len(pending_u) < 6:
                 pending_u += ch
@@ -155,12 +161,11 @@ def _extract_final_answer_delta(
                     pending_u = None
                 continue
             else:
-                # Non-hex terminates \\u: emit literal and reprocess ch.
                 delta_chars.append(pending_u)
                 pending_u = None
                 continue
 
-        # Normal characters --------------------------------------------------
+        # Normal characters
         if ch == "\\":
             if i + 1 < n:
                 nxt = buffer[i + 1]
@@ -173,24 +178,26 @@ def _extract_final_answer_delta(
                     pending_u = "\\u"
                     i += 2
                     continue
-                # Unknown escape: emit both literally.
                 delta_chars.append(ch)
                 delta_chars.append(nxt)
                 i += 2
                 continue
-            # Trailing backslash at end-of-buffer: defer.
             pending_escape = True
             i += 1
             continue
 
         if ch == '"':
-            # Delimiter-aware close: value terminates only when the next char
-            # is a JSON delimiter or the buffer is exhausted.
             nxt = buffer[i + 1] if i + 1 < n else ""
             if nxt in _DELIMITERS or nxt == "":
-                new_delta = "".join(delta_chars)[emit_from:]
-                return new_delta, len(delta_chars)
-            # Unescaped inner quote – treat as content.
+                assert _key_pos is not None  # is_incremental이 None 아님을 보장
+                if is_incremental:
+                    _key_pos[4] = 1  # closed = True
+                if is_incremental:
+                    new_delta = "".join(delta_chars)
+                    return new_delta, start + len(new_delta)
+                else:
+                    new_delta = "".join(delta_chars)[start:]
+                    return new_delta, len(delta_chars)
             delta_chars.append(ch)
             i += 1
             continue
@@ -198,10 +205,16 @@ def _extract_final_answer_delta(
         delta_chars.append(ch)
         i += 1
 
-    # Value still open – emit only chars not yet delivered; pending escape/u
-    # are held for the next call and NOT emitted in this delta.
-    new_delta = "".join(delta_chars)[emit_from:]
-    return new_delta, len(delta_chars)
+    if is_incremental:
+        assert _key_pos is not None  # is_incremental이 None 아님을 보장
+        _key_pos[1] = i
+        _key_pos[2] = 1 if pending_escape else 0
+        _key_pos[3] = pending_u
+        new_delta = "".join(delta_chars)
+        return new_delta, start + len(new_delta)
+    else:
+        new_delta = "".join(delta_chars)[start:]
+        return new_delta, len(delta_chars)
 
 
 _FA_RE = re.compile(r'"final_answer"\s*:\s*"(.*)', re.DOTALL)
@@ -228,31 +241,21 @@ def _recover_final_answer(blob: str) -> str | None:
 
 
 class _FinalAnswerExtractor:
-    """structured 모드 raw_json 청크 → final_answer 증분 추출 헬퍼.
-
-    consume_stream_into_message / _content_generator / stream_content 세
-    소비자가 공유한다. feed(content)마다 내부 blob에 원문을 순서대로
-    누적하고, _extract_final_answer_delta의 상태 머신(스캔 위치 + 키 위치
-    캐시)으로 새로 디코드된 delta만 반환한다. 모든 delta의 연결(join)은
-    final_answer 값과 정확히 같다(순서 불변, \\uXXXX/CJK 디코드 포함).
-    스트림/제너레이터당 인스턴스 1개를 만들고 chunk마다 feed() 호출.
-    """
+    """structured 모드 raw_json 청크 → final_answer 증분 추출 헬퍼 (O(1) amortized)."""
 
     def __init__(self) -> None:
         self._parts: list[str] = []
+        self._blob: str = ""
         self._scan_pos = 0
-        self._key_pos: list[int] = [-1]
+        # [key_idx, raw_pos, pending_escape, pending_u, closed]
+        self._key_pos: list[Any] = [-1, -1, 0, None, 0]
 
     def feed(self, content: str) -> str:
-        """raw_json 청크의 content를 누적하고 새 final_answer delta를 반환.
-
-        키 미발견 등 아직 출력할 문자가 없으면 ""를 반환한다. 호출자는
-        yield 직전에 ``if delta:`` 가드로 빈 문자열을 걸러야 한다.
-        """
+        """raw_json 청크의 content를 누적하고 새 final_answer delta를 즉시 반환."""
         self._parts.append(content)
-        blob = "".join(self._parts)
+        self._blob += content  # CPython in-place realloc 최적화 적용
         delta, self._scan_pos = _extract_final_answer_delta(
-            blob, self._scan_pos, self._key_pos
+            self._blob, self._scan_pos, self._key_pos
         )
         return delta
 
@@ -266,7 +269,7 @@ class _FinalAnswerExtractor:
 # those. Yield this once so ``st.write_stream`` shows progress instead of
 # silence. Reuses the existing ``_content_generator`` first-content string
 # (streaming_state imports it — no new literals).
-_STATUS_PLACEHOLDER = "응답 생성 중..."
+_STATUS_PLACEHOLDER = ""
 
 # ■ 중지(StopException) 폴링 간격(초). 단일 q.get(timeout=...)은 C 레벨
 # Condition.wait에 메인 스레드를 묶어두어 Streamlit의 네이티브 중지(trace 훅
@@ -705,17 +708,19 @@ def _content_generator(
                 "process_steps": process_steps,
                 "complete": False,
             }
-            _write_aux_state(sid, _aux_state)
             if on_aux is not None:
+                # thought가 진행되는 동안 40자 단위 또는 변경 시점에 UI를 점진적 갱신
+                thought_bucket = len(thought) // 40 if thought else 0
                 snapshot = (
-                    thought,
                     tuple(process_steps),
                     tuple(documents),
                     tuple(metrics.items()),
                     tuple(citations),
+                    thought_bucket,
                 )
                 if snapshot != _last_on_aux_snapshot:
                     _last_on_aux_snapshot = snapshot
+                    _write_aux_state(sid, _aux_state)
                     on_aux(_aux_state)
         if _placeholder_live:
             yield _STATUS_PLACEHOLDER
