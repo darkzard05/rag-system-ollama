@@ -759,7 +759,6 @@ async def _bg_rebuild_task(
             },
             session_id=session_id,
         )
-        SessionManager.add_status_log(success_message, session_id=session_id)
         # 타임라인 진행 메시지 완료 처리 (동일 msg_id)
         SessionManager.add_message(
             "system",
@@ -773,7 +772,6 @@ async def _bg_rebuild_task(
             logs=[],
             session_id=session_id,
         )
-        SessionManager.add_message("system", success_message, session_id=session_id)
     except asyncio.CancelledError:
         logger.info(
             f"[MAIN] Rebuild pipeline cancelled mid-build for session {session_id}"
@@ -790,7 +788,7 @@ async def _bg_rebuild_task(
         )
     except Exception as e:
         logger.error(f"Background RAG rebuild error: {e}", exc_info=True)
-        error_msg = f"An error occurred while processing the document: {e}"
+        error_msg = "문서 분석 중 오류가 발생했습니다. 파일 상태를 확인하신 후 다시 업로드해 주세요."
         SessionManager.set("rebuild_error", error_msg, session_id=session_id)
         SessionManager.set("pdf_processing_error", error_msg, session_id=session_id)
         SessionManager.set("rebuild_progress", 0, session_id=session_id)
@@ -839,7 +837,7 @@ def _swap_llm_core(session_id: str) -> None:
         SessionManager.set("llm", llm, session_id=session_id)
         SessionManager.add_status_log("Inference model switched", session_id=session_id)
     except Exception as e:
-        error_msg = f"Failed to update the QA chain: {e}"
+        error_msg = "답변 생성 모델을 변경하는 중 오류가 발생했습니다."
         logger.error(f"QA 업데이트 실패: {e}", exc_info=True)
         SessionManager.add_status_log(error_msg, session_id=session_id)
         SessionManager.add_message(

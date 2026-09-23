@@ -94,7 +94,7 @@ class SessionManager:
         "is_generating_answer": False,
         "streaming_buffer": "",
         "streaming_thought": "",
-        "global_status": "✅ 시스템 준비 완료",
+        "global_status": "문서 업로드 대기 중",
         "status_level": "success",
         "global_progress": 0,
         "is_first_run": True,
@@ -416,6 +416,7 @@ class SessionManager:
         **kwargs,
     ):
         """단일 또는 다중 세션 데이터를 업데이트합니다."""
+        session_id = session_id or kwargs.pop("current_sid", None)
         sid = session_id or cls.get_session_id()
 
         updates = kwargs.copy()
@@ -428,7 +429,10 @@ class SessionManager:
             state = cls._get_state(sid)
             for k, v in updates.items():
                 state[k] = v
-                logger.debug(f"[DEBUG] SessionManager.set: {sid} {k}={v}")
+                if logger.isEnabledFor(
+                    logging.DEBUG
+                ):  # 👈 DEBUG 레벨일 때만 문자열 포맷팅 실행
+                    logger.debug(f"[DEBUG] SessionManager.set: {sid} {k}={v}")
             state["_dirty_keys"].update(updates.keys())
 
     @classmethod
