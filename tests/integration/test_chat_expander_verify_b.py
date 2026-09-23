@@ -2,16 +2,20 @@
 Lane B cross-validation (independent method): state-machine-driven AppTest
 with a mocked stream. No real document build, no shared disk/FAISS IO.
 
-Verifies three behaviors of the chat view in `src/ui/components/chat.py`:
-  (a) build-status lifecycle: a native `st.status` shows a running "문서 분석
-      중 ..." state with the "분석 취소" button and a collapsed "진행 로그"
-      expander while a `build_progress` message is live, and transitions to a
-      "✅ 분석 완료" complete state when the build finishes;
-  (b) chat input state machine: input DISABLED while
-      `is_generating_answer=True`, ENABLED when idle;
+Verifies three behaviors of the chat view in `src/ui/components/chat.py`
+(+ `chat_build.py` / `chat_references.py` P3 분리 모듈):
+  (a) build-status lifecycle: a native `st.status` shows a running
+      "{파일} · 문서 분석 중..." state with the "분석 취소" button and a
+      "0% 완료" progress caption while `is_building_rag` is live, and
+      transitions to a "{파일} · 준비 완료" complete state when the build
+      finishes;
+  (b) chat input state machine (6-state): input DISABLED with the upload
+      prompt when no file is present, ENABLED when ready, and ENABLED while
+      `is_generating_answer=True` (submit_mode="stop" shows ■ instead);
   (c) a completed streamed answer renders an assistant message exposing the
-      native reasoning expander ("🧠 상세 사고 과정", chat.py:189) carrying
-      the accumulated pipeline steps/thought.
+      native reasoning expander ("Thought Process",
+      strings.expander_reasoning_only) carrying the accumulated pipeline
+      steps/thought.
 
 AppTest idioms that work (streamlit 1.54.0):
 - `AppTest.from_file("src/main.py").run(timeout=N)` boots the full app.
@@ -63,7 +67,13 @@ def _app_session_id() -> str:
 
 
 def _set_ready_state(sid: str) -> None:
-    """Satisfy SessionManager.is_ready_for_chat (manager.py:350-357)."""
+    """Satisfy SessionManager.is_ready_for_chat (manager.py:350-357).
+
+    현행 6-상태 입력 게이팅(chat.py:_resolve_chat_input_state)은 파일 업로드
+    전에는 입력을 DISABLED로 둔다. enabled 입력을 얻으려면 파일명 + readiness를
+    함께 세팅해야 한다.
+    """
+    SessionManager.set("last_uploaded_file_name", "doc.pdf", sid)
     SessionManager.set("pdf_processed", True, sid)
     SessionManager.set("rag_engine", object(), sid)
     SessionManager.set("is_building_rag", False, sid)
@@ -73,17 +83,23 @@ def _set_ready_state(sid: str) -> None:
 
 
 def test_build_status_banner_lifecycle():
-    """(a) 네이티브 st.status가 빌드 중 running으로 표시되고 완료 후 complete로 전환된다."""
+    """(a) 네이티브 st.status가 빌드 중 running으로 표시되고 완료 후 complete로 전환된다.
+
+    현행 계약 (ui/components/chat_build.py:_render_build_progress_block):
+    - 라벨 "{파일명} · {상태}" (진행 중: "· 문서 분석 중...", 완료: "· 준비 완료")
+    - st.status 단독 렌더 (구 chat_message 래퍼 없음), 취소 버튼 "분석 취소",
+      진행 캡션 "{n}% 완료 · {s}초 경과".
+    """
     SessionManager.reset()
     at = AppTest.from_file("src/main.py").run(timeout=_RUN_TIMEOUT)
     sid = _app_session_id()
     assert not at.exception
 
     # Phase 1 — analysis running. Seed the session store exactly like
-    # main.py's _bg_rebuild_task (main.py:203-213); the native renderer reads
-    # these session keys (chat.py:466-477), not the message dict. The added
-    # build_progress message mirrors main.py but is skipped in the timeline
-    # (chat.py:597-601).
+    # main.py's _bg_rebuild_task; the native renderer reads
+    # these session keys (chat_build.py:_render_build_progress_block), not the
+    # message dict. The added build_progress message mirrors main.py but is
+    # skipped in the timeline (chat.py:_render_unified_timeline).
     SessionManager.set("is_building_rag", True, sid)
     SessionManager.set("rebuild_status", "문서 분석 중...", sid)
     SessionManager.add_message(
@@ -104,19 +120,18 @@ def test_build_status_banner_lifecycle():
     # NOTE: `with st.status(...)` auto-updates a "running" status to "complete"
     # at context-manager exit (streamlit mutable_status_container.py:174-193),
     # so AppTest always observes the terminal state here. The running branch is
-    # proven by the label ("Analyzing document: ...", only in the running branch)
-    # and by the "Cancel Analysis" button (rendered only when state == running).
-    assert "Analyzing document:" in at.status[0].label, at.status[0].label
+    # proven by the label ("· 문서 분석 중...", only in the running branch)
+    # and by the "분석 취소" button (rendered only when state == running).
+    assert "문서 분석 중" in at.status[0].label, at.status[0].label
     assert at.status[0].state != "error", at.status[0].state
     cancel_labels = [b.label for b in at.button]
-    assert "Cancel Analysis" in cancel_labels, cancel_labels
-    # Current UI (chat.py:492-505): native st.status + st.progress + "% complete"
-    # caption; the legacy "Progress log" expander was removed in 139c3e1.
+    assert "분석 취소" in cancel_labels, cancel_labels
+    # 현행 UI (chat_build.py): 네이티브 st.status + st.progress + "% 완료" 캡션.
     # NOTE: AppTest (1.60.0) exposes no `at.progress` element; the observable
-    # proof of the progress render is the "% complete" caption surfaced from
+    # proof of the progress render is the "% 완료" caption surfaced from
     # inside the st.status container.
     captions = " ".join(c.value for c in at.caption)
-    assert "0% complete" in captions, captions
+    assert "0% 완료" in captions, captions
     assert not any(
         e.label == "Progress log" or "진행 로그" in e.label for e in at.expander
     ), [e.label for e in at.expander]
@@ -127,7 +142,7 @@ def test_build_status_banner_lifecycle():
     assert not at.exception
 
     # Phase 2 — analysis finished: drive the done state via the SESSION keys
-    # the renderer actually reads (chat.py:466-477). The message-dict mutation
+    # the renderer actually reads (chat_build.py). The message-dict mutation
     # was the pre-139c3e1 contract and is ignored today.
     SessionManager.set("rebuild_done", True, sid)
     SessionManager.set("rebuild_progress", 100, sid)
@@ -139,12 +154,17 @@ def test_build_status_banner_lifecycle():
     # AppTest auto-transitions st.status to "complete" at context exit, so the
     # terminal state is always "complete"; the done branch is proven by label.
     assert at.status[0].state == "complete", at.status[0].state
-    assert "Analysis complete" in at.status[0].label, at.status[0].label
+    assert "준비 완료" in at.status[0].label, at.status[0].label
     assert not at.exception
 
 
 def test_chat_input_state_machine_during_generation():
-    """(b) input ENABLED while generating (submit_mode=stop), ENABLED when idle."""
+    """(b) 6-상태 입력 게이팅: 준비 완료 시 ENABLED, 생성 중에도 ENABLED.
+
+    현행 계약 (chat.py:_resolve_chat_input_state): 파일 미업로드 시 DISABLED +
+    "좌측 사이드바에서 PDF 문서를 먼저 업로드해 주세요.", 생성 중에는 ENABLED로
+    유지되어 네이티브 ■ 중지 버튼(submit_mode="stop")이 전송 버튼 자리에 렌더된다.
+    """
     SessionManager.reset()
     at = AppTest.from_file("src/main.py").run(timeout=_RUN_TIMEOUT)
     sid = _app_session_id()
@@ -152,9 +172,10 @@ def test_chat_input_state_machine_during_generation():
     _set_ready_state(sid)
     assert SessionManager.is_ready_for_chat(session_id=sid)
 
-    # Idle → enabled
+    # Idle → enabled (첫 질문 플레이스홀더)
     at.run(timeout=_RUN_TIMEOUT)
     assert at.chat_input[0].disabled is False
+    assert at.chat_input[0].placeholder == "문서 내용에 대해 궁금한 점을 질문해 보세요."
     assert not at.exception
 
     # Generating → still enabled so the native stop button (submit_mode="stop")
@@ -168,6 +189,10 @@ def test_chat_input_state_machine_during_generation():
     at.run(timeout=_RUN_TIMEOUT)
 
     assert at.chat_input[0].disabled is False
+    assert (
+        at.chat_input[0].placeholder
+        == "답변을 생성하고 있습니다... (중지는 우측 하단 ■ 버튼)"
+    )
     assert not at.exception
 
     # Back to idle → enabled
@@ -181,8 +206,8 @@ def test_streamed_answer_renders_thought_expander_and_reenables_input(
     monkeypatch,
 ):
     """(c) completed answer → assistant message with native reasoning expander
-    (🧠 상세 사고 과정) carrying the accumulated pipeline steps,
-    input re-enabled, no exceptions."""
+    ("Thought Process", strings expander_reasoning_only) carrying the
+    accumulated pipeline steps, input re-enabled, no exceptions."""
     SessionManager.reset()
 
     async def _mock_stream():
@@ -245,16 +270,20 @@ def test_streamed_answer_renders_thought_expander_and_reenables_input(
     steps = assistant_msgs[-1].get("process_steps") or []
     assert "관련 문서 검색 중..." in steps, f"process_steps={steps}"
 
-    # Rendered assistant message exposes the native "Answer details" expander
-    # (render_generation_expander, chat.py:269) whose body carries the pipeline
-    # steps joined by " · " (chat.py:280).
-    assert any(e.label == "Answer details" for e in at.expander), [
+    # Rendered assistant message exposes the native reasoning expander
+    # (render_generation_expander → t("expander_reasoning_only") = "Thought
+    # Process"; thought-only이므로 sources 분기 없음) whose body carries the
+    # pipeline steps.
+    assert any(e.label == "Thought Process" for e in at.expander), [
         e.label for e in at.expander
     ]
-    step_text = "".join(
-        m.value for m in at.markdown if "관련 문서 검색 중..." in m.value
-    ) + "".join(c.value for c in at.caption if "관련 문서 검색 중..." in c.value)
-    assert "관련 문서 검색 중..." in step_text, f"step text missing: {step_text!r}"
+    # Rendered expander body carries the thought (blockquote markdown).
+    # 현행 계약: process_steps는 msg 저장소에 누적될 뿐 본문 텍스트로 렌더되지
+    # 않으므로, 렌더 검증은 thought 본문으로 수행한다.
+    thought_text = "".join(m.value for m in at.markdown)
+    assert "독립 검증용 추론 과정입니다." in thought_text, (
+        f"thought text missing: {thought_text!r}"
+    )
 
     # Input re-enabled again after generation finished
     assert at.chat_input[0].disabled is False

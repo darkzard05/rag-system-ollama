@@ -13,7 +13,11 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".
 class TestChatUI(unittest.TestCase):
     def test_page_jump_button_generation(self):
         """
-        '근거 페이지로 이동' 버튼이 숫자만 표시하도록 정상적으로 생성되는지 검증합니다.
+        참조 점프 버튼이 'p.N' 단일화 라벨로 정상 생성되는지 검증합니다.
+
+        현행 계약 (chat_references._render_references_content):
+        - 라벨: 섹션명이 없으면 'p.{page}' (예: 'p.1', 'p.12')
+        - 키: 'pop_doc_{msg_id}_{page}_{idx}'
         """
         # 임시 테스트 스크립트 작성
         script_content = """
@@ -60,15 +64,15 @@ render_message(
             # 비해 빠듯하여(이 환경에서 재현 확인) 명시적 타임아웃을 부여한다.
             at = AppTest.from_file("temp_test_ui.py").run(timeout=60)
 
-            # 1. 버튼들 확인 (숫자만 포함된 라벨)
+            # 1. 버튼들 확인 ('p.N' 단일화 라벨)
             button_labels = [b.label for b in at.button]
 
-            # 'p'가 포함된 숫자 라벨 확인
-            assert "1p" in button_labels, "1p 버튼이 없습니다."
-            assert "12p" in button_labels, "12p 버튼이 없습니다."
-            # 2. 버튼 키 접두사 확인 (12p 버튼)
-            jump_button_12 = next(b for b in at.button if b.label == "12p")
-            assert jump_button_12.key.startswith("jump_msg_0_12_"), (
+            # 'p.N' 형식 라벨 확인
+            assert "p.1" in button_labels, "p.1 버튼이 없습니다."
+            assert "p.12" in button_labels, "p.12 버튼이 없습니다."
+            # 2. 버튼 키 접두사 확인 (p.12 버튼)
+            jump_button_12 = next(b for b in at.button if b.label == "p.12")
+            assert jump_button_12.key.startswith("pop_doc_msg_0_12_"), (
                 f"버튼 키 오류: {jump_button_12.key}"
             )
 
@@ -94,8 +98,13 @@ def test_pdf_viewer_key_includes_page():
 
 def test_page_jump_click_invokes_handler_via_callback():
     """P0 회귀: 페이지 점프 버튼 클릭이 on_click 콜백(콜백 페이즈)으로
-    핸들러를 정확히 1회 호출한다. 렌더 단계 인라인 호출로 회귀하면
-    StreamlitAPIException(위젯키 스크립트 대입)이 재발한다."""
+    pdf_target_page 점프 토큰을 정확히 1회 세팅한다. 렌더 단계 인라인 호출로
+    회귀하면 클릭 전부터 토큰이 세팅되어 아래 선행 단언이 실패한다.
+
+    현행 계약 (chat_references._handle_page_jump):
+    - SessionManager 'pdf_target_page' = {"page", "source": "manual", "ts"}
+    - navigate_to_page로 nav-input('pdf_nav_input_v6') 동기화
+    """
     script_content = """
 import streamlit as st
 import sys
@@ -104,39 +113,74 @@ import os
 sys.path.append(os.path.abspath(os.path.join(os.getcwd(), "src")))
 
 from unittest.mock import MagicMock
+import ui.components.chat_references as refs
 from ui.components.chat_references import _render_references_content
+from core.session import SessionManager
 
 doc = MagicMock()
 doc.metadata = {"page": 3}
-if "__jumped_pages" not in st.session_state:
-    st.session_state["__jumped_pages"] = []
 
-def on_jump(p):
-    st.session_state["__jumped_pages"].append(p)
+# on_click 호출 횟수를 세는 래퍼 (rerun을 넘겨 유지되도록 session_state에 누적).
+# 스크립트는 매 rerun마다 재실행되므로 가드 없이 래핑하면 래퍼가 중첩되어
+# 1회 클릭이 여러 번 카운트된다 — 1회만 래핑한다.
+if not getattr(refs._handle_page_jump, "_is_counting_wrapper", False):
+    _true_orig_jump = refs._handle_page_jump
+
+    def _counting_jump(p):
+        if "__jump_count" not in st.session_state:
+            st.session_state["__jump_count"] = 1
+        else:
+            st.session_state["__jump_count"] = (
+                int(st.session_state["__jump_count"]) + 1
+            )
+        return _true_orig_jump(p)
+
+    _counting_jump._is_counting_wrapper = True  # type: ignore[attr-defined]
+    refs._handle_page_jump = _counting_jump
 
 _render_references_content(
     msg_id="m1",
     documents=[doc],
-    on_page_jump=on_jump,
     citations=None,
     generating=False,
 )
+
+# 콜백이 세팅한 점프 토큰을 평탄 키로 노출 (외부 단언용)
+_token = SessionManager.get("pdf_target_page")
+if isinstance(_token, dict) and "page" in _token:
+    st.session_state["__jumped_page"] = int(_token["page"])
 """
+    SessionManager.reset()
     with open("temp_test_jump_callback.py", "w", encoding="utf-8") as f:
         f.write(script_content)
     try:
         at = AppTest.from_file("temp_test_jump_callback.py").run(timeout=60)
-        jump_btn = next(b for b in at.button if b.label == "3p")
+        assert not at.exception, at.exception
+        # 렌더 단계에서는 핸들러가 호출되지 않아야 한다 (P0 회귀 가드)
+        assert "__jumped_page" not in at.session_state, (
+            "렌더 단계에서 점프 토큰이 세팅됨 (인라인 호출 회귀 의심)"
+        )
+        jump_btn = next(b for b in at.button if b.label == "p.3")
+        assert jump_btn.key.startswith("pop_doc_m1_3_"), jump_btn.key
         at_after = jump_btn.click().run(timeout=60)
-        assert at_after.session_state["__jumped_pages"] == [3]
+        assert not at_after.exception, at_after.exception
+        assert "__jump_count" in at_after.session_state
+        assert at_after.session_state["__jump_count"] == 1
+        assert at_after.session_state["__jumped_page"] == 3
+        assert at_after.session_state["pdf_nav_input_v6"] == 3
     finally:
         if os.path.exists("temp_test_jump_callback.py"):
             os.remove("temp_test_jump_callback.py")
 
 
 def test_doc_jump_click_invokes_handler_via_callback():
-    """P0 회귀: doc 점프 버튼 클릭이 on_click 콜백으로 세션에
-    pdf_target_page 토큰(page=문서 메타)을 세팅한다."""
+    """P0 회귀: 인용(doc) 점프 버튼 클릭이 on_click 콜백으로
+    pdf_target_page 토큰(page=인용 메타)을 정확히 1회 세팅한다.
+
+    현행 계약: citations 항목 {"doc_id", "section", "page"}이
+    "'{section} · p.{page}'" 버튼으로 렌더되며 클릭 시 _handle_page_jump이
+    {"page", "source": "manual", "ts"} 토큰 + nav-input 동기화를 수행한다.
+    """
     script_content = """
 import streamlit as st
 import sys
@@ -145,37 +189,57 @@ import os
 sys.path.append(os.path.abspath(os.path.join(os.getcwd(), "src")))
 
 from unittest.mock import MagicMock
+import ui.components.chat_references as refs
 from ui.components.chat_references import _render_references_content
 from core.session import SessionManager
 
-SessionManager.set_session_id("t_docjump")
-
 doc = MagicMock()
 doc.metadata = {"page": 7, "doc_id": "docA"}
-SessionManager.set("documents", [doc], "t_docjump")
+
+if not getattr(refs._handle_page_jump, "_is_counting_wrapper", False):
+    _true_orig_jump = refs._handle_page_jump
+
+    def _counting_jump(p):
+        if "__jump_count" not in st.session_state:
+            st.session_state["__jump_count"] = 1
+        else:
+            st.session_state["__jump_count"] = (
+                int(st.session_state["__jump_count"]) + 1
+            )
+        return _true_orig_jump(p)
+
+    _counting_jump._is_counting_wrapper = True  # type: ignore[attr-defined]
+    refs._handle_page_jump = _counting_jump
 
 _render_references_content(
     msg_id="m1",
     documents=[doc],
-    on_page_jump=None,
-    citations=[{"doc_id": "docA", "section": "Intro"}],
+    citations=[{"doc_id": "docA", "section": "Intro", "page": 7}],
     generating=False,
 )
+
+_token = SessionManager.get("pdf_target_page")
+if isinstance(_token, dict) and "page" in _token:
+    st.session_state["__jumped_page"] = int(_token["page"])
 """
-    SessionManager.reset_all_state("t_docjump")
+    SessionManager.reset()
     with open("temp_test_docjump.py", "w", encoding="utf-8") as f:
         f.write(script_content)
     try:
         at = AppTest.from_file("temp_test_docjump.py").run(timeout=60)
-        btn = next(b for b in at.button if (b.label or "").startswith("1. "))
+        assert not at.exception, at.exception
+        assert "__jumped_page" not in at.session_state, (
+            "렌더 단계에서 점프 토큰이 세팅됨 (인라인 호출 회귀 의심)"
+        )
+        btn = next(b for b in at.button if b.label == "Intro · p.7")
+        assert btn.key.startswith("pop_doc_m1_7_"), btn.key
         at_after = btn.click().run(timeout=60)
-        # P0 계약: 클릭이 on_click 콜백 페이즈에서 navigate_to_page를 실행한다.
-        # (수정 전: 렌더 단계 인라인 호출 → StreamlitAPIException으로 이미
-        # 인스턴스화된 pdf_nav_input_v6 위젯 키 대입에 실패). session_state의
-        # 내비게이션 부작용이 버전 무관 검증 지점이며, AppTest는 매 rerun 시작에
-        # 자체 default sid로 리셋하므로 SessionManager 토큰 위치는 단언하지 않는다.
+        # P0 계약: 클릭이 on_click 콜백 페이즈에서 _handle_page_jump을 실행한다.
         assert not at_after.exception, at_after.exception
-        assert at_after.session_state["pdf_nav_input_v6"] == 1
+        assert "__jump_count" in at_after.session_state
+        assert at_after.session_state["__jump_count"] == 1
+        assert at_after.session_state["__jumped_page"] == 7
+        assert at_after.session_state["pdf_nav_input_v6"] == 7
     finally:
         if os.path.exists("temp_test_docjump.py"):
             os.remove("temp_test_docjump.py")
