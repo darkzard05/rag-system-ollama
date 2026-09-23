@@ -233,8 +233,7 @@ class RAGSystem:
                         logger.error(f"[RAG] 문서 하이드레이션 실패: {te}")
                 if hydration_failed:
                     SessionManager.add_status_log(
-                        "Citation highlights may be incomplete "
-                        f"({hydration_failed} doc group(s) skipped).",
+                        "일부 참조 문서의 하이라이트 좌표를 불러오지 못했습니다.",
                         session_id=self.session_id,
                     )
                 # 단일 문서 세션에서는 마지막 문서를 쿼리 사이에 퇴출 가능하게

@@ -264,7 +264,9 @@ async def generate(
     llm = cfg.get("llm")
     if not llm:
         _emit_query_timing(_query_timings)
-        return {"response": "LLM not loaded"}
+        return {
+            "response": "답변 생성 모델(LLM)이 준비되지 않았습니다. 모델 설정을 확인하거나 잠시 후 다시 시도해 주세요."
+        }
 
     if writer is not None:
         await _dispatch_event(
@@ -278,7 +280,7 @@ async def generate(
     # 노드 재실행이 발생해도 타임라인에 중복이 쌓이지 않는다. (retrieve/grade 재실행 로그는
     # T1/T4 소유 노드 영역 — 라우팅 결정 시점 로그로 개선하는 것은 별도 워크스트림)
     SessionManager.add_status_log(
-        "답변 논리 설계 및 생성 시작", session_id=_get_session_id(config)
+        "문서 기반 답변 생성 시작", session_id=_get_session_id(config)
     )
 
     docs = get_state_attr(state, "relevant_docs") or []
@@ -286,7 +288,7 @@ async def generate(
     if docs:
         for i, d in enumerate(docs):
             logger.info(f"[RAG] [GENERATE] 문서 {i} 길이: {len(d.page_content)}")
-    no_info_msg = "제공된 문서에서 질문과 관련된 정보를 찾을 수 없습니다. 다른 질문을 입력하거나 문서 내용을 확인해 주세요."
+    no_info_msg = "질문과 관련된 내용을 업로드된 문서에서 찾을 수 없습니다."
     if not docs and get_state_attr(state, "intent") != "general":
         logger.info("[RAG] [GENERATE] 관련 문서 없음 -> 사용자 안내 메시지 생성")
         if writer is not None:

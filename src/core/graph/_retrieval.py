@@ -203,7 +203,7 @@ async def retrieve_and_rerank(
             config=config,
         )
     SessionManager.add_status_log(
-        f"Searching knowledge base: {query}", session_id=_get_session_id(config)
+        f"지식 베이스 검색 중: {query}", session_id=_get_session_id(config)
     )
 
     bm25 = cfg.get("bm25_retriever")
@@ -327,11 +327,9 @@ async def retrieve_and_rerank(
 
     if not final_docs:
         q_len = len(query) if query else 0
-        logger.warning(
-            f"[RAG] [RETRIEVE] 검색 결과가 전혀 없습니다 (Query Length: {q_len})"
-        )
+        logger.warning(f"[RAG] [RETRIEVE] 검색 결과가 없습니다 (Query Length: {q_len})")
         SessionManager.add_status_log(
-            "No documents found.", session_id=_get_session_id(config)
+            "검색 결과가 없습니다.", session_id=_get_session_id(config)
         )
         return {"relevant_docs": []}
 
