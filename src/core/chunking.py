@@ -181,7 +181,7 @@ async def split_documents(
             ):
                 semantic_chunker = _init_semantic_chunker(embedder)
                 split_docs, vectors = await semantic_chunker.split_documents(docs)
-                msg = f"의미론적 분할 완료 ({len(split_docs)}개 조각)"
+                msg = f"의미론적 분할 완료 ({len(split_docs)}개 청크 생성)"
         else:
             recursive_chunker = RecursiveCharacterTextSplitter(
                 chunk_size=TEXT_SPLITTER_CONFIG["chunk_size"],
@@ -193,7 +193,7 @@ async def split_documents(
             )
             if embedder and vectors is None:
                 vectors = await _embed_documents_chunks(split_docs, embedder)
-            msg = f"표준 분할 완료 ({len(split_docs)}개 조각)"
+            msg = f"표준 분할 완료 ({len(split_docs)}개 청크 생성)"
 
         SessionManager.add_status_log(msg, session_id=session_id)
         logger.info(

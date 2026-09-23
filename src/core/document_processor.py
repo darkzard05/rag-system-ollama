@@ -259,7 +259,7 @@ async def load_pdf_docs(
                         "호환성이 우수한 표준 PyMuPDF(C-Engine) 텍스트 추출 모드로 안전하게 자동 전환합니다."
                     )
                     SessionManager.add_status_log(
-                        "시스템 호환성 엔진(Classic C-Engine)으로 자동 전환 중...",
+                        "표준 텍스트 추출 모드로 전환하여 문서를 분석합니다...",
                         session_id=session_id,
                     )
 
@@ -312,7 +312,7 @@ async def load_pdf_docs(
                 )
 
                 docs: list[Document] = []
-                current_section = "Introduction/Root"
+                current_section = "Cover / Overview"
 
                 for i, chunk in enumerate(chunks):
                     if isinstance(chunk, dict):
@@ -388,7 +388,7 @@ async def load_pdf_docs(
             # context manager 종료로 doc.close() 자동 실행
 
             SessionManager.add_status_log(
-                f"문서 분석 완료: 총 {len(docs)}페이지 지식 확보",
+                f"문서 분석 완료: 총 {total_pages}페이지 ({len(docs)}개 섹션) 지식 확보",
                 session_id=session_id,
             )
             op.tokens = sum(len(doc.page_content.split()) for doc in docs)
