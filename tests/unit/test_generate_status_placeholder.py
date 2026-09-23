@@ -15,10 +15,15 @@ Grep (2026-09-19): ``status_logs`` consumers = ``main.py``
 ``streaming_state.py:136/163/168`` only. Zero UI-timeline consumers —
 pre-final window is silent (SS).
 
-Expectation (RED): pre-final "" must yield status placeholder reusing the
-existing "응답 생성 중..." string (no new literals); currently yields []
-so both placeholder tests FAIL. ``add_status_log`` no-pollution guard
-PASSES (documents MUST NOT chat-pollute constraint).
+Contract (post-consolidation): pre-final "" yields the src placeholder
+(``streaming_core._STATUS_PLACEHOLDER``, currently "" — a silent keep-alive
+yield so ``st.write_stream`` stays live) exactly once, and the same value is
+reported once via ``on_status`` for the caption slot. No new literals: the
+constant is imported from src. ``stream_chunks`` mocks must target
+``streaming_core`` (``streaming_runtime``/``streaming_state`` are re-export
+stubs since the Phase 2B consolidation, so patching them is a no-op).
+``add_status_log`` no-pollution guard documents the MUST NOT chat-pollute
+constraint.
 """
 
 from __future__ import annotations
@@ -30,13 +35,12 @@ from unittest.mock import MagicMock, patch
 
 os.environ.setdefault("IS_CI_TEST", "true")
 
+import ui.components.streaming_core as streaming_core_mod  # noqa: E402
 import ui.components.streaming_runtime as runtime_mod  # noqa: E402
 import ui.components.streaming_state as state_mod  # noqa: E402
 from api.streaming_handler import StreamChunk  # noqa: E402
 from core.session import SessionManager  # noqa: E402
-
-# Reuse existing literal only (streaming_state.py:168). No new literals.
-_STATUS_PLACEHOLDER = "응답 생성 중..."
+from ui.components.streaming_core import _STATUS_PLACEHOLDER  # noqa: E402
 
 # Pre-final raw_json fragment: key "final_answer" not yet arrived ->
 # _FinalAnswerExtractor.feed returns "" (extractors 206-217).
@@ -72,16 +76,18 @@ class _FakeSessionManager(MagicMock):
 
 
 def test_pre_final_empty_yields_status_placeholder() -> None:
-    """Pre-final "" must yield status placeholder (RED: currently silent).
+    """Pre-final "" yields the src placeholder once (silent keep-alive).
 
     ``stream_content`` (runtime 271-279) filters via ``if delta:`` so the
-    pre-final fragment yields nothing; ``st.write_stream`` would also filter
-    empty strings. Expected: single placeholder reusing existing string.
+    pre-final fragment yields no text; the trailing placeholder keeps
+    ``st.write_stream`` live without inventing new literals.
     """
     _FakeSessionManager.reset()
     with (
         patch.object(
-            runtime_mod, "stream_chunks", return_value=iter([_PRE_FINAL_CHUNK])
+            streaming_core_mod,
+            "stream_chunks",
+            return_value=iter([_PRE_FINAL_CHUNK]),
         ),
         patch.object(runtime_mod, "SessionManager", _FakeSessionManager),
     ):
@@ -106,13 +112,11 @@ def test_add_status_log_keeps_add_to_chat_false_no_pollution() -> None:
 
 
 def test_on_status_to_caption_contract_for_pre_final() -> None:
-    """Pre-final silence must still report status for caption (RED).
+    """Pre-final silence still reports the placeholder once for the caption.
 
-    ``_content_generator`` (state 169-176) only ``_report_status`` when
-    ``chunk.content`` is truthy; pure pre-final ("" / raw_json pre-key)
-    reports nothing, so the chat ``_on_status -> status_ph.caption``
-    contract has nothing to render. Expected: on_status called once with
-    the reused placeholder, forwarded to caption mock.
+    ``_content_generator`` (state 169-176) reports the src
+    placeholder for pure pre-final chunks ("" / raw_json pre-key) so the
+    chat ``_on_status -> status_ph.caption`` contract has a value to render.
     """
     _FakeSessionManager.reset()
     reported: list[str] = []
@@ -122,7 +126,11 @@ def test_on_status_to_caption_contract_for_pre_final() -> None:
 
     pre_final_empty = StreamChunk(content="", raw_json=True)
     with (
-        patch.object(state_mod, "stream_chunks", return_value=iter([pre_final_empty])),
+        patch.object(
+            streaming_core_mod,
+            "stream_chunks",
+            return_value=iter([pre_final_empty]),
+        ),
         patch.object(state_mod, "SessionManager", _FakeSessionManager),
     ):
         out = list(

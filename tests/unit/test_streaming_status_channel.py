@@ -6,7 +6,8 @@ UX-1/UX-2 수정(T10/T11)이 ``_content_generator`` 에 추가한 ``on_status``
 - 상태 청크(``status`` 존재 + ``content=""``)는 yield되지 않고 on_status 로만
   보고된다 (콘텐츠 누출 없음).
 - 연속으로 동일한 상태 텍스트는 1회만 보고된다 (dedupe).
-- 첫 콘텐츠 청크에서 "응답 생성 중..." 이 1회 보고된다.
+- 첫 콘텐츠 청크에서 플레이스홀더 상태가 1회 보고된다
+  (``streaming_core._STATUS_PLACEHOLDER`` 계약을 미러링).
 - ``on_status`` 미지정(기존 4-인자 호출) 시 yield 계약은 불변이다.
 - ``_render_streaming_with_write_stream`` 의 상태 캡션은 생성 직후 표시되고
   write_stream 종료(정상/예외/■ 중지) 시 ``status_ph.empty()`` 로 정리되며,
@@ -23,8 +24,6 @@ import uuid
 from collections.abc import Iterator
 from typing import Any
 from unittest.mock import MagicMock, patch
-
-import pytest
 
 try:
     from streamlit.runtime.scriptrunner_utils.exceptions import StopException
@@ -44,7 +43,10 @@ _CONTENT_1 = StreamChunk(content="안녕")
 _CONTENT_2 = StreamChunk(content="하세요")
 
 _ANSWER_TEXT = "안녕하세요"
-_INITIAL_CAPTION = "AI가 답변을 생성 중입니다... ▍"
+_INITIAL_CAPTION = "질문을 분석하고 관련 지식을 검색하는 중입니다... ▍"
+# First-content status marker now reuses the src placeholder contract
+# (streaming_core._STATUS_PLACEHOLDER, currently "").
+_FIRST_CONTENT_STATUS = streaming_core_mod._STATUS_PLACEHOLDER
 
 
 class _FakeSessionManager(MagicMock):
@@ -145,7 +147,7 @@ def test_content_generator_reports_statuses_in_order() -> None:
     out, texts, elapsed = _run_generator([_STATUS_A, _CONTENT_1, _STATUS_B, _CONTENT_2])
 
     assert out == ["안녕", "하세요"]
-    assert texts == [_STATUS_A.status, "응답 생성 중...", _STATUS_B.status]
+    assert texts == [_STATUS_A.status, _FIRST_CONTENT_STATUS, _STATUS_B.status]
     assert all(isinstance(value, float) for value in elapsed)
     assert elapsed == sorted(elapsed)
 
@@ -158,10 +160,10 @@ def test_content_generator_dedupes_consecutive_identical_statuses() -> None:
 
 
 def test_content_generator_first_content_switches_to_answer_in_progress() -> None:
-    """첫 콘텐츠 청크에서 "응답 생성 중..." 이 1회 보고된다."""
+    """첫 콘텐츠 청크에서 플레이스홀더 상태가 1회 보고된다."""
     out, texts, _elapsed = _run_generator([_CONTENT_1])
 
-    assert texts == ["응답 생성 중..."]
+    assert texts == [_FIRST_CONTENT_STATUS]
     assert out == ["안녕"]
 
 
@@ -267,13 +269,13 @@ def test_content_generator_calls_on_aux_only_on_changes() -> None:
 
 
 def test_stop_exception_persists_partial_answer() -> None:
-    """■ 중지(StopException) 시 부분 응답이 cancelled=True로 영속되고 재발생한다.
+    """■ 중지(StopException) 시 부분 응답이 cancelled=True로 영속되고 rerun된다.
 
+    신 계약: ``_render_streaming_with_write_stream`` 의 바깥 ``except
+    BaseException`` 이 ■ 중지를 포착해 부분 응답을 영속화한 뒤 ``st.rerun()``
+    으로 확정 렌더하므로 ``StopException`` 은 재발생하지 않는다.
     제너레이터 ``finally`` 가 ``_AUX_STATE_KEY`` 에 ``content`` 를 기록한 뒤
     ``StopException`` 이 ``st.write_stream`` 에서 전파되는 시나리오를 가장한다.
-    함수 밖에서 ``except BaseException`` 이 ``StopException`` 을 포착하고,
-    영속화 블록이 실행된 후 ``raise`` 로 재발생하여 Streamlit 중지 UX를
-    유지한다.
     """
     _FakeSessionManager.reset()
     fake = _FakeSessionManager()
@@ -299,9 +301,11 @@ def test_stop_exception_persists_partial_answer() -> None:
         patch.object(chat_mod, "SessionManager", fake),
         patch.object(chat_mod, "st", fake_st),
         patch.object(chat_mod, "render_generation_expander", MagicMock()),
-        pytest.raises(StopException),
     ):
         chat_mod._render_streaming_with_write_stream({"msg_id": "mid"}, "s", "질문")
+
+    # StopException은 재발생하지 않고 st.rerun()으로 확정 렌더한다.
+    fake_st.rerun.assert_called_once_with()
 
     messages = fake.get_messages()
     assert len(messages) == 1

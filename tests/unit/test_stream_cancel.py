@@ -522,7 +522,7 @@ def test_pre_chunk_timeout_allows_long_setup(monkeypatch):
     """
     import queue as _q
 
-    import ui.components.streaming_runtime as sm
+    import ui.components.streaming_core as sm
 
     monkeypatch.setattr(sm, "UI_STREAMING_SETUP_TIMEOUT", 300)
     monkeypatch.setattr(sm, "UI_STREAMING_TIMEOUT", 60)
@@ -561,7 +561,7 @@ def test_pre_chunk_timeout_allows_long_setup(monkeypatch):
     with (
         patch("core.rag_core.RAGSystem.astream", side_effect=_hang),
         patch(
-            "ui.components.streaming_runtime.get_streaming_handler",
+            "ui.components.streaming_core.get_streaming_handler",
             return_value=mock_handler,
         ),
     ):
@@ -584,7 +584,7 @@ def test_inter_chunk_timeout_strikes_after_first_chunk(monkeypatch):
     """
     import queue as _q
 
-    import ui.components.streaming_runtime as sm
+    import ui.components.streaming_core as sm
 
     monkeypatch.setattr(sm, "UI_STREAMING_SETUP_TIMEOUT", 300)
     monkeypatch.setattr(sm, "UI_STREAMING_TIMEOUT", 60)
@@ -625,7 +625,7 @@ def test_inter_chunk_timeout_strikes_after_first_chunk(monkeypatch):
     with (
         patch("core.rag_core.RAGSystem.astream", side_effect=_hang),
         patch(
-            "ui.components.streaming_runtime.get_streaming_handler",
+            "ui.components.streaming_core.get_streaming_handler",
             return_value=mock_handler,
         ),
         pytest.raises(TimeoutError),
@@ -640,7 +640,7 @@ def test_hard_cancel_no_tokens_to_lose(monkeypatch):
     """Zero chunks produced; cancel fires after strikes → done in queue."""
     import queue as _q
 
-    import ui.components.streaming_runtime as sm
+    import ui.components.streaming_core as sm
 
     monkeypatch.setattr(sm, "UI_STREAMING_SETUP_TIMEOUT", 300)
     monkeypatch.setattr(sm, "UI_STREAMING_TIMEOUT", 0.01)
@@ -666,7 +666,7 @@ def test_hard_cancel_no_tokens_to_lose(monkeypatch):
     with (
         patch("core.rag_core.RAGSystem.astream", side_effect=_hang),
         patch(
-            "ui.components.streaming_runtime.get_streaming_handler",
+            "ui.components.streaming_core.get_streaming_handler",
             return_value=mock_handler,
         ),
     ):
@@ -683,9 +683,7 @@ def test_hard_timeout_ceiling_aborts_hung_stream(monkeypatch):
     the ceiling check fires (> 0.001s elapsed) before the 3-strike
     mechanism can trigger.
     """
-    import queue as _q
-
-    import ui.components.streaming_runtime as sm
+    import ui.components.streaming_core as sm
 
     monkeypatch.setattr(sm, "UI_STREAMING_TIMEOUT", 0.01)
     monkeypatch.setattr(sm, "UI_STREAMING_SETUP_TIMEOUT", 0.01)
@@ -710,7 +708,7 @@ def test_hard_timeout_ceiling_aborts_hung_stream(monkeypatch):
     with (
         patch("core.rag_core.RAGSystem.astream", side_effect=_never_return),
         patch(
-            "ui.components.streaming_runtime.get_streaming_handler",
+            "ui.components.streaming_core.get_streaming_handler",
             return_value=mock_handler,
         ),
         pytest.raises(TimeoutError, match="절대 상한"),
