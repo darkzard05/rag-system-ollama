@@ -15,14 +15,11 @@ from typing import Any
 
 import streamlit as st
 
-from common.config import MSG_CHAT_GUIDE
 from core.session import SessionManager
-from ui.components.common import AVATARS, status_line
+from ui.components.common import AVATARS
 from ui.widget_keys import (
     SAMPLE_QUESTION_STATE_KEY,
     cancel_rebuild_key,
-    onboarding_upload_key,
-    sample_question_key,
 )
 
 __all__ = [
@@ -32,12 +29,6 @@ __all__ = [
     "_render_doc_context_inline",
     "_render_guidance_panel",
     "get_build_error_actions",
-]
-
-_ONBOARDING_QUESTIONS: list[str] = [
-    "What is this document about?",
-    "Summarize the key points",
-    "What are the main findings?",
 ]
 
 
@@ -61,18 +52,20 @@ def get_build_error_actions(error_msg: str) -> dict[str, Any]:
     }
 
 
+def _retry_build(sid: str) -> None:
+    """문서 분석 실패/취소 시 파이프라인 재구축을 트리거하는 콜백."""
+    SessionManager.set("pdf_processing_error", "", session_id=sid)
+    SessionManager.set("rebuild_error", None, session_id=sid)
+    SessionManager.set("rebuild_done", False, session_id=sid)
+    SessionManager.set("rebuild_progress", 0, session_id=sid)
+    SessionManager.set("rebuild_status", "Restarting analysis...", session_id=sid)
+    SessionManager.set(
+        "is_building_rag", False, session_id=sid
+    )  # main.py의 not is_building 가드 통과 보장
+    SessionManager.set("needs_rag_rebuild", True, session_id=sid)
+
+
 def _render_build_progress_block(sid: str) -> None:
-    """문서 분석 상태 블록을 단독 렌더합니다 (전용 폴링 fragment가 호출).
-
-    리팩터링에서 타임라인 폴링이 제거된 뒤, 빌드 도중에는 전체 rerun이
-    발생하지 않아 ``st.progress`` 가 0%에 고착되던 결함(진행 바 동결)을
-    해결하기 위해 분리했다. ``_report_progress``(main.py)가 갱신하는
-    ``rebuild_progress`` 상태만 읽어 주기적(``run_every``)으로 다시 그린다.
-
-    분석 블록은 대화의 일부로 영구 잔존한다(빌드 완료/취소/에러 후에도 남아
-    타임라인 기록으로 남는다). 빌드가 한 번도 시작되지 않은 초기 상태에서만
-    렌더하지 않는다.
-    """
     is_building = bool(SessionManager.get("is_building_rag", False, sid))
     is_cancelling = bool(SessionManager.get("rebuild_cancelled", False, sid))
     is_done = bool(SessionManager.get("rebuild_done", False, sid))
@@ -85,48 +78,78 @@ def _render_build_progress_block(sid: str) -> None:
     progress = int(SessionManager.get("rebuild_progress", 0, sid))
     status_text = str(SessionManager.get("rebuild_status", "", sid) or "")
     error = SessionManager.get("pdf_processing_error", "", sid) or ""
+    is_processed = bool(SessionManager.get("pdf_processed", False, sid))
+
+    # [개선] 파일명 및 캐시 정보 추출 (문서 컨텍스트 통합)
+    file_name = str(
+        SessionManager.get("last_uploaded_file_name", "", sid) or "Document"
+    )
+    doc_stats = SessionManager.get("doc_stats", {}, sid) or {}
+    cache_tag = (
+        " (기존 분석 재사용)"
+        if doc_stats.get("cache_used")
+        else " [new]"
+        if is_processed
+        else ""
+    )
+
+    # 1. 진행 중 상태 텍스트 정제 (중복 문구 제거)
+    clean_status = status_text.strip()
+    if clean_status.startswith("Analyzing"):
+        # "Analyzing 'file'..." 구문이 들어온 경우 중복을 제거하고 핵심 상태만 추출
+        clean_status = (
+            "지식 베이스 구축 중..." if clean_status.endswith("...") else clean_status
+        )
 
     if error:
-        label, state, expanded = "Analysis failed/cancelled", "error", True
-    elif progress >= 100 or is_done:
-        label, state, expanded = "Analysis complete", "complete", False
-    elif is_cancelling:
-        label, state, expanded = "Cancelling analysis...", "running", True
-    else:
+        label, state, expanded = f"{file_name} · 분석 실패", "error", True
+    elif (progress >= 100 or is_done) and is_processed:
         label, state, expanded = (
-            f"Analyzing document: {status_text}",
+            f"{file_name} · 준비 완료{cache_tag}",
+            "complete",
+            False,
+        )
+    elif is_cancelling:
+        label, state, expanded = f"{file_name} · 분석 취소 중...", "running", True
+    else:
+        # 일관된 "{파일명} · {상태}" 포맷으로 정돈
+        label, state, expanded = (
+            f"{file_name} · {clean_status or '문서 분석 중'}",
             "running",
             True,
         )
 
-    with (
-        st.chat_message("system", avatar=AVATARS["building"]),
-        st.status(label, expanded=expanded, state=state),
-    ):
-        st.progress(progress / 100)
+    # 2. st.status 단독 사용으로 이중 아이콘/이중 프레임 노이즈 제거
+    with st.status(label, expanded=expanded, state=state):
         start_time = SessionManager.get("rebuild_start_time", None, sid)
+        elapsed = 0
         if start_time:
             try:
                 elapsed = int(time.time() - float(start_time))
             except (TypeError, ValueError):
                 elapsed = 0
-            st.caption(f"{progress}% · {elapsed}s elapsed")
-        else:
-            st.caption(f"{progress}% complete")
+
+        # 3. 진행 중일 때만 게이지 바 및 진행률 표시, 완료 시에는 핵심 요약만 표시
+        if state == "running":
+            st.progress(progress / 100)
+            st.caption(f"{progress}% 완료 · {elapsed}초 경과")
+        elif state == "complete":
+            # 100% 게이지바와 중복 캡션("100% complete")을 제거하고 유의미한 소요 시간만 간결하게 표시
+            st.caption(f"분석 소요 시간: {elapsed}초" if elapsed > 0 else "분석 완료")
+
         if error:
             actions = get_build_error_actions(error)
             st.error(actions["message"])
             st.button(
-                "Retry Analysis",
+                "다시 시도",
                 key=f"retry_build_{sid}",
-                on_click=lambda: SessionManager.set(
-                    "pdf_processing_error", "", session_id=sid
-                ),
+                on_click=_retry_build,
+                args=(sid,),
                 use_container_width=True,
             )
         if state == "running" and not is_cancelling:
             st.button(
-                "Cancel Analysis",
+                "분석 취소",
                 key=cancel_rebuild_key(sid),
                 on_click=_cancel_rebuild,
                 args=(sid,),
@@ -152,62 +175,24 @@ def _on_sample_question_click(question: str) -> None:
 
 
 def _render_guidance_panel() -> None:
-    """Onboarding empty-state for first-time users with upload CTA and sample questions."""
+    """최초 사용자를 위한 단계별 안내 카드"""
     sid = SessionManager.get_session_id()
-
     if SessionManager.get("last_uploaded_file_name", "", sid):
         return
 
-    with st.chat_message("system", avatar=AVATARS["assistant"]):
-        st.markdown(MSG_CHAT_GUIDE)
-        st.button(
-            "Upload PDF",
-            key=onboarding_upload_key(sid),
-            on_click=lambda: st.session_state.update({"sidebar_state": "expanded"}),
-            use_container_width=True,
+    with st.chat_message("assistant", avatar=AVATARS["assistant"]):
+        st.markdown(
+            """
+            업로드하신 PDF 문서의 내용을 바탕으로 정확한 근거와 함께 답변해 드립니다.
+
+            **시작하는 방법:**
+            1. **좌측 사이드바**에서 분석할 PDF 문서를 업로드해 주세요.
+            2. 지식 베이스 구축이 완료되면 본문에 대한 질문을 자유롭게 입력하세요.
+            3. AI 답변과 함께 제공되는 **인용 출처 버튼**을 누르면 해당 페이지로 즉시 이동합니다.
+            """
         )
-        st.caption("Upload a file from the sidebar to get started")
-        st.divider()
-        st.caption("Try a sample question:")
-        cols = st.columns(3)
-        for idx, question in enumerate(_ONBOARDING_QUESTIONS):
-            with cols[idx]:
-                st.button(
-                    question,
-                    key=sample_question_key(sid, idx),
-                    on_click=_on_sample_question_click,
-                    args=(question,),
-                    use_container_width=True,
-                )
 
 
 def _render_doc_context_inline(sid: str) -> None:
-    """문서 컨텍스트를 타임라인 첫 메시지로 렌더링합니다 (네이티브)."""
-    file_name = str(SessionManager.get("last_uploaded_file_name", "", sid) or "")
-    if not file_name:
-        pdf_path = str(SessionManager.get("pdf_file_path", "", sid) or "")
-        if pdf_path:
-            file_name = pdf_path.replace("\\", "/").rsplit("/", 1)[-1]
-    if not file_name:
-        return
-
-    is_building = bool(SessionManager.get("is_building_rag", False, sid))
-    is_ready = SessionManager.is_ready_for_chat(session_id=sid)
-    has_error = bool(SessionManager.get("pdf_processing_error", "", sid))
-
-    doc_stats = SessionManager.get("doc_stats", {}, sid) or {}
-    doc_loaded = bool(SessionManager.get("pdf_processed", False, sid))
-    cache_tag = ""
-    if doc_loaded and doc_stats:
-        cache_tag = " [cached]" if doc_stats.get("cache_used") else " [new]"
-
-    with st.chat_message("system", avatar=AVATARS["document"]):
-        if is_building:
-            st.caption(status_line(file_name, f"Analyzing...{cache_tag}"))
-            # 진행 상황은 메시지 루프에서 build_progress 타입으로 처리
-        elif has_error:
-            st.caption(status_line(file_name, f"Error{cache_tag}"))
-        elif is_ready:
-            st.caption(status_line(file_name, f"Ready{cache_tag}"))
-        else:
-            st.caption(status_line(file_name, f"Waiting...{cache_tag}"))
+    """[DEPRECATED] _render_build_progress_block으로 통합되어 no-op 처리 (하위 호환성 유지)"""
+    pass

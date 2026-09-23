@@ -12,8 +12,8 @@
 
 import contextlib
 import html
+import re
 import time
-from collections.abc import Callable
 from typing import Any
 
 import streamlit as st
@@ -21,7 +21,7 @@ import streamlit as st
 from common.utils import doc_stable_id
 from core.session import SessionManager
 from ui.components.common import get_doc_metadata, navigate_to_page
-from ui.widget_keys import jump_key
+from ui.strings import t
 
 __all__ = [
     "_extract_reference_pages",
@@ -32,41 +32,20 @@ __all__ = [
 ]
 
 
-def _handle_page_jump(p: int) -> None:
-    """참조 페이지 이동 버튼 콜백입니다."""
-    SessionManager.set(
-        "pdf_target_page",
-        {"page": int(p), "source": "manual", "ts": time.time()},
-    )
-    navigate_to_page(int(p))
-    st.toast(f"Moving to page {p}...")
-    # on_click 콜백은 상태만 기록하고, 클릭 자체가 트리거하는 다음 전체 rerun에서
-    # viewer의 _resolve_pdf_state가 pdf_target_page를 소비한다
-    # (st.rerun()은 콜백에서 no-op 경고를 유발하므로 사용하지 않음).
+def _handle_page_jump(page: int | str) -> None:
+    """인용 출처 클릭 시 해당 PDF 페이지로 이동하는 콜백."""
+    with contextlib.suppress(ValueError, TypeError):
+        target_page = max(1, int(page))
+        SessionManager.set(
+            "pdf_target_page",
+            {"page": target_page, "source": "manual", "ts": time.time()},
+        )
+        navigate_to_page(target_page)
+        # 좌측 PDF 뷰어와 페이지 컨트롤이 즉시 갱신되므로 4초간 화면을 가리는 불필요한 토스트 제거
 
 
-def _handle_doc_jump(doc_id: str) -> None:
-    """인용의 안정 doc_id로 문서를 찾아 첫 페이지로 이동합니다."""
-    docs = SessionManager.get("documents", []) or []
-    target_page = 1
-    found = False
-    for d in docs:
-        if doc_stable_id(d) == doc_id:
-            found = True
-            page = get_doc_metadata(d).get("page")
-            with contextlib.suppress(ValueError, TypeError):
-                if page is not None:
-                    target_page = int(page)
-            break
-    if not found:
-        # doc_id만으로 페이지를 알 수 없으면 1p 기준으로 이동한다.
-        target_page = 1
-    SessionManager.set(
-        "pdf_target_page",
-        {"page": target_page, "source": "citation", "ts": time.time()},
-    )
-    navigate_to_page(target_page)
-    st.toast("Moving to cited document...")
+# 하위 호환성 유지를 위한 alias (기존 참조 보호)
+_handle_doc_jump = _handle_page_jump
 
 
 def _extract_reference_pages(documents: list[Any]) -> list[int]:
@@ -86,76 +65,108 @@ def _extract_reference_pages(documents: list[Any]) -> list[int]:
 def _render_references_content(
     msg_id: str,
     documents: list[Any] | None,
-    on_page_jump: Callable[[int], None] | None = None,
     citations: list[dict[str, Any]] | None = None,
     generating: bool = False,
+    show_caption: bool = True,
 ) -> bool:
-    """참조 콘텐츠(페이지/doc 점프 버튼)를 렌더링합니다.
-
-    통합 익스팬더 내부에서 직접 호출되므로 popover 래퍼 없이 본문만 그립니다.
-    렌더된 참조가 있으면 True, 없으면 False를 반환합니다.
-
-    generating=True(스트리밍 중)에는 매 chunk rerun마다 동일 위젯이 재생성되므로
-    key를 소비하는 st.button 대신 정적 markdown으로 페이지/doc을 표시합니다.
-    key가 필요한 상호작용 점프 버튼은 완료 후(generating=False, 단일 rerun)에만
-    렌더하므로 StreamlitDuplicateElementKey 충돌을 피합니다.
-    """
     rendered = False
     if not documents and not citations:
         return rendered
 
-    pages = _extract_reference_pages(documents or [])
-    if pages:
-        st.caption("By page")
-        if generating:
-            # 스트리밍 중: key 없는 정적 표시 (중복 등록 방지).
-            st.markdown(" · ".join(f"`{p}p`" for p in pages))
-        else:
-            cols = st.columns(min(len(pages), 5))
-            for idx, p in enumerate(pages):
-                # P0 수정: 렌더 단계 인라인 호출(on_page_jump(p))은 진행 중인
-                # rerun에서 이미 인스턴스화된 pdf_nav_input_v6 위젯 키에 대한
-                # 스크립트 페이즈 대입을 유발해 StreamlitAPIException으로 점프가
-                # 실패했다. on_click 콜백으로 위젯키 대입을 콜백 페이즈로 옮긴다.
-                cols[idx % len(cols)].button(
-                    f"{p}p",
-                    key=jump_key(msg_id, p, idx),
-                    use_container_width=True,
-                    on_click=on_page_jump,
-                    args=(int(p),),
-                )
-        rendered = True
-
-    # P3: citations[] 기반 doc 점프 (안정 doc_id).
+    # 1. 인용 데이터 수집 (기존 로직 유지)
     doc_citations = [c for c in (citations or []) if c.get("doc_id") is not None]
-    if doc_citations:
-        doc_ids = {doc_stable_id(d) for d in (documents or [])}
-        st.caption("By doc")
-        for idx, cit in enumerate(doc_citations):
-            sid = str(cit.get("doc_id"))
-            if sid in doc_ids:
-                label = cit.get("section") or cit.get("text_span") or f"doc {sid}"
-                if generating:
-                    # 스트리밍 중: key 없는 정적 표시.
-                    st.markdown(
-                        f'{idx + 1}. <span data-doc-id="{html.escape(sid)}">'
-                        f"{html.escape(label)}</span>",
-                        unsafe_allow_html=True,
-                    )
-                else:
-                    # P0 수정: 페이지 버튼과 동일 — 렌더 단계 인라인
-                    # _handle_doc_jump(sid) 호출을 on_click 콜백으로 전환.
-                    st.button(
-                        f"{idx + 1}. {label}",
-                        key=f"pop_doc_{msg_id}_{sid}_{idx}",
-                        use_container_width=True,
-                        on_click=_handle_doc_jump,
-                        args=(sid,),
-                    )
-        rendered = True
-    return rendered
+    if not doc_citations and documents:
+        seen_keys = set()
+        fallback_citations = []
+        for d in documents:
+            meta = get_doc_metadata(d)
+            sec = meta.get("current_section", "문서 본문")
+            page = meta.get("page", 1)
+            key = (sec, page)
+            if key not in seen_keys:
+                seen_keys.add(key)
+                fallback_citations.append(
+                    {"doc_id": doc_stable_id(d), "section": sec, "page": page}
+                )
+        doc_citations = fallback_citations
+
+    if not doc_citations:
+        return False
+
+    # 2. 문서 ID별 페이지 매핑 테이블 구축
+    doc_page_map = {}
+    for d in documents or []:
+        p = get_doc_metadata(d).get("page")
+        if p is not None:
+            with contextlib.suppress(ValueError, TypeError):
+                doc_page_map[doc_stable_id(d)] = int(p)
+
+    # 3. [개선] 페이지 번호(target_p) 및 대표 섹션 기준 그룹화 (중복 버튼 방지)
+    page_to_refs: dict[int, dict[str, Any]] = {}
+    for cit in doc_citations:
+        sid = str(cit.get("doc_id"))
+        target_p = cit.get("page") or doc_page_map.get(sid, 1)
+        with contextlib.suppress(ValueError, TypeError):
+            target_p = int(target_p)
+
+        # 1) 의미 없는 플레이스홀더 섹션명을 빈 문자열("")로 정규화
+        raw_sec = (cit.get("section") or "").strip()
+        is_generic = not raw_sec or raw_sec.lower() in [
+            "general content",
+            "none",
+            "?",
+            "문서 본문",
+            "일반 본문",
+        ]
+        clean_sec = (
+            ""
+            if is_generic
+            else re.sub(
+                r"[\(\[]\s*p(?:age)?\.?\s*\d+\s*[\)\]]",
+                "",
+                raw_sec,
+                flags=re.IGNORECASE,
+            ).strip()
+        )
+
+        if target_p not in page_to_refs:
+            page_to_refs[target_p] = {"sid": sid, "section": clean_sec}
+        elif not page_to_refs[target_p]["section"] and clean_sec:
+            # 더 구체적인 실제 섹션명이 있는 경우에만 갱신
+            page_to_refs[target_p]["section"] = clean_sec
+
+    # 4. 페이지 번호 오름차순 정렬
+    sorted_pages = sorted(page_to_refs.keys())
+    if not sorted_pages:
+        return False
+
+    # 5. UI 렌더링 (단일 페이지당 1개의 정제된 버튼 배치)
+    for idx, page_num in enumerate(sorted_pages):
+        ref_info = page_to_refs[page_num]
+        sec_title = ref_info["section"]
+        sid = ref_info["sid"]
+
+        # 유의미한 섹션명이 존재할 때만 결합, 없을 때는 "p.X"로 단일화하여 중복 수식어 제거
+        label = f"{sec_title} · p.{page_num}" if sec_title else f"p.{page_num}"
+
+        if generating:
+            st.markdown(
+                f'{idx + 1}. <span data-doc-id="{html.escape(sid)}">{html.escape(label)}</span>',
+                unsafe_allow_html=True,
+            )
+        else:
+            st.button(
+                f"{label}",
+                key=f"pop_doc_{msg_id}_{page_num}_{idx}",
+                use_container_width=True,
+                on_click=_handle_page_jump,
+                args=(page_num,),
+                help=f"PDF {page_num}페이지로 이동",  # 장황한 설명 문구 간결화
+            )
+    return True
 
 
+# [수정 후: src/ui/components/chat_references.py]
 def render_generation_expander(
     msg: dict[str, Any],
     *,
@@ -163,66 +174,50 @@ def render_generation_expander(
     generating: bool,
     status_text: str = "Answer generation",
 ) -> None:
-    """답변 말풍선 상단(질문↔답변 사이)에 **참조 전용 익스팬더**를 렌더합니다.
-
-    생성 단계(Process)·메트릭(Metrics)은 각각 답변 위/아래 캡션으로 이동되어
-    이 익스팬더에는 참조만 남는다. 기본값은 접힘(expanded=False).
-
-    스트리밍 중과 완료 후 동일 위젯을 재사용해, 생성 완료 시 상태 박스가
-    증발하던 문제를 해결한다. 단일 script run 안에서 ``aux_ph`` 고정 슬롯이
-    텍스트보다 위에 익스팬더를 렌더하고, 완료 시 ``finally`` 블록에서 최종
-    메타데이터로 갱신한다. 열림/접힘 상태 영속화를 위해 마지막 렌더에서만
-    key가 적용된다.
-
-    - generating=True: 기본 접힘 유지, 내부 st.spinner로 진행 표시
-    - generating=False: 접은 상태(완료 후 유지), 정적 헤더만
-    - cancelled 메시지는 추론 로그를 감춰 전체 추론 완료로 오인되지 않게 함
-    """
     documents = msg.get("documents") or []
     citations = msg.get("citations") or []
+    thought = (msg.get("thought") or "").strip()
     msg_id = msg.get("msg_id") or ""
     has_references = bool(documents or citations)
 
-    # 완료 메시지인데 표시할 내용이 없으면 익스팬더 자체를 렌더하지 않는다.
-    # 빈 익스팬더 헤더가 대화 줄 간격(패딩+익스팬더)을 키워 간격 과대를 유발한다.
-    # 생성 중(generating=True)에는 항상 익스팬더를 열어 진행 표시/깜빡임을 방지한다.
-    if not generating and not has_references:
+    if not thought and not has_references:
         return
 
-    # msg_id 기반 key로 리렌더 간 열림/닫힘 상태를 메시지별로 영속시킨다.
-    # generating=True(라이브 초기 렌더/폴백)에는 key를 주지 않는다: 같은 script
-    # run에서 aux_ph.empty() 후 동일 key 재렌더는 Streamlit 1.60에서
-    # StreamlitDuplicateElementKey를 유발하므로 key는 최종 렌더에만 적용한다.
+    both_present = bool(has_references and thought)
+
+    # 상단 익스팬더 제목 결정
+    if both_present:
+        expander_title = t("expander_sources_reasoning")  # "출처 및 추론 과정"
+    elif has_references:
+        expander_title = t("expander_sources_only")  # "인용 출처"
+    else:
+        expander_title = t("expander_reasoning_only")  # "사고 과정"
+
+    auto_expand = expanded or (generating and bool(thought))
+
     with st.expander(
-        "Answer details",
-        expanded=expanded,
+        expander_title,
+        expanded=auto_expand,
         key=(f"gen_exp_{msg_id}" if msg_id and not generating else None),
     ):
-        if generating:
-            with st.spinner(status_text):
-                pass
+        # 1. 사고 과정 본문 (인용구 인용 스타일로 표기하므로 중복 캡션 제거)
+        if thought:
+            st.markdown(
+                "\n".join(f"> {line}" for line in thought.splitlines())
+                if "\n" in thought
+                else f"> {thought}"
+            )
 
-        if not has_references:
-            st.caption("Preparing...")
-            return
+        # 2. 두 영역이 모두 있을 때만 경계 구분선 추가
+        if both_present:
+            st.divider()
 
-        # 참조 전용 본문 (Process/Metrics는 답변 위/아래 캡션으로 이동).
-        _render_references_content(
-            msg_id,
-            documents,
-            on_page_jump=_handle_page_jump,
-            citations=citations,
-            generating=generating,
-        )
-
-        # 참조(페이지/doc 점프) — 기존 References popover 내용을 익스팬더 안으로 통합.
-        # if documents or citations:
-        #     st.divider()
-        #     st.caption("References")
-        #     _render_references_content(
-        #         msg_id,
-        #         documents,
-        #         on_page_jump=_handle_page_jump,
-        #         citations=citations,
-        #         generating=generating,
-        #     )
+        # 3. 출처 버튼 목록 렌더링 (show_caption=False로 전달하여 상단 제목과의 중복 캡션 제거)
+        if has_references:
+            _render_references_content(
+                msg_id,
+                documents,
+                citations=citations,
+                generating=generating,
+                show_caption=False,  # <-- 중복 캡션 비활성화
+            )
