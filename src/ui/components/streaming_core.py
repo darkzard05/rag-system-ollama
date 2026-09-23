@@ -189,8 +189,8 @@ def _extract_final_answer_delta(
         if ch == '"':
             nxt = buffer[i + 1] if i + 1 < n else ""
             if nxt in _DELIMITERS or nxt == "":
-                assert _key_pos is not None  # is_incremental이 None 아님을 보장
                 if is_incremental:
+                    assert _key_pos is not None  # is_incremental이 None 아님을 보장
                     _key_pos[4] = 1  # closed = True
                 if is_incremental:
                     new_delta = "".join(delta_chars)
