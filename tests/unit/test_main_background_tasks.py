@@ -14,10 +14,11 @@ import pytest
 # 프로젝트 루트를 path에 추가
 sys.path.append(os.path.abspath("src"))
 
-from core.document_processor import compute_file_hash
-from core.session import SessionManager
 from src.main import _bg_rebuild_task, _update_qa_chain, on_file_upload
 from src.ui.components.streaming import stream_chunks
+
+from core.document_processor import compute_file_hash
+from core.session import SessionManager
 
 
 class FakeSessionState(dict):
@@ -78,11 +79,16 @@ class TestMainBackgroundTasks(unittest.TestCase):
         error_msg = SessionManager.get(
             "pdf_processing_error", session_id="test_session"
         )
-        assert "RAG Build Failed Mock Error" in error_msg
+        # 새 스펙: 원시 예외 대신 정제된 사용자 안내 메시지가 기록된다.
+        assert (
+            error_msg
+            == "문서 분석 중 오류가 발생했습니다. 파일 상태를 확인하신 후 다시 업로드해 주세요."
+        )
+        assert "RAG Build Failed Mock Error" not in error_msg
 
         # 시스템 메시지에 에러가 추가되었는지 확인
         messages = SessionManager.get_messages(session_id="test_session")
-        assert any("RAG Build Failed Mock Error" in m["content"] for m in messages)
+        assert any("문서 분석 중 오류가 발생했습니다" in m["content"] for m in messages)
 
     def test_on_file_upload_same_name_different_hash_triggers_new_analysis(self):
         old_bytes = _make_test_pdf("old")
@@ -212,12 +218,12 @@ class TestMainBackgroundTasks(unittest.TestCase):
                 side_effect=never_returning_astream,
             ),
             patch(
-                "ui.components.streaming_runtime.get_streaming_handler",
+                "ui.components.streaming_core.get_streaming_handler",
                 return_value=mock_handler,
             ),
-            patch("ui.components.streaming_runtime.UI_STREAMING_TIMEOUT", 0.01),
-            patch("ui.components.streaming_runtime.UI_STREAMING_SETUP_TIMEOUT", 0.01),
-            patch("ui.components.streaming_runtime.UI_STREAMING_HARD_TIMEOUT", 0),
+            patch("ui.components.streaming_core.UI_STREAMING_TIMEOUT", 0.01),
+            patch("ui.components.streaming_core.UI_STREAMING_SETUP_TIMEOUT", 0.01),
+            patch("ui.components.streaming_core.UI_STREAMING_HARD_TIMEOUT", 0),
             pytest.raises(TimeoutError),
         ):
             list(
@@ -330,7 +336,11 @@ class TestMainBackgroundTasks(unittest.TestCase):
         # 3. 검증
         messages = SessionManager.get_messages(session_id="test_session")
         # 어시스턴트 역할로 에러 메시지가 추가되어야 함 (현재 구현 기준)
-        assert any("LLM Load Failed Mock Error" in m["content"] for m in messages)
+        # 새 스펙: 원시 예외 대신 정제된 사용자 안내 메시지가 기록된다.
+        assert any(
+            "답변 생성 모델을 변경하는 중 오류가 발생했습니다." in m["content"]
+            for m in messages
+        )
 
     def test_bg_task_drains_remaining_on_cancelled_error(self):
         """CancelledError mid-iteration: _remaining flushed chunks land in queue before 'done'."""

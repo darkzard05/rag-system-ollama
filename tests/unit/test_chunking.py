@@ -154,7 +154,7 @@ async def test_split_documents_semantic_chunking():
         assert len(split_docs) == 1
         assert vectors is not None
         np.testing.assert_array_equal(vectors[0], np.array([0.1]))
-        mock_log.assert_any_call("의미론적 분할 완료 (1개 조각)", session_id=None)
+        mock_log.assert_any_call("의미론적 분할 완료 (1개 청크 생성)", session_id=None)
 
 
 def test_get_optimal_batch_size_int_config():

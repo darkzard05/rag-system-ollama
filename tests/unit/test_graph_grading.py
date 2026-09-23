@@ -169,8 +169,8 @@ async def test_grade_documents_is_relevant_false():
 
 
 def test_min_score_to_skip_loaded_from_config():
-    """config.yml prompts.grading.min_score_to_skip(=0.85)가 GRADING_CONFIG에 로드되는지 검증"""
-    assert GRADING_CONFIG.get("min_score_to_skip") == 0.85
+    """config.yml prompts.grading.min_score_to_skip(=0.70)가 GRADING_CONFIG에 로드되는지 검증"""
+    assert GRADING_CONFIG.get("min_score_to_skip") == 0.70
 
 
 @pytest.mark.asyncio
@@ -226,7 +226,11 @@ async def test_grade_documents_calls_llm_below_threshold(
     result = await grade_documents(state, config, writer=MockWriter())
     assert result == {"intent": "generate", "route": "generate"}
     # 임계값 미만이므로 LLM 검증 경로가 실제로 실행되어야 합니다.
-    mock_llm.bind.assert_called_once()
+    mock_llm.bind.assert_called_once_with(
+        format="json",
+        reasoning=False,
+        options={"think": False, "num_predict": 256, "temperature": 0.0},
+    )
     json_llm.ainvoke.assert_awaited_once()
 
 

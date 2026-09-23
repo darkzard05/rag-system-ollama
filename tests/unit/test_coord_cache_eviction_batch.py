@@ -7,6 +7,7 @@ CoordCacheManager eviction 배치 정리·close 재사용 검증 (T14 / R1b-07, 
 """
 
 import asyncio
+import importlib
 import sqlite3
 import time
 from unittest.mock import patch
@@ -58,16 +59,21 @@ def test_batch_eviction_cleans_over_limit_in_one_cycle():
 
         now = time.time()
         rows: list[tuple[str, int, bytes, float]] = []
-        for i, h in enumerate(_KEEP_HASHES):
+        for _i, h in enumerate(_KEEP_HASHES):
             rows.append((h, 1, orjson.dumps(_payload(3)), now))
-        for i, h in enumerate(_OLD_HASHES):
+        for _i, h in enumerate(_OLD_HASHES):
             rows.append((h, 1, orjson.dumps(_payload(200)), now - 100))
         _insert_rows(rows)
 
         # 상한을 4KB로 축소해 초과 상태를 재현 (old 600행 ~5.7MB, keep 5행 ~0.5KB)
+        # NOTE: `cache/__init__.py`의 싱글톤 export가 패키지 속성
+        # `cache.coord_cache`를 가려(섀도잉) 문자열 패치
+        # "cache.coord_cache.MAX_CACHE_SIZE_MB"는 AttributeError가 납니다.
+        # 실제 모듈 객체에 직접 패치합니다 (deliberate change: ce3d333/d11e4a4).
         limit_bytes = 4096
         small_mb = limit_bytes / (1024 * 1024)
-        with patch("cache.coord_cache.MAX_CACHE_SIZE_MB", small_mb):
+        _coord_cache_module = importlib.import_module("cache.coord_cache")
+        with patch.object(_coord_cache_module, "MAX_CACHE_SIZE_MB", small_mb):
             asyncio.run(manager._submit(manager._evict_old_entries()))
 
         count, total, hashes = _read_state()

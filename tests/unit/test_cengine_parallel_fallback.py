@@ -6,6 +6,7 @@ pymupdf4llm이 실패할 때(ONNXRuntimeError 등) 진입하는 Classic C-Engine
 페이지 순서/단어 좌표를 산출하는지 검증합니다.
 """
 
+import importlib
 from unittest.mock import AsyncMock, patch
 
 import fitz  # pymupdf
@@ -51,6 +52,12 @@ async def test_cengine_fallback_parallel_matches_sequential(tmp_path):
         open_calls["n"] += 1
         return open_pdf_document(fp)
 
+    # NOTE: `cache/__init__.py`가 싱글톤 인스턴스 `coord_cache`를 export하면서
+    # 패키지 속성 `cache.coord_cache`가 모듈을 가려(섀도잉) 문자열 패치
+    # "cache.coord_cache.coord_cache"는 인스턴스에서 속성을 찾아 AttributeError가
+    # 납니다. 실제 모듈 객체(sys.modules 항목)에 직접 패치합니다.
+    # (deliberate product change: ce3d333/d11e4a4 cache singleton — src 정상)
+    _coord_cache_module = importlib.import_module("cache.coord_cache")
     with (
         patch(
             "pymupdf4llm.to_markdown",
@@ -59,7 +66,7 @@ async def test_cengine_fallback_parallel_matches_sequential(tmp_path):
         patch("core.document_processor.open_pdf_document", side_effect=counting_open),
         patch("core.document_processor.compute_file_hash", return_value="testhash"),
         patch("core.document_processor.SessionManager"),
-        patch("cache.coord_cache.coord_cache") as cc,
+        patch.object(_coord_cache_module, "coord_cache") as cc,
     ):
 
         async def fake_save(file_hash: str, page_num: int, words: list) -> None:

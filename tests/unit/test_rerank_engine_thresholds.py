@@ -1,8 +1,8 @@
 """리랭킹 엔진별 임계값·폴백·회로 차단기 유닛 테스트 (R3b-02 / R3b-03).
 
 - (a) semantic(bi-encoder, 코사인) 엔진에서 별도 임계값 `min_score_to_skip_semantic`으로
-      short-circuit 발동 — FlashRank용 0.85와 분리됨
-- (b) FlashRank(시그모이드) 엔진은 semantic 임계값이 아니라 0.85로 판정 (분기 누수 방지)
+      short-circuit 발동 — FlashRank용 0.70와 분리됨
+- (b) FlashRank(시그모이드) 엔진은 semantic 임계값이 아니라 0.70로 판정 (분기 누수 방지)
 - (c) 6자 미만 쿼리는 리랭킹을 생략하지만 `rerank_score`(RRF 집계 점수)를 기록
 - (d) get_or_build 실패 네거티브 캐시 — build_fn 연속 실패 N회 후 회로 차단(즉시 실패),
       TTL 경과 후 재시도 허용
@@ -31,11 +31,11 @@ def _reset_reranker_state():
 
 
 def _semantic_threshold() -> float:
-    return float(GRADING_CONFIG.get("min_score_to_skip_semantic", 0.60))
+    return float(GRADING_CONFIG.get("min_score_to_skip_semantic", 0.40))
 
 
 def _flashrank_threshold() -> float:
-    return float(GRADING_CONFIG.get("min_score_to_skip", 0.85))
+    return float(GRADING_CONFIG.get("min_score_to_skip", 0.45))
 
 
 def _grade_state(score: float) -> dict:
@@ -52,9 +52,9 @@ def _grade_state(score: float) -> dict:
 
 @pytest.mark.asyncio
 async def test_semantic_engine_fires_short_circuit_at_cosine_threshold():
-    """(a) semantic 엔진+코사인 임계값(0.60)에 도달하면 LLM grade 생략(short-circuit)."""
+    """(a) semantic 엔진+코사인 임계값(0.45)에 도달하면 LLM grade 생략(short-circuit)."""
     cosine_threshold = _semantic_threshold()
-    # 코사인 스케일(실측 0.32~0.57) 상한을 넘는 점수 → FlashRank 0.85엔 못 미치지만
+    # 코사인 스케일(실측 0.32~0.57) 상한을 넘는 점수 → FlashRank 0.70엔 못 미치지만
     # semantic 전용 임계값으론 충분해야 한다.
     score = cosine_threshold + 0.02
     assert score < _flashrank_threshold()  # 두 임계값 사이의 점수임을 보장
@@ -72,8 +72,8 @@ async def test_semantic_engine_fires_short_circuit_at_cosine_threshold():
 
 @pytest.mark.asyncio
 async def test_flashrank_engine_does_not_fire_below_sigmoid_threshold():
-    """(b) 동일한 점수라도 FlashRank 엔진(0.85)에서는 short-circuit이 발동하지 않는다."""
-    score = _semantic_threshold() + 0.02  # semantic 임계값 이상이지만 0.85 미만
+    """(b) 동일한 점수라도 FlashRank 엔진(0.70)에서는 short-circuit이 발동하지 않는다."""
+    score = _semantic_threshold() + 0.02  # semantic 임계값 이상이지만 0.70 미만
     assert score < _flashrank_threshold()
 
     mock_llm = MagicMock()
@@ -87,12 +87,14 @@ async def test_flashrank_engine_does_not_fire_below_sigmoid_threshold():
 
     with (
         patch.object(ar, "_rerank_engine_active", "flashrank"),
-        patch("core.graph.graph_builder.adispatch_custom_event", new_callable=AsyncMock),
+        patch(
+            "core.graph.graph_builder.adispatch_custom_event", new_callable=AsyncMock
+        ),
     ):
         result = await grade_documents(_grade_state(score), config, writer=None)
 
     assert result == {"intent": "generate", "route": "generate"}
-    # FlashRank 임계값(0.85) 미만이므로 LLM 검증 경로가 실제 실행되어야 합니다.
+    # FlashRank 임계값(0.70) 미만이므로 LLM 검증 경로가 실제 실행되어야 합니다.
     mock_llm.bind.assert_called_once()
 
 
@@ -247,7 +249,7 @@ async def test_semantic_short_circuit_fires_within_cosine_range():
     """[FIX 회귀] 코사인 실측 상한(~0.57) 이내의 점수(0.50)에서도 semantic 엔진
     short-circuit가 발동해야 한다 (기존 0.60 임계값은 달성 불가 dead-path였다)."""
     score = 0.50
-    assert score < _flashrank_threshold()  # FlashRank 0.85엔 못 미침
+    assert score < _flashrank_threshold()  # FlashRank 0.70엔 못 미침
 
     llm = MagicMock()
     config = {"configurable": {"llm": llm}}
@@ -262,9 +264,11 @@ async def test_semantic_short_circuit_fires_within_cosine_range():
 
 @pytest.mark.asyncio
 async def test_semantic_short_circuit_blocked_when_top_gap_too_small():
-    """[FIX 회귀] 상위-차상위 격차가 min_top_gap_to_skip(0.05) 미만이면
-    점수가 애매한 집합으로 판단해 short-circuit을 막고 LLM 검증을 수행한다."""
-    # 코사인 상한 이내의 고득점이지만, 1·2위가 0.02 차이로 엎치락뒤치락.
+    """[FIX 회귀] 상위-차상위 격차가 min_top_gap_to_skip 미만이어도, 상위 2개 문서가
+    모두 고신뢰도 군집(second >= min_score_to_skip - 0.07)을 형성하면
+    short-circuit이 발동하여 LLM 검증을 생략한다 (both_high_confidence 규칙)."""
+    # 코사인 상한 이내의 고득점이고, 1·2위가 0.02 차이로 엎치락뒤치락하지만
+    # 차상위(0.48)도 고신뢰도 군집(0.45 - 0.07 = 0.38 이상)에 속하므로 직행한다.
     state = {
         "input": "모호한 질문",
         "relevant_docs": [
@@ -288,5 +292,6 @@ async def test_semantic_short_circuit_blocked_when_top_gap_too_small():
         result = await grade_documents(state, config, writer=None)
 
     assert result == {"intent": "generate", "route": "generate"}
-    # 격차가 작아 short-circuit이 막혔으므로 LLM 검증이 실제로 호출되어야 한다.
-    mock_llm.bind.assert_called_once()
+    # 고신뢰도 군집이므로 short-circuit이 발동해 LLM 검증이 생략되어야 한다.
+    mock_llm.bind.assert_not_called()
+    json_llm.ainvoke.assert_not_awaited()
