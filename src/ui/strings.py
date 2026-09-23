@@ -64,21 +64,25 @@ UI_STRINGS: dict[str, dict[str, str]] = {
         "error_ollama_not_running": MSG_ERROR_OLLAMA_NOT_RUNNING,
         # Spinner
         "spinner_loading_models": "Loading available models…",
+        # Expanders
+        "expander_sources_reasoning": "Sources & Reasoning",
+        "expander_sources_only": "Cited Sources",
+        "expander_reasoning_only": "Thought Process",
     },
     "ko": {
         "phase_document_search": "문서 검색",
         "phase_evidence_collection": "증거 수집",
         "phase_answer_generation": "답변 생성",
         "status_generating": "AI가 답변을 생성 중입니다... ▍",
-        "status_stopped": "생성이 중단되었습니다 · 표시할 답변이 없습니다",
+        "status_stopped": "답변 생성이 사용자에 의해 중단되었습니다.",
         "status_switching_models": "모델을 전환하는 중입니다...",
         "status_generating_with_stop": (
             "AI가 답변을 생성 중입니다... · ■ 버튼으로 중지할 수 있습니다"
         ),
-        "chat_placeholder_followup": "Follow-up 질문...",
-        "caption_partial_answer": "Partial answer preserved",
-        "caption_answer_complete": "Answer complete",
-        "caption_stopped_partial": "Stopped · Partial answer preserved",
+        "chat_placeholder_followup": "이어서 질문을 입력하세요...",
+        "caption_partial_answer": "작성된 내용까지 저장되었습니다",
+        "caption_answer_complete": "답변 생성 완료",
+        "caption_stopped_partial": "정지됨 · 부분적인 답변 보존됨",
         "pdf_error_data": "⚠️ PDF 데이터를 불러올 수 없습니다.",
         "pdf_error_open": (
             "⚠️ PDF 파일을 열 수 없습니다. 파일이 손상되었거나 지원되지 않는 형식입니다."
@@ -86,13 +90,17 @@ UI_STRINGS: dict[str, dict[str, str]] = {
         "pdf_error_viewer": "PDF 뷰어 오류가 발생했습니다. 잠시 후 다시 시도해주세요.",
         "pdf_error_render": "PDF 뷰어 렌더링에 실패했습니다.",
         "pdf_highlight_load_failed": (
-            "하이라이트를 불러올 수 없습니다 (좌표 캐시 읽기 실패)."
+            "본문 위치 정보를 불러오지 못해 하이라이트 표시를 건너뜁니다."
         ),
         "nav_prev": "⬅️ 이전",
         "nav_next": "다음 ➡️",
         "chat_guide": MSG_CHAT_GUIDE,
         "error_ollama_not_running": MSG_ERROR_OLLAMA_NOT_RUNNING,
-        "spinner_loading_models": "Loading available models…",
+        "spinner_loading_models": "사용 가능한 모델 목록을 불러오는 중...",
+        # Expanders
+        "expander_sources_reasoning": "출처 및 추론 과정",
+        "expander_sources_only": "인용 출처",
+        "expander_reasoning_only": "사고 과정",
     },
 }
 

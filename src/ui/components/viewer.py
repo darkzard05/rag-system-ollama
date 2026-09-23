@@ -49,7 +49,7 @@ def _render_coord_cache_warnings() -> None:
         if source in warned_sources:
             continue
         warned_sources.add(source)
-        st.warning("하이라이트를 불러올 수 없습니다 (좌표 캐시 읽기 실패).")
+        st.warning("본문 위치 정보를 불러오지 못해 하이라이트 표시를 건너뜁니다.")
 
 
 @safe_cache_data(ttl=300, show_spinner=False)
@@ -96,7 +96,7 @@ def _navigate(delta: int, total_pages: int | None = None) -> None:
     """Move by ``delta`` pages (clamped), syncing state + nav input (D4/D5)."""
     current = int(SessionManager.get("current_page", 1))
     if total_pages is None:
-        target = current + delta
+        target = max(1, current + delta)
     else:
         target = min(total_pages, max(1, current + delta))
     navigate_to_page(target)
@@ -200,6 +200,7 @@ def _resolve_pdf_state() -> dict | None:
             st.session_state.pop(PDF_TARGET_PAGE_KEY, None)
         else:
             current_page = min(max(1, int(page)), total_pages)
+            st.session_state[PDF_NAV_INPUT_KEY] = current_page
             SessionManager.set("current_page", current_page)
             # pdf_target_page는 일회성 소비: 점프 적용 후 키를 삭제하여
             # 사용자가 수동 네비게이션으로 벗어나도 매 rerun마다 참조 페이지로

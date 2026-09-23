@@ -83,13 +83,6 @@ def _render_settings_internal(
             on_change=file_uploader_callback,
             disabled=is_generating,
         )
-        # 업로더 on_change 콜백 이후에 세션에서 다시 읽어 rerun 없이도
-        # 새 파일명이 즉시 반영되도록 한다.
-        current_file_name = (
-            SessionManager.get("last_uploaded_file_name") or current_file_name
-        )
-        if current_file_name:
-            st.caption(f"Current File: :green[{current_file_name}]")
 
     # 2. 고급 설정 (익스팬더)
     with st.expander("Settings", expanded=False):
@@ -188,25 +181,19 @@ def _render_settings_internal(
             _confirm_reset_all()
 
 
-@st.dialog("Confirm Reset All")
+@st.dialog("전체 초기화 확인")
 def _confirm_reset_all() -> None:
-    """Confirmation dialog before Reset All (module-level for st.dialog constraint).
-
-    Since this is destructive, both cancel and confirm paths are provided.
-    Cancel does nothing; confirm resets all state.
-    """
-    st.warning("All conversations and data will be deleted. Continue?")
+    """파괴적 동작 전 사용자 확인 모달"""
+    st.warning(
+        "현재까지의 모든 대화 기록과 업로드된 문서 데이터가 삭제됩니다. 계속하시겠습니까?"
+    )
     col_cancel, col_confirm = st.columns(2)
     with col_cancel:
-        if st.button(
-            "Cancel",
-            use_container_width=True,
-            key="reset_confirm_cancel_btn",
-        ):
+        if st.button("취소", use_container_width=True, key="reset_confirm_cancel_btn"):
             st.rerun()
     with col_confirm:
         if st.button(
-            "Delete",
+            "초기화 실행",
             use_container_width=True,
             type="primary",
             key="reset_confirm_btn",
