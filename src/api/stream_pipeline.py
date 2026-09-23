@@ -461,32 +461,55 @@ class StreamingResponseHandler:
                             )
                             self.chunk_index += 1
 
-                        # [추가] custom 이벤트의 content와 thought 처리
+                        # [최적화] custom 이벤트의 content와 thought도 PriorityStreamBuffer를 통해 버퍼링
                         content = data.get("content")
                         thought = data.get("thought")
                         raw_json = bool(data.get("raw_json", False))
 
                         if thought:
-                            yield StreamChunk(
-                                content="",
-                                timestamp=current_time,
-                                token_count=0,
-                                chunk_index=self.chunk_index,
-                                thought=thought,
-                                raw_json=raw_json,
-                            )
-                            self.chunk_index += 1
+                            buffered_thought = self.buffer.add_thought(thought)
+                            if buffered_thought:
+                                yield StreamChunk(
+                                    content="",
+                                    timestamp=current_time,
+                                    token_count=0,
+                                    chunk_index=self.chunk_index,
+                                    thought=buffered_thought,
+                                    is_thought=True,
+                                    raw_json=raw_json,
+                                )
+                                self.chunk_index += 1
 
                         if content:
+                            if self.first_token_time is None:
+                                self.first_token_time = current_time
                             self._last_chunk_raw_json = bool(raw_json)
-                            yield StreamChunk(
-                                content=content,
-                                timestamp=current_time,
-                                token_count=_estimate_tokens(content),
-                                chunk_index=self.chunk_index,
-                                raw_json=raw_json,
-                            )
-                            self.chunk_index += 1
+
+                            # 레이턴시 측정 및 버퍼 크기 적응형 조정
+                            if adaptive_controller and self.last_chunk_time:
+                                latency_ms = (
+                                    current_time - self.last_chunk_time
+                                ) * 1000
+                                adaptive_controller.record_latency(latency_ms)
+                                self.buffer.buffer_size = (
+                                    adaptive_controller.get_buffer_size()
+                                )
+                            self.last_chunk_time = current_time
+
+                            # PriorityStreamBuffer에 누적 후 배치 단위 방출
+                            buffered_content = self.buffer.add_content(content)
+                            if buffered_content:
+                                chunk = StreamChunk(
+                                    content=buffered_content,
+                                    timestamp=current_time,
+                                    token_count=_estimate_tokens(buffered_content),
+                                    chunk_index=self.chunk_index,
+                                    raw_json=raw_json,
+                                )
+                                self.metrics.total_tokens += chunk.token_count
+                                self.metrics.chunk_count += 1
+                                yield chunk
+                                self.chunk_index += 1
 
                         # P3: 구조화된 인용 배열(citations[])을 청크로 전달한다.
                         if "citations" in data:

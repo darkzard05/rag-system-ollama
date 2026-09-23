@@ -150,12 +150,6 @@ async def stream_query_rag(
     if file_name is None:
         raise HTTPException(status_code=400, detail="먼저 문서를 업로드해주세요.")
 
-    rag_app = srv.SessionManager.get("rag_engine", session_id=sid)
-    if rag_app is None:
-        raise HTTPException(
-            status_code=500, detail="QA 시스템이 초기화되지 않았습니다."
-        )
-
     async def event_generator():
         logger.debug(f"[API] Streaming started for session: {sid}")
 
