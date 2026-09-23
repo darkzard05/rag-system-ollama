@@ -6,12 +6,17 @@
 """
 
 from cache.coord_cache import COORD_CACHE_DB, CoordCacheManager, coord_cache
-from cache.vector_cache import EngineCacheManager, VectorStoreCache
+from cache.vector_cache import (
+    EngineCacheManager,
+    VectorStoreCache,
+    clear_vector_object_cache,
+)
 
 __all__ = [
     "COORD_CACHE_DB",
     "CoordCacheManager",
     "EngineCacheManager",
     "VectorStoreCache",
+    "clear_vector_object_cache",
     "coord_cache",
 ]

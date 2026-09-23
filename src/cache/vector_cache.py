@@ -191,6 +191,14 @@ def _build_config_signature(embedding_model_name: str) -> str:
     return fast_hash(payload.decode())
 
 
+# (프로세스 생애주기 동안 단 1개의 전용 루프/스레드만 유지되며, 256개 캐시 슬롯 공유)
+_shared_vector_object_cache: SyncCacheBridge = SyncCacheBridge(
+    ObjectCache[tuple[list[Document] | None, Any | None, Any | None]](
+        max_size=256, ttl_seconds=0.0
+    )
+)
+
+
 class VectorStoreCache:
     """
     벡터 저장소와 관련 컴포넌트를 디스크에 캐싱하고 로드합니다.
@@ -228,16 +236,8 @@ class VectorStoreCache:
         self.security_manager = get_security_manager()
         self._cache_invalid = False
 
-        # [R4/R9] 통합 객체 캐시 브릿지 — 파싱된 인메모리 객체(doc_splits/
-        # vector_store/bm25_retriever)를 SyncCacheBridge 로 감싼 ObjectCache 에
-        # 보관합니다. load/save 는 평범한 def(비동기 아님)이므로 await 할 수 없고,
-        # 호출부(pipeline_builder.py)도 동기 컨텍스트라 이벤트 루프 충돌을 피하려면
-        # SyncCacheBridge 가 필요합니다. 디스크 직렬화(pickle-free)는 그대로 유지.
-        self._object_cache: SyncCacheBridge = SyncCacheBridge(
-            ObjectCache[tuple[list[Document] | None, Any | None, Any | None]](
-                max_size=256, ttl_seconds=0.0
-            )
-        )
+        # 프로세스 전역 싱글톤 브릿지를 참조
+        self._object_cache: SyncCacheBridge = _shared_vector_object_cache
 
     def _try_load_legacy(self) -> bool:
         """Check if legacy cache dir (pre-fast_hash) exists and re-point paths."""
@@ -527,6 +527,12 @@ class VectorStoreCache:
             self._object_cache.delete_sync(self.cache_dir)
             if os.path.exists(staging_dir):
                 shutil.rmtree(staging_dir)
+
+
+# 테스트 격리 및 수동 초기화용 헬퍼 함수
+def clear_vector_object_cache() -> None:
+    """단위 테스트 간 격리 또는 수동 캐시 초기화 시 인메모리 객체 캐시를 비웁니다."""
+    _shared_vector_object_cache.clear_sync()
 
 
 # RAG 엔진 캐시 관리자 — Phase 3C 에서 cache/engine_cache.py → core/rag_core.py
