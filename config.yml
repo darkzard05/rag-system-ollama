@@ -244,7 +244,7 @@ rag:
     grading:
       # FlashRank(sigmoid) short-circuit 임계값 — max_rerank_score가 이 값 이상이면 LLM grade 생략.
       # 실측: 관련 질문 max 0.855~0.908 / 비관련·저신뢰 0.048~0.057 (이분 분포)
-      min_score_to_skip: 0.85
+      min_score_to_skip: 0.70
       # [R3b-02] semantic(bi-encoder, 코사인) 엔진용 별도 임계값.
       # 코사인 실측 상한이 ~0.57이므로, 기존 0.60은 절대 도달 불가(dead fast-path)였다.
       # 달성 가능 영역(0.45)으로 하향하여 short-circuit을 실제로 활성화한다.

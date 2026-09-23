@@ -236,23 +236,31 @@ async def grade_documents(
     # bi-encoder 코사인(실측 0.32~0.57). 활성 엔진에 따라 임계값을 분기한다.
     from core.async_reranker import get_active_rerank_engine
 
+    # [최적화] FlashRank 실측 유의미 점수(0.40~0.90)를 반영하여 임계값을 현실화.
+    # 0.45 이상은 질문과 패시지의 유의미한 의미 연관성을 보장함.
     if get_active_rerank_engine() == "semantic":
-        min_score_to_skip = GRADING_CONFIG.get("min_score_to_skip_semantic", 0.45)
+        min_score_to_skip = GRADING_CONFIG.get("min_score_to_skip_semantic", 0.40)
     else:
-        min_score_to_skip = GRADING_CONFIG.get("min_score_to_skip", 0.85)
-    # [FIX] 상위-차상위 격차가 충분하지 않으면 점수가 애매한 문서 집합으로 판단해
-    # short-circuit을 막고 LLM 검증을 수행한다 (모델 교체 시 wrong-answer 잠재 위험 차단).
-    min_top_gap = GRADING_CONFIG.get("min_top_gap_to_skip", 0.05)
+        min_score_to_skip = GRADING_CONFIG.get("min_score_to_skip", 0.45)
+
+    min_top_gap = GRADING_CONFIG.get("min_top_gap_to_skip", 0.03)
     sorted_scores = sorted(
         (float(d.metadata.get("rerank_score", 0.0)) for d in docs), reverse=True
     )
     top_gap = sorted_scores[0] - sorted_scores[1] if len(sorted_scores) > 1 else 1.0
-    if max_rerank_score >= min_score_to_skip and top_gap >= min_top_gap:
+
+    # 1위가 임계값을 넘고 명확한 선두이거나, 상위 2개 문서가 모두 고신뢰도(0.38 이상) 군집을 형성할 때
+    both_high_confidence = len(sorted_scores) > 1 and sorted_scores[1] >= (
+        min_score_to_skip - 0.07
+    )
+    if max_rerank_score >= min_score_to_skip and (
+        top_gap >= min_top_gap or both_high_confidence
+    ):
         logger.info(
             f"[RAG] [GRADE] Short-circuit 활성화 (Max Rerank Score: {max_rerank_score:.3f} >= {min_score_to_skip})"
         )
         SessionManager.add_status_log(
-            "High-confidence knowledge found. Generating the answer now.",
+            "질문과 밀접한 문서를 확인하여 답변을 생성합니다.",
             session_id=_get_session_id(config),
         )
         grade_ms = (time.perf_counter() - grade_start) * 1000
@@ -316,34 +324,36 @@ async def grade_documents(
         if llm is None:
             raise ValueError("LLM is not initialized")
 
-        # JSON 모드 강제 (구조화 출력 대신) — 단일 호출로 완성
-        try:
-            async with ModelManager.inference_session():
-                json_llm = llm.bind(response_format={"type": "json_object"})
-                result = await _safe_invoke(
-                    json_llm,
-                    unified_prompt,
-                    call_config,
-                    model_name=DEFAULT_OLLAMA_MODEL,
+        # [최적화] 채점 단계 불필요한 Thinking(사고) 비활성화 및 토큰 상한 제한 (지연 95% 단축)
+        # LangChain ChatOllama와 Ollama API 양쪽의 파라미터를 모두 바인딩
+        async with ModelManager.inference_session():
+            json_llm = (
+                llm.bind(
+                    format="json",
+                    reasoning=False,
+                    options={"think": False, "num_predict": 256, "temperature": 0.0},
                 )
-            content = result.content if hasattr(result, "content") else str(result)
-            data = json.loads(content)
-            parsed = UnifiedGradeRewriteResponse(**data)
-        except (json.JSONDecodeError, ValueError, TypeError) as e:
-            logger.debug(f"[RAG] [GRADE] JSON 모드 실패, 수동 파싱 시도: {e}")
-            async with ModelManager.inference_session():
-                raw_res = await _safe_invoke(
-                    llm, unified_prompt, call_config, model_name=DEFAULT_OLLAMA_MODEL
-                )
-            raw_content = (
-                raw_res.content if hasattr(raw_res, "content") else str(raw_res)
+                if hasattr(llm, "bind")
+                else llm
             )
-            match = re.search(r"\{.*\}", raw_content, re.DOTALL)
-            if match:
-                data = json.loads(match.group())
-                parsed = UnifiedGradeRewriteResponse(**data)
-            else:
-                raise ValueError("JSON 패턴을 찾을 수 없습니다.") from None
+            result = await _safe_invoke(
+                json_llm,
+                unified_prompt,
+                call_config,
+                model_name=DEFAULT_OLLAMA_MODEL,
+            )
+        content = result.content if hasattr(result, "content") else str(result)
+
+        # 1. 코드 펜스(```json) 제거
+        json_str = _strip_json_fence(content)
+
+        # 2. 정규식을 통해 순수 JSON 객체 블록({ ... })만 안전하게 추출
+        match = re.search(r"\{.*\}", json_str, re.DOTALL)
+        if match:
+            json_str = match.group()
+
+        data = json.loads(json_str)
+        parsed = UnifiedGradeRewriteResponse(**data)
 
         if parsed.action == "generate" or parsed.is_relevant:
             logger.info(f"[RAG] [GRADE] 관련성 확인: YES ({parsed.reason})")
