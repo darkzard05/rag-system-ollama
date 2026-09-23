@@ -438,12 +438,19 @@ def apply_tooltips_to_response(
             else doc.get("page_content", "")
         )
         clean_content = html.escape(content).replace("\n", " ").strip()[:300] + "..."
+        full_match = match.group(0)
+        meta = (
+            getattr(doc, "metadata", {})
+            if hasattr(doc, "metadata")
+            else doc.get("metadata", {})
+        )
+        target_page = meta.get("page", "")
 
         return (
             f'<span class="citation-highlight" title="{clean_content}" '
-            f'data-doc-id="{cited_id}" '
-            f'style="color: #007bff; font-weight: 600; text-decoration: underline; text-underline-offset: 3px;">'
-            f"{match.group(0)}</span>"
+            f'data-page="{target_page}" '
+            f'style="color: #0066cc; font-weight: 600; background-color: rgba(0, 102, 204, 0.08); padding: 1px 4px; border-radius: 4px; cursor: help;">'
+            f"{full_match}</span>"
         )
 
     def replace_citation(match):
@@ -518,44 +525,16 @@ def apply_tooltips_to_response(
         )
 
     try:
-        # 1. 문서 인용 [doc:N]을 먼저 위치 기반으로 치환 (페이지 오인 방지).
+        # 1. 문서 인용 [doc:N] 치환 (호버 시 툴팁 표시)
         text = _RE_DOC_CITATION.sub(replace_doc_citation, text)
-        # 2. 페이지 인용 [p.3] 등을 처리 ([doc:N]은 이미 변환되어 영향 없음).
+        # 2. 페이지 인용 [p.3] 치환 (호버 시 툴팁 표시)
         text = _RE_CITATION_BLOCK.sub(replace_citation, text)
     except Exception as e:
         logger.error(f"[Utils] 인용구 처리 오류: {e}")
 
-    # 3. 구조화 citations[]를 본문 말미의 data-doc-id 소스 앵커로 덧붙인다.
-    #    PRIMARY 소스는 citations[] (doc_id 기반, rerank 후에도 안정).
-    #    인라인 [doc:N] 폴백은 위 단계에서 이미 처리된다.
-    if citations:
-        anchors: list[str] = []
-        for idx, cit in enumerate(citations):
-            if not isinstance(cit, dict):
-                continue
-            sid = cit.get("doc_id")
-            if sid is None:
-                continue
-            label = html.escape(
-                str(cit.get("text_span") or cit.get("section") or f"Source {idx + 1}")
-            )[:160]
-            anchors.append(
-                f'<span class="citation-source" data-doc-id="{html.escape(str(sid))}" '
-                f'style="color: #007bff; font-weight: 600; margin-right: 8px;">'
-                f"[{idx + 1}] {label}</span>"
-            )
-        if anchors:
-            text += (
-                '\n\n<span class="citation-sources" data-doc-ids="{}">{}</span>'.format(
-                    ",".join(
-                        html.escape(str(c.get("doc_id")))
-                        for c in citations
-                        if isinstance(c, dict) and c.get("doc_id") is not None
-                    ),
-                    "".join(anchors),
-                )
-            )
-
+    # [리팩토링] 본문 말미 HTML 앵커(citation-sources) 주입 로직 제거.
+    # 출처 확인 및 페이지 점프는 chat_references.py의 네이티브 버튼과
+    # chat.py의 퀵점프 칩이 전담하므로, 본문 끝 중복 텍스트 노출을 차단합니다.
     return text
 
 

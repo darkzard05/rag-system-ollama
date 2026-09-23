@@ -176,7 +176,9 @@ class CircuitBreakerOpen(Exception):
 
     def __init__(self, service_name: str):
         self.service_name = service_name
-        super().__init__(f"{service_name} 서킷 브레이커가 열려있습니다")
+        super().__init__(
+            f"연속된 오류로 인해 {service_name} 요청이 일시적으로 차단되었습니다."
+        )
 
 
 class CircuitBreakerState(Enum):

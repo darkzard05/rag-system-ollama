@@ -91,5 +91,5 @@ class SystemNotifier:
     def model_load(cls, model_name: str, device: str = "GPU"):
         """모델 로딩 전용 알림"""
         icon = cls.ICONS["brain"] if device == "GPU" else cls.ICONS["setting"]
-        msg = f"추론 모델 로드 시작 ({device})"
+        msg = f"'{model_name}' 모델 로드 시작 ({device})"
         cls._notify(msg, "info", show_toast=False, icon=icon)
