@@ -127,7 +127,11 @@ def render_message(
         if processed_content:
             st.markdown(processed_content, unsafe_allow_html=True)
         else:
-            display_text = normalize_latex_delimiters(content)
+            display_text = content
+            if role == "assistant":
+                display_text = html.escape(display_text)
+
+            display_text = normalize_latex_delimiters(display_text)
             # [F5] 본문에 컨텍스트 메타토큰([doc:..] [score:..] 등)이 노출되지 않도록 제거
             if role == "assistant":
                 display_text = strip_context_tokens(display_text)
@@ -340,7 +344,7 @@ def _draw_streaming_message(msg: dict[str, Any], current_sid: str) -> None:
     if raw_content:
         cached = st.session_state.get(cache_key)
         if not cached or cached["raw"] != raw_content:
-            processed = normalize_latex_delimiters(raw_content)
+            processed = normalize_latex_delimiters(html.escape(raw_content))
             st.session_state[cache_key] = {
                 "raw": raw_content,
                 "html": processed,
