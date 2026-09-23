@@ -238,23 +238,23 @@ def create_bm25_retriever(docs: list[Document]) -> Any:
 
 
 def _bm25_results_with_scores(retriever: Any, query: str, k: int) -> list[Document]:
-    """rank_bm25 점수를 ``metadata["score"]``에 주입한 BM25 상위 결과를 반환합니다.
+    """rank_bm25 점수를 ``metadata["score"]``에 주입한 BM25 상위 결과를 반환합니다."""
+    import numpy as np
 
-    ``get_top_n``은 순위 정렬된 문서를, ``get_scores``는 코퍼스 전체 점수를 반환하므로
-    객체 id 기준으로 매칭해 각 문서의 실제 TF-IDF 계열 점수를 기록한다.
-    """
     tokenized_query = retriever.preprocess_func(query)
-    docs = retriever.vectorizer.get_top_n(tokenized_query, retriever.docs, n=k)
-    all_scores = retriever.vectorizer.get_scores(tokenized_query)
-    score_by_doc_id = {
-        id(doc): float(score)
-        for doc, score in zip(retriever.docs, all_scores, strict=False)
-    }
-    for doc in docs:
-        score = score_by_doc_id.get(id(doc))
-        if score is not None:
-            doc.metadata["score"] = score
-    return list(docs)
+    # 1) 전체 문서 대상 BM25 점수 1회만 계산
+    scores = np.asarray(retriever.vectorizer.get_scores(tokenized_query))
+
+    # 2) 상위 k개 문서의 인덱스 추출 (내림차순)
+    top_k_indices = np.argsort(scores)[::-1][:k]
+
+    # 3) O(k)로 직접 문서와 점수 주입 (중간 딕셔너리 할당 제거)
+    results = []
+    for idx in top_k_indices:
+        doc = retriever.docs[idx]
+        doc.metadata["score"] = float(scores[idx])
+        results.append(doc)
+    return results
 
 
 async def search_bm25_with_scores(retriever: Any, query: str, k: int) -> list[Document]:
