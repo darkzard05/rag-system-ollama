@@ -144,7 +144,7 @@ def test_hnsw_efsearch_applied_without_faiss_gpu_symbols(
     monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
     monkeypatch.setattr(faiss, "get_num_gpus", lambda: 1)
 
-    n = 3000  # 2단계 티어 (500 ~ 5000): HNSW32,Flat, ef_search=128
+    n = 3000  # 2단계 티어 (500 ~ 5000): HNSW32,Flat, ef_search=64
     rng = np.random.default_rng(1)
     vectors = rng.random((n, 128), dtype=np.float32)
     docs = [Document(page_content=f"문서 {i}") for i in range(n)]
@@ -152,7 +152,7 @@ def test_hnsw_efsearch_applied_without_faiss_gpu_symbols(
     result = create_vector_store(docs, MagicMock(), vectors=vectors)
 
     hnsw_index = faiss.downcast_index(result.index)
-    assert hnsw_index.hnsw.efSearch == 128
+    assert hnsw_index.hnsw.efSearch == 64
 
 
 def test_hnsw_tier_never_attempts_gpu_conversion(monkeypatch, mock_session_manager):

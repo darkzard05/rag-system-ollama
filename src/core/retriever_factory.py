@@ -136,7 +136,7 @@ def create_vector_store(
     elif chunk_count < q_threshold:
         # 2단계: 중소형 (그래프 기반 고속 검색, 정밀도 우선)
         index_type = f"HNSW{hnsw_m},Flat"
-        ef_search = 128
+        ef_search = 64
     elif chunk_count < 20000:
         # 3단계: 대형 (양자화 임계값 적용, 메모리 75% 절감)
         index_type = f"HNSW{hnsw_m},SQ8"
