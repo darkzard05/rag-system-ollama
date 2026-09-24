@@ -43,19 +43,21 @@ def _set_active_engine(engine: str) -> None:
 
 
 def _text_hash(text: str) -> str:
-    return hashlib.md5(text.encode("utf-8"), usedforsecurity=False).hexdigest()
+    return hashlib.md5(
+        " ".join(text.split()).encode("utf-8"), usedforsecurity=False
+    ).hexdigest()
 
 
-def _get_cached_emb(text: str) -> list[float] | None:
-    h = _text_hash(text)
+def _get_cached_emb(text: str, model: str = "") -> list[float] | None:
+    h = f"{model}:{_text_hash(text)}"
     if h in _doc_emb_cache:
         _doc_emb_cache.move_to_end(h)  # LRU refresh
         return _doc_emb_cache[h]
     return None
 
 
-def _set_cached_emb(text: str, vec: list[float]) -> None:
-    h = _text_hash(text)
+def _set_cached_emb(text: str, vec: list[float], model: str = "") -> None:
+    h = f"{model}:{_text_hash(text)}"
     _doc_emb_cache[h] = vec
     _doc_emb_cache.move_to_end(h)
     if len(_doc_emb_cache) > _DOC_EMB_CACHE_MAX:
@@ -82,7 +84,9 @@ class AsyncSemanticReranker:
             return [], []
 
         query_vec = await self._get_query_embedding(query)
-        doc_vecs = await self._get_doc_embeddings(documents)
+        doc_vecs = await self._get_doc_embeddings(
+            documents, dim=int(query_vec.shape[0])
+        )
         similarities = self._cosine_similarity_batch(query_vec, doc_vecs)
 
         ranked_indices = np.argsort(similarities)[::-1][:top_k]
@@ -113,24 +117,35 @@ class AsyncSemanticReranker:
             self._query_emb_cache.popitem(last=False)
         return vec_np
 
-    async def _get_doc_embeddings(self, documents: list[Document]) -> np.ndarray:
+    async def _get_doc_embeddings(
+        self, documents: list[Document], dim: int = 0
+    ) -> np.ndarray:
         """문서 임베딩 배치를 생성합니다 (메타데이터 캐시 재사용)."""
         texts: list[str] = []
         indices_needing_emb: list[int] = []
         vecs: list[np.ndarray | None] = [None] * len(documents)
+        model = str(
+            getattr(self.embedder, "model", getattr(self.embedder, "model_name", ""))
+        )
 
         for i, doc in enumerate(documents):
-            # 1. Check module-level persistent cache first (survives across queries)
-            cached_vec = _get_cached_emb(doc.page_content)
-            if cached_vec is not None:
-                vecs[i] = np.array(cached_vec, dtype="float32")
-                # Also store on metadata for faster access within this batch
-                doc.metadata["embedding_vector"] = cached_vec
+            # 1. Metadata FIRST: 정규화 해시 동등 + dim 일치시에만 재사용
+            meta_vec = doc.metadata.get("embedding_vector")
+            meta_hash = doc.metadata.get(
+                "embedding_text_hash", _text_hash(doc.page_content)
+            )
+            if (
+                meta_vec is not None
+                and meta_hash == _text_hash(doc.page_content)
+                and (dim == 0 or len(meta_vec) == dim)
+            ):
+                vecs[i] = np.array(meta_vec, dtype="float32")
                 continue
-            # 2. Check metadata-level cache (within current query)
-            cached_vec = doc.metadata.get("embedding_vector")
-            if cached_vec is not None:
+            # 2. Module-level persistent cache (model 키, 정규화 해시)
+            cached_vec = _get_cached_emb(doc.page_content, model)
+            if cached_vec is not None and (dim == 0 or len(cached_vec) == dim):
                 vecs[i] = np.array(cached_vec, dtype="float32")
+                doc.metadata["embedding_vector"] = cached_vec
                 continue
             # 3. Need to compute
             texts.append(doc.page_content)
@@ -154,9 +169,10 @@ class AsyncSemanticReranker:
                 vecs[idx] = vec_np
                 vec_list = vec_np.tolist()
                 documents[idx].metadata["embedding_vector"] = vec_list
-                _set_cached_emb(
-                    documents[idx].page_content, vec_list
-                )  # Module-level cache
+                documents[idx].metadata["embedding_text_hash"] = _text_hash(
+                    documents[idx].page_content
+                )
+                _set_cached_emb(documents[idx].page_content, vec_list, model)
 
         # 모든 벡터가 None이 아닌지 확인
         result_vecs = [v if v is not None else np.zeros_like(vecs[0]) for v in vecs]
