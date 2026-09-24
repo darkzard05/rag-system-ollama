@@ -81,7 +81,7 @@ rag:
   retriever:
     search_type: "similarity"
     search_kwargs:
-      k: 25  # 충분한 후보군 확보를 위해 상향
+      k: 15  # k-chain Stage-1 단일 절단 (N×2 지배항=BM25 get_scores, RRF/dynamic_top_k 불변)
     # BM25와 FAISS의 가중치 기본값
     ensemble_weights: [0.4, 0.6]
 
