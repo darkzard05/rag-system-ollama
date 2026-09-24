@@ -350,8 +350,9 @@ class SemanticChunkerEmbeddingsMixin:
 
         # 2. 누락분 배치 임베딩 수행 (캐시 저장은 모든 배치 성공 후 단일 패스)
         if missing_texts:
+            hit_rate = 1.0 - len(missing_texts) / len(texts)
             logger.debug(
-                f"[Chunker] {len(missing_texts)}개 문장 신규 임베딩 생성 중 (Batch Size: {self.batch_size})..."
+                f"[Chunker] {len(missing_texts)}개 문장 신규 임베딩 생성 중 (Batch Size: {self.batch_size}, hit율: {hit_rate:.1%})..."
             )
 
             # [최적화] Ollama 임베더는 embed_documents가 입력 전체를 단일 HTTP
@@ -399,20 +400,23 @@ class SemanticChunkerEmbeddingsMixin:
                         all_results[idx] = None
                     raise
 
-            # [수정] 모든 배치 성공 후 단일 패스로 캐시 저장 (부분 캐시 저장 방지)
+            # [수정] 모든 배치 성공 후 단일 wait_for + gather 병렬 배치 저장
+            # (逐차 per-item wait_for는 miss가 많을수록 t_embed 지배 → 1회로 축소)
             try:
-                for norm_text, vec_np in {
-                    text: vec for _, text, vec in newly_embedded
-                }.items():
-                    cache_key = f"emb:{self.model_name}:{xxhash.xxh64(norm_text.encode()).hexdigest()}"
-                    await asyncio.wait_for(
-                        self.cache_manager.set(
-                            cache_key,
-                            {"vector": vec_np.tolist(), "cache_version": "1.0"},
-                            persist_to_disk=True,
-                        ),
-                        timeout=30.0,
-                    )
+                unique_new = {text: vec for _, text, vec in newly_embedded}
+                await asyncio.wait_for(
+                    asyncio.gather(
+                        *(
+                            self.cache_manager.set(
+                                f"emb:{self.model_name}:{xxhash.xxh64(t.encode()).hexdigest()}",
+                                {"vector": v.tolist(), "cache_version": "1.0"},
+                                persist_to_disk=True,
+                            )
+                            for t, v in unique_new.items()
+                        )
+                    ),
+                    timeout=30.0,
+                )
             except asyncio.TimeoutError:
                 logger.error("[Chunker] 캐시 저장 타임아웃 (일부 항목 미저장 가능)")
                 raise
