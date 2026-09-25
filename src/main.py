@@ -312,6 +312,7 @@ def _process_uploaded_file(uploaded_file) -> None:
     from core.document_processor import compute_file_hash
     from core.session import SessionManager
     from services.monitoring.notification_system import SystemNotifier
+    from ui.components.common import navigate_to_page
 
     last_file_name = SessionManager.get("last_uploaded_file_name")
     last_file_hash = SessionManager.get("file_hash")
@@ -351,15 +352,12 @@ def _process_uploaded_file(uploaded_file) -> None:
         # 업로드 직후 불필요한 전체 rerun 없이도 빈 화면 깜빡임이 사라진다.
         # (reset_for_new_file이 current_page/pdf_annotations/pdf_target_page 초기화 포함)
         SessionManager.reset_for_new_file(session_id=sid)
-        # 새 문서는 항상 1페이지부터 열이도록 PDF 네비게이션 위젯 상태와
-        # 일회성 점프 키(pdf_target_page)를 초기화합니다. pdf_nav_input_v6는
-        # INTERACTIVE_KEYS(위젯 키)에 속하지만, sync_session은 더 이상 위젯 키를
-        # 스냅샷/복원하지 않습니다 (Streamlit 1.54는 스크립트 측 위젯 키 대입을
-        # 금지). viewer.py/common.py/main.py에서의 pdf_nav_input_v6 직접 스크립트
-        # 대입은 기존에 존재하던 것으로 저장소에 의해 더티 처리되지 않으므로
-        # sync가 이 키를 덮어쓰지 않습니다 — 여기서 직접 session_state를 갱신하여
-        # 이전 문서의 마지막 페이지 값이 재사용되지 않게 합니다.
-        st.session_state["pdf_nav_input_v6"] = 1
+        # 새 문서는 항상 1페이지부터: 단일 navigate_to_page(1) 경로로
+        # SessionManager.current_page를 리셋한다. 위젯 키(INTERACTIVE_KEYS)는
+        # 직접 쓰지 않으며, 네비 입력 위젯은 렌더 시 매니저에서 default를 받는다.
+        # reset_for_new_file이 pdf_target_page 토큰(저장소)을 이미 삭제했으므로
+        # UI 미러만 정리한다.
+        navigate_to_page(1)
         st.session_state.pop("pdf_target_page", None)
         old_path = SessionManager.get("pdf_file_path")
         if old_path:

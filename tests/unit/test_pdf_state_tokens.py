@@ -43,11 +43,13 @@ def test_manual_token_consumed_once(pdf_state: dict[str, object]) -> None:
     # 일회성 소비: 호출 후 토큰 삭제 확인
     assert SessionManager.get("pdf_target_page", session_id=SID) is None
 
-    # 두 번째 호출은 pdf_nav_input_v6로 폴스루, 재점프 없이 동일 페이지 유지
+    # 두 번째 호출은 매니저 current_page로 폴스루, 재점프 없이 동일 페이지 유지
+    # (TASK 3: resolve는 위젯 키를 쓰지 않으므로 키 부재를 단언한다)
     second = viewer_module._resolve_pdf_state()
     assert second is not None
     assert second["current_page"] == 5
-    assert pdf_state["pdf_nav_input_v6"] == 5
+    assert SessionManager.get("current_page", session_id=SID) == 5
+    assert "pdf_nav_input_v6" not in pdf_state
 
 
 def test_auto_token_consumed_when_no_manual_nav(
@@ -68,7 +70,9 @@ def test_stale_auto_token_discarded_after_manual_nav(
     """사용자 수동 네비게이션이 토큰보다 최신이면 토큰은 폐기되고 폴스루한다."""
     _set_token({"page": 7, "source": "auto", "ts": 100.0})
     SessionManager.set("manual_nav_ts", 200.0, SID)
-    pdf_state["pdf_nav_input_v6"] = 3
+    # TASK 3: 수동 입력은 on_change -> navigate_to_page 경유로 매니저에 기록되므로
+    # resolve는 매니저 값을 사용한다 (위젯 직접 시딩 금지).
+    SessionManager.set("current_page", 3, SID)
 
     state = viewer_module._resolve_pdf_state()
     assert state is not None
@@ -109,7 +113,7 @@ def test_malformed_dict_token_self_cleans(
 ) -> None:
     """page 누락 dict 토큰은 크래시 없이 폐기되고 폴스루한다."""
     _set_token({"source": "manual"})
-    pdf_state["pdf_nav_input_v6"] = 2
+    SessionManager.set("current_page", 2, SID)
 
     state = viewer_module._resolve_pdf_state()
     assert state is not None

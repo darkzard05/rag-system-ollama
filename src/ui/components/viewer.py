@@ -203,14 +203,14 @@ def _resolve_pdf_state() -> dict | None:
             st.session_state.pop(PDF_TARGET_PAGE_KEY, None)
         else:
             current_page = min(max(1, int(page)), total_pages)
-            st.session_state[PDF_NAV_INPUT_KEY] = current_page
             SessionManager.set("current_page", current_page)
             # pdf_target_page는 일회성 소비: 점프 적용 후 키를 삭제하여
             # 사용자가 수동 네비게이션으로 벗어나도 매 rerun마다 참조 페이지로
-            # 되돌아가지 않도록 보장한다.
+            # 되돌아가지 않도록 보장한다. 위젯 키(INTERACTIVE_KEYS)는 절대
+            # 직접 쓰지 않는다 — 네비 입력 위젯은 렌더 시 매니저에서 default를
+            # 받는다 (``render_pdf_controls``의 ``value=current_page``).
             SessionManager.delete(PDF_TARGET_PAGE_KEY)
             st.session_state.pop(PDF_TARGET_PAGE_KEY, None)
-            st.session_state[PDF_NAV_INPUT_KEY] = current_page
             return {
                 "pdf_path": pdf_path,
                 "file_hash": file_hash,
@@ -218,14 +218,17 @@ def _resolve_pdf_state() -> dict | None:
                 "current_page": current_page,
             }
 
-    if PDF_NAV_INPUT_KEY in st.session_state:
-        current_page = min(
-            max(1, int(st.session_state[PDF_NAV_INPUT_KEY])), total_pages
-        )
-        SessionManager.set("current_page", current_page)
-    else:
-        current_page = min(max(1, SessionManager.get("current_page", 1)), total_pages)
-        st.session_state[PDF_NAV_INPUT_KEY] = current_page
+    # 위젯 상태(sticky key)보다 매니저(SessionManager.current_page)가 우선한다:
+    # 모든 네비게이션(버튼/입력/참조점프/새파일)은 단일 navigate_to_page() 경로로
+    # 매니저에 먼저 기록되므로, 오래된 위젯 값이 매니저를 덮어쓰면 버튼 이동이
+    # 무효화된다. 사용자 입력은 on_change 콜백이 매니저에 동기화하므로 여기서
+    # 다시 읽을 필요가 없으며, 위젯 default는 렌더 시 매니저에서 받는다.
+    try:
+        managed_page = int(SessionManager.get("current_page", 1) or 1)
+    except (TypeError, ValueError):
+        managed_page = 1
+    current_page = min(max(1, managed_page), total_pages)
+    SessionManager.set("current_page", current_page)
 
     return {
         "pdf_path": pdf_path,
@@ -333,6 +336,7 @@ def render_pdf_controls(current_page, total_pages):
                 "Page",
                 min_value=1,
                 max_value=total_pages,
+                value=current_page,
                 key=PDF_NAV_INPUT_KEY,
                 on_change=_on_page_change,
                 label_visibility="collapsed",

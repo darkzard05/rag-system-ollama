@@ -101,9 +101,9 @@ def test_page_jump_click_invokes_handler_via_callback():
     pdf_target_page 점프 토큰을 정확히 1회 세팅한다. 렌더 단계 인라인 호출로
     회귀하면 클릭 전부터 토큰이 세팅되어 아래 선행 단언이 실패한다.
 
-    현행 계약 (chat_references._handle_page_jump):
+    현행 계약 (chat_references._handle_page_jump, TASK 3):
     - SessionManager 'pdf_target_page' = {"page", "source": "manual", "ts"}
-    - navigate_to_page로 nav-input('pdf_nav_input_v6') 동기화
+    - navigate_to_page로 SessionManager 'current_page' 동기화 (위젯 키 무접촉)
     """
     script_content = """
 import streamlit as st
@@ -145,10 +145,13 @@ _render_references_content(
     generating=False,
 )
 
-# 콜백이 세팅한 점프 토큰을 평탄 키로 노출 (외부 단언용)
+# 콜백이 세팅한 점프 토큰/페이지를 평탄 키로 노출 (외부 단언용)
 _token = SessionManager.get("pdf_target_page")
 if isinstance(_token, dict) and "page" in _token:
     st.session_state["__jumped_page"] = int(_token["page"])
+_cp = SessionManager.get("current_page")
+if isinstance(_cp, int):
+    st.session_state["__current_page"] = int(_cp)
 """
     SessionManager.reset()
     with open("temp_test_jump_callback.py", "w", encoding="utf-8") as f:
@@ -167,7 +170,7 @@ if isinstance(_token, dict) and "page" in _token:
         assert "__jump_count" in at_after.session_state
         assert at_after.session_state["__jump_count"] == 1
         assert at_after.session_state["__jumped_page"] == 3
-        assert at_after.session_state["pdf_nav_input_v6"] == 3
+        assert at_after.session_state["__current_page"] == 3
     finally:
         if os.path.exists("temp_test_jump_callback.py"):
             os.remove("temp_test_jump_callback.py")
@@ -177,9 +180,10 @@ def test_doc_jump_click_invokes_handler_via_callback():
     """P0 회귀: 인용(doc) 점프 버튼 클릭이 on_click 콜백으로
     pdf_target_page 토큰(page=인용 메타)을 정확히 1회 세팅한다.
 
-    현행 계약: citations 항목 {"doc_id", "section", "page"}이
+    현행 계약 (TASK 3): citations 항목 {"doc_id", "section", "page"}이
     "'{section} · p.{page}'" 버튼으로 렌더되며 클릭 시 _handle_page_jump이
-    {"page", "source": "manual", "ts"} 토큰 + nav-input 동기화를 수행한다.
+    {"page", "source": "manual", "ts"} 토큰 + current_page 동기화를 수행한다
+    (위젯 키 무접촉).
     """
     script_content = """
 import streamlit as st
@@ -221,6 +225,9 @@ _render_references_content(
 _token = SessionManager.get("pdf_target_page")
 if isinstance(_token, dict) and "page" in _token:
     st.session_state["__jumped_page"] = int(_token["page"])
+_cp = SessionManager.get("current_page")
+if isinstance(_cp, int):
+    st.session_state["__current_page"] = int(_cp)
 """
     SessionManager.reset()
     with open("temp_test_docjump.py", "w", encoding="utf-8") as f:
@@ -239,7 +246,7 @@ if isinstance(_token, dict) and "page" in _token:
         assert "__jump_count" in at_after.session_state
         assert at_after.session_state["__jump_count"] == 1
         assert at_after.session_state["__jumped_page"] == 7
-        assert at_after.session_state["pdf_nav_input_v6"] == 7
+        assert at_after.session_state["__current_page"] == 7
     finally:
         if os.path.exists("temp_test_docjump.py"):
             os.remove("temp_test_docjump.py")

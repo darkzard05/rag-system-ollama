@@ -8,7 +8,7 @@ drifting apart. Covers:
 - ``get_doc_metadata`` — document metadata extraction (D2, 3x dup)
 - ``status_line`` — middot-joined status fragments (D6/D7/C3)
 - ``ui_error`` / ``show_pdf_error`` — unified, friendly-only error exposure (C1/D1)
-- ``navigate_to_page`` — single page-jump helper (D4)
+- ``navigate_to_page`` — single page-jump helper (D4, manager-only)
 """
 
 from __future__ import annotations
@@ -18,7 +18,6 @@ import time
 import streamlit as st
 
 from core.session import SessionManager
-from ui.widget_keys import PDF_NAV_INPUT_KEY
 
 # ---------------------------------------------------------------------------
 # Avatars (D3): single source of truth across chat.py / viewer.py
@@ -107,11 +106,13 @@ def show_pdf_error(kind: str = "open") -> None:
 
 
 def navigate_to_page(page: int) -> None:
-    """Update current page + sync nav input widget (shared by viewer nav).
+    """Single page-jump path: SessionManager keys only (shared by viewer nav).
 
-    Keeps ``current_page``, ``manual_nav_ts`` and the ``pdf_nav_input_v6``
-    widget key in lockstep so manual navigation never desyncs the input box.
+    Writes ``current_page`` (clamped to >= 1; the upper bound is clamped by
+    callers holding the cached total) and ``manual_nav_ts``. Never touches
+    widget keys (``INTERACTIVE_KEYS`` contract) and never calls ``st.rerun``
+    (Task2) — the nav input widget receives its default from the manager at
+    render time (``value=current_page`` in ``render_pdf_controls``).
     """
-    SessionManager.set("current_page", page)
+    SessionManager.set("current_page", max(1, page))
     SessionManager.set("manual_nav_ts", time.time())
-    st.session_state[PDF_NAV_INPUT_KEY] = page
