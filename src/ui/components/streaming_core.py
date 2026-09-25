@@ -111,9 +111,35 @@ def _iter_live_asyncgens(limit: int = 12) -> Any:
         yield ag_frame.f_code.co_name, ag_frame
 
 
+def _describe_stream_task(run_id: str) -> str:
+    """One-line task state for the lingering stream (done/cancelled/pending).
+
+    Decides the branch: task done but thread alive (stuck *after* the
+    task: unregister/release/loop.close), cancel delivered but ignored
+    (teardown stall), or cancel never delivered (registry/loop mismatch).
+    """
+    try:
+        task = peek_stream_task(run_id)
+    except Exception as exc:  # noqa: BLE001 - diagnostics must never raise
+        return f"<registry unreadable: {exc}>"
+    if task is None:
+        return "task=unregistered"
+    try:
+        _cancelling = (
+            task.cancelling()  # type: ignore[attr-defined]
+            if hasattr(task, "cancelling")
+            else "n/a(py310)"
+        )
+        return (
+            f"task=done={task.done()} cancelled={task.cancelled()} "
+            f"cancelling={_cancelling}"
+        )
+    except Exception as exc:  # noqa: BLE001 - diagnostics must never raise
+        return f"<state unreadable: {exc}>"
+
+
 def _format_stream_task_stack(run_id: str, limit: int = 12) -> str:
     """Read-only coroutine-stack snapshot of the lingering stream task.
-
     The thread stack of a parked event loop only shows idle ``select``;
     the task stack names the actual await point (e.g. a ``wait_for``-guarded
     model call vs the Ollama socket read). Best effort: a racing teardown
@@ -603,10 +629,12 @@ def stream_chunks(
                 )
                 _parked = _format_stuck_thread_stack(t)
                 _task_parked = _format_stream_task_stack(run_id)
+                _task_state = _describe_stream_task(run_id)
                 logger.warning(
                     "[CHAT] Stream thread did not exit after cancel: "
                     f"{t.name} (phase={_phase}, teardown_wait=3.0s, "
-                    f"active_slots={active_stream_count()})\n"
+                    f"active_slots={active_stream_count()}, "
+                    f"{_task_state})\n"
                     f"parked at:\n{_parked}"
                     f"task parked at:\n{_task_parked}"
                 )
