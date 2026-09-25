@@ -5,7 +5,6 @@ PDF 뷰어 및 문서 관련 UI 컴포넌트.
 
 import logging
 import os
-import time
 
 import streamlit as st
 
@@ -102,31 +101,35 @@ def _navigate(delta: int, total_pages: int | None = None) -> None:
     navigate_to_page(target)
 
 
-def _on_prev_click():
-    """이전 페이지로 이동 (네비게이션 버튼 콜백)"""
-    _navigate(-1)
+def _on_prev_click(total_pages: int | None = None) -> None:
+    """이전 페이지로 이동 (네비게이션 버튼 콜백, cached total 사용)."""
+    _navigate(-1, total_pages)
 
 
-def _on_next_click_callback():
+def _on_next_click_callback(total_pages: int | None = None) -> None:
     """다음 페이지 네비게이션 콜백 (module-level).
 
-    total_pages는 런타임에만 알 수 있으므로 여기서 조회 후 _navigate에 전달한다.
+    total은 렌더 시 resolve된 캐시 값을 args로 전달받는다 — 콜백에서
+    재조회하지 않아 렌더당 resolve 1회를 보장한다 (fragment deps 축소).
     """
-    pdf_path = SessionManager.get("pdf_file_path", "")
-    if not pdf_path:
-        return
-    total = _get_pdf_total_pages(os.path.abspath(pdf_path))
-    if not total:
-        return
-    _navigate(1, total_pages=total)
+    _navigate(1, total_pages)
 
 
-def _on_page_change():
-    """페이지 번호 입력 변경 시 (number_input on_change 콜백)"""
-    new_p = st.session_state.get(PDF_NAV_INPUT_KEY)
-    if new_p:
-        SessionManager.set("current_page", new_p)
-        SessionManager.set(MANUAL_NAV_TS_KEY, time.time())
+def _on_page_change(total_pages: int | None = None) -> None:
+    """페이지 번호 입력 변경 시 (number_input on_change 콜백).
+
+    total을 알 수 없으면 no-op이며, 아니면 1<=page<=total로 클램프한다.
+    """
+    if total_pages is None:
+        return
+    raw = st.session_state.get(PDF_NAV_INPUT_KEY)
+    if raw is None:
+        return
+    try:
+        new_page = int(raw)
+    except (TypeError, ValueError):
+        return
+    navigate_to_page(min(total_pages, max(1, new_page)))
 
 
 # ---------------------------------------------------------------------------
@@ -322,6 +325,7 @@ def render_pdf_controls(current_page, total_pages):
                 key="btn_nav_prev_v6",
                 disabled=current_page <= 1,
                 on_click=_on_prev_click,
+                args=(total_pages,),
             )
 
         with col_page:
@@ -332,6 +336,7 @@ def render_pdf_controls(current_page, total_pages):
                 key=PDF_NAV_INPUT_KEY,
                 on_change=_on_page_change,
                 label_visibility="collapsed",
+                args=(total_pages,),
             )
 
         with col_next:
@@ -341,6 +346,7 @@ def render_pdf_controls(current_page, total_pages):
                 key="btn_nav_next_v6",
                 disabled=current_page >= total_pages,
                 on_click=_on_next_click_callback,
+                args=(total_pages,),
             )
 
     except Exception as e:
