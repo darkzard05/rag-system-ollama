@@ -24,6 +24,10 @@ from ui.components.chat import (  # noqa: E402
 )
 from ui.components.sidebar import render_settings_content  # noqa: E402
 
+# ko-KR primary premise: 스토어에 ko를 심는다 (sidebar 단일 배선이 매 렌더
+# 스토어에서 strings.LANG을 결정하므로 set_lang 직접 호출은 소용없다).
+SessionManager.set("ui_lang", "ko", session_id="unit-test-session")
+
 # Seed a minimal session so the chat areas render deterministically.
 SessionManager.set_session_id("unit-test-session")
 SessionManager.set("is_ready_for_chat", True, session_id="unit-test-session")

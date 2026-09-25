@@ -17,6 +17,7 @@ import streamlit as st
 
 from core.session import SessionManager
 from ui.components.common import AVATARS
+from ui.strings import t
 from ui.widget_keys import (
     SAMPLE_QUESTION_STATE_KEY,
     cancel_rebuild_key,
@@ -176,22 +177,17 @@ def _on_sample_question_click(question: str) -> None:
 
 
 def _render_guidance_panel() -> None:
-    """최초 사용자를 위한 단계별 안내 카드"""
+    """온보딩 단일 소스: 파일 미업로드 시에만 안내 카드를 렌더한다.
+
+    렌더 판단(파일 게이트)과 본문(strings onboarding_guide)이 여기 일원화되어
+    있으므로 호출자는 조건 없이 호출만 한다 (chat.py 타임라인 빈 분기).
+    """
     sid = SessionManager.get_session_id()
     if SessionManager.get("last_uploaded_file_name", "", sid):
         return
 
     with st.chat_message("assistant", avatar=AVATARS["assistant"]):
-        st.markdown(
-            """
-            업로드하신 PDF 문서의 내용을 바탕으로 정확한 근거와 함께 답변해 드립니다.
-
-            **시작하는 방법:**
-            1. **좌측 사이드바**에서 분석할 PDF 문서를 업로드해 주세요.
-            2. 지식 베이스 구축이 완료되면 본문에 대한 질문을 자유롭게 입력하세요.
-            3. AI 답변과 함께 제공되는 **인용 출처 버튼**을 누르면 해당 페이지로 즉시 이동합니다.
-            """
-        )
+        st.markdown(t("onboarding_guide"))
 
 
 def _render_doc_context_inline(sid: str) -> None:

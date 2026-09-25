@@ -155,17 +155,17 @@ def render_main_content() -> None:
         render_pdf_area()
         logger.debug("[PERF] render_pdf_area took %.3fs", time.perf_counter() - t0)
     with col_chat:
-        # [FIX-STREAM-INPUT] Render the input BEFORE the messages area on purpose.
-        # render_chat_messages_area() -> _render_unified_timeline() -> for the active
-        # streaming message, _render_streaming_with_write_stream() (st.write_stream +
-        # expander-above aux_ph slot) streams inside this same script run — the submit
-        # handler must NOT call st.rerun() (that would split submit from streaming and
-        # the submit_mode="stop" stop button never renders; Playwright-verified).
-        # st.chat_input() must be created BEFORE that loop starts so the widget is
-        # already in the DOM while tokens stream (otherwise the input vanishes for the
-        # whole generation and reappears only after). CSS `order:1` on the input wrapper
-        # re-pins it visually to the column bottom, so reordering the DOM does not
-        # disturb the bottom-pin layout.
+        # [TASK5-a VERDICT: stream-DOM 제약 검증 결론 — DOM 순서 유지 확정]
+        # render_chat_input_area()를 render_chat_messages_area()보다 먼저 호출해야
+        # 한다: 스트리밍이 같은 script run에서 st.write_stream 루프로 돌므로,
+        # input 위젯이 그 루프 시작 전에 DOM에 있어야 생성 내내 사라지지 않는다
+        # (뒤집으면 messages-then-input + sticky만으로 충분하겠지만, 스트리밍 중
+        # 입력창이 통째로 사라져 되돌릴 수 없으므로 DOM 순서 유지를 선택).
+        # 시각 순서는 main.css order:1이, 키보드 접근성은 :focus-visible 링이 담당.
+        # Trade-off 기록: Tab 순서는 DOM 순서(input 우선)를 따르므로 시각 순서와
+        # 다를 수 있다 — 스트리밍 안정성이 우선하므로 허용하고 주석으로 고정한다.
+        # (기존 [FIX-STREAM-INPUT] 주석의 결론을 TASK 5에서 재검증 후 확정)
+
         t0 = time.perf_counter()
         render_chat_input_area()
         logger.debug(

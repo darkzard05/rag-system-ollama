@@ -57,6 +57,43 @@ UI_STRINGS: dict[str, dict[str, str]] = {
         ),
         # Navigation
         "nav_prev": "◀ Previous",
+        # PDF page input (viewer.py render_pdf_controls, visible label + help)
+        "pdf_page_label": "Page",
+        "pdf_page_help": "Page number to jump to (1–N).",
+        # Onboarding guide (chat_build._render_guidance_panel, single source)
+        "onboarding_guide": (
+            "Answers with cited evidence from your uploaded PDF.\n\n"
+            "**How to start:**\n"
+            "1. **Upload** a PDF document from the left sidebar.\n"
+            "2. Once indexing finishes, freely ask anything about the document.\n"
+            "3. Press a **citation button** in an AI answer to jump to that page."
+        ),
+        # Sidebar (sidebar.py, LANG toggle host — en values mirror the
+        # pre-i18n literals so the default LANG="en" render is unchanged)
+        "sidebar_upload_label": "Upload PDF Document",
+        "sidebar_settings": "Settings",
+        "sidebar_llm_label": "LLM Model Selection",
+        "sidebar_ollama_hint": (
+            "Start Ollama to select a model. "
+            "[Installation guide](https://ollama.com/download)"
+        ),
+        "sidebar_refresh": "Refresh Models",
+        "sidebar_refresh_help": "Refresh the list of models available in Ollama.",
+        "sidebar_embedding_label": "Embedding Model Selection",
+        "sidebar_new_chat": "New Chat",
+        "sidebar_new_chat_help": "Start a new chat, keeping the uploaded documents.",
+        "sidebar_reset": "🗑️ Reset All",
+        "sidebar_reset_help": "Delete all conversations and data.",
+        "sidebar_reset_title": "Confirm Reset All",
+        "sidebar_reset_body": (
+            "This will delete all conversation history and uploaded document "
+            "data. Do you want to continue?"
+        ),
+        "sidebar_cancel": "Cancel",
+        "sidebar_confirm_reset": "Reset",
+        "sidebar_switching": "⏳ Switching model... Please wait.",
+        "sidebar_language": "Language / 언어",
+        "sidebar_language_help": "Switch the UI language (UI 언어 전환).",
         "nav_next": "Next ▶",
         # Chat guide
         "chat_guide": MSG_CHAT_GUIDE,
@@ -96,6 +133,39 @@ UI_STRINGS: dict[str, dict[str, str]] = {
             "본문 위치 정보를 불러오지 못해 하이라이트 표시를 건너뜁니다."
         ),
         "nav_prev": "⬅️ 이전",
+        "pdf_page_label": "페이지",
+        "pdf_page_help": "이동할 페이지 번호 (1–N).",
+        "onboarding_guide": (
+            "업로드하신 PDF 문서의 내용을 바탕으로 정확한 근거와 함께 답변해 드립니다.\n\n"
+            "**시작하는 방법:**\n"
+            "1. **좌측 사이드바**에서 분석할 PDF 문서를 업로드해 주세요.\n"
+            "2. 지식 베이스 구축이 완료되면 본문에 대한 질문을 자유롭게 입력하세요.\n"
+            "3. AI 답변과 함께 제공되는 **인용 출처 버튼**을 누르면 해당 페이지로 즉시 이동합니다."
+        ),
+        "sidebar_upload_label": "PDF 문서 업로드",
+        "sidebar_settings": "설정",
+        "sidebar_llm_label": "LLM 모델 선택",
+        "sidebar_ollama_hint": (
+            "모델을 선택하려면 Ollama를 시작하세요. "
+            "[설치 안내](https://ollama.com/download)"
+        ),
+        "sidebar_refresh": "모델 새로고침",
+        "sidebar_refresh_help": "Ollama에서 사용 가능한 모델 목록을 새로고침합니다.",
+        "sidebar_embedding_label": "임베딩 모델 선택",
+        "sidebar_new_chat": "새 대화",
+        "sidebar_new_chat_help": "업로드된 문서는 유지하고 새 대화를 시작합니다.",
+        "sidebar_reset": "🗑️ 전체 초기화",
+        "sidebar_reset_help": "모든 대화와 데이터를 삭제합니다.",
+        "sidebar_reset_title": "전체 초기화 확인",
+        "sidebar_reset_body": (
+            "현재까지의 모든 대화 기록과 업로드된 문서 데이터가 삭제됩니다. "
+            "계속하시겠습니까?"
+        ),
+        "sidebar_cancel": "취소",
+        "sidebar_confirm_reset": "초기화 실행",
+        "sidebar_switching": "⏳ 모델 전환 중입니다. 잠시만 기다려 주세요.",
+        "sidebar_language": "Language / 언어",
+        "sidebar_language_help": "UI 언어를 전환합니다 (Switch the UI language).",
         "nav_next": "다음 ➡️",
         "chat_guide": MSG_CHAT_GUIDE,
         "error_ollama_not_running": MSG_ERROR_OLLAMA_NOT_RUNNING,

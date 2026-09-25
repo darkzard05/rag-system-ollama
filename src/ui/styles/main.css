@@ -1,4 +1,11 @@
 @charset "UTF-8";
+/* TASK5-f VERSION GUARD — Streamlit 1.60 DOM contract.
+   Every data-testid selector below is pinned to the Streamlit 1.60 DOM
+   (see requirements/base.txt). Do NOT add new testID selectors or new DOM
+   probes (st.iframe scripts) without re-verifying the 1.60 DOM: new probes
+   re-introduce the upload-transition collapse this file guards against.
+   Allowed: plain-property fixes inside EXISTING rules, reusing EXISTING testIDs. */
+
 
 :root {
     --spacing-xs: 4px;
@@ -323,9 +330,11 @@
 > [data-testid="stElementContainer"]:has(> [data-testid="stChatInput"]) {
     position: sticky !important;
     bottom: 0 !important;
-    /* input is emitted BEFORE the messages area in ui.py (so the widget is in the DOM
-       during the blocking stream loop), but must visually sit at the column bottom.
-       The column stVerticalBlock is a flex column, so order:1 pushes the input last. */
+    /* TASK5-a verdict: input is emitted BEFORE the messages area in ui.py (so the
+       widget is in the DOM during the blocking stream loop), but must visually
+       sit at the column bottom. KEEP order:1 — removing it breaks the bottom-pin
+       that the verified DOM-first order depends on. The column stVerticalBlock
+       is a flex column, so order:1 pushes the input last. */
     order: 1 !important;
     /* margin-top:auto pins the input to the column bottom when the conversation is
        SHORT (content shorter than the scrollport). @st.fragment polling was removed
@@ -368,6 +377,7 @@ div[data-testid="stBottomBlockContainer"] {
 [data-testid="stMainBlockContainer"] [data-testid="stColumn"] div,
 [data-testid="stMainBlockContainer"] p {
     word-break: keep-all;
+    overflow-x: clip;
     overflow-wrap: break-word;
 }
 
@@ -401,6 +411,7 @@ header[data-testid="stHeader"] {
     background: var(--background-color) !important;
     z-index: 99999 !important;
     display: flex !important;
+    overflow-x: clip;
     border-bottom: 1px solid color-mix(in srgb, var(--border-color) 30%, transparent);
 }
 .stAppDeployButton { display: none !important; }
@@ -519,13 +530,22 @@ header[data-testid="stHeader"] {
         padding-bottom: 1rem !important;
     }
     /* Mobile: neutralize the desktop sticky-wrapper so the input is not double-positioned.
-       The input itself becomes position:fixed (below). */
+       The input itself becomes position:fixed (below) — the ONLY fixed node.
+       All three desktop sticky selectors (direct wrapper, :has wrapper, AND the
+       nested fragment wrapper > stLayoutWrapper > stVerticalBlock > wrapper) must
+       be neutralized, otherwise the fragment-wrapped input keeps sticky AND fixed. */
     [data-testid="stMainBlockContainer"] [data-testid="stColumn"]:last-child
     > [data-testid="stVerticalBlock"]
     > [data-testid="stElementContainer"]:has(> [data-testid="stChatInput"]),
     [data-testid="stMainBlockContainer"] [data-testid="stColumn"]:last-child
     > [data-testid="stVerticalBlock"]
-    > [data-testid="stLayoutWrapper"]:has(> [data-testid="stChatInput"]) {
+    > [data-testid="stLayoutWrapper"]:has([data-testid="stChatInput"]),
+    [data-testid="stMainBlockContainer"] [data-testid="stColumn"]:last-child
+    > [data-testid="stVerticalBlock"]
+    > [data-testid="stLayoutWrapper"]
+    > [data-testid="stVerticalBlock"]
+    > [data-testid="stElementContainer"]:has(> [data-testid="stChatInput"]) {
+
         position: static !important;
         margin-top: 0 !important;
         flex: 0 0 auto !important;

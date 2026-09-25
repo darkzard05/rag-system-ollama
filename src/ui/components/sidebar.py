@@ -10,7 +10,18 @@ from common.config import (
     DEFAULT_OLLAMA_MODEL,
 )
 from core.session import SessionManager
-from ui.widget_keys import reset_all_key
+from ui.strings import set_lang, t
+from ui.widget_keys import LANGUAGE_SELECTOR_KEY, reset_all_key
+
+_LANG_OPTIONS: dict[str, str] = {"한국어": "ko", "English": "en"}
+
+
+def on_language_change() -> None:
+    """LANG 단일 토글 콜백: 셀렉터 읽기 → 스토어 + strings.LANG에 반영."""
+    label = st.session_state.get(LANGUAGE_SELECTOR_KEY, "English")
+    code = _LANG_OPTIONS.get(str(label), "en")
+    SessionManager.set("ui_lang", code)
+    set_lang(code)
 
 
 def _render_sidebar_logo():
@@ -67,17 +78,19 @@ def _render_settings_internal(
     available_models,
     ollama_reachable=True,
 ):
+    # LANG 단일 배선: 스토어 값이 매 렌더 strings 활성 언어를 결정한다.
+    set_lang(str(SessionManager.get("ui_lang", "en") or "en"))
     """Render the settings section logic (accessibility-optimized)."""
     safe_models = available_models if isinstance(available_models, list) else []
 
     # DEFECT #6: loading indicator while the LLM model is being swapped.
     if is_swapping_model:
-        st.info("⏳ Switching model... Please wait.")
+        st.info(t("sidebar_switching"))
 
     # 1. 문서 업로드 섹션
     with st.container(border=True):
         st.file_uploader(
-            "Upload PDF Document",
+            t("sidebar_upload_label"),
             type="pdf",
             key="pdf_uploader",
             on_change=file_uploader_callback,
@@ -85,7 +98,22 @@ def _render_settings_internal(
         )
 
     # 2. 고급 설정 (익스팬더)
-    with st.expander("Settings", expanded=False):
+    with st.expander(t("sidebar_settings"), expanded=False):
+        # UI 언어 토글 (단일 콜백 on_language_change 경유)
+        current_lang = str(SessionManager.get("ui_lang", "en") or "en")
+        lang_labels = list(_LANG_OPTIONS.keys())
+        try:
+            lang_idx = list(_LANG_OPTIONS.values()).index(current_lang)
+        except ValueError:
+            lang_idx = 1
+        st.selectbox(
+            t("sidebar_language"),
+            lang_labels,
+            index=lang_idx,
+            key=LANGUAGE_SELECTOR_KEY,
+            on_change=on_language_change,
+            help=t("sidebar_language_help"),
+        )
         # 모델 설정 그룹
         from core.model_loader import ModelManager
 
@@ -103,7 +131,7 @@ def _render_settings_internal(
             def_idx = 0
 
         st.selectbox(
-            "LLM Model Selection",
+            t("sidebar_llm_label"),
             actual_llms,
             index=def_idx,
             key="model_selector",
@@ -112,18 +140,15 @@ def _render_settings_internal(
         )
 
         if not ollama_reachable:
-            st.caption(
-                "Start Ollama to select a model. "
-                "[Installation guide](https://ollama.com/download)"
-            )
+            st.caption(t("sidebar_ollama_hint"))
 
         # 모델 새로고침 (Ollama에서 모델 목록 재조회 — 보조 동작이므로 하향)
         if (
             st.button(
-                "Refresh Models",
+                t("sidebar_refresh"),
                 use_container_width=True,
                 type="secondary",
-                help="Refresh the list of models available in Ollama.",
+                help=t("sidebar_refresh_help"),
                 key="refresh_models_btn",
                 disabled=is_generating,
             )
@@ -144,7 +169,7 @@ def _render_settings_internal(
             emb_idx = 0
 
         st.selectbox(
-            "Embedding Model Selection",
+            t("sidebar_embedding_label"),
             actual_embeddings,
             index=emb_idx,
             key="embedding_model_selector",
@@ -156,10 +181,10 @@ def _render_settings_internal(
         is_building = bool(SessionManager.get("is_building_rag", False))
         if (
             st.button(
-                "New Chat",
+                t("sidebar_new_chat"),
                 use_container_width=True,
                 type="primary",
-                help="Start a new chat, keeping the uploaded documents.",
+                help=t("sidebar_new_chat_help"),
                 key="new_chat_btn",
                 disabled=is_generating or is_building,
             )
@@ -171,30 +196,32 @@ def _render_settings_internal(
         sid = SessionManager.get_session_id()
         st.divider()
         if st.button(
-            "🗑️ Reset All",
+            t("sidebar_reset"),
             use_container_width=True,
             type="secondary",
-            help="Delete all conversations and data.",
+            help=t("sidebar_reset_help"),
             key=reset_all_key(sid),
             disabled=is_generating,
         ):
             _confirm_reset_all()
 
 
-@st.dialog("전체 초기화 확인")
+@st.dialog(t("sidebar_reset_title"))
 def _confirm_reset_all() -> None:
     """파괴적 동작 전 사용자 확인 모달"""
-    st.warning(
-        "현재까지의 모든 대화 기록과 업로드된 문서 데이터가 삭제됩니다. 계속하시겠습니까?"
-    )
+    st.warning(t("sidebar_reset_body"))
     col_cancel, col_confirm = st.columns(2)
     with col_cancel:
-        if st.button("취소", use_container_width=True, key="reset_confirm_cancel_btn"):
-            # 버튼 위젯 interaction 자체의 리런으로 다이얼로그가 닫히므로 명시 rerun 금지.
+        # 버튼 위젯 interaction 자체의 리런으로 다이얼로그가 닫히므로 명시 rerun 금지.
+        if st.button(
+            t("sidebar_cancel"),
+            use_container_width=True,
+            key="reset_confirm_cancel_btn",
+        ):
             pass
     with col_confirm:
         if st.button(
-            "초기화 실행",
+            t("sidebar_confirm_reset"),
             use_container_width=True,
             type="primary",
             key="reset_confirm_btn",

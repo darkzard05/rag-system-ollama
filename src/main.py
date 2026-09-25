@@ -58,6 +58,7 @@ from common.config import (
 from common.constants import FilePathConstants, StringConstants
 from common.logging_config import setup_logging
 from common.utils import safe_cache_resource
+from ui.strings import t
 
 # 1. Streamlit 페이지 설정 (최우선 실행 - 가이드라인 준수)
 st.set_page_config(
@@ -598,7 +599,7 @@ def main() -> None:
     # Ollama list 최대 5s)에만 정직한 스피너를 표시한다.
     if "available_models_list" not in st.session_state:
         _t_models = time.perf_counter()
-        with st.spinner("Loading available models…"):
+        with st.spinner(t("spinner_loading_models")):
             st.session_state.available_models_list = _load_available_models()
         logger.debug(
             "[PERF] main(): _load_available_models took %.3fs",
@@ -612,9 +613,7 @@ def main() -> None:
     ollama_reachable = _is_ollama_reachable()
 
     if not ollama_reachable:
-        st.error(
-            "Ollama is not reachable. Start the Ollama server before using the app."
-        )
+        st.error(t("error_ollama_not_running"))
 
     _t_layout = time.perf_counter()
     _render_app_layout(
@@ -632,6 +631,9 @@ def main() -> None:
     )
     logger.debug("[PERF] main(): TOTAL rerun %.3fs", time.perf_counter() - _t_main)
 
+    # 온보딩 단일 소스 (TASK 5-e): 온보딩 렌더 판단은
+    # chat_build._render_guidance_panel 내부 게이트가 유일한 출처다.
+    # is_first_run은 렌더 게이트가 아닌 세션 부기용 플래그로만 유지한다.
     if SessionManager.get("is_first_run"):
         SessionManager.set("is_first_run", False)
 

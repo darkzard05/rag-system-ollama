@@ -177,10 +177,9 @@ def _render_unified_timeline(current_sid: str) -> None:
 
     # 실제 대화가 아직 시작되지 않은 경우:
     if not chat_messages:
-        file_name = SessionManager.get("last_uploaded_file_name", "", current_sid)
-        # 파일이 아직 업로드되지 않은 초기 상태에서만 온보딩 가이드 카드 표시
-        if not file_name:
-            _render_guidance_panel()
+        # 온보딩은 _render_guidance_panel 단일 소스에 위임한다 (파일 게이트는
+        # 패널 내부에 일원화 — 여기서 중복 검사하지 않는다).
+        _render_guidance_panel()
         # 문서 분석 완료 시 상단 status 블록("준비 완료")과 하단 입력창 placeholder가
         # 상태 안내 및 질문 유도를 전담하므로, 증발하는 중복 더미 말풍선은 렌더링하지 않고 종료
         return

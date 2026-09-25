@@ -327,32 +327,35 @@ def render_pdf_controls(current_page, total_pages):
 
         with col_prev:
             st.button(
-                "⬅️ 이전",
+                t("nav_prev"),
                 use_container_width=True,
                 key="btn_nav_prev_v6",
                 disabled=current_page <= 1,
                 on_click=_on_prev_click,
                 args=(total_pages,),
+                help=t("pdf_page_help"),
             )
 
         with col_page:
             st.number_input(
-                "Page",
+                t("pdf_page_label"),
                 min_value=1,
                 max_value=total_pages,
                 value=current_page,
                 key=PDF_NAV_INPUT_KEY,
                 on_change=_on_page_change,
-                label_visibility="collapsed",
                 args=(total_pages,),
+                label_visibility="visible",
+                help=t("pdf_page_help"),
             )
 
         with col_next:
             st.button(
-                "다음 ➡️",
+                t("nav_next"),
                 use_container_width=True,
                 key="btn_nav_next_v6",
                 disabled=current_page >= total_pages,
+                help=t("pdf_page_help"),
                 on_click=_on_next_click_callback,
                 args=(total_pages,),
             )

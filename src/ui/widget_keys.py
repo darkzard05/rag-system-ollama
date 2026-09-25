@@ -52,6 +52,10 @@ INTERACTIVE_KEYS: frozenset[str] = frozenset(
 
 
 SAMPLE_QUESTION_STATE_KEY: str = "onboarding_sample_question"
+# Sidebar language selector widget (TASK 5 LANG toggle). Deliberately NOT in
+# INTERACTIVE_KEYS: the sync mirrors store keys only, and the callback reads
+# (never writes) this key, so it needs no flicker protection.
+LANGUAGE_SELECTOR_KEY: str = "language_selector"
 
 
 def cancel_rebuild_key(sid: str) -> str:

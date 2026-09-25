@@ -18,6 +18,7 @@ import time
 import streamlit as st
 
 from core.session import SessionManager
+from ui.strings import t
 
 # ---------------------------------------------------------------------------
 # Avatars (D3): single source of truth across chat.py / viewer.py
@@ -93,11 +94,9 @@ def show_pdf_error(kind: str = "open") -> None:
     kind="data" -> PDF bytes could not be loaded.
     """
     if kind == "data":
-        st.error("⚠️ PDF 데이터를 불러올 수 없습니다.")
+        st.error(t("pdf_error_data"))
         return
-    st.error(
-        "⚠️ PDF 파일을 열 수 없습니다. 파일이 손상되었거나 지원되지 않는 형식입니다."
-    )
+    st.error(t("pdf_error_open"))
 
 
 # ---------------------------------------------------------------------------
