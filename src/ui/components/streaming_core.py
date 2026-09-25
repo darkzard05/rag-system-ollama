@@ -23,8 +23,10 @@ import contextlib
 import logging
 import queue
 import re
+import sys
 import threading
 import time
+import traceback
 import uuid
 from collections.abc import Callable, Iterator
 from typing import Any
@@ -51,6 +53,22 @@ from ui.components.common import get_doc_metadata
 logger = logging.getLogger(__name__)
 
 _clock = time.monotonic
+
+
+def _format_stuck_thread_stack(thread: threading.Thread, limit: int = 8) -> str:
+    """Read-only stack snapshot of a lingering stream thread.
+
+    Runs only on the join-expiry path (never hot): tells the next
+    investigation exactly where the thread is parked (sync-blocked loop
+    vs slow teardown await) without touching the target thread.
+    """
+    if thread.ident is None:
+        return "<no ident>"
+    frame = sys._current_frames().get(thread.ident)
+    if frame is None:
+        return "<no frame>"
+    return "".join(traceback.format_stack(frame, limit=limit))
+
 
 # ─────────────────────────────────────────────────────────────────────
 # §1  EXTRACTORS — pure final_answer delta state machine
@@ -503,10 +521,12 @@ def stream_chunks(
                     if _teardown_state["first_put_at"] is not None
                     else "setup"
                 )
+                _parked = _format_stuck_thread_stack(t)
                 logger.warning(
                     "[CHAT] Stream thread did not exit after cancel: "
                     f"{t.name} (phase={_phase}, teardown_wait=3.0s, "
-                    f"active_slots={active_stream_count()})"
+                    f"active_slots={active_stream_count()})\n"
+                    f"parked at:\n{_parked}"
                 )
             else:
                 logger.debug(f"[CHAT] Stream thread cleanup: {t.name}")

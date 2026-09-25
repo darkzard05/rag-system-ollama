@@ -758,3 +758,30 @@ def test_stop_during_slot_wait_exits_promptly(monkeypatch):
     finally:
         stream_worker.release_stream_slot()
     assert stream_worker.active_stream_count() == 0
+
+
+def test_format_stuck_thread_stack_names_parking_spot():
+    """The stuck-thread snapshot must name where the thread is parked."""
+    from ui.components.streaming_core import _format_stuck_thread_stack
+
+    entered = threading.Event()
+    release = threading.Event()
+
+    def _park_here() -> None:
+        entered.set()
+        release.wait(timeout=10.0)
+
+    t = threading.Thread(target=_park_here, daemon=True)
+    t.start()
+    try:
+        assert entered.wait(5.0)
+        snapshot = _format_stuck_thread_stack(t)
+        assert "_park_here" in snapshot
+        assert "threading" in snapshot or "wait" in snapshot
+    finally:
+        release.set()
+        t.join(timeout=5.0)
+
+    dead = threading.Thread(target=lambda: None, daemon=True)
+    # Never started: ident is None -> placeholder, never raises.
+    assert _format_stuck_thread_stack(dead) == "<no ident>"
