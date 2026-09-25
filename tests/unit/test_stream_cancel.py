@@ -785,3 +785,42 @@ def test_format_stuck_thread_stack_names_parking_spot():
     dead = threading.Thread(target=lambda: None, daemon=True)
     # Never started: ident is None -> placeholder, never raises.
     assert _format_stuck_thread_stack(dead) == "<no ident>"
+
+
+def test_format_stream_task_stack_names_await_point():
+    """The task-stack snapshot must name the coroutine's await point."""
+    import asyncio
+
+    from common import stream_worker
+    from ui.components.streaming_core import _format_stream_task_stack
+
+    run_id = f"peek-{uuid.uuid4().hex[:8]}"
+    loop = asyncio.new_event_loop()
+    ready = threading.Event()
+
+    async def _parked_await() -> None:
+        ready.set()
+        await asyncio.sleep(600)
+
+    def _run() -> None:
+        asyncio.set_event_loop(loop)
+        task = loop.create_task(_parked_await())
+        stream_worker.register_stream(run_id, loop, task)
+        loop.run_forever()
+
+    bg = threading.Thread(target=_run, daemon=True)
+    bg.start()
+    try:
+        assert ready.wait(5.0)
+        snapshot = _format_stream_task_stack(run_id)
+        assert "_parked_await" in snapshot
+        assert "sleep" in snapshot
+    finally:
+        stream_worker.unregister_stream(run_id)
+        loop.call_soon_threadsafe(loop.stop)
+        bg.join(timeout=5.0)
+        loop.close()
+
+    assert _format_stream_task_stack("no-such-run-id") == (
+        "<task already unregistered>"
+    )

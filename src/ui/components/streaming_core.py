@@ -43,6 +43,7 @@ from common.stream_worker import (
     acquire_stream_slot,
     active_stream_count,
     cancel_stream,
+    peek_stream_task,
     register_stream,
     release_stream_slot,
     unregister_stream,
@@ -68,6 +69,37 @@ def _format_stuck_thread_stack(thread: threading.Thread, limit: int = 8) -> str:
     if frame is None:
         return "<no frame>"
     return "".join(traceback.format_stack(frame, limit=limit))
+
+
+def _format_stream_task_stack(run_id: str, limit: int = 12) -> str:
+    """Read-only coroutine-stack snapshot of the lingering stream task.
+
+    The thread stack of a parked event loop only shows idle ``select``;
+    the task stack names the actual await point (e.g. a ``wait_for``-guarded
+    model call vs the Ollama socket read). Best effort: a racing teardown
+    may unregister or finish the task mid-inspection.
+    """
+    try:
+        task = peek_stream_task(run_id)
+    except Exception as exc:  # noqa: BLE001 - diagnostics must never raise
+        return f"<registry unreadable: {exc}>"
+    if task is None:
+        return "<task already unregistered>"
+    try:
+        stack = task.get_stack(limit=limit)
+    except Exception as exc:  # noqa: BLE001 - diagnostics must never raise
+        return f"<stack unreadable: {exc}>"
+    if not stack:
+        return "<task has no stack (done or never started)>"
+    try:
+        lines = [
+            line
+            for st in stack
+            for line in traceback.format_list(traceback.extract_stack(st))
+        ]
+        return "".join(lines)
+    except Exception as exc:  # noqa: BLE001 - diagnostics must never raise
+        return f"<stack unformattable: {exc}>"
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -522,11 +554,13 @@ def stream_chunks(
                     else "setup"
                 )
                 _parked = _format_stuck_thread_stack(t)
+                _task_parked = _format_stream_task_stack(run_id)
                 logger.warning(
                     "[CHAT] Stream thread did not exit after cancel: "
                     f"{t.name} (phase={_phase}, teardown_wait=3.0s, "
                     f"active_slots={active_stream_count()})\n"
                     f"parked at:\n{_parked}"
+                    f"task parked at:\n{_task_parked}"
                 )
             else:
                 logger.debug(f"[CHAT] Stream thread cleanup: {t.name}")

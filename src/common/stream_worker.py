@@ -94,6 +94,18 @@ def unregister_stream(run_id: str) -> None:
         _active_streams.pop(run_id, None)
 
 
+def peek_stream_task(run_id: str) -> asyncio.Task[None] | None:
+    """Return the registered task for ``run_id`` without touching it.
+
+    Read-only diagnostic accessor: lets the teardown-join watchdog inspect
+    *where* a lingering task is parked (``task.get_stack()``) instead of
+    only seeing the idle event loop in the thread stack.
+    """
+    with _stream_lock:
+        handle = _active_streams.get(run_id)
+    return handle[1] if handle is not None else None
+
+
 def cancel_stream(run_id: str) -> None:
     """Cancel the task registered under ``run_id``, then briefly drain its loop."""
     with _stream_lock:
