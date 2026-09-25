@@ -190,13 +190,14 @@ def _confirm_reset_all() -> None:
     col_cancel, col_confirm = st.columns(2)
     with col_cancel:
         if st.button("취소", use_container_width=True, key="reset_confirm_cancel_btn"):
-            st.rerun()
+            # 버튼 위젯 interaction 자체의 리런으로 다이얼로그가 닫히므로 명시 rerun 금지.
+            pass
     with col_confirm:
         if st.button(
             "초기화 실행",
             use_container_width=True,
             type="primary",
             key="reset_confirm_btn",
+            # 버튼 위젯 interaction 자체의 리런으로 전체 UI가 갱신되므로 명시 rerun 금지.
         ):
             SessionManager.reset_all_state()
-            st.rerun()

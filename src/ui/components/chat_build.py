@@ -33,9 +33,9 @@ __all__ = [
 
 
 def _cancel_rebuild(sid: str) -> None:
+    # on_click 콜백 종료 후 Streamlit 자동 post-callback 리런에 의존 (명시 rerun 금지).
     """문서 분석 재구축 취소 요청 콜백입니다."""
     SessionManager.set("rebuild_cancelled", True, session_id=sid)
-    st.rerun()
 
 
 def get_build_error_actions(error_msg: str) -> dict[str, Any]:
@@ -168,10 +168,11 @@ def _render_build_progress_fragment(sid: str) -> None:
     """
     _render_build_progress_block(sid)
 
+    # on_click 콜백 종료 후 Streamlit 자동 post-callback 리런에 의존 (명시 rerun 금지).
+
 
 def _on_sample_question_click(question: str) -> None:
     st.session_state[SAMPLE_QUESTION_STATE_KEY] = question
-    st.rerun()
 
 
 def _render_guidance_panel() -> None:

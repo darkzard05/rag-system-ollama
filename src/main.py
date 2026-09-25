@@ -410,7 +410,7 @@ def on_new_chat() -> None:
 
     current_sid = SessionManager.get_session_id()
     SessionManager.reset_conversation(current_sid)
-    st.rerun()
+    # 버튼 위젯 interaction 자체가 리런을 유발하므로 명시 rerun 금지 (중복 리런 방지).
 
 
 def on_model_change() -> None:
@@ -445,7 +445,7 @@ def on_refresh_models() -> None:
     """Ollama 모델 목록을 재조회하여 사이드바 셀렉터를 갱신합니다."""
     _get_available_models_cached.clear()
     st.session_state.available_models_list = _load_available_models()
-    st.rerun()
+    # 버튼 위젯 interaction 자체가 리런을 유발하므로 명시 rerun 금지 (중복 리런 방지).
 
 
 def _render_app_layout(
