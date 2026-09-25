@@ -788,7 +788,8 @@ def test_format_stuck_thread_stack_names_parking_spot():
 
 
 def test_format_stream_task_stack_names_await_point():
-    """The task-stack snapshot must name the coroutine's await point."""
+    """The task-stack snapshot must name the coroutine's await point,
+    descending into nested async generators (the real stream shape)."""
     import asyncio
 
     from common import stream_worker
@@ -798,13 +799,20 @@ def test_format_stream_task_stack_names_await_point():
     loop = asyncio.new_event_loop()
     ready = threading.Event()
 
-    async def _parked_await() -> None:
+    async def _inner_parked() -> Any:  # type: ignore[return]
         ready.set()
         await asyncio.sleep(600)
+        if False:
+            yield
+
+    async def _outer_parked() -> None:
+        agen: Any = _inner_parked()
+        with contextlib.suppress(StopAsyncIteration):
+            await agen.__anext__()
 
     def _run() -> None:
         asyncio.set_event_loop(loop)
-        task = loop.create_task(_parked_await())
+        task = loop.create_task(_outer_parked())
         stream_worker.register_stream(run_id, loop, task)
         loop.run_forever()
 
@@ -813,8 +821,9 @@ def test_format_stream_task_stack_names_await_point():
     try:
         assert ready.wait(5.0)
         snapshot = _format_stream_task_stack(run_id)
-        assert "_parked_await" in snapshot
-        assert "sleep" in snapshot
+        assert "_outer_parked" in snapshot
+        assert "_inner_parked" in snapshot
+        assert "live suspended asyncgens" in snapshot
     finally:
         stream_worker.unregister_stream(run_id)
         loop.call_soon_threadsafe(loop.stop)

@@ -71,6 +71,46 @@ def _format_stuck_thread_stack(thread: threading.Thread, limit: int = 8) -> str:
     return "".join(traceback.format_stack(frame, limit=limit))
 
 
+def _iter_live_asyncgens(limit: int = 12) -> Any:
+    """Yield ``(code_name, frame)`` for live suspended async generators.
+
+    A task parked in ``async for`` exposes only one coroutine frame, and
+    the iterator it parks on is a temporary invisible in frame locals.
+    Scanning the GC for suspended async-generator objects reveals the
+    whole downstream chain (``stream_graph_events`` -> ``_consumer`` ->
+    retry -> breaker -> ``astream_events`` -> ...), i.e. the real await
+    point. Repo and langchain frames first, stdlib noise last.
+    """
+    import gc as _gc
+    import inspect as _inspect
+    import os as _os
+
+    found: list[tuple[int, Any]] = []
+    for obj in _gc.get_objects():
+        try:
+            if not _inspect.isasyncgen(obj):
+                continue
+            ag_frame = getattr(obj, "ag_frame", None)
+            if ag_frame is None:
+                continue
+            filename = ag_frame.f_code.co_filename
+        except Exception:  # noqa: BLE001 - never break diagnostics
+            continue
+        lname = filename.replace(_os.sep, "/").lower()
+        if "rag-system-ollama/src" in lname:
+            prio = 0
+        elif "langchain" in lname or "ollama" in lname:
+            prio = 1
+        else:
+            prio = 2
+        found.append((prio, ag_frame))
+        if len(found) >= 60:
+            break
+    found.sort(key=lambda item: (item[0], item[1].f_code.co_name))
+    for _, ag_frame in found[:limit]:
+        yield ag_frame.f_code.co_name, ag_frame
+
+
 def _format_stream_task_stack(run_id: str, limit: int = 12) -> str:
     """Read-only coroutine-stack snapshot of the lingering stream task.
 
@@ -92,12 +132,20 @@ def _format_stream_task_stack(run_id: str, limit: int = 12) -> str:
     if not stack:
         return "<task has no stack (done or never started)>"
     try:
-        lines = [
-            line
-            for st in stack
-            for line in traceback.format_list(traceback.extract_stack(st))
-        ]
-        return "".join(lines)
+        parts: list[str] = []
+        for st in stack:
+            parts.extend(traceback.format_list(traceback.extract_stack(st)))
+        parts.append("  ~~ live suspended asyncgens ~~\n")
+        for _name, _frame in _iter_live_asyncgens():
+            parts.append(
+                f"  ~~ asyncgen {_name} "
+                f"({_frame.f_code.co_filename}"
+                f":{_frame.f_lineno}) ~~\n"
+            )
+            parts.extend(
+                traceback.format_list(traceback.extract_stack(_frame, limit=3))
+            )
+        return "".join(parts)
     except Exception as exc:  # noqa: BLE001 - diagnostics must never raise
         return f"<stack unformattable: {exc}>"
 
