@@ -11,6 +11,7 @@
 """
 
 import contextlib
+import html
 import re
 import time
 from typing import Any
@@ -143,17 +144,21 @@ def _render_references_content(
     for idx, page_num in enumerate(sorted_pages):
         ref_info = page_to_refs[page_num]
         sec_title = ref_info["section"]
+        sid = ref_info["sid"]
 
         # 유의미한 섹션명이 존재할 때만 결합, 없을 때는 "p.X"로 단일화하여 중복 수식어 제거
         label = f"{sec_title} · p.{page_num}" if sec_title else f"p.{page_num}"
 
         if generating:
-            st.button(
-                f"{label}",
-                key=f"pop_doc_{msg_id}_{page_num}_{idx}",
-                disabled=True,
-                use_container_width=True,
-                help=t("status_generating"),
+            # 생성 중 인용은 위젯 없이 렌더한다: 타임라인 본문과 aux
+            # 익스팬더가 같은 턴을 동시에 렌더하므로, 버튼(안정 키든 자동
+            # 키든)은 StreamlitDuplicateElement(Key|Id)로 스트리밍을 즉시
+            # 깨뜨린다. span은 위젯 identity가 없어 안전하고, 버튼 크롬이
+            # 없어 클릭 가능처럼 보이지도 않는다.
+            st.markdown(
+                f'{idx + 1}. <span data-doc-id="{html.escape(sid)}">'
+                f"{html.escape(label)}</span>",
+                unsafe_allow_html=True,
             )
         else:
             st.button(

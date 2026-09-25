@@ -116,33 +116,34 @@ def test_stopped_helper_has_no_rerun_or_widget_writes() -> None:
 
 
 # ---------------------------------------------------------------------------
-# (b) generating: disabled button (no dead span)
+# (b) generating: keyless span (no widget identity)
 # ---------------------------------------------------------------------------
 
 
-def test_generating_refs_use_disabled_button() -> None:
-    """generating 분기는 span(markdown) 대신 disabled st.button."""
+def test_generating_refs_use_keyless_span() -> None:
+    """generating 분기는 위젯 없이 span(markdown)으로 렌더한다.
+
+    타임라인 본문과 aux 익스팬더가 같은 턴을 동시에 렌더하므로, 버튼은
+    안정 키든 자동 키든 StreamlitDuplicateElement(Key|Id)로 스트리밍을
+    즉시 깨뜨린다 (실측 회귀). span은 identity가 없어 안전하다.
+    """
     src = inspect.getsource(refs_module._render_references_content)
     gen_branch = src.split("if generating:")[1].split("else:")[0]
-    assert "st.button" in gen_branch, "generating 분기는 st.button 사용"
-    assert "disabled=True" in gen_branch.replace(
-        "disabled = True", "disabled=True"
-    ).replace("disabled", "disabled"), "generating 버튼은 disabled"
-    assert "data-doc-id" not in gen_branch, "dead span 잔존 금지"
+    assert "st.markdown" in gen_branch, "generating 분기는 markdown 사용"
+    assert "st.button" not in gen_branch, "generating 분기에 button 금지"
+    assert "data-doc-id" in gen_branch, "span 식별자 유지"
 
 
-def test_generating_refs_render_disabled_runtime() -> None:
-    """런타임: generating=True 렌더는 disabled 버튼, markdown 미호출."""
+def test_generating_refs_render_span_runtime() -> None:
+    """런타임: generating=True 렌더는 span markdown, button 미호출."""
     fake_st = MagicMock()
     docs = [{"metadata": {"page": 3}}]
     with patch.object(refs_module, "st", fake_st):
         refs_module._render_references_content(
             "m1", docs, citations=None, generating=True
         )
-    assert fake_st.button.called, "generating 렌더는 button이어야 한다"
-    _, kwargs = fake_st.button.call_args
-    assert kwargs.get("disabled") is True
-    assert not fake_st.markdown.called, "generating 렌더는 dead span(markdown) 금지"
+    assert fake_st.markdown.called, "generating 렌더는 markdown이어야 한다"
+    assert not fake_st.button.called, "generating 렌더는 button 금지"
 
 
 # ---------------------------------------------------------------------------

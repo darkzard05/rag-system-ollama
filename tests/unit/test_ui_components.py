@@ -250,3 +250,46 @@ if isinstance(_cp, int):
     finally:
         if os.path.exists("temp_test_docjump.py"):
             os.remove("temp_test_docjump.py")
+
+
+class TestGeneratingExpanderRerender(unittest.TestCase):
+    def test_double_render_same_turn_no_duplicate_key(self):
+        """회귀: 동일 턴 생성중 익스팬더 2회 렌더(타임라인+aux)도 키 충돌 없음.
+
+        생성 중 인용 버튼에 안정 키(pop_doc_...)를 부여하면 두 컨테이너가
+        같은 키를 등록해 StreamlitDuplicateElementKey로 스트리밍이 즉시
+        죽는다. 생성 중 버튼은 키 없이(위치 자동 키) 렌더해야 한다.
+        """
+        script_content = """
+import streamlit as st
+import sys
+import os
+
+sys.path.append(os.path.abspath(os.path.join(os.getcwd(), "src")))
+
+from unittest.mock import MagicMock
+from ui.components.chat_references import render_generation_expander
+
+doc = MagicMock()
+doc.metadata = {"page": 3}
+
+msg = {
+    "thought": "",
+    "documents": [doc],
+    "citations": [],
+    "metrics": {},
+    "msg_id": "dup-m1",
+}
+with st.container():
+    render_generation_expander(msg, expanded=False, generating=True)
+with st.container():
+    render_generation_expander(msg, expanded=False, generating=True)
+"""
+        with open("temp_test_genexp_dupkey.py", "w", encoding="utf-8") as f:
+            f.write(script_content)
+        try:
+            at = AppTest.from_file("temp_test_genexp_dupkey.py").run(timeout=60)
+            assert not at.exception, at.exception
+        finally:
+            if os.path.exists("temp_test_genexp_dupkey.py"):
+                os.remove("temp_test_genexp_dupkey.py")
