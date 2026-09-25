@@ -264,3 +264,35 @@ class TestErrorRecoveryCTA:
         assert result.get("content") == "This is a partial answer", (
             f"부분 응답이 보존되지 않았다: content={result.get('content')!r}"
         )
+
+
+class TestContentGeneratorErrorObservability:
+    """_content_generator 실패는 로그에 traceback을 남겨야 한다 (무로그 금지).
+
+    UI 정책(raw 노출 금지)은 유지한다: 사용자에게는 제네릭 메시지만 가고,
+    원문은 로그 + aux state에만 보존된다.
+    """
+
+    def test_instant_failure_logs_traceback_and_persists_aux_error(
+        self, session_context: str, caplog: Any
+    ) -> None:
+        import logging
+
+        import pytest
+
+        from ui.components import streaming_core as sc
+
+        with (
+            patch.object(
+                sc,
+                "stream_chunks",
+                side_effect=RuntimeError("boom-cause-xyz"),
+            ),
+            caplog.at_level(logging.ERROR, logger=sc.__name__),
+        ):
+            gen = sc._content_generator("q", "m", session_context, "mid-1")
+            with pytest.raises(RuntimeError, match="boom-cause-xyz"):
+                list(gen)
+        # 원문이 로그에 남아야 한다 (UI에는 제네릭만 가도 디버깅 가능).
+        assert "boom-cause-xyz" in caplog.text
+        assert "content_generator" in caplog.text

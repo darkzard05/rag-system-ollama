@@ -891,6 +891,9 @@ def _content_generator(
         if _placeholder_live:
             yield _STATUS_PLACEHOLDER
     except Exception as exc:
+        # 삼킴 금지: aux에는 원문을 보존하되, 로그에 traceback을 남긴다.
+        # (UI 정책상 사용자에게는 제네릭 메시지만 노출한다.)
+        logger.exception("[CHAT] content_generator 오류: %s", exc)
         _write_aux_state(
             sid,
             {

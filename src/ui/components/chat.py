@@ -634,6 +634,9 @@ def _render_streaming_with_write_stream(
                     ),
                 )
             except Exception as exc:
+                # 삼킴 금지: 사용자에게는 제네릭 메시지만 보이지만, 로그에는
+                # 원본 traceback을 남긴다 (무로그 실패 방지).
+                logger.exception("[CHAT] write_stream 소비 오류: %s", exc)
                 stream_error = _friendly_stream_error(exc)
                 response = stream_error
             finally:
