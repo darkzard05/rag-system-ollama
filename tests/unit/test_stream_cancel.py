@@ -714,3 +714,47 @@ def test_hard_timeout_ceiling_aborts_hung_stream(monkeypatch):
         pytest.raises(TimeoutError, match="절대 상한"),
     ):
         list(stream_chunks("q", "m", "s"))
+
+
+def test_stop_during_slot_wait_exits_promptly(monkeypatch):
+    """Stop while parked in slot acquisition must not wedge the teardown join.
+
+    Regression: ``bg_task`` used to block up to 30s in
+    ``acquire_stream_slot()`` while unregistered, so ``cancel_stream()``
+    no-op'd and the 3s join always expired with "Stream thread did not
+    exit after cancel" (slot-exhaustion cascade). Now the wait polls
+    ``_stop_event`` and the abandoned thread exits promptly.
+    """
+    from ui.components import streaming_core as sc
+
+    monkeypatch.setattr(config, "UI_STREAM_WORKERS", 1, raising=False)
+    monkeypatch.setattr(sc, "UI_STREAMING_TIMEOUT", 2, raising=False)
+    monkeypatch.setattr(sc, "UI_STREAMING_SETUP_TIMEOUT", 2, raising=False)
+    assert stream_worker.acquire_stream_slot(timeout=1.0) is True
+    assert stream_worker.active_stream_count() == 1
+
+    try:
+        # Thread name is f"chat-stream-{session_id[-12:]}"; "probe-sid" is
+        # shorter than 12 chars so the name matches exactly — other tests'
+        # lingering threads can never collide with this assertion.
+        it = stream_chunks("slot-wait probe", "probe-model", "probe-sid")
+        t0 = time.monotonic()
+        with pytest.raises(TimeoutError):
+            next(it)
+        main_elapsed = time.monotonic() - t0
+        assert main_elapsed < 10.0, f"main wait took {main_elapsed:.2f}s"
+        # The bg thread was parked in slot acquisition; the stop must
+        # release it promptly instead of riding the 30s acquire + 3s
+        # join into the stuck-thread warning.
+        _wait_until(
+            lambda: not any(
+                t.name == "chat-stream-probe-sid" and t.is_alive()
+                for t in threading.enumerate()
+            ),
+            5.0,
+            "bg thread stuck in slot acquisition after stop",
+        )
+        assert stream_worker.active_stream_count() == 1  # only our hold
+    finally:
+        stream_worker.release_stream_slot()
+    assert stream_worker.active_stream_count() == 0

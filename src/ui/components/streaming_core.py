@@ -39,6 +39,7 @@ from common.config import (
 )
 from common.stream_worker import (
     acquire_stream_slot,
+    active_stream_count,
     cancel_stream,
     register_stream,
     release_stream_slot,
@@ -312,19 +313,41 @@ def stream_chunks(
     않는다.
 
     취소: 타임아웃/사용자 중단 시 ``cancel_stream(run_id)``가 실제 취소를
-    요청한다. ``loop.call_soon_threadsafe(task.cancel)``로 이벤트 루프에 즉시
-    전달되어 협조적 ``_stop_event``와 무관하게 하드 취소되며, 이어서 3초
-    바운드 join으로 스레드 종료를 기다린다. ``_stop_event``는 다음 await
-    지점에서 즉시 반응하는 협조적 백스톱으로 함께 유지한다. join(3s)이
-    타임아웃되면 daemon 스레드가 남을 수 있지만 루프/스트림 슬롯은
-    finally에서 해제된다.
+    요청한다(등록된 스트림에 한함 — 슬롯 대기 중 중단은 등록이 없으므로
+    cancel을 건너뛰고 즉시 복귀한다). ``loop.call_soon_threadsafe(task.cancel)``
+    로 이벤트 루프에 즉시 전달되어 협조적 ``_stop_event``와 무관하게 하드
+    취소되며, 이어서 3초 바운드 join으로 스레드 종료를 기다린다.
+    ``_stop_event``는 다음 await 지점에서 즉시 반응하는 협조적 백스톱으로
+    함께 유지한다. join(3s)이 타임아웃되면 daemon 스레드가 남을 수 있지만
+    루프/스트림 슬롯은 finally에서 해제된다. 이때 경고에는 페이즈
+    (setup/streaming)와 활성 슬롯 수가 함께 기록된다.
     """
     q: queue.Queue[tuple[str, Any]] = queue.Queue()
     _stop_event = threading.Event()
     run_id = f"stream-{session_id}-{uuid.uuid4().hex[:8]}"
+    # bg 스레드와 정리 finally가 공유하는 상태: 스트림 등록 여부(미등록
+    # 취소의 오경고 방지), 첫 청크 put 시각(경고 자가진단용 페이즈 판별).
+    _teardown_state: dict[str, Any] = {
+        "registered": False,
+        "first_put_at": None,
+    }
 
     def bg_task() -> None:
-        if not acquire_stream_slot(timeout=30):
+        # 슬롯 대기는 중단 가능해야 한다: 등록 전 대기는 cancel_stream이
+        # no-op이라 join만 만료돼 확정 경고가 되므로(슬롯 고갈 연쇄),
+        # _stop_event 폴링으로 즉시 빠져나간다. 전체 대기 상한 30초 유지.
+        _slot_deadline = time.perf_counter() + 30
+        _slot_ok = False
+        while time.perf_counter() < _slot_deadline:
+            if _stop_event.is_set():
+                logger.debug(f"[CHAT][STREAM] 슬롯 대기 중 중단 (run_id={run_id})")
+                return
+            if acquire_stream_slot(timeout=0.5):
+                _slot_ok = True
+                break
+        if not _slot_ok:
+            if _stop_event.is_set():
+                return
             logger.warning(
                 f"[CHAT][STREAM] 동시 스트림 슬롯 획득 실패 (run_id={run_id})"
             )
@@ -366,6 +389,8 @@ def stream_chunks(
                     if _stop_event.is_set():
                         break
                     q.put(("chunk", chunk))
+                    if _teardown_state["first_put_at"] is None:
+                        _teardown_state["first_put_at"] = time.perf_counter()
             except asyncio.CancelledError:
                 logger.info("[CHAT] 스트리밍 작업이 취소되었습니다")
             except Exception as e:
@@ -388,6 +413,7 @@ def stream_chunks(
             try:
                 task = loop.create_task(run())
                 register_stream(run_id, loop, task)
+                _teardown_state["registered"] = True
                 loop.run_until_complete(task)
             finally:
                 unregister_stream(run_id)
@@ -464,13 +490,23 @@ def stream_chunks(
         _stop_event.set()
         # 하드 취소: 스레드가 아직 살아 있을 때만 시도한다. 정상 완료 경로
         # (done 수신)에서는 이미 unregister된 run_id에 대해 stream_worker가
-        # 불필요한 경고를 남기는 것을 방지한다.
+        # 불필요한 경고를 남기는 것을 방지한다. 슬롯 대기 중에 중단된 경우
+        # (미등록)는 cancel 자체를 건너뛴다 — cancel_stream의 "no active
+        # stream" 오경고를 막기 위해서다.
         if t.is_alive():
-            cancel_stream(run_id)  # real cancel via task.cancel()
+            if _teardown_state["registered"]:
+                cancel_stream(run_id)  # real cancel via task.cancel()
             t.join(timeout=3)
             if t.is_alive():
+                _phase = (
+                    "streaming"
+                    if _teardown_state["first_put_at"] is not None
+                    else "setup"
+                )
                 logger.warning(
-                    f"[CHAT] Stream thread did not exit after cancel: {t.name}"
+                    "[CHAT] Stream thread did not exit after cancel: "
+                    f"{t.name} (phase={_phase}, teardown_wait=3.0s, "
+                    f"active_slots={active_stream_count()})"
                 )
             else:
                 logger.debug(f"[CHAT] Stream thread cleanup: {t.name}")
