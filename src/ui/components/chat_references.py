@@ -11,7 +11,6 @@
 """
 
 import contextlib
-import html
 import re
 import time
 from typing import Any
@@ -144,15 +143,17 @@ def _render_references_content(
     for idx, page_num in enumerate(sorted_pages):
         ref_info = page_to_refs[page_num]
         sec_title = ref_info["section"]
-        sid = ref_info["sid"]
 
         # 유의미한 섹션명이 존재할 때만 결합, 없을 때는 "p.X"로 단일화하여 중복 수식어 제거
         label = f"{sec_title} · p.{page_num}" if sec_title else f"p.{page_num}"
 
         if generating:
-            st.markdown(
-                f'{idx + 1}. <span data-doc-id="{html.escape(sid)}">{html.escape(label)}</span>',
-                unsafe_allow_html=True,
+            st.button(
+                f"{label}",
+                key=f"pop_doc_{msg_id}_{page_num}_{idx}",
+                disabled=True,
+                use_container_width=True,
+                help=t("status_generating"),
             )
         else:
             st.button(

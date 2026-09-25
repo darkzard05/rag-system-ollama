@@ -31,7 +31,7 @@ from ui.components.streaming import (
     _content_generator,
     _finalize_pdf_side_effects,
 )
-from ui.strings import get_phase_labels
+from ui.strings import get_phase_labels, t
 from ui.widget_keys import MAIN_CHAT_INPUT_KEY, SAMPLE_QUESTION_STATE_KEY
 
 logger = logging.getLogger(__name__)
@@ -307,6 +307,41 @@ def _proc_phase_caption(status_text: str, elapsed_sec: float) -> str:
     return f"{line} · {elapsed_sec:.0f}s ▍"
 
 
+def get_stopped_answer_actions() -> dict[str, Any]:
+    """중단된 답변용 구조화 액션 (chat_build.get_build_error_actions 미러링)."""
+    message = t("status_stopped")
+    return {
+        "message": message,
+        "cause": message,
+        "retryable": True,
+        "retry_kind": "answer",
+        "cta": [t("action_retry_answer")],
+    }
+
+
+def _retry_stopped_answer(sid: str, query: str) -> None:
+    """중단된 턴의 마지막 질문을 새 스트리밍 플레이스홀더로 재제출하는 콜백."""
+    if not query.strip():
+        return
+    stream_msg_id = str(uuid.uuid4())
+    SessionManager.add_message(
+        "assistant",
+        "",
+        msg_type="streaming",
+        msg_id=stream_msg_id,
+        query=query,
+        thought="",
+        documents=[],
+        metrics={},
+        citations=[],
+        processed_content=None,
+        session_id=sid,
+    )
+    SessionManager.set("is_generating_answer", True, sid)
+    SessionManager.set("generation_cancel", False, sid)
+    SessionManager.set("active_stream_msg_id", stream_msg_id, sid)
+
+
 def _draw_streaming_message(msg: dict[str, Any], current_sid: str) -> None:
     """스트리밍 메시지를 그립니다 (단일 pass 렌더).
 
@@ -324,7 +359,18 @@ def _draw_streaming_message(msg: dict[str, Any], current_sid: str) -> None:
     # [UX-3] 내용이 없는(■ 중지로 영속을 건너뛴) 스트리밍 플레이스홀더:
     # "Generating..." 거짓 진행 표시 금지. 중립 문구로 처리하고 진행 expander 생략.
     if not msg.get("content"):
-        st.caption("답변 생성이 사용자에 의해 중단되었습니다.")
+        actions = get_stopped_answer_actions()
+        st.caption(t("status_stopped"))
+        query = msg.get("query", "") or ""
+        st.button(
+            actions["cta"][0],
+            key=f"retry_stopped_{msg.get('msg_id', '') or current_sid}",
+            on_click=_retry_stopped_answer,
+            args=(current_sid, query),
+            disabled=not query.strip(),
+            help=t("action_retry_answer_help"),
+            use_container_width=True,
+        )
         return
 
     status_text = msg.get("status", "Generating...")
@@ -685,6 +731,8 @@ __all__ = [
     "_render_guidance_panel",
     "_render_references_content",
     "_render_unified_timeline",
+    "_retry_stopped_answer",
+    "get_stopped_answer_actions",
     "_resolve_chat_input_state",
     "render_chat_input_area",
     "render_chat_messages_area",

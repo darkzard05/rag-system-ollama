@@ -19,6 +19,7 @@ from ui.components.common import (
     show_pdf_error,
     ui_error,
 )
+from ui.strings import t
 from ui.widget_keys import (
     MANUAL_NAV_TS_KEY,
     PDF_NAV_INPUT_KEY,
@@ -39,16 +40,19 @@ def _render_coord_cache_warnings() -> None:
     documents = SessionManager.get("documents", []) or []
     if not documents:
         return
-    warned_sources: set[str] = set()
+    failed = 0
+    seen_sources: set[str] = set()
     for doc in documents:
         meta = get_doc_metadata(doc)
         if not meta.get("coord_cache_error"):
             continue
         source = meta.get("file_path") or meta.get("source") or "문서"
-        if source in warned_sources:
+        if source in seen_sources:
             continue
-        warned_sources.add(source)
-        st.warning("본문 위치 정보를 불러오지 못해 하이라이트 표시를 건너뜁니다.")
+        seen_sources.add(source)
+        failed += 1
+    if failed:
+        st.warning(t("pdf_highlight_load_failed"))
 
 
 @safe_cache_data(ttl=300, show_spinner=False)

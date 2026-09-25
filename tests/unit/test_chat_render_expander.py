@@ -197,7 +197,9 @@ def test_completed_assistant_message_opens_expander():
 
 
 def test_draw_streaming_message_empty_placeholder_shows_neutral_caption() -> None:
-    """content 없는 스트리밍 플레이스홀더 → 중립 중단 캡션, expander/error 없음."""
+    """content 없는 스트리밍 플레이스홀더 → t(status_stopped) 캡션 + retry CTA, expander/error 없음."""
+    from ui.strings import t
+
     sid = "render_empty_stream"
     SessionManager.reset_all_state(sid)
 
@@ -210,8 +212,10 @@ def test_draw_streaming_message_empty_placeholder_shows_neutral_caption() -> Non
             sid,
         )
 
+    expected = t("status_stopped")
     texts = [call.args[0] for call in mock_st.caption.call_args_list if call.args]
-    assert any("답변 생성이 사용자에 의해 중단되었습니다." in text for text in texts)
+    assert any(expected in text for text in texts)
+    assert mock_st.button.called
     mock_expander.assert_not_called()
     mock_st.error.assert_not_called()
 
@@ -230,11 +234,13 @@ def test_draw_streaming_message_with_content_keeps_generating_expander() -> None
             sid,
         )
 
+    from ui.strings import t
+
     mock_expander.assert_called_once()
     assert mock_expander.call_args.kwargs["generating"] is True
     neutral = [
         call.args[0]
         for call in mock_st.caption.call_args_list
-        if call.args and "답변 생성이 사용자에 의해 중단되었습니다." in call.args[0]
+        if call.args and t("status_stopped") in call.args[0]
     ]
     assert neutral == []

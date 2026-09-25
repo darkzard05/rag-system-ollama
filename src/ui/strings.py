@@ -67,6 +67,9 @@ UI_STRINGS: dict[str, dict[str, str]] = {
         # Expanders
         "expander_sources_reasoning": "Sources & Reasoning",
         "expander_sources_only": "Cited Sources",
+        # Retry CTA (stopped-answer dead-end, mirrors build-error CTA shape)
+        "action_retry_answer": "Retry answer",
+        "action_retry_answer_help": "Ask the last question again",
         "expander_reasoning_only": "Thought Process",
     },
     "ko": {
@@ -100,6 +103,8 @@ UI_STRINGS: dict[str, dict[str, str]] = {
         # Expanders
         "expander_sources_reasoning": "출처 및 추론 과정",
         "expander_sources_only": "인용 출처",
+        "action_retry_answer": "다시 답변 생성",
+        "action_retry_answer_help": "마지막 질문을 다시 요청합니다",
         "expander_reasoning_only": "사고 과정",
     },
 }
