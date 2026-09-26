@@ -184,6 +184,7 @@ class CoordCacheManager:
                 thread.join(timeout=5)
             self._owner_thread = None
             self._owner_loop = None
+        logger.info("좌표 캐시 owner 루프가 중지되었습니다")
 
     # -- 내부 구현 (항상 owner 루프에서 실행) --------------------------------
 

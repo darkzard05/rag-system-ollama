@@ -49,6 +49,7 @@ from typing import Any, Literal, cast
 
 import streamlit as st
 
+from cache.coord_cache import coord_cache
 from common.async_worker import AsyncWorker
 from common.config import (
     DEFAULT_EMBEDDING_MODEL,
@@ -231,10 +232,17 @@ def _cleanup_current_file():
         pass
 
 
+def _cleanup_coord_cache() -> None:
+    """프로세스 종료 시 좌표 캐시를 정리합니다."""
+    with contextlib.suppress(Exception):
+        asyncio.run(coord_cache.close())
+
+
 @st.cache_resource
 def _register_cleanup_handlers():
     """[Singleton] 프로세스 종료 핸들러를 단 한 번만 등록합니다."""
     atexit.register(_cleanup_current_file)
+    atexit.register(_cleanup_coord_cache)
     logger.info("[SYSTEM] 프로세스 종료 핸들러 등록 완료")
     return True
 
