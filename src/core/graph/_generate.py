@@ -61,6 +61,30 @@ logger = logging.getLogger(__name__)
 _QUERY_CACHE_VALUE_VERSION = "1.0"
 
 
+def _normalize_doc_text(text: str) -> str:
+    """Compare-normalize chunk text: strip + collapse all whitespace runs."""
+    return " ".join(text.split())
+
+
+def _deduplicate_docs(docs: list[Document]) -> list[Document]:
+    """Drop chunks with identical normalized text, keeping first occurrence.
+
+    Same-section chunks retrieved from distinct pages often carry the same
+    sentence; without this the LLM echoes the repeated claim (~4x raw-side
+    repetition). Order-preserving, O(n).
+    """
+    seen: set[str] = set()
+    unique: list[Document] = []
+    for d in docs:
+        content = d.page_content if isinstance(d.page_content, str) else ""
+        key = _normalize_doc_text(content)
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(d)
+    return unique
+
+
 def format_context(docs: list[Document]) -> str:
     """검색된 문서들을 LLM이 읽기 좋은 형식의 문자열로 변환합니다.
 
@@ -70,9 +94,12 @@ def format_context(docs: list[Document]) -> str:
     [수정] 인용 토큰은 enumerate 위치(i) 대신 안정 식별자(stable id)를 사용합니다.
     위치 기반 토큰은 rerank/retry 시 문서 순서가 바뀌면 인용이 엉뚱한 청크를
     가리키는 버그를 유발하므로, doc_id(또는 content 해시)를 씁니다.
+
+    [수정] 정규화 텍스트가 동일한 청크는 최초 1건만 렌더링합니다. 중복 청크가
+    프롬프트에 그대로 들어가면 LLM이 같은 주장을 반복 출력합니다 (raw-side).
     """
     context = ""
-    for d in docs:
+    for d in _deduplicate_docs(docs):
         stable_id = _doc_stable_id(d)
         section = d.metadata.get("current_section", "일반 본문")
         page = d.metadata.get("page", "?")
@@ -113,9 +140,10 @@ def _estimate_ctx_tokens(docs: list, query: str) -> int:
 
 
 def _apply_ctx_guard(docs: list, query: str) -> tuple[list, str, int]:
-    """Enforce the num_ctx token budget on the retrieval context.
+    """Enforce content-dedup + the num_ctx token budget on the retrieval context.
 
-    Returns ``(trimmed_docs, context_str, removed_count)``. Documents are
+    Returns ``(trimmed_docs, context_str, removed_count)``. Identical
+    normalized-text chunks are dropped first (pre-prompt), then documents are
     dropped from the lowest ``rerank_score`` end of a descending-ranked copy
     until the estimated token cost fits the budget, while always preserving a
     minimum of 2 documents. On each removal the remaining docs are re-formatted
@@ -123,16 +151,25 @@ def _apply_ctx_guard(docs: list, query: str) -> tuple[list, str, int]:
     at most once per removal (1 + removals, which is bounded by the number of
     documents).
     """
+    # Pre-prompt content dedup: identical chunks add no information and make
+    # the LLM echo the repeated claim (raw-side repetition). Pure list filter —
+    # no extra format_context call, so the perf-test call budget is untouched.
+    deduped = _deduplicate_docs(docs)
+    dedup_removed = len(docs) - len(deduped)
+    if dedup_removed:
+        logger.info(f"[RAG] [CTX] dropped {dedup_removed} duplicate-text docs")
+        docs = deduped
+
     # Pre-guard context format (initial render of all docs).
     context = format_context(docs) if docs else "일상적인 대화입니다."
 
     if not docs:
-        return docs, context, 0
+        return docs, context, dedup_removed
 
     token_budget = int((OLLAMA_NUM_CTX - OLLAMA_NUM_PREDICT) * 0.85)
     est = _estimate_ctx_tokens(docs, query)
 
-    removed = 0
+    removed = dedup_removed
     if est > token_budget:
         # rerank_score 내림차순(최상위 문서 우선) 사본에서 낮은 점수 문서부터 제거
         ranked = sorted(
