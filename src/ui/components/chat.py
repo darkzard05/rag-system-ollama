@@ -152,7 +152,7 @@ def render_message(
                     st.session_state[_tip_key] = (_tip_sig, display_text)
             st.markdown(display_text, unsafe_allow_html=(role == "assistant"))
 
-        # 답변 말미 짧은 회색 [N] 배지 (발췌는 help= 호버) — 파란 전문 블록 대체.
+        # 답변 말미 한 줄 인용 표식 ([1] [2] ...) — 발췌 호버는 익스팬더가 전담.
         if role == "assistant" and citations:
             render_inline_citation_badges(citations, documents)
 

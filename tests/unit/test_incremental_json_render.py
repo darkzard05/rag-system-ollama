@@ -72,9 +72,9 @@ def test_citations_array_rendered_by_doc_id():
 
     Citation-UX overhaul: the answer body no longer appends the blue
     full-text ``citation-sources`` block. Stable ``doc_id`` keying (NOT page
-    number) now lives in the grey ``[N]`` badge renderer, verified here via
-    excerpt source: the badge hover excerpt must come from the ``doc_id``
-    match (page-7 document), never from a page-1 mis-link.
+    number) now lives in the inline marker line + expander excerpts, verified
+    here via the marker line: a single horizontal ``[1]`` markdown line keyed
+    by the ``doc_id`` match (page-7 document), never a page-1 mis-link.
     """
     from unittest.mock import patch
 
@@ -104,13 +104,12 @@ def test_citations_array_rendered_by_doc_id():
     # Blue full-text block is gone from the answer body.
     assert "citation-sources" not in html_out
 
-    # Grey badges key excerpts by stable doc_id (doc_abc123 content).
+    # Inline markers keyed by stable doc_id (doc_abc123 content).
     with patch("ui.components.chat_references.st") as mock_st:
         assert render_inline_citation_badges(citations, documents) is True
-    badges = mock_st.badge.call_args_list
-    assert len(badges) == 1
-    assert str(badges[0].args[0]) == "[1]"
-    assert "topic X detail" in str(badges[0].kwargs.get("help", ""))
+    mock_st.badge.assert_not_called()
+    assert mock_st.markdown.call_count == 1
+    assert "[1]" in str(mock_st.markdown.call_args.args[0])
     # Must NOT fall back to page-1 mis-link (doc_id, not page, is the key).
     assert 'data-doc-id="1"' not in html_out
     # Inline [doc:N] fallback path is preserved/independent.

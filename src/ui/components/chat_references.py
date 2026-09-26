@@ -34,11 +34,13 @@ __all__ = [
 ]
 
 
-def normalize_excerpt(text: object, max_chars: int = 200) -> str:
-    """호버용 발췌 정규화: strip + 공백 축소 + ~200자 절단.
+def normalize_excerpt(text: object, max_chars: int = 500) -> str:
+    """호버용 발췌 정규화: strip + 공백 축소 + ~500자 절단.
 
     Streamlit ``help=`` 툴팁은 ``\\n\\n``에서 깨지므로(#13339) 모든 개행을
     제거해 단일 행으로 만든다. 배지/점프 버튼 렌더 경로가 공유한다.
+    보이는 잘림은 익스팬더 행의 1줄 캡션에 위임하므로, 툴팁에는 실제 발췌를
+    최대한 담는다 (CHI hover>click).
     """
     if not isinstance(text, str):
         return ""
@@ -66,24 +68,21 @@ def render_inline_citation_badges(
     citations: list[dict[str, Any]] | None,
     documents: list[Any] | None = None,
 ) -> bool:
-    """답변 말미 짧은 회색 배지 ``[1..N]`` 렌더 (발췌는 ``help=`` 호버).
+    """답변 말미 인용 표식을 한 줄의 작은 회색 텍스트로 렌더한다.
 
-    클릭 불가한 파란 전문 블록을 대체한다. 발췌원은 ``text_span`` 우선,
-    없으면 동일 ``doc_id`` 문서 원문, 마지막으로 섹션명이다.
+    ``[1] [2] ...`` 형태의 단일 ``st.markdown`` 호출이며, 배지 위젯이나
+    인라인 ``help=``/툴팁을 달지 않는다 — 표식은 익스팬더 행으로의 매핑
+    앵커일 뿐이고, 호버 미리보기는 익스팬더 점프 버튼이 전담한다.
     """
+    _ = documents  # 인라인 표식은 매핑 앵커 전용이므로 문서 본문이 불필요하다.
     doc_citations = [c for c in (citations or []) if c.get("doc_id") is not None]
     if not doc_citations:
         return False
-    raw_map = _doc_raw_text_map(documents)
-    for idx, cit in enumerate(doc_citations):
-        sid = str(cit.get("doc_id"))
-        span = cit.get("text_span")
-        raw = span if isinstance(span, str) and span else raw_map.get(sid, "")
-        if not raw:
-            section = cit.get("section")
-            raw = section if isinstance(section, str) else ""
-        excerpt = normalize_excerpt(raw) or f"Source {idx + 1}"
-        st.badge(f"[{idx + 1}]", color="grey", help=excerpt)
+    markers = " ".join(f"[{idx + 1}]" for idx in range(len(doc_citations)))
+    st.markdown(
+        f'<small style="color: gray;">{html.escape(markers)}</small>',
+        unsafe_allow_html=True,
+    )
     return True
 
 
@@ -272,6 +271,8 @@ def _render_references_content(
                 args=(page_num,),
                 help=f"{base_help} — {excerpt}" if excerpt else base_help,
             )
+            if excerpt:
+                st.caption(excerpt)
     return True
 
 

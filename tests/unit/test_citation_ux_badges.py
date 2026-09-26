@@ -1,11 +1,13 @@
-"""Citation UX overhaul: grey badges + hover excerpts (failing-first).
+"""Citation UX overhaul: inline marker line + hover excerpts (failing-first).
 
-Spec:
-- Answer end shows only short ``[N]`` grey badges (no full-sentence blue block).
-- Each badge and each expander jump button carries the excerpt on hover via
-  ``help=`` (Streamlit help tooltips break on ``\\n\\n`` per issue #13339, so
-  excerpts are single-line via :func:`normalize_excerpt`).
-- :func:`normalize_excerpt` (strip + collapse whitespace, truncate ~200 chars)
+Spec (v2: single horizontal small-grey text line replaces the badge stack):
+- Answer end shows one horizontal ``[1] [2] ...`` line via a single
+  ``st.markdown`` call (no badge widgets, no inline help/tooltips).
+- Each expander jump button carries the excerpt on hover via ``help=``
+  plus a 1-line ``st.caption`` excerpt (Streamlit help tooltips break on
+  ``\\n\\n`` per issue #13339, so excerpts are single-line via
+  :func:`normalize_excerpt`).
+- :func:`normalize_excerpt` (strip + collapse whitespace, truncate ~500 chars)
   is shared by both render paths.
 """
 
@@ -33,12 +35,12 @@ def test_normalize_excerpt_collapses_newlines() -> None:
 
 
 def test_normalize_excerpt_strips_and_truncates() -> None:
-    """Strip edges; ~200 chars max with ellipsis suffix."""
+    """Strip edges; ~500 chars max with ellipsis suffix."""
     from ui.components.chat_references import normalize_excerpt
 
-    out = normalize_excerpt("   " + LONG_SPAN + "   ")
+    out = normalize_excerpt("   " + LONG_SPAN * 2 + "   ")
     assert out == out.strip()
-    assert len(out) <= 203
+    assert len(out) <= 503
     assert out.endswith("...")
     assert "\n" not in out
 
@@ -60,7 +62,7 @@ def test_normalize_excerpt_non_string_empty() -> None:
 
 
 def test_badge_render_has_no_full_text_but_help_excerpt() -> None:
-    """Answer-end badges are short [N]; full sentence only via help= excerpt."""
+    """Answer-end markers are one horizontal line; excerpts live in expander."""
     from ui.components.chat_references import render_inline_citation_badges
 
     citations: list[dict[str, Any]] = [
@@ -70,27 +72,24 @@ def test_badge_render_has_no_full_text_but_help_excerpt() -> None:
     with patch("ui.components.chat_references.st") as mock_st:
         rendered = render_inline_citation_badges(citations)
     assert rendered is True
-    badges = mock_st.badge.call_args_list
-    assert len(badges) == 2
-    labels = [str(c.args[0]) for c in badges]
-    assert labels == ["[1]", "[2]"]
-    for label in labels:
-        assert "인용 원문 전체 문장입니다." not in label
-    helps = [str(c.kwargs.get("help", "")) for c in badges]
-    assert all(h for h in helps)
-    assert all("\n" not in h for h in helps)
-    # Excerpt of the span is surfaced on hover (truncated, tooltip-safe).
-    assert "인용 원문 전체 문장입니다." in helps[0]
+    mock_st.badge.assert_not_called()
+    assert mock_st.markdown.call_count == 1
+    line = str(mock_st.markdown.call_args.args[0])
+    assert "[1]" in line and "[2]" in line
+    assert "\n" not in line
+    assert "인용 원문 전체 문장입니다." not in line
+    assert mock_st.markdown.call_args.kwargs.get("help") is None
 
 
 def test_badge_render_empty_without_citations() -> None:
-    """No citations -> no badges, returns False."""
+    """No citations -> no markers, returns False."""
     from ui.components.chat_references import render_inline_citation_badges
 
     with patch("ui.components.chat_references.st") as mock_st:
         assert render_inline_citation_badges(None) is False
         assert render_inline_citation_badges([]) is False
     mock_st.badge.assert_not_called()
+    mock_st.markdown.assert_not_called()
 
 
 def test_jump_button_help_carries_excerpt() -> None:
