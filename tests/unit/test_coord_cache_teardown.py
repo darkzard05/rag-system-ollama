@@ -31,6 +31,11 @@ def test_atexit_registers_coord_cache_close() -> None:
 
     with patch("atexit.register", side_effect=tracking_register):
         import src.main
+
+        # reload는 모듈 함수 객체를 복제해 타 테스트의 identity 단언을 깨므로 금지.
+        # 이미 import된 모듈 객체의 캐시만 비우고 직접 호출한다 (순서 무관).
+        src.main._register_cleanup_handlers.clear()
+        src.main._register_cleanup_handlers()
     found = False
     for func in captured:
         try:
