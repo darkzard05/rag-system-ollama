@@ -80,3 +80,19 @@ def test_progress_gate_no_double_mount_same_widget_keys() -> None:
         chat_mod.render_chat_messages_area()
         assert not frag2.called
         assert block2.call_count == 1
+
+
+def test_build_progress_fragment_has_no_run_every() -> None:
+    """run_every 재도입 금지: 데코레이터 소스에서 run_every 부재 확인.
+
+    run_every가 있으면 프론트엔드에 지속적인 auto-rerun 타이머가 설정되어
+    빌드 완료 후 전체 rerun 시 스테일 타이머가 경고를 발생시킨다.
+    """
+    import inspect
+
+    source = inspect.getsource(chat_mod._render_build_progress_fragment)
+    decorator_line = source.split("\n", 1)[0].strip()
+    assert decorator_line.startswith("@st.fragment"), "데코레이터가 @st.fragment여야 함"
+    assert "run_every" not in decorator_line, (
+        "run_every 재도입 금지: 프론트엔드 지속 타이머가 스테일 fragment 경고를 유발함"
+    )

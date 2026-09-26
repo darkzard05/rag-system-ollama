@@ -158,11 +158,11 @@ def _render_build_progress_block(sid: str) -> None:
             )
 
 
-@st.fragment(run_every=1.5)
+@st.fragment()
 def _render_build_progress_fragment(sid: str) -> None:
     """빌드 상태 블록 전용 폴링 fragment.
 
-    전체 rerun 없이 1.5초마다 ``rebuild_progress`` 를 다시 읽어 진행 바를
+    전체 rerun 없이 ``rebuild_progress`` 를 다시 읽어 진행 바를
     갱신한다(타임라인 폴링이 제거된 빈틈을 메움). 빌드 완료 후에는
     ``run_in_background_worker._on_complete`` 의 rerun이 최종 100%를 확정한다.
     완료/취소/에러 상태에서도 블록은 그대로 남아 대화 기록으로 잔존한다.
