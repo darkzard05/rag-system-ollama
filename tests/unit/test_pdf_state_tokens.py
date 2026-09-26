@@ -43,13 +43,13 @@ def test_manual_token_consumed_once(pdf_state: dict[str, object]) -> None:
     # 일회성 소비: 호출 후 토큰 삭제 확인
     assert SessionManager.get("pdf_target_page", session_id=SID) is None
 
-    # 두 번째 호출은 매니저 current_page로 폴스루, 재점프 없이 동일 페이지 유지
-    # (TASK 3: resolve는 위젯 키를 쓰지 않으므로 키 부재를 단언한다)
+    # 두 번째 호출은 매니저 current_page로 폴스루, 재점프 없이 동일 페이지 유지.
+    # 토큰 소비 시 네비 입력 키도 점프 페이지(5)로 동기화되어 desync가 없다.
     second = viewer_module._resolve_pdf_state()
     assert second is not None
     assert second["current_page"] == 5
     assert SessionManager.get("current_page", session_id=SID) == 5
-    assert "pdf_nav_input_v6" not in pdf_state
+    assert pdf_state.get("pdf_nav_input_v6") == 5
 
 
 def test_auto_token_consumed_when_no_manual_nav(

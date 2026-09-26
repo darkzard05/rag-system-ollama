@@ -53,19 +53,19 @@ def test_on_page_change_noop_when_total_none(
 
 
 def test_on_page_change_clamps_high(nav_state: dict[str, object]) -> None:
-    """초과 입력은 total로 클램프된다 (TASK 3: 위젯 키는 헬퍼가 덮어쓰지 않음)."""
+    """초과 입력은 total로 클램프된다 (입력 키도 클램프값으로 동기화)."""
     nav_state[PDF_NAV_INPUT_KEY] = 99
     viewer_module._on_page_change(10)
     assert _current_page() == 10
-    assert nav_state[PDF_NAV_INPUT_KEY] == 99
+    assert nav_state[PDF_NAV_INPUT_KEY] == 10
 
 
 def test_on_page_change_clamps_low(nav_state: dict[str, object]) -> None:
-    """0/음수 입력은 1로 클램프된다 (falsy no-op 금지, 위젯 키 무접촉)."""
+    """0/음수 입력은 1로 클램프된다 (falsy no-op 금지, 입력 키도 1로 동기화)."""
     nav_state[PDF_NAV_INPUT_KEY] = 0
     viewer_module._on_page_change(10)
     assert _current_page() == 1
-    assert nav_state[PDF_NAV_INPUT_KEY] == 0
+    assert nav_state[PDF_NAV_INPUT_KEY] == 1
 
 
 def test_on_page_change_pass_through(nav_state: dict[str, object]) -> None:

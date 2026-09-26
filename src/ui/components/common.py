@@ -13,12 +13,15 @@ drifting apart. Covers:
 
 from __future__ import annotations
 
+import contextlib
 import time
 
 import streamlit as st
+from streamlit.errors import StreamlitAPIException
 
 from core.session import SessionManager
 from ui.strings import t
+from ui.widget_keys import PDF_NAV_INPUT_KEY
 
 # ---------------------------------------------------------------------------
 # Avatars (D3): single source of truth across chat.py / viewer.py
@@ -108,10 +111,17 @@ def navigate_to_page(page: int) -> None:
     """Single page-jump path: SessionManager keys only (shared by viewer nav).
 
     Writes ``current_page`` (clamped to >= 1; the upper bound is clamped by
-    callers holding the cached total) and ``manual_nav_ts``. Never touches
-    widget keys (``INTERACTIVE_KEYS`` contract) and never calls ``st.rerun``
-    (Task2) — the nav input widget receives its default from the manager at
-    render time (``value=current_page`` in ``render_pdf_controls``).
+    callers holding the cached total) and ``manual_nav_ts``. Also syncs the
+    widget-bound nav input key (``PDF_NAV_INPUT_KEY``) so the viewer Page
+    ``number_input`` displays the jumped page instead of staying stale: this
+    write happens in callback phase (before the next script run instantiates
+    the widget), which is the sanctioned Streamlit pattern — the bridge sync
+    mirrors store keys only and never overwrites widget keys. Never calls
+    ``st.rerun`` (Task2) — the nav input widget receives its default from the
+    manager at render time (``value=current_page`` in ``render_pdf_controls``).
     """
-    SessionManager.set("current_page", max(1, page))
+    target = max(1, page)
+    SessionManager.set("current_page", target)
     SessionManager.set("manual_nav_ts", time.time())
+    with contextlib.suppress(AttributeError, RuntimeError, StreamlitAPIException):
+        st.session_state[PDF_NAV_INPUT_KEY] = target

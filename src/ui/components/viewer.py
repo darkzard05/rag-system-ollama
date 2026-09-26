@@ -3,6 +3,7 @@ PDF 뷰어 및 문서 관련 UI 컴포넌트.
 @st.fragment를 사용하여 PDF 렌더링과 네비게이션이 전체 페이지 리런 없이 독립적으로 업데이트됩니다.
 """
 
+import contextlib
 import logging
 import os
 
@@ -210,11 +211,14 @@ def _resolve_pdf_state() -> dict | None:
             SessionManager.set("current_page", current_page)
             # pdf_target_page는 일회성 소비: 점프 적용 후 키를 삭제하여
             # 사용자가 수동 네비게이션으로 벗어나도 매 rerun마다 참조 페이지로
-            # 되돌아가지 않도록 보장한다. 위젯 키(INTERACTIVE_KEYS)는 절대
-            # 직접 쓰지 않는다 — 네비 입력 위젯은 렌더 시 매니저에서 default를
-            # 받는다 (``render_pdf_controls``의 ``value=current_page``).
+            # 되돌아가지 않도록 보장한다. 점프한 페이지를 네비 입력 위젯에도
+            # 동기화한다: navigate_to_page()가 콜백 단계에서 위젯 키를 쓰지만,
+            # 토큰 소비 경로는 콜백을 거치지 않으므로 여기서 직접 맞춘다.
+            # 위젯 생성 이전의 대입이므로 Streamlit 규약상 허용된다.
             SessionManager.delete(PDF_TARGET_PAGE_KEY)
             st.session_state.pop(PDF_TARGET_PAGE_KEY, None)
+            with contextlib.suppress(AttributeError, RuntimeError):
+                st.session_state[PDF_NAV_INPUT_KEY] = current_page
             return {
                 "pdf_path": pdf_path,
                 "file_hash": file_hash,

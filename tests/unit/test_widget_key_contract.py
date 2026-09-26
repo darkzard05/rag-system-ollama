@@ -1,11 +1,13 @@
 """Widget-key single navigate_to_page() path guard (TASK 3, TDD failing-first).
 
-수호 조건 (bridge.py:14-26 + widget_keys.py "never write widget keys" 계약):
-- (a) src 전역에서 INTERACTIVE_KEYS 멤버에 대한 스크립트측 쓰기 0건.
-  위젯 키는 콜백 포함 어떤 경로에서도 직접 대입하지 않고, 단일
-  ``navigate_to_page()`` 헬퍼가 SessionManager 키만 쓴다.
+수호 조건 (citation-v2 page-sync 개정: 점프 후 Page number_input 동기를 위해
+아래 두 곳의 위젯 키 쓰기만 허용한다):
+- (a) src 전역에서 INTERACTIVE_KEYS 멤버에 대한 스크립트측 쓰기는 허용 목록에
+  든 2건뿐이다: ``common.navigate_to_page``의 콜백 단계 동기화와
+  ``viewer._resolve_pdf_state``의 토큰 소비 동기화. 그 외 직접 대입은 금지이며,
+  단일 ``navigate_to_page()`` 헬퍼가 SessionManager 키 + 네비 입력 키를 쓴다.
 - (b) ``navigate_to_page(1)`` 새파일 리셋: current_page=1 + manual_nav_ts
-  갱신, 위젯 상태(fake session_state) 무접촉.
+  갱신 + 네비 입력 키도 1로 동기화.
 - (c) Task1 클램프 유지: 헬퍼 하한(>=1) + 호출자 상한은 기존 테스트가 수호.
 - (d) Task2 무-콜백리런 유지: 헬퍼 내 st.rerun 추가 금지.
 """
@@ -29,6 +31,13 @@ _SRC_ROOT = pathlib.Path(_common_file).parent.parent.parent
 
 # 위젯 키 상수 별칭: 스크립트측 쓰기 검사에서 문자열 리터럴과 동일 취급.
 _WIDGET_KEY_ALIASES = {"PDF_NAV_INPUT_KEY", "MAIN_CHAT_INPUT_KEY"}
+
+# Page-sync 개정에서 허용하는 유일한 위젯 키 쓰기 2건 (콜백 단계/토큰 소비
+# 동기화 — number_input desync 회귀 방지). 그 외 쓰기는 모두 금지.
+_ALLOWED_WIDGET_WRITES = {
+    "common.py: subscript-write",
+    "viewer.py: subscript-write",
+}
 
 
 def _iter_src_files() -> list[pathlib.Path]:
@@ -92,9 +101,14 @@ def _widget_write_offenders() -> list[str]:
 
 
 def test_no_script_side_interactive_key_writes() -> None:
-    """src 전체에서 INTERACTIVE_KEYS 스크립트측 쓰기 0건."""
+    """허용 목록에 든 page-sync 동기화 2건 외의 위젯 키 쓰기는 0건."""
     offenders = _widget_write_offenders()
-    assert not offenders, f"위젯 키 직접 쓰기 잔존: {offenders}"
+    assert set(offenders) <= _ALLOWED_WIDGET_WRITES, (
+        f"허용 외 위젯 키 직접 쓰기 잔존: {offenders}"
+    )
+    assert len(offenders) == len(_ALLOWED_WIDGET_WRITES), (
+        f"page-sync 동기화 경로 유실: {offenders}"
+    )
 
 
 def test_main_new_file_path_uses_single_helper() -> None:
@@ -105,12 +119,10 @@ def test_main_new_file_path_uses_single_helper() -> None:
 
 
 def test_navigate_to_page_is_manager_only() -> None:
-    """헬퍼는 SessionManager 키만 쓰고 st.session_state/rerun을 건드리지 않는다."""
+    """헬퍼는 매니저 키 + 네비 입력 키를 쓰고 st.rerun은 건드리지 않는다."""
     source = inspect.getsource(common_module.navigate_to_page)
     tree = ast.parse(source)
     for node in ast.walk(tree):
-        if isinstance(node, ast.Attribute) and node.attr == "session_state":
-            raise AssertionError("navigate_to_page는 st.session_state를 쓰지 않는다")
         if (
             isinstance(node, ast.Call)
             and isinstance(node.func, ast.Attribute)
@@ -118,6 +130,7 @@ def test_navigate_to_page_is_manager_only() -> None:
         ):
             raise AssertionError("Task2: 헬퍼 내 st.rerun 추가 금지")
     assert "SessionManager.set" in source
+    assert "PDF_NAV_INPUT_KEY" in source
 
 
 @pytest.fixture
@@ -132,24 +145,24 @@ def contract_state(monkeypatch: pytest.MonkeyPatch) -> dict[str, object]:
 def test_navigate_to_page_sets_manager_not_widget(
     contract_state: dict[str, object],
 ) -> None:
-    """navigate_to_page(1): current_page=1, 위젯 상태 무접촉."""
+    """navigate_to_page(1): current_page=1 + 네비 입력 키도 1로 동기화."""
     before = time.time()
     common_module.navigate_to_page(1)
     assert int(SessionManager.get("current_page", 0)) == 1
     assert float(SessionManager.get("manual_nav_ts", 0)) >= before
-    assert contract_state == {}, f"위젯 키 쓰기 발생: {contract_state}"
+    assert contract_state == {"pdf_nav_input_v6": 1}
 
 
 def test_navigate_to_page_new_file_reset(
     contract_state: dict[str, object],
 ) -> None:
-    """새파일 리셋 시나리오: 이전 페이지 잔류 + 오래된 위젯 값에서도 1로 복귀."""
+    """새파일 리셋 시나리오: 이전 페이지 잔류 + 오래된 위젯 값도 1로 동기화."""
     SessionManager.set("current_page", 7, SID)
     contract_state["pdf_nav_input_v6"] = 7  # 이전 문서의 sticky 위젯 값
     common_module.navigate_to_page(1)
     assert int(SessionManager.get("current_page", 0)) == 1
-    # sticky 위젯 값은 헬퍼가 덮어쓰지 않는다 (default는 렌더 시 매니저에서).
-    assert contract_state["pdf_nav_input_v6"] == 7
+    # sticky 위젯 값도 헬퍼가 1로 맞춘다 (number_input desync 방지).
+    assert contract_state["pdf_nav_input_v6"] == 1
 
 
 def test_navigate_to_page_clamps_low(
@@ -160,4 +173,4 @@ def test_navigate_to_page_clamps_low(
     assert int(SessionManager.get("current_page", 0)) == 1
     common_module.navigate_to_page(-4)
     assert int(SessionManager.get("current_page", 0)) == 1
-    assert contract_state == {}
+    assert contract_state == {"pdf_nav_input_v6": 1}

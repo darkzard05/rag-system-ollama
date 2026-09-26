@@ -101,9 +101,9 @@ def test_page_jump_click_invokes_handler_via_callback():
     pdf_target_page 점프 토큰을 정확히 1회 세팅한다. 렌더 단계 인라인 호출로
     회귀하면 클릭 전부터 토큰이 세팅되어 아래 선행 단언이 실패한다.
 
-    현행 계약 (chat_references._handle_page_jump, TASK 3):
+    현행 계약 (chat_references._handle_page_jump, page-sync 개정):
     - SessionManager 'pdf_target_page' = {"page", "source": "manual", "ts"}
-    - navigate_to_page로 SessionManager 'current_page' 동기화 (위젯 키 무접촉)
+    - navigate_to_page로 SessionManager 'current_page' + 네비 입력 키 동기화
     """
     script_content = """
 import streamlit as st
@@ -180,10 +180,10 @@ def test_doc_jump_click_invokes_handler_via_callback():
     """P0 회귀: 인용(doc) 점프 버튼 클릭이 on_click 콜백으로
     pdf_target_page 토큰(page=인용 메타)을 정확히 1회 세팅한다.
 
-    현행 계약 (TASK 3): citations 항목 {"doc_id", "section", "page"}이
+    현행 계약 (page-sync 개정): citations 항목 {"doc_id", "section", "page"}이
     "'{section} · p.{page}'" 버튼으로 렌더되며 클릭 시 _handle_page_jump이
-    {"page", "source": "manual", "ts"} 토큰 + current_page 동기화를 수행한다
-    (위젯 키 무접촉).
+    {"page", "source": "manual", "ts"} 토큰 + current_page/네비 입력 동기화를
+    수행한다.
     """
     script_content = """
 import streamlit as st
