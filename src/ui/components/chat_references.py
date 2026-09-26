@@ -28,8 +28,63 @@ __all__ = [
     "_handle_doc_jump",
     "_handle_page_jump",
     "_render_references_content",
+    "normalize_excerpt",
     "render_generation_expander",
+    "render_inline_citation_badges",
 ]
+
+
+def normalize_excerpt(text: object, max_chars: int = 200) -> str:
+    """호버용 발췌 정규화: strip + 공백 축소 + ~200자 절단.
+
+    Streamlit ``help=`` 툴팁은 ``\\n\\n``에서 깨지므로(#13339) 모든 개행을
+    제거해 단일 행으로 만든다. 배지/점프 버튼 렌더 경로가 공유한다.
+    """
+    if not isinstance(text, str):
+        return ""
+    collapsed = re.sub(r"\s+", " ", text).strip()
+    if len(collapsed) > max_chars:
+        return collapsed[:max_chars].rstrip() + "..."
+    return collapsed
+
+
+def _doc_raw_text_map(documents: list[Any] | None) -> dict[str, str]:
+    """doc 안정 ID -> 원문(page_content) 매핑 (발췌 표시용, 정규화 없음)."""
+    raw_map: dict[str, str] = {}
+    for d in documents or []:
+        sid = doc_stable_id(d)
+        if sid in raw_map:
+            continue
+        content = getattr(d, "page_content", None)
+        if content is None and isinstance(d, dict):
+            content = d.get("page_content")
+        raw_map[sid] = content if isinstance(content, str) else ""
+    return raw_map
+
+
+def render_inline_citation_badges(
+    citations: list[dict[str, Any]] | None,
+    documents: list[Any] | None = None,
+) -> bool:
+    """답변 말미 짧은 회색 배지 ``[1..N]`` 렌더 (발췌는 ``help=`` 호버).
+
+    클릭 불가한 파란 전문 블록을 대체한다. 발췌원은 ``text_span`` 우선,
+    없으면 동일 ``doc_id`` 문서 원문, 마지막으로 섹션명이다.
+    """
+    doc_citations = [c for c in (citations or []) if c.get("doc_id") is not None]
+    if not doc_citations:
+        return False
+    raw_map = _doc_raw_text_map(documents)
+    for idx, cit in enumerate(doc_citations):
+        sid = str(cit.get("doc_id"))
+        span = cit.get("text_span")
+        raw = span if isinstance(span, str) and span else raw_map.get(sid, "")
+        if not raw:
+            section = cit.get("section")
+            raw = section if isinstance(section, str) else ""
+        excerpt = normalize_excerpt(raw) or f"Source {idx + 1}"
+        st.badge(f"[{idx + 1}]", color="grey", help=excerpt)
+    return True
 
 
 def _handle_page_jump(page: int | str) -> None:
@@ -119,10 +174,14 @@ def _render_references_content(
             content = d.get("page_content")
         doc_text_map[sid_d] = _normalize_text_for_dedup(content)
 
+    # 2c. 호버 발췌용 원문 매핑 (정규화 없음 — help= 표시용)
+    doc_raw_map = _doc_raw_text_map(documents)
+
     # 3. [개선] 페이지 번호(target_p) 및 대표 섹션 기준 그룹화 (중복 버튼 방지)
     # Branch-D: 동일 정규화 텍스트가 여러 페이지에 나타나면 최소 페이지만
     # 유지하고, 병합 시 가장 구체적인(긴) 섹션명을 보존한다.
     page_to_refs: dict[int, dict[str, Any]] = {}
+    page_to_excerpt: dict[int, str] = {}
     seen_text_hashes: dict[str, int] = {}
     targets: list[tuple[int, dict[str, Any]]] = []
     for cit in doc_citations:
@@ -157,6 +216,9 @@ def _render_references_content(
 
         span = cit.get("text_span")
         norm = _normalize_text_for_dedup(span) if span else doc_text_map.get(sid, "")
+        span_raw = span if isinstance(span, str) and span else doc_raw_map.get(sid, "")
+        if target_p not in page_to_excerpt and span_raw:
+            page_to_excerpt[target_p] = span_raw
         if norm:
             text_hash = fast_hash(norm)
             if text_hash in seen_text_hashes:
@@ -200,13 +262,15 @@ def _render_references_content(
                 unsafe_allow_html=True,
             )
         else:
+            excerpt = normalize_excerpt(page_to_excerpt.get(page_num, ""))
+            base_help = f"PDF {page_num}페이지로 이동"
             st.button(
                 f"{label}",
                 key=f"pop_doc_{msg_id}_{page_num}_{idx}",
                 use_container_width=True,
                 on_click=_handle_page_jump,
                 args=(page_num,),
-                help=f"PDF {page_num}페이지로 이동",  # 장황한 설명 문구 간결화
+                help=f"{base_help} — {excerpt}" if excerpt else base_help,
             )
     return True
 

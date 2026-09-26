@@ -68,16 +68,21 @@ def _make_doc(doc_id: str, page: int, content: str) -> "object":
 
 
 def test_citations_array_rendered_by_doc_id():
-    """A response carrying a `citations[]` array must surface clickable anchors
-    resolved by stable `doc_id` (NOT page number).
+    """A response carrying a `citations[]` array must resolve by stable `doc_id`.
 
-    Regression guard for P3: the structured citations array must reach the
-    rendered HTML as `data-doc-id` anchors pointing at the correct document.
+    Citation-UX overhaul: the answer body no longer appends the blue
+    full-text ``citation-sources`` block. Stable ``doc_id`` keying (NOT page
+    number) now lives in the grey ``[N]`` badge renderer, verified here via
+    excerpt source: the badge hover excerpt must come from the ``doc_id``
+    match (page-7 document), never from a page-1 mis-link.
     """
+    from unittest.mock import patch
+
     from common.utils import apply_tooltips_to_response
+    from ui.components.chat_references import render_inline_citation_badges
 
     known_doc_id = "doc_abc123"
-    # Document lives on page 7; an anchor must resolve to doc_abc123, never p1.
+    # Document lives on page 7; badges must key on doc_abc123, never p1.
     documents = [_make_doc(known_doc_id, 7, "Deep content about topic X.")]
 
     citations = [
@@ -96,14 +101,20 @@ def test_citations_array_rendered_by_doc_id():
         citations=citations,
     )
 
-    # Anchor present and keyed by stable doc_id.
-    assert f'data-doc-id="{known_doc_id}"' in html_out
+    # Blue full-text block is gone from the answer body.
+    assert "citation-sources" not in html_out
+
+    # Grey badges key excerpts by stable doc_id (doc_abc123 content).
+    with patch("ui.components.chat_references.st") as mock_st:
+        assert render_inline_citation_badges(citations, documents) is True
+    badges = mock_st.badge.call_args_list
+    assert len(badges) == 1
+    assert str(badges[0].args[0]) == "[1]"
+    assert "topic X detail" in str(badges[0].kwargs.get("help", ""))
     # Must NOT fall back to page-1 mis-link (doc_id, not page, is the key).
     assert 'data-doc-id="1"' not in html_out
-    # The cited source label is surfaced.
-    assert "topic X detail" in html_out
     # Inline [doc:N] fallback path is preserved/independent.
-    assert "citation-sources" in html_out
+    assert "citation-sources" not in html_out
 
 
 def test_citations_array_ignored_without_documents():

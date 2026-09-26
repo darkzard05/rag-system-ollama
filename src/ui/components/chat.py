@@ -152,6 +152,10 @@ def render_message(
                     st.session_state[_tip_key] = (_tip_sig, display_text)
             st.markdown(display_text, unsafe_allow_html=(role == "assistant"))
 
+        # 답변 말미 짧은 회색 [N] 배지 (발췌는 help= 호버) — 파란 전문 블록 대체.
+        if role == "assistant" and citations:
+            render_inline_citation_badges(citations, documents)
+
         # 완료된 어시스턴트 메시지의 하단 상태줄 (중복 상태 문구 제거 및 핵심 지표만 노출)
         metric_txt = _metrics_caption(metrics, kwargs.get("model"))
         if (
@@ -708,7 +712,9 @@ from ui.components.chat_references import (  # noqa: E402
     _handle_doc_jump,
     _handle_page_jump,
     _render_references_content,
+    normalize_excerpt,
     render_generation_expander,
+    render_inline_citation_badges,
 )
 from ui.components.chat_build import (  # noqa: E402
     _cancel_rebuild,
@@ -736,8 +742,10 @@ __all__ = [
     "_retry_stopped_answer",
     "get_stopped_answer_actions",
     "_resolve_chat_input_state",
+    "normalize_excerpt",
     "render_chat_input_area",
     "render_chat_messages_area",
     "render_generation_expander",
+    "render_inline_citation_badges",
     "render_message",
 ]

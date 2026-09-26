@@ -402,8 +402,8 @@ def apply_tooltips_to_response(
     스팬은 시각적 구분용이며 클릭 동작이 없습니다 (단순 메타데이터).
     실제 페이지 이동은 네이티브 참조 popover 버튼이 담당합니다.
 
-    citations: 구조화 인용 배열(doc_id 기반). 있으면 본문 말미에
-    data-doc-id 앵커 소스 블록을 덧붙여 안정적 doc 점프를 지원합니다.
+    citations: 구조화 인용 배열(doc_id 기반). 본문 말미 블록은 덧붙이지
+    않는다 — 답변 말미 출처 표시는 짧은 회색 [N] 배지로 별도 렌더된다.
     """
     if not response_text:
         return response_text
@@ -525,36 +525,10 @@ def apply_tooltips_to_response(
     except Exception as e:
         logger.error(f"[Utils] 인용구 처리 오류: {e}")
 
-    # 3. 구조화 citations[]를 본문 말미의 data-doc-id 소스 앵커로 덧붙인다.
-    #    PRIMARY 소스는 citations[] (doc_id 기반, rerank 후에도 안정).
-    #    인라인 [doc:N] 폴백은 위 단계에서 이미 처리된다.
-    if citations:
-        anchors: list[str] = []
-        for idx, cit in enumerate(citations):
-            if not isinstance(cit, dict):
-                continue
-            sid = cit.get("doc_id")
-            if sid is None:
-                continue
-            label = html.escape(
-                str(cit.get("text_span") or cit.get("section") or f"Source {idx + 1}")
-            )[:160]
-            anchors.append(
-                f'<span class="citation-source" data-doc-id="{html.escape(str(sid))}" '
-                f'style="color: #007bff; font-weight: 600; margin-right: 8px;">'
-                f"[{idx + 1}] {label}</span>"
-            )
-        if anchors:
-            text += (
-                '\n\n<span class="citation-sources" data-doc-ids="{}">{}</span>'.format(
-                    ",".join(
-                        html.escape(str(c.get("doc_id")))
-                        for c in citations
-                        if isinstance(c, dict) and c.get("doc_id") is not None
-                    ),
-                    "".join(anchors),
-                )
-            )
+    # 3. 구조화 citations[]는 본문에 덧붙이지 않는다: 답변 말미 출처 표시는
+    #    chat_references.render_inline_citation_badges가 짧은 회색 [N] 배지
+    #    (발췌는 help= 호버)로 렌더한다. 클릭 불가한 파란 전문 블록 제거.
+    #    인라인 [doc:N]/[p.X] 스팬 툴팁(위 단계)은 그대로 유지된다.
 
     return text
 
