@@ -341,17 +341,32 @@ def render_pdf_controls(current_page, total_pages):
             )
 
         with col_page:
-            st.number_input(
-                t("pdf_page_label"),
-                min_value=1,
-                max_value=total_pages,
-                value=current_page,
-                key=PDF_NAV_INPUT_KEY,
-                on_change=_on_page_change,
-                args=(total_pages,),
-                label_visibility="visible",
-                help=t("pdf_page_help"),
-            )
+            # 위젯 정책: 키가 이미 세션에 있으면 value(default) 동시 지정 금지
+            # ("created with a default value but also had its value set" 경고).
+            # 세션값이 그대로 표시되므로 점프 동기화는 유지된다.
+            if PDF_NAV_INPUT_KEY in st.session_state:
+                st.number_input(
+                    t("pdf_page_label"),
+                    min_value=1,
+                    max_value=total_pages,
+                    key=PDF_NAV_INPUT_KEY,
+                    on_change=_on_page_change,
+                    args=(total_pages,),
+                    label_visibility="visible",
+                    help=t("pdf_page_help"),
+                )
+            else:
+                st.number_input(
+                    t("pdf_page_label"),
+                    min_value=1,
+                    max_value=total_pages,
+                    value=current_page,
+                    key=PDF_NAV_INPUT_KEY,
+                    on_change=_on_page_change,
+                    args=(total_pages,),
+                    label_visibility="visible",
+                    help=t("pdf_page_help"),
+                )
 
         with col_next:
             st.button(
