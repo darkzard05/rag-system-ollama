@@ -585,6 +585,7 @@ class SessionManager:
         cls.set("active_faiss_retriever", None, session_id)
         cls.set("active_bm25_retriever", None, session_id)
         cls.set("file_hash", None, session_id)
+        cls.set("last_uploaded_file_name", None, session_id)
         cls.set("pdf_processing_error", None, session_id)
         cls.set("rebuild_error", None, session_id)
         cls.set("rebuild_status", None, session_id)

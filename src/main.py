@@ -316,6 +316,32 @@ def on_file_upload() -> None:
         SessionManager.set(upload_guard_key, False)
 
 
+def _find_cached_upload(
+    temp_dir: str, file_bytes: bytes, uploaded_hash: str
+) -> str | None:
+    """Return the path of an existing upload with identical bytes, if any."""
+
+    from core.document_processor import compute_file_hash
+
+    if not uploaded_hash:
+        return None
+    try:
+        candidates = sorted(Path(temp_dir).glob("upload_*.pdf"))
+    except OSError as e:
+        logger.warning(f"[UPLOAD] 재사용 스캔 실패: {e}")
+        return None
+    expected_size = len(file_bytes)
+    for entry in candidates:
+        try:
+            if entry.stat().st_size != expected_size:
+                continue
+            if compute_file_hash(str(entry)) == uploaded_hash:
+                return str(entry)
+        except OSError:
+            continue
+    return None
+
+
 def _process_uploaded_file(uploaded_file) -> None:
     """실제 업로드 처리 로직. on_file_upload 가 멱등 가드 후 호출한다."""
     from core.document_processor import compute_file_hash
@@ -357,6 +383,8 @@ def _process_uploaded_file(uploaded_file) -> None:
 
     if uploaded_file.name != last_file_name or uploaded_hash != last_file_hash:
         sid = SessionManager.get_session_id()
+        temp_dir = os.path.abspath(FilePathConstants.TEMP_DIR)
+        cached_path = _find_cached_upload(temp_dir, file_bytes, uploaded_hash)
         # [UX] 새 파일 전환: 대화/플래그를 렌더 전(콜백 시점)에 초기화하여
         # 업로드 직후 불필요한 전체 rerun 없이도 빈 화면 깜빡임이 사라진다.
         # (reset_for_new_file이 current_page/pdf_annotations/pdf_target_page 초기화 포함)
@@ -369,21 +397,25 @@ def _process_uploaded_file(uploaded_file) -> None:
         navigate_to_page(1)
         st.session_state.pop("pdf_target_page", None)
         old_path = SessionManager.get("pdf_file_path")
-        if old_path:
+        if old_path and old_path != cached_path:
             still_referenced = SessionManager.get_all_pdf_paths().count(old_path) > 1
-            if not still_referenced:
-                SessionManager.safe_remove_file(old_path)
+            if not still_referenced and not SessionManager.safe_remove_file(old_path):
+                logger.warning(f"이전 업로드 파일 삭제 실패 (잠금 가능): {old_path}")
+                SystemNotifier.warning(f"이전 파일 정리에 실패했습니다: {old_path}")
 
         SessionManager.set("last_uploaded_file_name", uploaded_file.name)
         SessionManager.set("file_hash", uploaded_hash)
 
         try:
-            temp_dir = os.path.abspath(FilePathConstants.TEMP_DIR)
-            sid = SessionManager.get_session_id()
-            tmp_path = os.path.join(temp_dir, f"upload_{sid}_{int(time.time())}.pdf")
-
-            with open(tmp_path, "wb") as f:
-                shutil.copyfileobj(uploaded_file, f)
+            if cached_path is not None:
+                tmp_path = cached_path
+                logger.info(f"[UPLOAD] 동일 파일 재사용 (dedup): {tmp_path}")
+            else:
+                tmp_path = os.path.join(
+                    temp_dir, f"upload_{sid}_{int(time.time())}.pdf"
+                )
+                with open(tmp_path, "wb") as f:
+                    shutil.copyfileobj(uploaded_file, f)
 
             SessionManager.set("pdf_file_path", tmp_path)
             # [UX] 분석 진행 자리표시자 메시지: _bg_rebuild_task가 동일 msg_id로 업데이트
