@@ -18,7 +18,7 @@ from typing import Any
 
 import streamlit as st
 
-from common.utils import doc_stable_id
+from common.utils import doc_stable_id, fast_hash
 from core.session import SessionManager
 from ui.components.common import get_doc_metadata, navigate_to_page
 from ui.strings import t
@@ -62,6 +62,13 @@ def _extract_reference_pages(documents: list[Any]) -> list[int]:
     return sorted(pages)
 
 
+def _normalize_text_for_dedup(text: object) -> str:
+    """Branch-D 제거용 본문 정규화: 연속 공백 축소 + 소문자화."""
+    if not isinstance(text, str):
+        return ""
+    return re.sub(r"\s+", " ", text).strip().lower()
+
+
 def _render_references_content(
     msg_id: str,
     documents: list[Any] | None,
@@ -101,13 +108,32 @@ def _render_references_content(
             with contextlib.suppress(ValueError, TypeError):
                 doc_page_map[doc_stable_id(d)] = int(p)
 
+    # 2b. Branch-D: 문서 ID별 정규화 본문 매핑 (동일 텍스트 판별용)
+    doc_text_map: dict[str, str] = {}
+    for d in documents or []:
+        sid_d = doc_stable_id(d)
+        if sid_d in doc_text_map:
+            continue
+        content = getattr(d, "page_content", None)
+        if content is None and isinstance(d, dict):
+            content = d.get("page_content")
+        doc_text_map[sid_d] = _normalize_text_for_dedup(content)
+
     # 3. [개선] 페이지 번호(target_p) 및 대표 섹션 기준 그룹화 (중복 버튼 방지)
+    # Branch-D: 동일 정규화 텍스트가 여러 페이지에 나타나면 최소 페이지만
+    # 유지하고, 병합 시 가장 구체적인(긴) 섹션명을 보존한다.
     page_to_refs: dict[int, dict[str, Any]] = {}
+    seen_text_hashes: dict[str, int] = {}
+    targets: list[tuple[int, dict[str, Any]]] = []
     for cit in doc_citations:
         sid = str(cit.get("doc_id"))
         target_p = cit.get("page") or doc_page_map.get(sid, 1)
         with contextlib.suppress(ValueError, TypeError):
             target_p = int(target_p)
+        targets.append((target_p, cit))
+    targets.sort(key=lambda item: item[0])
+    for target_p, cit in targets:
+        sid = str(cit.get("doc_id"))
 
         # 1) 의미 없는 플레이스홀더 섹션명을 빈 문자열("")로 정규화
         raw_sec = (cit.get("section") or "").strip()
@@ -128,6 +154,19 @@ def _render_references_content(
                 flags=re.IGNORECASE,
             ).strip()
         )
+
+        span = cit.get("text_span")
+        norm = _normalize_text_for_dedup(span) if span else doc_text_map.get(sid, "")
+        if norm:
+            text_hash = fast_hash(norm)
+            if text_hash in seen_text_hashes:
+                kept = seen_text_hashes[text_hash]
+                prev_sec = page_to_refs[kept]["section"]
+                cand_sec = clean_sec or raw_sec
+                if cand_sec and len(cand_sec) > len(prev_sec):
+                    page_to_refs[kept]["section"] = cand_sec
+                continue
+            seen_text_hashes[text_hash] = target_p
 
         if target_p not in page_to_refs:
             page_to_refs[target_p] = {"sid": sid, "section": clean_sec}
