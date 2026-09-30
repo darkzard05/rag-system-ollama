@@ -303,6 +303,13 @@
     overflow-y: auto !important;
     overflow-x: hidden !important;
     scrollbar-gutter: stable !important;
+    /* Opt out of browser scroll anchoring. Chromium otherwise keeps its chosen
+       anchor node visually stable while the stream appends content, adjusting
+       scrollTop on its own and cancelling the auto-follow yank. The resulting
+       scroll event then dispatches late, against a scrollHeight that has grown
+       further, so the smart scroller's self-heal reads a phantom distance as
+       user intent and latches auto-follow off mid-stream. */
+    overflow-anchor: none;
 }
 
 /* st.chat_input renders INLINE at its script position (Streamlit 1.60 DOM contract:
@@ -621,4 +628,14 @@ border-top: 1px solid color-mix(in srgb, var(--border-color) 30%, transparent) !
     font-size: 0.9rem;
     color: var(--primary-color);
     opacity: 0.8;
+}
+
+/* Chat auto-scroll rollout: sentinel marker only (append-only).
+   No broad :has(button) rule here, so no chat-column button
+   (retry/cancel) can be restyled by this block. */
+#chat-autoscroll-sentinel {
+    height: 0;
+    min-height: 0;
+    overflow: hidden;
+    display: block;
 }

@@ -24,6 +24,7 @@ from common.utils import (
     strip_context_tokens,
 )
 from core.session import SessionManager
+from ui.components.chat_autoscroll import render_autoscroll_sentinel
 from ui.components.common import AVATARS, status_line, ui_error
 from ui.components.streaming import (
     _AUX_STATE_KEY,
@@ -426,6 +427,12 @@ def render_chat_messages_area() -> None:
     # 통합 타임라인 렌더. 스트리밍 메시지도 단일 pass로 직접 렌더하므로
     # 익스팬더 위치가 안정적으로 유지된다.
     _render_unified_timeline(current_sid)
+
+    is_active = bool(
+        SessionManager.get("is_generating_answer", False, current_sid)
+        and SessionManager.get("active_stream_msg_id", "", current_sid)
+    )
+    render_autoscroll_sentinel(current_sid, force=is_active)
 
 
 def _resolve_chat_input_state(sid: str) -> tuple[str, bool]:

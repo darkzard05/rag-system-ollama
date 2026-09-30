@@ -113,6 +113,8 @@ def inject_custom_css() -> None:
     # 헤더 높이 감지 스크립트 - 매 렌더 동일 슬롯 점유(결정론적 최상위 구조).
     inject_header_height_script()
 
+    from ui.components.autoscroll_stick import BOTTOM_STICK_PX
+
     css_json = json.dumps(css_content)
     js = f"""
         <script>
@@ -126,6 +128,167 @@ def inject_custom_css() -> None:
                 doc.head.appendChild(el);
             }}
             el.textContent = css;
+
+            // =========================================================================
+            // 채팅창 스마트 자동 스크롤러 (MutationObserver + Wheel Event 감지)
+            // =========================================================================
+            if (!window.parent.__chatScrollState) {{
+                window.parent.__chatScrollState = {{
+                    userScrolledUp: false,
+                    observer: null,
+                    isTicking: false,
+                    yankTarget: -1
+                }};
+            }}
+            const scrollState = window.parent.__chatScrollState;
+
+            // 기존 옵저버가 있으면 해제 후 재생성 (Rerun 간 메모리 누수 방지)
+            if (scrollState.observer) {{
+                scrollState.observer.disconnect();
+                scrollState.observer = null;
+            }}
+
+            // Anchor on the chat input, NOT `:last-child`. With a real PDF
+            // loaded the main block holds 5 stColumn nodes (gutter/spacer
+            // columns included) and `:last-child` lands on a 211x40 sliver
+            // whose scrollHeight === clientHeight, so every scroll is a
+            // permanent no-op. stChatInput is always present in the chat
+            // column and lives inside the scroller itself.
+            const getChatContainer = () => {{
+                const input = doc.querySelector('[data-testid="stChatInput"]');
+                if (input) {{
+                    const col = input.closest('[data-testid="stColumn"]');
+                    const vb = col && col.querySelector(':scope > [data-testid="stVerticalBlock"]');
+                    if (vb) return vb;
+                }}
+                return doc.querySelector(
+                    '[data-testid="stMainBlockContainer"] [data-testid="stColumn"]:last-child > [data-testid="stVerticalBlock"]'
+                );
+            }};
+
+            const scrollToBottom = (force = false) => {{
+                const container = getChatContainer();
+                if (!container) return;
+
+                // 사용자가 휠을 위로 올려 과거 대화를 보고 있다면 강제 스크롤이 아닌 한 멈춤
+                if (!force && scrollState.userScrolledUp) return;
+
+                if (!scrollState.isTicking) {{
+                    scrollState.isTicking = true;
+                    window.parent.requestAnimationFrame(() => {{
+                        // 렌더링 프레임에서는 scroll 이벤트가 rAF 콜백보다 먼저
+                        // 처리되므로, 예약 이후에 latch가 갱신될 수 있다.
+                        // 갱신된 latch를 다시 확인해 사용자가 위로 올린 경우를 존중한다.
+                        if (!force && scrollState.userScrolledUp) {{
+                            scrollState.isTicking = false;
+                            return;
+                        }}
+                        scrollState.yankTarget = container.scrollHeight;
+                        container.scrollTop = scrollState.yankTarget;
+                        scrollState.isTicking = false;
+                    }});
+                }}
+            }};
+
+            const setupChatObserver = () => {{
+                const container = getChatContainer();
+                if (!container) {{
+                    setTimeout(setupChatObserver, 100);
+                    return;
+                }}
+
+                // 1. 실제 사용자의 마우스 휠 동작 감지
+                container.removeEventListener('wheel', container.__wheelHandler);
+                container.__wheelHandler = (e) => {{
+                    if (e.deltaY < 0) {{
+                        // 위로 휠을 굴렸을 때만 스크롤 고정
+                        scrollState.userScrolledUp = true;
+                    }} else {{
+                        // 아래로 휠을 굴려 바닥(BOTTOM_STICK_PX 이내)에 닿으면 자동 스크롤 재개
+                        const dist = container.scrollHeight - container.scrollTop - container.clientHeight;
+                        if (dist <= {BOTTOM_STICK_PX}) {{
+                            scrollState.userScrolledUp = false;
+                        }} else if (!container.__wheelResumePending) {{
+                            // wheel 이벤트는 스크롤 적용 전(pre-scroll)에
+                            // 동기적으로 발생하므로, 이번 펄스로 바닥에
+                            // 도달해도 dist는 여전히 임계값을 초과한다.
+                            // 스크롤이 착륙한 뒤(post-layout)에 거리 재측정.
+                            // __wheelResumePending 가드로 제스처당 1회만 예약.
+                            container.__wheelResumePending = true;
+                            setTimeout(() => {{
+                                container.__wheelResumePending = false;
+                                const landed = container.scrollHeight - container.scrollTop - container.clientHeight;
+                                if (landed <= {BOTTOM_STICK_PX}) {{
+                                    scrollState.userScrolledUp = false;
+                                }}
+                            }}, 80);
+                        }}
+                    }}
+                }};
+                container.addEventListener('wheel', container.__wheelHandler, {{ passive: true }});
+
+                // 스크롤바 드래그·PageUp/PageDown·터치·방향키는 wheel 이벤트를
+                // 발생시키지 않는다. wheel 리스너만으로는 latch가 갱신되지 않아
+                // 사용자가 과거 대화를 읽으려 올려도 스트리밍마다 바닥으로 끌려간다.
+                // scroll 이벤트는 스크롤이 실제로 적용된 뒤 firing되므로
+                // 위치를 그대로 신뢰할 수 있어, 어떤 입력 수단으로도 latch를 동기화한다.
+                container.removeEventListener('scroll', container.__scrollSyncHandler);
+                container.__lastScrollTop = container.scrollTop;
+                container.__scrollSyncHandler = () => {{
+                    if (container.__lastScrollTop === container.scrollTop) return;
+                    container.__lastScrollTop = container.scrollTop;
+                    // auto-follow가 스스로 만든 스크롤은 사용자 의도가 아니다.
+                    // scroll 이벤트는 메인 스레드가 바쁜 streaming 동안 지연되어
+                    // dispatch 시점의 scrollHeight만 최신이고 scrollTop은 yank
+                    // 이전 값으로 남아, phantom dist로 latch가 걸린다(실측 t=11749ms
+                    // dist=30 → auto-follow 영구 정지). yank가 놓은 위치에 그대로면
+                    // 우리 own scroll이므로 무시한다. 사용자가 실제로 위로 올리면
+                    // 이 조건을 벗어나 latch가 정상적으로 걸린다.
+                    const yank = scrollState.yankTarget;
+                    if (yank >= 0 && container.scrollTop >= yank - container.clientHeight - 4) {{
+                        return;
+                    }}
+                    scrollState.yankTarget = -1;
+                    const dist = container.scrollHeight - container.scrollTop - container.clientHeight;
+                    scrollState.userScrolledUp = dist > {BOTTOM_STICK_PX};
+                }};
+                container.addEventListener('scroll', container.__scrollSyncHandler, {{ passive: true }});
+
+                // 2. 새 메시지 및 st.write_stream 토큰 스트리밍 DOM 변화 실시간 감시
+                scrollState.observer = new MutationObserver(() => {{
+                    scrollToBottom(false);
+                }});
+
+                scrollState.observer.observe(container, {{
+                    childList: true,
+                    subtree: true,
+                    characterData: true
+                }});
+
+                // 3. 입력창 엔터 키/전송 버튼 클릭 시 무조건 락 해제 및 최하단 스크롤
+                const chatInputArea = doc.querySelector('[data-testid="stChatInput"]');
+                if (chatInputArea && !chatInputArea.__hasSubmitHook) {{
+                    chatInputArea.__hasSubmitHook = true;
+                    chatInputArea.addEventListener('keydown', (e) => {{
+                        if (e.key === 'Enter' && !e.shiftKey) {{
+                            scrollState.userScrolledUp = false;
+                            setTimeout(() => scrollToBottom(true), 50);
+                        }}
+                    }});
+                    const sendBtn = chatInputArea.querySelector('button');
+                    if (sendBtn) {{
+                        sendBtn.addEventListener('click', () => {{
+                            scrollState.userScrolledUp = false;
+                            setTimeout(() => scrollToBottom(true), 50);
+                        }});
+                    }}
+                }}
+
+                // 초기 진입 및 Rerun 시 바닥으로 이동
+                scrollToBottom(true);
+            }};
+
+            setupChatObserver();
         }} catch (e) {{}}
         </script>
     """
