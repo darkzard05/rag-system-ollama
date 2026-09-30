@@ -144,3 +144,15 @@ scripts/benchmarks/_diag.py
 scripts/benchmarks/_diag4.py
 scripts/benchmarks/_diag5.py
 
+# Local JS tooling (repomix / playwright harness) — not part of the Python project
+node_modules/
+bun.lock
+repomix-output.xml
+
+# Dated config/data snapshots — local experiment rollback points, never committed
+config.yml.bak-*
+config.yml.pre-*
+config.yml.pilot-*
+config.yml.s4-on-*
+*.json.bak-*
+
