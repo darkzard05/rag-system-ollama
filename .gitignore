@@ -148,6 +148,10 @@ scripts/benchmarks/_diag5.py
 node_modules/
 bun.lock
 repomix-output.xml
+# `bun init` boilerplate (index.ts is a bare console.log, no TS sources in this repo)
+index.ts
+package.json
+tsconfig.json
 
 # Dated config/data snapshots — local experiment rollback points, never committed
 config.yml.bak-*
@@ -155,4 +159,13 @@ config.yml.pre-*
 config.yml.pilot-*
 config.yml.s4-on-*
 *.json.bak-*
+
+# NOTE: reports/ is deliberately NOT ignored. 105 report files are tracked,
+# including eval_quality_* (31), e2e_eval_report_* (24) and rerank_decision_*.md,
+# so retrieval/eval experiment evidence stays version-controlled by convention.
+# Ignoring the families would split the category: old files tracked, new ones
+# silently dropped from history.
+# Exception: visual QA screenshot dumps are binary, machine-generated and not a
+# decision record, so they stay local.
+reports/visual_qa_*
 
