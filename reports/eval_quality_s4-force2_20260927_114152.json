@@ -1,0 +1,454 @@
+{
+  "meta": {
+    "script": "scripts/eval_quality.py",
+    "tag": "s4-force2",
+    "timestamp": "2026-09-27T11:45:04",
+    "pdf": "tests/data/2201.07520v1.pdf",
+    "testset_n": 1,
+    "no_llm": false,
+    "model": "qwen3:4b-instruct-2507-q4_K_M",
+    "embedder": "nomic-embed-text-v2-moe",
+    "judge_model": "qwen3:4b-instruct-2507-q4_K_M",
+    "num_predict": 2048,
+    "num_ctx": 8192,
+    "truncation_threshold": 1843.2,
+    "timeout_seconds": 180.0,
+    "golden_total": 5,
+    "testset_total": 1
+  },
+  "questions": [
+    {
+      "source": "golden",
+      "row": 1,
+      "query": "CM3 모델이 이미지를 학습할 때 사용하는 구체적인 원리와 토큰화 방식은 뭐야? 기존 DALL-E와는 어떤 차이가 있어?",
+      "out_of_doc": false,
+      "ground_truth": null,
+      "degenerate": {
+        "is_degenerate": false,
+        "reason": null,
+        "status": "포함"
+      },
+      "note": null,
+      "skipped_no_llm": false,
+      "retrieval": {
+        "doc_count": 5,
+        "max_rerank_score": 0.9367,
+        "documents": [
+          {
+            "page": 2,
+            "section": "TITLE: 1 INTRODUCTION",
+            "rerank_score": 0.8715299367904663
+          },
+          {
+            "page": 5,
+            "section": "4.1.1 UNCONDITIONAL IMAGE GENERATION",
+            "rerank_score": 0.9011805653572083
+          },
+          {
+            "page": 6,
+            "section": "4.1.2 IMAGE IN-FILLING",
+            "rerank_score": 0.871920645236969
+          },
+          {
+            "page": 6,
+            "section": "4.2.2 CONDITIONAL IMAGE GENERATION",
+            "rerank_score": 0.9239777326583862
+          },
+          {
+            "page": 6,
+            "section": "4.2.2 CONDITIONAL IMAGE GENERATION",
+            "rerank_score": 0.9367393851280212
+          }
+        ],
+        "relevant": true,
+        "p_at_1": 0,
+        "mrr_at_5": 0.3333,
+        "context_recall": 0.5
+      },
+      "answer": "{\n  \"final_answer\": \"문서에는 CM3 모델이 이미지를 학습할 때 사용하는 구체적인 원리와 토큰화 방식에 대한 설명이 없습니다. CM3은 'causally masked objective'를 사용하여 이미지의 연속 영역을 주변 맥락에 조건화할 수 있도록 하며, 이는 DALL-E의 왼쪽에서 오른쪽 방향 언어 모델링과 달리 양방향 맥락 제어를 가능하게 합니다. 그러나 이미지 학습 시 사용하는 토큰화 방식이나, DALL-E와의 구체적인 차이에 대한 기술적 세부 사항은 제공된 문서에서 확인할 수 없습니다.\",\n  \"citations\": [\n    {\n      \"doc_id\": 8,\n      \"text_span\": \"CM3 with the proposed causally masked language modeling makes it possible to condition contiguous sections of an image on the surrounding context for image in-filling.\",\n      \"section\": \"4.1.2 IMAGE IN-FILLING\",\n      \"page\": 6,\n      \"score\": 0.872\n    },\n    {\n      \"doc_id\": 9,\n      \"text_span\": \"Unlike DALL-E, which leverages left-to-right language modeling objective to model language-image tokens, CM3 with the proposed causally masked language modeling makes it possible to condition contiguous sections of an image on the surrounding context for image in-filling.\",\n      \"section\": \"4.2.2 CONDITIONAL IMAGE GENERATION\",\n      \"page\": 6,\n      \"score\": 0.924\n    }\n  ],\n  \"confidence\": 0.6\n}",
+      "answer_chars": 1056,
+      "eval_count": 369,
+      "eval_count_missing": false,
+      "ttft": 5.5255,
+      "tps": 51.2953,
+      "truncated": 0,
+      "prompt_tokens_est": 2578,
+      "overflow": 0,
+      "judge": null,
+      "faithfulness": null,
+      "judge_excluded": null,
+      "judge_error": null,
+      "judge_raw": "",
+      "parse_failed": 0,
+      "echo_detected": 0,
+      "over_budget": 1,
+      "error": null
+    },
+    {
+      "source": "golden",
+      "row": 2,
+      "query": "문서 내에서 언급된 모델의 파라미터 수와 학습 데이터셋의 규모는 어떻게 돼?",
+      "out_of_doc": false,
+      "ground_truth": null,
+      "degenerate": {
+        "is_degenerate": false,
+        "reason": null,
+        "status": "포함"
+      },
+      "note": null,
+      "skipped_no_llm": false,
+      "retrieval": {
+        "doc_count": 5,
+        "max_rerank_score": 0.0604,
+        "documents": [
+          {
+            "page": 2,
+            "section": "2 CAUSALLY MASKED OBJECTIVE",
+            "rerank_score": 0.051158223301172256
+          },
+          {
+            "page": 4,
+            "section": "3.3 TRAINING",
+            "rerank_score": 0.05222257226705551
+          },
+          {
+            "page": 4,
+            "section": "3.4 SCALING LAWS",
+            "rerank_score": 0.04757193475961685
+          },
+          {
+            "page": 6,
+            "section": "4.2.2 CONDITIONAL IMAGE GENERATION",
+            "rerank_score": 0.047272637486457825
+          },
+          {
+            "page": 11,
+            "section": "4.3.3 SUMMARIZATION",
+            "rerank_score": 0.060389500111341476
+          }
+        ],
+        "relevant": false,
+        "p_at_1": 0,
+        "mrr_at_5": 0.0,
+        "context_recall": 0.5
+      },
+      "answer": "{\"final_answer\": \"문서 내에서 언급된 모델의 파라미터 수와 학습 데이터셋의 규모에 대한 구체적인 정보가 제공되어 있지 않습니다. CM3의 파라미터 수나 학습 데이터셋의 규모에 관한 언급은 문서에 없습니다.\", \"citations\": [], \"confidence\": 0.0}",
+      "answer_chars": 160,
+      "eval_count": 81,
+      "eval_count_missing": false,
+      "ttft": 34.915,
+      "tps": 51.2293,
+      "truncated": 0,
+      "prompt_tokens_est": 2525,
+      "overflow": 0,
+      "judge": null,
+      "faithfulness": null,
+      "judge_excluded": null,
+      "judge_error": null,
+      "judge_raw": "",
+      "parse_failed": 0,
+      "echo_detected": 0,
+      "over_budget": 1,
+      "error": null
+    },
+    {
+      "source": "golden",
+      "row": 3,
+      "query": "이 논문의 핵심 기여점(Contribution) 3가지만 요약해줘.",
+      "out_of_doc": false,
+      "ground_truth": null,
+      "degenerate": {
+        "is_degenerate": false,
+        "reason": null,
+        "status": "포함"
+      },
+      "note": null,
+      "skipped_no_llm": false,
+      "retrieval": {
+        "doc_count": 5,
+        "max_rerank_score": 0.8777,
+        "documents": [
+          {
+            "page": 1,
+            "section": "TITLE: 1 INTRODUCTION",
+            "rerank_score": 0.5741599798202515
+          },
+          {
+            "page": 3,
+            "section": "3 CM3",
+            "rerank_score": 0.7737730145454407
+          },
+          {
+            "page": 10,
+            "section": "4.3.1 ENTITY DISAMBIGUATION",
+            "rerank_score": 0.8775961399078369
+          },
+          {
+            "page": 11,
+            "section": "4.3.3 SUMMARIZATION",
+            "rerank_score": 0.877718985080719
+          },
+          {
+            "page": 13,
+            "section": "7 RELATED WORK",
+            "rerank_score": 0.7083337306976318
+          }
+        ],
+        "relevant": false,
+        "p_at_1": 0,
+        "mrr_at_5": 0.0,
+        "context_recall": 0.6667
+      },
+      "answer": "{\n  \"final_answer\": \"본 논문의 핵심 기여점은 1) 사전 학습 데이터에 이미지를 통합하여 다모달 학습을 가능하게 한 점, 2) 인과 마스킹 기법을 도입하여 양방향 컨텍스트를 활용한 완전한 생성 모델을 제안한 점, 3) 대규모 데이터를 기반으로 한 CM3-Medium 및 CM3-Large 모델을 개발하고, 다양한 영역에서의 영역 없이(Zero-shot) 성능을 입증한 점입니다. 이 기여들은 단일 모달 기반 접근에서 벗어나, 이미지와 텍스트를 함께 학습하고, 다양한 작업에 적용할 수 있는 새로운 모델 아키텍처를 제공합니다.\",\n  \"citations\": [\n    {\n      \"doc_id\": 659e3,\n      \"text_span\": \"Causally masked models generate tokens left to right, just like a causal language model, but also mask out a small number of long token spans, which are then generated at the end of the string instead of their original positions. This provides a new hybrid of causal and masked language models, enabling full generative modeling with bidirectional context.\",\n      \"section\": \"1 INTRODUCTION\",\n      \"page\": 1,\n      \"score\": 0.574\n    },\n    {\n      \"doc_id\": 659e3,\n      \"text_span\": \"We train a 2.7 billion and 13 billion causally masked model on this data which we call CM3-Medium and CM3-Large respectively. Extensive experiments demonstrate that these models are able to perform a wide range of zero-shot uni- and cross-modal tasks.\",\n      \"section\": \"1 INTRODUCTION\",\n      \"page\": 1,\n      \"score\": 0.574\n    },\n    {\n      \"doc_id\": 654e3,\n      \"text_span\": \"Fundamentally our work is an extension of the HTLM work proposed by Aghajanyan et al. (2021) to using the newly proposed causally masked objective, integrating images through VQVAE-GAN tokens, and scaling up over an order of magnitude.\",\n      \"section\": \"7 RELATED WORK\",\n      \"page\": 13,\n      \"score\": 0.708\n    }\n  ],\n  \"confidence\": 0.93\n}",
+      "answer_chars": 1587,
+      "eval_count": 539,
+      "eval_count_missing": false,
+      "ttft": 6.881,
+      "tps": 44.1904,
+      "truncated": 0,
+      "prompt_tokens_est": 2541,
+      "overflow": 0,
+      "judge": null,
+      "faithfulness": null,
+      "judge_excluded": null,
+      "judge_error": null,
+      "judge_raw": "",
+      "parse_failed": 0,
+      "echo_detected": 0,
+      "over_budget": 1,
+      "error": null
+    },
+    {
+      "source": "golden",
+      "row": 4,
+      "query": "안녕, 너는 누구니?",
+      "out_of_doc": false,
+      "ground_truth": null,
+      "degenerate": {
+        "is_degenerate": true,
+        "reason": "빈 엔티티 (expected_key_entities=[])",
+        "status": "제외됨"
+      },
+      "note": null,
+      "skipped_no_llm": false,
+      "retrieval": {
+        "doc_count": 5,
+        "max_rerank_score": 0.9116,
+        "documents": [
+          {
+            "page": 10,
+            "section": "4.3.1 ENTITY DISAMBIGUATION",
+            "rerank_score": 0.8976197838783264
+          },
+          {
+            "page": 15,
+            "section": "REFERENCE",
+            "rerank_score": 0.8869063854217529
+          },
+          {
+            "page": 16,
+            "section": "REFERENCE",
+            "rerank_score": 0.9105094075202942
+          },
+          {
+            "page": 17,
+            "section": "REFERENCE",
+            "rerank_score": 0.9116374850273132
+          },
+          {
+            "page": 18,
+            "section": "REFERENCE",
+            "rerank_score": 0.8881072998046875
+          }
+        ],
+        "relevant": null,
+        "p_at_1": null,
+        "mrr_at_5": null,
+        "context_recall": null
+      },
+      "answer": "{\"final_answer\": \"안녕하세요, 저는 문서 분석 전문가입니다. 질문에 대한 답변은 제공된 문서 내용을 기반으로 하며, 그 외의 정보는 포함되지 않습니다.\", \"citations\": [], \"confidence\": 0.95}",
+      "answer_chars": 131,
+      "eval_count": 59,
+      "eval_count_missing": false,
+      "ttft": 33.7191,
+      "tps": 48.7989,
+      "truncated": 0,
+      "prompt_tokens_est": 2589,
+      "overflow": 0,
+      "judge": null,
+      "faithfulness": null,
+      "judge_excluded": null,
+      "judge_error": null,
+      "judge_raw": "",
+      "parse_failed": 0,
+      "echo_detected": 0,
+      "over_budget": 0,
+      "error": null
+    },
+    {
+      "source": "golden",
+      "row": 5,
+      "query": "이미지 생성 모델의 최신 트렌드에 대해 알려줘.",
+      "out_of_doc": true,
+      "ground_truth": null,
+      "degenerate": {
+        "is_degenerate": false,
+        "reason": null,
+        "status": "포함"
+      },
+      "note": "out-of-doc 스트레스 케이스 (문서 밖 질문, P@1=0 기대)",
+      "skipped_no_llm": false,
+      "retrieval": {
+        "doc_count": 5,
+        "max_rerank_score": 0.0651,
+        "documents": [
+          {
+            "page": 2,
+            "section": "TITLE: 1 INTRODUCTION",
+            "rerank_score": 0.0608832985162735
+          },
+          {
+            "page": 5,
+            "section": "4.1.1 UNCONDITIONAL IMAGE GENERATION",
+            "rerank_score": 0.05848945304751396
+          },
+          {
+            "page": 6,
+            "section": "4.2.2 CONDITIONAL IMAGE GENERATION",
+            "rerank_score": 0.04914648458361626
+          },
+          {
+            "page": 7,
+            "section": "4.2.3 CAPTIONING",
+            "rerank_score": 0.04832190275192261
+          },
+          {
+            "page": 18,
+            "section": "REFERENCE",
+            "rerank_score": 0.06506869196891785
+          }
+        ],
+        "relevant": null,
+        "p_at_1": null,
+        "mrr_at_5": null,
+        "context_recall": null
+      },
+      "answer": "{\"final_answer\": \"제공된 문서에서는 이미지 생성 모델의 최신 트렌드에 대해 직접적으로 언급되어 있지 않습니다. CM3 모델이 DALL-E와 유사한 비조건적 및 조건적 이미지 생성을 수행할 수 있음을 보여주지만, 이는 특정 모델의 성능에 관한 사례에 그치며, 전체 이미지 생성 분야의 트렌드를 반영하지 않습니다. 따라서 문서에 기반한 이미지 생성 모델의 최신 트렌드에 대한 정보는 제공되지 않습니다.\", \"citations\": [], \"confidence\": 0.0}",
+      "answer_chars": 268,
+      "eval_count": 139,
+      "eval_count_missing": false,
+      "ttft": 33.8954,
+      "tps": 44.9645,
+      "truncated": 0,
+      "prompt_tokens_est": 2867,
+      "overflow": 0,
+      "judge": null,
+      "faithfulness": null,
+      "judge_excluded": null,
+      "judge_error": null,
+      "judge_raw": "",
+      "parse_failed": 0,
+      "echo_detected": 1,
+      "over_budget": 1,
+      "error": null
+    },
+    {
+      "source": "testset",
+      "row": 1,
+      "query": "CM3 모델은 어떤 종류의 모델을 기반으로 하고 있으며, 그 핵심 특징은 무엇인가요?",
+      "out_of_doc": false,
+      "ground_truth": "CM3는 구조화된 다중 모달 문서의 대규모 데이터 세트를 기반으로 훈련된 원인 마스킹 생성 모델입니다. 핵심 특징은 왼쪽에서 오른쪽으로 토큰을 생성하면서, 문자열 끝부분에 생성되는 소수의 긴 토큰 스피언을 원래 위치에서 마스킹하지 않고, 그 위치를 제외한 방식으로 처리하는 것입니다.",
+      "degenerate": {
+        "is_degenerate": false,
+        "reason": null,
+        "status": "포함"
+      },
+      "note": null,
+      "skipped_no_llm": false,
+      "retrieval": {
+        "doc_count": 5,
+        "max_rerank_score": 0.8512,
+        "documents": [
+          {
+            "page": 2,
+            "section": "TITLE: 1 INTRODUCTION",
+            "rerank_score": 0.784323513507843
+          },
+          {
+            "page": 6,
+            "section": "4.2.2 CONDITIONAL IMAGE GENERATION",
+            "rerank_score": 0.8071948885917664
+          },
+          {
+            "page": 10,
+            "section": "4.3.1 ENTITY DISAMBIGUATION",
+            "rerank_score": 0.8511990904808044
+          },
+          {
+            "page": 14,
+            "section": "8 CONCLUSION",
+            "rerank_score": 0.8055979013442993
+          },
+          {
+            "page": 19,
+            "section": "A.1 MODEL ARCHITECTURE",
+            "rerank_score": 0.7784121036529541
+          }
+        ],
+        "relevant": null,
+        "p_at_1": null,
+        "mrr_at_5": null,
+        "context_recall": null
+      },
+      "answer": "{\n  \"final_answer\": \"CM3 모델은 하이퍼텍스트 기반의 다중 모달 모델로, 공통 크롤에서 수집된 거의 테라바이트의 단순화된 HTML 데이터를 기반으로 훈련됩니다. 핵심 특징은 '원인 마스킹'을 적용한 하이브리드 마스킹 방식으로, 생성 과정에서 양방향 컨텍스트 제어를 가능하게 하며, 이로 인해 이미지 생성, 요약, 엔티티 링크 및 구분 등 다양한 단일 및 다중 모달 작업에 대해 강력한 이식성을 보여줍니다. 또한, CM3는 이미지 생성 및 엔티티 링크 작업에서 최신 기준을 달성하며, 훈련된 모델을 미세 조정함으로써 일반적인 엔티티 링크 및 구분에서 새로운 최고 수준 성과를 달성합니다.\",\n  \"citations\": [\n    {\n      \"doc_id\": 0,\n      \"text_span\": \"We present the first hyper-text language-image model, trained on close to a Terabyte of multi-modal simplified HTML data from the common crawl.\",\n      \"section\": \"1 INTRODUCTION\",\n      \"page\": 2,\n      \"score\": 0.784\n    },\n    {\n      \"doc_id\": 0,\n      \"text_span\": \"We present the causally masked objective, a hybrid of causal and masked language models that allows for bidirectional context control during generative mask infilling.\",\n      \"section\": \"1 INTRODUCTION\",\n      \"page\": 2,\n      \"score\": 0.784\n    },\n    {\n      \"doc_id\": 0,\n      \"text_span\": \"CM3 can be prompted to recover the functionality of many other models being able to do image generation, image captioning, unconditional image generation, and more.\",\n      \"section\": \"8 CONCLUSION\",\n      \"page\": 14,\n      \"score\": 0.806\n    },\n    {\n      \"doc_id\": 0,\n      \"text_span\": \"we show that representations learned by CM3 are not only useful for zero-shot prompting but for fine-tuning by fine-tuning CM3 and state-of-the-art for entity linking and entity disambiguation in general\",\n      \"section\": \"8 CONCLUSION\",\n      \"page\": 14,\n      \"score\": 0.806\n    }\n  ],\n  \"confidence\": 0.92\n}",
+      "answer_chars": 1570,
+      "eval_count": 556,
+      "eval_count_missing": false,
+      "ttft": 6.9076,
+      "tps": 43.3829,
+      "truncated": 0,
+      "prompt_tokens_est": 2454,
+      "overflow": 0,
+      "judge": 3,
+      "faithfulness": 3,
+      "judge_excluded": false,
+      "judge_error": null,
+      "judge_raw": "3",
+      "parse_failed": 0,
+      "echo_detected": 0,
+      "over_budget": 1,
+      "error": null
+    }
+  ],
+  "aggregates": {
+    "scorable_count": 3,
+    "p_at_1": 0.0,
+    "mrr_at_5": 0.1111,
+    "context_recall": 0.5556,
+    "context_recall_count": 3,
+    "latency_question_count": 5,
+    "avg_ttft": 17.6249,
+    "avg_tps": 47.0125,
+    "avg_answer_chars": 928.2,
+    "avg_eval_count": 336.8,
+    "truncated_ratio": 0.0,
+    "truncated_count": 0,
+    "overflow_ratio": 0.0,
+    "overflow_count": 0,
+    "parse_failed_count": 0,
+    "echo_detected_count": 1,
+    "over_budget_count": 5,
+    "judge_avg": 3.0,
+    "judge_count": 1,
+    "faithfulness_avg": 3.0,
+    "faithfulness_count": 1,
+    "eval_count_missing_count": 0,
+    "degenerate": [
+      {
+        "source": "golden",
+        "row": 4,
+        "reason": "빈 엔티티 (expected_key_entities=[])"
+      }
+    ]
+  }
+}
