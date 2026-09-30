@@ -367,7 +367,7 @@ async def retrieve_and_rerank(
     )
     # [T11] 50자 미만 초단문 섹션 드롭 — generate 컨텍스트가 단편 청크로 오염되지
     # 않도록 필터링한다. 백필 없음: 드롭으로 인한 문서 수 감소는 허용
-    # (grade_top_n=3, top_k=5 하한 이상 유지).
+    # (grade_top_n=3, top_k=10 하한 이상 유지).
     filtered_docs = _filter_min_section_len(merged_context_docs)
     dropped = len(merged_context_docs) - len(filtered_docs)
     if dropped > 0:
