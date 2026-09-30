@@ -259,6 +259,7 @@ PROMPT_TEMPLATES_CONFIG: dict = _prompts_config.get("prompt_templates", {})
 GRADE_PROMPT_CONFIG: dict = _prompts_config.get("grade", {})
 VERIFY_PROMPT_CONFIG: dict = _prompts_config.get("verify", {})
 GENERATE_PROMPT_CONFIG: dict = _prompts_config.get("generate", {})
+GENERATION_VALIDATION_CONFIG: dict = _prompts_config.get("generation_validation", {})
 
 # --- 6. 보안 및 캐시 (Security & Global Cache) ---
 _cache_security_config = _config.get("cache_security", {})

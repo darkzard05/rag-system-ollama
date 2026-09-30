@@ -197,6 +197,13 @@ rag:
     generate:
       human_message: "Think step by step, then output ONLY the JSON object."
 
+    # 4b. 생성 출력 검증 플래그 (S1 관측용 — 동작 변경 없음, 재생성 OFF)
+    generation_validation:
+      over_budget_chars: 600
+      regen_floor_chars: 450
+      regen_on_invalid: false
+      regen_on_over_budget: false
+
     # 5. 문서 평가 (grade_documents)
     grade:
       system_message: "당신은 문서 관련성 평가자이자 검색 쿼리 최적화 전문가입니다."

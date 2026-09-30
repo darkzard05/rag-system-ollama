@@ -22,6 +22,7 @@ from common.config import (
     ANALYSIS_PROTOCOL,
     DEFAULT_OLLAMA_MODEL,
     GENERATE_PROMPT_CONFIG,
+    GENERATION_VALIDATION_CONFIG,
     OLLAMA_NUM_CTX,
     OLLAMA_NUM_PREDICT,
     PROMPT_TEMPLATES_CONFIG,
@@ -277,6 +278,173 @@ def _coerce_chunk_content(raw: Any) -> str:
     return str(raw)
 
 
+def _has_echo(text: str, n: int = 5) -> bool:
+    """동일 n-gram이 2회 이상 등장하면 True (H1 No-Repetition 관측용)."""
+    tokens = text.split()
+    if len(tokens) < n + 1:
+        return False
+    seen: set[tuple[str, ...]] = set()
+    for i in range(len(tokens) - n + 1):
+        gram = tuple(tokens[i : i + n])
+        if gram in seen:
+            return True
+        seen.add(gram)
+    return False
+
+
+async def _generate_pass(
+    *,
+    llm: Any,
+    sys_msg: SystemMessage,
+    human_msg: HumanMessage,
+    prompt_version: str,
+    config: RunnableConfig,
+    writer: StreamWriter | None,
+    attempt: int,
+) -> dict[str, Any]:
+    """단일 생성 패스: JSON 모드 스트리밍 + 구조화 파싱. 재시도 루프에서 호출된다."""
+    full_response = ""
+    full_thought = ""
+    last_metadata: dict[str, Any] = {}
+    pass_start = time.perf_counter()
+    ttft_ms: float | None = None
+    use_structured_output = "structured_output" in PROMPT_TEMPLATES_CONFIG
+    async with ModelManager.inference_session():
+        # JSON 모드 강제 바인딩(grade 노드 1053행과 동일) — qwen3:4b가 값 내부에
+        # 이스케이프 없는 큰따옴표를 넣어 json.loads가 실패(Expecting ',' delimiter)하는
+        # 깨진 JSON 출력을 막는다.
+        json_llm = llm.bind(response_format={"type": "json_object"})
+        coordinator = get_resource_manager()
+        async with coordinator.use_llm(model_name=DEFAULT_OLLAMA_MODEL):
+            async for chunk in json_llm.astream([sys_msg, human_msg], config=config):
+                if hasattr(llm, "_convert_chunk_to_thought_and_content"):
+                    content_chunk, thought_chunk = (
+                        llm._convert_chunk_to_thought_and_content(chunk)
+                    )
+                else:
+                    # Fallback for LLMs without thought/content separation.
+                    # R4-08: content가 리스트(복합 콘텐츠)면 텍스트 블록을 병합해
+                    # str+list TypeError를 방지한다 (hasattr 분기 구조는 유지).
+                    content_chunk = _coerce_chunk_content(
+                        chunk.content if hasattr(chunk, "content") else str(chunk)
+                    )
+                    thought_chunk = ""
+                if content_chunk and ttft_ms is None:
+                    ttft_ms = (time.perf_counter() - pass_start) * 1000
+
+                if thought_chunk:
+                    full_thought += thought_chunk
+                if content_chunk:
+                    full_response += content_chunk
+                if hasattr(chunk, "response_metadata") and chunk.response_metadata:
+                    last_metadata = chunk.response_metadata
+
+                # 원시 JSON 청크도 항상 UI로 전송한다.
+                # 구조화 모드(raw_json=True)에서는 파싱 전 원시 토큰을 먼저 띄우고,
+                # 파싱 후 final_answer로 대체되도록 한다.
+                if (content_chunk or thought_chunk) and writer is not None:
+                    await _dispatch_event(
+                        "response_chunk",
+                        {
+                            "content": content_chunk,
+                            "thought": thought_chunk,
+                            "raw_json": use_structured_output,
+                        },
+                        writer=writer,
+                        config=config,
+                    )
+
+    generate_ms = (time.perf_counter() - pass_start) * 1000
+    logger.info(
+        f"[RAG] [GENERATE][TIMING] pass={attempt} generate_ms={generate_ms:.1f} "
+        f"ttft_ms={(ttft_ms or 0.0):.1f} output_chars={len(full_response)}"
+    )
+
+    # Phase 1.2: 구조화된 답변 파싱 (JSON 출력 기대)
+    parsed_answer = None
+    parse_failed = False
+    json_str = _strip_json_fence(full_response)
+
+    def _extract_partial(json_blob: str) -> dict[str, Any]:
+        """깨진 JSON에서 final_answer/citations를 비파괴 복구한다.
+
+        모듈 레벨 escape 인식 헬퍼로 값을 추출해 메타데이터 손실(D1)·본문 절단
+        (D2)·답변 절단(D3)·교차 매칭(D4)을 방지한다. 복구 불가능하면 빈 dict 반환.
+        """
+        recovered: dict[str, Any] = {}
+        final_answer = _extract_partial_answer(json_blob)
+        if final_answer is not None:
+            recovered["final_answer"] = final_answer
+        citations = _recover_citations(json_blob)
+        if citations:
+            recovered["citations"] = citations
+        return recovered
+
+    try:
+        # P1-4: 깨진 JSON 우선 복구 시도 (값 내부 escape 누락 큰따옴표 보정)
+        repaired = _repair_json(json_str)
+        if repaired is not None:
+            json_str = repaired
+        parsed_data = json.loads(json_str)
+
+        parsed_answer = AnswerStructure(**parsed_data)
+        logger.info(
+            f"[RAG] [GENERATE] 구조화된 답변 파싱 성공: prompt_version={prompt_version}"
+        )
+
+        # P3: 인라인 [doc:...] 폴백과 별도로 citations[] 자체를 스트림에 태워
+        # 안정적 doc_id 기반 렌더링을 가능케 한다.
+        if parsed_answer and writer is not None:
+            await _dispatch_event(
+                "citations",
+                {"citations": [c.model_dump() for c in parsed_answer.citations]},
+                writer=writer,
+                config=config,
+            )
+    except (json.JSONDecodeError, ValueError) as e:
+        parse_failed = True
+        # 진단: 재현/원인 분석을 위해 원시 출력을 기록 (blind spot 해소)
+        logger.warning(
+            f"[RAG] [GENERATE] JSON 파싱 실패, 폴백 사용: {e} "
+            f"(output_chars={len(full_response)})"
+        )
+        logger.debug(f"[RAG] [GENERATE] 파싱 실패 원시 출력:\n{json_str}")
+        # 강건화: 깨진 JSON에서 final_answer/citations 부분 복구 시도
+        recovered = _extract_partial(json_str)
+        if recovered:
+            cites = recovered.get("citations", [])
+            # P3-1: 복구 완전성 가시화 — 메타데이터 보존 여부를 명시
+            meta_preserved = sum(
+                1
+                for c in cites
+                if c.get("section") != "" or c.get("page") != 0 or c.get("score") != 0.0
+            )
+            logger.info(
+                f"[RAG] [GENERATE] 부분 복구 성공: "
+                f"final_answer={'Y' if recovered.get('final_answer') else 'N'}, "
+                f"citations={len(cites)} (메타데이터 보존 {meta_preserved}/{len(cites)})"
+            )
+            if cites and meta_preserved < len(cites):
+                logger.warning(
+                    "[RAG] [GENERATE] citation 메타데이터 일부 누락 — "
+                    "하이라이팅 좌표 정확도 저하 가능"
+                )
+        parsed_answer = AnswerStructure(
+            final_answer=recovered.get("final_answer", full_response),
+            citations=recovered.get("citations", []),
+            confidence=0.5,
+        )
+    return {
+        "full_response": full_response,
+        "full_thought": full_thought,
+        "last_metadata": last_metadata,
+        "ttft_ms": ttft_ms,
+        "generate_ms": generate_ms,
+        "parsed_answer": parsed_answer,
+        "parse_failed": parse_failed,
+    }
+
+
 async def generate(
     state: GraphState, config: RunnableConfig, *, writer: StreamWriter
 ) -> dict[str, Any]:
@@ -453,153 +621,90 @@ async def generate(
         )
     )
 
-    full_response = ""
-    full_thought = ""
-    last_metadata = {}
-
-    gen_start = time.perf_counter()
-    ttft_ms: float | None = None
+    regen_cfg = GENERATION_VALIDATION_CONFIG
+    budget_chars = int(regen_cfg.get("over_budget_chars", 600))
+    regen_floor = int(regen_cfg.get("regen_floor_chars", 450))
     _generate_op = _enter_stage(OperationType.LLM_INFERENCE)
     _generate_op.__enter__()
 
-    # 구조화된 출력 모드인지 확인 (PROMPT_TEMPLATES_CONFIG에 structured_output이 있으면 구조화 모드)
-    use_structured_output = "structured_output" in PROMPT_TEMPLATES_CONFIG
-
-    async with ModelManager.inference_session():
-        # JSON 모드 강제 바인딩(grade 노드 1053행과 동일) — qwen3:4b가 값 내부에
-        # 이스케이프 없는 큰따옴표를 넣어 json.loads가 실패(Expecting ',' delimiter)하는
-        # 깨진 JSON 출력을 막는다.
-        json_llm = llm.bind(response_format={"type": "json_object"})
-        coordinator = get_resource_manager()
-        async with coordinator.use_llm(model_name=DEFAULT_OLLAMA_MODEL):
-            async for chunk in json_llm.astream([sys_msg, human_msg], config=config):
-                if hasattr(llm, "_convert_chunk_to_thought_and_content"):
-                    content_chunk, thought_chunk = (
-                        llm._convert_chunk_to_thought_and_content(chunk)
-                    )
-                else:
-                    # Fallback for LLMs without thought/content separation.
-                    # R4-08: content가 리스트(복합 콘텐츠)면 텍스트 블록을 병합해
-                    # str+list TypeError를 방지한다 (hasattr 분기 구조는 유지).
-                    content_chunk = _coerce_chunk_content(
-                        chunk.content if hasattr(chunk, "content") else str(chunk)
-                    )
-                    thought_chunk = ""
-                if content_chunk and ttft_ms is None:
-                    ttft_ms = (time.perf_counter() - gen_start) * 1000
-
-                if thought_chunk:
-                    full_thought += thought_chunk
-                if content_chunk:
-                    full_response += content_chunk
-                if hasattr(chunk, "response_metadata") and chunk.response_metadata:
-                    last_metadata = chunk.response_metadata
-
-                # 원시 JSON 청크도 항상 UI로 전송한다.
-                # 구조화 모드(raw_json=True)에서는 파싱 전 원시 토큰을 먼저 띄우고,
-                # 파싱 후 final_answer로 대체되도록 한다.
-                if (content_chunk or thought_chunk) and writer is not None:
-                    await _dispatch_event(
-                        "response_chunk",
-                        {
-                            "content": content_chunk,
-                            "thought": thought_chunk,
-                            "raw_json": use_structured_output,
-                        },
-                        writer=writer,
-                        config=config,
-                    )
-
-    generate_ms = (time.perf_counter() - gen_start) * 1000
-    logger.info(
-        f"[RAG] [GENERATE][TIMING] generate_ms={generate_ms:.1f} "
-        f"ttft_ms={(ttft_ms or 0.0):.1f} output_chars={len(full_response)}"
-    )
-    _query_timings["generate_total_ms"] = (
-        _query_timings.get("generate_total_ms", 0.0) + generate_ms
-    )
-    _query_timings["ttft_ms"] = _query_timings.get("ttft_ms", 0.0) + float(
-        ttft_ms or 0.0
-    )
+    pass_writer: StreamWriter | None = writer
+    current_sys_msg = sys_msg
+    current_human_msg = human_msg
+    passes: list[dict[str, Any]] = []
+    regen_reason = ""
+    for attempt in (1, 2):
+        result_pass = await _generate_pass(
+            llm=llm,
+            sys_msg=current_sys_msg,
+            human_msg=current_human_msg,
+            prompt_version=prompt_version,
+            config=config,
+            writer=pass_writer,
+            attempt=attempt,
+        )
+        passes.append(result_pass)
+        _query_timings["generate_total_ms"] = (
+            _query_timings.get("generate_total_ms", 0.0) + result_pass["generate_ms"]
+        )
+        _query_timings["ttft_ms"] = _query_timings.get("ttft_ms", 0.0) + float(
+            result_pass["ttft_ms"] or 0.0
+        )
+        if attempt >= 2:
+            break
+        pass_text = result_pass["parsed_answer"].final_answer
+        corrective = ""
+        if result_pass["parse_failed"] and bool(
+            regen_cfg.get("regen_on_invalid", False)
+        ):
+            regen_reason = "invalid_json"
+            corrective = (
+                "이전 출력은 JSON 파싱에 실패했습니다. 값 안의 큰따옴표와 줄바꿈을 "
+                "반드시 이스케이프하여 유효한 JSON 객체 하나만 출력하십시오."
+            )
+        elif (
+            bool(regen_cfg.get("regen_on_over_budget", False))
+            and len(pass_text) > budget_chars
+            and len(pass_text) >= regen_floor
+        ):
+            regen_reason = "over_budget"
+            corrective = (
+                f"이전 답변은 {len(pass_text)}자로 예산({budget_chars}자)을 초과했습니다. "
+                f"핵심 수치와 인용을 유지하며 {budget_chars}자 이내로 압축하십시오. "
+                f"{regen_floor}자 미만으로는 줄이지 마십시오."
+            )
+        if not corrective:
+            break
+        logger.info(
+            f"[RAG] [GENERATE] 재생성 패스: 사유={regen_reason} "
+            f"(chars={len(pass_text)} budget={budget_chars})"
+        )
+        current_human_msg = HumanMessage(
+            content=f"{current_human_msg.content}\n\n[{corrective}]"
+        )
+        pass_writer = None
     _generate_op.__exit__(None, None, None)
 
-    # Phase 1.2: 구조화된 답변 파싱 (JSON 출력 기대)
-    parsed_answer = None
-    parse_failed = False
-    json_str = _strip_json_fence(full_response)
-
-    def _extract_partial(json_blob: str) -> dict[str, Any]:
-        """깨진 JSON에서 final_answer/citations를 비파괴 복구한다.
-
-        모듈 레벨 escape 인식 헬퍼로 값을 추출해 메타데이터 손실(D1)·본문 절단
-        (D2)·답변 절단(D3)·교차 매칭(D4)을 방지한다. 복구 불가능하면 빈 dict 반환.
-        """
-        recovered: dict[str, Any] = {}
-        final_answer = _extract_partial_answer(json_blob)
-        if final_answer is not None:
-            recovered["final_answer"] = final_answer
-        citations = _recover_citations(json_blob)
-        if citations:
-            recovered["citations"] = citations
-        return recovered
-
-    try:
-        # P1-4: 깨진 JSON 우선 복구 시도 (값 내부 escape 누락 큰따옴표 보정)
-        repaired = _repair_json(json_str)
-        if repaired is not None:
-            json_str = repaired
-        parsed_data = json.loads(json_str)
-
-        parsed_answer = AnswerStructure(**parsed_data)
-        logger.info(
-            f"[RAG] [GENERATE] 구조화된 답변 파싱 성공: prompt_version={prompt_version}"
-        )
-
-        # P3: 인라인 [doc:...] 폴백과 별도로 citations[] 자체를 스트림에 태워
-        # 안정적 doc_id 기반 렌더링을 가능케 한다.
-        if parsed_answer and writer is not None:
-            await _dispatch_event(
-                "citations",
-                {"citations": [c.model_dump() for c in parsed_answer.citations]},
-                writer=writer,
-                config=config,
-            )
-    except (json.JSONDecodeError, ValueError) as e:
-        parse_failed = True
-        # 진단: 재현/원인 분석을 위해 원시 출력을 기록 (blind spot 해소)
-        logger.warning(
-            f"[RAG] [GENERATE] JSON 파싱 실패, 폴백 사용: {e} "
-            f"(output_chars={len(full_response)})"
-        )
-        logger.debug(f"[RAG] [GENERATE] 파싱 실패 원시 출력:\n{json_str}")
-        # 강건화: 깨진 JSON에서 final_answer/citations 부분 복구 시도
-        recovered = _extract_partial(json_str)
-        if recovered:
-            cites = recovered.get("citations", [])
-            # P3-1: 복구 완전성 가시화 — 메타데이터 보존 여부를 명시
-            meta_preserved = sum(
-                1
-                for c in cites
-                if c.get("section") != "" or c.get("page") != 0 or c.get("score") != 0.0
-            )
-            logger.info(
-                f"[RAG] [GENERATE] 부분 복구 성공: "
-                f"final_answer={'Y' if recovered.get('final_answer') else 'N'}, "
-                f"citations={len(cites)} (메타데이터 보존 {meta_preserved}/{len(cites)})"
-            )
-            if cites and meta_preserved < len(cites):
-                logger.warning(
-                    "[RAG] [GENERATE] citation 메타데이터 일부 누락 — "
-                    "하이라이팅 좌표 정확도 저하 가능"
-                )
-        parsed_answer = AnswerStructure(
-            final_answer=recovered.get("final_answer", full_response),
-            citations=recovered.get("citations", []),
-            confidence=0.5,
-        )
+    last = passes[-1]
+    full_response = str(last["full_response"])
+    full_thought = str(last["full_thought"])
+    last_metadata = dict(last["last_metadata"])
+    parsed_answer = last["parsed_answer"]
+    parse_failed = bool(last["parse_failed"])
+    generate_ms = float(sum(float(p["generate_ms"]) for p in passes))
+    ttft_ms: float | None = passes[0]["ttft_ms"]
 
     input_tokens = last_metadata.get("prompt_eval_count", 0)
     output_tokens = last_metadata.get("eval_count", 0)
+    final_text = parsed_answer.final_answer if parsed_answer else full_response
+    echo_detected = _has_echo(final_text)
+    over_budget_chars = int(GENERATION_VALIDATION_CONFIG.get("over_budget_chars", 600))
+    over_budget = len(final_text) > over_budget_chars
+    if echo_detected or over_budget:
+        logger.info(
+            "[RAG] [GENERATE] 출력 검증 플래그: "
+            f"echo_detected={echo_detected} over_budget={over_budget} "
+            f"(chars={len(final_text)} budget={over_budget_chars})"
+        )
     result: dict[str, Any] = {
         "response": parsed_answer.final_answer if parsed_answer else full_response,
         "thought": full_thought,
@@ -609,6 +714,9 @@ async def generate(
         "confidence": parsed_answer.confidence if parsed_answer else 0.5,
         "prompt_version": prompt_version,
         "parse_failed": parse_failed,
+        "echo_detected": echo_detected,
+        "over_budget": over_budget,
+        "regenerated": regen_reason if len(passes) > 1 else "",
         # R1a-05: response_metadata 등 임의 객체가 섞이면 체크포인트 전체가 pickle로
         # 강등되는 경로를 차단하기 위해 순수 타입만 저장한다.
         "performance": _sanitize_channel_value(
@@ -619,6 +727,10 @@ async def generate(
                 "relevant_docs_count": len(docs),
                 "ttft_ms": ttft_ms or 0.0,
                 "generate_ms": generate_ms,
+                "parse_failed": parse_failed,
+                "echo_detected": echo_detected,
+                "over_budget": over_budget,
+                "regenerated": regen_reason if len(passes) > 1 else "",
             }
         ),
     }
