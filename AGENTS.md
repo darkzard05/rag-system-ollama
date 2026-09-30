@@ -63,6 +63,32 @@ rag-system-ollama/
 - **No Hardcoded Secrets**: All credentials must be in `.env` or `config.yml`.
 - **No UI Logic in Core**: Keep `src/ui/` separate from business logic in `src/core/`.
 
+## CHAT AUTO-SCROLL INVARIANTS (src/ui)
+- **Single writer**: only the `ui.py` smart scroller may write `scrollTop` on the chat
+  scroller. `chat_autoscroll.py` is an observe-only probe — it plants
+  `#chat-autoscroll-sentinel` and holds an `IntersectionObserver` for bottom
+  proximity, and must never scroll. A second writer races the latch and dies
+  mid-stream.
+- **`overflow-anchor: none` is mandatory** on the single-scroller rule
+  (`main.css`). Chromium scroll anchoring otherwise keeps its anchor node
+  visually stable during streaming, adjusts `scrollTop` itself, and cancels the
+  auto-follow yank. The scroll event then dispatches late against a grown
+  `scrollHeight`, so the self-heal reads a phantom distance as user intent and
+  latches auto-follow off. Symptom: streaming silently stops following the
+  bottom with no error. Do not add `!important` to it — the `!important` budget
+  in `tests/unit/test_task5_hygiene.py` is a hard gate.
+- **Latch truth comes from input events, and `scroll` is only a heuristic**:
+  `userScrolledUp` is set by `wheel` and cleared by wheel-down-near-bottom. The
+  `scroll` listener self-heals missed cases; it declares `yankTarget` so its own
+  programmatic scrolls are not mistaken for user intent.
+- **Scroller resolution**: anchor on `[data-testid="stChatInput"]`'s column
+  `stVerticalBlock`. With a PDF loaded the main block holds 5 `stColumn` nodes,
+  so `:last-child` lands on a gutter sliver whose `scrollHeight === clientHeight`
+  and every scroll is a no-op.
+- **Testing**: assert scroll behavior only after forcing real overflow
+  (`scrollHeight > clientHeight`). If the column does not scroll, wheel events
+  are no-ops and the assertions pass vacuously.
+
 ## UNIQUE STYLES
 - **Reference-based Metadata Offloading**: Coordinates are stored in a separate cache to keep FAISS indices lean.
 - **Header-Aware Chunking**: Chunks are grouped by Markdown headers to preserve structural context.
@@ -85,6 +111,42 @@ python -m pytest tests/integration/test_pipeline_build_once.py
 bandit -r src/ -ll
 pip-audit -r requirements.txt --skip-editable
 pytest --cov=src --cov-fail-under=55 tests/unit
+```
+
+### Background server startup
+Never gate a background server on a fixed `Start-Sleep` / `sleep`. Poll the
+health endpoint at 1s intervals, max 10 attempts, and fail loudly on the last
+attempt. A fixed sleep either wastes time on a fast boot or races a slow one.
+
+```powershell
+# PowerShell (this shell)
+Start-Process -FilePath "python" `
+  -ArgumentList "-m","streamlit","run","src/main.py","--server.port","8501","--server.headless","true" `
+  -RedirectStandardOutput "$env:TEMP\app8501.log" `
+  -RedirectStandardError  "$env:TEMP\app8501.err" `
+  -WindowStyle Hidden
+
+$ok = $false
+foreach ($i in 1..10) {
+    Start-Sleep -Seconds 1
+    try {
+        if ((Invoke-WebRequest "http://127.0.0.1:8501/_stcore/health" -TimeoutSec 5 -UseBasicParsing).Content -eq "ok") {
+            Write-Output "ready after ${i}s"; $ok = $true; break
+        }
+    } catch { }
+}
+if (-not $ok) { Write-Error "server not healthy after 10 attempts"; exit 1 }
+```
+
+```bash
+# bash equivalent
+for i in $(seq 1 10); do
+    sleep 1
+    if [ "$(curl -fsS http://127.0.0.1:8501/_stcore/health)" = "ok" ]; then
+        echo "ready after ${i}s"; break
+    fi
+    [ "$i" -eq 10 ] && { echo "server not healthy after 10 attempts" >&2; exit 1; }
+done
 ```
 
 ## NOTES
