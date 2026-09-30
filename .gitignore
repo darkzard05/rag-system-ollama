@@ -168,4 +168,10 @@ config.yml.s4-on-*
 # Exception: visual QA screenshot dumps are binary, machine-generated and not a
 # decision record, so they stay local.
 reports/visual_qa_*
+# Raw Streamlit process logs (stdout/stderr captures), not decision evidence.
+reports/streamlit_*.txt
+# Misplaced duplicate output tree: the eval harness writes to reports/. Its
+# eval_quality_k15_* copies are already tracked there, so this is a stale local
+# copy rather than a new source of evidence.
+scripts/reports/
 
