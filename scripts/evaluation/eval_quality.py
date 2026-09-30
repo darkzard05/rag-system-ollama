@@ -47,7 +47,8 @@ from pathlib import Path
 from typing import Any
 
 # 프로젝트 루트와 src를 모듈 경로에 추가 (PYTHONPATH 미설정 환경 대응)
-ROOT_DIR = Path(__file__).resolve().parent.parent
+_EVAL_DIR = Path(__file__).resolve().parent
+ROOT_DIR = _EVAL_DIR.parent.parent
 for _path in (str(ROOT_DIR), str(ROOT_DIR / "src")):
     if _path not in sys.path:
         sys.path.append(_path)
@@ -108,6 +109,9 @@ class QuestionSpec:
     entities: tuple[str, ...] = ()
     ground_truth: str | None = None
     required_chunks: tuple[str, ...] = ()  # context_recall 근거 청크 키워드 (R4-06)
+    out_of_doc: bool = (
+        False  # True면 P@1/MRR 집계 제외 (스트레스 케이스, 행 단위 표기 유지)
+    )
 
 
 # --- 데이터 로드 ---
@@ -122,6 +126,7 @@ def _load_golden() -> list[QuestionSpec]:
             query=item["query"],
             entities=tuple(item.get("expected_key_entities") or []),
             required_chunks=tuple(item.get("required_chunks") or []),
+            out_of_doc=bool(item.get("out_of_doc", False)),
         )
         for idx, item in enumerate(raw, start=1)
     ]
@@ -163,7 +168,8 @@ def _classify_degenerate(q: QuestionSpec) -> str | None:
     규칙: expected_key_entities 빈 배열 또는 preprocess intent=general은 P@1/MRR
     집계 제외. 현재 golden_set에서 제외되는 것은 행 4("안녕, 너는 누구니?",
     entities=[]) 1건뿐. 행 5("이미지 생성 모델의 최신 트렌드...")는 entities
-    비어있지 않고 intent=rag이므로 집계 포함 (out-of-doc 스트레스 케이스).
+    비어있지 않고 intent=rag이므로 측정은 수행하되, golden_set의 out_of_doc=true
+    지정에 따라 P@1/MRR 집계에서는 제외한다 (행 단위 max_rerank/note 표기 유지).
     """
     if q.source != "golden":
         return None
@@ -340,6 +346,7 @@ def _empty_record(
         "source": q.source,
         "row": q.row,
         "query": q.query,
+        "out_of_doc": q.out_of_doc,
         "ground_truth": q.ground_truth,
         "degenerate": {
             "is_degenerate": degenerate is not None,
@@ -362,6 +369,10 @@ def _empty_record(
         "faithfulness": None,
         "judge_excluded": None,
         "judge_error": None,
+        "judge_raw": "",
+        "parse_failed": 0,
+        "echo_detected": 0,
+        "over_budget": 0,
         "error": None,
     }
 
@@ -388,7 +399,11 @@ def _assemble_measurement(
         "max_rerank_score": round(max_rerank, 4),
         "documents": doc_details,
     }
-    is_scorable = q.source == "golden" and rec["degenerate"]["is_degenerate"] is False
+    is_scorable = (
+        q.source == "golden"
+        and rec["degenerate"]["is_degenerate"] is False
+        and not q.out_of_doc
+    )
     if is_scorable:
         relevance = [_doc_relevant(d, q.entities) for d in docs]
         retrieval["relevant"] = any(relevance)
@@ -418,6 +433,9 @@ def _assemble_measurement(
             "eval_count_missing": measured["eval_count_missing"],
             "ttft": _fmt(measured["ttft"]),
             "tps": _fmt(measured["tps"]),
+            "parse_failed": 1 if measured["performance"].get("parse_failed") else 0,
+            "echo_detected": 1 if measured["performance"].get("echo_detected") else 0,
+            "over_budget": 1 if measured["performance"].get("over_budget") else 0,
             "truncated": (
                 1
                 if eval_count is not None
@@ -436,26 +454,25 @@ async def _judge(
     ground_truth: str,
     answer: str,
     context: str,
-) -> int | None:
-    """SCORE_PROMPT 패턴 1-5점 판정 (Context 근거성 포함). 파싱 실패 시 None (판정 제외).
-
-    bare except 금지 - 구체 예외 (json.JSONDecodeError, ValueError, TypeError)만.
-    """
+) -> tuple[int | None, str]:
+    """SCORE_PROMPT 패턴 1-5점 판정 (Context 근거성 포함). (점수, 원문 앞 200자) 반환."""
     try:
-        score_str = await score_chain.ainvoke(
-            {
-                "question": question,
-                "ground_truth": ground_truth,
-                "answer": answer,
-                "context": context,
-            }
+        score_str = str(
+            await score_chain.ainvoke(
+                {
+                    "question": question,
+                    "ground_truth": ground_truth,
+                    "answer": answer,
+                    "context": context,
+                }
+            )
         )
-        match = re.search(r"[1-5]", str(score_str))
-        if match is None:
-            raise ValueError("judge 응답에서 1-5 점수 미발견")
-        return int(match.group())
-    except (json.JSONDecodeError, ValueError, TypeError):
-        return None
+    except (json.JSONDecodeError, ValueError, TypeError) as exc:
+        return None, f"{type(exc).__name__}: {exc}"[:200]
+    match = re.search(r"[1-5]", score_str)
+    if match is None:
+        return None, score_str[:200]
+    return int(match.group()), score_str[:200]
 
 
 async def _run_question(
@@ -491,14 +508,15 @@ async def _run_question(
         judge_docs = list(measured["documents"])[:5]
         context = format_context(judge_docs) if judge_docs else "일상적인 대화입니다."
         try:
-            score = await _judge(
+            score, raw = await _judge(
                 score_chain, q.query, q.ground_truth, rec["answer"], context
             )
             rec["judge"] = score
+            rec["judge_raw"] = raw
             rec["faithfulness"] = score  # [Context] 근거성 판정 점수 (R4-06 최소 구현)
             rec["judge_excluded"] = score is None
             if score is None:
-                rec["judge_error"] = "judge 파싱 실패 (판정 제외)"
+                rec["judge_error"] = f"judge 파싱 실패 (판정 제외, 원문: {raw})"
         except Exception as exc:  # judge 호출 실패는 해당 질문 판정 제외만
             rec["judge_excluded"] = True
             rec["judge_error"] = str(exc)
@@ -516,6 +534,7 @@ def _aggregate(results: list[dict[str, Any]]) -> dict[str, Any]:
         for r in results
         if r["source"] == "golden"
         and r["degenerate"]["is_degenerate"] is False
+        and not r.get("out_of_doc", False)
         and r["error"] is None
     ]
     executed = [
@@ -571,6 +590,9 @@ def _aggregate(results: list[dict[str, Any]]) -> dict[str, Any]:
         "truncated_count": truncated_count,
         "overflow_ratio": _mean([float(r["overflow"]) for r in executed]),
         "overflow_count": sum(1 for r in executed if r["overflow"]),
+        "parse_failed_count": sum(1 for r in executed if r.get("parse_failed")),
+        "echo_detected_count": sum(1 for r in executed if r.get("echo_detected")),
+        "over_budget_count": sum(1 for r in executed if r.get("over_budget")),
         "judge_avg": _mean([float(v) for v in judge_values]),
         "judge_count": len(judge_values),
         "faithfulness_avg": _mean([float(v) for v in faithfulness_values]),
@@ -608,6 +630,7 @@ def _render_markdown(report: dict[str, Any]) -> str:
         f"| avg answer chars | {agg['avg_answer_chars']} |",
         f"| avg eval_count | {agg['avg_eval_count']} |",
         f"| truncated ratio | {agg['truncated_ratio']} ({agg['truncated_count']}건) |",
+        f"| parse_failed / echo / over_budget | {agg['parse_failed_count']} / {agg['echo_detected_count']} / {agg['over_budget_count']}건 |",
         f"| overflow ratio | {agg['overflow_ratio']} ({agg['overflow_count']}건) |",
         f"| judge avg (1-5) | {agg['judge_avg']} ({agg['judge_count']}건) |",
         f"| faithfulness avg (1-5) | {agg['faithfulness_avg']} ({agg['faithfulness_count']}건) |",
@@ -615,8 +638,8 @@ def _render_markdown(report: dict[str, Any]) -> str:
         "",
         "## Per-Question",
         "",
-        "| source | row | query | status | P@1 | MRR@5 | ctx_recall | TTFT(s) | TPS | eval_count | truncated | overflow | judge | faithfulness | max_rerank | note |",
-        "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+        "| source | row | query | status | P@1 | MRR@5 | ctx_recall | TTFT(s) | TPS | eval_count | truncated | overflow | parse | echo | over_b | judge | faithfulness | max_rerank | note |",
+        "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
     ]
     for r in report["questions"]:
         st = (
@@ -631,7 +654,8 @@ def _render_markdown(report: dict[str, Any]) -> str:
         lines.append(
             "| {source} | {row} | {query} | {status} | {p1} | {mrr} | {ctx_recall} | "
             "{ttft} | {tps} | "
-            "{eval_count} | {truncated} | {overflow} | {judge} | {faithfulness} | "
+            "{eval_count} | {truncated} | {overflow} | {parse} | {echo} | {over_b} | "
+            "{judge} | {faithfulness} | "
             "{max_rerank} | {note} |".format(
                 source=r["source"],
                 row=r["row"],
@@ -645,6 +669,9 @@ def _render_markdown(report: dict[str, Any]) -> str:
                 eval_count=r["eval_count"] if r["eval_count"] is not None else "",
                 truncated=r["truncated"],
                 overflow=r["overflow"],
+                parse=r.get("parse_failed", ""),
+                echo=r.get("echo_detected", ""),
+                over_b=r.get("over_budget", ""),
                 judge=r["judge"] if r["judge"] is not None else "",
                 faithfulness=r["faithfulness"] if r["faithfulness"] is not None else "",
                 max_rerank=retrieval.get("max_rerank_score", ""),
@@ -705,7 +732,7 @@ async def _run_eval(args: argparse.Namespace) -> dict[str, Any]:
     if not args.no_llm and testset:
         # R4-05: evaluation.judge_model(EVAL_JUDGE_MODEL)을 생성기와 분리해 로드.
         # judge는 결정적 판정을 위해 온도 0.0을 명시한다.
-        judge_llm = await ModelManager.get_llm(EVAL_JUDGE_MODEL, temperature=0.0)
+        judge_llm = await ModelManager.get_llm(EVAL_JUDGE_MODEL)
         print(f"  judge model={EVAL_JUDGE_MODEL} (temperature=0.0, 생성기와 분리)")
         score_chain = (
             ChatPromptTemplate.from_template(SCORE_PROMPT)

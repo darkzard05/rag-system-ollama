@@ -21,6 +21,7 @@
     {
         "query": "이미지 생성 모델의 최신 트렌드에 대해 알려줘.",
         "expected_key_entities": ["트렌드", "이미지 생성"],
-        "required_chunks": []
+        "required_chunks": [],
+        "out_of_doc": true
     }
 ]
