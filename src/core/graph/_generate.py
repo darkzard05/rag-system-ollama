@@ -308,6 +308,7 @@ async def _generate_pass(
     last_metadata: dict[str, Any] = {}
     pass_start = time.perf_counter()
     ttft_ms: float | None = None
+    first_token_ms: float | None = None
     use_structured_output = "structured_output" in PROMPT_TEMPLATES_CONFIG
     async with ModelManager.inference_session():
         # JSON 모드 강제 바인딩(grade 노드 1053행과 동일) — qwen3:4b가 값 내부에
@@ -329,6 +330,8 @@ async def _generate_pass(
                         chunk.content if hasattr(chunk, "content") else str(chunk)
                     )
                     thought_chunk = ""
+                if (content_chunk or thought_chunk) and first_token_ms is None:
+                    first_token_ms = (time.perf_counter() - pass_start) * 1000
                 if content_chunk and ttft_ms is None:
                     ttft_ms = (time.perf_counter() - pass_start) * 1000
 
@@ -357,7 +360,9 @@ async def _generate_pass(
     generate_ms = (time.perf_counter() - pass_start) * 1000
     logger.info(
         f"[RAG] [GENERATE][TIMING] pass={attempt} generate_ms={generate_ms:.1f} "
-        f"ttft_ms={(ttft_ms or 0.0):.1f} output_chars={len(full_response)}"
+        f"ttft_ms={(ttft_ms or 0.0):.1f} "
+        f"first_token_ms={(first_token_ms or 0.0):.1f} "
+        f"output_chars={len(full_response)}"
     )
 
     # Phase 1.2: 구조화된 답변 파싱 (JSON 출력 기대)
@@ -439,6 +444,7 @@ async def _generate_pass(
         "full_thought": full_thought,
         "last_metadata": last_metadata,
         "ttft_ms": ttft_ms,
+        "first_token_ms": first_token_ms,
         "generate_ms": generate_ms,
         "parsed_answer": parsed_answer,
         "parse_failed": parse_failed,
@@ -643,12 +649,16 @@ async def generate(
             attempt=attempt,
         )
         passes.append(result_pass)
+        # [TIMING 구간 정의 — 단일 정본] generate_total_ms는 전 패스 합산,
+        # ttft_ms/first_token_ms는 passes[0]만(사용자 체감 첫 토큰 시점).
         _query_timings["generate_total_ms"] = (
             _query_timings.get("generate_total_ms", 0.0) + result_pass["generate_ms"]
         )
-        _query_timings["ttft_ms"] = _query_timings.get("ttft_ms", 0.0) + float(
-            result_pass["ttft_ms"] or 0.0
-        )
+        if attempt == 1:
+            _query_timings["ttft_ms"] = float(result_pass["ttft_ms"] or 0.0)
+            _query_timings["first_token_ms"] = float(
+                result_pass["first_token_ms"] or 0.0
+            )
         if attempt >= 2:
             break
         pass_text = result_pass["parsed_answer"].final_answer
@@ -692,6 +702,7 @@ async def generate(
     parse_failed = bool(last["parse_failed"])
     generate_ms = float(sum(float(p["generate_ms"]) for p in passes))
     ttft_ms: float | None = passes[0]["ttft_ms"]
+    first_token_ms: float | None = passes[0]["first_token_ms"]
 
     input_tokens = last_metadata.get("prompt_eval_count", 0)
     output_tokens = last_metadata.get("eval_count", 0)
@@ -726,6 +737,7 @@ async def generate(
                 "output_token_count": output_tokens,
                 "relevant_docs_count": len(docs),
                 "ttft_ms": ttft_ms or 0.0,
+                "first_token_ms": first_token_ms or 0.0,
                 "generate_ms": generate_ms,
                 "parse_failed": parse_failed,
                 "echo_detected": echo_detected,

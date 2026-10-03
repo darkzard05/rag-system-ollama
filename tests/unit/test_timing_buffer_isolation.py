@@ -11,11 +11,12 @@
 """
 
 import asyncio
-from io import StringIO
+import re
 from unittest.mock import patch
 
 import pytest
 
+import core.graph._graph_core as gcore
 import core.graph.graph_builder as gb
 
 
@@ -92,40 +93,37 @@ async def test_speculative_task_shares_buffer_and_accumulates():
 
 
 def test_query_timing_format_preserved():
-    """[QUERY][TIMING] 로그 포맷이 벤치마크 파서와 호환되도록 보존되어야 합니다."""
-    out = StringIO()
-    fmt = (
-        "[QUERY][TIMING] preprocess_ms=1.2 retrieve_ms=3.4 grade_ms=5.6 "
-        "generate_total_ms=7.8 ttft_ms=0.9"
-    )
-    with patch.object(gb.logger, "info", wraps=gb.logger.info) as mock_info:
+    """[QUERY][TIMING] 로그 포맷이 벤치마크 파서와 호환되도록 보존되어야 합니다.
 
-        def fake_emit(timings):
-            out.write(
-                f"[QUERY][TIMING] "
-                f"preprocess_ms={timings.get('preprocess_ms', 0.0):.1f} "
-                f"retrieve_ms={timings.get('retrieve_ms', 0.0):.1f} "
-                f"grade_ms={timings.get('grade_ms', 0.0):.1f} "
-                f"generate_total_ms={timings.get('generate_total_ms', 0.0):.1f} "
-                f"ttft_ms={timings.get('ttft_ms', 0.0):.1f}"
-            )
+    실제 ``_emit_query_timing``을 호출해 포맷을 검증합니다. 이전 버전은 로그 문자열을
+    테스트 안에서 재구성했기에 실제 함수와 drift가 생겨 계약을 못 지켰습니다.
+    """
+    captured: list[str] = []
+    timings = {
+        "preprocess_ms": 1.2,
+        "retrieve_ms": 3.4,
+        "grade_ms": 5.6,
+        "generate_total_ms": 7.8,
+        "ttft_ms": 0.9,
+        "first_token_ms": 0.4,
+    }
+    with patch.object(gcore.logger, "info", side_effect=captured.append):
+        gcore._emit_query_timing(timings)
 
-        timings = {
-            "preprocess_ms": 1.2,
-            "retrieve_ms": 3.4,
-            "grade_ms": 5.6,
-            "generate_total_ms": 7.8,
-            "ttft_ms": 0.9,
-        }
-        fake_emit(timings)
-        line = out.getvalue()
-        # 포맷이 "키=숫자" 형태로 유지되는지
-        assert line.startswith("[QUERY][TIMING]"), line
-        for key in (
-            "preprocess_ms",
-            "retrieve_ms",
-            "grade_ms",
-            "generate_total_ms",
-            "ttft_ms",
-        ):
-            assert f"{key}=" in line, f"포맷에 {key}= 키가 없음: {line}"
+    assert len(captured) == 1, captured
+    line = captured[0]
+    assert line.startswith("[QUERY][TIMING]"), line
+    for key in (
+        "preprocess_ms",
+        "retrieve_ms",
+        "grade_ms",
+        "generate_total_ms",
+        "ttft_ms",
+        "first_token_ms",
+    ):
+        assert f"{key}=" in line, f"포맷에 {key}= 키가 없음: {line}"
+
+    # bench_query_latency.py:79 정규식이 additive 키가 추가돼도 ttft_ms를 추출해야 한다.
+    match = re.search(r"ttft_ms=(?P<ttft_ms>[\d.]+)", line)
+    assert match is not None, line
+    assert float(match.group("ttft_ms")) == 0.9, line

@@ -271,20 +271,20 @@ async def search_bm25_with_scores(retriever: Any, query: str, k: int) -> list[Do
     return list(docs)
 
 
-def _faiss_results_with_scores(retriever: Any, query: str, k: int) -> list[Document]:
-    """FAISS ``similarity_search_with_score``의 유사도 점수를 metadata에 주입합니다.
+def embed_faiss_query_vector(retriever: Any, query: str) -> Any | None:
+    """FAISS 쿼리 벡터를 미리 임베딩해 반환합니다 (embed_ms 분리 계측용).
 
-    프로젝트 인덱스는 ``MAX_INNER_PRODUCT``(L2 정규화 벡터)이므로 점수가 클수록
-    유사하며 ``index.search``가 내림차순으로 반환한다.
+    ``VectorStoreRetriever``가 아니면 ``None``을 반환해 호출자가 기존 경로로
+    폴백하게 한다. 반환 벡터는 L2 정규화된 1-D ``float32`` 배열이다.
     """
+    from langchain_core.vectorstores import VectorStoreRetriever
+
+    if not isinstance(retriever, VectorStoreRetriever):
+        return None
     import faiss
     import numpy as np
 
     vector_store = retriever.vectorstore
-    # [R3a-07] 쿼리 벡터 L2 정규화 — 인덱스 벡터는 구축 시 정규화되었으므로
-    # 쿼리도 동일 규격으로 맞춰 IP(내적)를 진짜 코사인 유사도로 고정한다.
-    # Ollama 임베더는 단위벡터를 반환하나 HF/기타 백엔드는 미보장 — 명시적
-    # 정규화로 계약을 코드에 고정해 임베더 교체 시 회귀를 방지한다.
     embed_fn = vector_store.embedding_function
     query_vec = (
         embed_fn.embed_query(query)
@@ -293,20 +293,54 @@ def _faiss_results_with_scores(retriever: Any, query: str, k: int) -> list[Docum
     )
     query_np = np.asarray(query_vec, dtype="float32").reshape(1, -1)
     faiss.normalize_L2(query_np)
+    return query_np[0]
 
-    docs_scores = vector_store.similarity_search_with_score_by_vector(query_np[0], k=k)
+
+def _faiss_results_with_scores(
+    retriever: Any, query: str, k: int, query_vector: Any | None = None
+) -> list[Document]:
+    """FAISS ``similarity_search_with_score``의 유사도 점수를 metadata에 주입합니다.
+
+    프로젝트 인덱스는 ``MAX_INNER_PRODUCT``(L2 정규화 벡터)이므로 점수가 클수록
+    유사하며 ``index.search``가 내림차순으로 반환한다.
+
+    ``query_vector``가 주어지면 임베딩 라운드트립을 건너뛰고 FAISS 연산만 수행해
+    ``embed_ms``/``faiss_ms`` 분리가 가능하다. 구간 정의는
+    ``retrieve_and_rerank``의 [TIMING] 로그 단일 주석을 정본으로 한다.
+    """
+    import faiss
+    import numpy as np
+
+    vector_store = retriever.vectorstore
+    if query_vector is None:
+        # [R3a-07] 쿼리 벡터 L2 정규화 — 인덱스 벡터는 구축 시 정규화되었으므로
+        # 쿼리도 동일 규격으로 맞춰 IP(내적)를 진짜 코사인 유사도로 고정한다.
+        # Ollama 임베더는 단위벡터를 반환하나 HF/기타 백엔드는 미보장 — 명시적
+        # 정규화로 계약을 코드에 고정해 임베더 교체 시 회귀를 방지한다.
+        embed_fn = vector_store.embedding_function
+        query_vec = (
+            embed_fn.embed_query(query)
+            if hasattr(embed_fn, "embed_query")
+            else embed_fn(query)
+        )
+        query_np = np.asarray(query_vec, dtype="float32").reshape(1, -1)
+        faiss.normalize_L2(query_np)
+        query_vector = query_np[0]
+
+    docs_scores = vector_store.similarity_search_with_score_by_vector(query_vector, k=k)
     for doc, score in docs_scores:
         doc.metadata["score"] = float(score)
     return [doc for doc, _score in docs_scores]
 
 
 async def search_faiss_with_scores(
-    retriever: Any, query: str, k: int
+    retriever: Any, query: str, k: int, query_vector: Any | None = None
 ) -> list[Document]:
     """FAISS 검색 결과를 실제 유사도 점수와 함께 반환합니다.
 
     ``VectorStoreRetriever`` 안의 FAISS vectorstore를 언랩해 점수 포함 경로
     (``similarity_search_with_score``)를 사용하고, 그 외 객체는 ``ainvoke`` 폴백.
+    ``query_vector``가 주어지면 임베딩을 건너뛰고 FAISS 연산만 수행한다.
     """
     from langchain_core.vectorstores import VectorStoreRetriever
 
@@ -314,7 +348,7 @@ async def search_faiss_with_scores(
         vector_store = retriever.vectorstore
         if hasattr(vector_store, "similarity_search_with_score"):
             return await asyncio.to_thread(
-                _faiss_results_with_scores, retriever, query, k
+                _faiss_results_with_scores, retriever, query, k, query_vector
             )
     docs = await retriever.ainvoke(query)
     return list(docs)

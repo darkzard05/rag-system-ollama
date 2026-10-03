@@ -10,6 +10,7 @@ import asyncio
 import copy
 import logging
 import time
+from collections.abc import Awaitable
 from typing import Any, cast
 
 from langchain_core.callbacks.manager import adispatch_custom_event
@@ -219,15 +220,64 @@ async def retrieve_and_rerank(
     # 점수 주입 검색 헬퍼를 사용한다 (FAISS similarity_search_with_score / BM25 get_top_n+get_scores).
     search_k = int(RETRIEVER_CONFIG.get("search_kwargs", {}).get("k", 25))
 
+    # [TIMING 구간 정의 — 단일 정본]
+    # embed_ms: 쿼리 임베딩 라운드트립(Ollama HTTP)만의 시간. FAISS 이전에
+    #   별도 계측해 pre-embedded 벡터를 전달한다.
+    # faiss_ms: FAISS index.search 연산만의 시간(임베딩 제외).
+    # bm25_ms: BM25 rank 연산만의 시간.
+    # search_ms: gather 전체 wall-time(embed+검색 병렬 구간 포함).
+    # aggregate_ms/rerank_ms/merge_ms/total_ms: t0 기준 누적 경과(기존 의미 유지).
+    task_ms: dict[str, float] = {}
+
+    async def _timed_search(
+        source: str, coro: Awaitable[list[Document]]
+    ) -> list[Document]:
+        started = time.perf_counter()
+        try:
+            return await coro
+        finally:
+            task_ms[source] = (time.perf_counter() - started) * 1000
+
+    # FAISS 임베딩을 gather 전에 분리 계측한다. 성공 시 pre-embedded 벡터로
+    # FAISS 연산만 timed-search에 태워 embed_ms/faiss_ms를 분리한다.
+    # 테스트 대역(MagicMock 등)에서는 embed가 None/실패 → 기존 경로 폴백.
+    embed_ms = 0.0
+    query_vector: Any | None = None
+    if faiss:
+        try:
+            from core.retriever_factory import embed_faiss_query_vector
+
+            _t_embed = time.perf_counter()
+            query_vector = await asyncio.to_thread(
+                embed_faiss_query_vector, faiss, query
+            )
+            if query_vector is None:
+                embed_ms = 0.0
+            else:
+                embed_ms = (time.perf_counter() - _t_embed) * 1000
+        except Exception as e:  # noqa: BLE001 - 임베드 실패 시 기존 경로 폴백
+            logger.warning(f"[RAG] [RETRIEVE] 쿼리 임베드 실패 — 통합 경로 폴백: {e}")
+            query_vector = None
+            embed_ms = 0.0
+    task_ms["embed"] = embed_ms
+
     search_tasks = {}
     if bm25:
         search_tasks["bm25"] = asyncio.create_task(
-            search_bm25_with_scores(bm25, query, search_k)
+            _timed_search("bm25", search_bm25_with_scores(bm25, query, search_k))
         )
     if faiss:
-        search_tasks["faiss"] = asyncio.create_task(
-            search_faiss_with_scores(faiss, query, search_k)
-        )
+        if query_vector is not None:
+            search_tasks["faiss"] = asyncio.create_task(
+                _timed_search(
+                    "faiss",
+                    search_faiss_with_scores(faiss, query, search_k, query_vector),
+                )
+            )
+        else:
+            search_tasks["faiss"] = asyncio.create_task(
+                _timed_search("faiss", search_faiss_with_scores(faiss, query, search_k))
+            )
 
     results = {}
     if search_tasks:
@@ -331,6 +381,17 @@ async def retrieve_and_rerank(
         SessionManager.add_status_log(
             "검색 결과가 없습니다.", session_id=_get_session_id(config)
         )
+        _bm25_str = f"{task_ms.get('bm25', 0.0):.1f}" if bm25 else "n/a"
+        _faiss_str = f"{task_ms.get('faiss', 0.0):.1f}" if faiss else "n/a"
+        _embed_str = f"{task_ms.get('embed', 0.0):.1f}" if faiss else "n/a"
+        logger.info(
+            f"[RAG] [RETRIEVE][TIMING] search_ms={search_ms:.1f} "
+            f"aggregate_ms={aggregate_ms:.1f} rerank_ms=n/a "
+            f"merge_ms=n/a total_ms={aggregate_ms:.1f} "
+            f"bm25_ms={_bm25_str} faiss_ms={_faiss_str} embed_ms={_embed_str}"
+        )
+        _add_stage_ms("retrieve_ms", aggregate_ms)
+        _retrieve_op.__exit__(None, None, None)
         return {"relevant_docs": []}
 
     from core.async_reranker import get_async_reranker
@@ -387,10 +448,15 @@ async def retrieve_and_rerank(
 
     merge_ms = (time.perf_counter() - t0) * 1000
     total_ms = merge_ms
-    logger.debug(
+    _bm25_str = f"{task_ms.get('bm25', 0.0):.1f}" if bm25 else "n/a"
+    _faiss_str = f"{task_ms.get('faiss', 0.0):.1f}" if faiss else "n/a"
+    _embed_str = f"{task_ms.get('embed', 0.0):.1f}" if faiss else "n/a"
+    logger.info(
         f"[RAG] [RETRIEVE][TIMING] search_ms={search_ms:.1f} "
         f"aggregate_ms={aggregate_ms:.1f} rerank_ms={rerank_ms:.1f} "
-        f"merge_ms={merge_ms:.1f} total_ms={total_ms:.1f}"
+        f"merge_ms={merge_ms:.1f} total_ms={total_ms:.1f} "
+        f"bm25_ms={_bm25_str} "
+        f"faiss_ms={_faiss_str} embed_ms={_embed_str}"
     )
 
     _add_stage_ms("retrieve_ms", total_ms)
