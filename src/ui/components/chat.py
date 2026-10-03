@@ -25,7 +25,7 @@ from common.utils import (
 )
 from core.session import SessionManager
 from ui.components.chat_autoscroll import render_autoscroll_sentinel
-from ui.components.common import AVATARS, status_line, ui_error
+from ui.components.common import AVATARS, role_avatar, status_line, ui_error
 from ui.components.streaming import (
     _AUX_STATE_KEY,
     _clear_aux_state,
@@ -76,7 +76,8 @@ def render_message(
     unsafe_allow_html=True로 렌더되므로 원시 LLM 출력을 그대로 넘기지 않는다.
     원시 텍스트는 `content`로 전달하면 본문 경로에서 자동 이스케이프된다.
     """
-    avatar_icon = AVATARS["assistant"] if role == "assistant" else AVATARS["user"]
+    # role→avatar 매핑은 common.role_avatar에만 둔다 (인라인 분기 drift 방지).
+    avatar_icon = role_avatar(role)
     msg_id = kwargs.get("msg_id", f"msg_{msg_index}")
     citations = citations or kwargs.get("citations")
     cancelled = bool(kwargs.get("cancelled", False))
@@ -165,9 +166,7 @@ def render_message(
             and (content or processed_content or "").strip()
         ):
             if cancelled:
-                st.caption(
-                    status_line("Stopped · Partial answer preserved", metric_txt)
-                )
+                st.caption(status_line(t("caption_stopped_partial"), metric_txt))
             elif metric_txt:
                 st.caption(metric_txt)
 
@@ -305,9 +304,11 @@ def _proc_phase_caption(status_text: str, elapsed_sec: float) -> str:
             parts.append(f"✓ {label}")
         else:
             parts.append(label)
-    line = "  ·  ".join(parts)
+    # 마지막 하드코딩 구분자를 status_line으로 일원화한다: 앱 전역 상태줄
+    # 규격인 한 칸 미들닷(" · ")을 사용하고 빈 조각은 건너뛴다.
+    line = status_line(*parts)
     if active_idx == -1 and status_text:
-        line = f"{line}  ·  {status_text}"
+        line = status_line(line, status_text)
     return f"{line} · {elapsed_sec:.0f}s ▍"
 
 
@@ -357,7 +358,7 @@ def _draw_streaming_message(msg: dict[str, Any], current_sid: str) -> None:
     """
     # 스트리밍 중 오류가 실린 메시지는 즉시 표면화
     if msg.get("error"):
-        st.error(str(msg.get("error")))
+        ui_error(str(msg.get("error")))
         return
 
     # [UX-3] 내용이 없는(■ 중지로 영속을 건너뛴) 스트리밍 플레이스홀더:
@@ -529,7 +530,7 @@ def render_chat_input_area() -> None:
 
     if user_query:
         if input_disabled:
-            st.error(input_placeholder)
+            ui_error(input_placeholder)
             return
         query_text = user_query.strip()
         if query_text:
@@ -707,7 +708,9 @@ def _render_streaming_with_write_stream(
     SessionManager.set("is_generating_answer", False, session_id=current_sid)
     SessionManager.set("generation_cancel", False, session_id=current_sid)
     _clear_aux_state(current_sid)
+    _t_fin = time.perf_counter()
     _finalize_pdf_side_effects(current_sid, msg_id)
+    logger.info("[PERF] finalize took %.3fs", time.perf_counter() - _t_fin)
 
     # 정상 완료 및 ■ 중지 모두 부분 응답 확정 및 입력창 활성화를 위해 rerun 수행
     st.rerun()

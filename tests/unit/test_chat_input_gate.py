@@ -93,13 +93,17 @@ def test_submit_refused_guides_via_error_not_body_no_rerun() -> None:
 
     with (
         patch("ui.components.chat.st") as mock_st,
+        # The error path now goes through ui_error(), which renders via the
+        # st reference owned by ui.components.common, so both must be observed.
+        # Same pattern as test_streaming_deadlock.py and test_citation_v2_inline.py.
+        patch("ui.components.common.st") as mock_common_st,
         patch.object(SessionManager, "add_message") as mock_add,
     ):
         mock_st.chat_input.return_value = "hello dead-gate probe"
         render_chat_input_area()
 
-    mock_st.error.assert_called_once()
-    err_text = str(mock_st.error.call_args)
+    mock_common_st.error.assert_called_once()
+    err_text = str(mock_common_st.error.call_args)
     assert expected_placeholder in err_text, (
         f"dead-gate: st.error must show no-PDF placeholder, got {err_text!r}"
     )

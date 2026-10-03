@@ -30,8 +30,6 @@ from ui.widget_keys import PDF_NAV_INPUT_KEY
 AVATARS: dict[str, str] = {
     "assistant": "🤖",
     "user": "👤",
-    "document": "📄",
-    "building": "🔄",
     "error": "❌",
 }
 

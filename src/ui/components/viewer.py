@@ -11,7 +11,7 @@ import streamlit as st
 
 from common.config import MSG_PDF_VIEWER_NO_FILE
 from common.exceptions import PDFProcessingError
-from common.pdf_utils import get_pdf_page_count
+from common.pdf_utils import get_pdf_page_count, open_pdf_document
 from common.utils import safe_cache_data
 from core.session import SessionManager
 from ui.components.common import (
@@ -89,6 +89,68 @@ def _get_pdf_total_pages(pdf_path: str) -> int | None:
     if not os.path.exists(pdf_path):
         return None
     return get_pdf_page_count(pdf_path)
+
+
+@safe_cache_data(ttl=300, show_spinner=False)
+def _get_pdf_page_bytes(pdf_path: str, file_hash: str, page: int) -> bytes:
+    """요청한 단일 페이지만 담은 PDF 바이트를 반환한다.
+
+    streamlit_pdf_viewer base64-encodes and re-serializes whatever it is
+    given on every call, so passing the whole document defeats caching.
+    그래서 전체가 아닌 1페이지 추출본만 전달해 매 rerun 전송량을 줄인다.
+    file_hash는 캐시 키 전용이다 (본문에서 참조하지 않음): 같은 경로에
+    다른 파일이 업로드되면 캐시 키가 달라져 오래된 추출본을 피한다.
+
+    ``garbage=4``가 필수다: select()는 페이지 트리만 줄이고 다른 페이지의
+    간접 객체(폰트/이미지)는 그대로 직렬화되어, 이 값이 없으면 실제로는
+    0.7%만 줄어 최적화가 무효가 된다. garbage=4는 참조되지 않는 객체를
+    제거하며 렌더링 결과는 픽셀 단위로 동일하다(측정: 20쪽 논문 5,563,865
+    → 평균 332,903 바이트, 94.0% 감소 / 최대 1,925,259, 최소 46,522).
+    텍스트만 있는 페이지는 46KB까지 줄지만 이미지가 많은 페이지는 1.9MB가
+    남는다(그 페이지의 실제 이미지 데이터이므로 더 줄이면 화질이 상한다).
+    """
+    if not pdf_path or page < 1:
+        return b""
+    if not os.path.exists(pdf_path):
+        return b""
+    try:
+        with open_pdf_document(pdf_path) as doc:
+            if doc.page_count == 0 or page > doc.page_count:
+                return b""
+            doc.select([page - 1])
+            return doc.tobytes(garbage=4)
+    except Exception as e:
+        logger.warning(f"[PDF] {page}페이지 추출 실패 ({pdf_path}): {e}")
+        return b""
+
+
+def _page_scoped_annotations(annotations: list, current_page: int) -> list[dict]:
+    """현재 페이지 주석만 골라 1페이지 기준으로 변환한다.
+
+    x, y, width, height, color 등 나머지 키는 손대지 않는다: 이 좌표들은
+    fitz/PDF-point 기준 페이지 상대값이라 추출된 단일 페이지에서도 이미
+    정확하므로, 바뀌는 것은 페이지 순서값뿐이다 (추출본에서는 1).
+    입력 dict는 절대 변경하지 않고 복사본에 page=1을 담아 반환한다.
+    """
+    if not annotations:
+        return []
+    scoped: list[dict] = []
+    for item in annotations:
+        if not isinstance(item, dict):
+            continue
+        raw = item.get("page")
+        if raw is None:
+            continue
+        try:
+            page_no = int(raw)
+        except (TypeError, ValueError):
+            continue
+        if page_no != current_page:
+            continue
+        moved = dict(item)
+        moved["page"] = 1
+        scoped.append(moved)
+    return scoped
 
 
 # ---------------------------------------------------------------------------
@@ -290,11 +352,6 @@ def render_pdf_viewer(pdf_path, current_page, file_hash):
     try:
         from streamlit_pdf_viewer import pdf_viewer  # lazy: PDF 표시 시에만 import
 
-        pdf_bytes = _get_pdf_bytes(pdf_path)
-        if not pdf_bytes:
-            show_pdf_error("data")
-            return
-
         raw_annotations = SessionManager.get("pdf_annotations", [])
         if isinstance(raw_annotations, dict):
             annotations = (
@@ -305,6 +362,25 @@ def render_pdf_viewer(pdf_path, current_page, file_hash):
         else:
             annotations = raw_annotations  # legacy list 형식 호환
         viewer_key = pdf_viewer_key(file_hash, current_page)
+
+        # 단일 페이지 우선: 전체 문서 재전송을 피한다.
+        page_bytes = _get_pdf_page_bytes(pdf_path, file_hash, current_page)
+        if page_bytes:
+            pdf_viewer(
+                input=page_bytes,
+                render_text=True,
+                pages_to_render=[1],
+                annotations=_page_scoped_annotations(annotations, current_page),
+                annotation_outline_size=2,
+                scroll_behavior="instant",
+                key=viewer_key,
+            )
+            return
+
+        pdf_bytes = _get_pdf_bytes(pdf_path)
+        if not pdf_bytes:
+            show_pdf_error("data")
+            return
 
         pdf_viewer(
             input=pdf_bytes,
@@ -317,10 +393,10 @@ def render_pdf_viewer(pdf_path, current_page, file_hash):
         )
     except PDFProcessingError as e:
         logger.error(f"PDF 처리 오류: {e}")
-        ui_error("PDF 뷰어 오류가 발생했습니다. 잠시 후 다시 시도해주세요.")
+        ui_error(t("pdf_error_viewer"))
     except Exception as e:
         logger.error(f"PDF 뷰어 렌더링 오류: {e}", exc_info=True)
-        ui_error("PDF 뷰어 렌더링에 실패했습니다.")
+        ui_error(t("pdf_error_render"))
 
 
 def render_pdf_controls(current_page, total_pages):

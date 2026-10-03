@@ -16,7 +16,7 @@ from typing import Any
 import streamlit as st
 
 from core.session import SessionManager
-from ui.components.common import AVATARS
+from ui.components.common import AVATARS, ui_error
 from ui.strings import t
 from ui.widget_keys import (
     SAMPLE_QUESTION_STATE_KEY,
@@ -49,7 +49,7 @@ def get_build_error_actions(error_msg: str) -> dict[str, Any]:
         "cause": error_msg,
         "retryable": True,
         "retry_kind": "rebuild",
-        "cta": ["Retry Analysis"],
+        "cta": [t("action_retry_build")],
     }
 
 
@@ -140,12 +140,16 @@ def _render_build_progress_block(sid: str) -> None:
 
         if error:
             actions = get_build_error_actions(error)
-            st.error(actions["message"])
+            ui_error(actions["message"])
+            # 라벨/도움말은 actions 메타데이터 단일 소스에서 읽는다: 중단-답변
+            # dead-end(chat.py)와 하드코딩이 다시 drift 되는 것을 방지한다.
             st.button(
-                "다시 시도",
+                actions["cta"][0],
                 key=f"retry_build_{sid}",
                 on_click=_retry_build,
                 args=(sid,),
+                disabled=not actions["retryable"],
+                help=t("action_retry_build_help"),
                 use_container_width=True,
             )
         if state == "running" and not is_cancelling:

@@ -7,7 +7,10 @@ to support additional locales.
 
 from __future__ import annotations
 
-from common.config import MSG_CHAT_GUIDE, MSG_ERROR_OLLAMA_NOT_RUNNING
+import ast
+from pathlib import Path
+
+from common.config import MSG_ERROR_OLLAMA_NOT_RUNNING
 
 # ---------------------------------------------------------------------------
 # Language switch
@@ -23,6 +26,24 @@ def set_lang(lang: str) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Dropped-key tracking (WARNING counter — no silent OSError/UnicodeDecodeError drop)
+# ---------------------------------------------------------------------------
+
+_dropped_key_counter: int = 0
+
+
+def dropped_key_count() -> int:
+    """Return the number of times ``t(key`` was called with a missing key."""
+    return _dropped_key_counter
+
+
+def _record_dropped_key() -> None:
+    """Increment the dropped-key WARNING counter."""
+    global _dropped_key_counter
+    _dropped_key_counter += 1
+
+
+# ---------------------------------------------------------------------------
 # String tables
 # ---------------------------------------------------------------------------
 
@@ -33,17 +54,8 @@ UI_STRINGS: dict[str, dict[str, str]] = {
         "phase_evidence_collection": "Evidence Collection",
         "phase_answer_generation": "Answer Generation",
         # Streaming status
-        "status_generating": "AI is generating answer... ▍",
         "status_stopped": "Generation stopped · No answer to display",
-        "status_switching_models": "Switching models, please wait...",
-        "status_generating_with_stop": (
-            "AI is generating answer... · Stop with ■ button"
-        ),
-        # Chat input placeholder
-        "chat_placeholder_followup": "Ask a follow-up question...",
         # Captions
-        "caption_partial_answer": "Partial answer preserved",
-        "caption_answer_complete": "Answer complete",
         "caption_stopped_partial": "Stopped · Partial answer preserved",
         # PDF viewer
         "pdf_error_data": "⚠️ Cannot load PDF data.",
@@ -95,8 +107,6 @@ UI_STRINGS: dict[str, dict[str, str]] = {
         "sidebar_language": "Language / 언어",
         "sidebar_language_help": "Switch the UI language (UI 언어 전환).",
         "nav_next": "Next ▶",
-        # Chat guide
-        "chat_guide": MSG_CHAT_GUIDE,
         # Ollama error
         "error_ollama_not_running": MSG_ERROR_OLLAMA_NOT_RUNNING,
         # Spinner
@@ -107,21 +117,16 @@ UI_STRINGS: dict[str, dict[str, str]] = {
         # Retry CTA (stopped-answer dead-end, mirrors build-error CTA shape)
         "action_retry_answer": "Retry answer",
         "action_retry_answer_help": "Ask the last question again",
+        # Retry CTA (build-error dead-end, mirrors stopped-answer CTA shape)
+        "action_retry_build": "Retry Analysis",
+        "action_retry_build_help": "Rebuild the index from the uploaded PDF",
         "expander_reasoning_only": "Thought Process",
     },
     "ko": {
         "phase_document_search": "문서 검색",
         "phase_evidence_collection": "증거 수집",
         "phase_answer_generation": "답변 생성",
-        "status_generating": "AI가 답변을 생성 중입니다... ▍",
         "status_stopped": "답변 생성이 사용자에 의해 중단되었습니다.",
-        "status_switching_models": "모델을 전환하는 중입니다...",
-        "status_generating_with_stop": (
-            "AI가 답변을 생성 중입니다... · ■ 버튼으로 중지할 수 있습니다"
-        ),
-        "chat_placeholder_followup": "이어서 질문을 입력하세요...",
-        "caption_partial_answer": "작성된 내용까지 저장되었습니다",
-        "caption_answer_complete": "답변 생성 완료",
         "caption_stopped_partial": "정지됨 · 부분적인 답변 보존됨",
         "pdf_error_data": "⚠️ PDF 데이터를 불러올 수 없습니다.",
         "pdf_error_open": (
@@ -167,7 +172,6 @@ UI_STRINGS: dict[str, dict[str, str]] = {
         "sidebar_language": "Language / 언어",
         "sidebar_language_help": "UI 언어를 전환합니다 (Switch the UI language).",
         "nav_next": "다음 ➡️",
-        "chat_guide": MSG_CHAT_GUIDE,
         "error_ollama_not_running": MSG_ERROR_OLLAMA_NOT_RUNNING,
         "spinner_loading_models": "사용 가능한 모델 목록을 불러오는 중...",
         # Expanders
@@ -175,14 +179,89 @@ UI_STRINGS: dict[str, dict[str, str]] = {
         "expander_sources_only": "인용 출처",
         "action_retry_answer": "다시 답변 생성",
         "action_retry_answer_help": "마지막 질문을 다시 요청합니다",
+        "action_retry_build": "다시 시도",
+        "action_retry_build_help": "업로드한 PDF로 인덱스를 다시 만듭니다",
         "expander_reasoning_only": "사고 과정",
     },
 }
 
 
 def t(key: str) -> str:
-    """Look up a UI string by key for the active language."""
-    return UI_STRINGS.get(LANG, UI_STRINGS["en"]).get(key, key)
+    """Look up a UI string by key for the active language.
+
+    If the key is not found in the active language table, a WARNING is
+    recorded via ``_record_dropped_key()`` (no silent OSError/UnicodeDecodeError
+    drop — the key is still returned as fallback so rendering is not broken,
+    but the caller can check ``dropped_key_count()``).
+    """
+    result = UI_STRINGS.get(LANG, UI_STRINGS["en"]).get(key, None)
+    if result is None:
+        _record_dropped_key()
+        return key
+    return result
+
+
+# ---------------------------------------------------------------------------
+# AST‑based key collection (both‑direction i18n gate)
+# ---------------------------------------------------------------------------
+
+_DirectKeySet = set[str]
+
+
+def _collect_t_keys_ast(root: Path) -> _DirectKeySet:
+    """Scan Python source under *root* for literal ``t("key")`` calls.
+
+    Only ``ast.parse`` literal calls are counted — comments and string
+    concatenation are excluded (comment‑spoof proof).
+    """
+    found: _DirectKeySet = set()
+    for path in root.rglob("*.py"):
+        try:
+            text = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            continue
+        try:
+            tree = ast.parse(text, filename=str(path))
+        except SyntaxError:
+            continue
+        for node in ast.walk(tree):
+            if (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Name)
+                and node.func.id == "t"
+            ):
+                # Collect only literal string arguments; skip non-literal args
+                for arg in node.args:
+                    if isinstance(arg, ast.Constant) and isinstance(arg.value, str):
+                        found.add(arg.value)
+    return found
+
+
+def _indirect_keys() -> set[str]:
+    """Keys consumed via ``PHASE_KEYWORDS`` (resolved dynamically in ``t``)."""
+    return {key for key, _keywords in PHASE_KEYWORDS}
+
+
+def gate_en_keys_read() -> tuple[set[str], set[str]]:
+    """i18n gate: every ``en`` key must be read directly or via ``PHASE_KEYWORDS``.
+
+    Returns
+        missing: keys in ``UI_STRINGS["en"]`` not found in any ``t()`` call or
+                 ``PHASE_KEYWORDS``
+        absent_phase: ``PHASE_KEYWORDS`` keys missing from ``UI_STRINGS["en"]``
+    """
+    root = Path(__file__).resolve().parents[2] / "src"
+    direct_found = _collect_t_keys_ast(root)
+    indirect = _indirect_keys()
+    readable = direct_found | indirect
+    missing = set(UI_STRINGS["en"]) - readable
+    absent_phase = indirect - set(UI_STRINGS["en"])
+    return missing, absent_phase
+
+
+def gate_tables_symmetric() -> bool:
+    """i18n gate: the ``en`` and ``ko`` tables must carry the same key set."""
+    return set(UI_STRINGS["en"]) == set(UI_STRINGS["ko"])
 
 
 # ---------------------------------------------------------------------------

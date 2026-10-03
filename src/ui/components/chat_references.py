@@ -271,7 +271,8 @@ def _render_references_content(
                 args=(page_num,),
                 help=f"{base_help} — {excerpt}" if excerpt else base_help,
             )
-            if excerpt:
+            # 스트리밍 본문에 발췌가 이미 인라인 렌더되므로 생성 익스팬더는 캡션 반복을 생략한다.
+            if excerpt and show_caption:
                 st.caption(excerpt)
     return True
 
