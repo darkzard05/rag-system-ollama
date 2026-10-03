@@ -35,6 +35,8 @@ Otherwise the session fixture spawns the harness itself on port 8512
 from __future__ import annotations
 
 import contextlib
+import datetime
+import json
 import os
 import subprocess
 import sys
@@ -74,6 +76,8 @@ SCROLLER_SEL = (
     '[data-testid="stColumn"]:last-child > [data-testid="stVerticalBlock"]'
 )
 SENTINEL_ID = "chat-autoscroll-sentinel"
+
+VISUAL_QA_DIR = os.path.join(REPO_ROOT, "reports", "visual_qa_autoscroll")
 
 FIND_CHAT_SCROLLER_JS = (
     "() => {"
@@ -140,6 +144,23 @@ DIAG_JS = (
     "   windowScrollY: window.scrollY,"
     "  };"
     " } catch (e) { return { diagError: String(e) }; }"
+    "}"
+)
+
+STICKY_INPUT_JS = (
+    "() => {"
+    " const scroller = (" + FIND_CHAT_SCROLLER_JS + ")();"
+    " if (!scroller) return null;"
+    " const input = scroller.querySelector('[data-testid=\"stChatInput\"]');"
+    " if (!input) return null;"
+    " const wrapper = input.parentElement;"
+    " const sb = scroller.getBoundingClientRect();"
+    " const wb = wrapper.getBoundingClientRect();"
+    " return {"
+    "  wrapperPosition: getComputedStyle(wrapper).position,"
+    "  delta: wb.bottom - sb.bottom,"
+    "  visible: wb.top < sb.bottom - 1 && wb.bottom > sb.top + 1,"
+    " };"
     "}"
 )
 
@@ -413,6 +434,44 @@ async def _click_append_and_wait_growth(page: Page, prev_height: int) -> None:
         )
 
 
+async def _read_sticky_input(page: Page) -> dict[str, Any] | None:
+    """Read the sticky-input probe; None when input/scroller is missing."""
+    pinned: Any = await page.evaluate(STICKY_INPUT_JS)
+    return pinned if isinstance(pinned, dict) else None
+
+
+async def _capture_shot(page: Page, shot: str, dom_notes: str = "") -> dict[str, Any]:
+    """Capture ``<shot>.png`` bound to the DOM metrics of this instant.
+
+    Reads scroller metrics, the sticky-input probe, and
+    ``userScrolledUp`` back-to-back, screenshots to
+    ``reports/visual_qa_autoscroll/<shot>.png``, and writes the
+    sidecar ``<shot>.metrics.json`` with the exact values read, so
+    every PNG is provably bound to a scroll position.
+    """
+    metrics = await _require_metrics(page)
+    sticky = await _read_sticky_input(page)
+    flag = await _read_user_scrolled_up(page)
+    os.makedirs(VISUAL_QA_DIR, exist_ok=True)
+    png_path = os.path.join(VISUAL_QA_DIR, f"{shot}.png")
+    await page.screenshot(path=png_path)
+    viewport = page.viewport_size or {"width": 1280, "height": 800}
+    record: dict[str, Any] = {
+        "shot": shot,
+        "captured_at_utc": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+        "url": page.url,
+        "viewport": viewport,
+        "metrics": metrics,
+        "sticky": sticky,
+        "userScrolledUp": flag,
+        "dom_notes": dom_notes,
+    }
+    sidecar_path = os.path.join(VISUAL_QA_DIR, f"{shot}.metrics.json")
+    with open(sidecar_path, "w", encoding="utf-8") as fh:
+        json.dump(record, fh, indent=2)
+    return record
+
+
 @pytest.mark.asyncio
 @pytest.mark.e2e
 async def test_a1_single_scroller_and_window_locked(harness_base_url: str) -> None:
@@ -594,23 +653,8 @@ async def test_a7_sticky_input_invariant(harness_base_url: str) -> None:
             ).new_page()
             await _goto_ready(page, harness_base_url)
             await _require_overflow(page)
-            pinned: Any = await page.evaluate(
-                "() => {"
-                " const scroller = (" + FIND_CHAT_SCROLLER_JS + ")();"
-                " if (!scroller) return null;"
-                " const input = scroller.querySelector('[data-testid=\"stChatInput\"]');"
-                " if (!input) return null;"
-                " const wrapper = input.parentElement;"
-                " const sb = scroller.getBoundingClientRect();"
-                " const wb = wrapper.getBoundingClientRect();"
-                " return {"
-                "  wrapperPosition: getComputedStyle(wrapper).position,"
-                "  delta: wb.bottom - sb.bottom,"
-                "  visible: wb.top < sb.bottom - 1 && wb.bottom > sb.top + 1,"
-                " };"
-                "}"
-            )
-            if not isinstance(pinned, dict):
+            pinned = await _read_sticky_input(page)
+            if pinned is None:
                 dump = await _diag_dump(page)
                 pytest.fail(f"A7 probe found no input.\n{dump}", pytrace=False)
             assert pinned["wrapperPosition"] == "sticky", (
@@ -773,6 +817,151 @@ async def test_iframe_probe_slot_no_growth(harness_base_url: str) -> None:
             assert count1 <= 4, (
                 f"unexpected iframe population ({count1}); record the exact "
                 f"selector used.\n{await _diag_dump(page)}"
+            )
+        finally:
+            await browser.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.e2e
+async def test_s1_bottom_stuck_capture(harness_base_url: str) -> None:
+    """S1: bottom-stuck mid-stream capture + sidecar (spec section 2)."""
+    async with async_playwright() as pw:
+        browser = await _open_browser(pw)
+        try:
+            page = await (
+                await browser.new_context(viewport={"width": 1280, "height": 800})
+            ).new_page()
+            await _goto_ready(page, harness_base_url)
+            await _require_overflow(page)
+            await _scroll_to_bottom(page)
+            before = await _require_metrics(page)
+            top0 = before["scrollTop"]
+            sh0 = before["scrollHeight"]
+            await _click_append_and_wait_growth(page, sh0)
+            record = await _capture_shot(page, "s1_bottom_stuck")
+            await _wait_stream_settled(page)
+            after = await _require_metrics(page)
+            followed = (
+                after["scrollTop"] > top0 + NO_YANK_TOLERANCE_PX
+                or after["dist"] <= BOTTOM_THRESHOLD_PX
+            )
+            assert followed, (
+                "S1: view did not follow appended content after settle "
+                f"(top0={top0} sh0={sh0} "
+                f"cap={record['metrics']} "
+                f"after(top={after['scrollTop']}, "
+                f"sh={after['scrollHeight']}, "
+                f"dist={after['dist']}, "
+                f"flag={record['userScrolledUp']}, "
+                f"sticky={record['sticky']})\n{await _diag_dump(page)}"
+            )
+        finally:
+            await browser.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.e2e
+async def test_s2_scrolled_up_button_capture(harness_base_url: str) -> None:
+    """S2: scrolled-up capture + sidecar; jump-button absence recorded."""
+    async with async_playwright() as pw:
+        browser = await _open_browser(pw)
+        try:
+            page = await (
+                await browser.new_context(viewport={"width": 1280, "height": 800})
+            ).new_page()
+            await _goto_ready(page, harness_base_url)
+            await _require_overflow(page)
+            await _scroll_to_bottom(page)
+            await _move_mouse_to_scroller_center(page)
+            lifted = await _require_metrics(page)
+            for _ in range(4):
+                if lifted["dist"] > 300:
+                    break
+                lifted = await _wheel_pulse(page, -600)
+            jump: Any = await page.evaluate(
+                "() => {"
+                " const btns = Array.from(document.querySelectorAll('button'));"
+                " const btnHit = btns.some((b) =>"
+                "  (b.textContent || '').includes('최신')"
+                "  || (b.id || '').includes('jump_to_latest'));"
+                " const htmlHit = document.documentElement.innerHTML.includes("
+                "  'jump_to_latest');"
+                " return {btnHit: btnHit, htmlHit: htmlHit,"
+                "  buttonCount: btns.length};"
+                "}"
+            )
+            notes = (
+                "jump_to_latest probe (expected absent pre-rollout): "
+                f"{jump}; lifted(dist={lifted['dist']})"
+            )
+            record = await _capture_shot(page, "s2_scrolled_up_button", notes)
+            assert record["userScrolledUp"] is True, (
+                "S2: wheel-up did not set userScrolledUp "
+                f"(flag={record['userScrolledUp']}, "
+                f"metrics={record['metrics']})\n{await _diag_dump(page)}"
+            )
+            assert record["metrics"]["dist"] > 300, (
+                "S2: could not lift the view >300px above bottom with real "
+                f"wheel events (dist={record['metrics']['dist']}).\n"
+                f"{await _diag_dump(page)}"
+            )
+        finally:
+            await browser.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.e2e
+async def test_s3_streaming_mid_chunk_capture(harness_base_url: str) -> None:
+    """S3: mid-chunk streaming capture + sidecar (spec section 2)."""
+    async with async_playwright() as pw:
+        browser = await _open_browser(pw)
+        try:
+            page = await (
+                await browser.new_context(viewport={"width": 1280, "height": 800})
+            ).new_page()
+            await _goto_ready(page, harness_base_url)
+            await _require_overflow(page)
+            await _scroll_to_bottom(page)
+            before = await _require_metrics(page)
+            await _click_append_and_wait_growth(page, before["scrollHeight"])
+            evidence: Any = None
+            for _ in range(40):
+                probe: Any = await page.evaluate(
+                    "() => {"
+                    " const text = document.body"
+                    "  ? document.body.innerText : '';"
+                    " const hasBlockCursor = text.includes('▌')"
+                    "  || text.includes('▍');"
+                    " const cursorNodes = document.querySelectorAll("
+                    '  \'[class*="cursor"], [class*="blink"]\').length;'
+                    " const hasPartial = text.includes('token-');"
+                    " return {hasBlockCursor: hasBlockCursor,"
+                    "  cursorNodes: cursorNodes, hasPartial: hasPartial};"
+                    "}"
+                )
+                if isinstance(probe, dict) and (
+                    probe.get("hasBlockCursor")
+                    or probe.get("cursorNodes", 0) > 0
+                    or probe.get("hasPartial")
+                ):
+                    evidence = probe
+                    break
+                await page.wait_for_timeout(125)
+            if evidence is None:
+                evidence = {
+                    "hasBlockCursor": False,
+                    "cursorNodes": 0,
+                    "hasPartial": False,
+                    "note": "no streaming cursor seen; growth onset only",
+                }
+            notes = f"streaming evidence at capture: {evidence}"
+            record = await _capture_shot(page, "s3_streaming_mid_chunk", notes)
+            assert record["metrics"]["dist"] <= 80, (
+                "S3: viewport left the bottom mid-stream "
+                f"(dist={record['metrics']['dist']} > 80, "
+                f"metrics={record['metrics']}, "
+                f"evidence={evidence})\n{await _diag_dump(page)}"
             )
         finally:
             await browser.close()
