@@ -178,6 +178,14 @@ if _MAX_CONCURRENT_INFERENCE_RAW <= 0:
         "models.max_concurrent_inference to an integer >= 1."
     )
 MAX_CONCURRENT_INFERENCE: int = _MAX_CONCURRENT_INFERENCE_RAW
+# [T2] 동시 추론 부하 검증 게이트 — True + 부하 검증 완료 전까지는
+# effective bound가 1로 고정된다 (기본값 False = 직렬 추론 유지).
+# config key: models.allow_concurrent_inference, env: ALLOW_CONCURRENT_INFERENCE.
+INFERENCE_CONCURRENCY_LOAD_TESTED: bool = _get_env(
+    "ALLOW_CONCURRENT_INFERENCE",
+    _models_config.get("allow_concurrent_inference", False),
+    lambda x: str(x).lower() == "true",
+)
 MAX_RESOURCE_POOL_SIZE: int = _get_env(
     "MAX_RESOURCE_POOL_SIZE", _models_config.get("max_resource_pool_size", 5), int
 )
@@ -243,6 +251,12 @@ GRADING_ENABLED: bool = bool(_grading_config.get("enabled", True))
 # --- 4. 파싱 및 하이드레이션 (Parsing) ---
 PARSING_CONFIG: dict = _rag_config.get("parsing", {})
 HYDRATION_MODE: str = PARSING_CONFIG.get("hydration_mode", "precision_clip")
+# T2 bounded drain 상한(초) — 초과 시 fail-loud 타임아웃. 기본 30초.
+HYDRATION_DRAIN_TIMEOUT_SECONDS: float = _get_env(
+    "HYDRATION_DRAIN_TIMEOUT_SECONDS",
+    PARSING_CONFIG.get("hydration_drain_timeout_seconds", 30.0),
+    float,
+)
 VECTOR_STORE_CACHE_DIR: str = str(
     PROJECT_ROOT
     / _rag_config.get("vector_store_cache_dir", ".model_cache/vector_store_cache")

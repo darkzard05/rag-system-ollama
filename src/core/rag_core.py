@@ -8,12 +8,18 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from collections.abc import AsyncIterator, Callable
 from typing import Any
 
 from langchain_core.embeddings import Embeddings
 
 from cache.vector_cache import EngineCacheManager
+from common.config import (
+    HYDRATION_DRAIN_TIMEOUT_SECONDS,
+    INFERENCE_CONCURRENCY_LOAD_TESTED,
+    MAX_CONCURRENT_INFERENCE,
+)
 from common.exceptions import VectorStoreError
 from common.resilience import get_circuit_breaker_registry, retry_stream
 from common.utils import doc_stable_id
@@ -170,6 +176,10 @@ class RAGSystem:
             # 단일 변수가 아닌 리스트로 보관해 모든 하이드레이션 태스크를 유지한다.
             hydration_tasks: list[asyncio.Task[Any]] = []
             seen_doc_keys: set[str] = set()
+            SessionManager.add_status_log(
+                "답변 생성 시작...",
+                session_id=self.session_id,
+            )
             try:
 
                 async def _event_factory():
@@ -225,13 +235,59 @@ class RAGSystem:
                 # 좌표 완성 문서를 읽게 보장한다. 실패는 상태 로그에 남겨
                 # 인용 하이라이트 저하를 UI에 가시화한다 (침묵 성공 방지).
                 hydration_failed = 0
-                for t in hydration_tasks:
-                    try:
-                        await t
-                    except (Exception, asyncio.CancelledError) as te:
-                        hydration_failed += 1
-                        logger.error(f"[RAG] 문서 하이드레이션 실패: {te}")
-                if hydration_failed:
+                _t_drain = time.perf_counter()
+                # T2 bounded drain: 순차 드레인 유지(기본 effective_bound=1) +
+                # asyncio.wait_for 타임아웃 바운드 + 게이트 통과 시에만
+                # concurrent gather. metric은 성공/타임아웃 양쪽 경로에서
+                # 무조건 emit (fail-loud)한다.
+                _drain_timed_out = False
+                _effective_bound = (
+                    MAX_CONCURRENT_INFERENCE if INFERENCE_CONCURRENCY_LOAD_TESTED else 1
+                )
+                try:
+                    if _effective_bound > 1 and hydration_tasks:
+                        _results = await asyncio.wait_for(
+                            asyncio.gather(
+                                *(asyncio.shield(t) for t in hydration_tasks),
+                                return_exceptions=True,
+                            ),
+                            timeout=HYDRATION_DRAIN_TIMEOUT_SECONDS,
+                        )
+                        for _r in _results:
+                            if isinstance(_r, BaseException):
+                                hydration_failed += 1
+                                logger.error(f"[RAG] 문서 하이드레이션 실패: {_r}")
+                    else:
+                        _deadline = _t_drain + HYDRATION_DRAIN_TIMEOUT_SECONDS
+                        for t in hydration_tasks:
+                            _remaining = _deadline - time.perf_counter()
+                            if _remaining <= 0:
+                                _drain_timed_out = True
+                                hydration_failed += 1
+                                logger.error("[RAG] 하이드레이션 드레인 타임아웃")
+                                break
+                            try:
+                                await asyncio.wait_for(
+                                    asyncio.shield(t), timeout=_remaining
+                                )
+                            except asyncio.TimeoutError:
+                                _drain_timed_out = True
+                                hydration_failed += 1
+                                logger.error("[RAG] 하이드레이션 드레인 타임아웃")
+                            except (Exception, asyncio.CancelledError) as te:
+                                hydration_failed += 1
+                                logger.error(f"[RAG] 문서 하이드레이션 실패: {te}")
+                except asyncio.TimeoutError:
+                    _drain_timed_out = True
+                    hydration_failed += len(hydration_tasks)
+                    logger.error("[RAG] 하이드레이션 드레인 타임아웃")
+                _drain_elapsed = time.perf_counter() - _t_drain
+                logger.info(
+                    "[PERF] hydration drain took %.3fs (%d task(s))",
+                    _drain_elapsed,
+                    len(hydration_tasks),
+                )
+                if hydration_failed or _drain_timed_out:
                     SessionManager.add_status_log(
                         "일부 참조 문서의 하이라이트 좌표를 불러오지 못했습니다.",
                         session_id=self.session_id,
@@ -269,6 +325,18 @@ class RAGSystem:
 
         file_hash = SessionManager.get("file_hash", session_id=self.session_id)
         SessionManager.reset_all_state(session_id=self.session_id)
+
+        # T1: 세션 스코프 그래프 상태(체크포인터 thread + speculative orphan)를
+        # 명시적으로 정리한다. delete_session 경로에서도 수행되지만, clear 경로의
+        # 정리 계약을 이 메서드에 직접 둔다 (멱등 — 없어도 조용히 무시).
+        try:
+            from core.graph._speculative_gen import delete_spec_thread
+            from core.graph.graph_builder import delete_graph_thread
+
+            delete_spec_thread(self.session_id)
+            delete_graph_thread(self.session_id)
+        except Exception as e:
+            logger.warning(f"[RAG] 세션 그래프 상태 정리 실패 ({self.session_id}): {e}")
 
         if file_hash:
             active_hashes = SessionManager.get_active_file_hashes()

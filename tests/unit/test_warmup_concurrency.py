@@ -225,13 +225,17 @@ async def test_concurrency_no_pressure_keeps_configured_bound(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """MAX_CONCURRENT_INFERENCE=3 + host_pressure_exceeded()==False 면
-    effective bound 가 3 (강등 없음) 이 되는지."""
+    effective bound 가 3 (강등 없음) 이 되는지.
+
+    부하 검증 게이트(INFERENCE_CONCURRENCY_LOAD_TESTED)까지 통과한 상태를
+    전제로 한다 — 게이트 미통과 시 bound==1 고정은 의도된 동작(T2)이다."""
     coordinator = get_resource_manager()
     coordinator._inference_semaphore = None
     coordinator._inference_semaphore_bound = None
 
     monkeypatch.setattr(resource_manager_mod, "host_pressure_exceeded", lambda: False)
     monkeypatch.setattr(resource_manager_mod, "MAX_CONCURRENT_INFERENCE", 3)
+    monkeypatch.setattr(resource_manager_mod, "INFERENCE_CONCURRENCY_LOAD_TESTED", True)
 
     await coordinator.acquire_inference_lock(timeout=0)
     try:

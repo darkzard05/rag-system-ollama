@@ -51,6 +51,10 @@ models:
   # 2까지 권장, 3 이상은 추가 메모리 검증 필수.
   max_concurrent_inference: 1
 
+  # T2 load-test gate — true로 바꾸기 전에는 effective bound가 1로 고정된다.
+  # 2 이상은 부하 검증(load gate) 통과 후에만 활성화할 것.
+  allow_concurrent_inference: false
+
   # Ollama HTTP 요청 및 추론 세마포어 획득 타임아웃 (초)
   timeout: 120
 
@@ -130,7 +134,9 @@ rag:
     #     단어 토큰 시퀀스 매칭(슬라이딩 윈도우)이 담당합니다.
     # full: 페이지 전체 좌표 추출 (비효율적)
     # none: 좌표 추출 안 함 (하이라이트 불가)
-    hydration_mode: "precision_clip" 
+    hydration_mode: "precision_clip"
+    # T2 bounded drain 상한(초) — 초과 시 fail-loud 타임아웃 + X.XXXs metric emit.
+    hydration_drain_timeout_seconds: 30.0
     
     margins: [0, 72, 0, 72]  # [추가] 상하 1인치(72pt) 마진 무시 (헤더/푸터 제거)
     write_images: false
