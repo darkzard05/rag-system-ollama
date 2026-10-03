@@ -28,6 +28,7 @@ from typing import Any, Generic, ParamSpec, TypeVar, cast
 from common.config import (
     ENABLE_OLLAMA_PRESSURE_FALLBACK,  # noqa: F401 - patch seam (tests patch this attr)
     HOST_PRESSURE_THRESHOLD,
+    INFERENCE_CONCURRENCY_LOAD_TESTED,
     MAX_CACHED_MODELS,
     MAX_CONCURRENT_INFERENCE,
     MAX_RESOURCE_POOL_SIZE,
@@ -50,6 +51,14 @@ P = ParamSpec("P")
 # → FlashRank 같은 무거운 로드가 오프라인/차단 상태에서 매 쿼리 재시도되는 지연 누적을 방지.
 _BUILD_FAILURE_LIMIT = 3
 _BUILD_CIRCUIT_TTL_SECONDS = 60.0
+
+# T1 intrinsic growth bounds (GATE-1b): the dicts below previously relied only
+# on call-site-cadence sweeps, so unique keys accumulated without bound.
+# Caps are enforced on the write path; eviction always spares held/in-flight
+# entries (correctness first — overflow is allowed when nothing is evictable).
+# A _build_failures entry evicted early simply fails open (retries sooner).
+_BUILD_LOCK_MAX_ENTRIES = 10
+_BUILD_FAILURE_MAX_ENTRIES = 5
 
 
 logger = logging.getLogger(__name__)
@@ -77,6 +86,28 @@ def _ollama_backend_active() -> bool:
     import common.system_pressure as sp
 
     return sp.ollama_backend_active()
+
+
+def get_effective_inference_bound(configured: int | None = None) -> int:
+    """유효 동시 추론 bound를 반환합니다 (T2 파라미터화, 기본값 1 불변).
+
+    configured가 None이면 config MAX_CONCURRENT_INFERENCE를 사용한다.
+    부하 검증 게이트(INFERENCE_CONCURRENCY_LOAD_TESTED)가 False이면
+    configured 값과 무관하게 1을 반환한다. 게이트 통과 후에는 VRAM 압력
+    시 1로 강등, 그 외에는 configured 값을 그대로 반환한다.
+    """
+    bound = MAX_CONCURRENT_INFERENCE if configured is None else configured
+    if bound <= 1:
+        return 1
+    if not INFERENCE_CONCURRENCY_LOAD_TESTED:
+        logger.warning(
+            "[RESOURCE] 동시 추론 %d 요청됐으나 부하 검증 게이트 미통과 — 1로 고정",
+            bound,
+        )
+        return 1
+    if host_pressure_exceeded():
+        return 1
+    return bound
 
 
 # ============================================================================
@@ -423,6 +454,7 @@ class ResourceCoordinator:
         self._inference_semaphore: asyncio.Semaphore | None = None
         self._inference_semaphore_bound: int | None = None
         self._semaphore_loop: asyncio.AbstractEventLoop | None = None
+        self._inference_held: int = 0
 
     def reset(self) -> None:
         """
@@ -439,29 +471,51 @@ class ResourceCoordinator:
         self._inference_semaphore = None
         self._inference_semaphore_bound = None
         self._semaphore_loop = None
+        self._inference_held = 0
 
     def _get_build_lock(self, key: str) -> asyncio.Lock:
-        # Stable per-key lock: a concurrent caller for the same key always
-        # receives the SAME lock object, so only one build can run at a time
-        # (prevents double-build via lock recycling).
-        #
-        # asyncio.Lock binds to the running event loop on first acquire (its
-        # bound loop is None until then). Under per-test event-loop swapping
-        # (pytest-asyncio mode=auto) a lock cached from a previous loop raises
-        # ``bound to a different event loop`` on the next test. We therefore
-        # reuse an unbound lock, but recreate one whose bound loop differs from
-        # the current loop.
+        # T1 unified rule (strategy A — single entry per key, recreate only
+        # when idle; per-loop dict rejected: handing loop B a fresh UNLOCKED
+        # lock while loop A still holds the same key forks mutual exclusion
+        # and opens a double-build window (GATE-1a proves it); anyio rejected:
+        # these factories are sync and consumed by asyncio code, so a backend
+        # migration is out of scope for this fix).
+        # Held (possibly on a retired loop): NEVER fork — return the same
+        # object so the critical section stays exclusive; a contender on a
+        # foreign loop fails loud instead of silently double-building. Idle +
+        # foreign-bound: recreate so the new loop gets a usable lock (no hang).
         existing = self._build_locks.get(key)
-        if existing is None:
-            self._build_locks[key] = asyncio.Lock()
-        else:
+        if existing is not None:
+            if existing.locked():
+                return existing
             # asyncio.Lock._loop is private; cast to Any to read the bound loop
-            # (None until first acquire). Recreate if it is bound to a different
-            # loop than the current one (per-test loop swapping breaks reuse).
+            # (None until the first contended acquire).
             bound_loop = cast("Any", existing)._loop
-            if bound_loop is not None and bound_loop is not asyncio.get_event_loop():
-                self._build_locks[key] = asyncio.Lock()
+            if bound_loop is None or bound_loop is asyncio.get_event_loop():
+                # LRU refresh: hot keys survive the intrinsic cap below.
+                self._build_locks.pop(key, None)
+                self._build_locks[key] = existing
+                return existing
+        self._build_locks.pop(key, None)
+        self._build_locks[key] = asyncio.Lock()
+        self._evict_excess_build_locks()
         return self._build_locks[key]
+
+    def _evict_excess_build_locks(self) -> None:
+        """Enforce the intrinsic cap, sparing held/in-flight keys.
+
+        ``async with`` guarantees unlock on exception, so a locked entry is
+        always a live critical section — evicting it would fork mutual
+        exclusion. When nothing is evictable the dict temporarily overflows
+        (correctness first); the every-50-builds sweep reaps the idle rest.
+        """
+        while len(self._build_locks) > _BUILD_LOCK_MAX_ENTRIES:
+            for candidate, candidate_lock in self._build_locks.items():
+                if candidate not in self._in_flight and not candidate_lock.locked():
+                    del self._build_locks[candidate]
+                    break
+            else:
+                break
 
     def _cleanup_build_locks(self) -> None:
         """Remove build locks for keys no longer tracked in any pool.
@@ -510,12 +564,27 @@ class ResourceCoordinator:
             # TTL 경과 → 재시도 허용 (카운터 리셋)
             self._build_failures.pop(key, None)
 
+    def _purge_expired_build_failures(self, now: float) -> int:
+        """Drop failure records past the circuit TTL. Returns reaped count."""
+        expired = [
+            key
+            for key, (_, failed_at) in self._build_failures.items()
+            if now - failed_at >= _BUILD_CIRCUIT_TTL_SECONDS
+        ]
+        for key in expired:
+            del self._build_failures[key]
+        return len(expired)
+
     def _record_build_failure(self, key: str) -> None:
         """[R3b-03] 빌드 실패를 네거티브 캐시에 기록하고 회로 차단 전환을 로그로 노출."""
         now = time.monotonic()
+        self._purge_expired_build_failures(now)
         count, _ = self._build_failures.get(key, (0, 0.0))
         count += 1
+        self._build_failures.pop(key, None)
         self._build_failures[key] = (count, now)
+        while len(self._build_failures) > _BUILD_FAILURE_MAX_ENTRIES:
+            self._build_failures.pop(next(iter(self._build_failures)))
         if count >= _BUILD_FAILURE_LIMIT:
             logger.error(
                 f"[RESOURCE] '{key}' 빌드 {count}회 연속 실패 — "
@@ -534,6 +603,7 @@ class ResourceCoordinator:
     def inference_semaphore(self, sem: asyncio.Semaphore) -> None:
         self._inference_semaphore = sem
         self._inference_semaphore_bound = None
+        self._inference_held = 0
         try:
             self._semaphore_loop = asyncio.get_running_loop()
         except RuntimeError:
@@ -546,28 +616,41 @@ class ResourceCoordinator:
         발생시킵니다. 기본값은 config의 OLLAMA_TIMEOUT입니다.
         """
         loop = asyncio.get_running_loop()
-        # [WAVE4] VRAM 압력 시 >1 동시 추론을 1로 강등. 기본값(1)에서는
+        # T2: get_effective_inference_bound로 위임. 게이트 미통과/기본값(1)에서는
         # host_pressure_exceeded 호출 없이 기존 흐름과 동일(동작/성능 변화 없음).
-        effective_bound = (
-            1
-            if (MAX_CONCURRENT_INFERENCE > 1 and host_pressure_exceeded())
-            else MAX_CONCURRENT_INFERENCE
-        )
-        if self._inference_semaphore is None or self._semaphore_loop is not loop:
-            # First creation or loop change -> (re)create the managed default.
+        effective_bound = get_effective_inference_bound()
+        # T1 unified rule: recreate on loop/bound change ONLY when idle
+        # (_inference_held == 0). Recreating while permits are outstanding
+        # discards held-permit accounting and over-admits on the new loop
+        # (GATE-1a: bound=1 held on A, B must NOT acquire). When held, reuse
+        # the same semaphore so the contender parks and times out loud.
+        if self._inference_semaphore is None:
+            # No semaphore: nothing can be held — reset any drifted counter
+            # (tests poke _inference_semaphore directly) and create fresh.
+            self._inference_held = 0
             self._inference_semaphore = asyncio.Semaphore(effective_bound)
             self._inference_semaphore_bound = effective_bound
             self._semaphore_loop = loop
+        elif self._semaphore_loop is not loop:
+            # Loop change -> recreate ONLY when idle (see T1 rule above).
+            if self._inference_held == 0:
+                self._inference_semaphore = asyncio.Semaphore(effective_bound)
+                self._inference_semaphore_bound = effective_bound
+                self._semaphore_loop = loop
         elif self._inference_semaphore_bound is not None:
             # Managed semaphore only: re-create on VRAM-pressure bound change.
             # Track the CREATION bound (not _value) to avoid permit-leak recreation.
-            if self._inference_semaphore_bound != effective_bound:
+            if (
+                self._inference_semaphore_bound != effective_bound
+                and self._inference_held == 0
+            ):
                 self._inference_semaphore = asyncio.Semaphore(effective_bound)
                 self._inference_semaphore_bound = effective_bound
         # Injected semaphores (bound is None) are respected as-is — never recreated.
         wait_seconds = timeout if timeout is not None else OLLAMA_TIMEOUT
         if wait_seconds is None or wait_seconds <= 0:
             await self._inference_semaphore.acquire()
+            self._inference_held += 1
             return
         try:
             await asyncio.wait_for(
@@ -581,11 +664,14 @@ class ResourceCoordinator:
                     "timeout_seconds": wait_seconds,
                 },
             ) from e
+        self._inference_held += 1
 
     def release_inference_lock(self) -> None:
         """획득한 LLM 추론 락을 해제합니다."""
         if self._inference_semaphore is not None:
             self._inference_semaphore.release()
+            if self._inference_held > 0:
+                self._inference_held -= 1
 
     @asynccontextmanager
     async def inference_session(self, timeout: float | None = None):

@@ -684,6 +684,18 @@ class SessionManager:
         except Exception as e:
             logger.warning(f"[SESSION] 체크포인터 thread 정리 실패 ({session_id}): {e}")
 
+        # T1: 같은 thread_id의 speculative generate orphan도 함께 정리한다.
+        # 세션이 generate 경로를 마치기 전에 버려지면 해당 항목이 레지스트리에
+        # 영구 잔존한다 (TTL이 최후 방어선, 세션 삭제가 1차 정리).
+        try:
+            from core.graph._speculative_gen import delete_spec_thread
+
+            delete_spec_thread(session_id)
+        except Exception as e:
+            logger.warning(
+                f"[SESSION] speculative thread 정리 실패 ({session_id}): {e}"
+            )
+
         # 물리적 PDF 삭제는 호출자가 락 해제 후 수행하도록 경로만 반환.
         return pdf_path
 

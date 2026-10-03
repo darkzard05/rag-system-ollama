@@ -18,6 +18,7 @@ import json
 import logging
 import re
 import threading
+import time
 from dataclasses import dataclass, field
 from typing import Any, cast
 
@@ -34,6 +35,7 @@ from common.config import (
 )
 from common.utils import doc_stable_id
 from core.graph._speculative_gen import (
+    _enforce_spec_registry_bound,
     _spec_generate_events,
     _spec_overlap_enabled,
     _spec_registry,
@@ -137,15 +139,21 @@ class _GraphCache:
     def get_lock(self) -> asyncio.Lock:
         """지연 초기화된 단일 그래프 빌드 락을 반환합니다.
 
-        asyncio.Lock 은 최초 acquire 시점에 event loop 에 바인딩되므로, 생성 직후
-        ``_loop`` 는 ``None`` 입니다. 테스트/워커처럼 함수 단위로 루프가 교체되는
-        환경에서 캐시된 락을 무조건 재사용하면 ``bound to a different event loop``
-        오류가 나므로, 이미 바인딩된 루프가 현재 루프와 다를 때만 새 락으로
-        재생성합니다 (``_loop is None`` 인 미바인딩 락은 같은 객체로 재사용).
+        T1 unified rule (strategy A): loop change recreates the lock ONLY when
+        idle. A lock HELD on a retired loop is returned as-is so the in-flight
+        compile stays exclusive — recreating while held forks mutual exclusion
+        and opens a double-compile window (GATE-1a). A contender on the foreign
+        loop then fails loud instead of silently double-compiling.
         """
-        if self._lock is None or (
-            # asyncio.Lock._loop is private; cast to Any to read the bound loop
-            # (None until first acquire). Recreate if bound to a different loop.
+        if self._lock is None:
+            self._lock = asyncio.Lock()
+            return self._lock
+        if self._lock.locked():
+            return self._lock
+        # asyncio.Lock._loop is private; cast to Any to read the bound loop
+        # (None until first contended acquire). Idle + foreign-bound: safe to
+        # recreate so the new loop gets a usable lock (GATE-2a: no hang).
+        if (
             cast("Any", self._lock)._loop is not None
             and cast("Any", self._lock)._loop is not asyncio.get_event_loop()
         ):
@@ -569,6 +577,7 @@ def _reset_stage_timings() -> None:
             "grade_ms": 0.0,
             "generate_total_ms": 0.0,
             "ttft_ms": 0.0,
+            "first_token_ms": 0.0,
         }
     )
 
@@ -599,7 +608,8 @@ def _emit_query_timing(timings: dict[str, float]) -> None:
         f"retrieve_ms={timings.get('retrieve_ms', 0.0):.1f} "
         f"grade_ms={timings.get('grade_ms', 0.0):.1f} "
         f"generate_total_ms={timings.get('generate_total_ms', 0.0):.1f} "
-        f"ttft_ms={timings.get('ttft_ms', 0.0):.1f}"
+        f"ttft_ms={timings.get('ttft_ms', 0.0):.1f} "
+        f"first_token_ms={timings.get('first_token_ms', 0.0):.1f}"
     )
 
 
@@ -674,8 +684,11 @@ def _start_speculative_generate(
     # Tag the task so the speculative generate instance does NOT adopt itself
     # (it must run normally and buffer its events instead).
     task._is_speculative = True  # type: ignore[attr-defined]
-    _spec_registry[thread_id] = _SpecGenerate(task=task, buffer=[])
+    _spec_registry[thread_id] = _SpecGenerate(
+        task=task, buffer=[], created_at=time.monotonic()
+    )
     # The speculative task buffers into the ContextVar list we just captured.
     _spec_registry[thread_id].buffer = _spec_generate_events.get([])
+    _enforce_spec_registry_bound()
     logger.info("[RAG] [SPEC] eager generate 시작 (route 결정 대기)")
     return thread_id

@@ -45,6 +45,21 @@ _preload_loop: asyncio.AbstractEventLoop | None = None
 _preload_scheduled: bool = False
 
 
+async def _warmup_flashranker(ranker: Any) -> None:
+    """FlashRank ONNX 세션을 실제 스코어링 1회로 확정합니다.
+
+    ``get_flashranker()``는 파이썬 래퍼 객체만 반환하며, ONNX InferenceSession과
+    가중치는 첫 ``CrossEncoder.rerank``(= predict) 호출에서 로드됩니다. 따라서
+    acquire만으로는 첫 쿼리가 리랭킹 콜드 스타트를 그대로 지불합니다(측정 4.7s).
+
+    FlashRank는 빈 passages를 받으면 즉시 반환하므로 1건 이상을 반드시 넘깁니다.
+    """
+    from flashrank import RerankRequest
+
+    request = RerankRequest(query="warmup", passages=[{"id": 0, "text": "warmup"}])
+    await asyncio.to_thread(ranker.rerank, request)
+
+
 async def _preload_model() -> None:
     """임베딩·FlashRank·LLM을 프리로드합니다. 실패해도 앱을 중단하지 않으며 태스크 예외를 누출하지 않습니다."""
     try:
@@ -61,10 +76,20 @@ async def _preload_model() -> None:
         logger.info("[RAG] [PRELOAD] 임베딩 워밍 완료")
 
         # 2) FlashRank 워밍 — 첫 쿼리 시 리랭커 lazy 로드(~10s) 방지.
-        # 획득 기간 동안 use_flashranker CM 으로 pin.
-        async with coordinator.use_flashranker(model_name=RERANKER_MODEL_NAME):
-            await ModelManager.get_flashranker()
-        logger.info("[RAG] [PRELOAD] FlashRank 워밍 완료")
+        # acquire만으로는 ONNX InferenceSession이 뜨지 않으므로 실제 스코어링 1회가
+        # 필요하다(측정: 첫 쿼리 rerank_ms=4744.8 → 이후 87.2).
+        # FlashRank 실패(의존성 부재 포함)는 LLM 워밍까지 막지 않도록 여기서 격리한다.
+        try:
+            async with coordinator.use_flashranker(model_name=RERANKER_MODEL_NAME):
+                ranker = await ModelManager.get_flashranker()
+                await _warmup_flashranker(ranker)
+            logger.info("[RAG] [PRELOAD] FlashRank 워밍 완료")
+        except Exception as e:
+            logger.warning(
+                f"[RAG] [PRELOAD] FlashRank 워밍 실패 ({type(e).__name__}: {e}) — "
+                "LLM 워밍은 계속 진행",
+                exc_info=True,
+            )
 
         # 3) LLM 프리로드 — 클라이언트 생성만으로는 Ollama 콜드 모델 로드가 첫 쿼리
         # 시점까지 지연되므로, 실질 워밍 추론을 1회 실행해 콜드 스타트를 선행합니다.
@@ -92,8 +117,20 @@ async def _schedule_model_preload() -> None:
         logger.info("[RAG] [PRELOAD] 테스트 환경 — 프리로드 스킵")
         return
     current_loop = asyncio.get_running_loop()
-    if _preload_lock is not None and _preload_loop is current_loop:
-        lock = _preload_lock
+    # T1 unified rule (strategy A, best-effort variant): recreate on loop
+    # change ONLY when idle. A foreign loop arriving while preload holds the
+    # lock skips instead of forking (double warmup) or joining a foreign-bound
+    # lock (RuntimeError on first contention) — preload is pure optimization.
+    if _preload_lock is not None:
+        if _preload_lock.locked() and _preload_loop is not current_loop:
+            logger.debug("[RAG] [PRELOAD] 타 루프에서 프리로드 진행 중 — 스킵")
+            return
+        if _preload_loop is current_loop:
+            lock = _preload_lock
+        else:
+            lock = asyncio.Lock()
+            _preload_lock = lock
+            _preload_loop = current_loop
     else:
         lock = asyncio.Lock()
         _preload_lock = lock
