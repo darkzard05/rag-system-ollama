@@ -92,6 +92,16 @@ async def preprocess(
             sm_w = DYNAMIC_WEIGHTING_CONFIG.get("semantic_weight", 0.8)
             weights = {"bm25": round(1.0 - sm_w, 1), "faiss": sm_w}
             logger.info(f"[RAG] [PREPROCESS] 의미 중심 질의 판단 (FAISS: {sm_w})")
+        elif is_keyword_heavy and is_semantic_heavy:
+            # F2 log-only dual-match signal — routing emission UNCHANGED
+            # (static default [0.4, 0.6] already in weights); no tie-break.
+            # Log-only on purpose: a state flag would need a GraphState schema
+            # key, whose exact-set snapshot test must stay untouched.
+            logger.info(
+                "[RAG] [PREPROCESS] dual_match_fallthrough — keyword+semantic "
+                "dual-match, default 가중치 유지 "
+                f"(BM25: {weights['bm25']}, FAISS: {weights['faiss']})"
+            )
 
     _preprocess_ms = (time.perf_counter() - _preprocess_start) * 1000
     _add_stage_ms("preprocess_ms", _preprocess_ms)
@@ -358,6 +368,8 @@ async def retrieve_and_rerank(
     max_candidates = int(dynamic_cfg.get("max_candidates", 18))
 
     if len(aggregated) >= 10:
+        # len>=10 guard: the top1-top10 RRF gap needs 10 scored rows to
+        # measure; shorter pools skip the selector and keep min_candidates.
         top_1_score = aggregated[0].aggregated_score
         top_10_score = aggregated[9].aggregated_score
         score_gap = top_1_score - top_10_score

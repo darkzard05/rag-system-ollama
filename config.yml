@@ -85,7 +85,7 @@ rag:
   retriever:
     search_type: "similarity"
     search_kwargs:
-      k: 15  # k-chain Stage-1 단일 절단 (N×2 지배항=BM25 get_scores, RRF/dynamic_top_k 불변)
+      k: 18  # Stage-1 풀 크기: dynamic_top_k max_candidates(18)와 일치시켜 18-후보 분기가 도달 가능하도록 복원 (k < max면 max 분기가 dead range가 됨 — F2 fix)
     # BM25와 FAISS의 가중치 기본값
     ensemble_weights: [0.4, 0.6]
 
