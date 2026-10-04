@@ -384,6 +384,11 @@ class _FinalAnswerExtractor:
         )
         return delta
 
+    @property
+    def closed(self) -> bool:
+        """final_answer 값이 닫혔으면 True (이후 토큰은 citations/confidence)."""
+        return bool(self._key_pos[4])
+
 
 # ─────────────────────────────────────────────────────────────────────
 # §2  RUNTIME — queue-thread bridge + st.write_stream helper
@@ -834,6 +839,8 @@ def _content_generator(
                 if getattr(chunk, "raw_json", False):
                     delta = raw_json_extractor.feed(chunk.content)
                     accumulated += delta
+                    if not delta and raw_json_extractor.closed:
+                        _report_status("인용 정리 중...")
                     if delta:
                         _real_yielded = True
                         _placeholder_live = False
