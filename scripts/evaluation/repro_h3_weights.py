@@ -6,13 +6,27 @@ Reads the ACTUAL routing params from config.yml:
 
 Classifies 12 sample questions (6 keyword-type, 6 semantic-type) with the real
 regex + keyword lists, shows per-question routing + simulated weight heatmap
-bins [0.2,0.8]/[0.4,0.6]/[0.6,0.4]/[0.8,0.2], and reports misroute rate.
+bins [0.2,0.8]/[0.4,0.6]/[0.8,0.2], and reports misroute rate.
 
-Routing rule (mirrors retriever_factory dynamic weighting intent):
+Routing rule (mirrors src/core/graph/_retrieval.py lines 70-84, strict 3-way):
   keyword-only  -> [0.8, 0.2] BM25-heavy
   semantic-only -> [0.2, 0.8] FAISS-heavy
-  both          -> [0.6, 0.4] keyword-leaning blend
-  neither       -> [0.4, 0.6] default ensemble_weights
+  both/neither -> [0.4, 0.6] default ensemble_weights (dual-match fallthrough)
+
+BLEND_DECISION (F1 Task 4, strict 3-way — minimal path):
+  Keep strict 3-way; do NOT invent a [0.6, 0.4] blend branch. The code has no
+  blend (grep '0.6' in _retrieval.py: no hits in the dynamic path; ledger F1-9;
+  static default ensemble_weights [0.4, 0.6] is F1-10, not a dynamic branch).
+  Earlier revisions of this script simulated a [0.6, 0.4] keyword-leaning blend
+  for dual-match rows — a measurement-loop defect: the report emitted weights
+  the real preprocess path can never produce, and excluded PARTIAL rows from
+  the denominator (Misrouted 0/12). The fix belongs report-side: this generator
+  now emits only the code-enumerated set {[0.8,0.2],[0.2,0.8],[0.4,0.6]} and
+  counts every row (denominator == row count, Misrouted = misrouted/total).
+  Rationale: inventing a blend would change routing behavior (scope creep into
+  Task 5/F2 tie-break, which owns dual-match handling) and contradict the F2
+  RED baseline that assumes silent [0.4, 0.6] fallthrough. Task 5 follows this
+  decision. See reports/f1_red_evidence.md Decision section.
 """
 
 from __future__ import annotations
@@ -21,6 +35,7 @@ import datetime
 import re
 import sys
 from pathlib import Path
+from typing import cast
 
 ROOT = Path(__file__).resolve().parents[2]
 CONFIG_PATH = ROOT / "config.yml"
@@ -89,7 +104,8 @@ SAMPLES: list[tuple[str, str, str]] = [
 
 def classify(q: str) -> dict[str, object]:
     kw_hit = next(
-        (p for p, rx in zip(KEYWORD_PATTERNS, COMPILED) if rx.search(q)), None
+        (p for p, rx in zip(KEYWORD_PATTERNS, COMPILED, strict=False) if rx.search(q)),
+        None,
     )
     sem_hits = [k for k in SEMANTIC_KEYWORDS if k in q]
     is_kw = kw_hit is not None
@@ -100,12 +116,16 @@ def classify(q: str) -> dict[str, object]:
     elif is_sem and not is_kw:
         weights = [round(1 - SEM_W, 1), SEM_W]  # [0.2, 0.8]
         route = "semantic (FAISS-heavy)"
-    elif is_kw and is_sem:
-        weights = [0.6, 0.4]
-        route = "both -> keyword-leaning blend"
     else:
+        # Strict 3-way (BLEND_DECISION): dual-match and neither both fall
+        # through to the static default — mirrors _retrieval.py 70-84 where
+        # the guards are mutually exclusive and there is no blend branch.
         weights = list(DEFAULT_WEIGHTS)  # [0.4, 0.6]
-        route = "neutral -> default"
+        route = (
+            "both -> default fallthrough (dual-match)"
+            if (is_kw and is_sem)
+            else "neutral -> default"
+        )
     return {
         "kw_hit": kw_hit,
         "sem_hits": sem_hits,
@@ -121,9 +141,8 @@ def heat_bin(w: list[float]) -> str:
     return {
         "[0.2,0.8]": "FAISS ████████░░",
         "[0.4,0.6]": "default ████░░░░░░",
-        "[0.6,0.4]": "blend  ██████░░░░",
         "[0.8,0.2]": "BM25   ████████░░",
-    }.get(key, key)
+    }.get(key, f"IMPOSSIBLE-{key}")
 
 
 def main() -> int:
@@ -140,13 +159,14 @@ def main() -> int:
                 else ("both" if (c["is_kw"] and c["is_sem"]) else "neutral")
             )
         )
+        # Strict 3-way verdict (BLEND_DECISION): every row counts.
         # ok = routed to the expected single route.
-        # partial = both-signal blend [0.6,0.4] (listed separately, not a misroute).
-        # misroute = opposite single route, or neutral despite a clear signal.
+        # misroute = anything else, INCLUDING dual-match fallthrough to the
+        # default [0.4, 0.6] (it matches neither pure route). The old script
+        # excluded PARTIAL blend rows from the denominator (0/12); the
+        # corrected denominator is the full row count (denominator == 12).
         if actual == expected:
             verdict = "OK"
-        elif actual == "both":
-            verdict = "PARTIAL"
         else:
             verdict = "MISROUTE"
             misroutes += 1
@@ -170,12 +190,13 @@ def main() -> int:
         "|----|----------|----------|--------|----------|----------------------|------|--------|---------|",
     ]
     for qid, q, expected, c, actual, verdict in rows:
-        sem = ",".join(c["sem_hits"][:3]) or "-"
+        sem = ",".join(cast("list[str]", c["sem_hits"])[:3]) or "-"
         kw = f"`{c['kw_hit']}`" if c["kw_hit"] else "-"
-        mark = {"OK": "✅", "PARTIAL": "➖", "MISROUTE": "❌"}[verdict]
+        mark = {"OK": "✅", "MISROUTE": "❌"}[verdict]
+        weights = cast("list[float]", c["weights"])
         lines.append(
-            f"| {qid} | {q} | {expected} | {kw} | {sem} | {c['weights']} "
-            f"| {heat_bin(c['weights'])} | {actual} | {mark} {verdict} |"
+            f"| {qid} | {q} | {expected} | {kw} | {sem} | {weights} "
+            f"| {heat_bin(weights)} | {actual} | {mark} {verdict} |"
         )
     lines += [
         "",
@@ -185,9 +206,10 @@ def main() -> int:
     from collections import Counter
 
     bins = Counter(
-        f"[{c['weights'][0]:.1f},{c['weights'][1]:.1f}]" for _, _, _, c, _, _ in rows
+        f"[{cast('list[float]', c['weights'])[0]:.1f},{cast('list[float]', c['weights'])[1]:.1f}]"
+        for _, _, _, c, _, _ in rows
     )
-    for b in ["[0.8,0.2]", "[0.6,0.4]", "[0.4,0.6]", "[0.2,0.8]"]:
+    for b in ["[0.8,0.2]", "[0.4,0.6]", "[0.2,0.8]"]:
         n = bins.get(b, 0)
         lines.append(
             f"- {b} {heat_bin([float(x) for x in b.strip('[]').split(',')])}: {'▓' * n} ({n})"
@@ -196,18 +218,20 @@ def main() -> int:
         "",
         "## Misroute rate",
         "",
-        f"- Misrouted: {misroutes}/{total} = **{rate:.1%}** (PARTIAL blend rows excluded)",
-        "- PARTIAL rows (both-signal blend [0.6,0.4]): K1/K5/K6 carry a code/version token "
-        "AND a semantic keyword (차이/무엇/이유) — the blend is the intended fallback.",
-        "- Finding (S6): '0xFF'/'v2' tokens hijack a semantic-intended question to the "
-        "keyword route [0.8,0.2] via `[a-zA-Z]+\\d+` (matches 'v2'). Single genuine misroute.",
+        f"- Misrouted: {misroutes}/{total} = **{rate:.1%}** (all rows included; denominator == row count)",
+        "- Dual-match fallthrough rows ([0.4,0.6] default, matches neither pure route): K1/K5/K6 "
+        "carry a code/version token AND a semantic keyword (차이/무엇/이유); S6 carries 0xFF/v2 "
+        "tokens AND semantic keywords (뭐가/좋아). The real path returns [0.4,0.6] for all four.",
+        "- Finding (S6): '0xFF'/'v2' tokens dual-match a semantic-intended question via "
+        "`[a-zA-Z]+\\d+` (matches 'v2') and `0x[0-9a-fA-F]+`, so strict 3-way falls through to "
+        "the [0.4,0.6] default instead of the semantic [0.2,0.8]. Single genuine misroute.",
         "- Note: bare 'v2'/'v3' miss the dotted-version regex but still trip `[a-zA-Z]+\\d+`, "
-        "so short version tags land in the blend rather than escaping detection entirely.",
+        "so short version tags dual-match rather than escaping detection entirely.",
         "- Interpretation: pure-type questions route cleanly to [0.8,0.2]/[0.2,0.8]; the edge "
-        "failure mode is code-token hijack of semantic questions. Consider a semantic-priority "
-        "tie-break if blend precision matters.",
+        "failure mode is code-token hijack of semantic questions. Dual-match handling "
+        "(tie-break) is owned by Task 5/F2 — see BLEND_DECISION in the module docstring.",
         "",
-        f"- golden_set.json: 5 queries | testset_2201.csv headers: question,ground_truth,reference_context",
+        "- golden_set.json: 5 queries | testset_2201.csv headers: question,ground_truth,reference_context",
     ]
     report = "\n".join(lines) + "\n"
     REPORTS_DIR.mkdir(exist_ok=True)

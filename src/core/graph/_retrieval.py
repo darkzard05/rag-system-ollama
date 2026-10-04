@@ -74,6 +74,16 @@ async def preprocess(
         semantic_keywords = DYNAMIC_WEIGHTING_CONFIG.get("semantic_keywords", [])
         is_semantic_heavy = any(k in query for k in semantic_keywords)
 
+        # BLEND_DECISION (F1 Task 4, strict 3-way — minimal path): no [0.6, 0.4]
+        # blend branch exists here on purpose. Dual-match (both signals) falls
+        # through to the static ENSEMBLE_WEIGHTS default [0.4, 0.6]. The fix for
+        # the measurement-loop defect belongs report-side
+        # (scripts/evaluation/repro_h3_weights.py): the old report simulated a
+        # blend this path can never emit. Dual-match tie-break is owned by Task
+        # 5/F2 — do not add a blend here without updating that decision.
+        # F2 log-only signal: dual-match emits a LOGGED, asserted outcome
+        # (dual_match_fallthrough log line + state flag) while the routing
+        # emission stays at the [0.4, 0.6] default — observability only.
         if is_keyword_heavy and not is_semantic_heavy:
             kw_w = DYNAMIC_WEIGHTING_CONFIG.get("keyword_weight", 0.8)
             weights = {"bm25": kw_w, "faiss": round(1.0 - kw_w, 1)}
