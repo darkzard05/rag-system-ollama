@@ -244,11 +244,12 @@ class RAGSystem:
                 _effective_bound = (
                     MAX_CONCURRENT_INFERENCE if INFERENCE_CONCURRENCY_LOAD_TESTED else 1
                 )
+                pending = [t for t in hydration_tasks if not t.done()]
                 try:
-                    if _effective_bound > 1 and hydration_tasks:
+                    if _effective_bound > 1 and pending:
                         _results = await asyncio.wait_for(
                             asyncio.gather(
-                                *(asyncio.shield(t) for t in hydration_tasks),
+                                *pending,
                                 return_exceptions=True,
                             ),
                             timeout=HYDRATION_DRAIN_TIMEOUT_SECONDS,
@@ -257,9 +258,9 @@ class RAGSystem:
                             if isinstance(_r, BaseException):
                                 hydration_failed += 1
                                 logger.error(f"[RAG] 문서 하이드레이션 실패: {_r}")
-                    else:
+                    elif pending:
                         _deadline = _t_drain + HYDRATION_DRAIN_TIMEOUT_SECONDS
-                        for t in hydration_tasks:
+                        for t in pending:
                             _remaining = _deadline - time.perf_counter()
                             if _remaining <= 0:
                                 _drain_timed_out = True
@@ -267,25 +268,32 @@ class RAGSystem:
                                 logger.error("[RAG] 하이드레이션 드레인 타임아웃")
                                 break
                             try:
-                                await asyncio.wait_for(
-                                    asyncio.shield(t), timeout=_remaining
-                                )
+                                await asyncio.wait_for(t, timeout=_remaining)
                             except asyncio.TimeoutError:
+                                t.cancel()
                                 _drain_timed_out = True
                                 hydration_failed += 1
                                 logger.error("[RAG] 하이드레이션 드레인 타임아웃")
                             except (Exception, asyncio.CancelledError) as te:
                                 hydration_failed += 1
                                 logger.error(f"[RAG] 문서 하이드레이션 실패: {te}")
+                        for t in pending:
+                            if not t.done():
+                                t.cancel()
                 except asyncio.TimeoutError:
+                    for t in pending:
+                        if not t.done():
+                            t.cancel()
                     _drain_timed_out = True
-                    hydration_failed += len(hydration_tasks)
+                    hydration_failed += len(pending)
                     logger.error("[RAG] 하이드레이션 드레인 타임아웃")
                 _drain_elapsed = time.perf_counter() - _t_drain
                 logger.info(
-                    "[PERF] hydration drain took %.3fs (%d task(s))",
+                    "[PERF] hydration drain took %.3fs (%d task(s), waited=%s skipped_cache_hit=%s)",
                     _drain_elapsed,
                     len(hydration_tasks),
+                    len(pending) > 0,
+                    len(pending) == 0,
                 )
                 if hydration_failed or _drain_timed_out:
                     SessionManager.add_status_log(
