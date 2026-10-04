@@ -270,7 +270,10 @@ rag:
       # [R3b-01] 리랭킹 최종 선별 풀 크기 (graph_builder.py retrieve_and_rerank의 rerank_top_k로 배선)
       top_k: 10
       # grade에 전달할 상위 문서 수 상한 (graph_builder.py grade_documents test_docs로 배선)
-      grade_top_n: 3
+      # [F3_RANK_DROP_FIX] Widened from 3 to 5: eval corpus shows citations at rank 4-5
+      # (Q3: r4,r5; Q6: r4; Q8: r4). grade_top_n=3 was lossy — citations outside
+      # the grading window cannot be verified. 5 covers observed max rank 5.
+      grade_top_n: 5
       max_retries: 2            # rewrite 최대 재시도 횟수 (graph_builder.py grade_documents 리다이렉트 상한 — GRADING_CONFIG로 배선됨)
 
     # 3. 구조화된 답변 출력용 프롬프트 템플릿 (Phase 1.3)

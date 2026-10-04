@@ -29,7 +29,7 @@
 ### 🚀 **Extreme Performance & Efficiency**
 - **Header-Aware Semantic Chunking:** Beyond simple text splitting, our system respects Markdown headers (`#`, `##`). It prevents context contamination between sections and injects structural metadata (`current_section`) into every chunk.
 - **99.8% Metadata Optimization:** Implements **Reference-based Metadata Offloading**. Word coordinates for highlighting are stored in a dedicated side-cache (`CoordCacheManager`), reducing FAISS index RAM usage by over 99% while maintaining sub-millisecond hydration during retrieval.
-- **FlashRank Semantic Reranking:** Integrated `FlashRank` (v0.2.0) with ONNX runtime. The cross-encoder re-evaluates search results on CPU and cleanly separates relevant documents (score ≥ `min_score_to_skip`, default 0.85) from out-of-scope ones, enabling the fast-path grade short-circuit (`rag.reranker.engine`: `auto` / `flashrank` / `semantic`).
+- **FlashRank Semantic Reranking:** Integrated `FlashRank` (v0.2.0) with ONNX runtime. The cross-encoder re-evaluates search results on CPU and cleanly separates relevant documents (score ≥ `min_score_to_skip`, default 0.70 for FlashRank / 0.45 for semantic bi-encoder) from out-of-scope ones, enabling the fast-path grade short-circuit (`rag.reranker.engine`: `auto` / `flashrank` / `semantic`).
 
 ### 🧠 **Intelligent Reasoning & Citations**
 - **Configurable Prompt System:** All RAG prompts (`grading`, `rewriting`, `QA`) are externalized in `config.yml`. They use generalized instructions to handle complex model names and technical terms without hardcoding.
@@ -143,7 +143,7 @@ Each run writes `reports/eval_quality_<tag>_<ts>.json` and `.md` with per-questi
 | `models.embedding_batch_size` | auto | Embedding batch size (auto = GPU VRAM-based) |
 | `rag.parsing.hydration_mode` | precision_clip | PDF coordinate extraction mode for highlighting |
 | `rag.reranker.engine` | auto | Reranker engine: `auto` / `flashrank` / `semantic` |
-| `rag.prompts.grading.min_score_to_skip` | 0.85 | Skip the LLM grade when the max rerank score reaches this |
+| `rag.prompts.grading.min_score_to_skip` | 0.70 (FlashRank) / 0.45 (semantic) | Skip the LLM grade when the max rerank score reaches this (per-engine thresholds) |
 | `global_cache.enable_vector_cache` | true | Enable vector store (indexing results) caching |
 | `ui.timeline_poll_seconds` | 1.0 | Timeline fragment auto-refresh interval (seconds) |
 

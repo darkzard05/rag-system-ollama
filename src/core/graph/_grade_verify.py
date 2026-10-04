@@ -238,10 +238,14 @@ async def grade_documents(
 
     # [최적화] FlashRank 실측 유의미 점수(0.40~0.90)를 반영하여 임계값을 현실화.
     # 0.45 이상은 질문과 패시지의 유의미한 의미 연관성을 보장함.
+    # [F3_THRESHOLD_DECISION] Per-engine thresholds aligned with config.yml:
+    # FlashRank (sigmoid): min_score_to_skip=0.70 (fires 6/8 on FlashRank corpus)
+    # Semantic (cosine): min_score_to_skip_semantic=0.45 (achievable range, cosine cap ~0.57)
+    # Code fallbacks now match config.yml defaults exactly.
     if get_active_rerank_engine() == "semantic":
-        min_score_to_skip = GRADING_CONFIG.get("min_score_to_skip_semantic", 0.40)
+        min_score_to_skip = GRADING_CONFIG.get("min_score_to_skip_semantic", 0.45)
     else:
-        min_score_to_skip = GRADING_CONFIG.get("min_score_to_skip", 0.45)
+        min_score_to_skip = GRADING_CONFIG.get("min_score_to_skip", 0.70)
 
     min_top_gap = GRADING_CONFIG.get("min_top_gap_to_skip", 0.03)
     sorted_scores = sorted(
