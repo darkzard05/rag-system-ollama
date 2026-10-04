@@ -408,6 +408,9 @@ class StreamingResponseHandler:
         self.last_chunk_time: float | None = None
         self.node_metadata: dict[str, Any] = {}
         self._last_chunk_raw_json: bool = False
+        self._last_content_ts: float | None = None
+        self._prev_content_ts: float | None = None
+        self._max_content_gap: float = 0.0
 
     async def stream_graph_events(
         self,
@@ -430,6 +433,9 @@ class StreamingResponseHandler:
         self.buffer.reset()
         self.node_metadata = {}
         self._last_chunk_raw_json = False
+        self._last_content_ts = None
+        self._prev_content_ts = None
+        self._max_content_gap = 0.0
         # Adaptive controller와의 호환성을 위해 버퍼 크기 속성 제공
         self.buffer_size = self.buffer.content_buffer.buffer_size
 
@@ -484,6 +490,13 @@ class StreamingResponseHandler:
                             if self.first_token_time is None:
                                 self.first_token_time = current_time
                             self._last_chunk_raw_json = bool(raw_json)
+                            self._last_content_ts = current_time
+                            if self._prev_content_ts is not None:
+                                self._max_content_gap = max(
+                                    self._max_content_gap,
+                                    current_time - self._prev_content_ts,
+                                )
+                            self._prev_content_ts = current_time
 
                             # 레이턴시 측정 및 버퍼 크기 적응형 조정
                             if adaptive_controller and self.last_chunk_time:
@@ -597,6 +610,13 @@ class StreamingResponseHandler:
                                 if self.first_token_time is None:
                                     self.first_token_time = current_time
                                 self._last_chunk_raw_json = False
+                                self._last_content_ts = current_time
+                                if self._prev_content_ts is not None:
+                                    self._max_content_gap = max(
+                                        self._max_content_gap,
+                                        current_time - self._prev_content_ts,
+                                    )
+                                self._prev_content_ts = current_time
 
                                 # Phase 2.2: content는 즉시 플러시되는 content 버퍼에 추가
                                 buffered_content = self.buffer.add_content(content)
@@ -656,6 +676,7 @@ class StreamingResponseHandler:
             raise
         finally:
             # Phase 2.2: 두 버퍼 모두 플러시
+            _t_tail = time.perf_counter()
             remaining_content, remaining_thought = self.buffer.flush_all()
 
             final_chunk: StreamChunk | None = None
@@ -718,6 +739,19 @@ class StreamingResponseHandler:
                 is_final=True,
                 performance=final_performance,
             )
+            logger.info(
+                "[PERF] stream tail flush took %.3fs",
+                time.perf_counter() - _t_tail,
+            )
+            if self._last_content_ts is not None:
+                logger.info(
+                    "[PERF] stream post-content stall took %.3fs",
+                    time.time() - self._last_content_ts,
+                )
+                logger.info(
+                    "[PERF] stream max token gap took %.3fs",
+                    self._max_content_gap,
+                )
             if _remaining is not None:
                 _remaining.append(perf_chunk)
             else:
