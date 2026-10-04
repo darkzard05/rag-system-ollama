@@ -318,12 +318,10 @@ def extract_annotations_from_docs(documents: list) -> list[dict]:
 
                             sentences.append(s)
 
-                        if not sentences and clean_content:
-                            # 폴백: 필터링 결과가 없으면 첫 150자 사용
-                            sentences = [clean_content[:150].strip()]
+                        sentences = sentences[:3]
 
                         doc_quads = []
-                        # [최적화] TextPage를 사용하여 고속 검색
+                        # [최적화] TextPage를 사용하여 고속 검색 (상한: 3문장 x 선두 1프로브)
                         for search_query in sentences:
                             if not search_query:
                                 continue
@@ -332,16 +330,12 @@ def extract_annotations_from_docs(documents: list) -> list[dict]:
                                 f"[HIGHLIGHT] Searching query on page {page_val}: '{search_query}'"
                             )
 
-                            # [개선] 긴 문장 검색은 실패 확률이 높으므로 40자씩 끊어서 검색 (Overlapping Search)
-                            chunk_len = 40
-                            overlap = 10
-                            for i in range(0, len(search_query), chunk_len - overlap):
-                                part = search_query[i : i + chunk_len].strip()
-                                if len(part) < 12:
-                                    continue
-                                quads = page.search_for(part, textpage=textpage)
-                                if quads:
-                                    doc_quads.extend(quads)
+                            part = search_query[:40].strip()
+                            if len(part) < 12:
+                                continue
+                            quads = page.search_for(part, textpage=textpage)
+                            if quads:
+                                doc_quads.extend(quads)
 
                         if doc_quads:
                             # [핵심 개선] 줄 단위 병합 로직 (Line Merging)
