@@ -12,6 +12,7 @@ the pure-logic core:
 """
 
 import logging
+import time
 import uuid
 from collections.abc import Callable
 from typing import Any
@@ -184,7 +185,23 @@ def _finalize_pdf_side_effects(sid: str, msg_id: str) -> None:
         return
 
     try:
+        _t0 = time.perf_counter()
         annotations = extract_annotations_from_docs(documents)
+        _cache_hit = bool(
+            documents
+            and all(
+                ((getattr(d, "metadata", {}) or {}).get("page_coords"))
+                or ((getattr(d, "metadata", {}) or {}).get("word_coords"))
+                for d in documents
+            )
+        )
+        logger.info(
+            "[PERF] pdf finalize took %.3fs (%d docs, %d annotations, cache_hit=%s)",
+            time.perf_counter() - _t0,
+            len(documents),
+            len(annotations),
+            _cache_hit,
+        )
     except (OSError, ValueError, TypeError, RuntimeError) as exc:
         logger.exception(f"[STREAMING] PDF 주석 추출 실패: {exc}")
         return
@@ -332,6 +349,7 @@ def consume_stream_into_message(
 
     cancelled = bool(SessionManager.get("generation_cancel", False, session_id=sid))
     SessionManager.set("is_generating_answer", False, session_id=sid)
+    _t_persist = time.perf_counter()
     SessionManager.add_message(
         "assistant",
         accumulated,
@@ -345,6 +363,12 @@ def consume_stream_into_message(
         processed_content=None,
         cancelled=cancelled,
         session_id=sid,
+    )
+    logger.info(
+        "[PERF] consume persist took %.3fs (%d docs, %d citations)",
+        time.perf_counter() - _t_persist,
+        len(documents),
+        len(citations),
     )
     # 확정 상태 저장이 클리어보다 먼저 수행되어야 한다 (G4 순서 함정 회귀 방지).
     SessionManager.set("generation_cancel", False, session_id=sid)

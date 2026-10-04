@@ -148,8 +148,14 @@ def render_message(
                 if _tip_cached is not None and _tip_cached[0] == _tip_sig:
                     display_text = _tip_cached[1]
                 else:
+                    _t_tip = time.perf_counter()
                     display_text = apply_tooltips_to_response(
                         display_text, documents, citations=citations
+                    )
+                    logger.info(
+                        "[PERF] tooltip scan took %.3fs (%d docs)",
+                        time.perf_counter() - _t_tip,
+                        len(documents or []),
                     )
                     st.session_state[_tip_key] = (_tip_sig, display_text)
             st.markdown(display_text, unsafe_allow_html=(role == "assistant"))
@@ -268,7 +274,7 @@ def _render_unified_timeline(current_sid: str) -> None:
             process_steps=msg.get("process_steps"),
         )
 
-    logger.debug(
+    logger.info(
         "[PERF] _render_unified_timeline: rendered %d msg(s) in %.3fs",
         n_msgs,
         time.perf_counter() - _t_tl,
@@ -690,6 +696,7 @@ def _render_streaming_with_write_stream(
         final_error: str | None = _friendly_stream_error(Exception(error_text))
     else:
         final_error = stream_error
+    _t_persist = time.perf_counter()
     SessionManager.add_message(
         "assistant",
         str(response) if response else (aux_state.get("content") or ""),
@@ -704,6 +711,12 @@ def _render_streaming_with_write_stream(
         cancelled=cancelled,
         error=final_error,
         session_id=current_sid,
+    )
+    logger.info(
+        "[PERF] live persist took %.3fs (%d docs, %d citations)",
+        time.perf_counter() - _t_persist,
+        len(aux_state.get("documents", []) or []),
+        len(aux_state.get("citations", []) or []),
     )
     SessionManager.set("is_generating_answer", False, session_id=current_sid)
     SessionManager.set("generation_cancel", False, session_id=current_sid)

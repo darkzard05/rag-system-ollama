@@ -316,7 +316,7 @@ def render_main_content() -> None:
     with col_pdf:
         t0 = time.perf_counter()
         render_pdf_area()
-        logger.debug("[PERF] render_pdf_area took %.3fs", time.perf_counter() - t0)
+        logger.info("[PERF] render_pdf_area took %.3fs", time.perf_counter() - t0)
     with col_chat:
         # [TASK5-a VERDICT: stream-DOM 제약 검증 결론 — DOM 순서 유지 확정]
         # render_chat_input_area()를 render_chat_messages_area()보다 먼저 호출해야
@@ -331,11 +331,11 @@ def render_main_content() -> None:
 
         t0 = time.perf_counter()
         render_chat_input_area()
-        logger.debug(
+        logger.info(
             "[PERF] render_chat_input_area took %.3fs", time.perf_counter() - t0
         )
 
         render_chat_messages_area()
-        logger.debug(
+        logger.info(
             "[PERF] render_chat_messages_area took %.3fs", time.perf_counter() - t0
         )
