@@ -14,6 +14,7 @@ D17 은 쿼리 응답 캐시 키를 ``f"{file_hash}:{query}"`` 로 네임스페�
 그대로 따른다 — Ollama/네트워크 호출은 없다.
 """
 
+import asyncio
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -140,6 +141,12 @@ async def test_set_uses_namespaced_key(monkeypatch):
         ):
             result = await generate(state, config, writer=None)
 
+            # Task2: set은 크리티컬 패스 밖 백그라운드 예약이므로, 패치 스코프
+            # 안에서 예약을 정산한 뒤 키를 단언한다 (동기 호출 가정 금지).
+            for _ in range(200):
+                if fake_cm.set.call_count:
+                    break
+                await asyncio.sleep(0.01)
         fake_cm.set.assert_called_once()
         (key,) = fake_cm.set.call_args.args[:1]
         assert key == "abc123:reusable query"

@@ -90,7 +90,7 @@ def _make_doc(page: int = 1, content: str = "doc1") -> object:
 
 
 def _fully_populated_chunk() -> StreamChunk:
-    """여섯 가지 이벤트를 모두 생성하는 super-chunk."""
+    """일곱 가지 이벤트를 모두 생성하는 super-chunk."""
     return StreamChunk(
         content="안녕하세요",
         status=".retrieve",
@@ -98,15 +98,21 @@ def _fully_populated_chunk() -> StreamChunk:
         thought="검색 결과를 분석합니다",
         metadata={"documents": [_make_doc()]},
         citations=[{"page": 1, "text": "인용"}],
+        citations_add={
+            "items": [{"page": 1, "text": "인용"}],
+            "base_index": 0,
+            "arr_len": 1,
+            "attempt": 0,
+        },
         performance={"tokens_per_second": 42.0},
     )
 
 
 def test_chunk_to_stream_events_canonical_order() -> None:
-    """완전 청크 → 이벤트 6개, 타입이 STREAM_EVENT_TYPES 순서 그대로."""
+    """완전 청크 → 이벤트 7개, 타입이 STREAM_EVENT_TYPES 순서 그대로."""
     events = chunk_to_stream_events(_fully_populated_chunk())
 
-    assert len(events) == 6
+    assert len(events) == 7
     assert [ev.type for ev in events] == list(STREAM_EVENT_TYPES)
 
 
@@ -116,13 +122,13 @@ def test_chunk_to_stream_events_empty_chunk() -> None:
 
 
 def test_chunk_to_sse_entries_emits_all_six_types() -> None:
-    """SSE 경로: 엔트리 6개, 타입 순서·이벤트 id(0~5)·counter(6) 일치."""
+    """SSE 경로: 엔트리 7개, 타입 순서·이벤트 id(0~6)·counter(7) 일치."""
     entries, counter = chunk_to_sse_entries(_fully_populated_chunk(), 0)
 
-    assert len(entries) == 6
+    assert len(entries) == 7
     assert [t for t, _payload, _idx in entries] == list(STREAM_EVENT_TYPES)
-    assert [idx for _t, _payload, idx in entries] == list(range(6))
-    assert counter == 6
+    assert [idx for _t, _payload, idx in entries] == list(range(7))
+    assert counter == 7
 
 
 def test_chunk_to_sse_entries_sources_truncates_docs() -> None:
@@ -156,6 +162,14 @@ def test_ui_consumer_honors_all_six_event_kinds() -> None:
         StreamChunk(content=accumulated_text),
         StreamChunk(thought=thought_text),
         StreamChunk(metadata={"documents": [fake_doc]}),
+        StreamChunk(
+            citations_add={
+                "items": [citation],
+                "base_index": 0,
+                "arr_len": 1,
+                "attempt": 0,
+            }
+        ),
         StreamChunk(citations=[citation]),
         StreamChunk(performance=metrics),
     ]
