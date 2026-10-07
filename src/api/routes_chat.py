@@ -125,11 +125,12 @@ async def stream_query_rag(
     """
     인증된 세션에 대해 실시간 스트리밍(SSE) 응답을 제공합니다.
 
-    SSE 이벤트 타입 (6종, canonical order):
+    SSE 이벤트 타입 (7종, canonical order):
       - ``status``   → payload ``{"message": str, "node": str | None}``
       - ``message``  → payload ``{"content": str}``
       - ``thought``  → payload ``{"content": str}``
       - ``sources``  → payload ``{"documents": [...]}``
+      - ``citations_add`` → payload ``{"items": [...], "base_index": int, "arr_len": int, "attempt": int}``
       - ``citations``→ payload ``{"citations": [...]}``
       - ``metrics``  → payload ``{"metrics": {...}}``
     모든 스트림은 ``event: end`` (payload ``{"status": "done"}``)로 종료됩니다.

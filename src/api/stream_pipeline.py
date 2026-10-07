@@ -80,6 +80,7 @@ class StreamChunk:
     performance: dict[str, Any] | None = None  # 통합 성능 통계 추가
     raw_json: bool = False  # 구조화 모드 원시 JSON 스트리밍 플래그
     citations: list[dict[str, Any]] | None = None  # P3: 구조화 인용 배열
+    citations_add: dict[str, Any] | None = None  # Phase 1: 증분 인용 페이로드
 
 
 @dataclass
@@ -536,6 +537,16 @@ class StreamingResponseHandler:
                                 )
                                 self.chunk_index += 1
 
+                        # Phase 1: 증분 인용 이벤트 (items/base_index/arr_len/attempt)
+                        if "items" in data and "base_index" in data:
+                            yield StreamChunk(
+                                content="",
+                                timestamp=current_time,
+                                chunk_index=self.chunk_index,
+                                citations_add=data,
+                            )
+                            self.chunk_index += 1
+
                     elif mode == "messages":
                         from langchain_core.messages import AIMessageChunk
 
@@ -871,13 +882,14 @@ def get_streaming_handler() -> StreamingResponseHandler:
 
 # ---------------------------------------------------------------------------
 # Canonical event type registry — keep in sync with StreamEvent type field.
-# Contract tests validate this tuple matches the six mapping branches below.
+# Contract tests validate this tuple matches the seven mapping branches below.
 # ---------------------------------------------------------------------------
 STREAM_EVENT_TYPES: tuple[str, ...] = (
     "status",
     "message",
     "thought",
     "sources",
+    "citations_add",
     "citations",
     "metrics",
 )
@@ -900,7 +912,7 @@ def chunk_to_stream_events(chunk: StreamChunk) -> list[StreamEvent]:
     """StreamChunk를 순서가 보장된 StreamEvent 목록으로 변환합니다.
 
     각 필드는 독립적으로 검사되며, 하나의 Chunk에서 여러 이벤트가
-    생성될 수 있습니다. 반환 순서는 항상 1→6 (status→metrics)으로 고정됩니다.
+    생성될 수 있습니다. 반환 순서는 항상 1→7 (status→metrics)으로 고정됩니다.
 
     빈 값이나 누락된 필드는 해당 이벤트를 생성하지 않습니다.
 
@@ -921,6 +933,7 @@ def chunk_to_stream_events(chunk: StreamChunk) -> list[StreamEvent]:
     thought = getattr(chunk, "thought", None)
     metadata = getattr(chunk, "metadata", None)
     citations = getattr(chunk, "citations", None)
+    citations_add = getattr(chunk, "citations_add", None)
     performance = getattr(chunk, "performance", None)
 
     # 1. status — 노드 상태 메시지
@@ -939,11 +952,25 @@ def chunk_to_stream_events(chunk: StreamChunk) -> list[StreamEvent]:
     if metadata and "documents" in metadata:
         events.append(StreamEvent("sources", {"documents": metadata["documents"]}))
 
-    # 5. citations — 구조화된 인용
+    # 5. citations_add — 증분 인용 (items/base_index/arr_len/attempt 보존)
+    if citations_add:
+        events.append(
+            StreamEvent(
+                "citations_add",
+                {
+                    "items": citations_add.get("items", []),
+                    "base_index": citations_add.get("base_index", 0),
+                    "arr_len": citations_add.get("arr_len", 0),
+                    "attempt": citations_add.get("attempt", 0),
+                },
+            )
+        )
+
+    # 6. citations — 구조화된 인용
     if citations:
         events.append(StreamEvent("citations", {"citations": citations}))
 
-    # 6. metrics — 성능 통계
+    # 7. metrics — 성능 통계
     if performance:
         events.append(StreamEvent("metrics", {"metrics": performance}))
 
