@@ -16,6 +16,22 @@ from core.session import SessionManager
 
 logger = logging.getLogger(__name__)
 
+FAISS_LEAN_METADATA_KEYS: frozenset[str] = frozenset(
+    {"page", "current_section", "rerank_score", "score", "doc_id"}
+)
+
+FAISS_COORD_KEYS: frozenset[str] = frozenset({"word_coords", "page_coords", "coords"})
+
+
+def strip_coord_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
+    """좌표 블롭 키를 제거한 메타데이터 복사본을 반환합니다 (원본 불변)."""
+    return {k: v for k, v in metadata.items() if k not in FAISS_COORD_KEYS}
+
+
+def is_faiss_lean(metadata: dict[str, Any]) -> bool:
+    """메타데이터 키가 린 허용 집합의 부분집합인지 판정합니다."""
+    return set(metadata.keys()) <= FAISS_LEAN_METADATA_KEYS
+
 
 def _faiss_gpu_supported(faiss_mod: Any) -> bool:
     """faiss-gpu 설치 여부를 심볼 존재로 판정합니다 (GPU 자동 감지 fail-safe).
@@ -200,8 +216,14 @@ def create_vector_store(
     _configure_hnsw_efsearch(index, index_type, ef_search)
 
     doc_ids = [str(uuid.uuid4()) for _ in range(chunk_count)]
+    # zero-coords invariant: 좌표 블롭은 SQLite 사이드캐시에만 두고 FAISS
+    # docstore에는 절대 저장하지 않습니다. 라우팅 키(file_hash/file_path/page/
+    # bbox/has_coordinates)는 하이드레이터가 소비하므로 보존합니다.
     new_docs = {
-        doc_id: Document(page_content=doc.page_content, metadata=doc.metadata)
+        doc_id: Document(
+            page_content=doc.page_content,
+            metadata=strip_coord_metadata(doc.metadata),
+        )
         for doc_id, doc in zip(doc_ids, docs, strict=False)
     }
     docstore = InMemoryDocstore(new_docs)
