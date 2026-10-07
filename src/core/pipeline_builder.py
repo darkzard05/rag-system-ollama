@@ -229,6 +229,14 @@ class PipelineBuilder:
                 await get_resource_manager().unregister_retrievers(prev_file_hash)
             except Exception as e:
                 logger.warning(f"[RAG] [INDEX] 이전 리트리버 정리 실패 — 우회: {e}")
+            try:
+                # 이전 문서의 좌표 캐시도 함께 정리 (신규 해시는 건드리지 않음:
+                # 신규 좌표는 load_pdf_docs 단계에서 이미 저장됨).
+                from cache.coord_cache import coord_cache
+
+                await coord_cache.clear_cache(prev_file_hash)
+            except Exception as e:
+                logger.warning(f"[RAG] [CACHE] 이전 좌표 캐시 정리 실패 — 우회: {e}")
         return result
 
     async def _build_impl(
