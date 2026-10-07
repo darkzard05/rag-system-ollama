@@ -21,6 +21,10 @@ from api.stream_pipeline import chunk_to_stream_events
 from common.config import MSG_ERROR_OLLAMA_NOT_RUNNING
 from common.utils import extract_annotations_from_docs
 from core.session import SessionManager
+from ui.components.reference_plan import (
+    adopt_prewarmed_annotations,
+    note_stream_references,
+)
 
 # --- Phase 2B: consolidated core lives in streaming_core.py ---
 # Re-export every merged name so all ``from ui.components.streaming import …``
@@ -36,6 +40,7 @@ from ui.components.streaming_core import (  # noqa: E402
     _recover_final_answer,
     _target_message_dict,
     _write_aux_state,
+    merge_citations_add,
     stream_chunks,
     stream_content,
 )
@@ -171,6 +176,7 @@ def _finalize_pdf_side_effects(sid: str, msg_id: str) -> None:
         return
 
     documents: list[Any] = []
+    citations: list[dict[str, Any]] = []
     has_error = False
     with SessionManager._acquire_lock(sid):
         state = SessionManager._get_state(sid)
@@ -178,6 +184,7 @@ def _finalize_pdf_side_effects(sid: str, msg_id: str) -> None:
             if msg.get("msg_id") == msg_id:
                 has_error = bool(msg.get("error"))
                 documents = msg.get("documents") or []
+                citations = msg.get("citations") or []
                 break
 
     # 오류 턴 또는 문서 없음 → 주석 생략
@@ -186,7 +193,14 @@ def _finalize_pdf_side_effects(sid: str, msg_id: str) -> None:
 
     try:
         _t0 = time.perf_counter()
-        annotations = extract_annotations_from_docs(documents)
+        # Task3 prefetch: sources 이벤트 시점의 prewarm 적중 시 재사용하고,
+        # 불일치(miss)하면 폐기 후 동기 폴백한다. fitz 호출은 세션 락 밖.
+        annotations: list[dict[str, Any]] | None = adopt_prewarmed_annotations(
+            sid, msg_id, documents, citations
+        )
+        _prewarmed = annotations is not None
+        if annotations is None:
+            annotations = extract_annotations_from_docs(documents)
         _cache_hit = bool(
             documents
             and all(
@@ -196,11 +210,13 @@ def _finalize_pdf_side_effects(sid: str, msg_id: str) -> None:
             )
         )
         logger.info(
-            "[PERF] pdf finalize took %.3fs (%d docs, %d annotations, cache_hit=%s)",
+            "[PERF] pdf finalize took %.3fs (%d docs, %d annotations,"
+            " cache_hit=%s, prewarmed=%s)",
             time.perf_counter() - _t0,
             len(documents),
             len(annotations),
             _cache_hit,
+            _prewarmed,
         )
     except (OSError, ValueError, TypeError, RuntimeError) as exc:
         logger.exception(f"[STREAMING] PDF 주석 추출 실패: {exc}")
@@ -243,8 +259,11 @@ def consume_stream_into_message(
 
     ``on_chunk``: 처리된 각 청크 직후 및 스트림 종료 시(최종 스냅샷) 1회
     추가 호출되며, ``{"accumulated", "thought", "documents", "metrics",
-    "citations", "process_steps", "cancelled"}`` 형식의 스냅샷 dict를 받는다.
-    렌더/위젯 코드는 코어에 두지 않는다(on_chunk가 유일한 접합부).
+    "citations", "process_steps", "cancelled", "has_ghost", "ghost_msg_id",
+    "ghost_ts"}`` 형식의 스냅샷 dict를 받는다. ``has_ghost``는 문서 도착+
+    인용 미도착 구간의 고스트 선행 렌더 플래그이며, 영속 메시지에는
+    기록되지 않는다. 렌더/위젯 코드는 코어에 두지 않는다(on_chunk가
+    유일한 접합부).
 
     반환: 영속화된 어시스턴트 메시지 dict (실패 시 error 필드 포함).
     """
@@ -279,9 +298,13 @@ def consume_stream_into_message(
     citations: list[dict[str, Any]] = []
     process_steps: list[str] = []
     raw_json_extractor = _FinalAnswerExtractor()
+    _ghost_logged = False
+    incr_citations: list[dict[str, Any]] = []
+    incr_attempt: int | None = None
 
     def _emit(cancelled: bool) -> None:
         if on_chunk is not None:
+            has_ghost = bool(documents) and not citations
             on_chunk(
                 {
                     "accumulated": accumulated,
@@ -291,6 +314,9 @@ def consume_stream_into_message(
                     "citations": citations,
                     "process_steps": list(process_steps),
                     "cancelled": cancelled,
+                    "has_ghost": has_ghost,
+                    "ghost_msg_id": resolved_id,
+                    "ghost_ts": time.perf_counter() if has_ghost else None,
                 }
             )
 
@@ -319,10 +345,55 @@ def consume_stream_into_message(
                 elif ev.type == "sources":
                     if ev.payload["documents"]:
                         documents = ev.payload["documents"]
+                        if not citations and not _ghost_logged:
+                            _ghost_logged = True
+                            logger.info(
+                                "[GHOST] ghost snapshot msg_id=%s (%d docs)",
+                                resolved_id,
+                                len(documents),
+                            )
+                        note_stream_references(
+                            sid,
+                            resolved_id,
+                            documents,
+                            citations,
+                            extractor=extract_annotations_from_docs,
+                        )
                 elif ev.type == "metrics":
                     metrics = ev.payload["metrics"]
                 elif ev.type == "citations":
                     citations = ev.payload["citations"]
+                    incr_citations = list(citations)
+                    note_stream_references(
+                        sid,
+                        resolved_id,
+                        documents,
+                        citations,
+                        extractor=extract_annotations_from_docs,
+                    )
+                elif ev.type == "citations_add":
+                    payload = ev.payload
+                    attempt = payload.get("attempt")
+                    if attempt != incr_attempt:
+                        incr_citations = []
+                        incr_attempt = attempt
+                    arr_len_raw = payload.get("arr_len")
+                    incr_citations = merge_citations_add(
+                        incr_citations,
+                        items=payload.get("items") or [],
+                        base_index=int(payload.get("base_index", 0) or 0),
+                        arr_len=int(arr_len_raw)
+                        if isinstance(arr_len_raw, int)
+                        else len(incr_citations),
+                    )
+                    citations = incr_citations
+                    note_stream_references(
+                        sid,
+                        resolved_id,
+                        documents,
+                        citations,
+                        extractor=extract_annotations_from_docs,
+                    )
                 # "message"는 위 content 분기에서 이미 처리됨 (payload 미사용)
             _emit(False)
     except Exception as exc:  # noqa: BLE001 - 스트림 레벨 오류를 메시지에 보존
