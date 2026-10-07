@@ -37,6 +37,8 @@ _PDF_RETENTION_DAYS = 30
 # 입력 경계 (MAX_PDF_SIZE_BYTES 는 api_server 에 정의 — 테스트가 해당 네임스페이스를 패치)
 MAX_QUERY_LENGTH = 4000
 MAX_SESSION_ID_LENGTH = 64
+# 스캔 폴백 상한: 캐시 미스 요청당 전수 해시 연산(DoS 앰프) 방지
+_PDF_SCAN_FALLBACK_LIMIT = 200
 
 _session_owners: dict[str, tuple[str, float]] = {}
 _file_owners: dict[str, tuple[str, float]] = {}
@@ -216,11 +218,35 @@ def _resolve_pdf_path(file_hash: str) -> Path | None:
     except OSError:
         pass
 
-    # 2) 스캔 폴백: 다른 이름으로 저장된 동일 콘텐츠 파일 검색
+    # 2) 스캔 폴백: 다른 이름으로 저장된 동일 콘텐츠 파일 검색.
+    # 콘텐츠 해시(SHA256 hex 64자)일 때만 전수 스캔하고, 후보마다
+    # 스토리지 루트 내부 검증을 거쳐 독스트링 계약을 유지합니다.
+    if len(safe_hash) != 64:
+        return None
     try:
-        for path in storage.glob("*.pdf"):
-            if compute_file_hash(str(path)) == safe_hash:
-                return path
+        storage_resolved = storage.resolve()
+    except OSError:
+        return None
+    try:
+        for index, path in enumerate(storage.glob("*.pdf")):
+            if index >= _PDF_SCAN_FALLBACK_LIMIT:
+                logger.warning(
+                    "[PDF] 스캔 폴백 상한 초과, 중단합니다 (hash=%.8s)",
+                    safe_hash,
+                )
+                break
+            try:
+                if not path.is_file():
+                    continue
+                if not path.resolve().is_relative_to(storage_resolved):
+                    continue
+            except OSError:
+                continue
+            try:
+                if compute_file_hash(str(path)) == safe_hash:
+                    return path
+            except OSError:
+                continue
     except OSError:
         return None
     return None
