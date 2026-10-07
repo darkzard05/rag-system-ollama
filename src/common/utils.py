@@ -226,10 +226,174 @@ def _build_line_boxes(coords: list, page_val: int, content: str) -> list[dict]:
     return annotations
 
 
-def extract_annotations_from_docs(documents: list) -> list[dict]:
+def _memo_key_for_doc(
+    meta: dict[str, Any], page_val: int, content: str
+) -> tuple[str, int, str] | None:
+    """어노테이션 메모 키를 구성합니다 (file_hash+page+normtext 해시).
+
+    ``file_hash`` 가 없으면 메모를 사용하지 않고 ``None`` 을 반환합니다.
+    """
+    file_hash = meta.get("file_hash")
+    if not file_hash:
+        return None
+    try:
+        from cache.coord_cache import memo_norm_hash
+    except ImportError as e:
+        logger.debug(f"[HIGHLIGHT] 메모 해시 로드 실패: {e}")
+        return None
+    return (str(file_hash), int(page_val), memo_norm_hash(content))
+
+
+def _memo_lookup(key: tuple[str, int, str]) -> list[dict] | None:
+    """메모 적중 시 라인박스를 반환합니다 (fitz 오픈 없음, never raise)."""
+    try:
+        from cache.coord_cache import coord_cache
+    except ImportError as e:
+        logger.debug(f"[HIGHLIGHT] 메모 조회 불가: {e}")
+        return None
+    try:
+        return coord_cache.get_annotation_memo_sync(*key)
+    except (OSError, ValueError, TypeError, RuntimeError) as e:
+        logger.debug(f"[HIGHLIGHT] 메모 조회 실패: {e}")
+        return None
+
+
+def _memo_store(key: tuple[str, int, str], doc_annots: list[dict]) -> None:
+    """확정 라인박스를 메모에 저장합니다 (실패해도 추출 결과에 영향 없음)."""
+    try:
+        from cache.coord_cache import coord_cache
+    except ImportError as e:
+        logger.debug(f"[HIGHLIGHT] 메모 저장 불가: {e}")
+        return
+    try:
+        coord_cache.save_annotation_memo_sync(*key, doc_annots)
+    except (OSError, ValueError, TypeError, RuntimeError) as e:
+        logger.debug(f"[HIGHLIGHT] 메모 저장 실패: {e}")
+
+
+def _ranked_doc_indices(
+    documents: list, citations: list[dict[str, Any]] | None
+) -> list[int]:
+    """인용 순위대로 문서 인덱스를 정렬합니다 (Task 4 lazy prewarm).
+
+    ``citations`` 가 없으면 입력 순서(검색 랭크) 그대로 반환합니다.
+    있으면 ``doc_id``/``page`` 가 인용된 문서만 인용 등장 순서대로 반환하고,
+    인용되지 않은 페이지는 제외합니다 (뷰어는 한 페이지만 보여주므로
+    표시되지 않을 페이지는 eager 계산하지 않습니다). 인용과 매칭되는
+    문서가 하나도 없으면(stale 인용) 전체를 입력 순서대로 반환합니다.
+    """
+    total = list(range(len(documents)))
+    if not citations:
+        return total
+    doc_rank: dict[str, int] = {}
+    page_rank: dict[int, int] = {}
+    for order, cit in enumerate(citations):
+        if not isinstance(cit, dict):
+            continue
+        sid = cit.get("doc_id")
+        if sid is not None:
+            key = str(sid)
+            if key not in doc_rank:
+                doc_rank[key] = order
+        try:
+            cited_page = int(cit["page"]) if cit.get("page") is not None else None
+        except (TypeError, ValueError):
+            cited_page = None
+        if cited_page is not None and cited_page not in page_rank:
+            page_rank[cited_page] = order
+    if not doc_rank and not page_rank:
+        return total
+    scored: list[tuple[int, int]] = []
+    for idx, doc in enumerate(documents):
+        try:
+            stable_id = doc_stable_id(doc)
+        except (TypeError, ValueError, AttributeError):
+            stable_id = ""
+        if isinstance(doc, dict):
+            meta = doc.get("metadata", {}) or {}
+        else:
+            meta = getattr(doc, "metadata", None) or {}
+        try:
+            doc_page = int(meta.get("page", 1))
+        except (TypeError, ValueError):
+            doc_page = 1
+        best = min(
+            doc_rank.get(stable_id, 10**9),
+            doc_rank.get(str(meta.get("doc_id", "")), 10**9)
+            if meta.get("doc_id") is not None
+            else 10**9,
+            page_rank.get(doc_page, 10**9),
+        )
+        if best >= 10**9:
+            continue
+        scored.append((best, idx))
+    if not scored:
+        return total
+    scored.sort(key=lambda item: (item[0], item[1]))
+    return [idx for _, idx in scored]
+
+
+def _extract_search_sentences(content: str) -> list[str]:
+    """하이라이트 검색 쿼리 문장을 추출합니다 (5 regex 패스 유지, 최대 3문장).
+
+    호출자는 이미 소문자화된 본문을 넘기며, fitz 핸들 바깥에서 호출해도
+    되지만 Task 4 그룹화 경로에서는 단일 오픈 블록 안에서 페이지별로
+    호출됩니다 (오픈은 파일당 1회, 문장당 검색만 반복).
+    """
+    # 1. HTML 태그 제거 (예: <img src="...">)
+    text = re.sub(r"<[^>]+>", " ", content)
+
+    # 2. 마크다운 및 특수문자 제거 (기존보다 강화, 따옴표 포함)
+    text = re.sub(r"[#*`_~\[\]()\"']", "", text)
+
+    # 3. 연속 공백 제거 및 앞뒤 공백 제거
+    text = re.sub(r"\s+", " ", text).strip()
+
+    # 4. 소문자 변환
+    clean_content = text.lower()
+
+    # 5. 문장 분리 (줄바꿈 포함)
+    raw_sentences = re.split(r"[.!?\n]", clean_content)
+
+    sentences: list[str] = []
+    for s in raw_sentences:
+        s = s.strip()
+
+        # [필터링 1] 최소 길이 상향 (8 -> 20)
+        # 너무 짧은 문장은 오탐지(False Positive)의 원인이 됨
+        if len(s) < 20:
+            continue
+
+        # [필터링 2] 숫자나 특수문자로만 구성된 쓰레기 데이터 제거
+        if re.match(r"^[\d\s\W]+$", s):
+            continue
+
+        # [필터링 3] 표/그림 캡션 등 불필요한 메타데이터 제거 (휴리스틱)
+        # 예: "table 1", "figure 3", "page 10" 등으로 시작하는 경우
+        if re.match(r"^(table|figure|fig\.|tab\.)\s*\d+", s):
+            continue
+
+        # [필터링 4] 참고문헌 패턴 (예: [1], (2020)) 등으로 시작하는 경우
+        if re.match(r"^[\(\[]\s*\d+\s*[\)\]]", s):
+            continue
+
+        sentences.append(s)
+
+    return sentences[:3]
+
+
+def extract_annotations_from_docs(
+    documents: list, citations: list[dict[str, Any]] | None = None
+) -> list[dict]:
     """
     검색된 문서들의 메타데이터에서 좌표 정보를 추출하여
     현재 청크의 텍스트와 일치하는 영역만 줄(Line) 단위로 하이라이트합니다.
+
+    Task 4 lazy citation-rank prewarm: 같은 PDF의 여러 청크는 파일당 1회만
+    열고(``open_pdf_document`` 호이스트), ``citations`` 가 주어지면 인용된
+    페이지부터 인용 순서대로 계산합니다. 표시되지 않을 페이지는 eager
+    계산하지 않으며, 나머지는 참조 클릭 시점에 lazy 계산됩니다. 메모 적중은
+    fitz 오픈 없이 O(1) 반환됩니다 (Wave2 계약 유지).
     """
     annotations: list[dict] = []
     if not documents:
@@ -237,7 +401,11 @@ def extract_annotations_from_docs(documents: list) -> list[dict]:
 
     logger.info(f"[HIGHLIGHT] Processing {len(documents)} docs for annotations")
 
-    for _i, doc in enumerate(documents):
+    ranked_indices = _ranked_doc_indices(documents, citations)
+    pending: list[dict[str, Any]] = []
+
+    for _i in ranked_indices:
+        doc = documents[_i]
         meta = (
             getattr(doc, "metadata", {})
             if hasattr(doc, "metadata")
@@ -265,60 +433,59 @@ def extract_annotations_from_docs(documents: list) -> list[dict]:
                     annotations.extend(
                         _build_line_boxes(coords, int(page_val), content)
                     )
-        else:
-            # 기존 단일 페이지 경로 (word_coords 또는 on-demand fitz)
-            page_val = int(meta.get("page", 1))
-            all_coords = meta.get("word_coords", [])
+            continue
 
-            # [고도화] On-demand 좌표 추출 (Strategy C)
-            # 메타데이터에 좌표가 없으면 PDF 파일에서 실시간으로 검색합니다.
-            if not all_coords and file_path and os.path.exists(file_path):
-                try:
-                    with open_pdf_document(file_path) as pdf:
+        # 기존 단일 페이지 경로 (word_coords 또는 on-demand fitz)
+        try:
+            page_val = int(meta.get("page", 1))
+        except (TypeError, ValueError):
+            page_val = 1
+        all_coords = meta.get("word_coords", [])
+        if all_coords:
+            annotations.extend(_build_line_boxes(all_coords, page_val, content))
+            continue
+
+        # [고도화] On-demand 좌표 추출 (Strategy C)
+        # 메타데이터에 좌표가 없으면 PDF 파일에서 실시간으로 검색합니다.
+        # [Wave2] 메모 우선: 적중이면 fitz 오픈 없이 O(1) 반환합니다.
+        if not file_path or not os.path.exists(file_path):
+            logger.debug(
+                f"[HIGHLIGHT] Conditions not met: coords={len(all_coords)}, path_exists={os.path.exists(file_path) if file_path else 'N/A'}"
+            )
+            continue
+        memo_key: tuple[str, int, str] | None = _memo_key_for_doc(
+            meta, page_val, content
+        )
+        if memo_key is not None:
+            memo_hit = _memo_lookup(memo_key)
+            if memo_hit is not None:
+                annotations.extend(memo_hit)
+                continue
+        pending.append(
+            {
+                "content": content,
+                "file_path": str(file_path),
+                "page_val": page_val,
+                "memo_key": memo_key,
+            }
+        )
+
+    # Task 4: 파일당 단일 오픈 — 같은 PDF의 대기 청크를 한 핸들 안에서
+    # 인용 순위대로 처리합니다 (5 regex 패스는 페이지별 문장 추출에 유지).
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for item in pending:
+        grouped.setdefault(item["file_path"], []).append(item)
+    for file_path, items in grouped.items():
+        try:
+            with open_pdf_document(file_path) as pdf:
+                for item in items:
+                    page_val = int(item["page_val"])
+                    content = str(item["content"])
+                    memo_key = item["memo_key"]
+                    try:
                         page = pdf[page_val - 1]
                         textpage = page.get_textpage()
-
-                        # [고도화] 개선된 검색 쿼리 전처리 로직 (Strategy C 기반)
-                        # 1. HTML 태그 제거 (예: <img src="...">)
-                        text = re.sub(r"<[^>]+>", " ", content)
-
-                        # 2. 마크다운 및 특수문자 제거 (기존보다 강화, 따옴표 포함)
-                        text = re.sub(r"[#*`_~\[\]()\"']", "", text)
-
-                        # 3. 연속 공백 제거 및 앞뒤 공백 제거
-                        text = re.sub(r"\s+", " ", text).strip()
-
-                        # 4. 소문자 변환
-                        clean_content = text.lower()
-
-                        # 5. 문장 분리 (줄바꿈 포함)
-                        raw_sentences = re.split(r"[.!?\n]", clean_content)
-
-                        sentences = []
-                        for s in raw_sentences:
-                            s = s.strip()
-
-                            # [필터링 1] 최소 길이 상향 (8 -> 20)
-                            # 너무 짧은 문장은 오탐지(False Positive)의 원인이 됨
-                            if len(s) < 20:
-                                continue
-
-                            # [필터링 2] 숫자나 특수문자로만 구성된 쓰레기 데이터 제거
-                            if re.match(r"^[\d\s\W]+$", s):
-                                continue
-
-                            # [필터링 3] 표/그림 캡션 등 불필요한 메타데이터 제거 (휴리스틱)
-                            # 예: "table 1", "figure 3", "page 10" 등으로 시작하는 경우
-                            if re.match(r"^(table|figure|fig\.|tab\.)\s*\d+", s):
-                                continue
-
-                            # [필터링 4] 참고문헌 패턴 (예: [1], (2020)) 등으로 시작하는 경우
-                            if re.match(r"^[\(\[]\s*\d+\s*[\)\]]", s):
-                                continue
-
-                            sentences.append(s)
-
-                        sentences = sentences[:3]
+                        sentences = _extract_search_sentences(content)
 
                         doc_quads = []
                         # [최적화] TextPage를 사용하여 고속 검색 (상한: 3문장 x 선두 1프로브)
@@ -337,6 +504,7 @@ def extract_annotations_from_docs(documents: list) -> list[dict]:
                             if quads:
                                 doc_quads.extend(quads)
 
+                        doc_annots: list[dict] = []
                         if doc_quads:
                             # [핵심 개선] 줄 단위 병합 로직 (Line Merging)
                             on_demand_lines: dict[float, list] = {}
@@ -353,7 +521,7 @@ def extract_annotations_from_docs(documents: list) -> list[dict]:
                                 x_max = max(r.x1 for r in group)
                                 y_max = max(r.y1 for r in group)
 
-                                annotations.append(
+                                doc_annots.append(
                                     {
                                         "page": page_val,
                                         "x": x_min,
@@ -363,18 +531,15 @@ def extract_annotations_from_docs(documents: list) -> list[dict]:
                                         "color": "red",
                                     }
                                 )
-                            continue
-                except Exception as e:
-                    logger.error(f"[HIGHLIGHT] On-demand search failed: {e}")
-            else:
-                logger.debug(
-                    f"[HIGHLIGHT] Conditions not met: coords={len(all_coords)}, path_exists={os.path.exists(file_path) if file_path else 'N/A'}"
-                )
-
-            if not all_coords:
-                continue
-
-            annotations.extend(_build_line_boxes(all_coords, page_val, content))
+                        annotations.extend(doc_annots)
+                        if memo_key is not None:
+                            _memo_store(memo_key, doc_annots)
+                    except Exception as e:
+                        logger.error(f"[HIGHLIGHT] On-demand search failed: {e}")
+                        continue
+        except Exception as e:
+            logger.error(f"[HIGHLIGHT] On-demand search failed: {e}")
+            continue
 
     if annotations:
         pages = sorted({a["page"] for a in annotations})

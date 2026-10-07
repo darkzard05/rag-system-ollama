@@ -11,6 +11,7 @@ AsyncWorker 루프(인덱싱)와 FastAPI 루프(쿼리) 등 서로 다른 루프
 
 import asyncio
 import contextlib
+import hashlib
 import logging
 import sqlite3
 import threading
@@ -50,6 +51,38 @@ def to_coord5(word: Any) -> Any:
     if isinstance(word, (tuple, list)) and len(word) >= 5:
         return (word[0], word[1], word[2], word[3], word[4])
     return word
+
+
+_ANNOTATION_MEMO_DDL = """
+    CREATE TABLE IF NOT EXISTS annotation_memo (
+        file_hash TEXT,
+        page_num INTEGER,
+        normtext_hash TEXT,
+        annotations BLOB,
+        created_at REAL,
+        PRIMARY KEY (file_hash, page_num, normtext_hash)
+    )
+"""
+
+_ANNOTATION_MEMO_INDEX_DDL = (
+    "CREATE INDEX IF NOT EXISTS idx_annotation_memo_created_at "
+    "ON annotation_memo(created_at)"
+)
+
+
+def memo_norm_hash(text: str) -> str:
+    """어노테이션 메모 키용 정규화 텍스트 해시를 반환합니다 (Task3 prefetch 호환).
+
+    정규화(소문자 + 공백 붕괴)는 멱등하므로 원문/소문자 어느 쪽을 넘겨도
+    동일한 키가 산출됩니다. 보안 식별자가 아니므로 MD5 16 hex를 사용합니다
+    (``common.utils.fast_hash`` 와 동일 규격).
+    """
+    normalized = " ".join(str(text).lower().split())
+    if not normalized:
+        return "0" * 16
+    return hashlib.md5(
+        normalized.encode(errors="ignore"), usedforsecurity=False
+    ).hexdigest()[:16]
 
 
 class CoordCacheManager:
@@ -107,6 +140,9 @@ class CoordCacheManager:
             _ = conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_created_at ON coords(created_at)"
             )
+            # [Wave2] 어노테이션 메모 테이블 — 기존 coords 경로와 무관한 additive 테이블.
+            _ = conn.execute(_ANNOTATION_MEMO_DDL)
+            _ = conn.execute(_ANNOTATION_MEMO_INDEX_DDL)
             conn.commit()
 
     # -- owner 이벤트 루프 --------------------------------------------------
@@ -321,6 +357,12 @@ class CoordCacheManager:
         _ = await db.execute(
             "DELETE FROM coords WHERE ? - created_at > ?", (now, ttl_seconds)
         )
+        # [Wave2] 메모 행도 동일 TTL로 만료 (coords 크기 계산은 기존식 유지).
+        await db.execute(_ANNOTATION_MEMO_DDL)
+        _ = await db.execute(
+            "DELETE FROM annotation_memo WHERE ? - created_at > ?",
+            (now, ttl_seconds),
+        )
 
         # 2. 크기 제한 — [R1b-07] SUM(length(coords)) 기반 초과 감지 후 배치 삭제.
         #    상한을 초과하면 오래된 행부터 반복 삭제해 한 사이클에서 상한 이하로
@@ -479,6 +521,166 @@ class CoordCacheManager:
             logger.error(f"좌표 캐시 로드 실패 ({file_hash}, p{page_num}): {e}")
             self._conn_healthy = False
             return None
+
+    def get_annotation_memo_sync(
+        self, file_hash: str, page_num: int, normtext_hash: str
+    ) -> list[dict[str, Any]] | None:
+        """어노테이션 메모 단건 조회 (동기, 이벤트 루프 불요).
+
+        PK 단건 조회라 O(1)이며 fitz를 열지 않습니다. 미스·저장소 실패 시
+        ``None`` 을 반환하고 절대 raise하지 않습니다 (호출자는 fitz 경로로 폴백).
+        """
+        if not file_hash or not normtext_hash:
+            return None
+        try:
+            if not COORD_CACHE_DIR.exists():
+                COORD_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+            with sqlite3.connect(COORD_CACHE_DB) as conn:
+                cursor = conn.execute(
+                    "SELECT annotations FROM annotation_memo "
+                    "WHERE file_hash = ? AND page_num = ? AND normtext_hash = ?",
+                    (file_hash, page_num, normtext_hash),
+                )
+                row = cursor.fetchone()
+        except sqlite3.OperationalError as e:
+            if "no such table" in str(e):
+                try:
+                    self._create_schema_sync()
+                except (OSError, sqlite3.Error) as schema_e:
+                    logger.debug(f"메모 스키마 생성 실패: {schema_e}")
+            else:
+                logger.debug(f"메모 조회 실패 ({file_hash}, p{page_num}): {e}")
+            return None
+        except (sqlite3.Error, OSError) as e:
+            logger.debug(f"메모 조회 실패 ({file_hash}, p{page_num}): {e}")
+            return None
+        if row is None:
+            return None
+        try:
+            payload = orjson.loads(row[0])
+        except (ValueError, TypeError) as e:
+            logger.debug(f"메모 역직렬화 실패 ({file_hash}, p{page_num}): {e}")
+            return None
+        if not isinstance(payload, list):
+            return None
+        return payload
+
+    def save_annotation_memo_sync(
+        self,
+        file_hash: str,
+        page_num: int,
+        normtext_hash: str,
+        annotations: list[dict[str, Any]],
+    ) -> bool:
+        """확정 라인박스 어노테이션을 메모에 저장합니다 (동기, never raise)."""
+        if not file_hash or not normtext_hash:
+            return False
+        try:
+            self._create_schema_sync()
+        except (OSError, sqlite3.Error) as e:
+            logger.debug(f"메모 스키마 생성 실패: {e}")
+            return False
+        try:
+            blob = orjson.dumps(annotations)
+        except (TypeError, ValueError) as e:
+            logger.debug(f"메모 직렬화 실패 ({file_hash}, p{page_num}): {e}")
+            return False
+        try:
+            with sqlite3.connect(COORD_CACHE_DB) as conn:
+                _ = conn.execute(
+                    "INSERT OR REPLACE INTO annotation_memo "
+                    "(file_hash, page_num, normtext_hash, annotations, created_at) "
+                    "VALUES (?, ?, ?, ?, ?)",
+                    (file_hash, page_num, normtext_hash, blob, time.time()),
+                )
+                conn.commit()
+        except (sqlite3.Error, OSError) as e:
+            logger.debug(f"메모 저장 실패 ({file_hash}, p{page_num}): {e}")
+            return False
+        return True
+
+    async def get_annotation_memo(
+        self, file_hash: str, page_num: int, normtext_hash: str
+    ) -> list[dict[str, Any]] | None:
+        """어노테이션 메모 조회 (비동기, Task3 prefetch 경로용)."""
+        if not file_hash or not normtext_hash:
+            return None
+        try:
+            return await self._submit(
+                self._get_annotation_memo_impl(file_hash, page_num, normtext_hash)
+            )
+        except (OSError, ValueError, TypeError, RuntimeError) as e:
+            logger.debug(f"메모 조회 실패 ({file_hash}, p{page_num}): {e}")
+            return None
+
+    async def _get_annotation_memo_impl(
+        self, file_hash: str, page_num: int, normtext_hash: str
+    ) -> list[dict[str, Any]] | None:
+        try:
+            db = await self._get_connection()
+            await db.execute(_ANNOTATION_MEMO_DDL)
+            async with db.execute(
+                "SELECT annotations FROM annotation_memo "
+                "WHERE file_hash = ? AND page_num = ? AND normtext_hash = ?",
+                (file_hash, page_num, normtext_hash),
+            ) as cursor:
+                row = await cursor.fetchone()
+                if row:
+                    payload = orjson.loads(row[0])
+                    if isinstance(payload, list):
+                        return payload
+            return None
+        except (aiosqlite.Error, OSError, ValueError, TypeError) as e:
+            logger.debug(f"메모 조회 실패 ({file_hash}, p{page_num}): {e}")
+            self._conn_healthy = False
+            return None
+
+    async def save_annotation_memo(
+        self,
+        file_hash: str,
+        page_num: int,
+        normtext_hash: str,
+        annotations: list[dict[str, Any]],
+    ) -> bool:
+        """어노테이션 메모 저장 (비동기, Task3 prefetch 경로용)."""
+        if not file_hash or not normtext_hash:
+            return False
+        try:
+            await self._submit(
+                self._save_annotation_memo_impl(
+                    file_hash, page_num, normtext_hash, annotations
+                )
+            )
+            return True
+        except (OSError, ValueError, TypeError, RuntimeError) as e:
+            logger.debug(f"메모 저장 실패 ({file_hash}, p{page_num}): {e}")
+            return False
+
+    async def _save_annotation_memo_impl(
+        self,
+        file_hash: str,
+        page_num: int,
+        normtext_hash: str,
+        annotations: list[dict[str, Any]],
+    ) -> None:
+        try:
+            blob = orjson.dumps(annotations)
+        except (TypeError, ValueError) as e:
+            logger.debug(f"메모 직렬화 실패 ({file_hash}, p{page_num}): {e}")
+            return
+        try:
+            db = await self._get_connection()
+            await db.execute(_ANNOTATION_MEMO_DDL)
+            await db.execute(
+                "INSERT OR REPLACE INTO annotation_memo "
+                "(file_hash, page_num, normtext_hash, annotations, created_at) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (file_hash, page_num, normtext_hash, blob, time.time()),
+            )
+            await db.commit()
+        except (aiosqlite.Error, OSError) as e:
+            logger.debug(f"메모 저장 실패 ({file_hash}, p{page_num}): {e}")
+            self._conn_healthy = False
 
     async def clear_cache(self, file_hash: str | None = None):
         """특정 파일 또는 전체 캐시를 삭제합니다 (비동기)."""
