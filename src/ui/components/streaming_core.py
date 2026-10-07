@@ -48,8 +48,10 @@ from common.stream_worker import (
     release_stream_slot,
     unregister_stream,
 )
+from common.utils import fast_hash
 from core.session import SessionManager
 from ui.components.common import get_doc_metadata
+from ui.components.reference_plan import note_stream_references
 
 logger = logging.getLogger(__name__)
 
@@ -766,6 +768,54 @@ def _clear_aux_state(sid: str) -> None:
     SessionManager.set(_AUX_STATE_KEY, None, session_id=sid)
 
 
+def _note_reference_prewarm(
+    sid: str, msg_id: str, documents: list[Any], citations: list[Any]
+) -> None:
+    """Task3 prefetch 훅: 실패해도 스트리밍을 깨지 않는다."""
+    try:
+        note_stream_references(sid, msg_id, documents, citations)
+    except (RuntimeError, TypeError, ValueError, AttributeError) as exc:
+        logger.debug("[PREFETCH] prewarm 훅 생략: %s", exc)
+
+
+def _citation_dedupe_key(cit: dict[str, Any]) -> tuple[str, Any, Any, str]:
+    """보조 dedupe 키: doc_id(str 정규화) + page + section + text_span 해시."""
+    return (
+        str(cit.get("doc_id")),
+        cit.get("page"),
+        cit.get("section"),
+        fast_hash(str(cit.get("text_span") or "")),
+    )
+
+
+def merge_citations_add(
+    incr: list[dict[str, Any]],
+    *,
+    items: list[dict[str, Any]],
+    base_index: int,
+    arr_len: int,
+) -> list[dict[str, Any]]:
+    """증분 인용 병합: base_index+i 업서트 → arr_len 절단 → 보조 키 dedupe."""
+    merged = list(incr)
+    for i, item in enumerate(items):
+        idx = base_index + i
+        if idx < len(merged):
+            merged[idx] = item
+        else:
+            merged.append(item)
+    if arr_len is not None and arr_len < len(merged):
+        merged = merged[:arr_len]
+    seen: set[tuple[str, Any, Any, str]] = set()
+    deduped: list[dict[str, Any]] = []
+    for cit in merged:
+        key = _citation_dedupe_key(cit)
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(cit)
+    return deduped
+
+
 def _content_generator(
     query: str,
     model_name: str,
@@ -797,8 +847,23 @@ def _content_generator(
     raw_json_extractor = _FinalAnswerExtractor()
 
     _t_status_start = _clock()
+    _t_last_token: float | None = None
     _last_reported_status: str | None = None
     _last_on_aux_snapshot: tuple[Any, ...] | None = None
+    _ghost_logged = False
+    incr_citations: list[dict[str, Any]] = []
+    incr_attempt: int | None = None
+    _prewarm_first_add_done = False
+    _prewarm_elapsed_done = False
+    _t_first_citation_paint: float | None = None
+
+    def _ghost_flags() -> dict[str, Any]:
+        has_ghost = bool(documents) and not citations
+        return {
+            "has_ghost": has_ghost,
+            "ghost_msg_id": msg_id,
+            "ghost_ts": _clock() if has_ghost else None,
+        }
 
     def _report_status(text: str) -> None:
         nonlocal _last_reported_status
@@ -819,6 +884,9 @@ def _content_generator(
             "citations": [],
             "process_steps": [],
             "complete": False,
+            "has_ghost": False,
+            "ghost_msg_id": msg_id,
+            "ghost_ts": None,
         },
     )
 
@@ -845,12 +913,14 @@ def _content_generator(
                         _real_yielded = True
                         _placeholder_live = False
                         _yielded_this_chunk = True
+                        _t_last_token = _clock()
                         yield delta
                 else:
                     accumulated += chunk.content
                     _real_yielded = True
                     _placeholder_live = False
                     _yielded_this_chunk = True
+                    _t_last_token = _clock()
                     yield chunk.content
             if (
                 not chunk.status
@@ -869,10 +939,66 @@ def _content_generator(
             meta = chunk.metadata or {}
             if meta.get("documents"):
                 documents = meta["documents"]
+                if not citations and not _ghost_logged:
+                    _ghost_logged = True
+                    logger.info(
+                        "[GHOST] ghost snapshot msg_id=%s (%d docs)",
+                        msg_id,
+                        len(documents),
+                    )
+                _note_reference_prewarm(sid, msg_id, documents, citations)
             if chunk.performance:
                 metrics = chunk.performance
+            citations_add = getattr(chunk, "citations_add", None)
+            if citations_add:
+                attempt = citations_add.get("attempt")
+                if attempt != incr_attempt:
+                    incr_citations = []
+                    incr_attempt = attempt
+                arr_len_raw = citations_add.get("arr_len")
+                incr_citations = merge_citations_add(
+                    incr_citations,
+                    items=citations_add.get("items") or [],
+                    base_index=int(citations_add.get("base_index", 0) or 0),
+                    arr_len=int(arr_len_raw)
+                    if isinstance(arr_len_raw, int)
+                    else len(incr_citations),
+                )
+                citations = incr_citations
+                if _t_first_citation_paint is None:
+                    _t_first_citation_paint = _clock()
+                    _t_tok = (
+                        _t_last_token if _t_last_token is not None else _t_status_start
+                    )
+                    logger.info(
+                        "[PERF] first-citation-paint msg_id=%s took %.3fs",
+                        msg_id,
+                        _t_first_citation_paint - _t_tok,
+                    )
+                if not _prewarm_first_add_done:
+                    _prewarm_first_add_done = True
+                    logger.info("[PREWARM] submit reason=first_add msg_id=%s", msg_id)
+                    _note_reference_prewarm(sid, msg_id, documents, citations)
+                    if (_clock() - _t_status_start) > 5.0:
+                        _prewarm_elapsed_done = True
+                elif not _prewarm_elapsed_done and (_clock() - _t_status_start) > 5.0:
+                    _prewarm_elapsed_done = True
+                    logger.info("[PREWARM] submit reason=elapsed_5s msg_id=%s", msg_id)
+                    _note_reference_prewarm(sid, msg_id, documents, citations)
+                else:
+                    logger.debug("[PREWARM] skip middle increment msg_id=%s", msg_id)
             if getattr(chunk, "citations", None):
                 citations = chunk.citations or []
+                incr_citations = list(citations)
+                _t_citations = _clock()
+                _t_tok = _t_last_token if _t_last_token is not None else _t_status_start
+                logger.info(
+                    "[PERF] last-token->citations-event msg_id=%s took %.3fs",
+                    msg_id,
+                    _t_citations - _t_tok,
+                )
+                logger.info("[PREWARM] submit reason=final msg_id=%s", msg_id)
+                _note_reference_prewarm(sid, msg_id, documents, citations)
             _aux_state = {
                 "thought": thought,
                 "documents": documents,
@@ -880,6 +1006,7 @@ def _content_generator(
                 "citations": citations,
                 "process_steps": process_steps,
                 "complete": False,
+                **_ghost_flags(),
             }
             if on_aux is not None:
                 # thought가 진행되는 동안 40자 단위 또는 변경 시점에 UI를 점진적 갱신
@@ -912,6 +1039,7 @@ def _content_generator(
                 "error": str(exc),
                 "content": accumulated,
                 "complete": False,
+                **_ghost_flags(),
             },
         )
         raise
@@ -926,5 +1054,6 @@ def _content_generator(
                 "process_steps": process_steps,
                 "content": accumulated,
                 "complete": True,
+                **_ghost_flags(),
             },
         )
