@@ -12,6 +12,7 @@
 
 import contextlib
 import html
+import logging
 import re
 import time
 from typing import Any
@@ -23,11 +24,14 @@ from core.session import SessionManager
 from ui.components.common import get_doc_metadata, navigate_to_page
 from ui.strings import t
 
+logger = logging.getLogger(__name__)
+
 __all__ = [
     "_extract_reference_pages",
     "_handle_doc_jump",
     "_handle_page_jump",
     "_render_references_content",
+    "is_ghost_state",
     "normalize_excerpt",
     "render_generation_expander",
     "render_inline_citation_badges",
@@ -123,6 +127,14 @@ def _normalize_text_for_dedup(text: object) -> str:
     return re.sub(r"\s+", " ", text).strip().lower()
 
 
+def is_ghost_state(
+    documents: list[Any] | None,
+    citations: list[dict[str, Any]] | None,
+) -> bool:
+    """Ghost 조건: sources 문서 도착 + 인용 미도착 (스켈레톤 선행 렌더)."""
+    return bool(documents) and not citations
+
+
 def _render_references_content(
     msg_id: str,
     documents: list[Any] | None,
@@ -130,8 +142,43 @@ def _render_references_content(
     generating: bool = False,
     show_caption: bool = True,
 ) -> bool:
+    _t_recompute = time.perf_counter()
+    _n_recompute_docs = len(documents or [])
+    _n_recompute_cits = len(citations or [])
+
+    def _log_recompute() -> None:
+        logger.info(
+            "[PERF] recompute took %.3fs (%d docs, %d citations)",
+            time.perf_counter() - _t_recompute,
+            _n_recompute_docs,
+            _n_recompute_cits,
+        )
+
+    # Ghost 스켈레톤: 생성 중 + 문서 도착 + 인용 미도착이면 위젯 없는
+    # 플레이스홀더 행을 선행 렌더한다. 최종 렌더가 동일 msg_id 키로
+    # 1:1 교체하므로 중복되지 않고, 인용이 바뀌면(위 조건 불충족) 즉시
+    # 실경로로 전환되어 스테일 고스트가 남지 않는다. 실경로는 아래 그대로.
+    if generating and is_ghost_state(documents, citations):
+        for doc in documents or []:
+            page = get_doc_metadata(doc).get("page", 1)
+            with contextlib.suppress(ValueError, TypeError):
+                page = int(page)
+            st.markdown(
+                f'<div data-ghost="true" data-msg-id="{html.escape(msg_id)}">'
+                f"🔍 searching p.{page} ▍</div>",
+                unsafe_allow_html=True,
+            )
+        logger.info(
+            "[GHOST] ghost rendered msg_id=%s (%d docs)",
+            msg_id,
+            _n_recompute_docs,
+        )
+        _log_recompute()
+        return True
+
     rendered = False
     if not documents and not citations:
+        _log_recompute()
         return rendered
 
     # 1. 인용 데이터 수집 (기존 로직 유지)
@@ -152,6 +199,7 @@ def _render_references_content(
         doc_citations = fallback_citations
 
     if not doc_citations:
+        _log_recompute()
         return False
 
     # 2. 문서 ID별 페이지 매핑 테이블 구축
@@ -238,6 +286,7 @@ def _render_references_content(
     # 4. 페이지 번호 오름차순 정렬
     sorted_pages = sorted(page_to_refs.keys())
     if not sorted_pages:
+        _log_recompute()
         return False
 
     # 5. UI 렌더링 (단일 페이지당 1개의 정제된 버튼 배치)
@@ -274,6 +323,7 @@ def _render_references_content(
             # 스트리밍 본문에 발췌가 이미 인라인 렌더되므로 생성 익스팬더는 캡션 반복을 생략한다.
             if excerpt and show_caption:
                 st.caption(excerpt)
+    _log_recompute()
     return True
 
 

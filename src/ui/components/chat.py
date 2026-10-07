@@ -38,13 +38,37 @@ from ui.widget_keys import MAIN_CHAT_INPUT_KEY, SAMPLE_QUESTION_STATE_KEY
 logger = logging.getLogger(__name__)
 
 
-def _metrics_caption(metrics: dict | None, model: str | None = None) -> str:
-    """완료 캡션(답변 아래)용 핵심 메트릭 문자열 생성 (중복 모델명 제외)."""
+def _metrics_caption(
+    metrics: dict | None,
+    model: str | None = None,
+    *,
+    elapsed_sec: float | None = None,
+    turn_start: float | None = None,
+) -> str:
+    """완료 캡션(답변 아래)용 핵심 메트릭 문자열 생성 (중복 모델명 제외).
+
+    Incremental 계약: 최종 ``total_time``이 도착하기 전에는 단조(monotonic)
+    경과 시드로 캡션을 먼저 보여주고, 최종 메트릭이 오면 업그레이드한다.
+    시드는 ``turn_start`` (Task0 ``_record_turn_start``/``_t_submit`` perf
+    clock) 또는 이미 계산된 ``elapsed_sec`` (streaming ``on_status`` 경과)
+    중 하나면 충분하다. 렌더는 호출자의 ``st.caption`` 한 줄 전용이며
+    절대 블로킹하지 않는다 (순수 문자열, I/O 없음).
+    """
+    _ = model
     metrics = metrics or {}
     parts: list[str] = []
     total_time = metrics.get("total_time", 0)
     if isinstance(total_time, (int, float)) and total_time > 0:
         parts.append(f"{total_time:.1f}s")
+    else:
+        seed = elapsed_sec
+        if seed is None and turn_start is not None:
+            try:
+                seed = time.perf_counter() - float(turn_start)
+            except (TypeError, ValueError):
+                seed = None
+        if isinstance(seed, (int, float)) and seed > 0:
+            parts.append(f"{seed:.1f}s ▍")
     input_tokens = metrics.get("input_token_count", 0)
     output_tokens = metrics.get("token_count", 0)
     if input_tokens or output_tokens:
@@ -416,9 +440,55 @@ def _draw_streaming_message(msg: dict[str, Any], current_sid: str) -> None:
 # ---------------------------------------------------------------------------
 
 
+def _record_turn_start(sid: str, msg_id: str, t_start: float) -> None:
+    """Persist the turn start clock for post-stream [PERF] elapsed baselines."""
+    SessionManager.set("perf_turn_start", t_start, session_id=sid)
+    SessionManager.set("perf_turn_msg_id", msg_id, session_id=sid)
+
+
+def report_rerun_wall_if_pending(sid: str) -> None:
+    """Log the true post-stream rerun wall on the script run after st.rerun().
+
+    The streaming tail persists ``perf_rerun_start`` before raising through
+    ``st.rerun()`` (which discards locals via RerunException), so the next
+    script run landing here measures the real wall (queue + boot + first
+    render) instead of the ~0ms ``st.rerun()`` call time. Logging only —
+    pending keys are consumed exactly once.
+    """
+    start = SessionManager.get("perf_rerun_start", None, sid)
+    if start is None:
+        return
+    try:
+        wall_sec = time.perf_counter() - float(start)
+    except (TypeError, ValueError):
+        wall_sec = -1.0
+    msg_id = SessionManager.get("perf_rerun_msg_id", "", sid) or ""
+    SessionManager.set("perf_rerun_start", None, session_id=sid)
+    SessionManager.set("perf_rerun_msg_id", None, session_id=sid)
+    if wall_sec < 0:
+        return
+    turn_start = SessionManager.get("perf_turn_start", None, sid)
+    try:
+        turn_sec = (
+            time.perf_counter() - float(turn_start) if turn_start is not None else -1.0
+        )
+    except (TypeError, ValueError):
+        turn_sec = -1.0
+    if turn_sec >= 0:
+        logger.info(
+            "[PERF] rerun-wall msg_id=%s took %.3fs turn_elapsed=%.3fs",
+            msg_id,
+            wall_sec,
+            turn_sec,
+        )
+    else:
+        logger.info("[PERF] rerun-wall msg_id=%s took %.3fs", msg_id, wall_sec)
+
+
 def render_chat_messages_area() -> None:
     """Renders the chat column: unified timeline (streaming included)."""
     current_sid = SessionManager.get_session_id()
+    report_rerun_wall_if_pending(current_sid)
 
     # 분석 상태 블록은 타임라인 흐름 안에 둔다(별도 배치 시 시작 말풍선과
     # 레이아웃 충돌). 폴링(1.5s)은 빌드/취소 진행 중에만 필요하다 — 진행 중에는
@@ -518,6 +588,7 @@ def render_chat_input_area() -> None:
         SessionManager.set("is_generating_answer", True, current_sid)
         SessionManager.set("generation_cancel", False, current_sid)
         SessionManager.set("active_stream_msg_id", stream_msg_id, current_sid)
+        _record_turn_start(current_sid, stream_msg_id, time.perf_counter())
         return
 
     # 생성 중에도 위젯을 disabled로 계속 렌더(입력창 소실 방지).
@@ -573,6 +644,7 @@ def render_chat_input_area() -> None:
             # 플래그를 항상 초기화해야 새 질문이 오작동 취소되지 않는다.
             SessionManager.set("generation_cancel", False, current_sid)
             SessionManager.set("active_stream_msg_id", stream_msg_id, current_sid)
+            _record_turn_start(current_sid, stream_msg_id, _t_submit)
             logger.debug(
                 "[PERF] submit handler: setup took %.3fs",
                 time.perf_counter() - _t_submit,
@@ -586,6 +658,66 @@ def _friendly_stream_error(exc: Exception) -> str:
     from ui.components.streaming import friendly_error_message
 
     return str(friendly_error_message(exc))
+
+
+def _is_stale_ghost(aux: dict[str, Any], msg_id: str) -> bool:
+    """다른 턴의 고스트 스냅샷이면 True (msg_id 불일치 시 폐기)."""
+    owner = aux.get("ghost_msg_id")
+    return owner is not None and owner != msg_id
+
+
+def _paint_midstream_badges(aux: dict[str, Any]) -> bool:
+    """Mid-stream 인용 배지를 그린다 (단일 markdown, 위젯 없음).
+
+    ``_on_aux`` 스냅샷 게이트 안에서 호출된다: 인용이 도착한 aux에만 반응하고,
+    전체 참조 본문(``_render_references_content`` 버튼 경로)은 finalize에만
+    렌더한다. 스트리밍을 깨뜨리지 않도록 실패는 흡수하고 False를 반환한다.
+    """
+    citations = aux.get("citations") or []
+    if not citations:
+        return False
+    try:
+        return bool(render_inline_citation_badges(citations, aux.get("documents")))
+    except (AttributeError, TypeError, ValueError, RuntimeError) as exc:
+        logger.debug("[CHAT] mid-stream badges 생략: %s", exc)
+        return False
+
+
+def _seeded_metrics_text(aux: dict[str, Any], sid: str) -> str:
+    """Pre-final 캡션 텍스트: 최종 total_time 전에는 turn clock 시드로 표시.
+
+    최종 메트릭(``total_time``)이 있으면 ``_metrics_caption``이 최종값으로
+    업그레이드하고, 없으면 Task0 ``perf_turn_start`` 단조 clock으로 시드한다.
+    빈 문자열이면 호출자가 캡션을 그리지 않는다 (팬텀 캡션 금지).
+    """
+    metrics = aux.get("metrics") or {}
+    if not isinstance(metrics, dict):
+        return ""
+    if metrics.get("total_time"):
+        return _metrics_caption(metrics)
+    turn_start = SessionManager.get("perf_turn_start", None, sid)
+    if turn_start is None:
+        return ""
+    try:
+        t0 = float(turn_start)
+    except (TypeError, ValueError):
+        return ""
+    return _metrics_caption(metrics, turn_start=t0)
+
+
+def _should_skip_final_rerun(*, cancelled: bool, error_text: str | None) -> bool:
+    """Clean finalize needs no st.rerun (Task3 terminalize, safe subset).
+
+    Badges/metrics already painted in-run via the Task2 helpers
+    (``_paint_midstream_badges``/``_seeded_metrics_text``) plus the
+    ``finally`` final expander, so the only pending change is the
+    ``msg_type`` streaming->general conversion for the current ``msg_id``.
+    ■ stop (``cancelled``) and error turns still rerun for a confirmed
+    render. No fragment infrastructure — single boolean guard only.
+    """
+    if cancelled:
+        return False
+    return not error_text
 
 
 def _render_streaming_with_write_stream(
@@ -615,8 +747,12 @@ def _render_streaming_with_write_stream(
             def _on_status(status_text: str, elapsed_sec: float) -> None:
                 status_ph.caption(_proc_phase_caption(status_text, elapsed_sec))
 
+            _seed_logged: list[bool] = [False]
+
             def _on_aux(aux: dict[str, Any]) -> None:
                 # [개선] aux_state에 thought나 documents가 유입되었을 때만 익스팬더를 슬롯에 갱신
+                if _is_stale_ghost(aux, msg_id):
+                    return
                 aux_ph.empty()
                 with aux_ph:
                     render_generation_expander(
@@ -633,6 +769,18 @@ def _render_streaming_with_write_stream(
                         expanded=False,
                         generating=True,
                     )
+                    # Task2: badges mid-stream, full references only on finalize.
+                    _paint_midstream_badges(aux)
+                    seeded = _seeded_metrics_text(aux, current_sid)
+                    if seeded:
+                        st.caption(seeded)
+                        if not _seed_logged[0]:
+                            _seed_logged[0] = True
+                            logger.info(
+                                "[PERF] caption-seed msg_id=%s text=%r",
+                                msg_id,
+                                seeded,
+                            )
 
             # [개선 4] 데이터가 없는 상태에서 불필요하게 빈 익스팬더를 그리던 기존 선행 렌더 블록 제거
             # (기존 lines 410-433 삭제: aux_ph.empty()로 슬롯만 확보하고 실제 렌더링은 _on_aux에 위임)
@@ -640,6 +788,7 @@ def _render_streaming_with_write_stream(
 
             # st.write_stream — 스트리밍 텍스트 표시
             response = None
+            _t_join = time.perf_counter()
             try:
                 response = st.write_stream(
                     _content_generator(
@@ -658,6 +807,11 @@ def _render_streaming_with_write_stream(
                 stream_error = _friendly_stream_error(exc)
                 response = stream_error
             finally:
+                logger.info(
+                    "[PERF] join-block msg_id=%s took %.3fs",
+                    msg_id,
+                    time.perf_counter() - _t_join,
+                )
                 # 완료/예외/■ 중지(StopException — BaseException) 모두에서 실행되어
                 # 잘못된 "생성 중" 잔상이 남지 않는다. 플레이스홀더는 매 run의 일시 요소.
                 status_ph.empty()
@@ -684,6 +838,14 @@ def _render_streaming_with_write_stream(
                             expanded=False,
                             generating=False,
                         )
+                    # Terminal in-run paint: rerun-skip 턴은 render_message를
+                    # 다시 타지 않으므로, 최종 뱃지/지표를 write_stream 본문
+                    # 아래(완료 메시지와 동일 슬롯 순서)에 여기서 확정 렌더한다.
+                    # aux_ph 블록 바깥 — chat_message 안에서 본문 뒤에 이어진다.
+                    _paint_midstream_badges(aux_state)
+                    final_metric_txt = _seeded_metrics_text(aux_state, current_sid)
+                    if final_metric_txt:
+                        st.caption(final_metric_txt)
     except BaseException:
         stop_hit = True  # ■ 사용자 중지 — 부분 응답 영속화 후 rerun으로 확정 렌더
 
@@ -725,7 +887,35 @@ def _render_streaming_with_write_stream(
     _finalize_pdf_side_effects(current_sid, msg_id)
     logger.info("[PERF] finalize took %.3fs", time.perf_counter() - _t_fin)
 
-    # 정상 완료 및 ■ 중지 모두 부분 응답 확정 및 입력창 활성화를 위해 rerun 수행
+    # Terminalize (Task3 safe subset): clean finalize already painted the
+    # final expander/badges/metrics in-run, so skip st.rerun() when the only
+    # pending change is msg_type streaming->general for this msg_id. The
+    # finalized flag lets the next run know no rerun wall is pending.
+    if _should_skip_final_rerun(cancelled=cancelled, error_text=final_error):
+        SessionManager.set("stream_finalized_no_rerun", msg_id, session_id=current_sid)
+        logger.info(
+            "[PERF] rerun skipped msg_id=%s (final already painted in-run)",
+            msg_id,
+        )
+        return
+
+    # ■ 중지 및 오류 턴은 부분 응답 확정 및 입력창 활성화를 위해 rerun 수행
+    # Task 0 instrumentation: st.rerun()은 RerunException을 발생시켜 호출 시간
+    # 측정이 항상 ~0ms가 되므로, wall 측정은 다음 script run으로 이월한다.
+    _turn_start = SessionManager.get("perf_turn_start", None, current_sid)
+    try:
+        _turn_sec = (
+            time.perf_counter() - float(_turn_start)
+            if _turn_start is not None
+            else -1.0
+        )
+    except (TypeError, ValueError):
+        _turn_sec = -1.0
+    if _turn_sec >= 0:
+        logger.info("[PERF] turn msg_id=%s elapsed_sec=%.3fs", msg_id, _turn_sec)
+    SessionManager.set("perf_rerun_start", time.perf_counter(), session_id=current_sid)
+    SessionManager.set("perf_rerun_msg_id", msg_id, session_id=current_sid)
+    logger.info("[PERF] rerun scheduled msg_id=%s", msg_id)
     st.rerun()
 
 
@@ -771,4 +961,5 @@ __all__ = [
     "render_generation_expander",
     "render_inline_citation_badges",
     "render_message",
+    "report_rerun_wall_if_pending",
 ]
