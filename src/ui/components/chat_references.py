@@ -315,7 +315,7 @@ def _render_references_content(
             st.button(
                 f"{label}",
                 key=f"pop_doc_{msg_id}_{page_num}_{idx}",
-                use_container_width=True,
+                width="stretch",
                 on_click=_handle_page_jump,
                 args=(page_num,),
                 help=f"{base_help} — {excerpt}" if excerpt else base_help,

@@ -404,7 +404,7 @@ def _draw_streaming_message(msg: dict[str, Any], current_sid: str) -> None:
             args=(current_sid, query),
             disabled=not query.strip(),
             help=t("action_retry_answer_help"),
-            use_container_width=True,
+            width="stretch",
         )
         return
 

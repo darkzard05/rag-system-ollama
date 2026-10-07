@@ -150,7 +150,7 @@ def _render_build_progress_block(sid: str) -> None:
                 args=(sid,),
                 disabled=not actions["retryable"],
                 help=t("action_retry_build_help"),
-                use_container_width=True,
+                width="stretch",
             )
         if state == "running" and not is_cancelling:
             st.button(
@@ -158,7 +158,7 @@ def _render_build_progress_block(sid: str) -> None:
                 key=cancel_rebuild_key(sid),
                 on_click=_cancel_rebuild,
                 args=(sid,),
-                use_container_width=True,
+                width="stretch",
             )
 
 
