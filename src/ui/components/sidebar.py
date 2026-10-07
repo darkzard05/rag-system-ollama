@@ -146,7 +146,7 @@ def _render_settings_internal(
         if (
             st.button(
                 t("sidebar_refresh"),
-                use_container_width=True,
+                width="stretch",
                 type="secondary",
                 help=t("sidebar_refresh_help"),
                 key="refresh_models_btn",
@@ -182,7 +182,7 @@ def _render_settings_internal(
         if (
             st.button(
                 t("sidebar_new_chat"),
-                use_container_width=True,
+                width="stretch",
                 type="primary",
                 help=t("sidebar_new_chat_help"),
                 key="new_chat_btn",
@@ -197,7 +197,7 @@ def _render_settings_internal(
         st.divider()
         if st.button(
             t("sidebar_reset"),
-            use_container_width=True,
+            width="stretch",
             type="secondary",
             help=t("sidebar_reset_help"),
             key=reset_all_key(sid),
@@ -215,14 +215,14 @@ def _confirm_reset_all() -> None:
         # 버튼 위젯 interaction 자체의 리런으로 다이얼로그가 닫히므로 명시 rerun 금지.
         if st.button(
             t("sidebar_cancel"),
-            use_container_width=True,
+            width="stretch",
             key="reset_confirm_cancel_btn",
         ):
             pass
     with col_confirm:
         if st.button(
             t("sidebar_confirm_reset"),
-            use_container_width=True,
+            width="stretch",
             type="primary",
             key="reset_confirm_btn",
             # 버튼 위젯 interaction 자체의 리런으로 전체 UI가 갱신되므로 명시 rerun 금지.
