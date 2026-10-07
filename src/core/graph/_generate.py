@@ -8,6 +8,7 @@ import asyncio
 import json
 import logging
 import re
+import threading
 import time
 from typing import Any
 
@@ -47,6 +48,7 @@ from core.graph._graph_core import (
     _strip_json_fence,
     get_state_attr,
 )
+from core.graph._partial_citations import PartialCitationScanner
 from core.graph._speculative_gen import _adopt_speculative_generate
 from core.model_loader import ModelManager
 from core.resource_manager import get_resource_manager
@@ -60,6 +62,98 @@ logger = logging.getLogger(__name__)
 # SemanticCache.get()은 내부 유사도 임계값을 통과한 entry.value(저장값) 또는 None만 반환하며,
 # 유사도 점수나 히트 객체를 노출하지 않으므로 신뢰도는 저장 시 함께 직렬화한다.
 _QUERY_CACHE_VALUE_VERSION = "1.0"
+
+
+def _log_cache_set_done(task: asyncio.Task[None], *, msg_id: str) -> None:
+    """Fire-and-forget 완료 콜백: 예외를 소비·기록하고 재발생시키지 않는다."""
+    if task.cancelled():
+        logger.warning("[RAG] [CACHE] 백그라운드 저장 취소됨 msg_id=%s", msg_id)
+        return
+    exc = task.exception()
+    if exc is not None:
+        logger.warning("[RAG] [CACHE] 저장 실패 — 무시 msg_id=%s: %s", msg_id, exc)
+
+
+async def _cache_set_worker(
+    *, key: str, value: dict[str, Any], ttl_seconds: int
+) -> None:
+    """백그라운드 캐시 쓰기: 임베더 준비 + set (실패는 호출자 콜백이 기록)."""
+    await _ensure_query_cache_embedder()
+    await get_cache_manager().set(
+        key,
+        value,
+        ttl_seconds=ttl_seconds,
+        use_semantic=True,
+        persist_to_disk=False,
+    )
+
+
+def _run_cache_worker_sync(
+    *, key: str, value: dict[str, Any], ttl_seconds: int, msg_id: str
+) -> None:
+    """실행 중 루프가 없을 때의 폴백: 데몬 스레드의 일회성 루프로 쓰기."""
+    try:
+        asyncio.run(_cache_set_worker(key=key, value=value, ttl_seconds=ttl_seconds))
+    except (OSError, RuntimeError) as exc:
+        logger.warning("[RAG] [CACHE] 저장 실패 — 무시 msg_id=%s: %s", msg_id, exc)
+
+
+def _schedule_query_cache_set(
+    *,
+    query: str,
+    response: str,
+    confidence: float,
+    file_hash: str,
+    msg_id: str = "",
+) -> bool:
+    """쿼리 캐시 쓰기를 크리티컬 패스 밖으로 예약한다. 예약되면 True.
+
+    게이트는 모듈의 ``QUERY_CACHE_ENABLED`` (기본 False, 호출 시점 판독)에만
+    의존한다: 비활성화면 스레드 생성·임베더 준비·캐시 접근 없이 즉시 False를
+    반환해 오버헤드가 0이다. 신뢰도 미달·빈 쿼리·file_hash 없음도 예약하지
+    않는다. UI 턴 id는 그래프까지 전달되지 않으므로 로그 상관 id는 호출자가 준다.
+    """
+    if not QUERY_CACHE_ENABLED:
+        return False
+    if not query or not file_hash:
+        return False
+    try:
+        conf = float(confidence)
+    except (TypeError, ValueError):
+        return False
+    if conf < float(QUERY_CACHE_MIN_CONF):
+        return False
+    key = f"{file_hash}:{query}"
+    value = {
+        "response": response,
+        "confidence": conf,
+        "version": _QUERY_CACHE_VALUE_VERSION,
+    }
+    ttl_seconds = int(QUERY_CACHE_TTL)
+    tag = msg_id or "-"
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        thread = threading.Thread(
+            target=_run_cache_worker_sync,
+            kwargs={
+                "key": key,
+                "value": value,
+                "ttl_seconds": ttl_seconds,
+                "msg_id": tag,
+            },
+            daemon=True,
+            name=f"query-cache-set-{tag}",
+        )
+        thread.start()
+        logger.info("[PERF] cache-set scheduled (thread) msg_id=%s", tag)
+        return True
+    task: asyncio.Task[None] = loop.create_task(
+        _cache_set_worker(key=key, value=value, ttl_seconds=ttl_seconds)
+    )
+    task.add_done_callback(lambda t: _log_cache_set_done(t, msg_id=tag))
+    logger.info("[PERF] cache-set scheduled msg_id=%s (off critical path)", tag)
+    return True
 
 
 def _normalize_doc_text(text: str) -> str:
@@ -317,6 +411,7 @@ async def _generate_pass(
         json_llm = llm.bind(response_format={"type": "json_object"})
         coordinator = get_resource_manager()
         async with coordinator.use_llm(model_name=DEFAULT_OLLAMA_MODEL):
+            citation_scanner = PartialCitationScanner()
             async for chunk in json_llm.astream([sys_msg, human_msg], config=config):
                 if hasattr(llm, "_convert_chunk_to_thought_and_content"):
                     content_chunk, thought_chunk = (
@@ -341,6 +436,23 @@ async def _generate_pass(
                     full_response += content_chunk
                 if hasattr(chunk, "response_metadata") and chunk.response_metadata:
                     last_metadata = chunk.response_metadata
+
+                # Phase 0: 완성된 citation 객체를 생성 도중 즉시 디스패치한다.
+                # writer=None / 비구조화 경로는 건드리지 않는다.
+                if content_chunk and writer is not None:
+                    new_cites = citation_scanner.feed(full_response)
+                    if new_cites:
+                        await _dispatch_event(
+                            "citations_add",
+                            {
+                                "items": [obj for _, obj in new_cites],
+                                "base_index": new_cites[0][0],
+                                "arr_len": citation_scanner.emitted,
+                                "attempt": attempt,
+                            },
+                            writer=writer,
+                            config=config,
+                        )
 
                 # 원시 JSON 청크도 항상 UI로 전송한다.
                 # 구조화 모드(raw_json=True)에서는 파싱 전 원시 토큰을 먼저 띄우고,
@@ -405,6 +517,10 @@ async def _generate_pass(
                 {"citations": [c.model_dump() for c in parsed_answer.citations]},
                 writer=writer,
                 config=config,
+            )
+            logger.info(
+                "[PERF] citations-dispatch count=%d",
+                len(parsed_answer.citations),
             )
     except (json.JSONDecodeError, ValueError) as e:
         parse_failed = True
@@ -753,31 +869,16 @@ async def generate(
         result["relevant_docs"] = state_docs
 
     # 쿼리 응답 캐시 저장 (선택적 opt-in). 캐시 히트 경로가 아니라 이번에 새로
-    # 생성한 경우에만 저장한다. 신뢰도가 기준 미달이면 저장하지 않는다.
-    if QUERY_CACHE_ENABLED and not get_state_attr(state, "is_cached"):
-        query_for_cache = get_state_attr(state, "input", "") or ""
-        conf = float(result.get("confidence", 0.0))
-        if query_for_cache and conf >= QUERY_CACHE_MIN_CONF:
-            sid = _get_session_id(config)
-            file_hash = SessionManager.get("file_hash", session_id=sid, default=None)
-            if file_hash:
-                await _ensure_query_cache_embedder()
-                try:
-                    # D17 — cache key namespaced by file_hash so cross-document queries can't collide.
-                    query_for_cache = f"{file_hash}:{query_for_cache}"
-                    await get_cache_manager().set(
-                        query_for_cache,
-                        {
-                            "response": result["response"],
-                            "confidence": conf,
-                            "version": _QUERY_CACHE_VALUE_VERSION,
-                        },
-                        ttl_seconds=QUERY_CACHE_TTL,
-                        use_semantic=True,
-                        persist_to_disk=False,
-                    )
-                except Exception as e:  # noqa: BLE001 - 캐시 저장 실패는 무시
-                    logger.warning(f"[RAG] [CACHE] 저장 실패 — 무시: {e}")
+    # 생성한 경우에만 저장한다. 쓰기는 크리티컬 패스 밖으로 예약한다.
+    if not get_state_attr(state, "is_cached"):
+        sid = _get_session_id(config)
+        file_hash = SessionManager.get("file_hash", session_id=sid, default=None)
+        _schedule_query_cache_set(
+            query=get_state_attr(state, "input", "") or "",
+            response=result["response"],
+            confidence=result.get("confidence", 0.0),
+            file_hash=file_hash or "",
+        )
 
     _emit_query_timing(_query_timings)
     return result
