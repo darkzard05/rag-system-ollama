@@ -10,16 +10,13 @@ import asyncio
 import logging
 import time
 from collections.abc import AsyncIterator, Callable
+from dataclasses import dataclass, field
 from typing import Any
 
 from langchain_core.embeddings import Embeddings
 
 from cache.vector_cache import EngineCacheManager
-from common.config import (
-    HYDRATION_DRAIN_TIMEOUT_SECONDS,
-    INFERENCE_CONCURRENCY_LOAD_TESTED,
-    MAX_CONCURRENT_INFERENCE,
-)
+from common.config import HYDRATION_DRAIN_TIMEOUT_SECONDS
 from common.exceptions import VectorStoreError
 from common.resilience import get_circuit_breaker_registry, retry_stream
 from common.utils import doc_stable_id
@@ -29,6 +26,89 @@ from core.resource_manager import get_resource_manager
 from core.session import SessionManager
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class HydrationDrainResult:
+    """하이드레이션 드레인 결과 (태스크 순서 보존)."""
+
+    results: list[Any] = field(default_factory=list)
+    failed: int = 0
+    timed_out: bool = False
+
+
+async def _drain_hydration_tasks(
+    tasks: list[asyncio.Task[Any]], *, timeout: float, msg_id: str = ""
+) -> HydrationDrainResult:
+    """하이드레이션 태스크를 동시 대기한다 (순차 드레인 금지).
+
+    ``asyncio.gather`` 단일 경로로 병렬 대기하며 결과 순서를 보존한다.
+    태스크 실패는 세기만 하고 스트림 실패로 승격시키지 않으며, 타임아웃이면
+    pending을 취소하고 fail-loud로 알린다. UI 턴 id는 스트림까지 전달되지
+    않으므로 로그 상관 id는 호출자가 준다.
+    """
+    pending = [t for t in tasks if not t.done()]
+    results: list[Any] = [None] * len(tasks)
+    failed = 0
+    timed_out = False
+    _t0 = time.perf_counter()
+    if pending:
+        index_of = {id(t): i for i, t in enumerate(tasks)}
+        try:
+            gathered = await asyncio.wait_for(
+                asyncio.gather(*pending, return_exceptions=True),
+                timeout=timeout,
+            )
+        except asyncio.TimeoutError:
+            timed_out = True
+            for t in pending:
+                if not t.done():
+                    t.cancel()
+            unsettled = [t for t in pending if not t.done()]
+            if unsettled:
+                await asyncio.gather(*unsettled, return_exceptions=True)
+            for t in pending:
+                if t.cancelled():
+                    failed += 1
+                elif t.done() and t.exception() is not None:
+                    failed += 1
+                    logger.error(f"[RAG] 문서 하이드레이션 실패: {t.exception()}")
+            logger.error("[RAG] 하이드레이션 드레인 타임아웃")
+        except (Exception, asyncio.CancelledError) as exc:
+            failed += 1
+            logger.error(f"[RAG] 문서 하이드레이션 실패: {exc}")
+        else:
+            for task, outcome in zip(pending, gathered, strict=True):
+                results[index_of[id(task)]] = (
+                    None if isinstance(outcome, BaseException) else outcome
+                )
+                if isinstance(outcome, BaseException):
+                    failed += 1
+                    logger.error(f"[RAG] 문서 하이드레이션 실패: {outcome}")
+    elapsed = time.perf_counter() - _t0
+    logger.info(
+        "[PERF] hydration drain took %.3fs (%d task(s), waited=%s skipped_cache_hit=%s) msg_id=%s",
+        elapsed,
+        len(tasks),
+        len(pending) > 0,
+        len(pending) == 0,
+        msg_id or "-",
+    )
+    return HydrationDrainResult(results=results, failed=failed, timed_out=timed_out)
+
+
+def _lazy_perf_report() -> dict[str, Any]:
+    """모니터링 스냅샷을 best-effort로 구한다 (답변 경로를 깨지 않는다)."""
+    try:
+        from services.monitoring.performance_monitor import (
+            get_performance_monitor,
+        )
+
+        report = get_performance_monitor().generate_report()
+        return dict(report) if isinstance(report, dict) else {}
+    except (AttributeError, KeyError, RuntimeError, TypeError, ValueError) as exc:
+        logger.debug("[PERF] perf report skipped (lazy): %s", exc)
+        return {}
 
 
 async def _stream_with_retry(
@@ -144,7 +224,7 @@ class RAGSystem:
             from .graph.graph_builder import format_context
 
             # perf_report = monitor.get_report() # 이전 코드
-            perf_report = monitor.generate_report()
+            perf_report = _lazy_perf_report()
             combined_perf = {**result.get("performance", {}), "metrics": perf_report}
             return {
                 "response": result.get("response", ""),
@@ -234,68 +314,12 @@ class RAGSystem:
                 # 완료 대기로 UI 경로의 _finalize_pdf_side_effects가
                 # 좌표 완성 문서를 읽게 보장한다. 실패는 상태 로그에 남겨
                 # 인용 하이라이트 저하를 UI에 가시화한다 (침묵 성공 방지).
-                hydration_failed = 0
-                _t_drain = time.perf_counter()
-                # T2 bounded drain: 순차 드레인 유지(기본 effective_bound=1) +
-                # asyncio.wait_for 타임아웃 바운드 + 게이트 통과 시에만
-                # concurrent gather. metric은 성공/타임아웃 양쪽 경로에서
-                # 무조건 emit (fail-loud)한다.
-                _drain_timed_out = False
-                _effective_bound = (
-                    MAX_CONCURRENT_INFERENCE if INFERENCE_CONCURRENCY_LOAD_TESTED else 1
+                drain = await _drain_hydration_tasks(
+                    hydration_tasks,
+                    timeout=HYDRATION_DRAIN_TIMEOUT_SECONDS,
+                    msg_id=self.session_id,
                 )
-                pending = [t for t in hydration_tasks if not t.done()]
-                try:
-                    if _effective_bound > 1 and pending:
-                        _results = await asyncio.wait_for(
-                            asyncio.gather(
-                                *pending,
-                                return_exceptions=True,
-                            ),
-                            timeout=HYDRATION_DRAIN_TIMEOUT_SECONDS,
-                        )
-                        for _r in _results:
-                            if isinstance(_r, BaseException):
-                                hydration_failed += 1
-                                logger.error(f"[RAG] 문서 하이드레이션 실패: {_r}")
-                    elif pending:
-                        _deadline = _t_drain + HYDRATION_DRAIN_TIMEOUT_SECONDS
-                        for t in pending:
-                            _remaining = _deadline - time.perf_counter()
-                            if _remaining <= 0:
-                                _drain_timed_out = True
-                                hydration_failed += 1
-                                logger.error("[RAG] 하이드레이션 드레인 타임아웃")
-                                break
-                            try:
-                                await asyncio.wait_for(t, timeout=_remaining)
-                            except asyncio.TimeoutError:
-                                t.cancel()
-                                _drain_timed_out = True
-                                hydration_failed += 1
-                                logger.error("[RAG] 하이드레이션 드레인 타임아웃")
-                            except (Exception, asyncio.CancelledError) as te:
-                                hydration_failed += 1
-                                logger.error(f"[RAG] 문서 하이드레이션 실패: {te}")
-                        for t in pending:
-                            if not t.done():
-                                t.cancel()
-                except asyncio.TimeoutError:
-                    for t in pending:
-                        if not t.done():
-                            t.cancel()
-                    _drain_timed_out = True
-                    hydration_failed += len(pending)
-                    logger.error("[RAG] 하이드레이션 드레인 타임아웃")
-                _drain_elapsed = time.perf_counter() - _t_drain
-                logger.info(
-                    "[PERF] hydration drain took %.3fs (%d task(s), waited=%s skipped_cache_hit=%s)",
-                    _drain_elapsed,
-                    len(hydration_tasks),
-                    len(pending) > 0,
-                    len(pending) == 0,
-                )
-                if hydration_failed or _drain_timed_out:
+                if drain.failed or drain.timed_out:
                     SessionManager.add_status_log(
                         "일부 참조 문서의 하이라이트 좌표를 불러오지 못했습니다.",
                         session_id=self.session_id,
