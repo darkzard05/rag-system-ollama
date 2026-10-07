@@ -1,0 +1,52 @@
+{
+  "tool": "measure_tail",
+  "turns": [
+    {
+      "seed": 7,
+      "coord_cache": "cold",
+      "n_docs": 3,
+      "spans_s": {
+        "recompute": 0.001,
+        "pdf-finalize": 0.000121900000522146,
+        "persist": 0.0,
+        "finalize": 0.0,
+        "rerun": 0.0
+      }
+    },
+    {
+      "seed": 8,
+      "coord_cache": "warm",
+      "n_docs": 6,
+      "spans_s": {
+        "recompute": 0.001,
+        "pdf-finalize": 0.00013609999950858764,
+        "persist": 0.0,
+        "finalize": 0.0,
+        "rerun": 0.0
+      }
+    },
+    {
+      "seed": 9,
+      "coord_cache": "warm",
+      "n_docs": 12,
+      "spans_s": {
+        "recompute": 0.001,
+        "pdf-finalize": 0.00012859999696956947,
+        "persist": 0.0,
+        "finalize": 0.0,
+        "rerun": 0.0
+      }
+    }
+  ],
+  "summary": {
+    "mean_s": {
+      "persist": 0.0,
+      "finalize": 0.0,
+      "pdf-finalize": 0.00012886666566676772,
+      "recompute": 0.001,
+      "rerun": 0.0
+    },
+    "task3_recompute_vs_task4_rerun_ratio": "inf",
+    "priority": "Task3 (recompute/prefetch) before Task4 (rerun reduction)"
+  }
+}

@@ -1,0 +1,54 @@
+{
+  "tool": "measure_tail",
+  "turns": [
+    {
+      "seed": 7,
+      "coord_cache": "cold",
+      "n_docs": 3,
+      "spans_s": {
+        "recompute": 0.001,
+        "pdf-finalize": 0.00010159999874304049,
+        "persist": 0.0,
+        "finalize": 0.0,
+        "rerun": 0.0,
+        "rerun_requested": true
+      }
+    },
+    {
+      "seed": 8,
+      "coord_cache": "warm",
+      "n_docs": 6,
+      "spans_s": {
+        "recompute": 0.001,
+        "pdf-finalize": 7.520000144722871e-05,
+        "persist": 0.0,
+        "finalize": 0.0,
+        "rerun": 0.0,
+        "rerun_requested": true
+      }
+    },
+    {
+      "seed": 9,
+      "coord_cache": "warm",
+      "n_docs": 12,
+      "spans_s": {
+        "recompute": 0.001,
+        "pdf-finalize": 9.310000314144418e-05,
+        "persist": 0.0,
+        "finalize": 0.0,
+        "rerun": 0.0,
+        "rerun_requested": true
+      }
+    }
+  ],
+  "summary": {
+    "mean_s": {
+      "persist": 0.0,
+      "finalize": 0.0,
+      "pdf-finalize": 8.996666777723779e-05,
+      "recompute": 0.001,
+      "rerun": 0.0
+    },
+    "rerun_requested": true
+  }
+}
