@@ -408,7 +408,7 @@ def render_pdf_controls(current_page, total_pages):
         with col_prev:
             st.button(
                 t("nav_prev"),
-                use_container_width=True,
+                width="stretch",
                 key="btn_nav_prev_v6",
                 disabled=current_page <= 1,
                 on_click=_on_prev_click,
@@ -447,7 +447,7 @@ def render_pdf_controls(current_page, total_pages):
         with col_next:
             st.button(
                 t("nav_next"),
-                use_container_width=True,
+                width="stretch",
                 key="btn_nav_next_v6",
                 disabled=current_page >= total_pages,
                 help=t("pdf_page_help"),
