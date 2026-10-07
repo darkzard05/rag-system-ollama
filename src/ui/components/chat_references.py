@@ -72,7 +72,7 @@ def render_inline_citation_badges(
     citations: list[dict[str, Any]] | None,
     documents: list[Any] | None = None,
 ) -> bool:
-    """답변 말미 인용 표식을 한 줄의 작은 회색 텍스트로 렌더한다.
+    """답변 말미 인용 표식을 한 줄의 테마 적응형 텍스트로 렌더한다.
 
     ``[1] [2] ...`` 형태의 단일 ``st.markdown`` 호출이며, 배지 위젯이나
     인라인 ``help=``/툴팁을 달지 않는다 — 표식은 익스팬더 행으로의 매핑
@@ -83,10 +83,7 @@ def render_inline_citation_badges(
     if not doc_citations:
         return False
     markers = " ".join(f"[{idx + 1}]" for idx in range(len(doc_citations)))
-    st.markdown(
-        f'<small style="color: gray;">{html.escape(markers)}</small>',
-        unsafe_allow_html=True,
-    )
+    st.markdown(markers)
     return True
 
 
