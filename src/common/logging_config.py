@@ -147,7 +147,7 @@ def setup_logging(
 
     # 1. 콘솔 핸들러 (개발용 - 간단한 형식)
     if console_output:
-        console_handler = logging.StreamHandler(sys.__stderr__)
+        console_handler = logging.StreamHandler(sys.stderr)
         console_handler.setLevel(log_level_int)
         console_handler.setFormatter(simple_formatter)
         console_handler.addFilter(ContextFilter())
