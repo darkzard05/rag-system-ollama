@@ -100,8 +100,12 @@ def inject_custom_css() -> None:
     try:
         css_content = _load_css()
     except (FileNotFoundError, PermissionError, OSError) as e:
-        st.error(f"Failed to load custom CSS: {e}")
-        return
+        # CSS 로드 실패해도 프로브 슬롯 방출은 유지한다: 최상위 요소 수/순서를
+        # 결정론적으로 고정해야 업로드 전환 붕괴가 재발하지 않는다. 빈 CSS로
+        # 폴백하고 파일 로그에만 남긴다 (st.error는 DOM에 요소를 추가해 같은
+        # 붕괴를 유발하므로 여기서 쓰지 않는다).
+        logger.error("Failed to load custom CSS: %s", e)
+        css_content = ""
     # [UX] CSS를 본문 <style> 마크업이 아니라 문서 <head>에 영구 주입한다.
     # 본문 마크업 방식은 업로드 on_change 풀 rerun 시 레이아웃 delta가
     # <style> delta보다 먼저 플러시되어 flex:1 규칙이 늦게 적용되고, 그 사이
@@ -137,7 +141,8 @@ def inject_custom_css() -> None:
                     userScrolledUp: false,
                     observer: null,
                     isTicking: false,
-                    yankTarget: -1
+                    yankTarget: -1,
+                    initialYanked: false
                 }};
             }}
             const scrollState = window.parent.__chatScrollState;
@@ -244,8 +249,9 @@ def inject_custom_css() -> None:
                     // dist=30 → auto-follow 영구 정지). yank가 놓은 위치에 그대로면
                     // 우리 own scroll이므로 무시한다. 사용자가 실제로 위로 올리면
                     // 이 조건을 벗어나 latch가 정상적으로 걸린다.
+                    // 임계값은 BOTTOM_STICK_PX 단일 상수 (wheel 해제와 동일 기준).
                     const yank = scrollState.yankTarget;
-                    if (yank >= 0 && container.scrollTop >= yank - container.clientHeight - 4) {{
+                    if (yank >= 0 && container.scrollTop >= yank - container.clientHeight - {BOTTOM_STICK_PX}) {{
                         return;
                     }}
                     scrollState.yankTarget = -1;
@@ -284,8 +290,16 @@ def inject_custom_css() -> None:
                     }}
                 }}
 
-                // 초기 진입 및 Rerun 시 바닥으로 이동
-                scrollToBottom(true);
+                // 초기 진입 1회만 강제 하단 이동한다. 매 rerun 강제 yank는
+                // 과거 대화를 읽던 사용자를 바닥으로 끌어내리므로, 이후에는
+                // latch를 존중하는 비강제 모드로 전환한다 (Enter/전송 버튼의
+                // 명시적 force는 사용자 의도이므로 유지).
+                if (!scrollState.initialYanked) {{
+                    scrollState.initialYanked = true;
+                    scrollToBottom(true);
+                }} else {{
+                    scrollToBottom(false);
+                }}
             }};
 
             setupChatObserver();

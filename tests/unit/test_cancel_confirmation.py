@@ -90,8 +90,9 @@ def test_cancel_flow_saves_cancelled_field_and_preserves_partial_content():
 
 
 def test_streaming_status_shows_cancelling_caption():
-    """(c) 스트리밍 중 generation_cancel=True → 생성 익스팬더에 "Stopping..." 전달."""
+    """(c) 스트리밍 중 generation_cancel=True → 생성 익스팬더에 중지 상태 전달."""
     from ui.components import chat as chat_mod
+    from ui.strings import t
 
     sid = "test_cancel_render"
     SessionManager.reset_all_state(sid)
@@ -125,10 +126,13 @@ def test_streaming_status_shows_cancelling_caption():
         chat_mod._render_unified_timeline(sid)
 
     # 취소 요청 시 _draw_streaming_message는 생성 익스팬더를
-    # status_text="Stopping..." (generating=True)으로 렌더한다.
+    # status_text=t("status_fallback_stopping") (generating=True)으로 렌더한다.
+    # 기본 로케일(en)에서 en 값이 "Stopping..."이므로 기존 기대와 동일하다.
     mock_expander.assert_called_once()
     assert mock_expander.call_args.kwargs["generating"] is True
-    assert "Stopping..." in mock_expander.call_args.kwargs["status_text"]
+    assert (
+        t("status_fallback_stopping") in mock_expander.call_args.kwargs["status_text"]
+    )
 
 
 def test_render_message_shows_cancelled_caption():

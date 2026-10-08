@@ -4,6 +4,12 @@ from core.session import SessionManager
 
 logger = logging.getLogger(__name__)
 
+# 마지막으로 동기화한 세션 ID (모듈 레벨, 프로세스 공유).
+# 세션 전환 직후에는 _dirty_keys가 비어 있어 첫 sync_session이 스킵되고
+# 이전 세션의 st.session_state 미러가 stale로 남는다 — 전환 시 1회 강제
+# 동기화로 이를 메운다. 미러링 자체는 멱등이라 중복 호출도 안전하다.
+_last_synced_sid: str | None = None
+
 
 class UIBridge:
     """
@@ -31,13 +37,16 @@ class UIBridge:
         if not session_id or session_id == "default":
             return
 
-        # 변경 사항이 없으면 동기화 불필요 (rerun/render 비용 절감)
-        if not SessionManager.has_pending_ui_sync(session_id):
+        # 변경 사항이 없고 세션 전환도 아니면 동기화 불필요 (rerun/render 비용 절감)
+        global _last_synced_sid
+        sid_changed = _last_synced_sid != session_id
+        if not sid_changed and not SessionManager.has_pending_ui_sync(session_id):
             return
 
         try:
             # SessionManager를 통해 핵심 상태를 st.session_state에 동기화
             SessionManager.sync_to_streamlit(session_id)
+            _last_synced_sid = session_id
 
         except (RuntimeError, KeyError, ValueError) as e:
             # 프래그먼트 내부의 오류가 전체 앱을 중단시키지 않도록 예외 처리

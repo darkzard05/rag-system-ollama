@@ -58,9 +58,18 @@ SAMPLE_QUESTION_STATE_KEY: str = "onboarding_sample_question"
 LANGUAGE_SELECTOR_KEY: str = "language_selector"
 
 
-def cancel_rebuild_key(sid: str) -> str:
+def cancel_rebuild_key(sid: str, attempt: int | None = None) -> str:
     """Widget key for the RAG rebuild cancel button (components/chat.py)."""
-    return f"cancel_rebuild_{sid}"
+    if attempt is None:
+        return f"cancel_rebuild_{sid}"
+    return f"cancel_rebuild_{sid}_{int(attempt)}"
+
+
+def retry_build_key(sid: str, attempt: int | None = None) -> str:
+    """Widget key for the RAG rebuild retry button (components/chat_build.py)."""
+    if attempt is None:
+        return f"retry_build_{sid}"
+    return f"retry_build_{sid}_{int(attempt)}"
 
 
 def onboarding_upload_key(sid: str) -> str:

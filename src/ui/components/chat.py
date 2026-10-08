@@ -17,9 +17,12 @@ import uuid
 from typing import Any
 
 import streamlit as st
+from streamlit.runtime.scriptrunner_utils.exceptions import StopException
 
 from common.utils import (
     apply_tooltips_to_response,
+    doc_stable_id,
+    fast_hash,
     normalize_latex_delimiters,
     strip_context_tokens,
 )
@@ -112,9 +115,27 @@ def render_message(
         if wrap_in_container
         else st.container()
     ):
-        # 오류 메시지: 부분 답변이 있으면 먼저 본문을 보존하고 오류를 안내한다
+        # 오류 메시지: 증거(익스팬더)를 보존하면서 부분 답변 본문과 오류를 안내한다.
+        # 기존 early return은 thought/documents/citations 접근을 통째로 버렸다.
+        # 익스팬더는 이 분기 안에서만 렌더한다 (아래 일반 분기와 중복 금지 —
+        # 동일 msg_id 키의 익스팬더가 2개면 StreamlitDuplicateElementKey).
         error = kwargs.get("error")
         if error:
+            if role == "assistant" and (thought or documents or citations):
+                render_generation_expander(
+                    {
+                        "thought": thought,
+                        "documents": documents or [],
+                        "citations": citations,
+                        "metrics": metrics,
+                        "model": kwargs.get("model", ""),
+                        "process_steps": process_steps,
+                        "cancelled": cancelled,
+                        "msg_id": msg_id,
+                    },
+                    expanded=False,
+                    generating=False,
+                )
             has_content = bool(processed_content or content)
             if has_content:
                 if processed_content:
@@ -127,13 +148,14 @@ def render_message(
                     if role == "assistant":
                         display_text = strip_context_tokens(display_text)
                     st.markdown(display_text, unsafe_allow_html=(role == "assistant"))
-            ui_error(f"Error: {error}")
+            ui_error(f"{t('error_prefix')}{error}")
             return
 
         # 통합 익스팬더(사고·참조) — 질문↔답변 사이(답변 말풍선 상단) 고정.
-        # [개선 5] thought나 documents, citations 중 하나라도 존재할 때만 렌더링 호출
+        # thought·documents·citations 중 하나라도 존재할 때만 렌더링 호출.
+        # citations-only 턴도 최신이면 자동 펼침한다 (참조 접근성).
         if role == "assistant" and (thought or documents or citations):
-            should_expand = is_latest and bool(thought or documents)
+            should_expand = is_latest and bool(thought or documents or citations)
             render_generation_expander(
                 {
                     "thought": thought,
@@ -165,10 +187,15 @@ def render_message(
                 # RC-A: 완료된 메시지 본문은 매 script run마다 변하지 않으므로
                 # tooltips 주입 결과(문서 스캔 O(docs))를 msg_id로 캐시해 재수행을
                 # 제거한다. st.markdown 호출은 매 run 그대로 실행되므로 위젯/참조
-                # popover 재렌더는 보장된다. content/documents/citations가 동일하면 재사용.
+                # popover 재렌더는 보장된다. 값 기반 시그니처(메모리 주소 id()
+                # 사용 금지 — rerun마다 리스트가 재구성되면 매번 miss한다).
                 _tip_key = f"_msg_render_{msg_id}"
                 _tip_cached = st.session_state.get(_tip_key)
-                _tip_sig = (content, id(documents), id(citations))
+                _tip_sig = (
+                    fast_hash(content),
+                    tuple(doc_stable_id(d) for d in documents),
+                    fast_hash(repr(citations)),
+                )
                 if _tip_cached is not None and _tip_cached[0] == _tip_sig:
                     display_text = _tip_cached[1]
                 else:
@@ -219,11 +246,22 @@ def _render_unified_timeline(current_sid: str) -> None:
         return
 
     # 대화가 시작된 이후에는 messages 목록에 있는 내용들이 순서대로 출력됨
+    # is_latest는 가시 마지막 메시지 기준: 스킵되는 내부 메시지(build_progress,
+    # READY_FOR_QUERY)가 말미에 있어도 실제 마지막 답변의 익스팬더가 펼쳐진다.
+    last_visible = len(messages) - 1
+    while last_visible >= 0:
+        _m = messages[last_visible]
+        if not (
+            (_m.get("role") == "system" and _m.get("msg_type") == "build_progress")
+            or _m.get("content") == "READY_FOR_QUERY"
+        ):
+            break
+        last_visible -= 1
     for i, msg in enumerate(messages):
         role = msg.get("role", "user")
         content = msg.get("content", "")
         mtype = msg.get("msg_type", "general")
-        is_latest = i == len(messages) - 1
+        is_latest = i == last_visible
 
         # 시스템/로그 메시지 처리
         if role == "system":
@@ -311,13 +349,17 @@ def _render_unified_timeline(current_sid: str) -> None:
 
 # 프로세스 위상 라벨 (Phase 3: 답변 위 자막용). status 텍스트 키워드 기반으로
 # 진행 위상을 추론해 "문서 검색 → 증거 수집 → 답변 생성" 흐름을 표시한다.
+# NOTE: 라벨은 호출 시점의 활성 로케일로 해석해야 스트리밍 중 언어 전환이
+# 자막에 실시간 반영된다. import 시점에 바인딩하면 이전 언어로 고정되므로
+# 아래 함수들은 모듈 상수가 아닌 get_phase_labels()를 직접 호출한다.
+# _PHASE_LABELS는 하위 호환용 별칭으로만 유지한다.
 _PHASE_LABELS = get_phase_labels()
 
 
 def _infer_proc_phase(status_text: str) -> int:
     """status 텍스트가 속한 프로세스 위상 인덱스를 반환한다 (미검출 -1)."""
     lowered = status_text.lower()
-    for idx, (_label, _keywords) in enumerate(_PHASE_LABELS):
+    for idx, (_label, _keywords) in enumerate(get_phase_labels()):
         if any(k.lower() in lowered for k in _keywords):
             return idx
     return -1
@@ -327,7 +369,7 @@ def _proc_phase_caption(status_text: str, elapsed_sec: float) -> str:
     """답변 위 자막용 프로세스 위상 캡션 텍스트를 만든다."""
     active_idx = _infer_proc_phase(status_text)
     parts: list[str] = []
-    for idx, (label, _keywords) in enumerate(_PHASE_LABELS):
+    for idx, (label, _keywords) in enumerate(get_phase_labels()):
         if active_idx >= 0 and idx == active_idx:
             parts.append(f"▸ {label}")
         elif active_idx > idx:
@@ -339,7 +381,7 @@ def _proc_phase_caption(status_text: str, elapsed_sec: float) -> str:
     line = status_line(*parts)
     if active_idx == -1 and status_text:
         line = status_line(line, status_text)
-    return f"{line} · {elapsed_sec:.0f}s ▍"
+    return status_line(line, f"{elapsed_sec:.0f}s ▍")
 
 
 def get_stopped_answer_actions() -> dict[str, Any]:
@@ -408,10 +450,10 @@ def _draw_streaming_message(msg: dict[str, Any], current_sid: str) -> None:
         )
         return
 
-    status_text = msg.get("status", "Generating...")
+    status_text = msg.get("status", t("status_fallback_generating"))
     cancel_requested = bool(SessionManager.get("generation_cancel", False, current_sid))
     if cancel_requested:
-        status_text = "Stopping..."
+        status_text = t("status_fallback_stopping")
 
     # 실시간 상태 표시 — 영속 익스팬더(본문 위에 고정, 생성 완료 후에도 유지).
     render_generation_expander(
@@ -491,9 +533,9 @@ def render_chat_messages_area() -> None:
     report_rerun_wall_if_pending(current_sid)
 
     # 분석 상태 블록은 타임라인 흐름 안에 둔다(별도 배치 시 시작 말풍선과
-    # 레이아웃 충돌). 폴링(1.5s)은 빌드/취소 진행 중에만 필요하다 — 진행 중에는
-    # 전체 rerun이 없어 진행 바가 고착되기 때문. 그 외 상태는 정적 block이 렌더하므로
-    # 유휴 폴링 타이머가 없다 (fix-001-polling-fragments).
+    # 레이아웃 충돌). fragment는 빌드/취소 진행 중에만 마운트하고, 그 외
+    # 상태는 정적 block을 렌더한다 (fix-001: 유휴 폴링 금지, run_every 없음).
+    # 진행 중 갱신은 빌드 워커의 상태 전파 rerun으로 전달된다.
     is_building = bool(SessionManager.get("is_building_rag", False, current_sid))
     is_cancelling = bool(SessionManager.get("rebuild_cancelled", False, current_sid))
     if is_building or is_cancelling:
@@ -523,35 +565,40 @@ def _resolve_chat_input_state(sid: str) -> tuple[str, bool]:
 
     # 1. 답변 생성 중
     if is_generating:
-        return "답변을 생성하고 있습니다... (중지는 우측 하단 ■ 버튼)", False
+        return t("chat_placeholder_generating"), False
 
     # 2. 모델 교체 중
     if is_swapping:
-        return "AI 모델을 전환하는 중입니다... 잠시만 기다려 주세요.", True
+        return t("chat_placeholder_swapping"), True
 
     # 3. 문서 분석/인덱싱 진행 중 (기존의 치명적 오류 해결)
     if is_building:
-        return "문서 지식을 분석하고 있습니다... (완료 후 질문 가능)", True
+        return t("chat_placeholder_building"), True
 
     # 4. 문서가 아직 업로드되지 않음
     if not has_file:
-        return "좌측 사이드바에서 PDF 문서를 먼저 업로드해 주세요.", True
+        return t("chat_placeholder_no_pdf"), True
 
     # 5. 문서는 올라왔으나 파이프라인 준비 미완료 (오류 등)
     if not is_ready:
-        return "문서 인덱스를 준비 중입니다. 잠시만 기다려 주세요.", True
+        return t("chat_placeholder_not_ready"), True
 
     # 6. 준비 완료: 첫 질문 vs 후속 질문 분기
     has_user_msg = any(m.get("role") == "user" for m in messages)
     if not has_user_msg:
-        return "문서 내용에 대해 궁금한 점을 질문해 보세요.", False
+        return t("chat_placeholder_ready"), False
 
-    return "이어서 추가 질문을 입력하세요...", False
+    return t("chat_placeholder_next"), False
 
 
 def _consume_sample_question() -> str | None:
     """Pop and return a pending sample question from session state, if any."""
     return st.session_state.pop(SAMPLE_QUESTION_STATE_KEY, None)
+
+
+def _peek_sample_question() -> str | None:
+    """Return the pending sample question without consuming it."""
+    return st.session_state.get(SAMPLE_QUESTION_STATE_KEY)
 
 
 def render_chat_input_area() -> None:
@@ -564,32 +611,42 @@ def render_chat_input_area() -> None:
     브랜치가 run 후반부에 st.write_stream으로 스트림을 소비한다. 생성 완료/예외/
     중지는 _render_streaming_with_write_stream의 finally가 is_generating_answer를
     즉시 False로 리셋한다(INT-입력동결 방지). 빌드 진행 바는 이 영역이 아닌 별도의
-    ``_render_build_progress_fragment``(1.5초 폴링)가 담당한다.
+    ``_render_build_progress_fragment``(빌드 중에만 마운트, run_every 없음)가 담당한다.
     """
     current_sid = SessionManager.get_session_id()
 
-    pending_sample = _consume_sample_question()
-    if pending_sample and SessionManager.is_ready_for_chat(session_id=current_sid):
-        SessionManager.add_message("user", pending_sample, session_id=current_sid)
-        stream_msg_id = str(uuid.uuid4())
-        SessionManager.add_message(
-            "assistant",
-            "",
-            msg_type="streaming",
-            msg_id=stream_msg_id,
-            query=pending_sample,
-            thought="",
-            documents=[],
-            metrics={},
-            citations=[],
-            processed_content=None,
-            session_id=current_sid,
-        )
-        SessionManager.set("is_generating_answer", True, current_sid)
-        SessionManager.set("generation_cancel", False, current_sid)
-        SessionManager.set("active_stream_msg_id", stream_msg_id, current_sid)
-        _record_turn_start(current_sid, stream_msg_id, time.perf_counter())
-        return
+    # 샘플 질문은 검증 후에만 소비한다: 준비 미완료면 큐에 남겨 유실을 막고,
+    # 빈 문자열이면 버린다. 유효하면 스트리밍 플레이스홀더를 세운 뒤에도
+    # 입력창을 항상 렌더해 DOM 순서를 유지한다 (ui.render_main_content 계약).
+    pending_raw = _peek_sample_question()
+    if isinstance(pending_raw, str):
+        if not pending_raw.strip():
+            # 빈 샘플 질문은 버리고 입력창 렌더로 진행한다.
+            _consume_sample_question()
+        elif SessionManager.is_ready_for_chat(session_id=current_sid):
+            pending_sample = (_consume_sample_question() or "").strip()
+            SessionManager.add_message("user", pending_sample, session_id=current_sid)
+            stream_msg_id = str(uuid.uuid4())
+            SessionManager.add_message(
+                "assistant",
+                "",
+                msg_type="streaming",
+                msg_id=stream_msg_id,
+                query=pending_sample,
+                thought="",
+                documents=[],
+                metrics={},
+                citations=[],
+                processed_content=None,
+                session_id=current_sid,
+            )
+            SessionManager.set("is_generating_answer", True, current_sid)
+            SessionManager.set("generation_cancel", False, current_sid)
+            SessionManager.set("active_stream_msg_id", stream_msg_id, current_sid)
+            _record_turn_start(current_sid, stream_msg_id, time.perf_counter())
+            # 조기 return 금지: 입력창을 항상 렌더해 DOM 순서를 유지한다.
+            # 타임라인 브랜치가 이 run 후반부에서 스트림을 소비한다.
+        # 준비 미완료면 큐에 남겨 유실을 막고 입력창 렌더로 진행한다.
 
     # 생성 중에도 위젯을 disabled로 계속 렌더(입력창 소실 방지).
     input_placeholder, input_disabled = _resolve_chat_input_state(current_sid)
@@ -723,7 +780,7 @@ def _should_skip_final_rerun(*, cancelled: bool, error_text: str | None) -> bool
 def _render_streaming_with_write_stream(
     msg: dict[str, Any], current_sid: str, query: str
 ) -> None:
-    """st.write_stream 기반 스트리밍 렌더 (비블로킹).
+    """st.write_stream 기반 스트리밍 렌더 (동기 조인).
 
     부가 정보(익스팬더)는 텍스트보다 **위**에 표시된다: 진행 중 ``aux_ph``에
     spinner 포함 익스팬더가 먼저 렌더링되고, ``write_stream``이 그 아래에
@@ -742,7 +799,7 @@ def _render_streaming_with_write_stream(
         with st.chat_message("assistant", avatar=AVATARS["assistant"]):
             aux_ph = st.empty()  # 부가 정보(expander) 고정 슬롯 — 텍스트보다 위
             status_ph = st.empty()
-            status_ph.caption("질문을 분석하고 관련 지식을 검색하는 중입니다... ▍")
+            status_ph.caption(t("status_initial_search"))
 
             def _on_status(status_text: str, elapsed_sec: float) -> None:
                 status_ph.caption(_proc_phase_caption(status_text, elapsed_sec))
@@ -808,7 +865,7 @@ def _render_streaming_with_write_stream(
                 response = stream_error
             finally:
                 logger.info(
-                    "[PERF] join-block msg_id=%s took %.3fs",
+                    "[PERF] join-block msg_id=%s took %.3fs (sync write_stream join)",
                     msg_id,
                     time.perf_counter() - _t_join,
                 )
@@ -846,8 +903,13 @@ def _render_streaming_with_write_stream(
                     final_metric_txt = _seeded_metrics_text(aux_state, current_sid)
                     if final_metric_txt:
                         st.caption(final_metric_txt)
-    except BaseException:
+    except StopException:
         stop_hit = True  # ■ 사용자 중지 — 부분 응답 영속화 후 rerun으로 확정 렌더
+    except BaseException as exc:
+        # Stop 외 BaseException은 취소가 아닌 에러로 보존한다.
+        logger.exception("[CHAT] write_stream 소비 중 BaseException: %s", exc)
+        stream_error = _friendly_stream_error(Exception(f"{type(exc).__name__}: {exc}"))
+        response = stream_error
 
     # chat_message 블록 바깥 — 메시지 영속화
     cancelled = stop_hit or bool(

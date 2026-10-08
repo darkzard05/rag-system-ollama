@@ -22,6 +22,7 @@ from ui.components.chat import (
     _resolve_chat_input_state,
     render_chat_input_area,
 )
+from ui.strings import set_lang, t
 
 
 def _reset_session(sid: str) -> None:
@@ -45,9 +46,14 @@ def test_resolver_not_ready_returns_guide_and_disabled() -> None:
     _reset_session(sid)
 
     assert SessionManager.is_ready_for_chat(session_id=sid) is False
-    placeholder, disabled = _resolve_chat_input_state(sid)
+    set_lang("ko")
+    try:
+        placeholder, disabled = _resolve_chat_input_state(sid)
+        expected = t("chat_placeholder_no_pdf")
+    finally:
+        set_lang("en")
 
-    assert placeholder == "좌측 사이드바에서 PDF 문서를 먼저 업로드해 주세요."
+    assert placeholder == expected
     assert disabled is True
 
 
@@ -89,18 +95,22 @@ def test_submit_refused_guides_via_error_not_body_no_rerun() -> None:
     """(c) RED: not-ready submit guides via st.error, no body, no rerun."""
     sid = "dg_gate_submit_guide"
     _reset_session(sid)
-    expected_placeholder = "좌측 사이드바에서 PDF 문서를 먼저 업로드해 주세요."
+    set_lang("ko")
+    try:
+        expected_placeholder = t("chat_placeholder_no_pdf")
 
-    with (
-        patch("ui.components.chat.st") as mock_st,
-        # The error path now goes through ui_error(), which renders via the
-        # st reference owned by ui.components.common, so both must be observed.
-        # Same pattern as test_streaming_deadlock.py and test_citation_v2_inline.py.
-        patch("ui.components.common.st") as mock_common_st,
-        patch.object(SessionManager, "add_message") as mock_add,
-    ):
-        mock_st.chat_input.return_value = "hello dead-gate probe"
-        render_chat_input_area()
+        with (
+            patch("ui.components.chat.st") as mock_st,
+            # The error path now goes through ui_error(), which renders via the
+            # st reference owned by ui.components.common, so both must be observed.
+            # Same pattern as test_streaming_deadlock.py and test_citation_v2_inline.py.
+            patch("ui.components.common.st") as mock_common_st,
+            patch.object(SessionManager, "add_message") as mock_add,
+        ):
+            mock_st.chat_input.return_value = "hello dead-gate probe"
+            render_chat_input_area()
+    finally:
+        set_lang("en")
 
     mock_common_st.error.assert_called_once()
     err_text = str(mock_common_st.error.call_args)

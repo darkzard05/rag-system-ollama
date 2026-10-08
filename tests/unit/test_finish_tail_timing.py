@@ -87,6 +87,15 @@ def test_tail_gates_cover_badges_path() -> None:
 
 
 def test_citation_phase_reports_progress() -> None:
+    from ui.strings import UI_STRINGS, set_lang, t
+
     text = _src("src/ui/components/streaming_core.py")
-    assert "인용 정리 중" in text
+    # 상태 문구는 t("status_citation_cleanup") 경유 (하드코딩 금지).
+    assert 't("status_citation_cleanup")' in text
+    set_lang("ko")
+    try:
+        assert t("status_citation_cleanup") in UI_STRINGS["ko"].values()
+        assert "인용 정리 중" in t("status_citation_cleanup")
+    finally:
+        set_lang("en")
     assert "def closed" in text

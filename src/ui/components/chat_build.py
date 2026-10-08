@@ -3,7 +3,7 @@
 ``chat.py`` (P3 분리)에서 이동한 빌드 진행/문서 컨텍스트 렌더 함수들:
 - ``_cancel_rebuild`` — 분석 재구축 취소 요청 콜백
 - ``_render_build_progress_block`` — 빌드 상태 블록 단독 렌더
-- ``_render_build_progress_fragment`` — 1.5초 폴링 빌드 상태 fragment
+- ``_render_build_progress_fragment`` — 빌드 상태 fragment (빌드/취소 중에만 마운트)
 - ``_render_guidance_panel`` — 빈 대화 가이드 패널
 - ``_render_doc_context_inline`` — 타임라인 첫 메시지 문서 컨텍스트
 
@@ -21,6 +21,7 @@ from ui.strings import t
 from ui.widget_keys import (
     SAMPLE_QUESTION_STATE_KEY,
     cancel_rebuild_key,
+    retry_build_key,
 )
 
 __all__ = [
@@ -64,6 +65,15 @@ def _retry_build(sid: str) -> None:
         "is_building_rag", False, session_id=sid
     )  # main.py의 not is_building 가드 통과 보장
     SessionManager.set("needs_rag_rebuild", True, session_id=sid)
+    # 재시도 시 경과 시간 기준점을 리셋하고 취소 플래그를 해제한다.
+    # 같은 버튼 키 재사용으로 인한 stale 클릭 상태도 세대 카운터로 분리한다.
+    SessionManager.set("rebuild_start_time", time.time(), session_id=sid)
+    SessionManager.set("rebuild_cancelled", False, session_id=sid)
+    try:
+        attempt = int(SessionManager.get("rebuild_attempt", 0, sid) or 0)
+    except (TypeError, ValueError):
+        attempt = 0
+    SessionManager.set("rebuild_attempt", attempt + 1, session_id=sid)
 
 
 def _render_build_progress_block(sid: str) -> None:
@@ -76,20 +86,25 @@ def _render_build_progress_block(sid: str) -> None:
     if not (is_building or is_cancelling or is_done or has_doc):
         return
 
-    progress = int(SessionManager.get("rebuild_progress", 0, sid))
+    try:
+        progress = max(0, min(100, int(SessionManager.get("rebuild_progress", 0, sid))))
+    except (TypeError, ValueError):
+        progress = 0
     status_text = str(SessionManager.get("rebuild_status", "", sid) or "")
     error = SessionManager.get("pdf_processing_error", "", sid) or ""
     is_processed = bool(SessionManager.get("pdf_processed", False, sid))
 
     # [개선] 파일명 및 캐시 정보 추출 (문서 컨텍스트 통합)
     file_name = str(
-        SessionManager.get("last_uploaded_file_name", "", sid) or "Document"
+        SessionManager.get("last_uploaded_file_name", "", sid) or t("doc_default_name")
     )
-    doc_stats = SessionManager.get("doc_stats", {}, sid) or {}
+    doc_stats = SessionManager.get("doc_stats", {}, sid)
+    if not isinstance(doc_stats, dict):
+        doc_stats = {}
     cache_tag = (
-        " (기존 분석 재사용)"
+        t("cache_tag_reused")
         if doc_stats.get("cache_used")
-        else " [new]"
+        else t("cache_tag_new")
         if is_processed
         else ""
     )
@@ -99,23 +114,27 @@ def _render_build_progress_block(sid: str) -> None:
     if clean_status.startswith("Analyzing"):
         # "Analyzing 'file'..." 구문이 들어온 경우 중복을 제거하고 핵심 상태만 추출
         clean_status = (
-            "지식 베이스 구축 중..." if clean_status.endswith("...") else clean_status
+            t("build_analyzing") if clean_status.endswith("...") else clean_status
         )
 
     if error:
         label, state, expanded = f"{file_name} · 분석 실패", "error", True
+    elif is_cancelling:
+        label, state, expanded = (
+            f"{file_name} · {t('build_cancelled')}",
+            "running",
+            True,
+        )
     elif (progress >= 100 or is_done) and is_processed:
         label, state, expanded = (
             f"{file_name} · 준비 완료{cache_tag}",
             "complete",
             False,
         )
-    elif is_cancelling:
-        label, state, expanded = f"{file_name} · 분석 취소 중...", "running", True
     else:
         # 일관된 "{파일명} · {상태}" 포맷으로 정돈
         label, state, expanded = (
-            f"{file_name} · {clean_status or '문서 분석 중'}",
+            f"{file_name} · {clean_status or t('build_in_progress')}",
             "running",
             True,
         )
@@ -126,26 +145,40 @@ def _render_build_progress_block(sid: str) -> None:
         elapsed = 0
         if start_time:
             try:
-                elapsed = int(time.time() - float(start_time))
+                elapsed = max(0, int(time.time() - float(start_time)))
             except (TypeError, ValueError):
                 elapsed = 0
 
         # 3. 진행 중일 때만 게이지 바 및 진행률 표시, 완료 시에는 핵심 요약만 표시
         if state == "running":
             st.progress(progress / 100)
-            st.caption(f"{progress}% 완료 · {elapsed}초 경과")
+            st.caption(
+                t("build_progress_caption").format(progress=progress, elapsed=elapsed)
+            )
         elif state == "complete":
             # 100% 게이지바와 중복 캡션("100% complete")을 제거하고 유의미한 소요 시간만 간결하게 표시
-            st.caption(f"분석 소요 시간: {elapsed}초" if elapsed > 0 else "분석 완료")
+            st.caption(
+                t("build_complete_caption").format(elapsed=elapsed)
+                if elapsed > 0
+                else t("build_complete_default")
+            )
 
         if error:
             actions = get_build_error_actions(error)
             ui_error(actions["message"])
+            # 실패 직전 진행률 맥락을 유지한다 (게이지 없이 캡션 1줄).
+            st.caption(
+                t("build_progress_caption").format(progress=progress, elapsed=elapsed)
+            )
             # 라벨/도움말은 actions 메타데이터 단일 소스에서 읽는다: 중단-답변
             # dead-end(chat.py)와 하드코딩이 다시 drift 되는 것을 방지한다.
+            try:
+                attempt = int(SessionManager.get("rebuild_attempt", 0, sid) or 0)
+            except (TypeError, ValueError):
+                attempt = 0
             st.button(
                 actions["cta"][0],
-                key=f"retry_build_{sid}",
+                key=retry_build_key(sid, attempt),
                 on_click=_retry_build,
                 args=(sid,),
                 disabled=not actions["retryable"],
@@ -153,9 +186,13 @@ def _render_build_progress_block(sid: str) -> None:
                 width="stretch",
             )
         if state == "running" and not is_cancelling:
+            try:
+                attempt = int(SessionManager.get("rebuild_attempt", 0, sid) or 0)
+            except (TypeError, ValueError):
+                attempt = 0
             st.button(
-                "분석 취소",
-                key=cancel_rebuild_key(sid),
+                t("action_cancel_build"),
+                key=cancel_rebuild_key(sid, attempt),
                 on_click=_cancel_rebuild,
                 args=(sid,),
                 width="stretch",
@@ -164,11 +201,13 @@ def _render_build_progress_block(sid: str) -> None:
 
 @st.fragment()
 def _render_build_progress_fragment(sid: str) -> None:
-    """빌드 상태 블록 전용 폴링 fragment.
+    """빌드 상태 블록 전용 fragment (run_every 없음).
 
     전체 rerun 없이 ``rebuild_progress`` 를 다시 읽어 진행 바를
-    갱신한다(타임라인 폴링이 제거된 빈틈을 메움). 빌드 완료 후에는
-    ``run_in_background_worker._on_complete`` 의 rerun이 최종 100%를 확정한다.
+    갱신한다(타임라인 폴링이 제거된 빈틈을 메움). ``run_every`` 타이머는
+    두지 않는다: 빌드 완료 후 전체 rerun 시 스테일 타이머가 경고를
+    유발한다(test_progress_poller_mounting). 진행 중 갱신은 빌드 워커의
+    상태 전파 rerun + fragment 내 인터랙션(취소 버튼) rerun으로 전달된다.
     완료/취소/에러 상태에서도 블록은 그대로 남아 대화 기록으로 잔존한다.
     """
     _render_build_progress_block(sid)

@@ -52,6 +52,7 @@ from common.utils import fast_hash
 from core.session import SessionManager
 from ui.components.common import get_doc_metadata
 from ui.components.reference_plan import note_stream_references
+from ui.strings import t
 
 logger = logging.getLogger(__name__)
 
@@ -908,7 +909,7 @@ def _content_generator(
                     delta = raw_json_extractor.feed(chunk.content)
                     accumulated += delta
                     if not delta and raw_json_extractor.closed:
-                        _report_status("인용 정리 중...")
+                        _report_status(t("status_citation_cleanup"))
                     if delta:
                         _real_yielded = True
                         _placeholder_live = False

@@ -120,7 +120,35 @@ UI_STRINGS: dict[str, dict[str, str]] = {
         # Retry CTA (build-error dead-end, mirrors stopped-answer CTA shape)
         "action_retry_build": "Retry Analysis",
         "action_retry_build_help": "Rebuild the index from the uploaded PDF",
+        "action_cancel_build": "Cancel Analysis",
         "expander_reasoning_only": "Thought Process",
+        # Reference ghost skeleton (chat_references._render_references_content)
+        "ref_ghost_searching": "🔍 searching p.{page} ▍",
+        "ref_jump_help": "Go to PDF page {page}",
+        # Streaming status fallbacks (chat._draw_streaming_message, streaming_core)
+        "status_initial_search": "Analyzing the question and searching related knowledge... ▍",
+        "status_fallback_generating": "Generating...",
+        "status_fallback_stopping": "Stopping...",
+        "status_citation_cleanup": "Tidying citations...",
+        "error_prefix": "Error: ",
+        # Document build progress (chat_build._render_build_progress_block)
+        "doc_default_name": "Document",
+        "cache_tag_reused": " (reusing previous analysis)",
+        "cache_tag_new": " [new]",
+        "build_cancelled": "Cancelling analysis...",
+        "build_analyzing": "Building knowledge base...",
+        "build_in_progress": "Analyzing document",
+        "build_progress_caption": "%{progress}% complete · {elapsed}s elapsed",
+        "build_complete_caption": "Analysis took {elapsed}s",
+        "build_complete_default": "Analysis complete",
+        # Chat input placeholders (chat._resolve_chat_input_state)
+        "chat_placeholder_generating": "Generating an answer... (■ button on the right of the input to stop)",
+        "chat_placeholder_swapping": "Switching the AI model... Please wait a moment.",
+        "chat_placeholder_building": "Analyzing document knowledge... (you can ask once done)",
+        "chat_placeholder_no_pdf": "Please upload a PDF document from the left sidebar first.",
+        "chat_placeholder_not_ready": "Preparing the document index. Please wait a moment.",
+        "chat_placeholder_ready": "Ask anything about the document.",
+        "chat_placeholder_next": "Type a follow-up question...",
     },
     "ko": {
         "phase_document_search": "문서 검색",
@@ -181,7 +209,35 @@ UI_STRINGS: dict[str, dict[str, str]] = {
         "action_retry_answer_help": "마지막 질문을 다시 요청합니다",
         "action_retry_build": "다시 시도",
         "action_retry_build_help": "업로드한 PDF로 인덱스를 다시 만듭니다",
+        "action_cancel_build": "분석 취소",
         "expander_reasoning_only": "사고 과정",
+        # Reference ghost skeleton (chat_references._render_references_content)
+        "ref_ghost_searching": "🔍 p.{page} 검색 중 ▍",
+        "ref_jump_help": "PDF {page}페이지로 이동",
+        # Streaming status fallbacks (chat._draw_streaming_message, streaming_core)
+        "status_initial_search": "질문을 분석하고 관련 지식을 검색하는 중입니다... ▍",
+        "status_fallback_generating": "생성 중...",
+        "status_fallback_stopping": "중지 중...",
+        "status_citation_cleanup": "인용 정리 중...",
+        "error_prefix": "오류: ",
+        # Document build progress (chat_build._render_build_progress_block)
+        "doc_default_name": "문서",
+        "cache_tag_reused": " (기존 분석 재사용)",
+        "cache_tag_new": " [new]",
+        "build_cancelled": "분석 취소 중...",
+        "build_analyzing": "지식 베이스 구축 중...",
+        "build_in_progress": "문서 분석 중",
+        "build_progress_caption": "{progress}% 완료 · {elapsed}초 경과",
+        "build_complete_caption": "분석 소요 시간: {elapsed}초",
+        "build_complete_default": "분석 완료",
+        # Chat input placeholders (chat._resolve_chat_input_state)
+        "chat_placeholder_generating": "답변을 생성하고 있습니다... (중지는 입력창 우측 ■ 버튼)",
+        "chat_placeholder_swapping": "AI 모델을 전환하는 중입니다... 잠시만 기다려 주세요.",
+        "chat_placeholder_building": "문서 지식을 분석하고 있습니다... (완료 후 질문 가능)",
+        "chat_placeholder_no_pdf": "좌측 사이드바에서 PDF 문서를 먼저 업로드해 주세요.",
+        "chat_placeholder_not_ready": "문서 인덱스를 준비 중입니다. 잠시만 기다려 주세요.",
+        "chat_placeholder_ready": "문서 내용에 대해 궁금한 점을 질문해 보세요.",
+        "chat_placeholder_next": "이어서 추가 질문을 입력하세요...",
     },
 }
 

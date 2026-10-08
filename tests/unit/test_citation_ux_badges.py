@@ -65,9 +65,12 @@ def test_badge_render_has_no_full_text_but_help_excerpt() -> None:
     """Answer-end markers are one horizontal line; excerpts live in expander."""
     from ui.components.chat_references import render_inline_citation_badges
 
+    # Distinct spans per citation: identical text would Branch-D-merge into a
+    # single expander row (and therefore a single marker) by design.
+    span_b = "다른 인용 원문 문장입니다. " * 30
     citations: list[dict[str, Any]] = [
         {"doc_id": "chunk_A", "text_span": LONG_SPAN, "section": "제3장", "page": 3},
-        {"doc_id": "chunk_B", "text_span": LONG_SPAN, "section": "제4장", "page": 7},
+        {"doc_id": "chunk_B", "text_span": span_b, "section": "제4장", "page": 7},
     ]
     with patch("ui.components.chat_references.st") as mock_st:
         rendered = render_inline_citation_badges(citations)
@@ -75,7 +78,8 @@ def test_badge_render_has_no_full_text_but_help_excerpt() -> None:
     mock_st.badge.assert_not_called()
     assert mock_st.markdown.call_count == 1
     line = str(mock_st.markdown.call_args.args[0])
-    assert "[1]" in line and "[2]" in line
+    assert "[1]" in line
+    assert "[2]" in line
     assert "\n" not in line
     assert "인용 원문 전체 문장입니다." not in line
     assert mock_st.markdown.call_args.kwargs.get("help") is None

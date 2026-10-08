@@ -33,6 +33,7 @@ __all__ = [
     "_render_references_content",
     "is_ghost_state",
     "normalize_excerpt",
+    "ordered_reference_entries",
     "render_generation_expander",
     "render_inline_citation_badges",
 ]
@@ -77,12 +78,13 @@ def render_inline_citation_badges(
     ``[1] [2] ...`` 형태의 단일 ``st.markdown`` 호출이며, 배지 위젯이나
     인라인 ``help=``/툴팁을 달지 않는다 — 표식은 익스팬더 행으로의 매핑
     앵커일 뿐이고, 호버 미리보기는 익스팬더 점프 버튼이 전담한다.
+    번호는 ``ordered_reference_entries`` 단일 소스에서 오므로 익스팬더의
+    페이지 정렬·병합 결과와 개수가 항상 일치한다.
     """
-    _ = documents  # 인라인 표식은 매핑 앵커 전용이므로 문서 본문이 불필요하다.
-    doc_citations = [c for c in (citations or []) if c.get("doc_id") is not None]
-    if not doc_citations:
+    entries = ordered_reference_entries(documents, citations)
+    if not entries:
         return False
-    markers = " ".join(f"[{idx + 1}]" for idx in range(len(doc_citations)))
+    markers = " ".join(f"[{idx + 1}]" for idx in range(len(entries)))
     st.markdown(markers)
     return True
 
@@ -132,53 +134,20 @@ def is_ghost_state(
     return bool(documents) and not citations
 
 
-def _render_references_content(
-    msg_id: str,
+def ordered_reference_entries(
     documents: list[Any] | None,
-    citations: list[dict[str, Any]] | None = None,
-    generating: bool = False,
-    show_caption: bool = True,
-) -> bool:
-    _t_recompute = time.perf_counter()
-    _n_recompute_docs = len(documents or [])
-    _n_recompute_cits = len(citations or [])
+    citations: list[dict[str, Any]] | None,
+) -> list[dict[str, Any]]:
+    """인용 행의 순서 단일 소스 (익스팬더 행 + 말미 배지가 공유).
 
-    def _log_recompute() -> None:
-        logger.info(
-            "[PERF] recompute took %.3fs (%d docs, %d citations)",
-            time.perf_counter() - _t_recompute,
-            _n_recompute_docs,
-            _n_recompute_cits,
-        )
-
-    # Ghost 스켈레톤: 생성 중 + 문서 도착 + 인용 미도착이면 위젯 없는
-    # 플레이스홀더 행을 선행 렌더한다. 최종 렌더가 동일 msg_id 키로
-    # 1:1 교체하므로 중복되지 않고, 인용이 바뀌면(위 조건 불충족) 즉시
-    # 실경로로 전환되어 스테일 고스트가 남지 않는다. 실경로는 아래 그대로.
-    if generating and is_ghost_state(documents, citations):
-        for doc in documents or []:
-            page = get_doc_metadata(doc).get("page", 1)
-            with contextlib.suppress(ValueError, TypeError):
-                page = int(page)
-            st.markdown(
-                f'<div data-ghost="true" data-msg-id="{html.escape(msg_id)}">'
-                f"🔍 searching p.{page} ▍</div>",
-                unsafe_allow_html=True,
-            )
-        logger.info(
-            "[GHOST] ghost rendered msg_id=%s (%d docs)",
-            msg_id,
-            _n_recompute_docs,
-        )
-        _log_recompute()
-        return True
-
-    rendered = False
-    if not documents and not citations:
-        _log_recompute()
-        return rendered
-
-    # 1. 인용 데이터 수집 (기존 로직 유지)
+    페이지 번호(target_p) 및 대표 섹션 기준 그룹화, Branch-D 텍스트
+    dedup(동일 정규화 텍스트는 최소 페이지만 유지, 가장 구체적인 섹션명
+    보존), 페이지 오름차순 정렬을 수행한다. 인용이 없고 문서만 있으면
+    섹션·페이지 기준 폴백 인용을 만든다. 반환은
+    ``[{"page", "section", "sid", "excerpt"}]`` 리스트이며 순수 함수다
+    (Streamlit 호출 없음 — 단위 테스트 직접 검증 가능).
+    """
+    # 1. 인용 데이터 수집
     doc_citations = [c for c in (citations or []) if c.get("doc_id") is not None]
     if not doc_citations and documents:
         seen_keys = set()
@@ -196,8 +165,7 @@ def _render_references_content(
         doc_citations = fallback_citations
 
     if not doc_citations:
-        _log_recompute()
-        return False
+        return []
 
     # 2. 문서 ID별 페이지 매핑 테이블 구축
     doc_page_map = {}
@@ -221,7 +189,7 @@ def _render_references_content(
     # 2c. 호버 발췌용 원문 매핑 (정규화 없음 — help= 표시용)
     doc_raw_map = _doc_raw_text_map(documents)
 
-    # 3. [개선] 페이지 번호(target_p) 및 대표 섹션 기준 그룹화 (중복 버튼 방지)
+    # 3. 페이지 번호(target_p) 및 대표 섹션 기준 그룹화 (중복 버튼 방지)
     # Branch-D: 동일 정규화 텍스트가 여러 페이지에 나타나면 최소 페이지만
     # 유지하고, 병합 시 가장 구체적인(긴) 섹션명을 보존한다.
     page_to_refs: dict[int, dict[str, Any]] = {}
@@ -281,16 +249,74 @@ def _render_references_content(
             page_to_refs[target_p]["section"] = clean_sec
 
     # 4. 페이지 번호 오름차순 정렬
-    sorted_pages = sorted(page_to_refs.keys())
-    if not sorted_pages:
+    return [
+        {
+            "page": page_num,
+            "section": page_to_refs[page_num]["section"],
+            "sid": page_to_refs[page_num]["sid"],
+            "excerpt": page_to_excerpt.get(page_num, ""),
+        }
+        for page_num in sorted(page_to_refs.keys())
+    ]
+
+
+def _render_references_content(
+    msg_id: str,
+    documents: list[Any] | None,
+    citations: list[dict[str, Any]] | None = None,
+    generating: bool = False,
+    show_caption: bool = True,
+) -> bool:
+    _t_recompute = time.perf_counter()
+    _n_recompute_docs = len(documents or [])
+    _n_recompute_cits = len(citations or [])
+
+    def _log_recompute() -> None:
+        logger.info(
+            "[PERF] recompute took %.3fs (%d docs, %d citations)",
+            time.perf_counter() - _t_recompute,
+            _n_recompute_docs,
+            _n_recompute_cits,
+        )
+
+    # Ghost 스켈레톤: 생성 중 + 문서 도착 + 인용 미도착이면 위젯 없는
+    # 플레이스홀더 행을 선행 렌더한다. 최종 렌더가 동일 msg_id 키로
+    # 1:1 교체하므로 중복되지 않고, 인용이 바뀌면(위 조건 불충족) 즉시
+    # 실경로로 전환되어 스테일 고스트가 남지 않는다. 실경로는 아래 그대로.
+    if generating and is_ghost_state(documents, citations):
+        for doc in documents or []:
+            page = get_doc_metadata(doc).get("page", 1)
+            with contextlib.suppress(ValueError, TypeError):
+                page = int(page)
+            st.markdown(
+                f'<div data-ghost="true" data-msg-id="{html.escape(msg_id)}">'
+                f"{html.escape(t('ref_ghost_searching').format(page=page))}</div>",
+                unsafe_allow_html=True,
+            )
+        logger.info(
+            "[GHOST] ghost rendered msg_id=%s (%d docs)",
+            msg_id,
+            _n_recompute_docs,
+        )
+        _log_recompute()
+        return True
+
+    rendered = False
+    if not documents and not citations:
+        _log_recompute()
+        return rendered
+
+    # 순서 단일 소스: 배지 번호와 익스팬더 행이 같은 entries를 공유한다.
+    entries = ordered_reference_entries(documents, citations)
+    if not entries:
         _log_recompute()
         return False
 
     # 5. UI 렌더링 (단일 페이지당 1개의 정제된 버튼 배치)
-    for idx, page_num in enumerate(sorted_pages):
-        ref_info = page_to_refs[page_num]
-        sec_title = ref_info["section"]
-        sid = ref_info["sid"]
+    for idx, entry in enumerate(entries):
+        page_num = entry["page"]
+        sec_title = entry["section"]
+        sid = entry["sid"]
 
         # 유의미한 섹션명이 존재할 때만 결합, 없을 때는 "p.X"로 단일화하여 중복 수식어 제거
         label = f"{sec_title} · p.{page_num}" if sec_title else f"p.{page_num}"
@@ -300,15 +326,18 @@ def _render_references_content(
             # 익스팬더가 같은 턴을 동시에 렌더하므로, 버튼(안정 키든 자동
             # 키든)은 StreamlitDuplicateElement(Key|Id)로 스트리밍을 즉시
             # 깨뜨린다. span은 위젯 identity가 없어 안전하고, 버튼 크롬이
-            # 없어 클릭 가능처럼 보이지도 않는다.
+            # 없어 클릭 가능처럼 보이지도 않는다. 발췌는 텍스트로 함께 두어
+            # 스크린리더/Ctrl+F 접근을 유지한다 (위젯이 아니라 중복 위험 없음).
+            excerpt_inline = normalize_excerpt(entry["excerpt"], 200)
             st.markdown(
                 f'{idx + 1}. <span data-doc-id="{html.escape(sid)}">'
-                f"{html.escape(label)}</span>",
+                f"{html.escape(label)}</span>"
+                + (f" — {html.escape(excerpt_inline)}" if excerpt_inline else ""),
                 unsafe_allow_html=True,
             )
         else:
-            excerpt = normalize_excerpt(page_to_excerpt.get(page_num, ""))
-            base_help = f"PDF {page_num}페이지로 이동"
+            excerpt = normalize_excerpt(entry["excerpt"])
+            base_help = t("ref_jump_help").format(page=page_num)
             st.button(
                 f"{label}",
                 key=f"pop_doc_{msg_id}_{page_num}_{idx}",
@@ -317,7 +346,6 @@ def _render_references_content(
                 args=(page_num,),
                 help=f"{base_help} — {excerpt}" if excerpt else base_help,
             )
-            # 스트리밍 본문에 발췌가 이미 인라인 렌더되므로 생성 익스팬더는 캡션 반복을 생략한다.
             if excerpt and show_caption:
                 st.caption(excerpt)
     _log_recompute()
@@ -370,12 +398,14 @@ def render_generation_expander(
         if both_present:
             st.divider()
 
-        # 3. 출처 버튼 목록 렌더링 (show_caption=False로 전달하여 상단 제목과의 중복 캡션 제거)
+        # 3. 출처 버튼 목록 렌더링. 완료 메시지는 발췌 캡션을 함께 보여
+        # 스크린리더/Ctrl+F 접근을 유지하고, 생성 중에는 캡션을 생략해
+        # 스트리밍 본문과의 중복을 피한다.
         if has_references:
             _render_references_content(
                 msg_id,
                 documents,
                 citations=citations,
                 generating=generating,
-                show_caption=False,  # <-- 중복 캡션 비활성화
+                show_caption=not generating,
             )

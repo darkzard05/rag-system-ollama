@@ -62,8 +62,9 @@ async def test_thought_first_splits_thinking_from_ttft(
     coordinator.use_llm.return_value.__aenter__ = _aenter
     coordinator.use_llm.return_value.__aexit__ = _aexit
 
-    # t0=0.0 pass_start, t1=0.15 thought, t2=3.20 content, t3=4.00 end
-    ticks = iter([0.0, 0.15, 3.20, 4.00])
+    # t0=0.0 pass_start, t1=0.15 thought, t2=3.20 content, t3=3.25 last-content,
+    # t4=4.00 stream-end, t5=4.01 parse-start (tail_content 계측 호출 포함)
+    ticks = iter([0.0, 0.15, 3.20, 3.25, 4.00, 4.01])
     llm = _make_llm([("추론 중...", ""), ("", '{"final_answer":"답변"}')])
 
     with patch.object(gen.time, "perf_counter", lambda: next(ticks)):
@@ -97,7 +98,7 @@ async def test_content_only_keeps_both_metrics_equal(
     coordinator.use_llm.return_value.__aenter__ = _aenter
     coordinator.use_llm.return_value.__aexit__ = _aexit
 
-    ticks = iter([0.0, 0.5, 0.5, 2.00])
+    ticks = iter([0.0, 0.5, 0.5, 0.5, 2.00, 2.01])
     llm = _make_llm([("", '{"final_answer":"답변"}')])
 
     with patch.object(gen.time, "perf_counter", lambda: next(ticks)):

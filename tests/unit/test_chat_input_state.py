@@ -7,16 +7,17 @@ from unittest.mock import patch
 
 from core.session import SessionManager
 from ui.components.chat import _resolve_chat_input_state, render_chat_input_area
+from ui.strings import set_lang, t
 
-# New 6-state spec in src/ui/components/chat.py::_resolve_chat_input_state
-# (Korean literals, no longer driven by t() i18n keys).
-_PLACEHOLDER_GENERATING = "답변을 생성하고 있습니다... (중지는 우측 하단 ■ 버튼)"
-_PLACEHOLDER_SWAPPING = "AI 모델을 전환하는 중입니다... 잠시만 기다려 주세요."
-_PLACEHOLDER_BUILDING = "문서 지식을 분석하고 있습니다... (완료 후 질문 가능)"
-_PLACEHOLDER_NO_PDF = "좌측 사이드바에서 PDF 문서를 먼저 업로드해 주세요."
-_PLACEHOLDER_NOT_READY = "문서 인덱스를 준비 중입니다. 잠시만 기다려 주세요."
-_PLACEHOLDER_READY = "문서 내용에 대해 궁금한 점을 질문해 보세요."
-_PLACEHOLDER_FOLLOWUP = "이어서 추가 질문을 입력하세요..."
+# Placeholders are i18n-driven (src/ui/components/chat.py::_resolve_chat_input_state
+# via t() keys). Tests pin the Korean locale to assert exact strings.
+_PLACEHOLDER_GENERATING = "chat_placeholder_generating"
+_PLACEHOLDER_SWAPPING = "chat_placeholder_swapping"
+_PLACEHOLDER_BUILDING = "chat_placeholder_building"
+_PLACEHOLDER_NO_PDF = "chat_placeholder_no_pdf"
+_PLACEHOLDER_NOT_READY = "chat_placeholder_not_ready"
+_PLACEHOLDER_READY = "chat_placeholder_ready"
+_PLACEHOLDER_FOLLOWUP = "chat_placeholder_next"
 
 
 def _reset_session(sid: str) -> None:
@@ -39,20 +40,30 @@ def test_generating_enables_input_for_stop_button():
     _reset_session(sid)
     SessionManager.set("is_generating_answer", True, sid)
 
-    placeholder, disabled = _resolve_chat_input_state(sid)
+    set_lang("ko")
+    try:
+        placeholder, disabled = _resolve_chat_input_state(sid)
+        expected = t(_PLACEHOLDER_GENERATING)
+    finally:
+        set_lang("en")
 
     assert disabled is False
-    assert placeholder == _PLACEHOLDER_GENERATING
+    assert placeholder == expected
 
 
 def test_not_ready_disables_input_without_pdf():
     sid = "input_state_no_pdf"
     _reset_session(sid)
 
-    placeholder, disabled = _resolve_chat_input_state(sid)
+    set_lang("ko")
+    try:
+        placeholder, disabled = _resolve_chat_input_state(sid)
+        expected = t(_PLACEHOLDER_NO_PDF)
+    finally:
+        set_lang("en")
 
     assert disabled is True
-    assert placeholder == _PLACEHOLDER_NO_PDF
+    assert placeholder == expected
 
 
 def test_not_ready_disables_input_while_processing():
@@ -61,10 +72,15 @@ def test_not_ready_disables_input_while_processing():
     SessionManager.set("last_uploaded_file_name", "doc.pdf", sid)
     SessionManager.set("is_building_rag", True, sid)
 
-    placeholder, disabled = _resolve_chat_input_state(sid)
+    set_lang("ko")
+    try:
+        placeholder, disabled = _resolve_chat_input_state(sid)
+        expected = t(_PLACEHOLDER_BUILDING)
+    finally:
+        set_lang("en")
 
     assert disabled is True
-    assert placeholder == _PLACEHOLDER_BUILDING
+    assert placeholder == expected
 
 
 def test_not_ready_disables_input_on_error():
@@ -73,10 +89,15 @@ def test_not_ready_disables_input_on_error():
     SessionManager.set("last_uploaded_file_name", "doc.pdf", sid)
     SessionManager.set("pdf_processing_error", "파싱 실패", sid)
 
-    placeholder, disabled = _resolve_chat_input_state(sid)
+    set_lang("ko")
+    try:
+        placeholder, disabled = _resolve_chat_input_state(sid)
+        expected = t(_PLACEHOLDER_NOT_READY)
+    finally:
+        set_lang("en")
 
     assert disabled is True
-    assert placeholder == _PLACEHOLDER_NOT_READY
+    assert placeholder == expected
 
 
 def test_ready_enables_input():
@@ -84,10 +105,15 @@ def test_ready_enables_input():
     _reset_session(sid)
     _make_ready(sid)
 
-    placeholder, disabled = _resolve_chat_input_state(sid)
+    set_lang("ko")
+    try:
+        placeholder, disabled = _resolve_chat_input_state(sid)
+        expected = t(_PLACEHOLDER_READY)
+    finally:
+        set_lang("en")
 
     assert disabled is False
-    assert placeholder == _PLACEHOLDER_READY
+    assert placeholder == expected
 
 
 def test_render_chat_input_area_generating_shows_status_caption() -> None:
@@ -97,15 +123,20 @@ def test_render_chat_input_area_generating_shows_status_caption() -> None:
     SessionManager.set_session_id(sid)
     SessionManager.set("is_generating_answer", True, sid)
 
-    with patch("ui.components.chat.st") as mock_st:
-        mock_st.chat_input.return_value = None
-        render_chat_input_area()
+    set_lang("ko")
+    try:
+        with patch("ui.components.chat.st") as mock_st:
+            mock_st.chat_input.return_value = None
+            render_chat_input_area()
+        expected = t(_PLACEHOLDER_GENERATING)
+    finally:
+        set_lang("en")
 
     assert mock_st.chat_input.called, "st.chat_input must be rendered"
     _, kwargs = mock_st.chat_input.call_args
     args = mock_st.chat_input.call_args.args or ()
     placeholder = args[0] if args else kwargs.get("placeholder")
-    assert placeholder == _PLACEHOLDER_GENERATING
+    assert placeholder == expected
     assert kwargs.get("disabled") is False
     mock_st.caption.assert_not_called()
 

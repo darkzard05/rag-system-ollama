@@ -43,7 +43,9 @@ _CONTENT_1 = StreamChunk(content="안녕")
 _CONTENT_2 = StreamChunk(content="하세요")
 
 _ANSWER_TEXT = "안녕하세요"
-_INITIAL_CAPTION = "질문을 분석하고 관련 지식을 검색하는 중입니다... ▍"
+# Initial caption is i18n-driven (chat.t("status_initial_search")); the test
+# pins the Korean locale to assert the exact string.
+_INITIAL_CAPTION_KEY = "status_initial_search"
 # First-content status marker now reuses the src placeholder contract
 # (streaming_core._STATUS_PLACEHOLDER, currently "").
 _FIRST_CONTENT_STATUS = streaming_core_mod._STATUS_PLACEHOLDER
@@ -209,21 +211,31 @@ def test_status_caption_created_and_cleared_around_write_stream() -> None:
     fake_st = _make_fake_st()
     chunks = [_STATUS_A, _CONTENT_1, _STATUS_B, _CONTENT_2]
 
-    with (
-        patch.object(streaming_core_mod, "stream_chunks", return_value=iter(chunks)),
-        patch.object(streaming_core_mod, "SessionManager", fake),
-        patch.object(chat_mod, "st", fake_st),
-        patch.object(chat_mod, "render_generation_expander", MagicMock()),
-        patch.object(chat_mod, "SessionManager", fake),
-    ):
-        chat_mod._render_streaming_with_write_stream({"msg_id": "mid"}, "s", "질문")
+    from ui.strings import set_lang, t
+
+    # Initial caption is locale-driven: render under ko to pin the Korean text.
+    set_lang("ko")
+    try:
+        with (
+            patch.object(
+                streaming_core_mod, "stream_chunks", return_value=iter(chunks)
+            ),
+            patch.object(streaming_core_mod, "SessionManager", fake),
+            patch.object(chat_mod, "st", fake_st),
+            patch.object(chat_mod, "render_generation_expander", MagicMock()),
+            patch.object(chat_mod, "SessionManager", fake),
+        ):
+            chat_mod._render_streaming_with_write_stream({"msg_id": "mid"}, "s", "질문")
+        expected_initial = t(_INITIAL_CAPTION_KEY)
+    finally:
+        set_lang("en")
 
     status_ph = fake_st.empty.return_value
     captions = [call.args[0] for call in status_ph.caption.call_args_list if call.args]
-    assert captions[0] == _INITIAL_CAPTION
-    # Phase 3: on_status는 프로세스 위상 요약으로 캡션을 갱신한다. 위상 라벨은
-    # bilingual t() 기반이므로 기본 LANG="en"에서는 영어 라벨이 렌더된다.
-    assert any("▸ Answer Generation" in text for text in captions)
+    assert captions[0] == expected_initial
+    # Phase labels resolve per call for the active locale: rendered under ko,
+    # so the Korean label is expected (locale-reactive, not import-bound).
+    assert any("▸ 답변 생성" in text for text in captions)
     # finally 블록의 정리가 마지막 메서드 호출이어야 한다.
     assert status_ph.method_calls[-1][0] == "empty"
 
@@ -232,6 +244,26 @@ def test_status_caption_created_and_cleared_around_write_stream() -> None:
     assert messages[0]["role"] == "assistant"
     assert messages[0]["content"] == _ANSWER_TEXT
     assert messages[0]["msg_id"] == "mid"
+
+
+def test_phase_caption_follows_locale_switch_mid_stream() -> None:
+    """스트리밍 중 언어 전환 시 위상 캡션 라벨이 새 로케일을 따른다.
+
+    ``_proc_phase_caption`` 이 호출 시점의 활성 로케일로 라벨을 해석하는지
+    검증한다 (import 시점 바인딩 회귀 방지).
+    """
+    from ui.strings import set_lang
+
+    set_lang("ko")
+    try:
+        ko_caption = chat_mod._proc_phase_caption("답변 설계 및 생성 중...", 3.0)
+    finally:
+        set_lang("en")
+    en_caption = chat_mod._proc_phase_caption("Answer response streaming...", 3.0)
+
+    assert "▸ 답변 생성" in ko_caption
+    assert "▸ Answer Generation" in en_caption
+    assert ko_caption != en_caption
 
 
 def test_content_generator_calls_on_aux_only_on_changes() -> None:
