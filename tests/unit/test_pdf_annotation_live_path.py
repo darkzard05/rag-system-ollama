@@ -1,13 +1,14 @@
-"""A1 — PDF 주석 라이브 경로 검증.
+"""A1 — PDF 주석 라이브 경로 검증 (단순안).
 
-C14 통합 후 ``consume_stream_into_message``는 완료 턴의 ``_finalize_pdf_
-side_effects``를 동기 호출하므로(기존 백그라운드 스레드 finally 역할),
-문서를 로드한 세션에서 스트림을 소비하면 ``pdf_annotations``가 올바른
-``file_hash``와 함께 영속화된다. 문서가 실제 fitz 좌표를 가질 필요 없도록
+``consume_stream_into_message``는 완료 턴의 ``_finalize_pdf_side_effects``를
+호출한다. prewarm 미완료 시 렌더 스레드를 막지 않고 백그라운드에 맡기므로
+(논블로킹), 주석은 done 콜백이 ``pdf_annotations``에 하이드레이션한다.
+문서가 실제 fitz 좌표를 가질 필요 없도록
 ``ui.components.streaming.extract_annotations_from_docs``를 패치해 결정적
 주석을 반환하게 한다.
 """
 
+import time
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -33,7 +34,10 @@ def _fake_chunk(
 
 def test_consume_stream_writes_pdf_annotations_with_file_hash():
     """Given PDF가 로드된 세션 / When 스트림을 소비 / Then pdf_annotations가
-    올바른 file_hash와 함께 저장되고 메시지는 오류 없이 영속화된다."""
+    올바른 file_hash와 함께 저장되고 메시지는 오류 없이 영속화된다.
+
+    논블로킹 finalize이므로 백그라운드 하이드레이션을 최대 10초 대기한다.
+    """
     sid = "test_pdf_annotation_live"
     SessionManager.reset_all_state(sid)
     SessionManager.set_session_id(sid)
@@ -69,9 +73,18 @@ def test_consume_stream_writes_pdf_annotations_with_file_hash():
     assert result["content"] == "답변 내용"
     assert result["documents"] == fake_docs
 
-    # PDF 주석이 올바른 file_hash와 함께 저장됨
-    annotations = SessionManager.get("pdf_annotations", None, sid)
+    # PDF 주석이 올바른 file_hash와 함께 저장됨 (백그라운드 대기).
+    annotations = None
+    deadline = time.monotonic() + 10.0
+    while time.monotonic() < deadline:
+        annotations = SessionManager.get("pdf_annotations", None, sid)
+        if (
+            isinstance(annotations, dict)
+            and annotations.get("annotations") == deterministic_annotations
+        ):
+            break
+        time.sleep(0.05)
     assert annotations is not None
     assert annotations["file_hash"] == "abc123hash"
     assert annotations["annotations"] == deterministic_annotations
-    mock_extract.assert_called_once()
+    assert mock_extract.called

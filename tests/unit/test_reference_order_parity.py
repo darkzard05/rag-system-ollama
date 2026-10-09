@@ -114,7 +114,7 @@ def test_ghost_text_uses_i18n_key() -> None:
 
 
 def test_citations_only_latest_auto_expands() -> None:
-    """Citations-only assistant turn expands when it is the latest message."""
+    """Citations-only 턴은 익스팬더 대신 참조 목록을 렌더한다."""
     import ui.components.chat as chat_mod
 
     msg: dict[str, Any] = {
@@ -128,7 +128,7 @@ def test_citations_only_latest_auto_expands() -> None:
     }
     with (
         patch.object(chat_mod.SessionManager, "get_messages", return_value=[msg]),
-        patch.object(chat_mod, "render_generation_expander") as mock_exp,
+        patch.object(chat_mod, "render_reference_list") as mock_refs,
         patch.object(chat_mod.st, "chat_message") as mock_cm,
         patch.object(chat_mod.st, "markdown"),
         patch.object(chat_mod.st, "caption"),
@@ -136,5 +136,5 @@ def test_citations_only_latest_auto_expands() -> None:
         mock_cm.return_value.__enter__.return_value = MagicMock()
         mock_cm.return_value.__exit__.return_value = False
         chat_mod._render_unified_timeline("sid-cit-only")
-    assert mock_exp.called
-    assert mock_exp.call_args.kwargs.get("expanded") is True
+    assert mock_refs.called
+    assert mock_refs.call_args.args[0] == "cit-only-1"

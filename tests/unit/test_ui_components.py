@@ -11,13 +11,15 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".
 
 
 class TestChatUI(unittest.TestCase):
-    def test_page_jump_button_generation(self):
+    def test_reference_list_generation(self):
         """
-        참조 점프 버튼이 'p.N' 단일화 라벨로 정상 생성되는지 검증합니다.
+        문서별 한 줄 요약 참조 목록이 새 계약대로 생성되는지 검증합니다.
 
-        현행 계약 (chat_references._render_references_content):
-        - 라벨: 섹션명이 없으면 'p.{page}' (예: 'p.1', 'p.12')
-        - 키: 'pop_doc_{msg_id}_{page}_{idx}'
+            # 현행 계약 (chat_references.render_reference_list):
+            - 見出 markdown: 'Reference' 포함
+            - 행 라벨: '{i}. {요약} · p.{page}' (예: '1. ... · p.1')
+            - 키: 'reflink_{msg_id}_{i}_{page}'
+            - 상한: 문서별 1행, 최대 5행
         """
         # 임시 테스트 스크립트 작성
         script_content = """
@@ -36,14 +38,15 @@ msg_index = 0
 role = "assistant"
 content = "테스트 답변입니다."
 
-# Document 객체 모사 (metadata 속성 포함)
-doc1 = MagicMock()
-doc1.metadata = {"page": 1}
-doc2 = MagicMock()
-doc2.metadata = {"page": 12}
+def _doc(page, text):
+    d = MagicMock()
+    d.metadata = {"page": page}
+    d.page_content = text
+    return d
 
-documents = [doc1, doc2]
-metrics = {"doc_count": 2, "input_token_count": 10, "token_count": 20, "total_time": 1.5, "ttft": 0.1}
+# 상한 검증용으로 6개 문서 (5행까지만 렌더되어야 한다)
+documents = [_doc(i, f"관련 문장 {i}번입니다. " * 10) for i in range(1, 7)]
+metrics = {"doc_count": 6, "input_token_count": 10, "token_count": 20, "total_time": 1.5, "ttft": 0.1}
 
 # UI 렌더링 호출
 render_message(
@@ -64,19 +67,31 @@ render_message(
             # 비해 빠듯하여(이 환경에서 재현 확인) 명시적 타임아웃을 부여한다.
             at = AppTest.from_file("temp_test_ui.py").run(timeout=60)
 
-            # 1. 버튼들 확인 ('p.N' 단일화 라벨)
-            button_labels = [b.label for b in at.button]
-
-            # 'p.N' 형식 라벨 확인
-            assert "p.1" in button_labels, "p.1 버튼이 없습니다."
-            assert "p.12" in button_labels, "p.12 버튼이 없습니다."
-            # 2. 버튼 키 접두사 확인 (p.12 버튼)
-            jump_button_12 = next(b for b in at.button if b.label == "p.12")
-            assert jump_button_12.key.startswith("pop_doc_msg_0_12_"), (
-                f"버튼 키 오류: {jump_button_12.key}"
+            # 1. Reference 見出 확인
+            assert any("Reference" in m.value for m in at.markdown), (
+                "Reference 見出이 없습니다."
             )
 
-            # 3. CSS 제거 확인 (기존 스타일 코드가 없는지)
+            # 2. 행 상한 확인 (6개 문서 -> 5행)
+            button_labels = [b.label for b in at.button]
+            assert len(button_labels) == 5, f"참조 행 상한 위반: {button_labels}"
+
+            # 3. '{i}. {요약} · p.{page}' 형식 확인
+            first = button_labels[0]
+            assert first.startswith("1. "), f"행 번호 접두사 오류: {first}"
+            assert "· p.1" in first, f"페이지 병기 오류: {first}"
+            for label in button_labels:
+                assert "· p." in label, f"페이지 병기 누락: {label}"
+                assert "\\n" not in label, f"행 줄바꿈 위반: {label}"
+
+            # 4. 버튼 키 접두사 확인 (첫 행)
+            first_btn = next(b for b in at.button if b.label.startswith("1. "))
+            assert first_btn.key, "첫 행 버튼 키가 없습니다."
+            assert first_btn.key.startswith("reflink_msg_0_1_"), (
+                f"버튼 키 오류: {first_btn.key}"
+            )
+
+            # 5. CSS 제거 확인 (기존 스타일 코드가 없는지)
             style_markdowns = [
                 m for m in at.markdown if "white-space: nowrap !important" in m.value
             ]

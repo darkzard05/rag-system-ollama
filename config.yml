@@ -95,6 +95,9 @@ rag:
       gap_threshold: 0.003
       min_candidates: 12
       max_candidates: 18
+    # 리랭킹 생략 기준: 이 길이 미만 쿼리는 FlashRank를 생략하고 RRF 점수 사용
+    # (기존 하드코딩 6을 config로 승격 — t0 누적 타이밍 오독 방지와 함께 수정)
+    min_rerank_chars: 6
     
     # [추가] 동적 가중치 설정 (질문 의도에 따라 자동 조절)
     dynamic_weighting:

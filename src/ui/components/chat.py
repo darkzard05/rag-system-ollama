@@ -20,9 +20,6 @@ import streamlit as st
 from streamlit.runtime.scriptrunner_utils.exceptions import StopException
 
 from common.utils import (
-    apply_tooltips_to_response,
-    doc_stable_id,
-    fast_hash,
     normalize_latex_delimiters,
     strip_context_tokens,
 )
@@ -121,21 +118,9 @@ def render_message(
         # 동일 msg_id 키의 익스팬더가 2개면 StreamlitDuplicateElementKey).
         error = kwargs.get("error")
         if error:
-            if role == "assistant" and (thought or documents or citations):
-                render_generation_expander(
-                    {
-                        "thought": thought,
-                        "documents": documents or [],
-                        "citations": citations,
-                        "metrics": metrics,
-                        "model": kwargs.get("model", ""),
-                        "process_steps": process_steps,
-                        "cancelled": cancelled,
-                        "msg_id": msg_id,
-                    },
-                    expanded=False,
-                    generating=False,
-                )
+            # 익스팬더 삭제: 오류 턴도 참조 목록만 남기고 확정 렌더한다.
+            if role == "assistant" and (documents or citations):
+                render_reference_list(msg_id, documents, citations)
             has_content = bool(processed_content or content)
             if has_content:
                 if processed_content:
@@ -151,25 +136,10 @@ def render_message(
             ui_error(f"{t('error_prefix')}{error}")
             return
 
-        # 통합 익스팬더(사고·참조) — 질문↔답변 사이(답변 말풍선 상단) 고정.
-        # thought·documents·citations 중 하나라도 존재할 때만 렌더링 호출.
-        # citations-only 턴도 최신이면 자동 펼침한다 (참조 접근성).
-        if role == "assistant" and (thought or documents or citations):
-            should_expand = is_latest and bool(thought or documents or citations)
-            render_generation_expander(
-                {
-                    "thought": thought,
-                    "documents": documents or [],
-                    "citations": citations,
-                    "metrics": metrics,
-                    "model": kwargs.get("model", ""),
-                    "process_steps": process_steps,
-                    "cancelled": cancelled,
-                    "msg_id": msg_id,
-                },
-                expanded=should_expand,
-                generating=False,
-            )
+        # 인용 익스팬더 삭제: 완료 메시지는 본문 + 점프 스트립만 렌더한다.
+        # (thought/documents/citations 익스팬더, 툴팁 주입 모두 제거 — 하이라이트
+        # 데이터(documents/citations 영속)는 유지하고 UI 계산만 끊는다.)
+        _ = (thought, is_latest, process_steps, metrics, cancelled)
 
         # 본문 내용
         if processed_content:
@@ -183,49 +153,15 @@ def render_message(
             # [F5] 본문에 컨텍스트 메타토큰([doc:..] [score:..] 등)이 노출되지 않도록 제거
             if role == "assistant":
                 display_text = strip_context_tokens(display_text)
-            if role == "assistant" and documents:
-                # RC-A: 완료된 메시지 본문은 매 script run마다 변하지 않으므로
-                # tooltips 주입 결과(문서 스캔 O(docs))를 msg_id로 캐시해 재수행을
-                # 제거한다. st.markdown 호출은 매 run 그대로 실행되므로 위젯/참조
-                # popover 재렌더는 보장된다. 값 기반 시그니처(메모리 주소 id()
-                # 사용 금지 — rerun마다 리스트가 재구성되면 매번 miss한다).
-                _tip_key = f"_msg_render_{msg_id}"
-                _tip_cached = st.session_state.get(_tip_key)
-                _tip_sig = (
-                    fast_hash(content),
-                    tuple(doc_stable_id(d) for d in documents),
-                    fast_hash(repr(citations)),
-                )
-                if _tip_cached is not None and _tip_cached[0] == _tip_sig:
-                    display_text = _tip_cached[1]
-                else:
-                    _t_tip = time.perf_counter()
-                    display_text = apply_tooltips_to_response(
-                        display_text, documents, citations=citations
-                    )
-                    logger.info(
-                        "[PERF] tooltip scan took %.3fs (%d docs)",
-                        time.perf_counter() - _t_tip,
-                        len(documents or []),
-                    )
-                    st.session_state[_tip_key] = (_tip_sig, display_text)
             st.markdown(display_text, unsafe_allow_html=(role == "assistant"))
 
-        # 답변 말미 한 줄 인용 표식 ([1] [2] ...) — 발췌 호버는 익스팬더가 전담.
-        if role == "assistant" and citations:
-            render_inline_citation_badges(citations, documents)
+        # 문서별 한 줄 요약 참조 목록 (기존 [1][2] 배지 + 지표 캡션 대체).
+        if role == "assistant" and (documents or citations):
+            render_reference_list(msg_id, documents, citations)
 
-        # 완료된 어시스턴트 메시지의 하단 상태줄 (중복 상태 문구 제거 및 핵심 지표만 노출)
-        metric_txt = _metrics_caption(metrics, kwargs.get("model"))
-        if (
-            role == "assistant"
-            and msg_type == "general"
-            and (content or processed_content or "").strip()
-        ):
-            if cancelled:
-                st.caption(status_line(t("caption_stopped_partial"), metric_txt))
-            elif metric_txt:
-                st.caption(metric_txt)
+        # 중단 턴은 중립 캡션만 남긴다 (성능 지표 캡션 삭제).
+        if role == "assistant" and cancelled and msg_type == "general":
+            st.caption(t("caption_stopped_partial"))
 
 
 def _render_unified_timeline(current_sid: str) -> None:
@@ -786,7 +722,7 @@ def _render_streaming_with_write_stream(
     spinner 포함 익스팬더가 먼저 렌더링되고, ``write_stream``이 그 아래에
     텍스트를 표시한다. 완료 시 ``finally``에서 최종 메타데이터로 갱신된다.
     ``submit_mode="stop"``과 호환되어 사용자가 중지 시 부분 응답이 표시되고
-    영속화된다.
+    영속화된다. tail 확정은 점프 스트립 1회만 렌더한다 (익스팬더/배지/지표 없음).
     """
     msg_id = msg.get("msg_id", "")
     model_name = SessionManager.get("last_selected_model", session_id=current_sid) or ""
@@ -797,47 +733,20 @@ def _render_streaming_with_write_stream(
     stream_error: str | None = None
     try:
         with st.chat_message("assistant", avatar=AVATARS["assistant"]):
-            aux_ph = st.empty()  # 부가 정보(expander) 고정 슬롯 — 텍스트보다 위
+            aux_ph = st.empty()  # 점프 스트립 확정 슬롯 — 텍스트보다 위
             status_ph = st.empty()
             status_ph.caption(t("status_initial_search"))
 
             def _on_status(status_text: str, elapsed_sec: float) -> None:
                 status_ph.caption(_proc_phase_caption(status_text, elapsed_sec))
 
-            _seed_logged: list[bool] = [False]
-
             def _on_aux(aux: dict[str, Any]) -> None:
-                # [개선] aux_state에 thought나 documents가 유입되었을 때만 익스팬더를 슬롯에 갱신
+                # 인용/지표 중간 렌더 삭제: 스트리밍 중에는 aux 슬롯을 비운 채
+                # 두고 상태 캡션만 유지한다. 점프 스트립은 tail에서 1회 확정
+                # 렌더하므로 mid-stream 위젯/마크다운 비용이 사라진다.
                 if _is_stale_ghost(aux, msg_id):
                     return
                 aux_ph.empty()
-                with aux_ph:
-                    render_generation_expander(
-                        {
-                            "thought": aux.get("thought", ""),
-                            "documents": aux.get("documents", []),
-                            "citations": aux.get("citations", []),
-                            "metrics": aux.get("metrics", {}),
-                            "model": model_name,
-                            "process_steps": (aux.get("process_steps") or [])[-10:],
-                            "cancelled": False,
-                            "msg_id": msg_id,
-                        },
-                        expanded=False,
-                        generating=True,
-                    )
-                    # Task2: badges mid-stream, full references only on finalize.
-                    _paint_midstream_badges(aux)
-                    seeded = _seeded_metrics_text(aux, current_sid)
-                    if seeded:
-                        st.caption(seeded)
-                        if not _seed_logged[0]:
-                            _seed_logged[0] = True
-                            logger.info(
-                                "[PERF] caption-seed msg_id=%s text=%r",
-                                msg_id,
-                                seeded,
-                            )
 
             # [개선 4] 데이터가 없는 상태에서 불필요하게 빈 익스팬더를 그리던 기존 선행 렌더 블록 제거
             # (기존 lines 410-433 삭제: aux_ph.empty()로 슬롯만 확보하고 실제 렌더링은 _on_aux에 위임)
@@ -874,35 +783,17 @@ def _render_streaming_with_write_stream(
                 status_ph.empty()
                 aux_state = SessionManager.get(_AUX_STATE_KEY, {}, current_sid) or {}
                 aux_ph.empty()
-                if aux_state:
-                    cancelled = bool(
-                        SessionManager.get("generation_cancel", False, current_sid)
+                # Tail 확정 렌더 (단순안): 익스팬더/배지/지표 없이 참조 목록만.
+                # 본문은 write_stream이 이미 그렸고, 완료 메시지와 동일 슬롯
+                # 순서(본문 아래)에 목록을 확정한다.
+                if aux_state and (
+                    aux_state.get("documents") or aux_state.get("citations")
+                ):
+                    render_reference_list(
+                        msg_id,
+                        aux_state.get("documents"),
+                        aux_state.get("citations"),
                     )
-                    with aux_ph:
-                        render_generation_expander(
-                            {
-                                "thought": aux_state.get("thought", ""),
-                                "documents": aux_state.get("documents", []),
-                                "citations": aux_state.get("citations", []),
-                                "metrics": aux_state.get("metrics", {}),
-                                "model": model_name,
-                                "process_steps": aux_state.get("process_steps", [])[
-                                    -10:
-                                ],
-                                "cancelled": cancelled,
-                                "msg_id": msg_id,
-                            },
-                            expanded=False,
-                            generating=False,
-                        )
-                    # Terminal in-run paint: rerun-skip 턴은 render_message를
-                    # 다시 타지 않으므로, 최종 뱃지/지표를 write_stream 본문
-                    # 아래(완료 메시지와 동일 슬롯 순서)에 여기서 확정 렌더한다.
-                    # aux_ph 블록 바깥 — chat_message 안에서 본문 뒤에 이어진다.
-                    _paint_midstream_badges(aux_state)
-                    final_metric_txt = _seeded_metrics_text(aux_state, current_sid)
-                    if final_metric_txt:
-                        st.caption(final_metric_txt)
     except StopException:
         stop_hit = True  # ■ 사용자 중지 — 부분 응답 영속화 후 rerun으로 확정 렌더
     except BaseException as exc:
@@ -990,6 +881,7 @@ from ui.components.chat_references import (  # noqa: E402
     normalize_excerpt,
     render_generation_expander,
     render_inline_citation_badges,
+    render_reference_list,
 )
 from ui.components.chat_build import (  # noqa: E402
     _cancel_rebuild,
@@ -1022,6 +914,7 @@ __all__ = [
     "render_chat_messages_area",
     "render_generation_expander",
     "render_inline_citation_badges",
+    "render_reference_list",
     "render_message",
     "report_rerun_wall_if_pending",
 ]

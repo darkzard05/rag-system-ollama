@@ -7,7 +7,8 @@
 - (c) main.css overflow-x hidden/clip + 모바일 단일 fixed + order:1 유지.
 - (d) 하드코딩 리터럴 t() 전환 + strings.LANG 단일 토글 배선.
 - (e) 온보딩 단일 소스 (chat_build._render_guidance_panel 게이트 일원화).
-- (f) 1.60 버전가드 + 새 !important/testID 셀렉터 0건 (베이스라인 고정).
+- (f) 1.60 버전가드 + 새 !important/testID 셀렉터 0건 (베이스라인 고정,
+  R2 tertiary 1건 예외).
 """
 
 from __future__ import annotations
@@ -182,7 +183,12 @@ def test_css_version_guard_present() -> None:
 
 
 def test_no_new_important_or_testid_selectors() -> None:
-    """새 !important/testID 셀렉터 0건 (고유 testID 16종 고정 + !=200 초과 금지)."""
+    """새 !important/testID 셀렉터 0건 (고유 testID 17종 고정 + !=200 초과 금지).
+
+    R2 예외 1건: Reference 행 전용 ``stBaseButton-tertiary`` — 유일한 tertiary
+    생산자가 ``render_reference_list``이므로 행 스코프와 동일하고,
+    ``!important`` 0건·전역 button 규칙 0건을 유지한다.
+    """
     import re
 
     css = _css()
@@ -190,6 +196,7 @@ def test_no_new_important_or_testid_selectors() -> None:
     names = set(re.findall(r'data-testid="([^"]+)"', css))
     baseline = {
         "stAppViewContainer",
+        "stBaseButton-tertiary",
         "stBottomBlockContainer",
         "stChatInput",
         "stChatMessage",

@@ -246,7 +246,10 @@ async def retrieve_and_rerank(
     # faiss_ms: FAISS index.search 연산만의 시간(임베딩 제외).
     # bm25_ms: BM25 rank 연산만의 시간.
     # search_ms: gather 전체 wall-time(embed+검색 병렬 구간 포함).
-    # aggregate_ms/rerank_ms/merge_ms/total_ms: t0 기준 누적 경과(기존 의미 유지).
+    # aggregate_ms/rerank_ms/merge_ms/total_ms: t0 기준 누적 경과(기존 의미 유지,
+    #   로그 파서 호환용). 단계별 순수 소요는 아래 *_ex_ms를 볼 것.
+    # rerank_ex_ms: 리랭킹 구간만의 순수 소요(리랭크 시작~종료).
+    # merge_ex_ms: 문맥 병합 구간만의 순수 소요(리랭크 종료~머지 종료).
     task_ms: dict[str, float] = {}
 
     async def _timed_search(
@@ -383,7 +386,7 @@ async def retrieve_and_rerank(
     else:
         dynamic_top_k = min_candidates
 
-    # [R3b-02] RRF 집계 점수를 doc_id 기준으로 보관 — 6자 미만 쿼리 리랭킹 생략 경로에서
+    # [R3b-02] RRF 집계 점수를 doc_id 기준으로 보관 — min_rerank_chars 미만 쿼리 리랭킹 생략 경로에서
     # rerank_score로 기록해 grade short-circuit이 0.0으로만 평가되는 것을 방지한다.
     rrf_scores: dict[str, float] = {}
     final_docs = []
@@ -420,9 +423,11 @@ async def retrieve_and_rerank(
 
     reranker = await get_async_reranker()
     rerank_top_k = min(int(GRADING_CONFIG.get("top_k", 5)), len(final_docs))
-    if len(query or "") < 6:
+    min_rerank_chars = int(RETRIEVER_CONFIG.get("min_rerank_chars", 6))
+    t_rerank_start = time.perf_counter()
+    if len(query or "") < min_rerank_chars:
         ranked_docs = final_docs[:rerank_top_k]
-        # [R3b-02] 6자 미만 쿼리는 리랭킹을 생략하되 rerank_score(RRF 집계 점수)를 기록해
+        # [R3b-02] min_rerank_chars 미만 쿼리는 리랭킹을 생략하되 rerank_score(RRF 집계 점수)를 기록해
         # grade short-circuit이 0.0으로만 평가되는 것을 방지한다.
         for doc in ranked_docs:
             doc_key = doc_stable_id(doc)
@@ -440,6 +445,8 @@ async def retrieve_and_rerank(
         for doc in ranked_docs:
             doc.metadata.setdefault("rerank_engine", _engine)
     rerank_ms = (time.perf_counter() - t0) * 1000
+    rerank_ex_ms = (time.perf_counter() - t_rerank_start) * 1000
+    t_rerank_end = time.perf_counter()
     logger.debug(
         f"[RAG] [RETRIEVE] 리랭킹 선별 완료: {len(final_docs)}개 후보 중 {len(ranked_docs)}개 최종 선별"
     )
@@ -469,6 +476,7 @@ async def retrieve_and_rerank(
     )
 
     merge_ms = (time.perf_counter() - t0) * 1000
+    merge_ex_ms = (time.perf_counter() - t_rerank_end) * 1000
     total_ms = merge_ms
     _bm25_str = f"{task_ms.get('bm25', 0.0):.1f}" if bm25 else "n/a"
     _faiss_str = f"{task_ms.get('faiss', 0.0):.1f}" if faiss else "n/a"
@@ -477,6 +485,7 @@ async def retrieve_and_rerank(
         f"[RAG] [RETRIEVE][TIMING] search_ms={search_ms:.1f} "
         f"aggregate_ms={aggregate_ms:.1f} rerank_ms={rerank_ms:.1f} "
         f"merge_ms={merge_ms:.1f} total_ms={total_ms:.1f} "
+        f"rerank_ex_ms={rerank_ex_ms:.1f} merge_ex_ms={merge_ex_ms:.1f} "
         f"bm25_ms={_bm25_str} "
         f"faiss_ms={_faiss_str} embed_ms={_embed_str}"
     )

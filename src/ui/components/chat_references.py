@@ -36,22 +36,46 @@ __all__ = [
     "ordered_reference_entries",
     "render_generation_expander",
     "render_inline_citation_badges",
+    "render_reference_list",
 ]
 
 
+def _strip_markdown_for_label(text: str) -> str:
+    """행 라벨용 마크다운 걷어내기: 헤더 마커·불릿·표 파이프·강조·링크 정리.
+
+    청크 원문 앞부분이 발췌원이므로 ``#``/``##`` 섹션 마커나 표 ``|`` 구분자가
+    행에 그대로 노출된다(스크린샷 P1). 단어 내 단일 ``_``(snake_case 식별자
+    보호)는 유지하고, 짝을 이루는 강조 마커만 제거한다.
+    """
+    cleaned = re.sub(r"(?m)^\s*#{1,6}\s*", "", text)
+    cleaned = re.sub(r"(?m)^\s*[-•·]\s+", "", cleaned)
+    cleaned = cleaned.replace("![", "[")
+    cleaned = re.sub(r"\[([^\]]*)\]\([^)]*\)", r"\1", cleaned)
+    cleaned = re.sub(r"\*\*(.+?)\*\*", r"\1", cleaned)
+    cleaned = re.sub(r"__(.+?)__", r"\1", cleaned)
+    cleaned = re.sub(r"[*`~]", "", cleaned)
+    # bare 대괄호 제거: 행 라벨의 :blue[] 색 래퍼 파싱을 깨뜨리므로.
+    cleaned = re.sub(r"[\[\]]", "", cleaned)
+    return cleaned.replace("|", " ")
+
+
 def normalize_excerpt(text: object, max_chars: int = 500) -> str:
-    """호버용 발췌 정규화: strip + 공백 축소 + ~500자 절단.
+    """호버용 발췌 정규화: 마크다운 정리 + strip + 공백 축소 + ~500자 절단.
 
     Streamlit ``help=`` 툴팁은 ``\\n\\n``에서 깨지므로(#13339) 모든 개행을
     제거해 단일 행으로 만든다. 배지/점프 버튼 렌더 경로가 공유한다.
     보이는 잘림은 익스팬더 행의 1줄 캡션에 위임하므로, 툴팁에는 실제 발췌를
-    최대한 담는다 (CHI hover>click).
+    최대한 담는다 (CHI hover>click). ``render_reference_list`` 행 라벨도
+    공유하므로 헤더/표 마커가 행에 노출되지 않는다.
     """
     if not isinstance(text, str):
         return ""
-    collapsed = re.sub(r"\s+", " ", text).strip()
+    collapsed = re.sub(r"\s+", " ", _strip_markdown_for_label(text)).strip()
     if len(collapsed) > max_chars:
-        return collapsed[:max_chars].rstrip() + "..."
+        # 절단 경계의 마침표 런을 접은 뒤 ...付与: 발췌원 trailing "..."와
+        # 겹쳐 "...." 이중 말줄임이 되지 않도록 한다 (P5).
+        cut = re.sub(r"[.…\s]+$", "", collapsed[:max_chars].rstrip())
+        return (cut if cut else collapsed[:max_chars].rstrip()) + "..."
     return collapsed
 
 
@@ -103,6 +127,94 @@ def _handle_page_jump(page: int | str) -> None:
 
 # 하위 호환성 유지를 위한 alias (기존 참조 보호)
 _handle_doc_jump = _handle_page_jump
+
+
+def _coerce_page(value: object) -> int | None:
+    """메타데이터/인용의 페이지 값을 1 이상 정수로 정규화한다."""
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value if value >= 1 else None
+    if isinstance(value, str):
+        try:
+            page = int(value.strip())
+        except ValueError:
+            return None
+        return page if page >= 1 else None
+    return None
+
+
+def render_reference_list(
+    msg_id: str,
+    documents: list[Any] | None,
+    citations: list[dict[str, Any]] | None = None,
+    max_rows: int = 5,
+    excerpt_chars: int = 80,
+) -> bool:
+    """문서별 한 줄 요약 링크 목록: Reference見出 + tertiary 점프 버튼.
+
+    문서 입력 순서(관련도 순)대로 문서별 최대 1행,
+    ``"{i}. :blue[{요약}] · p.{N}"`` tertiary 버튼으로 렌더한다. 내용은 파랑,
+    번호·페이지는 기본색으로 구분된다 (버튼 라벨 StreamlitMarkdown 렌더).
+    발췌는 해당 문서의 citation ``text_span`` 우선, 없으면 ``page_content``
+    앞부분이며 ``normalize_excerpt``로 공백 축소 + ``...`` 절단한다. 클릭은
+    기존 ``_handle_page_jump`` 콜백 경로를 그대로 사용해
+    ``pdf_target_page(manual)`` 토큰을 세팅한다 (P0 콜백 계약 유지).
+    """
+
+    def _doc_text(doc: Any) -> str:
+        content = getattr(doc, "page_content", None)
+        if content is None and isinstance(doc, dict):
+            content = doc.get("page_content")
+        return content if isinstance(content, str) else ""
+
+    span_by_doc: dict[str, str] = {}
+    page_by_doc: dict[str, int] = {}
+    for cit in citations or []:
+        if not isinstance(cit, dict):
+            continue
+        doc_id = cit.get("doc_id")
+        if doc_id is None:
+            continue
+        key = str(doc_id)
+        span = cit.get("text_span")
+        if key not in span_by_doc and isinstance(span, str) and span.strip():
+            span_by_doc[key] = span
+        page = _coerce_page(cit.get("page"))
+        if key not in page_by_doc and page is not None:
+            page_by_doc[key] = page
+
+    rows: list[tuple[str, int]] = []
+    seen: set[str] = set()
+    for doc in documents or []:
+        sid = doc_stable_id(doc)
+        if sid in seen:
+            continue
+        seen.add(sid)
+        excerpt = normalize_excerpt(
+            span_by_doc.get(sid) or _doc_text(doc), excerpt_chars
+        )
+        if not excerpt:
+            continue
+        page = page_by_doc.get(sid)
+        if page is None:
+            page = _coerce_page(get_doc_metadata(doc).get("page")) or 1
+        rows.append((excerpt, page))
+        if len(rows) >= max(1, max_rows):
+            break
+    if not rows:
+        return False
+    st.markdown(f"**{t('ref_section_title')}**")
+    for idx, (excerpt, page) in enumerate(rows, start=1):
+        st.button(
+            f"{idx}. :blue[{excerpt}] · p.{page}",
+            key=f"reflink_{msg_id}_{idx}_{page}",
+            type="tertiary",
+            width="stretch",
+            on_click=_handle_page_jump,
+            args=(page,),
+        )
+    return True
 
 
 def _extract_reference_pages(documents: list[Any]) -> list[int]:

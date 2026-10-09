@@ -3,9 +3,9 @@
 ``sources`` 이벤트 시점에 ``_build_reference_plan`` 으로 불변 플랜을 1회
 계산하고, ``extract_annotations_from_docs`` 의 fitz 작업을 ``AsyncWorker``
 백그라운드 루프(``asyncio.to_thread``)에 선행 제출한다. 최종 확정 시점
-(``_finalize_pdf_side_effects``)에는 플랜 해시와 최종 citations 을 비교해
-일치(hit)하면 prewarm 결과를 채택하고, 불일치(miss)하면 폐기 후 동기
-폴백한다. 영속화(persist) → 하이드레이션(hydrate) → 동기화(sync) 순서는
+(``_finalize_pdf_side_effects``)에는 문서 서명 기준으로 적중(hit)을 판정해
+채택하고, 불일치(miss)/미완료이면 동기 폴백 없이 백그라운드 완료에 맡긴다
+(렌더 스레드 논블로킹). 영속화(persist) → 하이드레이션(hydrate) → 동기화(sync) 순서는
 절대 바꾸지 않는다.
 
 좌표 불변식: 루프 격리(백그라운드는 ``SessionManager`` 락을 잡지 않음),
@@ -423,9 +423,12 @@ def adopt_prewarmed_annotations(
 ) -> list[dict[str, Any]] | None:
     """최종 확정 시점의 hit/miss 판정 (렌더 스레드 논블로킹).
 
-    활성 플랜의 ``plan_hash`` 가 최종 서명과 일치하고 prewarm future 가
-    확보되면 그 결과를 반환(hit)한다. 불일치(miss)하면 플랜을 폐기하고
-    ``None`` 을 반환 — 호출자는 반드시 동기 폴백을 수행한다.
+    문서 집합 서명(``docs_signature``) 기준으로 판정한다: 증분 인용 도착으로
+    citations 서명이 바뀌어도 문서는 동일하므로 prewarm이 깨지지 않는다.
+    하이라이트 좌표는 문서 본문에서 계산되며 인용은 순위 힌트에 불과하므로
+    정합성에 영향이 없다. prewarm future 가 확보되면 그 결과를 반환(hit)하고,
+    불일치(miss)/미완료이면 ``None`` 을 반환 — 호출자는 동기 폴백 대신
+    백그라운드 완료를 기다린다.
 
     렌더 스레드는 절대 대기하지 않는다: ``future.result(timeout=0)`` 으로
     즉시 판정하고, 미완료 시 done 콜백을 등록한 뒤 ``None`` 을 반환한다
@@ -439,7 +442,7 @@ def adopt_prewarmed_annotations(
     expected = _build_reference_plan(documents, citations, msg_id)
     with _registry_lock:
         active = _ACTIVE_PLANS.get((sid, msg_id))
-        if active is None or active.plan_hash != expected.plan_hash:
+        if active is None or active.docs_signature != expected.docs_signature:
             _ACTIVE_PLANS.pop((sid, msg_id), None)
             return None
         future = _PREWARM_FUTURES.get(active.docs_signature)

@@ -125,6 +125,7 @@ UI_STRINGS: dict[str, dict[str, str]] = {
         # Reference ghost skeleton (chat_references._render_references_content)
         "ref_ghost_searching": "🔍 searching p.{page} ▍",
         "ref_jump_help": "Go to PDF page {page}",
+        "ref_section_title": "Reference",
         # Streaming status fallbacks (chat._draw_streaming_message, streaming_core)
         "status_initial_search": "Analyzing the question and searching related knowledge... ▍",
         "status_fallback_generating": "Generating...",
@@ -214,6 +215,7 @@ UI_STRINGS: dict[str, dict[str, str]] = {
         # Reference ghost skeleton (chat_references._render_references_content)
         "ref_ghost_searching": "🔍 p.{page} 검색 중 ▍",
         "ref_jump_help": "PDF {page}페이지로 이동",
+        "ref_section_title": "Reference",
         # Streaming status fallbacks (chat._draw_streaming_message, streaming_core)
         "status_initial_search": "질문을 분석하고 관련 지식을 검색하는 중입니다... ▍",
         "status_fallback_generating": "생성 중...",

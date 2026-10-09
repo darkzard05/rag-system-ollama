@@ -101,7 +101,7 @@ def _target_message(sid: str, msg_id: str) -> dict:
 
 
 def test_raw_json_chain_builds_processed_content():
-    """raw_json 단일 청크 → final_answer 추출 + 툴팁 처리된 processed_content."""
+    """raw_json 단일 청크 → final_answer 추출 (툴팁 주입 없음, 단순안)."""
     sid = "test_raw_json_ok"
     doc = Document(page_content="원문입니다.", metadata={"page": 5})
 
@@ -116,8 +116,7 @@ def test_raw_json_chain_builds_processed_content():
     msg = _target_message(sid, msg_id)
 
     assert msg["content"] == "Hello [p.5]"
-    # processed_content는 렌더 시점에 apply_tooltips_to_response로 생성되므로
-    # render_message 출력(AppTest markdown)으로 검증한다.
+    # 단순안: 렌더 시점에 툴팁 주입을 하지 않으므로 본문이 그대로 출력된다.
     from streamlit.testing.v1 import AppTest
 
     with tempfile.NamedTemporaryFile(
@@ -137,8 +136,8 @@ def test_raw_json_chain_builds_processed_content():
         at = AppTest.from_file(script_path).run(timeout=60)
         assert not at.exception
         body = "".join(m.value for m in at.markdown)
-        assert "citation-highlight" in body
-        assert 'data-page="5"' in body
+        assert "Hello [p.5]" in body
+        assert "citation-highlight" not in body
     finally:
         os.remove(script_path)
     assert msg["msg_type"] == "general"

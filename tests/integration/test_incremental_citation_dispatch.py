@@ -145,10 +145,9 @@ def test_clean_turn_paints_incremental_citations_and_skips_rerun() -> None:
 
 
 def test_clean_turn_paints_badges_and_metrics_below_body_in_run() -> None:
-    """실앱 재현: rerun 없이 본문 아래에 최종 뱃지·지표가 그려져야 한다.
+    """실앱 재현: rerun 없이 본문 아래에 참조 목록이 그려져야 한다 (단순안).
 
-    호출 순서(body → badges → caption)를 공유 기록으로 고정한다.
-    aux 슬롯(본문 위)에만 그리면 이 테스트가 실패한다.
+    호출 순서(body → refs)를 공유 기록으로 고정한다.
     """
     sid = f"below_{uuid.uuid4().hex[:8]}"
     mid = f"msg_{uuid.uuid4().hex[:8]}"
@@ -161,15 +160,11 @@ def test_clean_turn_paints_badges_and_metrics_below_body_in_run() -> None:
         order.append("body")
         return text
 
-    def _caption(*args, **kwargs):
-        order.append("caption")
-
     st_mock.write_stream.side_effect = _write_stream
-    st_mock.caption.side_effect = _caption
-    badges_mock = MagicMock(
-        name="badges",
+    refs_mock = MagicMock(
+        name="refs",
         return_value=True,
-        side_effect=lambda *a, **k: order.append("badges"),
+        side_effect=lambda *a, **k: order.append("refs"),
     )
     chunks = [
         StreamChunk(content="hello "),
@@ -188,9 +183,7 @@ def test_clean_turn_paints_badges_and_metrics_below_body_in_run() -> None:
         patch.object(chat_module, "st", st_mock),
         patch.object(streaming_core, "stream_chunks", return_value=iter(chunks)),
         patch.object(chat_module, "_finalize_pdf_side_effects", MagicMock()),
-        patch.object(chat_module, "render_generation_expander", MagicMock()),
-        patch.object(chat_module, "render_inline_citation_badges", badges_mock),
-        patch.object(chat_module, "_render_references_content", MagicMock()),
+        patch.object(chat_module, "render_reference_list", refs_mock),
         patch.object(streaming_core, "_note_reference_prewarm", MagicMock()),
     ):
         chat_module._render_streaming_with_write_stream(
@@ -198,8 +191,7 @@ def test_clean_turn_paints_badges_and_metrics_below_body_in_run() -> None:
         )
 
     st_mock.rerun.assert_not_called()
-    # mid-stream aux paint가 앞에 올 수 있다. 확정 조건은 꼬리 순서다:
-    # 본문 완료(body) 뒤에 최종 뱃지·지표가 같은 run에서 이어져야 한다.
-    assert order[-3:] == ["body", "badges", "caption"], f"paint order: {order}"
-    assert badges_mock.call_count >= 1
-    assert badges_mock.call_args[0][0] == [_cit(0)]
+    # 확정 조건은 꼬리 순서다: 본문 완료(body) 뒤에 참조 목록이 같은 run에서
+    # 이어져야 한다 (배지/지표 없음).
+    assert order[-2:] == ["body", "refs"], f"paint order: {order}"
+    assert refs_mock.call_count >= 1

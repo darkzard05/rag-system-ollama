@@ -401,6 +401,9 @@ async def _generate_pass(
     full_thought = ""
     last_metadata: dict[str, Any] = {}
     pass_start = time.perf_counter()
+    # last-token->citations-event 분해용: 마지막 content 청크 시각과 스트림 종료 시각.
+    # citations JSON이 answer 뒤에 생성되므로 tail 구간이 로컬 LLM 속도에 좌우된다.
+    _t_last_content: float | None = None
     ttft_ms: float | None = None
     first_token_ms: float | None = None
     use_structured_output = "structured_output" in PROMPT_TEMPLATES_CONFIG
@@ -434,6 +437,7 @@ async def _generate_pass(
                     full_thought += thought_chunk
                 if content_chunk:
                     full_response += content_chunk
+                    _t_last_content = time.perf_counter()
                 if hasattr(chunk, "response_metadata") and chunk.response_metadata:
                     last_metadata = chunk.response_metadata
 
@@ -469,18 +473,24 @@ async def _generate_pass(
                         config=config,
                     )
 
-    generate_ms = (time.perf_counter() - pass_start) * 1000
+    generate_ms = (t_stream_end := time.perf_counter()) - pass_start
+    generate_ms *= 1000
+    tail_content_ms = (
+        (t_stream_end - _t_last_content) * 1000 if _t_last_content is not None else -1.0
+    )
     logger.info(
         f"[RAG] [GENERATE][TIMING] pass={attempt} generate_ms={generate_ms:.1f} "
         f"ttft_ms={(ttft_ms or 0.0):.1f} "
         f"first_token_ms={(first_token_ms or 0.0):.1f} "
-        f"output_chars={len(full_response)}"
+        f"output_chars={len(full_response)} "
+        f"tail_content_ms={tail_content_ms:.1f}"
     )
 
     # Phase 1.2: 구조화된 답변 파싱 (JSON 출력 기대)
     parsed_answer = None
     parse_failed = False
     json_str = _strip_json_fence(full_response)
+    t_parse_start = time.perf_counter()
 
     def _extract_partial(json_blob: str) -> dict[str, Any]:
         """깨진 JSON에서 final_answer/citations를 비파괴 복구한다.
@@ -519,8 +529,10 @@ async def _generate_pass(
                 config=config,
             )
             logger.info(
-                "[PERF] citations-dispatch count=%d",
+                "[PERF] citations-dispatch count=%d tail_content_ms=%.1f parse_ms=%.1f",
                 len(parsed_answer.citations),
+                tail_content_ms,
+                (time.perf_counter() - t_parse_start) * 1000,
             )
     except (json.JSONDecodeError, ValueError) as e:
         parse_failed = True

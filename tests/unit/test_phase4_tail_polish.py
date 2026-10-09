@@ -1,10 +1,8 @@
-"""Phase 4: metrics/error/bridge finishing guards.
+"""Phase 4: metrics/error/bridge finishing guards (단순안).
 
-- Error turns keep the evidence expander (thought/documents/citations stay
-  reachable) and prefix the error via ``t("error_prefix")``.
-- Tooltip cache signature is value-based: re-rendering the same content with
-  reconstructed (non-identical) document lists hits the cache instead of
-  rescanning every rerun.
+- Error turns keep references reachable via the reference list (no expander)
+  and prefix the error via ``t("error_prefix")``.
+- Tooltip injection removed: completed messages render plain markdown.
 - ``is_latest`` follows the last *visible* message: trailing internal
   messages (``READY_FOR_QUERY``) no longer collapse the real last answer.
 - ``UIBridge.sync_session`` forces one sync on session switch even without
@@ -26,12 +24,12 @@ def _doc(page: int = 1) -> MagicMock:
 
 
 def test_error_turn_preserves_evidence_expander() -> None:
-    """error + thought/documents -> expander rendered before the error card."""
+    """error + documents -> 참조 목록으로 참조 유지, 익스팬더 없음."""
     import ui.components.chat as chat_mod
 
     with (
         patch.object(chat_mod, "st") as mock_st,
-        patch.object(chat_mod, "render_generation_expander") as mock_exp,
+        patch.object(chat_mod, "render_reference_list") as mock_refs,
         patch("ui.components.common.st", mock_st),
     ):
         mock_st.chat_message.return_value.__enter__.return_value = MagicMock()
@@ -43,7 +41,7 @@ def test_error_turn_preserves_evidence_expander() -> None:
             documents=[_doc(2)],
             error="boom",
         )
-    assert mock_exp.called, "evidence expander must survive error turns"
+    assert mock_refs.called, "references must survive error turns via reference list"
     mock_st.error.assert_called_once()
 
 
@@ -71,7 +69,7 @@ def test_error_prefix_uses_i18n_key() -> None:
 
 
 def test_tooltip_cache_hits_on_reconstructed_lists() -> None:
-    """Same content + equal (not identical) docs -> single tooltip scan."""
+    """툴팁 주입 삭제: 재구성된 문서 리스트로 재렌더해도 동일 본문 출력."""
     import ui.components.chat as chat_mod
 
     state: dict[str, Any] = {}
@@ -90,17 +88,19 @@ def test_tooltip_cache_hits_on_reconstructed_lists() -> None:
     }
     with (
         patch.object(chat_mod, "st", fake_st),
-        patch.object(
-            chat_mod, "apply_tooltips_to_response", return_value="SCANNED"
-        ) as mock_scan,
-        patch.object(chat_mod, "render_generation_expander"),
+        patch.object(chat_mod, "render_reference_list"),
     ):
         kwargs["documents"] = [_doc(3)]
         chat_mod.render_message(**kwargs)
+        first = [c.args[0] for c in fake_st.markdown.call_args_list if c.args]
         # Reconstructed equal list (different object identities, as on rerun).
         kwargs["documents"] = [_doc(3)]
         chat_mod.render_message(**kwargs)
-    assert mock_scan.call_count == 1
+        second = [c.args[0] for c in fake_st.markdown.call_args_list if c.args]
+    assert first
+    assert second
+    assert first[-1] == second[-1]
+    assert "citation-highlight" not in second[-1]
 
 
 def test_trailing_internal_message_keeps_last_answer_latest() -> None:

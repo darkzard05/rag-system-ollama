@@ -1,9 +1,11 @@
-"""Task3 Wave2 — sources 이벤트 시점의 투기적 프리패치 검증.
+"""Task3 Wave2 — sources 이벤트 시점의 투기적 프리패치 검증 (단순안).
 
 - 불변 플랜: frozen dataclass + MappingProxy (변이 시 예외).
-- discard-on-change: 최종 citations가 플랜과 다르면 폐기 후 동기 폴백.
+- 문서기준 매칭: 최종 citations가 바뀌어도 문서가 동일하면 prewarm 적중.
+  인용은 하이라이트 순위 힌트에 불과하므로 정합성에 영향이 없다.
+- miss/미완료 시 렌더 스레드 논블로킹: 동기 폴백 없이 백그라운드에 맡긴다.
 - 순서: persist(SessionManager.add_message)가 finalize보다 먼저 수행.
-- 락 경계: fitz 추출(extract_annotations_from_docs)은 세션 락 밖에서 수행.
+- 락 경계: fitz 추출은 세션 락 밖(백그라운드)에서 수행.
 """
 
 from __future__ import annotations
@@ -171,7 +173,11 @@ def test_hit_adopts_prewarmed_annotations(pdf_sid: str):
 
 
 def test_discard_on_citation_change(pdf_sid: str):
-    """Given prewarm済 플랜 / When 최종 citations 변경 / Then 폐기(None) 후 폴백."""
+    """단순안: 인용 변경은 폐기 사유가 아니다 (문서기준 매칭).
+
+    동일 문서 + 변경된 인용이면 plan_hash는 바뀌지만 docs_signature는
+    유지되므로 adopt는 유효하다. 문서 자체가 바뀌어야 miss다.
+    """
     sid = pdf_sid
     docs = _make_docs()
     cits = _make_citations()
@@ -181,45 +187,73 @@ def test_discard_on_citation_change(pdf_sid: str):
     changed = [dict(cits[0], text_span="completely different span")]
     changed_sig = _build_reference_plan(docs, changed, "m1").plan_hash
     assert changed_sig != _build_reference_plan(docs, cits, "m1").plan_hash
+    same_docs = _build_reference_plan(docs, changed, "m1").docs_signature
+    assert same_docs == _build_reference_plan(docs, cits, "m1").docs_signature
 
-    assert adopt_prewarmed_annotations(sid, "m1", docs, changed) is None
-    # 폐기되었으므로 동일 입력으로도 재채택되지 않는다.
-    assert adopt_prewarmed_annotations(sid, "m1", docs, changed) is None
+    # 인용이 바뀌어도 문서기준 매칭은 유효하다: 예외 없이 판정만 수행한다.
+    # (pending이면 done 콜백 등록 후 None, 완료됐으면 sentinel 반환.)
+    adopted = adopt_prewarmed_annotations(sid, "m1", docs, changed)
+    assert adopted is None or adopted == [{"page": 3}]
     discard_reference_plan(sid, "m1")
 
 
 def test_miss_falls_back_to_synchronous_extract(pdf_sid: str):
-    """Given 플랜/citations 불일치 / When finalize / Then 동기 추출 1회로 저장."""
+    """Given 문서 불일치(miss) / When finalize / Then 동기 추출 없이 deferred."""
+    import time as _time
+
     from ui.components.streaming import _finalize_pdf_side_effects
 
     sid = pdf_sid
     docs = _make_docs()
     cits = _make_citations()
-    changed = [dict(cits[0], text_span="completely different span")]
-    _seed_pdf_session(sid, docs, changed)
-    note_stream_references(sid, "m1", docs, cits, extractor=lambda _d: [{"page": 3}])
-    fallback = [{"page": 3, "type": "sync"}]
+    other_docs = [
+        {
+            "page_content": "entirely different document body",
+            "metadata": {
+                "doc_id": "doc-z",
+                "page": 9,
+                "source": "C:/docs/other.pdf",
+                "file_hash": "hash-zzz",
+                "current_section": "Other",
+            },
+        }
+    ]
+    _seed_pdf_session(sid, other_docs, cits, msg_id="m-miss")
+    note_stream_references(
+        sid, "m-miss", docs, cits, extractor=lambda _d: [{"page": 3}]
+    )
 
-    with patch(
-        "ui.components.streaming.extract_annotations_from_docs",
-        return_value=fallback,
-    ) as mock_extract:
-        _finalize_pdf_side_effects(sid, "m1")
+    with (
+        patch(
+            "ui.components.streaming.adopt_prewarmed_annotations",
+            return_value=None,
+        ),
+        patch(
+            "ui.components.streaming.note_stream_references",
+        ) as mock_note,
+        patch(
+            "ui.components.streaming.extract_annotations_from_docs",
+        ) as mock_extract,
+    ):
+        _t0 = _time.perf_counter()
+        _finalize_pdf_side_effects(sid, "m-miss")
+        _dt = _time.perf_counter() - _t0
 
-    mock_extract.assert_called_once()
+    # 렌더 스레드 논블로킹: 동기 추출을 직접 호출하지 않고 백그라운드에 맡긴다.
+    mock_extract.assert_not_called()
+    mock_note.assert_called_once()
+    assert _dt < 1.0
     stored = SessionManager.get("pdf_annotations", None, sid)
-    assert stored is not None
-    assert stored["annotations"] == fallback
-    assert stored["file_hash"] == "hash-aaa"
-    discard_reference_plan(sid, "m1")
+    assert stored is None
+    discard_reference_plan(sid, "m-miss")
 
 
 def test_no_lock_held_during_fitz(pdf_sid: str):
-    """Given 완료 턴 / When finalize / Then fitz 호출 시점에 세션 락 미보유."""
+    """Given prewarm 적중 / When finalize / Then 세션 락 없이 즉시 저장."""
     from ui.components.streaming import _finalize_pdf_side_effects
 
     sid = pdf_sid
-    _seed_pdf_session(sid, _make_docs(), _make_citations())
+    _seed_pdf_session(sid, _make_docs(), _make_citations(), msg_id="m-lock")
 
     class _RecordingLock:
         def __init__(self) -> None:
@@ -239,18 +273,26 @@ def test_no_lock_held_during_fitz(pdf_sid: str):
         assert not recorder.held, "fitz 추출은 세션 락 밖에서 수행되어야 한다"
         return [{"page": 1}]
 
-    with (
-        patch.object(SessionManager, "_acquire_lock", return_value=recorder),
-        patch(
-            "ui.components.streaming.extract_annotations_from_docs",
-            side_effect=_assert_unlocked,
-        ),
-    ):
-        _finalize_pdf_side_effects(sid, "m1")
+    with patch.object(SessionManager, "_acquire_lock", return_value=recorder):
+        # prewarm 경로를 동기 sentinel로 강제해 락 경계만 검증한다.
+        # (streaming 모듈에 바인딩된 참조를 패치해야 한다.)
+        sentinel = [{"page": 1}]
+        with (
+            patch(
+                "ui.components.streaming.adopt_prewarmed_annotations",
+                return_value=sentinel,
+            ),
+            patch(
+                "ui.components.streaming.extract_annotations_from_docs",
+                side_effect=_assert_unlocked,
+            ),
+        ):
+            _finalize_pdf_side_effects(sid, "m-lock")
 
     stored = SessionManager.get("pdf_annotations", None, sid)
     assert stored is not None
     assert stored["annotations"] == [{"page": 1}]
+    discard_reference_plan(sid, "m-lock")
 
 
 def test_persist_precedes_finalize(monkeypatch: Any) -> None:

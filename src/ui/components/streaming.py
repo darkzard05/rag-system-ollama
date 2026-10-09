@@ -166,10 +166,12 @@ def friendly_error_message(exc: Exception) -> FriendlyError:
 
 
 def _finalize_pdf_side_effects(sid: str, msg_id: str) -> None:
-    """완료된 스트리밍 턴의 PDF 주석을 반영합니다.
+    """완료된 스트리밍 턴의 PDF 주석을 반영합니다 (논블로킹).
 
-    fitz 기반 좌표 추출(느린 작업)은 세션 락 밖에서 수행하며, 실패해도 턴
-    완료와 is_generating_answer 해제에는 영향을 주지 않습니다.
+    렌더 스레드를 절대 막지 않는다: prewarm 적중 시에만 즉시
+    ``pdf_annotations`` 를 set하고, miss/pending이면 백그라운드 추출을
+    보장한 뒤 즉시 리턴한다. 늦게 도착한 주석은 done 콜백이 채우며 뷰어
+    fragment가 다음 실행에서 표시한다. tail 체감 지연 제거용.
     """
     # 문서가 로드되지 않은 세션은 스킵 (저비용 가드)
     if not SessionManager.get("pdf_file_path", "", sid):
@@ -193,14 +195,33 @@ def _finalize_pdf_side_effects(sid: str, msg_id: str) -> None:
 
     try:
         _t0 = time.perf_counter()
-        # Task3 prefetch: sources 이벤트 시점의 prewarm 적중 시 재사용하고,
-        # 불일치(miss)하면 폐기 후 동기 폴백한다. fitz 호출은 세션 락 밖.
+        # 문서 기준 prewarm 적중 시 재사용한다. 증분 인용 도착으로 citations
+        # 서명이 바뀌어도 문서는 동일하므로 적중한다 (문서기준 매칭).
+        # fitz 호출은 세션 락 밖. miss/pending이면 동기 폴백 없이 백그라운드에
+        # 맡기고 즉시 리턴한다 (렌더 스레드 논블로킹).
         annotations: list[dict[str, Any]] | None = adopt_prewarmed_annotations(
             sid, msg_id, documents, citations
         )
         _prewarmed = annotations is not None
         if annotations is None:
-            annotations = extract_annotations_from_docs(documents)
+            # 백그라운드 추출 보장 (이미 제출된 future가 있으면 재사용) 후 리턴.
+            # done 콜백이 완료 시 pdf_annotations를 채운다.
+            note_stream_references(
+                sid,
+                msg_id,
+                documents,
+                citations,
+                extractor=extract_annotations_from_docs,
+            )
+            logger.info(
+                "[PERF] pdf finalize took %.3fs (%d docs, deferred,"
+                " cache_hit=%s, prewarmed=%s)",
+                time.perf_counter() - _t0,
+                len(documents),
+                False,
+                _prewarmed,
+            )
+            return
         _cache_hit = bool(
             documents
             and all(

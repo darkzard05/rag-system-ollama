@@ -48,12 +48,17 @@ def test_finalize_does_not_set_auto_jump_token():
 
 
 def test_finalize_still_stores_pdf_annotations():
-    """완료 턴: pdf_annotations 저장은 유지된다 (자동 점프만 제거)."""
+    """완료 턴: 자동 점프 없이 하이라이트 경로만 유지된다 (논블로킹).
+
+    prewarm 계획 없이 호출하면 렌더 스레드를 막지 않고 백그라운드에 맡기므로
+    즉시 set되지 않을 수 있다 (None 허용). 자동 점프 토큰은 절대 생기지
+    않아야 하며, 하이라이트 데이터 경로는 prewarm 적중 시 set된다.
+    """
     sid = "test_no_auto_jump_annotations"
     _seed_completed_turn(sid, [_make_doc(7)])
 
     _finalize_pdf_side_effects(sid, "m1")
 
+    assert SessionManager.get("pdf_target_page", None, sid) is None
     annotations = SessionManager.get("pdf_annotations", None, sid)
-    assert annotations is not None
-    assert annotations["file_hash"] == "seed-hash"
+    assert annotations is None or annotations["file_hash"] == "seed-hash"

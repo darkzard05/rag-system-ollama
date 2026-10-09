@@ -639,3 +639,26 @@ border-top: 1px solid color-mix(in srgb, var(--border-color) 30%, transparent) !
     overflow: hidden;
     display: block;
 }
+
+/* R2: Reference 한 줄 요약 링크 목록 (1.60 DOM 계약).
+   유일한 tertiary 생산자는 chat_references.render_reference_list이며 호출
+   3곳이 모두 st.chat_message 블록 내부이므로, 조상 한정이 곧 행 스코프다.
+   조상이 필요한 이유: main.css는 head 선두 주입이라 단일 속성 셀렉터가
+   뒤따르는 emotion 단일 클래스와 동점에서 진다. 조상 한정(0,2,0)으로
+   이기며, 전역 button 규칙 금지(상단 C8 경고) 및 우선순위 강제 선언 0건
+   (hygiene 게이트)을 준수한다. 사용 testID는 모두 베이스라인 포함済み.
+   1.60 DOM: button[data-testid] > div > p(라벨). */
+[data-testid="stChatMessage"] [data-testid="stBaseButton-tertiary"] {
+    justify-content: flex-start;
+    text-align: left;
+    text-decoration: underline;
+    text-underline-offset: 3px;
+}
+[data-testid="stChatMessage"] [data-testid="stBaseButton-tertiary"] p {
+    display: block;
+    max-width: 100%;
+    overflow: hidden;
+    text-align: left;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}

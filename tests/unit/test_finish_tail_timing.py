@@ -83,7 +83,9 @@ def test_tail_gates_cover_badges_path() -> None:
     assert "[PERF] stream max token gap took" in _src("src/api/stream_pipeline.py")
     assert "[PERF] consume persist took" in _src("src/ui/components/streaming.py")
     assert "[PERF] live persist took" in _src("src/ui/components/chat.py")
-    assert "[PERF] tooltip scan took" in _src("src/ui/components/chat.py")
+    # 단순안: 툴팁 스캔 로그는 삭제되고 참조 목록이 tail 확정을 담당한다.
+    assert "[PERF] tooltip scan took" not in _src("src/ui/components/chat.py")
+    assert "render_reference_list" in _src("src/ui/components/chat.py")
 
 
 def test_citation_phase_reports_progress() -> None:
