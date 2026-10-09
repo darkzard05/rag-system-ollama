@@ -60,7 +60,6 @@ from typing import TYPE_CHECKING, Any
 from common.constants import MAX_MESSAGE_HISTORY
 from common.resilience import retry_with_backoff
 from core.build_state import (
-    PHASE_DETAIL_KEY,
     BuildEvent,
     BuildPhase,
     BuildState,
@@ -220,7 +219,14 @@ class SessionManager:
                 new_state = cls.DEFAULT_SESSION_STATE.copy()
                 new_state["messages"] = []
                 new_state["status_logs"] = []
+                # Mutable defaults must not be shared: DEFAULT_SESSION_STATE
+                # holds a single {} for doc_pool, so a shallow copy would alias
+                # it across all sessions (cross-session contamination).
+                new_state["doc_pool"] = {}
                 new_state["_dirty_keys"] = set()
+                # 삭제 tombstone: delete()로 제거된 키는 UI 미러에서도 제거해야
+                # 하므로 별도 집합에 보관한다 (sync_to_streamlit이 소비).
+                new_state["_deleted_keys"] = set()
                 new_state["last_accessed"] = time.time()
                 cls._fallback_sessions[sid] = new_state
                 logger.debug(f"[SESSION] 신규 세션 저장소 생성: {sid}")
@@ -310,14 +316,19 @@ class SessionManager:
                 if key in state:
                     values[key] = state[key]
                     target_keys.add(key)
+                deleted_keys = {key} & state.setdefault("_deleted_keys", set()).copy()
             else:
                 dirty = state["_dirty_keys"].copy()
                 for k in dirty:
                     if k in state:
                         values[k] = state[k]
                         target_keys.add(k)
+            # 삭제 tombstone 스냅샷: state에 이미 없으므로 values에 담지 않고
+            # 별도로 전달한다. set() 후 add는 동일 키 부활(set)과의 경합에서
+            # tombstone이 지지 않도록 스냅샷 시점에 고정한다.
+            deleted_keys = state.setdefault("_deleted_keys", set()).copy()
 
-        if not values:
+        if not values and not deleted_keys:
             return
 
         if cls._ui_sync is not None:
@@ -330,19 +341,42 @@ class SessionManager:
                     logger.error(
                         "[SESSION] UI 미러링 실패, 더티 복원: %s", k, exc_info=True
                     )
+            # 삭제 전파: 어댑터가 delete를 지원하면 호출, 미지원이면
+            # best-effort로 스킵한다 (tombstone은 해소해 누수 방지).
+            delete_fn = getattr(cls._ui_sync, "delete", None)
+            failed_deletes: set[str] = set()
+            if callable(delete_fn):
+                for k in deleted_keys:
+                    try:
+                        delete_fn(k)
+                    except (RuntimeError, KeyError, ValueError):
+                        failed_deletes.add(k)
+                        logger.error(
+                            "[SESSION] UI 삭제 전파 실패, tombstone 복원: %s",
+                            k,
+                            exc_info=True,
+                        )
             succeeded = target_keys - failed
-            if succeeded or failed:
+            delivered_deletes = deleted_keys - failed_deletes
+            if succeeded or failed or delivered_deletes or failed_deletes:
                 with cls._acquire_lock(sid):
                     cur = cls._fallback_sessions.get(sid)
                     if cur is not None:
                         cur["_dirty_keys"].difference_update(succeeded)
                         cur["_dirty_keys"].update(failed)
+                        cur.setdefault("_deleted_keys", set()).difference_update(
+                            delivered_deletes
+                        )
+                        cur.setdefault("_deleted_keys", set()).update(failed_deletes)
         else:
             # 어댑터 미설치(core 단독/테스트) 시에는 기존처럼 소비한다.
             with cls._acquire_lock(sid):
                 cur = cls._fallback_sessions.get(sid)
                 if cur is not None:
                     cur["_dirty_keys"].difference_update(target_keys)
+                    cur.setdefault("_deleted_keys", set()).difference_update(
+                        deleted_keys
+                    )
 
     @classmethod
     def has_pending_ui_sync(cls, session_id: str | None = None) -> bool:
@@ -358,7 +392,9 @@ class SessionManager:
             state = cls._fallback_sessions.get(sid)
             if state is None:
                 return False
-            return bool(state["_dirty_keys"])
+            return bool(state["_dirty_keys"]) or bool(
+                state.setdefault("_deleted_keys", set())
+            )
 
     @classmethod
     def get(
@@ -438,6 +474,8 @@ class SessionManager:
             state = cls._get_state(sid)
             for k, v in updates.items():
                 state[k] = v
+                # 부활한 키의 tombstone 제거 (삭제-후-재생성 경합 해소)
+                state.setdefault("_deleted_keys", set()).discard(k)
                 if logger.isEnabledFor(
                     logging.DEBUG
                 ):  # 👈 DEBUG 레벨일 때만 문자열 포맷팅 실행
@@ -446,7 +484,12 @@ class SessionManager:
 
     @classmethod
     def delete(cls, key: str, session_id: str | None = None):
-        """세션 상태에서 특정 키를 삭제합니다."""
+        """세션 상태에서 특정 키를 삭제합니다.
+
+        삭제는 UI 미러에도 전파되어야 하므로 tombstone(``_deleted_keys``)을
+        남기고, 소비된 dirty에서는 제거한다. ``sync_to_streamlit``이 다음
+        동기화에서 tombstone을 소비한다.
+        """
         sid = session_id or cls.get_session_id()
 
         with cls._acquire_lock(sid):
@@ -454,6 +497,8 @@ class SessionManager:
                 state = cls._fallback_sessions[sid]
                 if key in state:
                     del state[key]
+                state["_dirty_keys"].discard(key)
+                state.setdefault("_deleted_keys", set()).add(key)
 
     @classmethod
     def _copy_value(cls, value: Any) -> Any:
@@ -581,6 +626,7 @@ class SessionManager:
             state["messages"] = []
             if "chat_history" in state:
                 del state["chat_history"]
+                state.setdefault("_deleted_keys", set()).add("chat_history")
             state["pdf_annotations"] = []
             state["_dirty_keys"].add("messages")
             state["_dirty_keys"].add("pdf_annotations")
@@ -629,9 +675,11 @@ class SessionManager:
         file_hash: str = "",
         session_id: str | None = None,
     ) -> BuildState:
-        """새 분석 시작: BuildState를 생성하고 평탄 레거시 키에 이중 기록한다.
+        """새 분석 시작: BuildState를 생성한다 (3B: 평탄 이중기록 폐지).
 
         단일 락 안에서 신구 상태를 함께 쓰므로 torn read가 없다.
+        ``is_building_rag``/``rebuild_cancelled``/``rebuild_start_time``은
+        입력 placeholder·업로드 가드 호환용으로만 유지한다.
         """
         sid = session_id or cls.get_session_id()
         with cls._acquire_lock(sid):
@@ -648,12 +696,6 @@ class SessionManager:
                 attempt=max(prev_attempt, legacy_attempt),
             )
             st["build_state"] = build
-            # 레거시 이중 기록 (P2 UI 교체까지 구 렌더 경로 유지)
-            st["rebuild_progress"] = 0
-            st["rebuild_status"] = PHASE_DETAIL_KEY.get(
-                build.phase, "build_in_progress"
-            )
-            st["rebuild_done"] = False
             st["rebuild_cancelled"] = False
             st["rebuild_error"] = None
             st["is_building_rag"] = True
@@ -661,9 +703,6 @@ class SessionManager:
             st["_dirty_keys"].update(
                 {
                     "build_state",
-                    "rebuild_progress",
-                    "rebuild_status",
-                    "rebuild_done",
                     "rebuild_cancelled",
                     "rebuild_error",
                     "is_building_rag",
@@ -679,10 +718,9 @@ class SessionManager:
         session_id: str | None = None,
         status_text: str | None = None,
     ) -> BuildState | None:
-        """빌드 이벤트를 반영하고 레거시 키에 이중 기록한다.
+        """빌드 이벤트를 반영한다 (3B: 평탄 이중기록 폐지).
 
-        ``status_text``는 구 UI용 표시 문자열 (없으면 detail_key/위상 키).
-        P2 UI 교체 후에는 인자가 무시되고 위상 키만으로 렌더한다.
+        ``status_text`` 인자는 하위 호환용으로만 받고 무시한다.
         """
         sid = session_id or cls.get_session_id()
         with cls._acquire_lock(sid):
@@ -691,12 +729,7 @@ class SessionManager:
             if not isinstance(build, BuildState):
                 return None
             apply_event(build, event)
-            legacy_status = (
-                status_text or event.detail_key or PHASE_DETAIL_KEY.get(build.phase, "")
-            )
-            st["rebuild_progress"] = build.pct
-            st["rebuild_status"] = legacy_status
-            st["rebuild_done"] = build.phase == BuildPhase.DONE
+            _ = status_text
             st["rebuild_cancelled"] = build.phase == BuildPhase.CANCELLED
             st["is_building_rag"] = build.phase in (
                 BuildPhase.PREPARING,
@@ -711,9 +744,6 @@ class SessionManager:
             st["_dirty_keys"].update(
                 {
                     "build_state",
-                    "rebuild_progress",
-                    "rebuild_status",
-                    "rebuild_done",
                     "rebuild_cancelled",
                     "is_building_rag",
                 }
@@ -726,13 +756,11 @@ class SessionManager:
         build: BuildState,
         session_id: str | None = None,
     ) -> BuildState:
-        """터미널 전이 완료/실패/취소를 저장하고 레거시 키에 이중 기록한다."""
+        """터미널 전이 완료/실패/취소를 저장한다 (3B: 평탄 이중기록 폐지)."""
         sid = session_id or cls.get_session_id()
         with cls._acquire_lock(sid):
             st = cls._get_state(sid)
             st["build_state"] = build
-            st["rebuild_progress"] = build.pct
-            st["rebuild_done"] = build.phase == BuildPhase.DONE
             st["rebuild_cancelled"] = build.phase == BuildPhase.CANCELLED
             st["is_building_rag"] = False
             if build.phase == BuildPhase.ERROR and build.error:
@@ -741,8 +769,6 @@ class SessionManager:
             st["_dirty_keys"].update(
                 {
                     "build_state",
-                    "rebuild_progress",
-                    "rebuild_done",
                     "rebuild_cancelled",
                     "is_building_rag",
                 }

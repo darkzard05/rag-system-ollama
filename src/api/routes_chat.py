@@ -24,6 +24,7 @@ from api._deps import (
     _app_server_module,
     _doc_to_source,
     _owners_lock,
+    _reject_session_mismatch,
     _require_session_owner,
     _session_owners,
     _validate_session_id,
@@ -82,6 +83,10 @@ async def query_rag(
     srv = _app_server_module()
     sid = request.session_id or "default"
     _validate_session_id(sid)
+    _reject_session_mismatch(_session_ctx, sid)
+    # 유효 세션을 ContextVar에 고정: 헤더 dep가 주입한 값과 본문 sid가
+    # 다르면 이후 ContextVar 기반 코드가 엉뚱한 세션을 보게 된다.
+    srv.SessionManager.set_session_id(sid)
     if len(request.query) > MAX_QUERY_LENGTH:
         raise HTTPException(
             status_code=400, detail=f"질문은 {MAX_QUERY_LENGTH}자 이하여야 합니다."
@@ -138,6 +143,9 @@ async def stream_query_rag(
     srv = _app_server_module()
     sid = request.session_id or "default"
     _validate_session_id(sid)
+    _reject_session_mismatch(_session_ctx, sid)
+    # 유효 세션을 ContextVar에 고정 (query 핸들러와 동일 이유).
+    srv.SessionManager.set_session_id(sid)
     if len(request.query) > MAX_QUERY_LENGTH:
         raise HTTPException(
             status_code=400, detail=f"질문은 {MAX_QUERY_LENGTH}자 이하여야 합니다."

@@ -17,9 +17,10 @@ def test_global_exception_handler():
     headers = {"Authorization": f"Bearer {API_KEY}"}
 
     # 1. 문서 없이 질문 (SessionError 유발)
+    # 헤더 세션과 본문 세션은 일치해야 한다 (불일치 시 400 세션-혼선 거부).
     response = client.post(
         "/api/v1/query",
-        json={"query": "테스트 질문"},
+        json={"query": "테스트 질문", "session_id": "test-error-session"},
         headers={**headers, "X-Session-ID": "test-error-session"},
     )
 

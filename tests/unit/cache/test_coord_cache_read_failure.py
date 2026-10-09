@@ -101,3 +101,22 @@ def test_t2_missing_page_returns_empty_without_raise(manager: Any) -> None:
 
     single = asyncio.run(manager.get_coords("missing", 1))
     assert single is None
+
+
+def test_t3_real_db_failure_surfaces_as_read_error(manager: Any) -> None:
+    """T3: 실제 DB 장애는 빈 결과가 아닌 ``CoordCacheReadError``로 전파되어야 한다.
+
+    이전에는 ``_get_coords_batch_impl``/``_get_coords_impl`` 내부 except가
+    ``{}``/``None``(캐시 미스와 동일)으로 삼켜 외층 raise 경로가 도달 불가였다.
+    """
+
+    async def _broken_connection() -> Any:
+        raise OSError("injected DB failure")
+
+    manager._get_connection = _broken_connection  # type: ignore[method-assign]
+
+    with pytest.raises(CoordCacheReadError):
+        asyncio.run(manager.get_coords_batch("hashB", [1]))
+
+    with pytest.raises(CoordCacheReadError):
+        asyncio.run(manager.get_coords("hashB", 1))

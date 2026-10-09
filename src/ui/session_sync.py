@@ -41,3 +41,11 @@ class StreamlitSessionSync:
     def read(key: str, default: Any = None) -> Any:
         """Read ``key`` from ``st.session_state`` falling back to ``default``."""
         return st.session_state.get(key, default)
+
+    @staticmethod
+    def delete(key: str) -> None:
+        """Remove ``key`` from ``st.session_state`` (delete propagation).
+
+        Absent keys are ignored so tombstone replay is idempotent.
+        """
+        st.session_state.pop(key, None)

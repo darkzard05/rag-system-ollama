@@ -34,6 +34,17 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
+# PDF 매직바이트: 접미사(.pdf)만 검사하면 비-PDF 바이트가 스토리지에 영속화되어
+# 빌드 경로로 전달된다. 저장·바인딩 전에 매직바이트를 강제한다. 구조적 온전성
+# (페이지 수 등)은 빌드 단계(load_pdf_docs)가 검증한다.
+_PDF_MAGIC = b"%PDF"
+
+
+def _ensure_valid_pdf(content: bytes, filename: str | None) -> None:
+    """업로드 바이트가 PDF 매직바이트로 시작하는지 검증한다. 아니면 400을 발생시킨다."""
+    if not content or not content.lstrip().startswith(_PDF_MAGIC):
+        raise HTTPException(status_code=400, detail="PDF 파일만 업로드 가능합니다.")
+
 
 @router.post("/api/v1/upload")
 async def upload_document(
@@ -72,6 +83,9 @@ async def upload_document(
                     status_code=413, detail="파일 크기가 50MB를 초과합니다."
                 )
             content += chunk
+        # [입력 검증] 저장·소유권 바인딩 전에 실제 PDF인지 검증한다.
+        # 검증 실패 시 스토리지/레지스트리를 오염시키지 않고 400으로 거부한다.
+        _ensure_valid_pdf(content, file.filename)
         file_hash = compute_file_hash("", data=content)
         # [TOCTOU 방지] 파일 소유권 바인딩을 파일 저장 직전으로 이동.
         _bind_file_owner(file_hash, user_id)
@@ -137,12 +151,14 @@ async def serve_pdf(
     브라우저 PDF 뷰어에서 #page=N 으로 페이지 이동을 지원합니다.
     인증이 필요하며, 경로 주입 공격을 방지합니다.
     """
-    # resolve-first: 파일이 존재하지 않으면 소유권 검사 이전에 404 (unbound 여부와 무관).
+    # owner-first: 존재 여부(resolve 404)보다 소유권(403)을 먼저 검사한다.
+    # resolve-first 순서는 유효 토큰 보유자에게 임의 file_hash의 존재 여부를
+    # 404/403 차분으로 노출하는 오라클이 된다. 타인·미등록 파일은 존재 여부와
+    # 무관하게 일률 403으로 응답해 열거를 차단한다.
+    _require_file_owner(file_hash, user_id)
     pdf_path = _resolve_pdf_path(file_hash)
     if pdf_path is None:
         raise HTTPException(status_code=404, detail="PDF 문서를 찾을 수 없습니다.")
-    # fail-closed: 미등록(unbound)/타인 소유 파일은 403.
-    _require_file_owner(file_hash, user_id)
     return FileResponse(
         str(pdf_path),
         media_type="application/pdf",

@@ -100,15 +100,18 @@ async def verify_token(
 
 # --- 세션 격리 의존성 ---
 async def get_session_context(x_session_id: str | None = Header(None)) -> str:
-    """헤더에서 세션 ID를 추출하고 컨텍스트를 고정합니다."""
+    """헤더에서 세션 ID를 추출하고 컨텍스트를 고정합니다.
+
+    ContextVar 주입만 수행하고 세션 객체는 생성하지 않습니다. 임의 헤더 값마다
+    세션을 생성하면 인증 사용자가 세션 상한(64)을 채워 타인 세션을 퇴출시키는
+    churn이 가능하므로, 세션 생성은 본문 sid 기준 핸들러의 init_session이
+    전담합니다.
+    """
     sid = x_session_id or "default"
     # [핵심] API 요청 스레드의 컨텍스트 변수에 세션 ID 주입
     from core.session import SessionManager
 
     SessionManager.set_session_id(sid)
-
-    # [최적화] 가벼운 세션 초기화는 직접 호출
-    SessionManager.init_session(session_id=sid)
     return sid
 
 
@@ -140,6 +143,22 @@ def _validate_session_id(session_id: str) -> None:
         raise HTTPException(
             status_code=400,
             detail=f"세션 ID는 {MAX_SESSION_ID_LENGTH}자 이하여야 합니다.",
+        )
+
+
+def _reject_session_mismatch(header_sid: str, body_sid: str) -> None:
+    """헤더 세션(X-Session-ID)과 본문 세션(request.session_id) 불일치를 거부합니다.
+
+    ``get_session_context``는 헤더 sid를 ContextVar에 주입하고, 핸들러는
+    본문 sid로 RAG를 수행하므로 둘이 다르면 상태 로그·RAG가 서로 다른
+    세션에 기록되는 혼선이 발생합니다. 헤더가 명시된 경우(``default``가
+    아님)에만 본문과 일치를 강제하고, 헤더 미지정(본문 단독 사용)은
+    기존 동작대로 허용합니다.
+    """
+    if header_sid != "default" and header_sid != body_sid:
+        raise HTTPException(
+            status_code=400,
+            detail="헤더 세션 ID와 본문 세션 ID가 일치하지 않습니다.",
         )
 
 

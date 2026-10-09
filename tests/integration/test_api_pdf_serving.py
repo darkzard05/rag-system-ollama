@@ -35,6 +35,16 @@ def _auth_override():
 _FAKE_PDF = b"%PDF-1.4\n1 0 obj<</Type/Catalog>>endobj\n%%EOF"
 
 
+@pytest.fixture(autouse=True)
+def _reset_ownership_registry():
+    """모듈 레벨 소유권 레지스트리를 테스트 간 격리합니다."""
+    yield
+    import src.api.api_server as api
+
+    api._session_owners.clear()
+    api._file_owners.clear()
+
+
 @pytest.fixture
 def pdf_storage(tmp_path: Path):
     """임시 스토리지 루트에 테스트 PDF 파일을 생성하고 PDF_STORAGE_DIR을 패치합니다."""
@@ -62,12 +72,30 @@ async def test_serve_pdf_success(pdf_storage: tuple[Path, str]):
 
 @pytest.mark.asyncio
 async def test_serve_pdf_not_found(pdf_storage: tuple[Path, str]):
-    """존재하지 않는 file_hash로 요청 시 404를 반환합니다."""
+    """소유권은 있으나 존재하지 않는 file_hash로 요청 시 404를 반환합니다.
+
+    owner-first 순서이므로 미등록 해식은 403이며, 404는 소유자 본인의
+    누락 파일에만 응답합니다.
+    """
+    from src.api.api_server import _bind_file_owner as _bind
+
+    missing = "0" * 64
+    _bind(missing, "test-user")
+    storage, _ = pdf_storage
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        resp = await ac.get(f"/api/v1/pdf/{missing}")
+    assert resp.status_code == 404
+    assert "PDF" in resp.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_serve_pdf_unbound_returns_403(pdf_storage: tuple[Path, str]):
+    """미등록 해시는 존재 여부와 무관하게 403 (존재 오라클 차단)."""
     storage, _ = pdf_storage
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as ac:
         resp = await ac.get(
             "/api/v1/pdf/0000000000000000000000000000000000000000000000000000000000000000"
         )
-    assert resp.status_code == 404
-    assert "PDF" in resp.json()["detail"]
+    assert resp.status_code == 403

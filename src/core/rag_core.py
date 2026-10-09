@@ -28,6 +28,11 @@ from core.session import SessionManager
 
 logger = logging.getLogger(__name__)
 
+# clear_session에서 생성한 정리 태스크 보관소. 지역 변수로 두면 이벤트 루프가
+# 회수하기 전 태스크가 GC되어 "Task was destroyed but it is pending" 경고와
+# 함께 정리가 중단될 수 있으므로 모듈 레벨 셋에 보관한다.
+_pending_cleanup_tasks: set[asyncio.Task[Any]] = set()
+
 
 @dataclass(frozen=True)
 class HydrationDrainResult:
@@ -381,8 +386,28 @@ class RAGSystem:
                 try:
                     loop = asyncio.get_running_loop()
                     if loop.is_running():
-                        loop.create_task(
+                        task = loop.create_task(
                             get_resource_manager().unregister_retrievers(file_hash)
                         )
+
+                        def _cleanup_done(
+                            t: asyncio.Task[Any], _hash: str = file_hash
+                        ) -> None:
+                            _pending_cleanup_tasks.discard(t)
+                            try:
+                                removed = t.result()
+                            except Exception as e:
+                                logger.warning(
+                                    f"[RAG] 리트리버 정리 실패 ({_hash}): {e}"
+                                )
+                            else:
+                                if removed is False:
+                                    logger.warning(
+                                        f"[RAG] 리트리버 정리 연기 "
+                                        f"({_hash}: 사용 중 pin)"
+                                    )
+
+                        _pending_cleanup_tasks.add(task)
+                        task.add_done_callback(_cleanup_done)
                 except RuntimeError:
                     logger.warning("[RAG] No running event loop for retriever cleanup")

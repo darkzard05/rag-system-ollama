@@ -56,3 +56,18 @@ def test_first_user_claims_unbound_session():
     # 최초 점유는 예외를 발생시키지 않아야 함
     api._require_session_owner(session_id, "user-a")
     assert api._session_owners[session_id][0] == "user-a"
+
+
+def test_header_body_session_mismatch_rejected():
+    """헤더 세션과 본문 세션이 다르면 400 이어야 합니다 (세션 혼선 방지)."""
+    from fastapi import HTTPException
+
+    with pytest.raises(HTTPException) as exc_info:
+        api._reject_session_mismatch("header-sid", "body-sid")
+    assert exc_info.value.status_code == 400
+
+
+def test_header_body_session_match_or_absent_allowed():
+    """헤더=본문 일치 또는 헤더 미지정(default)은 허용됩니다."""
+    api._reject_session_mismatch("same-sid", "same-sid")
+    api._reject_session_mismatch("default", "body-sid")

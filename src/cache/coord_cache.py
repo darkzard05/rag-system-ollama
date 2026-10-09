@@ -485,7 +485,10 @@ class CoordCacheManager:
         except Exception as e:
             logger.error(f"좌표 캐시 배치 로드 실패 ({file_hash}): {e}")
             self._conn_healthy = False
-            return {}
+            # 읽기 실패를 빈 결과({}=캐시 미스)로 위장하지 않는다. 외층
+            # get_coords_batch가 CoordCacheReadError로 변환해 호출자
+            # (document_hydrator)가 per-file 실패 마커를 기록하게 한다.
+            raise
 
     async def get_coords(
         self, file_hash: str, page_num: int
@@ -520,7 +523,9 @@ class CoordCacheManager:
         except Exception as e:
             logger.error(f"좌표 캐시 로드 실패 ({file_hash}, p{page_num}): {e}")
             self._conn_healthy = False
-            return None
+            # 배치 경로와 동일: 실패를 None(=미스)으로 위장하지 않고
+            # 외층 get_coords가 CoordCacheReadError로 변환하도록 재발생.
+            raise
 
     def get_annotation_memo_sync(
         self, file_hash: str, page_num: int, normtext_hash: str

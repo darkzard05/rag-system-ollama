@@ -109,6 +109,21 @@ def test_eviction_skips_pinned():
     assert "b" not in pool._pool
 
 
+@pytest.mark.asyncio
+async def test_remove_refuses_pinned_key():
+    """Regression: explicit remove() must respect pin like eviction does."""
+    pool = BaseResourcePool("Test", item_limit=10, byte_limit=10**9)
+    pool._pool["k"] = _Obj("k")
+    pool.pin("k")
+    removed = await pool.remove("k")
+    assert removed is False
+    assert "k" in pool._pool  # use-after-free 방지: 사용 중 삭제 금지
+    pool.unpin("k")
+    removed = await pool.remove("k")
+    assert removed is True
+    assert "k" not in pool._pool
+
+
 # --- Atomic acquire+pin via get_or_pin (integration) ---
 
 

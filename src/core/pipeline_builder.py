@@ -28,7 +28,7 @@ from common.exceptions import EmptyPDFError, InsufficientChunksError, VectorStor
 from core.build_state import PHASE_DETAIL_KEY, BuildEvent, BuildPhase
 from core.chunking import split_documents
 from core.document_processor import compute_file_hash, emit_progress, load_pdf_docs
-from core.graph.graph_builder import build_graph
+from core.graph.graph_builder import build_graph, invalidate_graph_cache
 from core.resource_manager import get_resource_manager
 from core.retriever_factory import create_bm25_retriever, create_vector_store
 from core.session import SessionManager
@@ -426,6 +426,12 @@ class PipelineBuilder:
             emit_progress(on_progress, pct, detail=status_text)
 
         _report(BuildPhase.REGISTERING, 85, "Building graph workflow...")
+        if fresh_build:
+            # 신규/교체 인덱싱은 컴파일된 그래프를 재사용하면 구 코퍼스·구
+            # 설정으로 고정된 stale 그래프가 등록된다. build_graph() 호출
+            # 전에 캐시를 무효화해 이번 파이프라인용으로 재컴파일한다.
+            # 캐시 재사용 경로(fresh_build=False)는 캐시 히트를 유지한다.
+            invalidate_graph_cache()
         _, workflow = await asyncio.gather(
             get_resource_manager().register_retrievers(
                 file_hash, vector_store, bm25_retriever

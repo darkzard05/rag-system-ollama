@@ -32,6 +32,9 @@ class _FakeUiSync:
     def read(self, key: str, default: object = None) -> object:
         return self.store.get(key, default)
 
+    def delete(self, key: str) -> None:
+        self.store.pop(key, None)
+
 
 def _patch_sync_deps(st_dict):
     """Return combined patchers for sync_to_streamlit testing.
@@ -82,6 +85,65 @@ def test_session_isolation():
 
     assert SessionManager.get("shared_key", session_id=sid1) == "val1"
     assert SessionManager.get("shared_key", session_id=sid2) == "val2"
+
+
+def test_doc_pool_isolation_across_sessions():
+    """Regression: doc_pool must not be a shared mutable across sessions."""
+    SessionManager.init_session("pool_a")
+    SessionManager.init_session("pool_b")
+
+    state_a = SessionManager._get_state("pool_a")
+    state_b = SessionManager._get_state("pool_b")
+    assert state_a["doc_pool"] is not state_b["doc_pool"]
+    assert state_a["doc_pool"] is not SessionManager.DEFAULT_SESSION_STATE["doc_pool"]
+
+    state_a["doc_pool"]["evil"] = "x"
+    assert state_b["doc_pool"] == {}
+    assert SessionManager.DEFAULT_SESSION_STATE["doc_pool"] == {}
+
+
+def test_delete_leaves_tombstone_consumed_by_sync():
+    """Regression: delete()는 dirty 누수 없이 UI 미러까지 삭제 전파."""
+    sid = "del_sync_sid"
+    SessionManager.init_session(sid)
+
+    st_state: dict = {}
+    p1, p2, p3 = _patch_sync_deps(st_state)
+    with p1, p2, p3:
+        SessionManager.set("k1", "v1", session_id=sid)
+        SessionManager.sync_to_streamlit(session_id=sid)
+        assert st_state.get("k1") == "v1"
+
+        SessionManager.delete("k1", session_id=sid)
+        # dirty에는 남지 않고 tombstone에만 남는다 (누수 방지)
+        state = SessionManager._fallback_sessions[sid]
+        assert "k1" not in state["_dirty_keys"]
+        assert "k1" in state["_deleted_keys"]
+        assert SessionManager.has_pending_ui_sync(sid) is True
+
+        SessionManager.sync_to_streamlit(session_id=sid)
+        assert "k1" not in st_state
+        assert SessionManager.has_pending_ui_sync(sid) is False
+
+
+def test_set_after_delete_resurrects_key():
+    """삭제 후 set하면 tombstone이 제거되어 미러에 값이 다시 기록된다."""
+    sid = "del_resurrect_sid"
+    SessionManager.init_session(sid)
+
+    st_state: dict = {}
+    p1, p2, p3 = _patch_sync_deps(st_state)
+    with p1, p2, p3:
+        SessionManager.set("k2", "v1", session_id=sid)
+        SessionManager.delete("k2", session_id=sid)
+        SessionManager.set("k2", "v2", session_id=sid)
+
+        state = SessionManager._fallback_sessions[sid]
+        assert "k2" not in state["_deleted_keys"]
+
+        SessionManager.sync_to_streamlit(session_id=sid)
+        assert st_state.get("k2") == "v2"
+        assert SessionManager.has_pending_ui_sync(sid) is False
 
 
 # --- Streamlit Synchronization Tests ---

@@ -5,7 +5,8 @@ F2: 소유권 강화 (Ownership Hardening) 통합 테스트.
 fail-closed(미등록 세션은 최초 인증 사용자가 점유하며 타인 접근은 403)입니다.
 
 - test_unbound_existing_file_denied: 파일 fail-closed 전환 검증 (RED 대상)
-- test_missing_file_404_for_unbound_hash: resolve-first 404 순서 고정 (regression lock)
+- test_missing_file_403_for_unbound_hash: owner-first 순서 고정 (존재 오라클 차단)
+- test_missing_file_404_for_bound_hash: 소유자 본인 누락 파일 404 경로 검증
 - test_concurrent_upload_second_rejected: TOCTOU 경합 검증 (RED 대상)
 
 스윕 로직(_sweep_stale_owners) 검증은 tests/unit/test_ownership.py 로 이관되었습니다.
@@ -75,9 +76,24 @@ async def test_unbound_existing_file_denied(client, pdf_override):
 
 
 @pytest.mark.asyncio
-async def test_missing_file_404_for_unbound_hash(client, pdf_override):
-    """존재하지 않는 파일은 resolve-first 순서로 404 를 반환해야 합니다 (unbound 여부와 무관)."""
+async def test_missing_file_403_for_unbound_hash(client, pdf_override):
+    """존재하지 않는 파일도 소유권 검사 우선(owner-first)으로 403 을 반환해야 합니다.
+
+    이전 resolve-first 순서는 404/403 차분으로 임의 file_hash 존재 여부를
+    노출하는 오라클이었습니다. 미등록 해시는 존재 여부와 무관하게 403.
+    """
     resp = await client.get(f"/api/v1/pdf/{'b' * 64}")
+    assert resp.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_missing_file_404_for_bound_hash(client, pdf_override):
+    """소유권은 있으나 파일이 없으면 404 를 반환해야 합니다 (정당한 404 경로)."""
+    import src.api.api_server as api
+
+    missing = "c" * 64
+    api._bind_file_owner(missing, "test-user")
+    resp = await client.get(f"/api/v1/pdf/{missing}")
     assert resp.status_code == 404
 
 

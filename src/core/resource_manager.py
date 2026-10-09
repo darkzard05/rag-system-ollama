@@ -265,13 +265,24 @@ class BaseResourcePool(Generic[T]):
             self._pool[key] = resource
             self._current_bytes += resource_size
 
-    async def remove(self, key: str):
-        """리소스 즉시 제거."""
+    async def remove(self, key: str) -> bool:
+        """리소스 즉시 제거. pin 중인 키는 삭제하지 않고 False를 반환합니다.
+
+        ``_evict_one_locked``는 pin을 존중하지만 ``remove``는 검사 없이
+        ``pop``하여 쿼리 중 pin된 리트리버가 삭제되는 use-after-free가
+        가능했습니다. 명시적 제거 경로도 동일한 계약을 따릅니다.
+        """
         with self._lock:
+            if key in self._pinned_keys:
+                logger.warning(f"[{self.name}Pool] remove 스킵 (사용 중 pin): {key}")
+                return False
             if key in self._pool:
                 res = self._pool.pop(key)
                 self._current_bytes -= self._get_resource_size(res)
+                self._pinned_keys.pop(key, None)
                 del res
+                return True
+            return True
 
     def clear(self):
         """풀 전체 초기화."""
@@ -996,8 +1007,8 @@ class ResourceCoordinator:
         # 호스트 압력은 get_or_build 에서 부재 시에만 처리한다.
         await self.retrievers.put(file_hash, (vector_store, bm25_retriever))
 
-    async def unregister_retrievers(self, file_hash: str):
-        await self.retrievers.remove(file_hash)
+    async def unregister_retrievers(self, file_hash: str) -> bool:
+        return await self.retrievers.remove(file_hash)
 
     def get_client(self, host: str):
         return self.clients.get_sync_client(host)
