@@ -87,22 +87,40 @@ def test_no_callback_rerun_in_sidebar_dialog() -> None:
 # --- (b) 단일 st.status 인플레이스 렌더 ---------------------------------------
 
 
-def test_build_progress_single_status_no_manual_loop() -> None:
-    """빌드 진행 블록은 st.status 1회 + 수동 리런 루프 금지."""
-    source = inspect.getsource(_render_build_progress_block)
+def _status_calls(source: str) -> list[ast.Call]:
     tree = ast.parse(source)
-    status_calls = [
+    return [
         node
         for node in ast.walk(tree)
         if isinstance(node, ast.Call)
         and isinstance(node.func, ast.Attribute)
         and node.func.attr == "status"
     ]
-    assert len(status_calls) == 1, "st.status는 단독 1회만 사용"
-    assert "time.sleep" not in source, "수동 폴링 sleep 금지"
-    assert "st.rerun" not in source, "진행 블록 내 수동 rerun 금지"
-    loops = [n for n in ast.walk(tree) if isinstance(n, (ast.While, ast.For))]
-    assert not loops, "Progress 수동 리런 루프 금지 (단일 st.status 인플레이스)"
+
+
+def test_build_progress_single_status_no_manual_loop() -> None:
+    """빌드 진행 렌더는 st.status 기반 + 수동 리런 루프 금지.
+
+    카드 분리 후 구조: 디스패치(``_render_build_progress_block``)는 분기만
+    담당하고, 실제 ``st.status`` 렌더는 배타 분기의 카드 본문
+    (``_render_build_card``)과 호환 폴백(``_render_build_legacy_block``)이
+    각각 수행한다. 어느 경로도 수동 rerun/sleep/루프를 두지 않는다.
+    """
+    import ui.components.chat_build as chat_build_mod
+
+    dispatch_src = inspect.getsource(_render_build_progress_block)
+    assert not _status_calls(dispatch_src), "디스패치는 직접 렌더하면 안 됨"
+    for name in ("_render_build_card", "_render_build_legacy_block"):
+        source = inspect.getsource(getattr(chat_build_mod, name))
+        assert _status_calls(source), f"{name}는 st.status로 렌더해야 함"
+        assert "time.sleep" not in source, "수동 폴링 sleep 금지"
+        assert "st.rerun" not in source, "진행 블록 내 수동 rerun 금지"
+        loops = [
+            n
+            for n in ast.walk(ast.parse(source))
+            if isinstance(n, (ast.While, ast.For))
+        ]
+        assert not loops, "Progress 수동 리런 루프 금지 (단일 st.status 인플레이스)"
 
 
 # --- (c) stream-DOM 제약 유지 --------------------------------------------------

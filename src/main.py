@@ -684,6 +684,12 @@ async def _bg_rebuild_task(
     """
     [Background Task] 업로드된 파일과 선택된 모델을 사용하여 RAG 파이프라인을 비동기로 재구축합니다.
     """
+    from core.build_state import (
+        BuildEvent,
+        cancel_build,
+        complete_build,
+        fail_build,
+    )
     from core.model_loader import ModelManager
     from core.rag_core import RAGSystem
     from core.session import SessionManager
@@ -694,6 +700,12 @@ async def _bg_rebuild_task(
     SessionManager.set("rebuild_start_time", time.time(), session_id=session_id)
     SessionManager.set(
         "rebuild_status", f"Analyzing '{file_name}'...", session_id=session_id
+    )
+    # 단일 상태 객체 초기화 (평탄 레거시 키는 이중 기록으로 유지).
+    SessionManager.init_build_state(
+        file_name,
+        str(SessionManager.get("file_hash", "", session_id) or ""),
+        session_id=session_id,
     )
 
     # 타임라인에 분석 시작 메시지 추가 (하나의 메시지를 업데이트)
@@ -713,65 +725,56 @@ async def _bg_rebuild_task(
         session_id=session_id,
     )
 
+    def _report_progress(pct: int, msg: str = "", detail: str = ""):
+        # 틱마다 타임라인 메시지를 upsert하던 스팸 제거: 레거시 키만 갱신하고
+        # 메시지는 시작/완료/에러 3회만 기록한다 (결정 2).
+        status_msg = detail or msg or f"Progress {pct}%"
+        SessionManager.set("rebuild_progress", pct, session_id=session_id)
+        if status_msg:
+            SessionManager.set("rebuild_status", status_msg, session_id=session_id)
+
+    def _report_event(event: BuildEvent) -> None:
+        SessionManager.update_build_state(
+            event, session_id=session_id, status_text=event.status or None
+        )
+
+    def _finalize_cancelled(reason: str) -> None:
+        build = SessionManager.get_build_state(session_id=session_id)
+        if build is not None:
+            SessionManager.finalize_build_state(
+                cancel_build(build), session_id=session_id
+            )
+        SessionManager.set("rebuild_cancelled", False, session_id=session_id)
+        SessionManager.set("rebuild_progress", 0, session_id=session_id)
+        SessionManager.add_status_log(
+            "Document analysis cancelled.", session_id=session_id
+        )
+        SessionManager.add_message(
+            "system",
+            "Document analysis cancelled",
+            msg_type="build_error",
+            msg_id=build_msg_id,
+            error=reason,
+            session_id=session_id,
+        )
+
     try:
         embedder = await ModelManager.get_embedder(embedder_name)
 
         # Check cancellation before starting build
         if SessionManager.get("rebuild_cancelled", False, session_id=session_id):
             logger.info(f"[MAIN] Rebuild cancelled by user for session {session_id}")
-            SessionManager.set("rebuild_cancelled", False, session_id=session_id)
-            SessionManager.set("rebuild_progress", 0, session_id=session_id)
-            SessionManager.add_status_log(
-                "Document analysis cancelled.", session_id=session_id
-            )
-            SessionManager.add_message(
-                "system",
-                "Document analysis cancelled",
-                msg_type="build_error",
-                msg_id=build_msg_id,
-                error="cancelled by the user",
-                session_id=session_id,
-            )
+            _finalize_cancelled("Document analysis cancelled.")
             return
 
         rag_sys = RAGSystem(session_id=session_id)
-
-        def _report_progress(pct: int, msg: str = "", detail: str = ""):
-            status_msg = detail or msg or f"Progress {pct}%"
-            SessionManager.set("rebuild_progress", pct, session_id=session_id)
-            if status_msg:
-                SessionManager.set("rebuild_status", status_msg, session_id=session_id)
-            # 타임라인 진행 메시지 업데이트 (동일 msg_id)
-            SessionManager.add_message(
-                "system",
-                f"Analyzing '{file_name}'...",
-                msg_type="build_progress",
-                msg_id=build_msg_id,
-                progress=pct,
-                status=status_msg,
-                cancelable=True,
-                logs=SessionManager.get("status_logs", [], session_id) or [],
-                session_id=session_id,
-            )
 
         SessionManager.set("rebuild_progress", 0, session_id=session_id)
 
         # Check cancellation again before expensive build_pipeline call
         if SessionManager.get("rebuild_cancelled", False, session_id=session_id):
             logger.info(f"[MAIN] Rebuild cancelled by user for session {session_id}")
-            SessionManager.set("rebuild_cancelled", False, session_id=session_id)
-            SessionManager.set("rebuild_progress", 0, session_id=session_id)
-            SessionManager.add_status_log(
-                "Document analysis cancelled.", session_id=session_id
-            )
-            SessionManager.add_message(
-                "system",
-                "Document analysis cancelled",
-                msg_type="build_error",
-                msg_id=build_msg_id,
-                error="cancelled by the user",
-                session_id=session_id,
-            )
+            _finalize_cancelled("cancelled by the user")
             return
 
         def _is_cancelled() -> bool:
@@ -785,9 +788,15 @@ async def _bg_rebuild_task(
             embedder=embedder,
             on_progress=_report_progress,
             check_cancelled=_is_cancelled,
+            on_event=_report_event,
         )
 
-        SessionManager.set("rebuild_progress", 100, session_id=session_id)
+        done_build = SessionManager.get_build_state(session_id=session_id)
+        if done_build is not None:
+            SessionManager.finalize_build_state(
+                complete_build(done_build, cache_used=bool(cache_used)),
+                session_id=session_id,
+            )
         SessionManager.set("pdf_processed", True, session_id=session_id)
         SessionManager.set("pdf_processing_error", None, session_id=session_id)
         SessionManager.set(
@@ -816,22 +825,17 @@ async def _bg_rebuild_task(
         logger.info(
             f"[MAIN] Rebuild pipeline cancelled mid-build for session {session_id}"
         )
-        SessionManager.set("rebuild_cancelled", False, session_id=session_id)
-        SessionManager.set("rebuild_progress", 0, session_id=session_id)
-        SessionManager.add_message(
-            "system",
-            "Document analysis cancelled",
-            msg_type="build_error",
-            msg_id=build_msg_id,
-            error="async task cancelled",
-            session_id=session_id,
-        )
+        _finalize_cancelled("async task cancelled")
     except Exception as e:
         logger.error(f"Background RAG rebuild error: {e}", exc_info=True)
         error_msg = "문서 분석 중 오류가 발생했습니다. 파일 상태를 확인하신 후 다시 업로드해 주세요."
+        failed = SessionManager.get_build_state(session_id=session_id)
+        if failed is not None:
+            SessionManager.finalize_build_state(
+                fail_build(failed, error_msg), session_id=session_id
+            )
         SessionManager.set("rebuild_error", error_msg, session_id=session_id)
         SessionManager.set("pdf_processing_error", error_msg, session_id=session_id)
-        SessionManager.set("rebuild_progress", 0, session_id=session_id)
         SessionManager.set("pdf_processed", False, session_id=session_id)
         SessionManager.add_message(
             "system",

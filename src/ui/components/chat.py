@@ -887,7 +887,6 @@ from ui.components.chat_build import (  # noqa: E402
     _cancel_rebuild,
     _render_build_progress_block,
     _render_build_progress_fragment,
-    _render_doc_context_inline,
     _render_guidance_panel,
 )
 # isort: on
@@ -902,7 +901,6 @@ __all__ = [
     "_handle_page_jump",
     "_render_build_progress_block",
     "_render_build_progress_fragment",
-    "_render_doc_context_inline",
     "_render_guidance_panel",
     "_render_references_content",
     "_render_unified_timeline",

@@ -198,11 +198,16 @@ class TestErrorRecoveryCTA:
         assert build_error_msg.get("retry_kind") == "rebuild"
         assert build_error_msg.get("retryable") is True
 
-        # 렌더 경로에 실제 Retry 버튼이 존재해야 한다
-        source = inspect.getsource(chat_build._render_build_progress_block)
-        assert "retry" in source.lower(), (
+        # 렌더 경로에 실제 Retry 버튼이 존재해야 한다 (카드/레거시 양 경로).
+        card_source = inspect.getsource(chat_build._render_build_card)
+        legacy_source = inspect.getsource(chat_build._render_build_legacy_block)
+        assert "retry" in card_source.lower(), (
             "빌드 오류 렌더 경로에 Retry 버튼이 없다: "
-            "_render_build_progress_block에 재시도 CTA가 필요하다."
+            "_render_build_card에 재시도 CTA가 필요하다."
+        )
+        assert "retry" in legacy_source.lower(), (
+            "빌드 오류 렌더 경로에 Retry 버튼이 없다: "
+            "_render_build_legacy_block에 재시도 CTA가 필요하다."
         )
 
     def test_error_preserves_partial_content(self) -> None:

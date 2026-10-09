@@ -41,6 +41,12 @@ def _render_error_block(fake_st: MagicMock) -> MagicMock:
         def get(key: str, default: Any = None, *args: Any, **kwargs: Any) -> Any:
             return store.get(key, default)
 
+        @staticmethod
+        def get_build_state(*args: Any, **kwargs: Any) -> None:
+            # 신규 디스패치는 BuildState를 먼저 조회한다 — 레거시 오류
+            # 경로를 타도록 None을 반환한다.
+            return None
+
     with (
         patch.object(chat_build_module, "st", fake_st),
         patch.object(chat_build_module, "SessionManager", _FakeSessionManager),

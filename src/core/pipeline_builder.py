@@ -25,6 +25,7 @@ from common.config import (
 )
 from common.constants import GRADE_MEMO_KEY
 from common.exceptions import EmptyPDFError, InsufficientChunksError, VectorStoreError
+from core.build_state import PHASE_DETAIL_KEY, BuildEvent, BuildPhase
 from core.chunking import split_documents
 from core.document_processor import compute_file_hash, emit_progress, load_pdf_docs
 from core.graph.graph_builder import build_graph
@@ -161,6 +162,8 @@ class PipelineBuilder:
         embedder: Embeddings,
         on_progress: Callable[[int], Any] | None = None,
         check_cancelled: Callable[[], bool] | None = None,
+        on_event: Callable[[BuildEvent], Any] | None = None,
+        cancel: asyncio.Event | None = None,
     ) -> tuple[str, bool]:
         """문서를 로드하고 RAG 파이프라인을 구축합니다.
 
@@ -168,8 +171,10 @@ class PipelineBuilder:
             file_path: PDF 파일 경로.
             file_name: 원본 파일 이름.
             embedder: 임베딩 모델 인스턴스.
-            on_progress: 진행률 콜백 (0~100).
+            on_progress: 진행률 콜백 (0~100, 레거시 — P3에 제거 예정).
             check_cancelled: True 반환 시 asyncio.CancelledError 발생으로 중단.
+            on_event: 타입 단계 이벤트 콜백 (신규 단일 계약).
+            cancel: asyncio 취소 이벤트 (set 시 CancelledError로 중단).
 
         Returns:
             (메시지, 캐시 사용 여부) 튜플.
@@ -204,6 +209,8 @@ class PipelineBuilder:
                 file_hash,
                 on_progress,
                 check_cancelled,
+                on_event,
+                cancel,
             )
         except BaseException:
             SessionManager.set("file_hash", prev_file_hash, session_id=self.session_id)
@@ -247,14 +254,36 @@ class PipelineBuilder:
         file_hash: str,
         on_progress: Callable[[int], Any] | None,
         check_cancelled: Callable[[], bool] | None,
+        on_event: Callable[[BuildEvent], Any] | None = None,
+        cancel: asyncio.Event | None = None,
     ) -> tuple[str, bool]:
         """file_hash 커밋 이후의 실제 파이프라인 구축 본문 (실패 가능 작업)."""
 
         def _check() -> None:
+            if cancel is not None and cancel.is_set():
+                raise asyncio.CancelledError(
+                    "파이프라인 구축이 사용자에 의해 취소되었습니다"
+                )
             if check_cancelled is not None and check_cancelled():
                 raise asyncio.CancelledError(
                     "파이프라인 구축이 사용자에 의해 취소되었습니다"
                 )
+
+        def _report(phase: BuildPhase, pct: int, status_text: str = "") -> None:
+            """타입 이벤트 + 레거시 pct 콜백 이중 발행 (P3에 레거시 제거)."""
+            if on_event is not None:
+                try:
+                    on_event(
+                        BuildEvent(
+                            phase=phase,
+                            pct=pct,
+                            detail_key=PHASE_DETAIL_KEY.get(phase, ""),
+                            status=status_text,
+                        )
+                    )
+                except Exception as e:
+                    logger.warning(f"[RAG] [INDEX] on_event 콜백 실패 — 우회: {e}")
+            emit_progress(on_progress, pct, detail=status_text)
 
         start_time = time.time()
         logger.debug(f"[RAG] [INDEX] 파이프라인 구축 시작: {file_name}")
@@ -277,13 +306,14 @@ class PipelineBuilder:
                     SessionManager.add_status_log(
                         "기존 분석 데이터 발견 (캐시 활용)", session_id=self.session_id
                     )
-                    emit_progress(on_progress, 90, detail="Loading from cache...")
+                    _report(BuildPhase.INDEXING, 90, "Loading from cache...")
                     await self._register_and_finalize(
                         file_hash,
                         vector_store,
                         bm25_retriever,
                         on_progress,
                         fresh_build=False,
+                        on_event=on_event,
                     )
                     return f"'{file_name}' 캐시 데이터 로드 완료", True
 
@@ -291,30 +321,34 @@ class PipelineBuilder:
         SessionManager.add_status_log(
             f"'{file_name}' 텍스트 추출 중...", session_id=self.session_id
         )
+
+        def _extract_progress(pct: int, detail: str = "") -> None:
+            _report(BuildPhase.EXTRACTING, pct, detail or "Extracting text...")
+
         documents = await load_pdf_docs(
             file_path,
             file_name,
-            on_progress=on_progress,
+            on_progress=_extract_progress if on_event is not None else on_progress,
             session_id=self.session_id,
             file_hash=file_hash,
         )
         if not documents:
             raise EmptyPDFError()
 
-        emit_progress(on_progress, 40, detail="Text extraction complete")
+        _report(BuildPhase.EXTRACTING, 40, "Text extraction complete")
 
         # 3. 청크 분할 (Async)
         SessionManager.add_status_log(
             "문맥 최적화 및 청크 분할 중...", session_id=self.session_id
         )
-        emit_progress(on_progress, 45, detail="Splitting documents...")
+        _report(BuildPhase.CHUNKING, 45, "Splitting documents...")
         doc_splits, vectors = await split_documents(
             documents, embedder=embedder, session_id=self.session_id
         )
         if not doc_splits:
             raise InsufficientChunksError()
 
-        emit_progress(on_progress, 55, detail="Chunking complete")
+        _report(BuildPhase.CHUNKING, 55, "Chunking complete")
 
         _check()
 
@@ -322,7 +356,7 @@ class PipelineBuilder:
         SessionManager.add_status_log(
             "지식 베이스(Vector Index) 생성 중...", session_id=self.session_id
         )
-        emit_progress(on_progress, 60, detail="Building vector index...")
+        _report(BuildPhase.INDEXING, 60, "Building vector index...")
         vector_store_future = asyncio.to_thread(
             create_vector_store,
             doc_splits,
@@ -335,19 +369,20 @@ class PipelineBuilder:
             vector_store_future, bm25_future
         )
 
-        emit_progress(on_progress, 68, detail="Vector index built")
-        emit_progress(on_progress, 75, detail="BM25 index built")
+        _report(BuildPhase.INDEXING, 68, "Vector index built")
+        _report(BuildPhase.INDEXING, 75, "BM25 index built")
 
         _check()
 
         # 6. 등록 및 최종화 (캐시 저장 전에 수행 — 실패 시 캐시 미저장)
-        emit_progress(on_progress, 80, detail="Registering retrievers...")
+        _report(BuildPhase.REGISTERING, 80, "Registering retrievers...")
         await self._register_and_finalize(
             file_hash,
             vector_store,
             bm25_retriever,
             on_progress,
             fresh_build=True,
+            on_event=on_event,
         )
 
         # 7. 캐시 저장 (엔진 등록 성공 후에만 저장)
@@ -367,13 +402,30 @@ class PipelineBuilder:
         bm25_retriever: Any,
         on_progress: Callable[[int], Any] | None = None,
         fresh_build: bool = False,
+        on_event: Callable[[BuildEvent], Any] | None = None,
     ) -> None:
         """생성된 리소스를 전역 풀에 등록하고 세션을 초기화합니다.
 
         fresh_build=True 이면 (캐시 재사용이 아닌) 실제 신규/교체 인덱싱이
         완료된 것이므로, 기존 코퍼스와 연결된 캐시/메모를 무효화합니다.
         """
-        emit_progress(on_progress, 85, detail="Building graph workflow...")
+
+        def _report(phase: BuildPhase, pct: int, status_text: str = "") -> None:
+            if on_event is not None:
+                try:
+                    on_event(
+                        BuildEvent(
+                            phase=phase,
+                            pct=pct,
+                            detail_key=PHASE_DETAIL_KEY.get(phase, ""),
+                            status=status_text,
+                        )
+                    )
+                except Exception as e:
+                    logger.warning(f"[RAG] [INDEX] on_event 콜백 실패 — 우회: {e}")
+            emit_progress(on_progress, pct, detail=status_text)
+
+        _report(BuildPhase.REGISTERING, 85, "Building graph workflow...")
         _, workflow = await asyncio.gather(
             get_resource_manager().register_retrievers(
                 file_hash, vector_store, bm25_retriever
@@ -389,9 +441,9 @@ class PipelineBuilder:
 
         EngineCacheManager.set_engine(self.session_id, workflow)
 
-        emit_progress(on_progress, 95, detail="Graph workflow ready")
+        _report(BuildPhase.REGISTERING, 95, "Graph workflow ready")
 
-        emit_progress(on_progress, 100, detail="Complete")
+        _report(BuildPhase.REGISTERING, 100, "Complete")
 
         # 신규 인덱싱 시에만 무효화: 캐시 재사용 빌드는 건드리지 않음.
         if fresh_build:

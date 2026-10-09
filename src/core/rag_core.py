@@ -20,6 +20,7 @@ from common.config import HYDRATION_DRAIN_TIMEOUT_SECONDS
 from common.exceptions import VectorStoreError
 from common.resilience import get_circuit_breaker_registry, retry_stream
 from common.utils import doc_stable_id
+from core.build_state import BuildEvent
 from core.document_hydrator import hydrate_documents
 from core.pipeline_builder import PipelineBuilder, prepare_query_config_or_build
 from core.resource_manager import get_resource_manager
@@ -173,6 +174,8 @@ class RAGSystem:
         embedder: Embeddings,
         on_progress: Callable[[int], Any] | None = None,
         check_cancelled: Callable[[], bool] | None = None,
+        on_event: Callable[[BuildEvent], Any] | None = None,
+        cancel: asyncio.Event | None = None,
     ) -> tuple[str, bool]:
         self._ensure_session_context()
         builder = PipelineBuilder(session_id=self.session_id)
@@ -182,6 +185,8 @@ class RAGSystem:
             embedder=embedder,
             on_progress=on_progress,
             check_cancelled=check_cancelled,
+            on_event=on_event,
+            cancel=cancel,
         )
 
     async def _get_rag_engine(self) -> Any:

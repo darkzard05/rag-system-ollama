@@ -59,6 +59,14 @@ from typing import TYPE_CHECKING, Any
 
 from common.constants import MAX_MESSAGE_HISTORY
 from common.resilience import retry_with_backoff
+from core.build_state import (
+    PHASE_DETAIL_KEY,
+    BuildEvent,
+    BuildPhase,
+    BuildState,
+    apply_event,
+    initial_build_state,
+)
 
 if TYPE_CHECKING:
     # Type-only import: never executed at runtime, so core stays free of any
@@ -107,6 +115,7 @@ class SessionManager:
         "rebuild_progress": 0,
         "is_building_rag": False,
         "rebuild_cancelled": False,
+        "build_state": None,
         "rag_build_complete_flag": False,
         "status_logs": [],
         "current_page": 1,
@@ -592,6 +601,7 @@ class SessionManager:
         cls.set("rebuild_progress", 0, session_id)
         cls.set("rebuild_done", False, session_id)
         cls.set("rebuild_cancelled", False, session_id)
+        cls.set("build_state", None, session_id)
         cls.set("needs_rag_rebuild", False, session_id)
         cls.set("needs_qa_chain_update", False, session_id)
         cls.set("rag_build_complete_flag", False, session_id)
@@ -600,6 +610,153 @@ class SessionManager:
         cls.set("manual_nav_ts", 0, session_id)
         cls.delete("pdf_target_page", session_id)
         cls.add_status_log("새 문서 분석 시작", session_id)
+
+    @classmethod
+    def get_build_state(cls, session_id: str | None = None) -> BuildState | None:
+        """단일 빌드 상태 객체를 반환한다 (없으면 None)."""
+        sid = session_id or cls.get_session_id()
+        with cls._acquire_lock(sid):
+            state = cls._fallback_sessions.get(sid)
+            if state is None:
+                return None
+            build = state.get("build_state")
+            return build if isinstance(build, BuildState) else None
+
+    @classmethod
+    def init_build_state(
+        cls,
+        file_name: str,
+        file_hash: str = "",
+        session_id: str | None = None,
+    ) -> BuildState:
+        """새 분석 시작: BuildState를 생성하고 평탄 레거시 키에 이중 기록한다.
+
+        단일 락 안에서 신구 상태를 함께 쓰므로 torn read가 없다.
+        """
+        sid = session_id or cls.get_session_id()
+        with cls._acquire_lock(sid):
+            st = cls._get_state(sid)
+            prev = st.get("build_state")
+            prev_attempt = prev.attempt if isinstance(prev, BuildState) else 0
+            try:
+                legacy_attempt = int(st.get("rebuild_attempt", 0) or 0)
+            except (TypeError, ValueError):
+                legacy_attempt = 0
+            build = initial_build_state(
+                file_name,
+                file_hash,
+                attempt=max(prev_attempt, legacy_attempt),
+            )
+            st["build_state"] = build
+            # 레거시 이중 기록 (P2 UI 교체까지 구 렌더 경로 유지)
+            st["rebuild_progress"] = 0
+            st["rebuild_status"] = PHASE_DETAIL_KEY.get(
+                build.phase, "build_in_progress"
+            )
+            st["rebuild_done"] = False
+            st["rebuild_cancelled"] = False
+            st["rebuild_error"] = None
+            st["is_building_rag"] = True
+            st["rebuild_start_time"] = build.started_at
+            st["_dirty_keys"].update(
+                {
+                    "build_state",
+                    "rebuild_progress",
+                    "rebuild_status",
+                    "rebuild_done",
+                    "rebuild_cancelled",
+                    "rebuild_error",
+                    "is_building_rag",
+                    "rebuild_start_time",
+                }
+            )
+            return build
+
+    @classmethod
+    def update_build_state(
+        cls,
+        event: BuildEvent,
+        session_id: str | None = None,
+        status_text: str | None = None,
+    ) -> BuildState | None:
+        """빌드 이벤트를 반영하고 레거시 키에 이중 기록한다.
+
+        ``status_text``는 구 UI용 표시 문자열 (없으면 detail_key/위상 키).
+        P2 UI 교체 후에는 인자가 무시되고 위상 키만으로 렌더한다.
+        """
+        sid = session_id or cls.get_session_id()
+        with cls._acquire_lock(sid):
+            st = cls._get_state(sid)
+            build = st.get("build_state")
+            if not isinstance(build, BuildState):
+                return None
+            apply_event(build, event)
+            legacy_status = (
+                status_text or event.detail_key or PHASE_DETAIL_KEY.get(build.phase, "")
+            )
+            st["rebuild_progress"] = build.pct
+            st["rebuild_status"] = legacy_status
+            st["rebuild_done"] = build.phase == BuildPhase.DONE
+            st["rebuild_cancelled"] = build.phase == BuildPhase.CANCELLED
+            st["is_building_rag"] = build.phase in (
+                BuildPhase.PREPARING,
+                BuildPhase.EXTRACTING,
+                BuildPhase.CHUNKING,
+                BuildPhase.INDEXING,
+                BuildPhase.REGISTERING,
+            )
+            if build.phase == BuildPhase.ERROR and build.error:
+                st["rebuild_error"] = build.error
+                st["pdf_processing_error"] = build.error
+            st["_dirty_keys"].update(
+                {
+                    "build_state",
+                    "rebuild_progress",
+                    "rebuild_status",
+                    "rebuild_done",
+                    "rebuild_cancelled",
+                    "is_building_rag",
+                }
+            )
+            return build
+
+    @classmethod
+    def finalize_build_state(
+        cls,
+        build: BuildState,
+        session_id: str | None = None,
+    ) -> BuildState:
+        """터미널 전이 완료/실패/취소를 저장하고 레거시 키에 이중 기록한다."""
+        sid = session_id or cls.get_session_id()
+        with cls._acquire_lock(sid):
+            st = cls._get_state(sid)
+            st["build_state"] = build
+            st["rebuild_progress"] = build.pct
+            st["rebuild_done"] = build.phase == BuildPhase.DONE
+            st["rebuild_cancelled"] = build.phase == BuildPhase.CANCELLED
+            st["is_building_rag"] = False
+            if build.phase == BuildPhase.ERROR and build.error:
+                st["rebuild_error"] = build.error
+                st["pdf_processing_error"] = build.error
+            st["_dirty_keys"].update(
+                {
+                    "build_state",
+                    "rebuild_progress",
+                    "rebuild_done",
+                    "rebuild_cancelled",
+                    "is_building_rag",
+                }
+            )
+            return build
+
+    @classmethod
+    def reset_build_state(cls, session_id: str | None = None) -> None:
+        """빌드 상태를 초기화한다 (새 파일 업로드 경로와 동일 효과)."""
+        sid = session_id or cls.get_session_id()
+        with cls._acquire_lock(sid):
+            st = cls._get_state(sid)
+            st["build_state"] = None
+            st["_dirty_keys"].add("build_state")
 
     @classmethod
     def safe_remove_file(cls, path: str, max_retries: int = 3):

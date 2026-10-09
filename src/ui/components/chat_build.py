@@ -2,10 +2,11 @@
 
 ``chat.py`` (P3 분리)에서 이동한 빌드 진행/문서 컨텍스트 렌더 함수들:
 - ``_cancel_rebuild`` — 분석 재구축 취소 요청 콜백
-- ``_render_build_progress_block`` — 빌드 상태 블록 단독 렌더
+- ``_render_build_progress_block`` — 문서 분석 카드 단독 렌더 (BuildState 우선)
+- ``_render_build_card`` — 타입 상태 카드 본문 (신규)
+- ``_render_build_legacy_block`` — 평탄키 폴백 렌더 (호환)
 - ``_render_build_progress_fragment`` — 빌드 상태 fragment (빌드/취소 중에만 마운트)
 - ``_render_guidance_panel`` — 빈 대화 가이드 패널
-- ``_render_doc_context_inline`` — 타임라인 첫 메시지 문서 컨텍스트
 
 본 모듈은 ``chat.py``를 import하지 않는다 (순환 의존 방지).
 """
@@ -15,8 +16,14 @@ from typing import Any
 
 import streamlit as st
 
+from core.build_state import (
+    PHASE_DETAIL_KEY,
+    BuildPhase,
+    BuildState,
+    elapsed_sec,
+)
 from core.session import SessionManager
-from ui.components.common import AVATARS, ui_error
+from ui.components.common import AVATARS, status_line, ui_error
 from ui.strings import t
 from ui.widget_keys import (
     SAMPLE_QUESTION_STATE_KEY,
@@ -26,12 +33,76 @@ from ui.widget_keys import (
 
 __all__ = [
     "_cancel_rebuild",
+    "_render_build_card",
+    "_render_build_legacy_block",
     "_render_build_progress_block",
     "_render_build_progress_fragment",
-    "_render_doc_context_inline",
     "_render_guidance_panel",
     "get_build_error_actions",
 ]
+
+# 스테퍼 단계 순서 (PREPARING은 시작 전이므로 전부 ○로 표시).
+_BUILD_STEP_ORDER: tuple[BuildPhase, ...] = (
+    BuildPhase.EXTRACTING,
+    BuildPhase.CHUNKING,
+    BuildPhase.INDEXING,
+    BuildPhase.REGISTERING,
+)
+
+_RUNNING_PHASES: frozenset[BuildPhase] = frozenset(
+    {
+        BuildPhase.PREPARING,
+        BuildPhase.EXTRACTING,
+        BuildPhase.CHUNKING,
+        BuildPhase.INDEXING,
+        BuildPhase.REGISTERING,
+    }
+)
+
+
+def _stepper_caption(phase: BuildPhase) -> str:
+    """단계 스테퍼 1줄 캡션: ✓ 완료 · ▸ 진행중 · ○ 대기 (결정 3).
+
+    단계 라벨은 리터럴 ``t()`` 호출로 읽는다 (i18n AST 게이트).
+    """
+    steps: list[tuple[BuildPhase, str]] = [
+        (BuildPhase.EXTRACTING, t("build_step_extract")),
+        (BuildPhase.CHUNKING, t("build_step_chunk")),
+        (BuildPhase.INDEXING, t("build_step_index")),
+        (BuildPhase.REGISTERING, t("build_step_finalize")),
+    ]
+    if phase == BuildPhase.DONE:
+        current = len(steps)
+    else:
+        current = 0
+        for idx, (step_phase, _label) in enumerate(steps):
+            if step_phase == phase:
+                current = idx
+                break
+    parts: list[str] = []
+    for idx, (_step_phase, label) in enumerate(steps):
+        if phase == BuildPhase.DONE or idx < current:
+            marker = "✓"
+        elif idx == current:
+            marker = "▸"
+        else:
+            marker = "○"
+        parts.append(f"{marker} {label}")
+    return status_line(*parts)
+
+
+def _build_cache_tag(sid: str, build: BuildState | None) -> str:
+    """캐시 재사용 태그 (결정 5: 유지). 임베딩 모델명은 표기하지 않는다."""
+    cache_used: bool | None = build.cache_used if build is not None else None
+    if cache_used is None:
+        doc_stats = SessionManager.get("doc_stats", {}, sid)
+        if isinstance(doc_stats, dict):
+            cache_used = doc_stats.get("cache_used")
+    if cache_used:
+        return t("cache_tag_reused")
+    if cache_used is False:
+        return t("cache_tag_new")
+    return ""
 
 
 def _cancel_rebuild(sid: str) -> None:
@@ -56,6 +127,7 @@ def get_build_error_actions(error_msg: str) -> dict[str, Any]:
 
 def _retry_build(sid: str) -> None:
     """문서 분석 실패/취소 시 파이프라인 재구축을 트리거하는 콜백."""
+    SessionManager.reset_build_state(session_id=sid)
     SessionManager.set("pdf_processing_error", "", session_id=sid)
     SessionManager.set("rebuild_error", None, session_id=sid)
     SessionManager.set("rebuild_done", False, session_id=sid)
@@ -77,6 +149,98 @@ def _retry_build(sid: str) -> None:
 
 
 def _render_build_progress_block(sid: str) -> None:
+    """문서 분석 카드 렌더 (BuildState 우선, 레거시 키 폴백).
+
+    - 실행 중: 상태 pill 라벨 + 스테퍼 1줄 + 게이지바 + 경과 캡션 + 취소 버튼.
+    - 완료: 접힌 상태 + 소요 시간 1줄 (게이지바 없음, 결정 1).
+    - 실패/취소: 에러 카드 + 재시도 버튼.
+    ``build_state``가 없는 세션(구 흐름/테스트)은 기존 렌더로 폴백한다.
+    """
+    build = SessionManager.get_build_state(session_id=sid)
+    if build is not None:
+        _render_build_card(sid, build)
+    else:
+        _render_build_legacy_block(sid)
+
+
+def _render_build_card(sid: str, build: BuildState) -> None:
+    file_name = build.file_name or t("doc_default_name")
+    if build.phase == BuildPhase.IDLE and not build.file_name:
+        return
+    elapsed = elapsed_sec(build)
+    cache_tag = _build_cache_tag(sid, build)
+
+    if build.phase in _RUNNING_PHASES:
+        is_cancelling = bool(SessionManager.get("rebuild_cancelled", False, sid))
+        if is_cancelling:
+            label = f"{file_name} · {t('build_cancelled')}"
+        else:
+            phase_text = t(PHASE_DETAIL_KEY.get(build.phase, "build_in_progress"))
+            label = f"{file_name} · {phase_text}"
+        with st.status(label, expanded=True, state="running"):
+            st.progress(max(0, min(100, build.pct)) / 100)
+            st.caption(_stepper_caption(build.phase))
+            st.caption(
+                t("build_progress_caption").format(progress=build.pct, elapsed=elapsed)
+            )
+            if is_cancelling:
+                return
+            try:
+                attempt = int(build.attempt)
+            except (TypeError, ValueError):
+                attempt = 0
+            st.button(
+                t("action_cancel_build"),
+                key=cancel_rebuild_key(sid, attempt),
+                on_click=_cancel_rebuild,
+                args=(sid,),
+                width="stretch",
+            )
+        return
+
+    if build.phase == BuildPhase.DONE:
+        label = f"{file_name} · 준비 완료{cache_tag}"
+        with st.status(label, expanded=False, state="complete"):
+            st.caption(
+                t("build_complete_caption").format(elapsed=elapsed)
+                if elapsed > 0
+                else t("build_complete_default")
+            )
+        return
+
+    if build.phase == BuildPhase.CANCELLED:
+        label = f"{file_name} · {t('build_cancelled')}"
+        with st.status(label, expanded=True, state="running"):
+            st.progress(max(0, min(100, build.pct)) / 100)
+            st.caption(_stepper_caption(build.phase))
+        return
+
+    # ERROR
+    error = build.error or SessionManager.get("pdf_processing_error", "", sid) or ""
+    label = f"{file_name} · 분석 실패"
+    with st.status(label, expanded=True, state="error"):
+        if error:
+            actions = get_build_error_actions(str(error))
+            ui_error(actions["message"])
+            st.caption(
+                t("build_progress_caption").format(progress=build.pct, elapsed=elapsed)
+            )
+            try:
+                attempt = int(build.attempt)
+            except (TypeError, ValueError):
+                attempt = 0
+            st.button(
+                actions["cta"][0],
+                key=retry_build_key(sid, attempt),
+                on_click=_retry_build,
+                args=(sid,),
+                disabled=not actions["retryable"],
+                help=t("action_retry_build_help"),
+                width="stretch",
+            )
+
+
+def _render_build_legacy_block(sid: str) -> None:
     is_building = bool(SessionManager.get("is_building_rag", False, sid))
     is_cancelling = bool(SessionManager.get("rebuild_cancelled", False, sid))
     is_done = bool(SessionManager.get("rebuild_done", False, sid))
@@ -201,14 +365,13 @@ def _render_build_progress_block(sid: str) -> None:
 
 @st.fragment()
 def _render_build_progress_fragment(sid: str) -> None:
-    """빌드 상태 블록 전용 fragment (run_every 없음).
+    """빌드 상태 카드 전용 fragment (run_every 없음).
 
-    전체 rerun 없이 ``rebuild_progress`` 를 다시 읽어 진행 바를
-    갱신한다(타임라인 폴링이 제거된 빈틈을 메움). ``run_every`` 타이머는
-    두지 않는다: 빌드 완료 후 전체 rerun 시 스테일 타이머가 경고를
-    유발한다(test_progress_poller_mounting). 진행 중 갱신은 빌드 워커의
-    상태 전파 rerun + fragment 내 인터랙션(취소 버튼) rerun으로 전달된다.
-    완료/취소/에러 상태에서도 블록은 그대로 남아 대화 기록으로 잔존한다.
+    전체 rerun 없이 ``build_state`` 를 다시 읽어 카드를 갱신한다.
+    ``run_every`` 타이머는 두지 않는다: 빌드 완료 후 전체 rerun 시 스테일
+    타이머가 경고를 유발한다(test_progress_poller_mounting). 진행 중 갱신은
+    빌드 워커의 상태 전파 rerun + fragment 내 인터랙션(취소 버튼) rerun으로
+    전달된다. 완료/취소/에러 상태에서도 카드는 그대로 남아 기록으로 잔존한다.
     """
     _render_build_progress_block(sid)
 
@@ -231,8 +394,3 @@ def _render_guidance_panel() -> None:
 
     with st.chat_message("assistant", avatar=AVATARS["assistant"]):
         st.markdown(t("onboarding_guide"))
-
-
-def _render_doc_context_inline(sid: str) -> None:
-    """[DEPRECATED] _render_build_progress_block으로 통합되어 no-op 처리 (하위 호환성 유지)"""
-    pass

@@ -139,6 +139,15 @@ UI_STRINGS: dict[str, dict[str, str]] = {
         "build_cancelled": "Cancelling analysis...",
         "build_analyzing": "Building knowledge base...",
         "build_in_progress": "Analyzing document",
+        "build_phase_extracting": "Extracting text...",
+        "build_phase_chunking": "Splitting into chunks...",
+        "build_phase_indexing": "Building knowledge index...",
+        "build_phase_registering": "Finalizing pipeline...",
+        "build_phase_error": "Analysis failed",
+        "build_step_extract": "Extract",
+        "build_step_chunk": "Chunk",
+        "build_step_index": "Index",
+        "build_step_finalize": "Finalize",
         "build_progress_caption": "%{progress}% complete · {elapsed}s elapsed",
         "build_complete_caption": "Analysis took {elapsed}s",
         "build_complete_default": "Analysis complete",
@@ -229,6 +238,15 @@ UI_STRINGS: dict[str, dict[str, str]] = {
         "build_cancelled": "분석 취소 중...",
         "build_analyzing": "지식 베이스 구축 중...",
         "build_in_progress": "문서 분석 중",
+        "build_phase_extracting": "텍스트 추출 중...",
+        "build_phase_chunking": "청크 분할 중...",
+        "build_phase_indexing": "지식 인덱스 구축 중...",
+        "build_phase_registering": "파이프라인 마무리 중...",
+        "build_phase_error": "분석 실패",
+        "build_step_extract": "추출",
+        "build_step_chunk": "청킹",
+        "build_step_index": "인덱싱",
+        "build_step_finalize": "마무리",
         "build_progress_caption": "{progress}% 완료 · {elapsed}초 경과",
         "build_complete_caption": "분석 소요 시간: {elapsed}초",
         "build_complete_default": "분석 완료",
@@ -295,9 +313,22 @@ def _collect_t_keys_ast(root: Path) -> _DirectKeySet:
     return found
 
 
+# Build-phase detail keys resolved dynamically via
+# ``core.build_state.PHASE_DETAIL_KEY`` (``t(detail_key)`` with a variable, so
+# the AST literal gate cannot see them — registered here as indirect keys,
+# mirroring the ``PHASE_KEYWORDS`` pattern).
+BUILD_PHASE_KEYS: tuple[str, ...] = (
+    "build_phase_extracting",
+    "build_phase_chunking",
+    "build_phase_indexing",
+    "build_phase_registering",
+    "build_phase_error",
+)
+
+
 def _indirect_keys() -> set[str]:
     """Keys consumed via ``PHASE_KEYWORDS`` (resolved dynamically in ``t``)."""
-    return {key for key, _keywords in PHASE_KEYWORDS}
+    return {key for key, _keywords in PHASE_KEYWORDS} | set(BUILD_PHASE_KEYS)
 
 
 def gate_en_keys_read() -> tuple[set[str], set[str]]:
