@@ -24,13 +24,29 @@ CONTENT_B = "Semantic chunking respects markdown headers and preserves section c
 
 @pytest.fixture
 def isolated_memo_db(tmp_path, monkeypatch):
-    """메모 SQLite를 tmp 경로로 격리합니다 (실 캐시 불변)."""
+    """메모 SQLite를 tmp 경로로 격리합니다 (실 캐시 불변).
+
+    ``coord_cache``는 프로세스 전역 싱글톤으로 이전 테스트의 aiosqlite
+    연결(``_conn``)과 ``_schema_ready`` 플래그를 들고 있을 수 있습니다.
+    경로만 monkeypatch하면 비동기 저장은 stale 연결(구 DB 파일)에 쓰고
+    동기 조회는 새 tmp 파일을 열어 순서 의존 실패
+    (``None == [{'page': 1}]``)가 발생하므로, 패치 전후로 연결을 닫고
+    상태를 리셋해 격리합니다.
+    """
     db_dir = tmp_path / "coord_cache"
     db_dir.mkdir()
     mod = importlib.import_module("cache.coord_cache")
+    with contextlib.suppress(Exception):
+        asyncio.run(coord_cache.close())
+    # close()가 owner 루프 없이 조기 반환한 경우를 대비한 방어적 리셋.
+    coord_cache._conn = None
+    coord_cache._schema_ready = False
+    coord_cache._conn_healthy = False
     monkeypatch.setattr(mod, "COORD_CACHE_DIR", db_dir)
     monkeypatch.setattr(mod, "COORD_CACHE_DB", db_dir / "coords.db")
-    return db_dir
+    yield db_dir
+    with contextlib.suppress(Exception):
+        asyncio.run(coord_cache.close())
 
 
 class _FakeQuad:

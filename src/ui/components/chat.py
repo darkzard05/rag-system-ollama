@@ -469,12 +469,15 @@ def render_chat_messages_area() -> None:
     report_rerun_wall_if_pending(current_sid)
 
     # 분석 상태 블록은 타임라인 흐름 안에 둔다(별도 배치 시 시작 말풍선과
-    # 레이아웃 충돌). fragment는 빌드/취소 진행 중에만 마운트하고, 그 외
-    # 상태는 정적 block을 렌더한다 (fix-001: 유휴 폴링 금지, run_every 없음).
-    # 진행 중 갱신은 빌드 워커의 상태 전파 rerun으로 전달된다.
-    is_building = bool(SessionManager.get("is_building_rag", False, current_sid))
-    is_cancelling = bool(SessionManager.get("rebuild_cancelled", False, current_sid))
-    if is_building or is_cancelling:
+    # 레이아웃 충돌). 마운트 판단은 BuildState 단일 predicate에 위임한다
+    # (should_mount_fragment: 비터미널일 때만 fragment, 그 외 정적 block).
+    # 평탄키(is_building_rag/rebuild_cancelled) 직접 분기는 폐지(3B) —
+    # 입력 placeholder 가드(_resolve_chat_input_state)용으로만 유지한다.
+    # 유휴 폴링 금지, run_every 없음(4A). 진행 중 갱신은 빌드 워커의
+    # 상태 전파 rerun으로 전달된다.
+    from ui.components.doc_analysis.panel import should_mount_fragment
+
+    if should_mount_fragment(current_sid):
         _render_build_progress_fragment(current_sid)
     else:
         _render_build_progress_block(current_sid)

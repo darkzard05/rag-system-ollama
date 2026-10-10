@@ -695,13 +695,9 @@ async def _bg_rebuild_task(
     from core.session import SessionManager
 
     SessionManager.set_session_id(session_id)
-    SessionManager.set("rebuild_done", False, session_id=session_id)
     SessionManager.set("rebuild_error", None, session_id=session_id)
     SessionManager.set("rebuild_start_time", time.time(), session_id=session_id)
-    SessionManager.set(
-        "rebuild_status", f"Analyzing '{file_name}'...", session_id=session_id
-    )
-    # 단일 상태 객체 초기화 (평탄 레거시 키는 이중 기록으로 유지).
+    # 단일 상태 객체 초기화 (3B: 평탄 레거시 이중기록 폐지).
     SessionManager.init_build_state(
         file_name,
         str(SessionManager.get("file_hash", "", session_id) or ""),
@@ -726,12 +722,9 @@ async def _bg_rebuild_task(
     )
 
     def _report_progress(pct: int, msg: str = "", detail: str = ""):
-        # 틱마다 타임라인 메시지를 upsert하던 스팸 제거: 레거시 키만 갱신하고
-        # 메시지는 시작/완료/에러 3회만 기록한다 (결정 2).
-        status_msg = detail or msg or f"Progress {pct}%"
-        SessionManager.set("rebuild_progress", pct, session_id=session_id)
-        if status_msg:
-            SessionManager.set("rebuild_status", status_msg, session_id=session_id)
+        # 3B: 평탄 레거시 키 갱신 폐지. 진행률은 BuildEvent 경로(_report_event)
+        # 단일 소스로만 전파된다. 시그니처는 build_pipeline 콜백 호환용으로 유지.
+        _ = (pct, msg, detail)
 
     def _report_event(event: BuildEvent) -> None:
         SessionManager.update_build_state(
@@ -745,7 +738,6 @@ async def _bg_rebuild_task(
                 cancel_build(build), session_id=session_id
             )
         SessionManager.set("rebuild_cancelled", False, session_id=session_id)
-        SessionManager.set("rebuild_progress", 0, session_id=session_id)
         SessionManager.add_status_log(
             "Document analysis cancelled.", session_id=session_id
         )
@@ -768,8 +760,6 @@ async def _bg_rebuild_task(
             return
 
         rag_sys = RAGSystem(session_id=session_id)
-
-        SessionManager.set("rebuild_progress", 0, session_id=session_id)
 
         # Check cancellation again before expensive build_pipeline call
         if SessionManager.get("rebuild_cancelled", False, session_id=session_id):
@@ -852,7 +842,6 @@ async def _bg_rebuild_task(
             session_id=session_id,
         )
     finally:
-        SessionManager.set("rebuild_done", True, session_id=session_id)
         SessionManager.set("is_building_rag", False, session_id=session_id)
 
 

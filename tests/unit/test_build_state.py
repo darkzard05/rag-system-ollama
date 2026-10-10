@@ -63,24 +63,26 @@ def test_elapsed_sec_without_start_is_zero() -> None:
     assert elapsed_sec(build) == 0
 
 
-def test_session_dual_write_legacy_keys() -> None:
+def test_session_build_state_single_source_no_legacy_dual_write() -> None:
+    """BuildState 단일 원천: 평탄 레거시 키에는 이중 기록하지 않는다 (3B)."""
     sid = "test-build-state-dual"
     SessionManager.reset_all_state(sid)
     build = SessionManager.init_build_state("doc.pdf", "hash1", session_id=sid)
-    assert SessionManager.get("rebuild_progress", 0, session_id=sid) == 0
+    assert SessionManager.get_build_state(session_id=sid) is not None
     assert SessionManager.get("is_building_rag", False, session_id=sid) is True
+    # 3B: 레거시 키는 쓰지 않는다 (기본값 그대로).
+    assert SessionManager.get("rebuild_progress", 0, session_id=sid) == 0
     assert SessionManager.get("rebuild_done", True, session_id=sid) is False
+    assert SessionManager.get("rebuild_status", None, session_id=sid) is None
 
     SessionManager.update_build_state(
         BuildEvent(BuildPhase.INDEXING, 75, "build_phase_indexing", time.time()),
         session_id=sid,
         status_text="Building vector index...",
     )
-    assert SessionManager.get("rebuild_progress", 0, session_id=sid) == 75
-    assert (
-        SessionManager.get("rebuild_status", "", session_id=sid)
-        == "Building vector index..."
-    )
+    # 3B: 평탄 키는 업데이트하지 않는다. BuildState만 전진한다.
+    assert SessionManager.get("rebuild_progress", 0, session_id=sid) == 0
+    assert SessionManager.get("rebuild_status", None, session_id=sid) is None
     stored = SessionManager.get_build_state(session_id=sid)
     assert stored is not None
     assert stored.phase == BuildPhase.INDEXING
@@ -88,6 +90,8 @@ def test_session_dual_write_legacy_keys() -> None:
 
     complete_build(build, cache_used=False)
     SessionManager.finalize_build_state(build, session_id=sid)
-    assert SessionManager.get("rebuild_done", False, session_id=sid) is True
+    assert SessionManager.get("rebuild_done", True, session_id=sid) is False
     assert SessionManager.get("is_building_rag", True, session_id=sid) is False
+    assert SessionManager.get_build_state(session_id=sid) is not None
+    assert SessionManager.get_build_state(session_id=sid).phase == BuildPhase.DONE
     SessionManager.reset_all_state(sid)

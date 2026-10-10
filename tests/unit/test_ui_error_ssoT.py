@@ -12,7 +12,6 @@ from unittest.mock import MagicMock, patch
 
 from core.session import SessionManager
 from ui.components import chat as chat_mod
-from ui.components import chat_build as build_mod
 from ui.components import common as common_mod
 
 
@@ -63,19 +62,24 @@ def test_chat_input_disabled_routes_placeholder_through_ui_error() -> None:
 
 def test_build_progress_error_routes_message_through_ui_error() -> None:
     """빌드 오류 메시지가 ui_error를 경유해 st.error에 원문 그대로 도달."""
+    import ui.components.doc_analysis.panel as panel_mod
+    from core.build_state import fail_build, initial_build_state
+
     sid = "ssot_build_err"
     SessionManager.reset_all_state(sid)
-    SessionManager.set("last_uploaded_file_name", "doc.pdf", session_id=sid)
+    build = initial_build_state("doc.pdf", "h1")
+    fail_build(build, "RAW-BOOM-9")
+    SessionManager.set("build_state", build, session_id=sid)
     SessionManager.set("pdf_processing_error", "RAW-BOOM-9", session_id=sid)
     with (
-        patch("ui.components.chat_build.st") as mock_st,
+        patch("ui.components.doc_analysis.panel.st") as mock_st,
         patch(
-            "ui.components.chat_build.ui_error",
+            "ui.components.doc_analysis.panel.ui_error",
             side_effect=lambda m: mock_st.error(m),
         ) as mock_ui_error,
     ):
         mock_st.status.return_value.__enter__.return_value = MagicMock()
-        build_mod._render_build_progress_block(sid)
+        panel_mod.render_document_panel(sid)
     mock_ui_error.assert_called_once_with("RAW-BOOM-9")
     assert mock_st.error.call_args is not None
     assert mock_st.error.call_args.args[0] == "RAW-BOOM-9"

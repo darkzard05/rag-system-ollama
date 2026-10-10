@@ -1,4 +1,4 @@
-"""P2: 문서 분석 카드 렌더 테스트 (BuildState 우선 + 레거시 폴백)."""
+"""P2: 문서 분석 카드 렌더 테스트 (BuildState 단일 진실원천, 3B)."""
 
 from __future__ import annotations
 
@@ -16,7 +16,9 @@ from core.session import SessionManager
 
 @contextmanager
 def _mock_st():
-    with patch("ui.components.chat_build.st") as mock_st:
+    import ui.components.doc_analysis.panel as panel_mod
+
+    with patch.object(panel_mod, "st") as mock_st:
         mock_st.status.return_value.__enter__.return_value = MagicMock()
         mock_st.button.return_value = False
         yield mock_st
@@ -84,32 +86,51 @@ def test_error_card_offers_retry() -> None:
     assert mock_st.button.called
 
 
-def test_legacy_fallback_without_build_state() -> None:
+def test_no_build_state_renders_nothing() -> None:
+    """BuildState 없이는 아무것도 렌더하지 않는다 (3B: 레거시 폴백 삭제)."""
     from ui.components import chat_build as build_mod
 
-    sid = _sid("legacy")
+    sid = _sid("none")
     SessionManager.set("is_building_rag", True, session_id=sid)
     SessionManager.set("last_uploaded_file_name", "old.pdf", session_id=sid)
-    SessionManager.set("rebuild_progress", 10, session_id=sid)
-    SessionManager.set("rebuild_status", "Working...", session_id=sid)
 
     with _mock_st() as mock_st:
         build_mod._render_build_progress_block(sid)
 
-    assert mock_st.status.called
-    assert mock_st.progress.called
+    mock_st.status.assert_not_called()
+    mock_st.progress.assert_not_called()
+
+
+def test_cancelled_card_is_terminal_error_with_retry() -> None:
+    """CANCELLED는 terminal error + 재시도 (2B). 스테퍼/스피너 없음."""
+    from ui.components import chat_build as build_mod
+
+    sid = _sid("cancelled")
+    build = initial_build_state("doc.pdf", "h1")
+    build.phase = BuildPhase.CANCELLED
+    build.pct = 40
+    SessionManager.set("build_state", build, session_id=sid)
+
+    with _mock_st() as mock_st:
+        build_mod._render_build_progress_block(sid)
+
+    assert mock_st.status.call_args.kwargs["state"] == "error"
+    assert mock_st.status.call_args.kwargs["expanded"] is True
+    mock_st.progress.assert_not_called()
+    assert mock_st.button.called
 
 
 def test_stepper_caption_marks() -> None:
-    from ui.components.chat_build import _stepper_caption
+    from ui.components.doc_analysis.viewmodel import stepper_caption
 
-    cap = _stepper_caption(BuildPhase.CHUNKING)
+    cap = stepper_caption(BuildPhase.CHUNKING)
+    assert cap is not None
     assert cap.count("✓") == 1
     assert "▸" in cap
     assert "○" in cap
-    done_cap = _stepper_caption(BuildPhase.DONE)
-    assert "▸" not in done_cap
-    assert "○" not in done_cap
+    assert stepper_caption(BuildPhase.DONE) is None
+    assert stepper_caption(BuildPhase.ERROR) is None
+    assert stepper_caption(BuildPhase.CANCELLED) is None
 
 
 def test_no_build_state_no_file_renders_nothing() -> None:

@@ -184,7 +184,6 @@ class TestErrorRecoveryCTA:
         """
         import inspect
 
-        from ui.components import chat_build
         from ui.components.chat_build import get_build_error_actions
 
         # 빌드 오류 재시도 페이로드 구조 검증
@@ -198,16 +197,13 @@ class TestErrorRecoveryCTA:
         assert build_error_msg.get("retry_kind") == "rebuild"
         assert build_error_msg.get("retryable") is True
 
-        # 렌더 경로에 실제 Retry 버튼이 존재해야 한다 (카드/레거시 양 경로).
-        card_source = inspect.getsource(chat_build._render_build_card)
-        legacy_source = inspect.getsource(chat_build._render_build_legacy_block)
-        assert "retry" in card_source.lower(), (
+        # 렌더 경로에 실제 Retry 버튼이 존재해야 한다 (단일 패널, 3B).
+        import ui.components.doc_analysis.panel as panel_mod
+
+        panel_source = inspect.getsource(panel_mod.render_document_panel)
+        assert "retry" in panel_source.lower(), (
             "빌드 오류 렌더 경로에 Retry 버튼이 없다: "
-            "_render_build_card에 재시도 CTA가 필요하다."
-        )
-        assert "retry" in legacy_source.lower(), (
-            "빌드 오류 렌더 경로에 Retry 버튼이 없다: "
-            "_render_build_legacy_block에 재시도 CTA가 필요하다."
+            "render_document_panel에 재시도 CTA가 필요하다."
         )
 
     def test_error_preserves_partial_content(self) -> None:

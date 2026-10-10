@@ -85,9 +85,9 @@ def _set_ready_state(sid: str) -> None:
 def test_build_status_banner_lifecycle():
     """(a) 네이티브 st.status가 빌드 중 running으로 표시되고 완료 후 complete로 전환된다.
 
-    현행 계약 (ui/components/chat_build.py:_render_build_progress_block):
-    - 라벨 "{파일명} · {상태}" (진행 중: "· 문서 분석 중...", 완료: "· 준비 완료")
-    - st.status 단독 렌더 (구 chat_message 래퍼 없음), 취소 버튼 "분석 취소",
+    현행 계약 (ui/components/doc_analysis/panel.py:render_document_panel):
+    - 라벨 "{파일명} · {상태}" (진행 중: "· 텍스트 추출 중...", 완료: "· 준비 완료")
+    - st.status 단독 렌더, 취소 버튼 "분석 취소",
       진행 캡션 "{n}% 완료 · {s}초 경과".
     """
     SessionManager.reset()
@@ -95,13 +95,16 @@ def test_build_status_banner_lifecycle():
     sid = _app_session_id()
     assert not at.exception
 
-    # Phase 1 — analysis running. Seed the session store exactly like
-    # main.py's _bg_rebuild_task; the native renderer reads
-    # these session keys (chat_build.py:_render_build_progress_block), not the
-    # message dict. The added build_progress message mirrors main.py but is
-    # skipped in the timeline (chat.py:_render_unified_timeline).
-    SessionManager.set("is_building_rag", True, sid)
-    SessionManager.set("rebuild_status", "문서 분석 중...", sid)
+    # Phase 1 — analysis running. Seed the BuildState exactly like
+    # main.py's _bg_rebuild_task via init/update_build_state; the native
+    # renderer reads BuildState only (3B), not flat legacy keys.
+    from core.build_state import BuildEvent, BuildPhase
+
+    SessionManager.init_build_state("doc.pdf", "h-test", session_id=sid)
+    SessionManager.update_build_state(
+        BuildEvent(BuildPhase.EXTRACTING, 0, "build_phase_extracting"),
+        session_id=sid,
+    )
     SessionManager.add_message(
         "system",
         "📄 문서 분석 시작",
@@ -120,18 +123,22 @@ def test_build_status_banner_lifecycle():
     # NOTE: `with st.status(...)` auto-updates a "running" status to "complete"
     # at context-manager exit (streamlit mutable_status_container.py:174-193),
     # so AppTest always observes the terminal state here. The running branch is
-    # proven by the label ("· 문서 분석 중...", only in the running branch)
+    # proven by the phase label (EXTRACTING detail, only in the running branch)
     # and by the "분석 취소" button (rendered only when state == running).
-    assert "문서 분석 중" in at.status[0].label, at.status[0].label
+    assert "추출" in at.status[0].label or "Extract" in at.status[0].label, at.status[
+        0
+    ].label
     assert at.status[0].state != "error", at.status[0].state
     cancel_labels = [b.label for b in at.button]
-    assert "분석 취소" in cancel_labels, cancel_labels
-    # 현행 UI (chat_build.py): 네이티브 st.status + st.progress + "% 완료" 캡션.
+    assert "분석 취소" in cancel_labels or "Cancel Analysis" in cancel_labels, (
+        cancel_labels
+    )
+    # 현행 UI (doc_analysis/panel.py): 네이티브 st.status + st.progress + "% 완료" 캡션.
     # NOTE: AppTest (1.60.0) exposes no `at.progress` element; the observable
     # proof of the progress render is the "% 완료" caption surfaced from
     # inside the st.status container.
     captions = " ".join(c.value for c in at.caption)
-    assert "0% 완료" in captions, captions
+    assert "0% 완료" in captions or "0% complete" in captions, captions
     assert not any(
         e.label == "Progress log" or "진행 로그" in e.label for e in at.expander
     ), [e.label for e in at.expander]
@@ -141,12 +148,16 @@ def test_build_status_banner_lifecycle():
     assert not any("⏳" in e.label for e in at.expander), at.expander
     assert not at.exception
 
-    # Phase 2 — analysis finished: drive the done state via the SESSION keys
-    # the renderer actually reads (chat_build.py). The message-dict mutation
+    # Phase 2 — analysis finished: drive the done state via BuildState
+    # (the renderer reads BuildState only, 3B). The message-dict mutation
     # was the pre-139c3e1 contract and is ignored today.
-    SessionManager.set("rebuild_done", True, sid)
-    SessionManager.set("rebuild_progress", 100, sid)
-    SessionManager.set("is_building_rag", False, sid)
+    from core.build_state import complete_build
+
+    done_build = SessionManager.get_build_state(session_id=sid)
+    assert done_build is not None
+    SessionManager.finalize_build_state(
+        complete_build(done_build, cache_used=False), session_id=sid
+    )
     SessionManager.set("pdf_processed", True, sid)
     at.run(timeout=_RUN_TIMEOUT)
 

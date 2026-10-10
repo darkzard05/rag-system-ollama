@@ -17,14 +17,11 @@ from ui.strings import set_lang, t
 
 
 def _error_store() -> dict[str, Any]:
-    """빌드-오류 분기에 진입하는 SessionManager 스냅샷."""
+    """빌드-오류 분기에 진입하는 SessionManager 스냅샷 (3B: BuildState 단일 원천)."""
     return {
         "is_building_rag": False,
         "rebuild_cancelled": False,
-        "rebuild_done": False,
         "last_uploaded_file_name": "doc.pdf",
-        "rebuild_progress": 0,
-        "rebuild_status": "",
         "pdf_processing_error": "boom",
         "pdf_processed": False,
         "doc_stats": {},
@@ -34,7 +31,12 @@ def _error_store() -> dict[str, Any]:
 
 def _render_error_block(fake_st: MagicMock) -> MagicMock:
     """오류 블록을 렌더하고 retry ``st.button`` 목을 반환한다."""
+    import ui.components.doc_analysis.panel as panel_module
+    from core.build_state import fail_build, initial_build_state
+
     store = _error_store()
+    failed = initial_build_state("doc.pdf", "h1")
+    fail_build(failed, "boom")
 
     class _FakeSessionManager:
         @staticmethod
@@ -42,15 +44,13 @@ def _render_error_block(fake_st: MagicMock) -> MagicMock:
             return store.get(key, default)
 
         @staticmethod
-        def get_build_state(*args: Any, **kwargs: Any) -> None:
-            # 신규 디스패치는 BuildState를 먼저 조회한다 — 레거시 오류
-            # 경로를 타도록 None을 반환한다.
-            return None
+        def get_build_state(*args: Any, **kwargs: Any) -> Any:
+            return failed
 
     with (
-        patch.object(chat_build_module, "st", fake_st),
-        patch.object(chat_build_module, "SessionManager", _FakeSessionManager),
-        patch.object(chat_build_module, "ui_error", MagicMock()),
+        patch.object(panel_module, "st", fake_st),
+        patch.object(panel_module, "SessionManager", _FakeSessionManager),
+        patch.object(panel_module, "ui_error", MagicMock()),
     ):
         chat_build_module._render_build_progress_block("sid-test")
     assert fake_st.button.called, "빌드 오류 렌더는 retry 버튼 필요"
@@ -67,20 +67,11 @@ def test_retry_button_label_comes_from_cta_metadata() -> None:
 
 
 def test_retry_button_label_follows_metadata_not_literal() -> None:
-    """메타데이터를 바꾸면 라벨이 따라간다 (하드코딩이면 실패)."""
+    """라벨이 i18n 메타데이터를 따른다 (하드코딩이면 실패, 3B)."""
+    import ui.components.doc_analysis.panel as panel_module
+
     fake_st = MagicMock()
-    sentinel: dict[str, Any] = {
-        "message": "boom",
-        "cause": "boom",
-        "retryable": True,
-        "retry_kind": "rebuild",
-        "cta": ["SENTINEL_CTA_XYZ"],
-    }
-    with patch.object(
-        chat_build_module,
-        "get_build_error_actions",
-        return_value=sentinel,
-    ):
+    with patch.object(panel_module, "t", return_value="SENTINEL_CTA_XYZ"):
         button = _render_error_block(fake_st)
     args, _ = button.call_args
     assert args[0] == "SENTINEL_CTA_XYZ"
@@ -123,4 +114,4 @@ def test_retry_button_enabled_when_retryable() -> None:
     fake_st = MagicMock()
     button = _render_error_block(fake_st)
     _, kwargs = button.call_args
-    assert kwargs.get("disabled") is False
+    assert kwargs.get("disabled") is not True

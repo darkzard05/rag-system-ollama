@@ -57,6 +57,7 @@ rag-system-ollama/
 - **Formatting**: Strictly `ruff` (Double quotes, 88 chars).
 - **Typing**: Mandatory type annotations for all signatures (`mypy`).
 - **Imports**: Sorted via `ruff`. Lazy imports for heavy modules (`torch`, `fitz`).
+- **Commits**: Commit messages must always be in English.
 
 ## ANTI-PATTERNS (THIS PROJECT)
 - **No Bare Excepts**: Never use `except: pass`. Use specific exceptions from `src/common/exceptions.py`.
