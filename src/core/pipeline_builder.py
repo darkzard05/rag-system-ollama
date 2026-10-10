@@ -6,6 +6,7 @@ RAGSystem에서 파이프라인 구축 및 실행 설정 책임을 분리하여 
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import copy
 import logging
 import time
@@ -35,6 +36,24 @@ from core.session import SessionManager
 from services.optimization.caching_optimizer import get_cache_manager
 
 logger = logging.getLogger(__name__)
+
+
+def _warmup_faiss_import() -> None:
+    """FAISS/torch 첫회 import 비용을 선행 로드한다 (P3 cold 5s 회피).
+
+    예외는 무시한다 — 실제 생성 시점에 정상 경로로 재시도된다.
+    """
+    try:
+        import faiss  # noqa: F401
+    except Exception as e:
+        logger.debug(f"[RAG] [INDEX] FAISS 프리로드 스킵: {e}")
+    try:
+        import torch  # noqa: F401
+
+        if torch.cuda.is_available():
+            torch.cuda.get_device_properties(0)
+    except Exception as e:
+        logger.debug(f"[RAG] [INDEX] torch 프리로드 스킵: {e}")
 
 
 # --- 모델 프리로드 (1회성, 비차단) ---
@@ -287,6 +306,12 @@ class PipelineBuilder:
 
         start_time = time.time()
         logger.debug(f"[RAG] [INDEX] 파이프라인 구축 시작: {file_name}")
+        # Phase 0 계측: 단계별 wall-time 분리 (합계≒전체 검증용)
+        _t_extract_ms = 0.0
+        _t_chunk_ms = 0.0
+        _t_faiss_ms = 0.0
+        _t_bm25_ms = 0.0
+        _t_register_ms = 0.0
 
         emb_model_name = getattr(
             embedder, "model", getattr(embedder, "model_name", "unknown")
@@ -325,6 +350,14 @@ class PipelineBuilder:
         def _extract_progress(pct: int, detail: str = "") -> None:
             _report(BuildPhase.EXTRACTING, pct, detail or "Extracting text...")
 
+        _t0 = time.perf_counter()
+        # P3: FAISS/torch import를 추출과 중첩 — cold 첫회 5s를 크리티컬
+        # 패스에서 제거한다 (추출 10s+와 오버랩).
+        _faiss_warmup: asyncio.Task[None] | None = None
+        try:
+            _faiss_warmup = asyncio.create_task(asyncio.to_thread(_warmup_faiss_import))
+        except RuntimeError:
+            _faiss_warmup = None
         documents = await load_pdf_docs(
             file_path,
             file_name,
@@ -332,6 +365,7 @@ class PipelineBuilder:
             session_id=self.session_id,
             file_hash=file_hash,
         )
+        _t_extract_ms = (time.perf_counter() - _t0) * 1000.0
         if not documents:
             raise EmptyPDFError()
 
@@ -342,9 +376,11 @@ class PipelineBuilder:
             "문맥 최적화 및 청크 분할 중...", session_id=self.session_id
         )
         _report(BuildPhase.CHUNKING, 45, "Splitting documents...")
+        _t0 = time.perf_counter()
         doc_splits, vectors = await split_documents(
             documents, embedder=embedder, session_id=self.session_id
         )
+        _t_chunk_ms = (time.perf_counter() - _t0) * 1000.0
         if not doc_splits:
             raise InsufficientChunksError()
 
@@ -357,16 +393,36 @@ class PipelineBuilder:
             "지식 베이스(Vector Index) 생성 중...", session_id=self.session_id
         )
         _report(BuildPhase.INDEXING, 60, "Building vector index...")
-        vector_store_future = asyncio.to_thread(
-            create_vector_store,
-            doc_splits,
-            embedder,
-            vectors=vectors,
-            session_id=self.session_id,
-        )
-        bm25_future = asyncio.to_thread(create_bm25_retriever, doc_splits)
+
+        if _faiss_warmup is not None:
+            # 추출과 중첩된 import 확정 (실패해도 생성 시점에 재시도됨)
+            with contextlib.suppress(Exception):
+                await _faiss_warmup
+
+        async def _timed_faiss() -> Any:
+            t0 = time.perf_counter()
+            try:
+                return await asyncio.to_thread(
+                    create_vector_store,
+                    doc_splits,
+                    embedder,
+                    vectors=vectors,
+                    session_id=self.session_id,
+                )
+            finally:
+                nonlocal _t_faiss_ms
+                _t_faiss_ms = (time.perf_counter() - t0) * 1000.0
+
+        async def _timed_bm25() -> Any:
+            t0 = time.perf_counter()
+            try:
+                return await asyncio.to_thread(create_bm25_retriever, doc_splits)
+            finally:
+                nonlocal _t_bm25_ms
+                _t_bm25_ms = (time.perf_counter() - t0) * 1000.0
+
         vector_store, bm25_retriever = await asyncio.gather(
-            vector_store_future, bm25_future
+            _timed_faiss(), _timed_bm25()
         )
 
         _report(BuildPhase.INDEXING, 68, "Vector index built")
@@ -376,6 +432,7 @@ class PipelineBuilder:
 
         # 6. 등록 및 최종화 (캐시 저장 전에 수행 — 실패 시 캐시 미저장)
         _report(BuildPhase.REGISTERING, 80, "Registering retrievers...")
+        _t0 = time.perf_counter()
         await self._register_and_finalize(
             file_hash,
             vector_store,
@@ -384,6 +441,7 @@ class PipelineBuilder:
             fresh_build=True,
             on_event=on_event,
         )
+        _t_register_ms = (time.perf_counter() - _t0) * 1000.0
 
         # 7. 캐시 저장 (엔진 등록 성공 후에만 저장)
         if ENABLE_VECTOR_CACHE:
@@ -392,6 +450,17 @@ class PipelineBuilder:
         duration = time.time() - start_time
         logger.info(
             f"[RAG] [INDEX] 파이프라인 구축 완료: {file_name} ({duration:.2f}s)"
+        )
+        logger.info(
+            "[RAG] [INDEX][TIMING] extract_ms=%.1f chunk_ms=%.1f "
+            "faiss_ms=%.1f bm25_ms=%.1f register_ms=%.1f total_s=%.2f chunks=%d",
+            _t_extract_ms,
+            _t_chunk_ms,
+            _t_faiss_ms,
+            _t_bm25_ms,
+            _t_register_ms,
+            duration,
+            len(doc_splits),
         )
         return f"'{file_name}' 분석 및 신규 인덱싱 완료", False
 

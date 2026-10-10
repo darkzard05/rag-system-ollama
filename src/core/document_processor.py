@@ -4,6 +4,7 @@ PyMuPDF4LLM을 사용하여 초고속으로 구조적 마크다운을 추출하�
 """
 
 import asyncio
+import contextlib
 import logging
 import os
 import re
@@ -109,6 +110,157 @@ def _normalize_markdown_bold_dropcaps(markdown: str) -> str:
     if not markdown:
         return markdown
     return _RE_BOLD_INITIAL.sub(r"\1", markdown)
+
+
+def _parallel_extract_enabled() -> bool:
+    """페이지 병렬 추출 허용 여부 (env RAG_PARALLEL_EXTRACT=0이면 강제 순차)."""
+    return os.environ.get("RAG_PARALLEL_EXTRACT", "1") != "0"
+
+
+def _extract_markdown_range(
+    file_path: str,
+    pages: list[int],
+    *,
+    extract_words: bool,
+    margins: list,
+    table_strategy: str,
+    graphics_limit: int,
+    fontsize_limit: int,
+    ignore_code: bool,
+    write_images: bool,
+) -> list:
+    """페이지 범위 단위 PyMuPDF4LLM 추출 워커 (스레드별 자체 핸들).
+
+    ``pages``는 0-based 페이지 번호 리스트. 실패 시 예외를 그대로 전달해
+    호출부가 해당 범위를 C-Engine 단건 추출로 폴백한다.
+    """
+    import pymupdf4llm
+
+    with open_pdf_document(file_path) as doc:
+        chunks: Any = pymupdf4llm.to_markdown(
+            doc,
+            pages=pages,
+            page_chunks=True,
+            extract_words=extract_words,
+            table_strategy=table_strategy,
+            graphics_limit=graphics_limit,
+            fontsize_limit=fontsize_limit,
+            ignore_code=ignore_code,
+            write_images=write_images,
+            margins=margins,
+        )
+    if isinstance(chunks, list):
+        for chunk in chunks:
+            if isinstance(chunk, dict) and isinstance(chunk.get("text"), str):
+                chunk["text"] = _normalize_markdown_bold_dropcaps(chunk["text"])
+    return chunks if isinstance(chunks, list) else []
+
+
+def _split_page_ranges(total_pages: int, workers: int) -> list[list[int]]:
+    """페이지를 워커 수만큼 균등 분할 (순서 보장, 빈 범위 제외)."""
+    workers = max(1, min(workers, total_pages))
+    base, extra = divmod(total_pages, workers)
+    ranges: list[list[int]] = []
+    start = 0
+    for i in range(workers):
+        size = base + (1 if i < extra else 0)
+        if size <= 0:
+            continue
+        ranges.append(list(range(start, start + size)))
+        start += size
+    return ranges
+
+
+def _extract_markdown_parallel(
+    file_path: str,
+    total_pages: int,
+    *,
+    extract_words: bool,
+    margins: list,
+    table_strategy: str,
+    graphics_limit: int,
+    fontsize_limit: int,
+    ignore_code: bool,
+    write_images: bool,
+    on_range_done: Callable[[int, int], Any] | None = None,
+) -> tuple[list | None, list[int]]:
+    """페이지 범위 병렬 추출. (병합 리스트/None, OCR 의심 범위 인덱스) 반환.
+
+    범위 단위 실패는 None 마커로 남겨 호출부가 C-Engine 폴백으로 메운다
+    (하이브리드 동등성 게이트: 표 깨짐 의심 범위는 순차 재추출과 동등).
+    """
+    import time as _time
+
+    max_workers = min(total_pages, os.cpu_count() or 4) or 1
+    ranges = _split_page_ranges(total_pages, max_workers)
+    ordered: list[Any] = [None] * len(ranges)
+    range_ms: dict[int, float] = {}
+    failed = False
+    t0 = _time.perf_counter()
+    with ThreadPoolExecutor(max_workers=len(ranges)) as executor:
+        future_to_idx = {
+            executor.submit(
+                _extract_markdown_range,
+                file_path,
+                pages,
+                extract_words=extract_words,
+                margins=margins,
+                table_strategy=table_strategy,
+                graphics_limit=graphics_limit,
+                fontsize_limit=fontsize_limit,
+                ignore_code=ignore_code,
+                write_images=write_images,
+            ): i
+            for i, pages in enumerate(ranges)
+        }
+        range_start: dict[int, float] = {
+            i: _time.perf_counter() for i in range(len(ranges))
+        }
+        for done, future in enumerate(as_completed(future_to_idx), start=1):
+            idx = future_to_idx[future]
+            range_ms[idx] = (_time.perf_counter() - range_start[idx]) * 1000.0
+            try:
+                ordered[idx] = future.result()
+            except Exception as e:
+                failed = True
+                ordered[idx] = None
+                logger.warning(
+                    f"[RAG] [PDF] 병렬 범위 {idx} 추출 실패 — C-Engine 폴백: {e}"
+                )
+            if on_range_done is not None:
+                with contextlib.suppress(Exception):
+                    on_range_done(done, len(ranges))
+    dt_ms = (_time.perf_counter() - t0) * 1000.0
+    # P1-2: OCR 의심 범위 가시화 — 중앙값의 3배 초과 범위를 지연으로 표시.
+    # pymupdf4llm은 OCR 사용 페이지를 구조적으로 노출하지 않으므로,
+    # 범위 소요시간 분산으로 프록시한다 (텍스트 페이지는 수백ms, OCR은 수 초).
+    slow_ranges: list[int] = []
+    if range_ms:
+        median_ms = sorted(range_ms.values())[len(range_ms) // 2]
+        if median_ms > 0:
+            slow_ranges = [idx for idx, ms in range_ms.items() if ms > median_ms * 3.0]
+    logger.info(
+        "[RAG] [PDF][TIMING] parallel_extract_ms=%.1f ranges=%d pages=%d "
+        "failed=%s slow_ranges=%s",
+        dt_ms,
+        len(ranges),
+        total_pages,
+        failed,
+        slow_ranges,
+    )
+    if any(r is None for r in ordered):
+        return None, slow_ranges
+    merged: list = []
+    for part in ordered:
+        merged.extend(part if isinstance(part, list) else [])
+    # 동등성 게이트: 페이지 수 불일치면 전체 폴백 (표 분할 의심 포함)
+    if len(merged) != total_pages:
+        logger.warning(
+            "[RAG] [PDF] 병렬 결과 페이지 수 불일치 "
+            f"(got={len(merged)} expected={total_pages}) — 순차 폴백"
+        )
+        return None, slow_ranges
+    return merged, slow_ranges
 
 
 def _extract_markdown_via_thread(
@@ -241,17 +393,58 @@ async def load_pdf_docs(
                 do_extract_words = HYDRATION_MODE != "none"
 
                 try:
-                    chunks = await asyncio.to_thread(
-                        _extract_markdown_via_thread,
-                        file_path,
-                        extract_words=do_extract_words,
-                        margins=target_margins,
-                        table_strategy=table_strategy,
-                        graphics_limit=PARSING_CONFIG.get("graphics_limit", 5000),
-                        fontsize_limit=PARSING_CONFIG.get("fontsize_limit", 3),
-                        ignore_code=PARSING_CONFIG.get("ignore_code", False),
-                        write_images=PARSING_CONFIG.get("write_images", False),
-                    )
+                    parallel_ok = _parallel_extract_enabled() and total_pages > 4
+                    if parallel_ok:
+                        # P1-1: 페이지 범위 병렬 추출 (워커별 자체 핸들).
+                        # 범위 실패·페이지 수 불일치 시 None → 순차 폴백
+                        # (하이브리드 동등성 게이트).
+                        def _range_progress(done: int, total: int) -> None:
+                            emit_progress(
+                                on_progress,
+                                _extraction_progress_pct(done, total),
+                                detail=f"Parallel range {done}/{total}",
+                            )
+
+                        chunks = await asyncio.to_thread(
+                            _extract_markdown_parallel,
+                            file_path,
+                            total_pages,
+                            extract_words=do_extract_words,
+                            margins=target_margins,
+                            table_strategy=table_strategy,
+                            graphics_limit=PARSING_CONFIG.get("graphics_limit", 5000),
+                            fontsize_limit=PARSING_CONFIG.get("fontsize_limit", 3),
+                            ignore_code=PARSING_CONFIG.get("ignore_code", False),
+                            write_images=PARSING_CONFIG.get("write_images", False),
+                            on_range_done=_range_progress,
+                        )
+                        # P1-2: OCR 의심 범위 배지 — 느린 범위(OCR 프록시)가
+                        # 있으면 상태 로그에 가시화한다.
+                        _slow: list[int] = []
+                        if isinstance(chunks, tuple):
+                            chunks, _slow = chunks
+                        if _slow:
+                            SessionManager.add_status_log(
+                                f"일부 구간 처리 지연 (OCR 의심 {len(_slow)}개 범위) — "
+                                "해당 구간 포함 인덱싱을 계속합니다.",
+                                session_id=session_id,
+                            )
+                    else:
+                        chunks = None
+                    if chunks is None:
+                        if parallel_ok:
+                            logger.info("[RAG] [PDF] 병렬 추출 폴백 — 순차 추출로 전환")
+                        chunks = await asyncio.to_thread(
+                            _extract_markdown_via_thread,
+                            file_path,
+                            extract_words=do_extract_words,
+                            margins=target_margins,
+                            table_strategy=table_strategy,
+                            graphics_limit=PARSING_CONFIG.get("graphics_limit", 5000),
+                            fontsize_limit=PARSING_CONFIG.get("fontsize_limit", 3),
+                            ignore_code=PARSING_CONFIG.get("ignore_code", False),
+                            write_images=PARSING_CONFIG.get("write_images", False),
+                        )
                 except Exception as second_error:
                     # 3차 시도: ONNXRuntimeError 등 예측 모델 라이브러리 충돌 시 폴백 안전 장치 가동
                     logger.warning(
