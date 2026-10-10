@@ -116,9 +116,11 @@ def run_in_background_worker(coro: Awaitable[Any], session_id: str) -> None:
         return await coro
 
     def _on_complete(future):
+        worker_error: Exception | None = None
         try:
             future.result()
         except Exception as e:
+            worker_error = e
             logger.error(f"Background worker error: {e}", exc_info=True)
 
         if ctx and ctx.session_id:
@@ -132,9 +134,10 @@ def run_in_background_worker(coro: Awaitable[Any], session_id: str) -> None:
                         session_info.session.request_rerun(None)
             except Exception as e:
                 # rerun 재요청 실패 시 입력창이 영구 비활성화되지 않도록
-                # 세션 플래그를 정리한다(INT-입력동결). 빌드 진행 바는
-                # 전용 폴링 fragment(_render_build_progress_fragment, 1.5초)가
-                # 플래그를 읽어 갱신하므로, 여기서 플래그를 내려주면
+                # 세션 플래그를 정리한다(INT-입력동결). D4: 조용한 정상 위장을
+                # 막기 위해 실패를 상태 로그에 남겨 사용자에게 표면화한다.
+                # 빌드 진행 바는 폴링 fragment(_render_build_progress_fragment,
+                # 1초)가 플래그를 읽어 갱신하므로, 여기서 플래그를 내려주면
                 # 다음 폴링에서 정상 상태로 복구된다.
                 logger.error(f"Background worker rerun failed: {e}", exc_info=True)
                 try:
@@ -144,8 +147,27 @@ def run_in_background_worker(coro: Awaitable[Any], session_id: str) -> None:
                     SessionManager.set("is_building_rag", False, ctx.session_id)
                     SessionManager.set("is_swapping_model", False, ctx.session_id)
                     SessionManager.set("is_generating_answer", False, ctx.session_id)
+                    detail = f"{type(e).__name__}: {e}"[:200]
+                    SessionManager.add_status_log(
+                        "백그라운드 작업 완료 후 화면 갱신에 실패했습니다. "
+                        f"페이지를 새로고침해 주세요. ({detail})",
+                        session_id=ctx.session_id,
+                    )
                 except Exception as inner:  # noqa: BLE001 - 복구 실패는 로그만
                     logger.error(f"Flag recovery failed: {inner}", exc_info=True)
+        if worker_error is not None and ctx and ctx.session_id:
+            # D4: 워커 본체 실패도 로그에만 두지 않고 상태 로그로 표면화한다.
+            try:
+                from core.session import SessionManager
+
+                SessionManager.set_session_id(ctx.session_id)
+                SessionManager.add_status_log(
+                    "백그라운드 작업 중 오류가 발생했습니다: "
+                    f"{str(worker_error)[:200]}",
+                    session_id=ctx.session_id,
+                )
+            except Exception as inner:  # noqa: BLE001 - 표면화 실패는 로그만
+                logger.error(f"Error surfacing failed: {inner}", exc_info=True)
 
     future = AsyncWorker().submit(_with_session())
     future.add_done_callback(_on_complete)

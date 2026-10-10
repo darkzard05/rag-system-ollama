@@ -120,7 +120,13 @@ class TestErrorRecoveryCTA:
             def add_message(
                 role: str, content: str, msg_type: str = "general", **kwargs: Any
             ) -> None:
-                msg = {"msg_id": kwargs.pop("msg_id", str(uuid.uuid4())), **kwargs}
+                msg = {
+                    "role": role,
+                    "content": content,
+                    "msg_type": msg_type,
+                    "msg_id": kwargs.pop("msg_id", str(uuid.uuid4())),
+                    **kwargs,
+                }
                 for i, m in enumerate(_messages):
                     if m.get("msg_id") == msg.get("msg_id"):
                         _messages[i].update(msg)
@@ -129,7 +135,7 @@ class TestErrorRecoveryCTA:
 
             @staticmethod
             def get_messages(**kwargs: Any) -> list[dict[str, Any]]:
-                return list(_messages)
+                return [dict(m) for m in _messages]
 
             @staticmethod
             def _acquire_lock(sid: str) -> Any:
@@ -227,7 +233,13 @@ class TestErrorRecoveryCTA:
             def add_message(
                 role: str, content: str, msg_type: str = "general", **kwargs: Any
             ) -> None:
-                msg = {"msg_id": kwargs.pop("msg_id", str(uuid.uuid4())), **kwargs}
+                msg = {
+                    "role": role,
+                    "content": content,
+                    "msg_type": msg_type,
+                    "msg_id": kwargs.pop("msg_id", str(uuid.uuid4())),
+                    **kwargs,
+                }
                 for i, m in enumerate(_messages):
                     if m.get("msg_id") == msg.get("msg_id"):
                         _messages[i].update(msg)
@@ -236,7 +248,7 @@ class TestErrorRecoveryCTA:
 
             @staticmethod
             def get_messages(**kwargs: Any) -> list[dict[str, Any]]:
-                return list(_messages)
+                return [dict(m) for m in _messages]
 
             @staticmethod
             def _acquire_lock(sid: str) -> Any:

@@ -88,10 +88,16 @@ def _drive_turn(sid: str, stream_factory) -> str:
             error_msg = friendly_error_message(exc)
 
     SessionManager.set("is_generating_answer", False, sid)
-    msg = _target_message(sid, msg_id)
-    msg["content"] = accumulated
-    if error_msg is not None:
-        msg["error"] = error_msg
+    # D3: get() 반환은 저장소 복사본이므로 직접 대입으로 영속화되지 않는다.
+    # 동일 msg_id add_message가 제자리 갱신하므로 그 경로로 확정한다.
+    SessionManager.add_message(
+        role="assistant",
+        content=accumulated,
+        msg_type="general",
+        msg_id=msg_id,
+        session_id=sid,
+        **({"error": error_msg} if error_msg is not None else {}),
+    )
     return msg_id
 
 

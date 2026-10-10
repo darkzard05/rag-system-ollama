@@ -48,6 +48,7 @@ released, so the UI layer never participates in the locked critical section.
 
 from __future__ import annotations
 
+import copy
 import logging
 import os
 import threading
@@ -406,45 +407,33 @@ class SessionManager:
     ) -> Any:
         """세션 상태에서 값을 가져옵니다.
 
+        SSoT 우선: 폴백 저장소(``_fallback_sessions``)가 authoritative source이며
+        UI 미러(``_ui_sync``)보다 항상 먼저 조회한다. UI에 아직 미러링되지 않은
+        fresh 쓰기(dirty)가 미러의 stale 값을 덮어쓰는 역전을 방지하기 위한
+        의도적 순서다. 위젯 편집값처럼 UI에만 먼저 존재하는 키는 폴백 miss
+        이후에 UI 어댑터에서 읽는다.
         스레드 안전성: 세션별 락(_acquire_lock)을 전체 읽기 작업 동안
         유지하여 concurrent set()/add_message() 등으로부터 원자적 읽기를 보장합니다.
         잠금 순서: _acquire_lock(sid) → _map_lock (add_message/add_status_log과 일관).
         """
         sid = session_id or cls.get_session_id()
 
-        if create:
-            with cls._acquire_lock(sid):
+        with cls._acquire_lock(sid):
+            state = cls._fallback_sessions.get(sid) if not create else None
+            if create:
                 state = cls._get_state(sid)
-                if key in state:
-                    return cls._copy_value(state[key])
-        else:
-            with cls._acquire_lock(sid):
-                fallback = cls._fallback_sessions.get(sid)
-                if fallback is None:
-                    return default
-                if key in fallback:
-                    return cls._copy_value(fallback[key])
+            if state is not None and key in state:
+                return cls._copy_value(state[key])
 
         if cls._is_streamlit_running():
             try:
                 from streamlit.runtime.scriptrunner import get_script_run_ctx
 
-                if get_script_run_ctx():
-                    # Only prefer the live UI store when an adapter is actually
-                    # attached. Without one the global fallback store remains the
+                if get_script_run_ctx() and cls._ui_sync is not None:
+                    # Only consult the live UI store on fallback miss. Without
+                    # an adapter the global fallback store remains the
                     # authoritative source (e.g. in tests or headless consumers).
-                    if cls._ui_sync is not None:
-                        return cls._ui_sync.read(key, default)
-                    if create:
-                        with cls._acquire_lock(sid):
-                            state = cls._get_state(sid)
-                            if key in state:
-                                return cls._copy_value(state[key])
-                    else:
-                        with cls._acquire_lock(sid):
-                            fallback = cls._fallback_sessions.get(sid)
-                            if fallback is not None and key in fallback:
-                                return cls._copy_value(fallback[key])
+                    return cls._ui_sync.read(key, default)
 
             except (ImportError, RuntimeError, AttributeError) as exc:
                 logger.debug(
@@ -501,19 +490,48 @@ class SessionManager:
                 state.setdefault("_deleted_keys", set()).add(key)
 
     @classmethod
+    def _copy_plain(cls, value: Any) -> Any:
+        """Plain 컨테이너(dict/list/tuple/set + primitives)만 재귀 복사한다.
+
+        엔진/클라이언트/락 같은 불투명 객체는 절대 복사하지 않고 참조를
+        유지한다 — deepcopy는 정체성(``is``)을 깨뜨리고(엔진 재사용 테스트
+        회귀) 비용도 크다. torn-read는 plain 메타데이터(documents 키 목록,
+        metrics, citations)의 별칭에서 오므로 이 층만 끊으면 충분하다.
+        dict 서브클래스(``FriendlyError`` 등)는 재구성 시 동작(``__eq__``)이
+        깨지므로 복사하지 않고 참조를 유지한다.
+        """
+        if type(value) is dict:
+            return {k: cls._copy_plain(v) for k, v in value.items()}
+        if type(value) is list:
+            return [cls._copy_plain(v) for v in value]
+        if type(value) is tuple:
+            return tuple(cls._copy_plain(v) for v in value)
+        if type(value) in (set, frozenset):
+            return type(value)(cls._copy_plain(v) for v in value)
+        return value
+
+    @classmethod
     def _copy_value(cls, value: Any) -> Any:
-        """반환값의 얕은 복사본을 만들어 호출자가 내부 가변 상태를 돌연변이하지
+        """반환값의 복사본을 만들어 호출자가 내부 가변 상태를 돌연변이하지
 
         못하게 합니다. ``get``/``get_messages``는 실제 저장소 객체(리스트/딕트)
         참조를 그대로 반환했고, 백그라운드 ``add_message``가 동일 리스트를 제자리
         변이(append/update)하는 동안 UI 스레드가 순회하면 torn read
-        (``list changed size during iteration``)가 발생했습니다. 리스트는 복사하여
-        호출자 소유로 만듭니다. 요소(dict)는 공유 정체성을 유지합니다(기존 동작).
+        (``list changed size during iteration``)가 발생했습니다. D3: 1레벨
+        복사(``list()``/``dict()``)는 원소 dict(``documents/citations/metrics``)
+        별칭을 남겨 ``current[i].update(msg)``와 UI 순회가 여전히 경합하므로
+        plain 컨테이너 층은 재귀 복사한다. 엔진 등 불투명 객체는 참조 유지
+        (``_copy_plain``) — 정체성 보존 및 비용 회피.
         """
-        if isinstance(value, list):
-            return list(value)
-        if isinstance(value, dict):
-            return dict(value)
+        if isinstance(value, (dict, list, tuple, set, frozenset)):
+            try:
+                return cls._copy_plain(value)
+            except (TypeError, copy.Error):
+                pass
+            if isinstance(value, list):
+                return list(value)
+            if isinstance(value, dict):
+                return dict(value)
         return value
 
     @classmethod

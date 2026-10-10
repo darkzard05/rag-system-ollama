@@ -701,7 +701,9 @@ def _seeded_metrics_text(aux: dict[str, Any], sid: str) -> str:
     return _metrics_caption(metrics, turn_start=t0)
 
 
-def _should_skip_final_rerun(*, cancelled: bool, error_text: str | None) -> bool:
+def _should_skip_final_rerun(
+    *, cancelled: bool, error_text: str | None, pdf_updated: bool = False
+) -> bool:
     """Clean finalize needs no st.rerun (Task3 terminalize, safe subset).
 
     Badges/metrics already painted in-run via the Task2 helpers
@@ -710,8 +712,16 @@ def _should_skip_final_rerun(*, cancelled: bool, error_text: str | None) -> bool
     ``msg_type`` streaming->general conversion for the current ``msg_id``.
     ■ stop (``cancelled``) and error turns still rerun for a confirmed
     render. No fragment infrastructure — single boolean guard only.
+
+    D2 fix: actively changed ``pdf_annotations`` are rendered by
+    ``render_pdf_area`` which already ran earlier in this script run
+    (``ui.render_main_content`` renders PDF before chat). Skipping the
+    rerun would leave fresh highlights invisible until the next user
+    action, so any turn that updated annotations must rerun.
     """
     if cancelled:
+        return False
+    if pdf_updated:
         return False
     return not error_text
 
@@ -840,14 +850,22 @@ def _render_streaming_with_write_stream(
     SessionManager.set("generation_cancel", False, session_id=current_sid)
     _clear_aux_state(current_sid)
     _t_fin = time.perf_counter()
+    # D2: viewer fragment(render_pdf_area)는 이 run 전반부에 이미 실행됐다.
+    # finalize가 pdf_annotations를 실제로 바꾸면 rerun 없이 하이라이트가
+    # 다음 액션까지 invisible이므로 변경 여부를 추적해 rerun을 강제한다.
+    _pdf_before = SessionManager.get("pdf_annotations", None, current_sid)
     _finalize_pdf_side_effects(current_sid, msg_id)
+    _pdf_after = SessionManager.get("pdf_annotations", None, current_sid)
+    _pdf_updated = _pdf_before != _pdf_after
     logger.info("[PERF] finalize took %.3fs", time.perf_counter() - _t_fin)
 
     # Terminalize (Task3 safe subset): clean finalize already painted the
     # final expander/badges/metrics in-run, so skip st.rerun() when the only
     # pending change is msg_type streaming->general for this msg_id. The
     # finalized flag lets the next run know no rerun wall is pending.
-    if _should_skip_final_rerun(cancelled=cancelled, error_text=final_error):
+    if _should_skip_final_rerun(
+        cancelled=cancelled, error_text=final_error, pdf_updated=_pdf_updated
+    ):
         SessionManager.set("stream_finalized_no_rerun", msg_id, session_id=current_sid)
         logger.info(
             "[PERF] rerun skipped msg_id=%s (final already painted in-run)",

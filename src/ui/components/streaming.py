@@ -422,7 +422,7 @@ def consume_stream_into_message(
         SessionManager.set("is_generating_answer", False, session_id=sid)
         SessionManager.add_message(
             "assistant",
-            accumulated,
+            accumulated.strip(),
             msg_type="general",
             msg_id=resolved_id,
             thought=thought,
@@ -435,8 +435,24 @@ def consume_stream_into_message(
         )
         _emit(False)
         result = _target_message_dict(sid, resolved_id)
-        if result is not None and not result.get("content"):
-            result["content"] = accumulated.strip()
+        if result is not None and not result.get("content") and accumulated.strip():
+            # D3: get() 반환은 저장소 복사본이므로 직접 대입은 영속화되지
+            # 않는다. 동일 msg_id add_message가 제자리 갱신하므로 그 경로로
+            # 확정한다 (구 별칭 write-back 대체).
+            SessionManager.add_message(
+                "assistant",
+                accumulated.strip(),
+                msg_type="general",
+                msg_id=resolved_id,
+                thought=thought,
+                documents=documents,
+                metrics=metrics,
+                citations=citations,
+                process_steps=process_steps[-10:],
+                error=friendly_error_message(exc),
+                session_id=sid,
+            )
+            result = _target_message_dict(sid, resolved_id)
         return result
 
     cancelled = bool(SessionManager.get("generation_cancel", False, session_id=sid))

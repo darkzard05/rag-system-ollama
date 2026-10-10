@@ -1,7 +1,8 @@
 """Single st.status renderer for the document analysis panel (1A).
 
 Reads ``BuildState`` only — flat legacy keys are never consulted (3B).
-No polling timer (4A): refresh arrives via worker state-propagation reruns.
+No polling timer: refresh arrives via worker state-propagation reruns,
+plus error surfacing on worker failure (D4, ``async_worker._on_complete``).
 """
 
 from __future__ import annotations

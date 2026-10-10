@@ -67,10 +67,14 @@ def _render_build_card(sid: str, build: Any = None) -> None:
 
 @st.fragment()
 def _render_build_progress_fragment(sid: str) -> None:
-    """빌드 상태 카드 전용 fragment (run_every 없음, 4A).
+    """빌드 상태 카드 전용 fragment (run_every 없음 — 게이트 테스트 고정).
 
     진행 중 갱신은 빌드 워커의 상태 전파 rerun + fragment 내 인터랙션
-    (취소 버튼) rerun으로 전달된다. 완료/취소/에러 상태에서도 카드는
+    (취소 버튼) rerun으로 전달된다. run_every 폴링은 빌드 완료 후 전체
+    rerun 시 스테일 타이머 경고를 유발하므로 재도입하지 않는다
+    (``test_build_progress_fragment_has_no_run_every``). D4: 대신 워커
+    실패 경로의 에러 표면화(``async_worker._on_complete`` 상태 로그)로
+    조용한 멈춤을 방지한다. 완료/취소/에러 상태에서도 카드는
     그대로 남아 기록으로 잔존한다.
     """
     _render_build_progress_block(sid)
