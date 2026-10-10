@@ -33,7 +33,9 @@ async def test_citation_preserved_on_extract_failure(tmp_path: Path) -> None:
         patch.object(
             document_hydrator.coord_cache, "get_coords_batch", return_value={}
         ),
-        patch.object(document_hydrator, "_extract_page_words_sync", return_value=None),
+        patch.object(
+            document_hydrator, "_extract_pages_words_sync", return_value=[None]
+        ),
     ):
         await hydrate_documents([doc])
 
@@ -47,17 +49,19 @@ async def test_full_page_retry_when_bbox_fails(tmp_path: Path) -> None:
     pdf.write_bytes(b"dummy")
     doc = _make_doc(str(pdf), file_hash="h2", page=1, bbox=[0, 0, 100, 100])
 
-    def _extract(path: str, page_num: int, chunk_bbox: object) -> list | None:
-        if chunk_bbox is not None:
-            return None
-        return [("a", 1.0, 2.0, 3.0, 4.0)]
+    # D4: bbox 폴백은 배치 추출 내부에서 수행되므로, 이음새 수준에서는
+    # 최종 성공 좌표 1건을 반환해 인용 보존 계약을 검증한다.
+    def _extract(path: str, requests: list) -> list:
+        assert len(requests) == 1
+        assert requests[0][1] == [0, 0, 100, 100]
+        return [[("a", 1.0, 2.0, 3.0, 4.0)]]
 
     with (
         patch.object(
             document_hydrator.coord_cache, "get_coords_batch", return_value={}
         ),
         patch.object(
-            document_hydrator, "_extract_page_words_sync", side_effect=_extract
+            document_hydrator, "_extract_pages_words_sync", side_effect=_extract
         ),
     ):
         await hydrate_documents([doc])
@@ -78,11 +82,11 @@ async def test_already_hydrated_skipped(tmp_path: Path) -> None:
 
     spy_calls: list = []
 
-    def _spy(path: str, page_num: int, chunk_bbox: object) -> list:
-        spy_calls.append((path, page_num, chunk_bbox))
-        return [("a", 1.0, 2.0, 3.0, 4.0)]
+    def _spy(path: str, requests: list) -> list:
+        spy_calls.append((path, requests))
+        return [[("a", 1.0, 2.0, 3.0, 4.0)] for _ in requests]
 
-    with patch.object(document_hydrator, "_extract_page_words_sync", side_effect=_spy):
+    with patch.object(document_hydrator, "_extract_pages_words_sync", side_effect=_spy):
         await hydrate_documents([doc])
 
     assert spy_calls == []

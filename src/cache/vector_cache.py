@@ -383,7 +383,25 @@ class VectorStoreCache:
             # [R3a-06] index.pkl 대신 JSON으로 직렬화된 docstore 매핑으로 doc_id를
             # 재구성합니다 (legacy 캐시는 기존처럼 uuid4 재생성으로 폴백).
             doc_ids = _reconstruct_doc_ids(self.faiss_index_path, len(doc_splits))
-            new_docstore_docs = dict(zip(doc_ids, doc_splits, strict=False))
+            # D3: 개수 정합성 게이트 — 인덱스 ntotal, 문서 수, doc_id 매핑 수가
+            # 어긋나면 position→문서 매핑이 어긋나 엉뚱한 청크가 인용된다.
+            # 조용히 잘라내지(zip strict=False) 말고 재구축을 유도한다.
+            ntotal = int(getattr(index, "ntotal", -1))
+            if (
+                ntotal < 0
+                or ntotal != len(doc_splits)
+                or len(doc_ids) != len(doc_splits)
+            ):
+                logger.warning(
+                    "[CACHE] 개수 불일치 (ntotal=%s, docs=%d, ids=%d) — "
+                    "캐시를 삭제하지 않고 재구축합니다.",
+                    ntotal,
+                    len(doc_splits),
+                    len(doc_ids),
+                )
+                self._cache_invalid = True
+                return None, None, None
+            new_docstore_docs = dict(zip(doc_ids, doc_splits, strict=True))
             docstore = InMemoryDocstore(new_docstore_docs)
             index_to_docstore_id = dict(enumerate(doc_ids))
 

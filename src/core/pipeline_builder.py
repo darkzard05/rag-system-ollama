@@ -590,11 +590,13 @@ async def prepare_query_config_or_build(
             embedder=embedder,
         )
         result = coordinator.retrievers.get(file_hash)
+    pinned = False
     if result is not None:
         # [R1b-04] get_retrievers(내부 pin) 경유 — 진행 중인 세션의 리트리버를
         # LRU/용량 퇴출(silent eviction)에서 보호해 쿼리마다 재인덱싱되는
         # churn을 방지한다. 해제는 aquery/astream 종료 시 unpin_retrievers
-        # (rag_core.py:154, :224)와 clear_session의 unregister가 담당한다.
+        # (rag_core.py)가 담당한다 — 쿼리 스코프 pin이므로 조건 없이 해제해야
+        # 하며, 단일 문서 보호는 RetrieverPool.check_memory_pressure가 담당한다.
         #
         # [T18-회귀수정] get_retrievers 내부 check_memory_pressure() await 사이
         # unpinned 리소스가 퇴출될 수 있다(메모리 압력 TOCTOU). build_fn을
@@ -604,6 +606,7 @@ async def prepare_query_config_or_build(
         # ((None, None) 분기로 하류가 처리).
         try:
             result = await coordinator.get_retrievers(file_hash, None)
+            pinned = True
         except ValueError:
             result = None
             if pdf_file_path and build_fn is not None:
@@ -615,38 +618,55 @@ async def prepare_query_config_or_build(
                     embedder=embedder,
                 )
                 result = coordinator.retrievers.get(file_hash)
-    vector_store, bm25_shared = result if result else (None, None)
+                if result is not None:
+                    # 재빌드 직후 비-pin get이므로 쿼리 스코프 보호를 위해 명시적 pin.
+                    # 해제는 rag_core finally의 무조건 unpin이 담당한다.
+                    coordinator.retrievers.pin(file_hash)
+                    pinned = True
+    try:
+        vector_store, bm25_shared = result if result else (None, None)
 
-    faiss_ret = SessionManager.get("active_faiss_retriever", session_id=session_id)
-    bm25_ret = SessionManager.get("active_bm25_retriever", session_id=session_id)
-    # [A1-self-heal] 세션 캐시 리트리버가 현재 file_hash와 다르면 폐기 후 재생성.
-    # reset_for_new_file 누락·임베딩 변경 등 어떤 경로로 오염돼도 쿼리 설정 단계에서
-    # 자기 치유된다. 해시 키는 파일 해시에서 파생된 별도 키로 약한 키와 충돌 방지.
-    stored_retriever_hash = SessionManager.get(
-        "active_retriever_hash", session_id=session_id
-    )
-    if stored_retriever_hash is not None and stored_retriever_hash != file_hash:
-        SessionManager.set("active_faiss_retriever", None, session_id=session_id)
-        SessionManager.set("active_bm25_retriever", None, session_id=session_id)
-        SessionManager.delete("active_retriever_hash", session_id=session_id)
-        faiss_ret = None
-        bm25_ret = None
-    if not faiss_ret and vector_store:
-        faiss_ret = vector_store.as_retriever(
-            search_type=RETRIEVER_CONFIG.get("search_type", "similarity"),
-            search_kwargs=RETRIEVER_CONFIG.get("search_kwargs", {"k": 5}),
+        faiss_ret = SessionManager.get("active_faiss_retriever", session_id=session_id)
+        bm25_ret = SessionManager.get("active_bm25_retriever", session_id=session_id)
+        # [A1-self-heal] 세션 캐시 리트리버가 현재 file_hash와 다르면 폐기 후 재생성.
+        # reset_for_new_file 누락·임베딩 변경 등 어떤 경로로 오염돼도 쿼리 설정 단계에서
+        # 자기 치유된다. 해시 키는 파일 해시에서 파생된 별도 키로 약한 키와 충돌 방지.
+        stored_retriever_hash = SessionManager.get(
+            "active_retriever_hash", session_id=session_id
         )
-        SessionManager.set("active_faiss_retriever", faiss_ret, session_id=session_id)
+        if stored_retriever_hash is not None and stored_retriever_hash != file_hash:
+            SessionManager.set("active_faiss_retriever", None, session_id=session_id)
+            SessionManager.set("active_bm25_retriever", None, session_id=session_id)
+            SessionManager.delete("active_retriever_hash", session_id=session_id)
+            faiss_ret = None
+            bm25_ret = None
+        if not faiss_ret and vector_store:
+            faiss_ret = vector_store.as_retriever(
+                search_type=RETRIEVER_CONFIG.get("search_type", "similarity"),
+                search_kwargs=RETRIEVER_CONFIG.get("search_kwargs", {"k": 5}),
+            )
+            SessionManager.set(
+                "active_faiss_retriever", faiss_ret, session_id=session_id
+            )
 
-    bm25_ret = SessionManager.get("active_bm25_retriever", session_id=session_id)
-    if not bm25_ret and bm25_shared:
-        bm25_ret = copy.copy(bm25_shared)
-        SessionManager.set("active_bm25_retriever", bm25_ret, session_id=session_id)
-    if (faiss_ret or bm25_ret) and file_hash:
-        SessionManager.set("active_retriever_hash", file_hash, session_id=session_id)
+        bm25_ret = SessionManager.get("active_bm25_retriever", session_id=session_id)
+        if not bm25_ret and bm25_shared:
+            bm25_ret = copy.copy(bm25_shared)
+            SessionManager.set("active_bm25_retriever", bm25_ret, session_id=session_id)
+        if (faiss_ret or bm25_ret) and file_hash:
+            SessionManager.set(
+                "active_retriever_hash", file_hash, session_id=session_id
+            )
 
-    if bm25_ret:
-        bm25_ret.k = RETRIEVER_CONFIG.get("search_kwargs", {}).get("k", 5)
+        if bm25_ret:
+            bm25_ret.k = RETRIEVER_CONFIG.get("search_kwargs", {}).get("k", 5)
+    except Exception:
+        # D1: pin 후 후속 단계(as_retriever 등)가 실패하면 호출자의
+        # finally가 실행되지 않을 수 있으므로 여기서 선해제해 누수를 방지한다.
+        # (이중 unpin은 BaseResourcePool.unpin이 흡수하므로 안전.)
+        if pinned:
+            coordinator.retrievers.unpin(file_hash)
+        raise
 
     return {
         "configurable": {

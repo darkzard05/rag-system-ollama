@@ -53,11 +53,12 @@ async def test_parallel_hydration_saves_coords_only_for_fresh_pages(
             "get_coords_batch",
             return_value=cache_hits,
         ),
+        # D4: 추출은 파일당 단일 open 배치 1회 — 미스 페이지(1, 3) 순서대로 반환.
         patch.object(
             document_hydrator,
-            "_extract_page_words_sync",
-            return_value=_EXTRACTED,
-        ),
+            "_extract_pages_words_sync",
+            return_value=[_EXTRACTED, _EXTRACTED],
+        ) as mock_batch,
         patch.object(
             document_hydrator.coord_cache,
             "save_coords",
@@ -66,6 +67,7 @@ async def test_parallel_hydration_saves_coords_only_for_fresh_pages(
     ):
         await hydrate_documents([doc])
 
+    assert mock_batch.call_count == 1
     saved_pages = {call.args[1] for call in save_coords.call_args_list}
     assert saved_pages == {1, 3}
     for call in save_coords.call_args_list:
@@ -96,8 +98,8 @@ async def test_parallel_hydration_extraction_failure_does_not_raise(
         ),
         patch.object(
             document_hydrator,
-            "_extract_page_words_sync",
-            return_value=None,
+            "_extract_pages_words_sync",
+            return_value=[None],
         ),
         patch.object(
             document_hydrator.coord_cache,
@@ -120,10 +122,11 @@ async def test_parallel_hydration_keeps_pages_order(tmp_path: Path) -> None:
 
     cache_hits = {2: _CACHED}
 
-    def _slow_first(path: str, page_num: int, chunk_bbox: object) -> list:
-        if page_num == 1:
-            time.sleep(0.05)
-        return _EXTRACTED
+    def _slow_first(path: str, requests: list) -> list:
+        # D4: 배치는 단일 호출이므로 지연 시나리오 대신 요청 순서 보존을 검증한다.
+        time.sleep(0.01)
+        assert [page for page, _bbox in requests] == [1, 3]
+        return [_EXTRACTED, _EXTRACTED]
 
     with (
         patch.object(
@@ -133,7 +136,7 @@ async def test_parallel_hydration_keeps_pages_order(tmp_path: Path) -> None:
         ),
         patch.object(
             document_hydrator,
-            "_extract_page_words_sync",
+            "_extract_pages_words_sync",
             side_effect=_slow_first,
         ),
         patch.object(

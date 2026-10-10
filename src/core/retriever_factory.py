@@ -271,11 +271,18 @@ def _bm25_results_with_scores(retriever: Any, query: str, k: int) -> list[Docume
     top_k_indices = np.argsort(scores)[::-1][:k]
 
     # 3) O(k)로 직접 문서와 점수 주입 (중간 딕셔너리 할당 제거)
+    # D2: 풀 공유 Document를 직접 변이하지 않는다. retriever.docs[idx]는
+    # 리소스 풀의 공용 객체이므로 metadata에 점수를 쓰면 다음 쿼리·다른 세션까지
+    # 오염된다. 점수를 주입한 복사본을 반환한다.
     results = []
     for idx in top_k_indices:
-        doc = retriever.docs[idx]
-        doc.metadata["score"] = float(scores[idx])
-        results.append(doc)
+        src = retriever.docs[idx]
+        results.append(
+            Document(
+                page_content=src.page_content,
+                metadata={**src.metadata, "score": float(scores[idx])},
+            )
+        )
     return results
 
 
@@ -350,9 +357,15 @@ def _faiss_results_with_scores(
         query_vector = query_np[0]
 
     docs_scores = vector_store.similarity_search_with_score_by_vector(query_vector, k=k)
-    for doc, score in docs_scores:
-        doc.metadata["score"] = float(score)
-    return [doc for doc, _score in docs_scores]
+    # D2: FAISS docstore가 반환한 Document도 풀 공유 객체일 수 있으므로
+    # 원본 변이 없이 점수 주입 복사본을 반환한다.
+    return [
+        Document(
+            page_content=doc.page_content,
+            metadata={**doc.metadata, "score": float(score)},
+        )
+        for doc, score in docs_scores
+    ]
 
 
 async def search_faiss_with_scores(

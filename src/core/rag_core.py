@@ -244,9 +244,12 @@ class RAGSystem:
                 "performance": combined_perf,
             }
         finally:
-            # 단일 문서 세션에서는 마지막 문서를 쿼리 사이에 퇴출 가능하게
-            # 풀지 않는다(즉시 재빌드 루프 방지). 다중 문서일 때만 언핀.
-            if len(get_resource_manager().retrievers._pool) > 1:
+            # D1: 쿼리 스코프 pin 균형 — prepare 단계의 get_retrievers pin(+1)은
+            # 쿼리마다 반드시 해제한다. 단일 문서 보호는
+            # RetrieverPool.check_memory_pressure(len<=1 no-evict)가 담당하므로
+            # 여기서 조건부로 유지하면 pin refcount가 쿼리 수만큼 누적되어
+            # clear_session의 unregister가 영원히 실패한다.
+            if file_hash:
                 get_resource_manager().unpin_retrievers(file_hash)
 
     async def astream(self, query: str, model_name: str | None = None):
@@ -334,9 +337,9 @@ class RAGSystem:
                         "일부 참조 문서의 하이라이트 좌표를 불러오지 못했습니다.",
                         session_id=self.session_id,
                     )
-                # 단일 문서 세션에서는 마지막 문서를 쿼리 사이에 퇴출 가능하게
-                # 풀지 않는다(즉시 재빌드 루프 방지). 다중 문서일 때만 언핀.
-                if len(get_resource_manager().retrievers._pool) > 1:
+                # D1: 쿼리 스코프 pin 균형 — prepare 단계의 pin(+1)은 스트림 종료 시
+                # 반드시 해제한다 (단일 문서 no-evict는 check_memory_pressure가 담당).
+                if file_hash:
                     get_resource_manager().unpin_retrievers(file_hash)
 
         return _consumer()

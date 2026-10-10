@@ -67,7 +67,15 @@ def astream_env() -> Iterator[dict[str, Any]]:
     # (무한 churn 방지) 과 구분하기 위해 2개 항목 풀을 세팅한다.
     manager.retrievers._pool = {"doc1": "r1", "doc2": "r2"}
     session_manager = MagicMock()
-    session_manager.get.return_value = None
+
+    # D1: file_hash가 있어야 쿼리 스코프 pin이 존재하고 finally에서 unpin된다.
+    # 그 외 키는 기존처럼 None 반환.
+    def _sm_get(key: str, *args: object, **kwargs: object) -> object:
+        if key == "file_hash":
+            return "testhash"
+        return None
+
+    session_manager.get.side_effect = _sm_get
     session_manager.get_messages.return_value = []
 
     env: dict[str, Any] = {"rag": rag, "breaker": breaker, "manager": manager}
