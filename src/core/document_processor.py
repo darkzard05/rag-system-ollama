@@ -8,7 +8,7 @@ import logging
 import os
 import re
 from collections.abc import Callable
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
 
 from langchain_core.documents import Document
@@ -283,7 +283,9 @@ async def load_pdf_docs(
                             for page_idx in range(total_pages)
                         }
                         # as_completed로 완료 순서와 무관하게 페이지 순서로 재조립
-                        for future in future_to_idx:
+                        for completed, future in enumerate(
+                            as_completed(future_to_idx), start=1
+                        ):
                             page_idx = future_to_idx[future]
                             try:
                                 chunks[page_idx] = future.result()
@@ -298,10 +300,11 @@ async def load_pdf_docs(
                                     "words": [],
                                     "tables": [],
                                 }
-                            # 진행률 콜백은 메인 스레드에서만 호출(스레드 안전)
+                            # 진행률 콜백은 메인 스레드에서만 호출(스레드 안전).
+                            # 완료 건수 기준이라 완료 순서와 무관하게 단조 증가한다.
                             emit_progress(
                                 on_progress,
-                                _extraction_progress_pct(page_idx + 1, total_pages),
+                                _extraction_progress_pct(completed, total_pages),
                                 detail=f"Page {page_idx + 1}/{total_pages}",
                             )
 
