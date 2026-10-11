@@ -82,6 +82,9 @@ UI_STRINGS: dict[str, dict[str, str]] = {
         ),
         # Sidebar (sidebar.py, LANG toggle host — en values mirror the
         # pre-i18n literals so the default LANG="en" render is unchanged)
+        # UX-2 label rules: labels are pure table language (domain terms
+        # PDF/LLM/Ollama stay as-is); no emoji in action buttons
+        # (status/info banners keep theirs); no hybrid "A / B" labels.
         "sidebar_upload_label": "Upload PDF Document",
         "sidebar_settings": "Settings",
         "sidebar_llm_label": "LLM Model Selection",
@@ -94,7 +97,7 @@ UI_STRINGS: dict[str, dict[str, str]] = {
         "sidebar_embedding_label": "Embedding Model Selection",
         "sidebar_new_chat": "New Chat",
         "sidebar_new_chat_help": "Start a new chat, keeping the uploaded documents.",
-        "sidebar_reset": "🗑️ Reset All",
+        "sidebar_reset": "Reset All",
         "sidebar_reset_help": "Delete all conversations and data.",
         "sidebar_reset_title": "Confirm Reset All",
         "sidebar_reset_body": (
@@ -104,8 +107,8 @@ UI_STRINGS: dict[str, dict[str, str]] = {
         "sidebar_cancel": "Cancel",
         "sidebar_confirm_reset": "Reset",
         "sidebar_switching": "⏳ Switching model... Please wait.",
-        "sidebar_language": "Language / 언어",
-        "sidebar_language_help": "Switch the UI language (UI 언어 전환).",
+        "sidebar_language": "Language",
+        "sidebar_language_help": "Switch the UI language.",
         "nav_next": "Next ▶",
         # Ollama error
         "error_ollama_not_running": MSG_ERROR_OLLAMA_NOT_RUNNING,
@@ -197,7 +200,7 @@ UI_STRINGS: dict[str, dict[str, str]] = {
         "sidebar_embedding_label": "임베딩 모델 선택",
         "sidebar_new_chat": "새 대화",
         "sidebar_new_chat_help": "업로드된 문서는 유지하고 새 대화를 시작합니다.",
-        "sidebar_reset": "🗑️ 전체 초기화",
+        "sidebar_reset": "전체 초기화",
         "sidebar_reset_help": "모든 대화와 데이터를 삭제합니다.",
         "sidebar_reset_title": "전체 초기화 확인",
         "sidebar_reset_body": (
@@ -207,8 +210,8 @@ UI_STRINGS: dict[str, dict[str, str]] = {
         "sidebar_cancel": "취소",
         "sidebar_confirm_reset": "초기화 실행",
         "sidebar_switching": "⏳ 모델 전환 중입니다. 잠시만 기다려 주세요.",
-        "sidebar_language": "Language / 언어",
-        "sidebar_language_help": "UI 언어를 전환합니다 (Switch the UI language).",
+        "sidebar_language": "언어",
+        "sidebar_language_help": "UI 언어를 전환합니다.",
         "nav_next": "다음 ➡️",
         "error_ollama_not_running": MSG_ERROR_OLLAMA_NOT_RUNNING,
         "spinner_loading_models": "사용 가능한 모델 목록을 불러오는 중...",
