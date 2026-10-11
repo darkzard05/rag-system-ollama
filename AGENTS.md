@@ -1,7 +1,7 @@
 # PROJECT KNOWLEDGE BASE
 
-**Generated:** 2026-08-09
-**Commit:** a0778fc
+**Generated:** 2026-10-11
+**Commit:** 1a7d3e6
 **Branch:** main
 
 ## OVERVIEW
@@ -12,7 +12,10 @@ GraphRAG-Ollama is a high-performance, local Retrieval-Augmented Generation (RAG
 rag-system-ollama/
 ├── src/
 │   ├── core/       # 🧠 RAG Engine, Semantic Chunker, Graph Builder, Session
+│   │   ├── graph/  # LangGraph split nodes (_retrieval/_grade_verify/_generate/_partial_citations)
+│   │   └── build_state.py  # BuildState SSoT for doc analysis panel
 │   ├── ui/         # 🎨 Streamlit UI (components/, styles/) & Bridge
+│   │   └── components/doc_analysis/  # Doc analysis panel (panel/viewmodel/actions)
 │   ├── api/        # 🌐 API Server & SSE Streaming
 │   ├── common/     # ⚙️ Shared Utilities & Config
 │   ├── cache/      # 💾 Vector & Coordinate Caching
@@ -30,7 +33,9 @@ rag-system-ollama/
 | RAG Pipeline | `src/core/rag_core.py` | `RAGSystem` orchestration flow |
 | Semantic Chunking | `src/core/chunking.py` | `split_documents()` orchestration entry |
 | Pure Splitter | `src/core/semantic_chunker.py` | `EmbeddingBasedSemanticChunker` (header-aware) |
-| Graph Workflow | `src/core/graph_builder.py` | LangGraph nodes + `build_graph()` |
+| Graph Workflow | `src/core/graph/graph_builder.py` | LangGraph nodes + `build_graph()` (split: `_retrieval/_grade_verify/_generate/_partial_citations`) |
+| Build State | `src/core/build_state.py` | `BuildState` SSoT for document analysis panel |
+| Partial Citations | `src/core/graph/_partial_citations.py` | `PartialCitationScanner` for mid-stream `citations_add` |
 | Session State | `src/core/session/manager.py` | `SessionManager` (SSoT, thread-safe) |
 | UI Bridge | `src/ui/bridge.py` | Syncs `SessionManager` ↔ `st.session_state` |
 | UI Layout | `src/ui/ui.py` | Main Streamlit page structure |
@@ -46,8 +51,10 @@ rag-system-ollama/
 | `EmbeddingBasedSemanticChunker` | Class | `src/core/semantic_chunker.py` | Header-aware document splitter |
 | `split_documents` | Function | `src/core/chunking.py` | Chunking orchestration entry |
 | `build_graph` | Function | `src/core/graph_builder.py` | LangGraph state graph construction |
-| `CoordCacheManager` | Class | `src/cache/coord_cache.py` | Manages PDF coordinate caching |
-| `SessionManager` | Class | `src/core/session/manager.py` | Thread-safe state management (import: `from core.session import SessionManager`) |
+| `CoordCacheManager` | Class | `src/cache/coord_cache.py` | Manages PDF coordinate caching + `annotation_memo` TTL table |
+| `BuildState` | Dataclass | `src/core/build_state.py` | Document analysis panel SSoT (`apply_event`, `initial_build_state`) |
+| `PartialCitationScanner` | Class | `src/core/graph/_partial_citations.py` | Mid-stream citation detection for `citations_add` |
+| `SessionManager` | Class | `src/core/session/manager.py` | Thread-safe state management with build-state SSoT, doc-pool copy isolation, tombstone deletes (import: `from core.session import SessionManager`) |
 | `UIBridge` | Class | `src/ui/bridge.py` | Syncs `SessionManager` ↔ Streamlit state |
 | `ResourceManager` | Class | `src/core/resource_manager.py` | LRU model/retriever pools with VRAM pressure eviction |
 | `ModelManager` | Class | `src/core/model_loader.py` | LLM/embedding/flashrank facade |
@@ -107,6 +114,8 @@ pytest tests/unit
 python -m pytest tests/integration/test_pipeline_build_once.py
 # Archived (live Ollama/PDF dependent, not pytest-collected):
 #   python scripts/archive/test_full_pipeline.py
+# Stream tail / citation gates:
+#   python scripts/measure_tail.py && python scripts/verify_citation_tail.py && python scripts/gate_tail.py
 
 # CI also enforces (see .github/workflows/ci.yml)
 bandit -r src/ -ll

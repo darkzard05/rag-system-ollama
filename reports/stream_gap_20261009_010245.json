@@ -1,0 +1,71 @@
+{
+  "tool": "measure_stream_to_citation_gap",
+  "log": {
+    "spans": {
+      "hydration drain": {
+        "n": 1,
+        "mean": 0.0,
+        "max": 0.0
+      },
+      "stream tail flush": {
+        "n": 1,
+        "mean": 0.0,
+        "max": 0.0
+      },
+      "stream post-content stall": {
+        "n": 1,
+        "mean": 0.076,
+        "max": 0.076
+      },
+      "stream max token gap": {
+        "n": 1,
+        "mean": 1.795,
+        "max": 1.795
+      },
+      "consume persist": {
+        "n": 1,
+        "mean": 0.0,
+        "max": 0.0
+      },
+      "join-block msg_id=375ba005-f860-4631-91be-45d0631c946c": {
+        "n": 1,
+        "mean": 0.002,
+        "max": 0.002
+      },
+      "pdf finalize": {
+        "n": 1,
+        "mean": 0.002,
+        "max": 0.002
+      }
+    },
+    "pdf_flags": [
+      {
+        "cache_hit": "True",
+        "prewarmed": "True"
+      }
+    ],
+    "tail_content_ms": {
+      "n": 2,
+      "mean": 68.8,
+      "max": 68.8
+    },
+    "parse_ms": {
+      "n": 1,
+      "mean": 1.9,
+      "max": 1.9
+    },
+    "citation_counts": [
+      5
+    ]
+  },
+  "fitz_bench": {
+    "n_docs": 6,
+    "cold_s": 0.029941799999505747,
+    "warm_s": 0.03182300000480609,
+    "cold_annotations": 10,
+    "warm_annotations": 10,
+    "recompute_s": 0.0006635999961872585,
+    "n_entries": 1
+  },
+  "verdict": "no suspect over threshold (synthetic gap ~0 or log without stall)"
+}

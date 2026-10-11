@@ -24,7 +24,7 @@
 
 ---
 
-## ⚡ Key Highlights (2026-08 Updated)
+## ⚡ Key Highlights (2026-10 Updated)
 
 ### 🚀 **Extreme Performance & Efficiency**
 - **Header-Aware Semantic Chunking:** Beyond simple text splitting, our system respects Markdown headers (`#`, `##`). It prevents context contamination between sections and injects structural metadata (`current_section`) into every chunk.
@@ -37,18 +37,22 @@
 - **Relevant Entity Extraction:** The LLM is strictly instructed to extract key technical entities during the grading phase, ensuring transparency in its reasoning process.
 
 ### 🛡️ **Reliability & Integrity**
-- **129+ unit test files** (plus 29 integration tests) covering Graph Flow, RAG Orchestration, Document Processing, Advanced Citations, concurrency, and streaming.
-- **CI-enforced integrity:** `ruff check`, `ruff format --check`, `mypy src`, `bandit`, `pip-audit`, unit coverage ≥55%, and 29 integration tests (auth/ownership/PDF/SSE).
+- **232 unit test files** (plus 32 integration tests) covering Graph Flow, RAG Orchestration, Document Processing, Advanced Citations, concurrency, and streaming.
+- **CI-enforced integrity:** `ruff check`, `ruff format --check`, `mypy src`, `bandit`, `pip-audit`, unit coverage ≥55%, and 32 integration tests (auth/ownership/PDF/SSE).
 - **Ghosting-Free UI:** Advanced `st.fragment` and `st.empty` placeholder management prevents visual glitches during real-time streaming.
 - **Robust PDF handling:** Corrupt PDFs are rejected upfront on upload; the viewer stays crash-proof and layout-preserved.
 
-### 🆕 Recent Improvements (2026-06 → 08)
+### 🆕 Recent Improvements (2026-06 → 10)
 - **Reasoning extraction:** `models.thinking` (default `true`) enables Ollama native reasoning streams, surfaced in the UI as a native "reasoning expander" with a condensed pipeline summary per answer.
 - **Faster first query:** embedding model, FlashRank ONNX, and the default LLM are preloaded at build time (silently skipped on failure); `num_ctx` raised to 8192.
 - **GPU batch embedding:** the Ollama embedder now picks batch size from available VRAM (`embedding_batch_size: auto`), cutting embedding HTTP round-trips.
 - **Non-blocking cache I/O:** DiskCache operations run on a worker thread (`asyncio.to_thread`) with an incremental size counter and an optional `persist_to_disk=False` fast path.
 - **Streamlit 1.60:** upgrade fixes a pdf-viewer scroll regression; hash-based PDF serving (`/api/v1/pdf/{hash}`) is path-injection-safe with multi-page highlight coordinates.
 - **Eval harness:** `scripts/eval_quality.py` measures P@1/MRR@5/TTFT/tokens-per-sec + LLM judge score per run into `reports/`.
+- **Incremental citations (2026-09 → 10):** streaming now emits `citations_add` events as citations are confirmed mid-stream (`PartialCitationScanner`), merged client-side without waiting for the final answer.
+- **Lean retrieval + coord memo (2026-09 → 10):** FAISS stores lean metadata (coordinates stripped to `CoordCacheManager` + TTL `annotation_memo`); retriever restored to `k=18`, rerank pool `top_k=10`, grading window `grade_top_n=5` (F3 rank-drop fix: citations observed at rank 4–5).
+- **BuildState SSoT + reference prewarm (2026-10):** document analysis panel unified on `BuildState`; reference list prefetches/hydrates non-blocking with order preservation and session-copy isolation.
+- **Stream tail gates (2026-10):** `scripts/measure_tail.py`, `scripts/verify_citation_tail.py`, `scripts/gate_tail.py` track first-token/TTFT/post-stream finalize gaps.
 
 ---
 
@@ -103,8 +107,13 @@ We maintain a strict **Zero-Error Policy**. Run the automated verification suite
 # Run all unit tests
 pytest tests/unit
 
-# Full pipeline integration test
-python scripts/test_full_pipeline.py
+# Full pipeline integration test (archived, live Ollama/PDF dependent, not pytest-collected)
+python scripts/archive/test_full_pipeline.py
+
+# Stream tail / citation gates
+python scripts/measure_tail.py
+python scripts/verify_citation_tail.py
+python scripts/gate_tail.py
 
 # Verify section metadata extraction
 python scripts/verify_section_metadata.py
@@ -113,7 +122,7 @@ python scripts/verify_section_metadata.py
 python scripts/maintenance/verify_integrity.py
 ```
 
-CI enforces unit coverage ≥55% (`--cov-fail-under=55`) and additionally runs `bandit`, `pip-audit`, and the integration tests: `test_rag_integration`, `test_streamlit_ui_lifecycle`, `test_streaming_response`, `test_caching_system`, `test_api_auth_login`, `test_api_pdf_serving`, `test_global_exception_handler`, `test_ownership_hardening`, `test_pdf_library_retention`, `test_stream_error_isolation`, `test_api_endpoints` (29 integration tests total).
+CI enforces unit coverage ≥55% (`--cov-fail-under=55`) and additionally runs `bandit`, `pip-audit`, and the integration tests: `test_rag_integration`, `test_streamlit_ui_lifecycle`, `test_streaming_response`, `test_caching_system`, `test_api_auth_login`, `test_api_pdf_serving`, `test_global_exception_handler`, `test_ownership_hardening`, `test_pdf_library_retention`, `test_stream_error_isolation`, `test_api_endpoints`, `test_incremental_citation_dispatch` (32 integration tests total).
 
 ---
 
@@ -141,9 +150,17 @@ Each run writes `reports/eval_quality_<tag>_<ts>.json` and `.md` with per-questi
 | `models.num_ctx` | 8192 | Model context window (tokens) |
 | `models.thinking` | true | Enable Ollama native reasoning extraction |
 | `models.embedding_batch_size` | auto | Embedding batch size (auto = GPU VRAM-based) |
+| `models.allow_concurrent_inference` | false | T2 load-test gate: effective inference bound stays 1 until load gate passes |
+| `rag.retriever.search_kwargs.k` | 18 | Stage-1 candidate pool (matches `dynamic_top_k.max_candidates`) |
+| `rag.retriever.dynamic_top_k.min_rerank_chars` | 6 | Queries shorter than this skip FlashRank and use RRF scores |
+| `rag.retriever.rerank_top_k` | 10 | Final rerank selection pool |
+| `rag.prompts.grading.grade_top_n` | 5 | Docs passed to grading (widened 3→5: citations observed at rank 4–5) |
 | `rag.parsing.hydration_mode` | precision_clip | PDF coordinate extraction mode for highlighting |
+| `rag.parsing.hydration_drain_timeout_seconds` | 30.0 | Bounded hydration drain upper bound (fail-loud timeout + metric) |
 | `rag.reranker.engine` | auto | Reranker engine: `auto` / `flashrank` / `semantic` |
 | `rag.prompts.grading.min_score_to_skip` | 0.70 (FlashRank) / 0.45 (semantic) | Skip the LLM grade when the max rerank score reaches this (per-engine thresholds) |
+| `rag.prompt_templates.citations.text_span` | ≤200 chars (advisory) | Keep `text_span` under 200 chars; `maxLength: 200` is advisory only in `json_object` mode (not enforced by a validator) |
+| `rag.prompts.generate.generation_validation` | observe-only | S1 telemetry flags (`over_budget_chars: 600`, `regen_floor_chars: 450`, regen OFF) |
 | `global_cache.enable_vector_cache` | true | Enable vector store (indexing results) caching |
 | `ui.timeline_poll_seconds` | 1.0 | Timeline fragment auto-refresh interval (seconds) |
 
@@ -151,4 +168,4 @@ Each run writes `reports/eval_quality_<tag>_<ts>.json` and `.md` with per-questi
 
 ## 📄 License
 MIT License - Developed by **darkzard05**.
-**Last Updated:** 2026-08-26
+**Last Updated:** 2026-10-11

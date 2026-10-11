@@ -1,0 +1,12 @@
+{
+  "parse_s": 17.193,
+  "parse_docs": 20,
+  "parse_chars": 60278,
+  "semantic_chunk_s": 20.27,
+  "semantic_n": 82,
+  "standard_split_s": 0.016,
+  "standard_embed_s": 0.004,
+  "standard_n": 177,
+  "index_s": 0.04,
+  "index_ntotal": 82
+}

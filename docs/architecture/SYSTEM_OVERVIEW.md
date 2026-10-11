@@ -28,20 +28,24 @@ To prevent VRAM exhaustion and reduce loading latency, the system uses a central
 
 ### 2. Session Decoupling & SSoT
 To solve the "State Fragmentation" problem inherent in Streamlit, the system decouples business logic from the UI:
-- **SessionManager (Single Source of Truth)**: A pure Python, thread-safe store (`src/core/session/manager.py`) that maintains session state independent of the UI framework.
+- **SessionManager (Single Source of Truth)**: A pure Python, thread-safe store (`src/core/session/manager.py`) that maintains session state independent of the UI framework. Includes build-state SSoT, doc-pool copy isolation, and tombstone deletes for safe PDF updates.
 - **UIBridge**: A framework-specific observer (`src/ui/bridge.py`) that syncs the `SessionManager` to `st.session_state` using a version-based heartbeat mechanism (`session_version`).
+- **Document Analysis SSoT**: The doc-analysis panel (`src/ui/components/doc_analysis/`) is unified on `BuildState` (`src/core/build_state.py`: `initial_build_state`/`apply_event`), surfaced via `st.status` with throttled progress reruns.
 - **Thread-Safe Propagation**: Uses a `ContextManager` (`src/core/session/context.py`) to safely propagate `session_id` across background worker threads.
 
 ### 3. Optimized RAG Pipeline
 The pipeline is engineered for "Extreme Speed" without sacrificing precision:
-- **Grading Short-circuit**: If the FlashRank reranker provides a confidence score $\ge 0.85$ (configurable `rag.prompts.grading.min_score_to_skip`), the system skips the costly LLM grading step, reducing latency by 2-3 seconds.
-- **Dynamic Top-K**: Instead of a fixed number of documents, the system analyzes the "Score Gap" between the top results to dynamically adjust the reranking window (10-25 docs).
+- **Grading Short-circuit**: If the reranker max score reaches its per-engine threshold (FlashRank `0.70` / semantic bi-encoder `0.45`, plus `min_top_gap_to_skip: 0.05`), the system skips the costly LLM grading step (`rag.prompts.grading.min_score_to_skip`), reducing latency by 2-3 seconds.
+- **Retrieval Window**: Stage-1 pool `retriever.search_kwargs.k: 18` matches `dynamic_top_k.max_candidates: 18` (`min: 12`); rerank selection `rerank_top_k: 10`; grading window `grade_top_n: 5` (widened 3→5, F3 fix: citations observed at rank 4–5). Queries shorter than `min_rerank_chars: 6` skip FlashRank and use RRF scores.
+- **Lean Index + Coord Memo**: FAISS stores lean metadata (coordinates stripped); `CoordCacheManager` hydrates on demand with an `annotation_memo` TTL table. Hydration drains are bounded (`hydration_drain_timeout_seconds: 30.0`) with parallel extraction and batched hydration.
+- **Reference Prewarm**: The reference list prefetches/hydrates non-blocking with order preservation (`src/ui/components/reference_plan.py`), so sources render before citations finalize.
 - **1-Pass Pruning**: Redundancy checks are integrated directly into the `EmbeddingBasedSemanticChunker` to avoid duplicate embeddings during indexing.
 
 ### 4. Streaming Integrity Protocol
 To provide a professional "Ghosting-Free" UI, the system implements a strict streaming protocol:
-- **Async Event Dispatch**: `graph_builder.py` uses `adispatch_custom_event` to send `response_chunk` and `graph_status` events.
-- **Buffered Rendering**: Prevents visual flickering by using `st.empty` placeholders and fragment-based updates; events are name-tagged at the emitter and consumed generically via `ui/components/streaming.py` and `api/streaming_handler.py`.
+- **Async Event Dispatch**: `src/core/graph/_generate.py` uses `adispatch_custom_event` to send `response_chunk`, `graph_status`, and mid-stream `citations_add` events (`PartialCitationScanner` in `src/core/graph/_partial_citations.py`).
+- **Buffered Rendering**: Prevents visual flickering by using `st.empty` placeholders and fragment-based updates; events are name-tagged at the emitter and consumed generically via `src/ui/components/streaming_core.py` (`merge_citations_add`) and `src/api/stream_pipeline.py` (`StreamChunk.citations_add`).
+- **Tail Gates**: First-token/TTFT/post-stream finalize gaps are tracked by `scripts/measure_tail.py`, `scripts/verify_citation_tail.py`, and `scripts/gate_tail.py`.
 
 ---
 

@@ -21,11 +21,14 @@
 현재 시스템은 **"전용 커스텀 통로 단일화"** 전략을 통해 두 문제를 동시에 해결합니다.
 
 ### 규칙 1: Core 엔진은 전용 이벤트를 발송한다
-- `src/core/graph_builder.py`의 `generate_response` 노드 내에서 토큰이 생성될 때마다 `adispatch_custom_event`를 통해 **`response_chunk`**라는 이름의 커스텀 이벤트를 명시적으로 발송합니다.
+- `src/core/graph/_generate.py`의 `generate_response` 노드 내에서 토큰이 생성될 때마다 `adispatch_custom_event`를 통해 **`response_chunk`**라는 이름의 커스텀 이벤트를 명시적으로 발송합니다.
+- 인용이 확정되는 대로 `src/core/graph/_partial_citations.py`의 `PartialCitationScanner`가 **`citations_add`** 이벤트(`{items, base_index, arr_len, attempt}`)를 중간 발송합니다. 최종 `citations`를 기다리지 않고 점진 렌더가 가능합니다.
+- 정규 SSE 순서는 7종입니다: `status / message / thought / sources / citations_add / citations / metrics` (`src/api/routes_chat.py`, `src/api/stream_pipeline.py: StreamChunk`).
 - **이유**: 노드 내부 루프에서 직접 이벤트를 쏘면 노드 종료를 기다리지 않고 상위 루프로 즉시 전파됩니다 (실시간성 확보).
 
 ### 규칙 2: UI는 전용 이벤트만 수신한다
 - `src/ui/ui.py`의 수신 루프는 오직 `on_custom_event` 중 이름이 `response_chunk`인 것만 필터링하여 `full_response`에 더합니다.
+- `citations_add`는 `src/ui/components/streaming_core.py`의 `merge_citations_add`로 병합되어 `streaming.py`에서 점진 렌더됩니다.
 - **이유**: 표준 이벤트(`on_chat_model_stream` 등)를 의도적으로 무시함으로써 중복 발생 가능성을 0%로 차단합니다.
 
 ### 규칙 3: 비동기 하이드레이션 (Streaming Hydration)
@@ -47,7 +50,7 @@ async def _stream_wrapper():
         yield chunk
 ```
 
-### Core (발생부: `src/core/graph_builder.py`)
+### Core (발생부: `src/core/graph/_generate.py`)
 ```python
 # llm.astream 루프 내에서 조각이 생성될 때마다 즉시 발송
 async for chunk in llm.astream(messages, config=config):
@@ -86,4 +89,6 @@ if chunk_text:
 
 ## 5. 검증 방법
 기능 수정 후에는 반드시 아래 테스트를 실행하여 무결성을 확인하십시오.
-- `python tests/verify_streaming_realtime.py`: 실시간 타임라인 및 중복 여부 체크.
+- `pytest tests/unit/test_stream_event_contract.py`: 7종 SSE 이벤트 순서/규약 체크.
+- `pytest tests/unit/test_citation_tail_timing_red.py tests/unit/test_tail_perf_spans.py tests/unit/test_finish_tail_timing.py`: tail/stall 타이밍 체크.
+- `python scripts/measure_tail.py && python scripts/verify_citation_tail.py && python scripts/gate_tail.py`: 스트림 tail 게이트.
