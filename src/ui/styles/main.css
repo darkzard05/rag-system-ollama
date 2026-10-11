@@ -20,14 +20,15 @@
        (.streamlit/config.toml deliberately has no [theme]), so mirror Streamlit's
        default light/dark palette via prefers-color-scheme. */
     --background-color: #ffffff;
-    /* VIS-1: brand hue tokens — Streamlit default red kept EXACTLY (#ff4b4b).
-       Component tokens (hue/sat/light) let derivative tones — focus rings, tints —
-       be computed with hsl() while --primary-color stays pixel-identical. */
-    --primary-hue: 0;
-    --primary-sat: 100%;
-    --primary-lit: 64.7%;
-    --primary-color: #ff4b4b;
-    /* ACC-2: focus ring color, 3:1 contrast on this background (5.4:1 on white) */
+    /* VIS-1: brand hue tokens — dedicated indigo hue (217), NOT the
+       Streamlit default red. --primary-color and the focus ring derive
+       from hue/sat/lit via hsl() so all tones move together.
+       Contrast: brand text 5.96:1 on white; keep lit <= 45% in light. */
+    --primary-hue: 217;
+    --primary-sat: 90%;
+    --primary-lit: 45%;
+    --primary-color: hsl(var(--primary-hue) var(--primary-sat) var(--primary-lit));
+    /* ACC-2: focus ring color, 3:1 contrast on this background (6.61:1 on white) */
     --focus-ring-color: hsl(var(--primary-hue) var(--primary-sat) 42%);
     --border-color: rgba(49, 51, 63, 0.2);
     --text-color: #31333f;
@@ -40,8 +41,10 @@
 @media (prefers-color-scheme: dark) {
     :root {
         --background-color: #0e1117;
-        --primary-color: #ff4b4b;
-        /* ACC-2: focus ring color, 3:1 contrast on this background (9.2:1 on #0e1117) */
+        /* Dark theme lifts lightness only — hue/sat stay single-sourced.
+           Brand text 7.93:1 on #0e1117; keep lit >= 70% in dark. */
+        --primary-lit: 72%;
+        /* ACC-2: focus ring color, 3:1 contrast on this background (9.66:1 on #0e1117) */
         --focus-ring-color: hsl(var(--primary-hue) var(--primary-sat) 78%);
         --border-color: rgba(250, 250, 250, 0.2);
         --text-color: #fafafa;
@@ -49,7 +52,7 @@
 }
 
 /* ACC-2: global keyboard focus ring — 2px, WCAG 3:1 on both themes.
-   Color resolves from --focus-ring-color (light #d60000 5.4:1 / dark #ff8f8f 9.2:1). */
+   Color resolves from --focus-ring-color (light #0b55cb 6.61:1 / dark #94bbf9 9.66:1). */
 [data-testid="stMainBlockContainer"] *:focus-visible {
     outline: 2px solid var(--focus-ring-color) !important;
     outline-offset: 2px !important;
