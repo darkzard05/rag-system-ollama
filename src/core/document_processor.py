@@ -394,6 +394,10 @@ async def load_pdf_docs(
 
                 try:
                     parallel_ok = _parallel_extract_enabled() and total_pages > 4
+                    # Accumulator shared by the parallel → sequential → C-engine
+                    # fallback chain. Annotated once so mypy tracks a single
+                    # type instead of inferring the parallel tuple shape.
+                    page_chunks: list[Any] | None = None
                     if parallel_ok:
                         # P1-1: 페이지 범위 병렬 추출 (워커별 자체 핸들).
                         # 범위 실패·페이지 수 불일치 시 None → 순차 폴백
@@ -405,7 +409,7 @@ async def load_pdf_docs(
                                 detail=f"Parallel range {done}/{total}",
                             )
 
-                        chunks = await asyncio.to_thread(
+                        par_merged, slow_ranges = await asyncio.to_thread(
                             _extract_markdown_parallel,
                             file_path,
                             total_pages,
@@ -420,21 +424,19 @@ async def load_pdf_docs(
                         )
                         # P1-2: OCR 의심 범위 배지 — 느린 범위(OCR 프록시)가
                         # 있으면 상태 로그에 가시화한다.
-                        _slow: list[int] = []
-                        if isinstance(chunks, tuple):
-                            chunks, _slow = chunks
-                        if _slow:
+                        if par_merged is not None:
+                            page_chunks = par_merged
+                        slow_list: list[int] = list(slow_ranges)
+                        if slow_list:
                             SessionManager.add_status_log(
-                                f"일부 구간 처리 지연 (OCR 의심 {len(_slow)}개 범위) — "
+                                f"일부 구간 처리 지연 (OCR 의심 {len(slow_list)}개 범위) — "
                                 "해당 구간 포함 인덱싱을 계속합니다.",
                                 session_id=session_id,
                             )
-                    else:
-                        chunks = None
-                    if chunks is None:
+                    if page_chunks is None:
                         if parallel_ok:
                             logger.info("[RAG] [PDF] 병렬 추출 폴백 — 순차 추출로 전환")
-                        chunks = await asyncio.to_thread(
+                        page_chunks = await asyncio.to_thread(
                             _extract_markdown_via_thread,
                             file_path,
                             extract_words=do_extract_words,
@@ -461,10 +463,8 @@ async def load_pdf_docs(
                     # 자체 PDF 핸들(``open_pdf_document``)을 열고 닫는다. 메인 스레드의
                     # ``doc``는 절대 공유하지 않는다. 페이지 순서는 인덱스 순으로 보장.
                     max_workers = min(total_pages, os.cpu_count() or 4) or 1
-                    # markdown 성공 경로(line 238)와 동일 변수 chunks 를 공유하여
-                    # 하단 enumerate(chunks) 에서 양 경로 결과를统一 소비한다.
-                    # 타입 어노테이션을 생략해 mypy no-redef(재정의 불일치)를 회피한다.
-                    chunks = [None] * total_pages
+                    # C-Engine 폴백은 자체 리스트를 채운 뒤 accumulator에 넘긴다.
+                    c_engine_chunks: list[Any] = [None] * total_pages
                     with ThreadPoolExecutor(max_workers=max_workers) as executor:
                         future_to_idx = {
                             executor.submit(
@@ -481,13 +481,13 @@ async def load_pdf_docs(
                         ):
                             page_idx = future_to_idx[future]
                             try:
-                                chunks[page_idx] = future.result()
+                                c_engine_chunks[page_idx] = future.result()
                             except Exception as page_e:
                                 logger.error(
                                     f"[RAG] [PDF] C-Engine 페이지 {page_idx + 1} 추출 실패: "
                                     f"{page_e}"
                                 )
-                                chunks[page_idx] = {
+                                c_engine_chunks[page_idx] = {
                                     "text": "",
                                     "metadata": {"page": page_idx + 1},
                                     "words": [],
@@ -500,6 +500,7 @@ async def load_pdf_docs(
                                 _extraction_progress_pct(completed, total_pages),
                                 detail=f"Page {page_idx + 1}/{total_pages}",
                             )
+                    page_chunks = c_engine_chunks
 
                 emit_progress(
                     on_progress,
@@ -510,7 +511,7 @@ async def load_pdf_docs(
                 docs: list[Document] = []
                 current_section = "Cover / Overview"
 
-                for i, chunk in enumerate(chunks):
+                for i, chunk in enumerate(page_chunks or []):
                     if isinstance(chunk, dict):
                         text = chunk.get("text", "")
                         metadata = chunk.get("metadata", {})
