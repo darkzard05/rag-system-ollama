@@ -653,6 +653,9 @@ border-top: 1px solid color-mix(in srgb, var(--border-color) 30%, transparent) !
     text-align: left;
     text-decoration: underline;
     text-underline-offset: 3px;
+    /* ACC-5: reference jump buttons are full-width rows — guarantee the
+       44px touch target. Plain declaration to respect the hygiene budget. */
+    min-height: 44px;
 }
 [data-testid="stChatMessage"] [data-testid="stBaseButton-tertiary"] p {
     display: block;
