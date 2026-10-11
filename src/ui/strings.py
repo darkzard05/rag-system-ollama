@@ -88,6 +88,9 @@ UI_STRINGS: dict[str, dict[str, str]] = {
         "sidebar_upload_label": "Upload PDF Document",
         "sidebar_settings": "Settings",
         "sidebar_llm_label": "LLM Model Selection",
+        # UX-7: LLM selector role badges (size parsed from the model ID)
+        "model_badge_fast": "lightweight · fast",
+        "model_badge_standard": "high-capability",
         "sidebar_ollama_hint": (
             "Start Ollama to select a model. "
             "[Installation guide](https://ollama.com/download)"
@@ -193,6 +196,9 @@ UI_STRINGS: dict[str, dict[str, str]] = {
         "sidebar_upload_label": "PDF 문서 업로드",
         "sidebar_settings": "설정",
         "sidebar_llm_label": "LLM 모델 선택",
+        # UX-7: LLM 셀렉터 역할 배지 (모델 ID에서 크기 파싱)
+        "model_badge_fast": "경량 · 빠름",
+        "model_badge_standard": "고성능",
         "sidebar_ollama_hint": (
             "모델을 선택하려면 Ollama를 시작하세요. "
             "[설치 안내](https://ollama.com/download)"

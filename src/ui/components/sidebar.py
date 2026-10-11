@@ -3,6 +3,8 @@ Sidebar settings and management component.
 (Accessibility: CSS classes instead of label_visibility="collapsed")
 """
 
+import re
+
 import streamlit as st
 
 from common.config import (
@@ -14,6 +16,28 @@ from ui.strings import set_lang, t
 from ui.widget_keys import LANGUAGE_SELECTOR_KEY, reset_all_key
 
 _LANG_OPTIONS: dict[str, str] = {"한국어": "ko", "English": "en"}
+
+# UX-7: parameter-size token in model IDs (e.g. "4b", "70B").
+_SIZE_TOKEN_RE = re.compile(r"(\d+(?:\.\d+)?)\s*b", re.IGNORECASE)
+
+
+def format_llm_option(model_id: str) -> str:
+    """UX-7: raw ID + role badge for display (stored value stays raw).
+
+    Size token (``4b``/``70B``) → ``"4B · <badge>"`` suffix; 8B and below
+    gets the fast/light badge, above gets high-capability. IDs without a
+    size token render raw (no guessing).
+    """
+    raw = str(model_id)
+    match = _SIZE_TOKEN_RE.search(raw)
+    if match is None:
+        return raw
+    try:
+        size = float(match.group(1))
+    except ValueError:
+        return raw
+    badge = t("model_badge_fast") if size <= 8 else t("model_badge_standard")
+    return f"{raw} · {match.group(1)}B · {badge}"
 
 
 def on_language_change() -> None:
@@ -136,6 +160,7 @@ def _render_settings_internal(
             index=def_idx,
             key="model_selector",
             on_change=model_selector_callback,
+            format_func=format_llm_option,
             disabled=is_generating or is_swapping_model or not ollama_reachable,
         )
 
