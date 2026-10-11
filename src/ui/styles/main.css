@@ -14,6 +14,11 @@
     --spacing-lg: 24px;
     --spacing-xl: 32px;
     --sidebar-width: 300px;
+    /* VIS-3: typeface stack — system UI + Korean fallbacks (no webfonts:
+       local-first offline app). Win: Malgun Gothic · macOS: Apple SD Gothic
+       Neo · Linux: Noto Sans KR. Applied in existing text rules below. */
+    --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+        "Noto Sans KR", "Malgun Gothic", "Apple SD Gothic Neo", sans-serif;
     /* Streamlit 1.60 DOM injects NO theme CSS variables globally, so the app's
        var(--background-color) / var(--primary-color) references currently resolve to
        transparent. Define them here. The app auto-follows the OS color scheme
@@ -391,6 +396,8 @@ div[data-testid="stBottomBlockContainer"] {
     word-break: keep-all;
     overflow-x: clip;
     overflow-wrap: break-word;
+    /* VIS-3: body level of the type hierarchy (letter-spacing normal). */
+    font-family: var(--font-sans);
 }
 
 /* Code blocks: prevent long lines from breaking layout */
@@ -626,6 +633,9 @@ border-top: 1px solid color-mix(in srgb, var(--border-color) 30%, transparent) !
 .rag-brand__name {
     font-size: 1.5rem;
     font-weight: 700;
+    /* VIS-3: display level of the type hierarchy (tight tracking). */
+    font-family: var(--font-sans);
+    letter-spacing: -0.01em;
     color: var(--text-color);
 }
 
