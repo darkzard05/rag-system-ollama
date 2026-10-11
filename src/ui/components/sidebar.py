@@ -192,7 +192,7 @@ def _render_settings_internal(
         ):
             new_chat_callback()
 
-        # 초기화 (파괴적 동작 — 확인 다이얼로그 + 생성 중 비활성 + 시각 위계 하향)
+        # 초기화 (파괴적 동작 — 확인 다이얼로그 + 생성/빌드 중 비활성 + 시각 위계 하향)
         sid = SessionManager.get_session_id()
         st.divider()
         if st.button(
@@ -201,7 +201,7 @@ def _render_settings_internal(
             type="secondary",
             help=t("sidebar_reset_help"),
             key=reset_all_key(sid),
-            disabled=is_generating,
+            disabled=is_generating or is_building,
         ):
             _confirm_reset_all()
 
