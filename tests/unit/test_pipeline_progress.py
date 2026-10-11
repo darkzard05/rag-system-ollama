@@ -125,8 +125,12 @@ def test_load_pdf_docs_calls_on_progress_with_pct():
     assert progress == sorted(progress)
 
 
-def test_load_pdf_docs_fallback_reports_per_page_progress():
+def test_load_pdf_docs_fallback_reports_per_page_progress(monkeypatch):
     """C-Engine 폴백 경로에서 페이지별 진행률(5→45)이 단조 증가로 보고되는지 검증합니다."""
+    # 병렬 범위 추출을 끄고 C-Engine 폴백 경로만 격리한다. 병렬이 켜져 있으면
+    # 범위 완료 콜백이 C-Engine 페이지 진행률과 같은 5→45 구간에 먼저
+    # 보고되어 단조 증가 가정이 깨진다 (9f9fb77 병렬 추출 도입 이후).
+    monkeypatch.setenv("RAG_PARALLEL_EXTRACT", "0")
     progress: list[int] = []
 
     def on_progress(pct: int) -> None:
