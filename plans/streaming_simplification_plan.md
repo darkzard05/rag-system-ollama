@@ -1,5 +1,16 @@
 # Stream Pipeline Simplification Plan
 
+> **Status (2026-10-11): SUPERSEDED — premises stale, do not execute as-is.**
+> - `RAGOrchestrator` no longer exists in `src` (0 references).
+> - Current pipeline: `src/core/rag_core.py:astream` → `src/api/stream_pipeline.py:stream_graph_events`
+>   (with `TokenStreamBuffer`) → `src/ui/components/streaming_core.py` consumption.
+>   There is no `astream`/`astream_events` merge target and no `StreamingResponseHandler`
+>   removal target as described below.
+> - A new plan must be written against the current pipeline after H2/H4 quality work.
+>   No TTFT benchmark script exists yet.
+>
+> Original content preserved below for archaeology.
+
 ## 1. Goal
 Simplify the RAG streaming pipeline to reduce latency (TTFT), improve reliability, and remove over-engineered layers (Queue, redundant buffers).
 

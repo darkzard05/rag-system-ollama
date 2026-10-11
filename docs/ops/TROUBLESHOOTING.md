@@ -4,13 +4,9 @@ This guide covers common issues encountered when running the RAG System, particu
 
 ## 🪟 Windows Specific Issues
 
-### ⚡ Quick Fix (Recommended)
-If you encounter crashes or DLL errors, we provide an automatic fix script:
-```powershell
-# 관리자 권한으로 실행하거나 아래 명령어를 입력하세요.
-powershell ./scripts/fix_windows_env.ps1
-```
-이 스크립트는 충돌하는 패키지를 삭제하고 Windows 안정 버전을 재설치합니다.
+### ⚡ Quick Fix
+If you encounter crashes or DLL errors, use the Windows-optimized requirements file
+(`scripts/fix_windows_env.ps1` was removed — no such script in this repo):
 
 ### 1. Application Crashes on Startup (0xc0000139 / DLL Load Failed)
 
@@ -32,10 +28,10 @@ pip uninstall torch torchvision
 pip install -r requirements-win.txt
 ```
 
-#### Option C: Run Diagnosis Script
-We provide a script to check your environment:
+#### Option C: Run a Quick Smoke Test
+No `scripts/diagnose_windows.py` exists in this repo. Check the environment directly:
 ```bash
-python scripts/diagnose_windows.py
+python -c "import torch, sentence_transformers; print(torch.__version__)"
 ```
 If `torchvision` fails but `sentence_transformers` succeeds, you can likely ignore the `torchvision` error or uninstall it.
 
@@ -55,7 +51,7 @@ If `torchvision` fails but `sentence_transformers` succeeds, you can likely igno
     ```bash
     ollama list
     # If empty or missing target model:
-    ollama pull qwen2.5:0.5b  # or your configured model
+    ollama pull qwen3:4b-instruct-2507-q4_K_M  # must match models.default_ollama in config.yml
     ```
 3.  If running in Docker, ensure `OLLAMA_BASE_URL` is set correctly (usually `http://host.docker.internal:11434` or `http://ollama:11434`).
 
@@ -68,11 +64,12 @@ If `torchvision` fails but `sentence_transformers` succeeds, you can likely igno
 
 **Solution:**
 The system now includes an **Auto-Batch Optimizer**.
-1.  Restart the application. The optimizer will automatically detect available VRAM and adjust `EMBEDDING_BATCH_SIZE` accordingly.
-2.  If the issue persists, manually lower the batch size in `config.yml`:
+1.  Restart the application. The optimizer reads `models.embedding_batch_size` in `config.yml`
+    (default `"auto"`) and automatically detects available VRAM to adjust the batch size.
+2.  If the issue persists, set an explicit number instead of `"auto"`:
     ```yaml
-    embedding:
-      batch_size: 16  # Try 16 or 8
+    models:
+      embedding_batch_size: 16  # Try 16 or 8
     ```
 
 ### 2. Slow Response Times
@@ -89,8 +86,7 @@ The system now includes an **Auto-Batch Optimizer**.
 
 **Solution:**
 The system now uses a **Standardized Locking Order** and **Granular Model Locking**.
-- Ensure you are on version 2.1.0 or later.
-- If the API still returns `SessionLockTimeoutError`, check if a background process is stuck. You can manually delete a session via API: `DELETE /api/v1/session/{id}`.
+- If the API still returns a session-lock timeout, check if a background process is stuck. You can manually delete a session via API: `DELETE /api/v1/session/{session_id}`.
 
 ### 2. UI Logs/Status Not Updating During Analysis
 **Cause:** Streamlit UI thread and background analysis thread using different state stores (State Fragmentation).
@@ -104,6 +100,6 @@ The system now uses a **Standardized Locking Order** and **Granular Model Lockin
 ## 🐛 Still Stuck?
 
 If these steps don't resolve your issue, please report it with the following info:
-1.  Output of `python scripts/diagnose_windows.py`
+1.  Output of `python -c "import torch, sentence_transformers; print(torch.__version__)"`
 2.  `logs/app.log` file content
 3.  Your `config.yml` settings
