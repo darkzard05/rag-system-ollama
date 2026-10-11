@@ -405,6 +405,12 @@ def _process_uploaded_file(uploaded_file) -> None:
 
         SessionManager.set("last_uploaded_file_name", uploaded_file.name)
         SessionManager.set("file_hash", uploaded_hash)
+        # [FIX] 동기 init: 업로드 콜백 시점에 BuildState(PREPARING)를 미리
+        # 생성하여 첫 페인트부터 st.status(running) 카드가 마운트되게 한다.
+        # _bg_rebuild_task는 동일 파일의 비터미널 상태가 있으면 재사용한다.
+        SessionManager.init_build_state(
+            uploaded_file.name, uploaded_hash, session_id=sid
+        )
 
         try:
             if cached_path is not None:
@@ -560,9 +566,9 @@ def _handle_pending_tasks() -> None:
             or DEFAULT_EMBEDDING_MODEL
         )
 
-        # [UX] 리셋/진행 메시지는 on_file_upload가 렌더 전에 이미 수행했으므로
-        # 여기서는 빌드 시작만 한다. (st.rerun 제거: 갱신은 2초 폴링 fragment와
-        # run_in_background_worker의 완료 시 rerun이 담당)
+        # [UX] 리셋/진행 메시지와 동기 init은 on_file_upload가 렌더 전에
+        # 이미 수행했으므로 여기서는 빌드 시작만 한다. 진행 중 갱신은
+        # _report_event의 쓰로틀 rerun + 완료 시 rerun이 담당한다.
         _safe_dispatch(
             "rebuild",
             _bg_rebuild_task(
@@ -591,6 +597,14 @@ def _handle_pending_tasks() -> None:
         current_embedding_model = SessionManager.get(
             "last_selected_embedding_model", None, current_sid
         )
+
+        # [FIX] 임베딩 변경 재빌드도 동기 init으로 즉시 running 카드를 노출한다.
+        if current_file_name:
+            SessionManager.init_build_state(
+                str(current_file_name),
+                str(SessionManager.get("file_hash", "", current_sid) or ""),
+                session_id=current_sid,
+            )
 
         _safe_dispatch(
             "rebuild",
@@ -678,6 +692,31 @@ def main() -> None:
         SessionManager.set("is_first_run", False)
 
 
+# [FIX] 빌드 진행 전파 쓰로틀: 워커 스레드의 on_event마다 rerun을
+# 요청하면 리런 폭주가 나므로, 위상 변경 시 즉시 + 동일 위상 1초 간격으로만
+# 화면 갱신을 요청한다. 완료 시 rerun은 async_worker._on_complete가 담당.
+_BUILD_RERUN_MIN_INTERVAL_S = 1.0
+_BUILD_RERUN_LAST: dict[str, tuple[float, str]] = {}
+
+
+def _request_build_progress_rerun(session_id: str, phase_name: str) -> None:
+    """Throttled progress rerun from the background worker thread."""
+    now = time.monotonic()
+    last = _BUILD_RERUN_LAST.get(session_id)
+    if (
+        last is not None
+        and last[1] == phase_name
+        and now - last[0] < _BUILD_RERUN_MIN_INTERVAL_S
+    ):
+        return
+    _BUILD_RERUN_LAST[session_id] = (now, phase_name)
+    try:
+        from common.async_worker import request_session_rerun
+    except ImportError:
+        return
+    request_session_rerun(session_id)
+
+
 async def _bg_rebuild_task(
     session_id: str, file_path: str, file_name: str, embedder_name: str
 ):
@@ -689,6 +728,7 @@ async def _bg_rebuild_task(
         cancel_build,
         complete_build,
         fail_build,
+        is_terminal,
     )
     from core.model_loader import ModelManager
     from core.rag_core import RAGSystem
@@ -698,11 +738,22 @@ async def _bg_rebuild_task(
     SessionManager.set("rebuild_error", None, session_id=session_id)
     SessionManager.set("rebuild_start_time", time.time(), session_id=session_id)
     # 단일 상태 객체 초기화 (3B: 평탄 레거시 이중기록 폐지).
-    SessionManager.init_build_state(
-        file_name,
-        str(SessionManager.get("file_hash", "", session_id) or ""),
-        session_id=session_id,
-    )
+    # 업로드 콜백에서 이미 동기 init한 동일 파일의 비터미널 상태가 있으면
+    # 재사용한다 (started_at 보존, 첫 페인트의 running 카드와 연속성 유지).
+    _existing = SessionManager.get_build_state(session_id=session_id)
+    if (
+        _existing is None
+        or _existing.file_name != file_name
+        or is_terminal(_existing.phase)
+    ):
+        SessionManager.init_build_state(
+            file_name,
+            str(SessionManager.get("file_hash", "", session_id) or ""),
+            session_id=session_id,
+        )
+    else:
+        SessionManager.set("is_building_rag", True, session_id=session_id)
+        SessionManager.set("rebuild_cancelled", False, session_id=session_id)
 
     # 타임라인에 분석 시작 메시지 추가 (하나의 메시지를 업데이트)
     # on_file_upload가 만든 자리표시자(msg_id=build_{session_id})를 재사용하여
@@ -730,6 +781,10 @@ async def _bg_rebuild_task(
         SessionManager.update_build_state(
             event, session_id=session_id, status_text=event.status or None
         )
+        # [FIX] 진행 중 화면 전파: 상태만 바꾸면 프론트가 모르므로
+        # 쓰로틀된 rerun으로 st.status(running) 마운트·갱신을 유발한다.
+        # Core(SessionManager)는 UI를 모르므로 호출은 여기서 수행한다.
+        _request_build_progress_rerun(session_id, event.phase.value)
 
     def _finalize_cancelled(reason: str) -> None:
         build = SessionManager.get_build_state(session_id=session_id)

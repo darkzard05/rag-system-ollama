@@ -99,6 +99,30 @@ class AsyncWorker:
         logger.info("[ASYNC_WORKER] Event loop stopped")
 
 
+def request_session_rerun(session_id: str) -> bool:
+    """Request a Streamlit rerun for the given session id (thread-safe).
+
+    Usable from background worker threads to propagate state changes
+    (e.g. build progress) to the frontend. Returns True on success.
+    """
+    if not session_id:
+        return False
+    try:
+        from streamlit.runtime import get_instance
+
+        runtime = get_instance()
+        if runtime is None:
+            return False
+        session_info = runtime._session_mgr.get_session_info(session_id)
+        if session_info is None:
+            return False
+        session_info.session.request_rerun(None)
+        return True
+    except Exception as e:  # noqa: BLE001 - rerun request must never crash worker
+        logger.debug(f"Session rerun request failed ({session_id}): {e}")
+        return False
+
+
 def run_in_background_worker(coro: Awaitable[Any], session_id: str) -> None:
     """
     Streamlit 환경에서 코루틴을 AsyncWorker의 전용 이벤트 루프에서 실행하는 백그라운드 워커.
@@ -125,20 +149,14 @@ def run_in_background_worker(coro: Awaitable[Any], session_id: str) -> None:
 
         if ctx and ctx.session_id:
             try:
-                from streamlit.runtime import get_instance
-
-                runtime = get_instance()
-                if runtime:
-                    session_info = runtime._session_mgr.get_session_info(ctx.session_id)
-                    if session_info:
-                        session_info.session.request_rerun(None)
+                if not request_session_rerun(ctx.session_id):
+                    raise RuntimeError("session not found for rerun")
             except Exception as e:
                 # rerun 재요청 실패 시 입력창이 영구 비활성화되지 않도록
                 # 세션 플래그를 정리한다(INT-입력동결). D4: 조용한 정상 위장을
                 # 막기 위해 실패를 상태 로그에 남겨 사용자에게 표면화한다.
-                # 빌드 진행 바는 폴링 fragment(_render_build_progress_fragment,
-                # 1초)가 플래그를 읽어 갱신하므로, 여기서 플래그를 내려주면
-                # 다음 폴링에서 정상 상태로 복구된다.
+                # 빌드 진행은 워커의 상태 전파 rerun(쓰로틀)으로 갱신되므로,
+                # 여기서 플래그를 내려주면 다음 렌더에서 정상 상태로 복구된다.
                 logger.error(f"Background worker rerun failed: {e}", exc_info=True)
                 try:
                     from core.session import SessionManager
