@@ -118,6 +118,7 @@ def _render_settings_internal(
             type="pdf",
             key="pdf_uploader",
             on_change=file_uploader_callback,
+            help=t("sidebar_upload_help"),
             disabled=is_generating,
         )
 
@@ -161,6 +162,7 @@ def _render_settings_internal(
             key="model_selector",
             on_change=model_selector_callback,
             format_func=format_llm_option,
+            help=t("sidebar_llm_help"),
             disabled=is_generating or is_swapping_model or not ollama_reachable,
         )
 
@@ -199,6 +201,7 @@ def _render_settings_internal(
             index=emb_idx,
             key="embedding_model_selector",
             on_change=embedding_selector_callback,
+            help=t("sidebar_embedding_help"),
             disabled=is_generating or (available_models is None),
         )
 

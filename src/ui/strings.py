@@ -86,8 +86,15 @@ UI_STRINGS: dict[str, dict[str, str]] = {
         # PDF/LLM/Ollama stay as-is); no emoji in action buttons
         # (status/info banners keep theirs); no hybrid "A / B" labels.
         "sidebar_upload_label": "Upload PDF Document",
+        # UX-8: inline "?" help for core concepts (uploader/LLM/embedding roles)
+        "sidebar_upload_help": (
+            "The PDF is split into chunks and indexed as answer sources."
+        ),
         "sidebar_settings": "Settings",
         "sidebar_llm_label": "LLM Model Selection",
+        "sidebar_llm_help": (
+            "The model that writes answers. Smaller models respond faster."
+        ),
         # UX-7: LLM selector role badges (size parsed from the model ID)
         "model_badge_fast": "lightweight · fast",
         "model_badge_standard": "high-capability",
@@ -98,6 +105,10 @@ UI_STRINGS: dict[str, dict[str, str]] = {
         "sidebar_refresh": "Refresh Models",
         "sidebar_refresh_help": "Refresh the list of models available in Ollama.",
         "sidebar_embedding_label": "Embedding Model Selection",
+        "sidebar_embedding_help": (
+            "The model that converts text into search vectors. "
+            "Changing it rebuilds the index."
+        ),
         "sidebar_new_chat": "New Chat",
         "sidebar_new_chat_help": "Start a new chat, keeping the uploaded documents.",
         "sidebar_reset": "Reset All",
@@ -194,8 +205,12 @@ UI_STRINGS: dict[str, dict[str, str]] = {
             "3. AI 답변과 함께 제공되는 **인용 출처 버튼**을 누르면 해당 페이지로 즉시 이동합니다."
         ),
         "sidebar_upload_label": "PDF 문서 업로드",
+        "sidebar_upload_help": (
+            "PDF를 청크로 나누어 인덱싱하고 답변 근거로 사용합니다."
+        ),
         "sidebar_settings": "설정",
         "sidebar_llm_label": "LLM 모델 선택",
+        "sidebar_llm_help": ("답변을 작성하는 모델입니다. 가벼울수록 빠릅니다."),
         # UX-7: LLM 셀렉터 역할 배지 (모델 ID에서 크기 파싱)
         "model_badge_fast": "경량 · 빠름",
         "model_badge_standard": "고성능",
@@ -206,6 +221,9 @@ UI_STRINGS: dict[str, dict[str, str]] = {
         "sidebar_refresh": "모델 새로고침",
         "sidebar_refresh_help": "Ollama에서 사용 가능한 모델 목록을 새로고침합니다.",
         "sidebar_embedding_label": "임베딩 모델 선택",
+        "sidebar_embedding_help": (
+            "텍스트를 검색 벡터로 바꾸는 모델입니다. 변경하면 인덱스를 다시 만듭니다."
+        ),
         "sidebar_new_chat": "새 대화",
         "sidebar_new_chat_help": "업로드된 문서는 유지하고 새 대화를 시작합니다.",
         "sidebar_reset": "전체 초기화",
