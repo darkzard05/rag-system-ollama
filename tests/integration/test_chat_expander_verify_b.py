@@ -12,10 +12,9 @@ Verifies three behaviors of the chat view in `src/ui/components/chat.py`
   (b) chat input state machine (6-state): input DISABLED with the upload
       prompt when no file is present, ENABLED when ready, and ENABLED while
       `is_generating_answer=True` (submit_mode="stop" shows ■ instead);
-  (c) a completed streamed answer renders an assistant message exposing the
-      native reasoning expander ("Thought Process",
-      strings.expander_reasoning_only) carrying the accumulated pipeline
-      steps/thought.
+  (c) a completed streamed answer persists thought/process_steps in the
+      store and renders body-only per the 단순안 contract (no reasoning
+      expander — see tests/unit/test_chat_render_expander.py).
 
 AppTest idioms that work (streamlit 1.54.0):
 - `AppTest.from_file("src/main.py").run(timeout=N)` boots the full app.
@@ -72,7 +71,11 @@ def _set_ready_state(sid: str) -> None:
     현행 6-상태 입력 게이팅(chat.py:_resolve_chat_input_state)은 파일 업로드
     전에는 입력을 DISABLED로 둔다. enabled 입력을 얻으려면 파일명 + readiness를
     함께 세팅해야 한다.
+
+    채팅 입력창은 로케일 반응형이므로 한국어 기대값을 위해 ko로 고정한다
+    (AppTest 기본값은 en).
     """
+    SessionManager.set("ui_lang", "ko", sid)
     SessionManager.set("last_uploaded_file_name", "doc.pdf", sid)
     SessionManager.set("pdf_processed", True, sid)
     SessionManager.set("rag_engine", object(), sid)
@@ -202,7 +205,7 @@ def test_chat_input_state_machine_during_generation():
     assert at.chat_input[0].disabled is False
     assert (
         at.chat_input[0].placeholder
-        == "답변을 생성하고 있습니다... (중지는 우측 하단 ■ 버튼)"
+        == "답변을 생성하고 있습니다... (중지는 입력창 우측 ■ 버튼)"
     )
     assert not at.exception
 
@@ -281,20 +284,16 @@ def test_streamed_answer_renders_thought_expander_and_reenables_input(
     steps = assistant_msgs[-1].get("process_steps") or []
     assert "관련 문서 검색 중..." in steps, f"process_steps={steps}"
 
-    # Rendered assistant message exposes the native reasoning expander
-    # (render_generation_expander → t("expander_reasoning_only") = "Thought
-    # Process"; thought-only이므로 sources 분기 없음) whose body carries the
-    # pipeline steps.
-    assert any(e.label == "Thought Process" for e in at.expander), [
+    # New render contract (단순안, test_chat_render_expander.py): completed
+    # messages render body + reference list only — no reasoning expander.
+    # The thought persists in the store (asserted above) but is not rendered.
+    assert not any(e.label in ("Thought Process", "사고 과정") for e in at.expander), [
         e.label for e in at.expander
     ]
-    # Rendered expander body carries the thought (blockquote markdown).
-    # 현행 계약: process_steps는 msg 저장소에 누적될 뿐 본문 텍스트로 렌더되지
-    # 않으므로, 렌더 검증은 thought 본문으로 수행한다.
-    thought_text = "".join(m.value for m in at.markdown)
-    assert "독립 검증용 추론 과정입니다." in thought_text, (
-        f"thought text missing: {thought_text!r}"
-    )
+    # Rendered body carries the streamed answer text (thought-only turn has
+    # no documents/citations, so no reference list either).
+    body_text = "".join(m.value for m in at.markdown)
+    assert "검증된 답변입니다." in body_text, f"answer body missing: {body_text!r}"
 
     # Input re-enabled again after generation finished
     assert at.chat_input[0].disabled is False
