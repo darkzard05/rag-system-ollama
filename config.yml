@@ -415,5 +415,3 @@ ui:
     thought_timeout_ms: 100
   messages:
     pdf_viewer_no_file: "No PDF to preview. Please upload a file from the sidebar."
-    # 빈 대화 상태의 단일 가이드 (Phase B: 가이드 5→1 통합)
-    chat_guide: "Upload a PDF and ask a question"

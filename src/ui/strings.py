@@ -158,7 +158,9 @@ UI_STRINGS: dict[str, dict[str, str]] = {
         "chat_placeholder_generating": "Generating an answer... (■ button on the right of the input to stop)",
         "chat_placeholder_swapping": "Switching the AI model... Please wait a moment.",
         "chat_placeholder_building": "Analyzing document knowledge... (you can ask once done)",
-        "chat_placeholder_no_pdf": "Please upload a PDF document from the left sidebar first.",
+        # UX-5: no-file placeholder defers to the guidance panel (which already
+        # gives the sidebar upload direction) instead of repeating it.
+        "chat_placeholder_no_pdf": "Upload a PDF document to begin.",
         "chat_placeholder_not_ready": "Preparing the document index. Please wait a moment.",
         "chat_placeholder_ready": "Ask anything about the document.",
         "chat_placeholder_next": "Type a follow-up question...",
@@ -257,7 +259,7 @@ UI_STRINGS: dict[str, dict[str, str]] = {
         "chat_placeholder_generating": "답변을 생성하고 있습니다... (중지는 입력창 우측 ■ 버튼)",
         "chat_placeholder_swapping": "AI 모델을 전환하는 중입니다... 잠시만 기다려 주세요.",
         "chat_placeholder_building": "문서 지식을 분석하고 있습니다... (완료 후 질문 가능)",
-        "chat_placeholder_no_pdf": "좌측 사이드바에서 PDF 문서를 먼저 업로드해 주세요.",
+        "chat_placeholder_no_pdf": "PDF 문서를 업로드하면 시작할 수 있습니다.",
         "chat_placeholder_not_ready": "문서 인덱스를 준비 중입니다. 잠시만 기다려 주세요.",
         "chat_placeholder_ready": "문서 내용에 대해 궁금한 점을 질문해 보세요.",
         "chat_placeholder_next": "이어서 추가 질문을 입력하세요...",

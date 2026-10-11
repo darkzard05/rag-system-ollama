@@ -364,7 +364,7 @@ UI_STREAMING_THOUGHT_TIMEOUT_MS: float = float(
 )
 
 _ui_messages = _ui_config.get("messages", {})
-MSG_CHAT_GUIDE: str = _ui_messages.get("chat_guide", "PDF를 업로드한 후 질문해 보세요")
+# UX-5: dead chat_guide key removed (MSG_CHAT_GUIDE was loaded but never rendered).
 MSG_PDF_VIEWER_NO_FILE: str = _ui_messages.get(
     "pdf_viewer_no_file", "No PDF to preview. Please upload a file from the sidebar."
 )
