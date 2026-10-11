@@ -76,6 +76,10 @@ def render_settings_content(
 ):
     """Render the settings content (callable outside the sidebar)."""
     _render_sidebar_logo()
+    # INT-4: locked controls need a reason — chat input stays live as ■ stop,
+    # sidebar settings wait for the turn to end.
+    if is_generating:
+        st.caption(t("sidebar_locked_generating"))
     _render_settings_internal(
         file_uploader_callback,
         model_selector_callback,

@@ -121,6 +121,11 @@ UI_STRINGS: dict[str, dict[str, str]] = {
         "sidebar_cancel": "Cancel",
         "sidebar_confirm_reset": "Reset",
         "sidebar_switching": "⏳ Switching model... Please wait.",
+        # INT-4: why sidebar controls are locked during generation
+        "sidebar_locked_generating": (
+            "Settings unlock when the answer finishes. "
+            "Stop generation with the ■ button to change them sooner."
+        ),
         "sidebar_language": "Language",
         "sidebar_language_help": "Switch the UI language.",
         "nav_next": "Next ▶",
@@ -236,6 +241,10 @@ UI_STRINGS: dict[str, dict[str, str]] = {
         "sidebar_cancel": "취소",
         "sidebar_confirm_reset": "초기화 실행",
         "sidebar_switching": "⏳ 모델 전환 중입니다. 잠시만 기다려 주세요.",
+        "sidebar_locked_generating": (
+            "답변이 끝나면 설정을 바꿀 수 있습니다. "
+            "■ 버튼으로 생성을 멈추면 바로 바꿀 수 있습니다."
+        ),
         "sidebar_language": "언어",
         "sidebar_language_help": "UI 언어를 전환합니다.",
         "nav_next": "다음 ➡️",
