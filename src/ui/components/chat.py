@@ -134,6 +134,10 @@ def render_message(
                         display_text = strip_context_tokens(display_text)
                     st.markdown(display_text, unsafe_allow_html=(role == "assistant"))
             ui_error(f"{t('error_prefix')}{error}")
+            # UX-4: 오류 턴 데드엔드 해소 — 재시도 가능 오류면 직전 질문 재전송
+            # 버튼을 렌더한다 (중단 턴의 retry_stopped 패턴과 동일 콜백 재사용).
+            if role == "assistant":
+                _render_error_retry(msg_id, error)
             return
 
         # 인용 익스팬더 삭제: 완료 메시지는 본문 + 점프 스트립만 렌더한다.
@@ -330,6 +334,40 @@ def get_stopped_answer_actions() -> dict[str, Any]:
         "retry_kind": "answer",
         "cta": [t("action_retry_answer")],
     }
+
+
+def _last_user_query() -> str:
+    """타임라인에서 가장 최근 사용자 질문을 반환한다 (없으면 "")."""
+    try:
+        messages = SessionManager.get_messages() or []
+    except (AttributeError, RuntimeError, KeyError):
+        return ""
+    for msg in reversed(messages):
+        if not isinstance(msg, dict):
+            continue
+        if msg.get("role") == "user" and str(msg.get("content") or "").strip():
+            return str(msg.get("content")).strip()
+    return ""
+
+
+def _render_error_retry(msg_id: str, error: object) -> None:
+    """UX-4: 오류 턴에 직전 질문 재전송 버튼을 렌더한다 (재시도 불가면 생략)."""
+    if isinstance(error, dict) and error.get("retryable") is False:
+        return
+    query = _last_user_query()
+    if not query:
+        return
+    sid = SessionManager.get_session_id()
+    if SessionManager.get("is_generating_answer", False, sid):
+        return
+    st.button(
+        t("action_retry_answer"),
+        key=f"retry_error_{msg_id or sid}",
+        on_click=_retry_stopped_answer,
+        args=(sid, query),
+        help=t("action_retry_answer_help"),
+        width="stretch",
+    )
 
 
 def _retry_stopped_answer(sid: str, query: str) -> None:
