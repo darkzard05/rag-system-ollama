@@ -272,7 +272,8 @@
     margin-top: auto !important; /* pins the bar to the bottom when the viewer is short */
     overflow: visible !important;
     border-top: 1px solid color-mix(in srgb, var(--border-color) 25%, transparent) !important;
-    padding-top: 8px !important;
+    /* VIS-2: spacing token (was hardcoded 8px). */
+    padding-top: var(--spacing-sm) !important;
     background: color-mix(in srgb, var(--background-color) 96%, var(--primary-color) 4%) !important;
 }
 
@@ -358,7 +359,8 @@
     z-index: 1000 !important;
     background-color: var(--background-color) !important;
     border-top: 1px solid color-mix(in srgb, var(--border-color) 30%, transparent) !important;
-    padding-top: 8px !important;
+    /* VIS-2: spacing token (was hardcoded 8px). */
+    padding-top: var(--spacing-sm) !important;
 }
 
 /* Inner input: not sticky (the wrapper handles pinning). Background kept so the mobile
