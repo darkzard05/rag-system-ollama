@@ -364,9 +364,10 @@ async def retrieve_and_rerank(
     )
 
     # [수정] R3a-04: 동적 Top-K 임계값을 RRF 점수 스케일(1/(k+rank))로 보정.
-    # 가중치 합산 RRF의 상위권 최대 gap은 ~0.003 수준이므로 config 값(기본 0.003)으로 판정.
+    # MEASURED (2026-10-11, 실코드 WEIGHTED_RRF n=500, p50 0.0016): 0.0015가
+    # trigger 약 56%로 pool 12/18을 분리한다. 0.003은 trigger 0%로 dead.
     dynamic_cfg = DYNAMIC_TOP_K_CONFIG
-    gap_threshold = float(dynamic_cfg.get("gap_threshold", 0.003))
+    gap_threshold = float(dynamic_cfg.get("gap_threshold", 0.0015))
     min_candidates = int(dynamic_cfg.get("min_candidates", 12))
     max_candidates = int(dynamic_cfg.get("max_candidates", 18))
 

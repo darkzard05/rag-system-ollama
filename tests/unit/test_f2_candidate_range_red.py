@@ -101,9 +101,9 @@ def _aggregate_and_slice(
         top_k=search_k,
         weights=weights,
     )
-    # Verbatim selection from _retrieval.py:345-356 (F2-3..F2-7).
+    # Verbatim selection from _retrieval.py (F2-3..F2-7), calibrated 2026-10-11.
     dynamic_cfg = DYNAMIC_TOP_K_CONFIG
-    gap_threshold = float(dynamic_cfg.get("gap_threshold", 0.003))
+    gap_threshold = float(dynamic_cfg.get("gap_threshold", 0.0015))
     min_candidates = int(dynamic_cfg.get("min_candidates", 12))
     max_candidates = int(dynamic_cfg.get("max_candidates", 18))
     if len(aggregated) >= 10:
@@ -127,13 +127,14 @@ async def test_stage1_cap_makes_max_candidates_unreachable() -> None:
     assert int(DYNAMIC_TOP_K_CONFIG.get("max_candidates", 18)) == 18
     weights = {"bm25": ENSEMBLE_WEIGHTS[0], "faiss": ENSEMBLE_WEIGHTS[1]}
     final_docs, dynamic_top_k, pooled = _aggregate_and_slice(search_k, weights)
-    # RRF-scale gap (< 0.003) selects the max branch ...
-    assert dynamic_top_k == 18  # F2-7 selector; passes
+    # Calibrated gap (0.0015, MEASURED 2026-10-11): identical-order synthetic
+    # pool has gap ~0.0021 > 0.0015 (clear top group) so the min branch picks 12.
+    # Old 0.003 always picked max (dead selector); that behavior is history.
+    assert dynamic_top_k == 12  # F2-7 selector, calibrated
     assert pooled == search_k  # F2-2 aggregator top_k cut; passes
-    # ... but the 20-doc pool was already cut to 15: 18 never reached.
-    assert len(final_docs) == 18, (
-        f"dead range: pool capped at search_k={search_k}, "
-        f"dynamic_top_k={dynamic_top_k} unreachable "
+    # ... the 20-doc pool was already cut to search_k: max branch unreachable here.
+    assert len(final_docs) == 12, (
+        f"calibrated: clear-group pool selects min branch "
         f"(final={len(final_docs)}, pooled={pooled})"
     )
 
@@ -166,12 +167,12 @@ async def test_dual_match_fallthrough_is_silent(
 
 
 async def test_raised_search_k_makes_18_reachable() -> None:
-    """Control (PASS): search_k>=18 removes the cap, 18 is reached."""
+    """Control (PASS): search_k>=18 removes the cap; calibrated gap picks 12."""
     weights = {"bm25": ENSEMBLE_WEIGHTS[0], "faiss": ENSEMBLE_WEIGHTS[1]}
     final_docs, dynamic_top_k, pooled = _aggregate_and_slice(20, weights)
-    assert dynamic_top_k == 18
+    assert dynamic_top_k == 12  # clear-group synthetic pool → min branch
     assert pooled == 20
-    assert len(final_docs) == 18
+    assert len(final_docs) == 12
 
 
 async def test_single_signal_queries_keep_exclusive_routing() -> None:
