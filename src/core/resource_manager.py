@@ -397,6 +397,8 @@ class ClientPool:
         self._lock = threading.Lock()
         self._sync_host: str = ""
         self._async_host: str = ""
+        self._async_lock: asyncio.Lock | None = None
+        self._async_lock_loop: Any = None
 
     def get_sync_client(self, host: str):
         with self._lock:
@@ -415,21 +417,38 @@ class ClientPool:
         except RuntimeError:
             return ollama.AsyncClient(host=host)
 
-        # 루프가 바뀌었거나 호스트가 바뀌었으면 재생성
+        # Fast path: 재생성이 필요 없으면 락 없이 반환 (await 없음 → 경합 없음).
         if (
-            self._async_client is None
-            or self._client_loop != current_loop
-            or self._async_host != host
+            self._async_client is not None
+            and self._client_loop is current_loop
+            and self._async_host == host
         ):
-            if self._async_client:
-                with contextlib.suppress(Exception):
-                    await getattr(
-                        self._async_client, "close", lambda: asyncio.sleep(0)
-                    )()
+            return self._async_client
 
-            self._async_client = ollama.AsyncClient(host=host)
-            self._client_loop = current_loop
-            self._async_host = host
+        # Slow path: asyncio.Lock으로 직렬화 (threading.Lock은 await 구간 보호 불가).
+        # Lock은 실행 중인 루프 안에서 생성해야 하므로 루프 변경 시 재생성한다.
+        lock = self._async_lock
+        if lock is None or self._async_lock_loop is not current_loop:
+            lock = asyncio.Lock()
+            self._async_lock = lock
+            self._async_lock_loop = current_loop
+
+        async with lock:
+            # Double-checked: 대기 중 다른 코루틴이 이미 재생성했을 수 있다.
+            if (
+                self._async_client is None
+                or self._client_loop is not current_loop
+                or self._async_host != host
+            ):
+                if self._async_client:
+                    with contextlib.suppress(Exception):
+                        await getattr(
+                            self._async_client, "close", lambda: asyncio.sleep(0)
+                        )()
+
+                self._async_client = ollama.AsyncClient(host=host)
+                self._client_loop = current_loop
+                self._async_host = host
 
         return self._async_client
 

@@ -228,6 +228,10 @@ class SessionManager:
                 # 삭제 tombstone: delete()로 제거된 키는 UI 미러에서도 제거해야
                 # 하므로 별도 집합에 보관한다 (sync_to_streamlit이 소비).
                 new_state["_deleted_keys"] = set()
+                # 더티 버전: sync 스냅샷 이후 동일 키 재쓰기를 감지한다.
+                # 스냅샷 시점 버전을 기록하고, 소비 시 버전이 동일할 때만
+                # 해소한다 (버전 불일치 = 전달되지 않은 V2 존재 → 잔류).
+                new_state["_dirty_versions"] = {}
                 new_state["last_accessed"] = time.time()
                 cls._fallback_sessions[sid] = new_state
                 logger.debug(f"[SESSION] 신규 세션 저장소 생성: {sid}")
@@ -310,13 +314,21 @@ class SessionManager:
         # 별칭(UI가 내부 리스트 공유) 문제를 제거합니다.
         # deliver-then-consume: 쓰기 성공한 키만 더티에서 제거한다. 쓰기 실패 시
         # 더티를 복원해 다음 sync에서 재시도한다 (영구 desync 방지).
+        # 버전 기반 consume: 스냅샷 이후 동일 키 재쓰기(V2)가 끼면 버전을
+        # 비교해 해소하지 않고 잔류시킨다 (Lost-Update 방지).
         values: dict[str, Any] = {}
         target_keys: set[str] = set()
+        snap_versions: dict[str, int] = {}
         with cls._acquire_lock(sid):
+            versions = state.setdefault("_dirty_versions", {})
             if key:
                 if key in state:
                     values[key] = state[key]
                     target_keys.add(key)
+                    try:
+                        snap_versions[key] = int(versions.get(key, 0))
+                    except (TypeError, ValueError):
+                        snap_versions[key] = 0
                 deleted_keys = {key} & state.setdefault("_deleted_keys", set()).copy()
             else:
                 dirty = state["_dirty_keys"].copy()
@@ -324,6 +336,10 @@ class SessionManager:
                     if k in state:
                         values[k] = state[k]
                         target_keys.add(k)
+                        try:
+                            snap_versions[k] = int(versions.get(k, 0))
+                        except (TypeError, ValueError):
+                            snap_versions[k] = 0
             # 삭제 tombstone 스냅샷: state에 이미 없으므로 values에 담지 않고
             # 별도로 전달한다. set() 후 add는 동일 키 부활(set)과의 경합에서
             # tombstone이 지지 않도록 스냅샷 시점에 고정한다.
@@ -363,18 +379,39 @@ class SessionManager:
                 with cls._acquire_lock(sid):
                     cur = cls._fallback_sessions.get(sid)
                     if cur is not None:
-                        cur["_dirty_keys"].difference_update(succeeded)
+                        cur_versions = cur.setdefault("_dirty_versions", {})
+                        still_dirty = set()
+                        for k in succeeded:
+                            try:
+                                cur_ver = int(cur_versions.get(k, 0))
+                            except (TypeError, ValueError):
+                                cur_ver = 0
+                            if cur_ver != snap_versions.get(k, 0):
+                                # 스냅샷 이후 재쓰기 발생 → 해소하지 않는다.
+                                still_dirty.add(k)
+                        cur["_dirty_keys"].difference_update(succeeded - still_dirty)
+                        cur["_dirty_keys"].update(still_dirty)
                         cur["_dirty_keys"].update(failed)
                         cur.setdefault("_deleted_keys", set()).difference_update(
                             delivered_deletes
                         )
                         cur.setdefault("_deleted_keys", set()).update(failed_deletes)
         else:
-            # 어댑터 미설치(core 단독/테스트) 시에는 기존처럼 소비한다.
+            # 어댑터 미설치(core 단독/테스트) 시에도 버전 기반으로 소비한다.
             with cls._acquire_lock(sid):
                 cur = cls._fallback_sessions.get(sid)
                 if cur is not None:
-                    cur["_dirty_keys"].difference_update(target_keys)
+                    cur_versions = cur.setdefault("_dirty_versions", {})
+                    still_dirty = set()
+                    for k in target_keys:
+                        try:
+                            cur_ver = int(cur_versions.get(k, 0))
+                        except (TypeError, ValueError):
+                            cur_ver = 0
+                        if cur_ver != snap_versions.get(k, 0):
+                            still_dirty.add(k)
+                    cur["_dirty_keys"].difference_update(target_keys - still_dirty)
+                    cur["_dirty_keys"].update(still_dirty)
                     cur.setdefault("_deleted_keys", set()).difference_update(
                         deleted_keys
                     )
@@ -442,6 +479,17 @@ class SessionManager:
         return default
 
     @classmethod
+    def _mark_dirty_locked(cls, state: dict[str, Any], keys: Set[str]) -> None:
+        """세션 락 보유 중에 더티 집합과 버전 카운터를 함께 갱신한다."""
+        state.setdefault("_dirty_keys", set()).update(keys)
+        versions = state.setdefault("_dirty_versions", {})
+        for k in keys:
+            try:
+                versions[k] = int(versions.get(k, 0)) + 1
+            except (TypeError, ValueError):
+                versions[k] = 1
+
+    @classmethod
     def set(
         cls,
         key: str | None = None,
@@ -469,7 +517,7 @@ class SessionManager:
                     logging.DEBUG
                 ):  # 👈 DEBUG 레벨일 때만 문자열 포맷팅 실행
                     logger.debug(f"[DEBUG] SessionManager.set: {sid} {k}={v}")
-            state["_dirty_keys"].update(updates.keys())
+            cls._mark_dirty_locked(state, set(updates.keys()))
 
     @classmethod
     def delete(cls, key: str, session_id: str | None = None):
@@ -580,7 +628,7 @@ class SessionManager:
             elif not updated:
                 state["messages"] = current
 
-            state["_dirty_keys"].add("messages")
+            cls._mark_dirty_locked(state, {"messages"})
 
     @classmethod
     def add_status_log(
@@ -597,7 +645,7 @@ class SessionManager:
             if len(logs) > 30:
                 del logs[:-30]
 
-            state["_dirty_keys"].add("status_logs")
+            cls._mark_dirty_locked(state, {"status_logs"})
 
         if add_to_chat:
             cls.add_message("system", msg, msg_type="log", session_id=session_id)
@@ -611,7 +659,7 @@ class SessionManager:
             if logs:
                 logs[-1] = msg
 
-            state["_dirty_keys"].add("status_logs")
+            cls._mark_dirty_locked(state, {"status_logs"})
 
     @classmethod
     def reset_all_state(cls, session_id: str | None = None):
@@ -646,8 +694,7 @@ class SessionManager:
                 del state["chat_history"]
                 state.setdefault("_deleted_keys", set()).add("chat_history")
             state["pdf_annotations"] = []
-            state["_dirty_keys"].add("messages")
-            state["_dirty_keys"].add("pdf_annotations")
+            cls._mark_dirty_locked(state, {"messages", "pdf_annotations"})
 
     @classmethod
     def reset_for_new_file(cls, session_id: str | None = None):
@@ -718,14 +765,15 @@ class SessionManager:
             st["rebuild_error"] = None
             st["is_building_rag"] = True
             st["rebuild_start_time"] = build.started_at
-            st["_dirty_keys"].update(
+            cls._mark_dirty_locked(
+                st,
                 {
                     "build_state",
                     "rebuild_cancelled",
                     "rebuild_error",
                     "is_building_rag",
                     "rebuild_start_time",
-                }
+                },
             )
             return build
 
@@ -759,12 +807,13 @@ class SessionManager:
             if build.phase == BuildPhase.ERROR and build.error:
                 st["rebuild_error"] = build.error
                 st["pdf_processing_error"] = build.error
-            st["_dirty_keys"].update(
+            cls._mark_dirty_locked(
+                st,
                 {
                     "build_state",
                     "rebuild_cancelled",
                     "is_building_rag",
-                }
+                },
             )
             return build
 
@@ -784,12 +833,13 @@ class SessionManager:
             if build.phase == BuildPhase.ERROR and build.error:
                 st["rebuild_error"] = build.error
                 st["pdf_processing_error"] = build.error
-            st["_dirty_keys"].update(
+            cls._mark_dirty_locked(
+                st,
                 {
                     "build_state",
                     "rebuild_cancelled",
                     "is_building_rag",
-                }
+                },
             )
             return build
 
@@ -800,7 +850,7 @@ class SessionManager:
         with cls._acquire_lock(sid):
             st = cls._get_state(sid)
             st["build_state"] = None
-            st["_dirty_keys"].add("build_state")
+            cls._mark_dirty_locked(st, {"build_state"})
 
     @classmethod
     def safe_remove_file(cls, path: str, max_retries: int = 3):
