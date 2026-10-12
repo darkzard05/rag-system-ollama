@@ -381,9 +381,9 @@
     box-shadow: 0 0 0 2px var(--focus-ring-color) !important;
 }
 
-/* Chat Input Disabled State */
+/* Chat Input Disabled State (ACC-8: 0.85 keeps the hint readable). */
 [data-testid="stChatInput"]:has(textarea:disabled) {
-    opacity: 0.6 !important;
+    opacity: 0.85 !important;
 }
 
 /* Kill Streamlit's default bottom padding on the sticky bottom container (3.5rem gap) */

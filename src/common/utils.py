@@ -601,7 +601,8 @@ def apply_tooltips_to_response(
         return (
             f'<span class="citation-highlight" title="{clean_content}" '
             f'data-doc-id="{cited_id}" '
-            f'style="color: #007bff; font-weight: 600; text-decoration: underline; text-underline-offset: 3px;">'
+            # ACC-6: #0056b3 (7:1 on white) + weight 700 for link contrast.
+            f'style="color: #0056b3; font-weight: 700; text-decoration: underline; text-underline-offset: 3px;">'
             f"{match.group(0)}</span>"
         )
 
@@ -672,7 +673,8 @@ def apply_tooltips_to_response(
         return (
             f'<span class="citation-highlight" title="{clean_content}" '
             f'data-page="{target_page}" '
-            f'style="color: #007bff; font-weight: 600; text-decoration: underline; text-underline-offset: 3px;">'
+            # ACC-6: #0056b3 (7:1 on white) + weight 700 for link contrast.
+            f'style="color: #0056b3; font-weight: 700; text-decoration: underline; text-underline-offset: 3px;">'
             f"{full_match}</span>"
         )
 
