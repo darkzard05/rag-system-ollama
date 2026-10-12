@@ -694,10 +694,15 @@ class CoordCacheManager:
     async def _clear_cache_impl(self, file_hash: str | None = None):
         try:
             db = await self._get_connection()
+            await db.execute(_ANNOTATION_MEMO_DDL)
             if file_hash:
                 await db.execute("DELETE FROM coords WHERE file_hash = ?", (file_hash,))
+                await db.execute(
+                    "DELETE FROM annotation_memo WHERE file_hash = ?", (file_hash,)
+                )
             else:
                 await db.execute("DELETE FROM coords")
+                await db.execute("DELETE FROM annotation_memo")
             await db.commit()
         except aiosqlite.Error as e:
             logger.error(f"좌표 캐시 삭제 중 오류: {e}")
@@ -722,12 +727,12 @@ class CoordCacheManager:
         self._eviction_started = False
 
     async def _close_impl(self) -> None:
-        async with self._conn_lock:
-            if self._conn is not None:
-                with contextlib.suppress(Exception):
-                    await self._conn.close()
-                self._conn = None
-                self._conn_healthy = False
+        # Write-behind 큐 드레인: 워커가 살아있는 동안 join으로 잔여분 처리를
+        # 대기한다. 타임아웃 시 경고를 남기고 동기 폴백으로 마저 기록한다.
+        worker = self._worker_task
+        if worker is not None and not worker.done() and not self._queue.empty():
+            with contextlib.suppress(asyncio.TimeoutError):
+                await asyncio.wait_for(self._queue.join(), timeout=30)
 
         for task in (self._worker_task, self._eviction_task):
             if task is not None and not task.done():
@@ -736,6 +741,30 @@ class CoordCacheManager:
                     await task
         self._worker_task = None
         self._eviction_task = None
+
+        # 워커 종료 후에도 큐에 잔여분이 있으면(타임아웃/크래시) 직접 기록한다.
+        leftovers: list[tuple[Any, Any, Any]] = []
+        while not self._queue.empty():
+            try:
+                leftovers.append(self._queue.get_nowait())
+            except asyncio.QueueEmpty:
+                break
+        for file_hash, page_num, coords in leftovers:
+            try:
+                await self._insert_coords_impl(file_hash, page_num, coords)
+            except (aiosqlite.Error, OSError, RuntimeError) as e:
+                logger.error(
+                    f"종료 시 잔여 좌표 기록 실패 ({file_hash}, p{page_num}): {e}"
+                )
+            finally:
+                self._queue.task_done()
+
+        async with self._conn_lock:
+            if self._conn is not None:
+                with contextlib.suppress(Exception):
+                    await self._conn.close()
+                self._conn = None
+                self._conn_healthy = False
 
 
 # 싱글톤 인스턴스 노출

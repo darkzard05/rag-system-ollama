@@ -87,6 +87,34 @@ def _token_from_dict(d: dict[str, Any]) -> Token:
     return Token(**d)
 
 
+def _secure_atomic_write_text(path: Path, text: str) -> None:
+    """민감 파일을 0600 권한으로 원자적으로 기록합니다.
+
+    tmp 파일을 ``os.open(..., 0o600)`` 으로 생성해 생성~chmod 사이
+    world-readable 윈도우를 제거하고(CWE-377), ``os.replace`` 후 최종
+    파일에도 ``0o600`` 을 적용합니다(CWE-732). Windows에서는 mode/chmod가
+    제한적이므로 best-effort로 적용합니다.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = path.with_suffix(path.suffix + ".tmp")
+    flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
+    fd = os.open(str(tmp_path), flags, 0o600)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(text)
+    except BaseException:
+        with suppress(OSError):
+            os.close(fd)
+        with suppress(OSError):
+            os.unlink(str(tmp_path))
+        raise
+    with suppress(OSError):
+        os.chmod(str(tmp_path), 0o600)
+    os.replace(str(tmp_path), str(path))
+    with suppress(OSError):
+        os.chmod(str(path), 0o600)
+
+
 class PasswordHasher:
     """비밀번호 해싱"""
 
@@ -142,14 +170,8 @@ class SimpleJWT:
                 if content:
                     return content
 
-            path.parent.mkdir(parents=True, exist_ok=True)
             secret = secrets.token_urlsafe(32)
-            tmp_path = path.with_suffix(path.suffix + ".tmp")
-            with open(tmp_path, "w", encoding="utf-8") as f:
-                f.write(secret)
-            os.replace(tmp_path, path)
-            with suppress(OSError):
-                os.chmod(path, 0o600)
+            _secure_atomic_write_text(path, secret)
             return secret
         except OSError:
             return secrets.token_urlsafe(32)
@@ -298,11 +320,7 @@ class AuthenticationManager:
                 "deny_list": sorted(self._deny_list),
             }
             path = Path(self._state_file)
-            path.parent.mkdir(parents=True, exist_ok=True)
-            tmp_path = path.with_suffix(path.suffix + ".tmp")
-            with open(tmp_path, "w", encoding="utf-8") as f:
-                json.dump(payload, f, ensure_ascii=False)
-            os.replace(tmp_path, path)
+            _secure_atomic_write_text(path, json.dumps(payload, ensure_ascii=False))
         except OSError as e:
             logger.warning("auth state 저장 실패 (%s): %s", self._state_file, e)
 
