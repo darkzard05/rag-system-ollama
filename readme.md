@@ -162,7 +162,6 @@ Each run writes `reports/eval_quality_<tag>_<ts>.json` and `.md` with per-questi
 | `rag.prompt_templates.citations.text_span` | ≤200 chars (advisory) | Keep `text_span` under 200 chars; `maxLength: 200` is advisory only in `json_object` mode (not enforced by a validator) |
 | `rag.prompts.generate.generation_validation` | observe-only | S1 telemetry flags (`over_budget_chars: 600`, `regen_floor_chars: 450`, regen OFF) |
 | `global_cache.enable_vector_cache` | true | Enable vector store (indexing results) caching |
-| `ui.timeline_poll_seconds` | 1.0 | Timeline fragment auto-refresh interval (seconds) |
 
 ---
 

@@ -9,7 +9,7 @@ Streamlit-based frontend orchestration for the RAG system, managing the two-colu
 - `components/`: Modular UI elements.
     - `chat.py`: Unified conversational timeline (single-pass render, no polling fragment), streaming message rendering, native status/expander components. Live streaming uses `_render_streaming_with_write_stream` (st.write_stream + expander-above aux_ph slot) inside `_render_unified_timeline`.
     - `streaming.py`: Async stream consumption bridge (`stream_chunks`, background worker inside) and `consume_stream_into_message` pure helper that persists the assistant message (content/thought/docs/metrics/citations, cancel detection, PDF side-effects) without a background thread.
-    - `viewer.py`: PDF rendering fragment (`@st.fragment(run_every=2.0)`), page navigation, annotation display.
+    - `viewer.py`: PDF rendering fragment (`@st.fragment`, no timer), page navigation, annotation display.
     - `sidebar.py`: Global settings and session controls.
 - `styles/`: CSS and theme assets.
     - `main.css`: Layout flex chain, responsive breakpoints, sticky chat input. Component styling delegated to native Streamlit elements.
@@ -29,7 +29,7 @@ Streamlit-based frontend orchestration for the RAG system, managing the two-colu
 ## CONVENTIONS
 - **Fragment first**: Wrap localized UI sections in `@st.fragment` to prevent full-page reruns.
 - **PDF + Chat**: Separate fragments — PDF navigation does not force chat rerun, and vice versa.
-- **Message polling**: `_render_unified_timeline` runs every 1.0s (`timeline_poll_seconds`) to pick up new messages without explicit `st.rerun()`.
+- **No idle polling**: no `run_every` timers in the render path. New messages arrive via the same script run (submit path) or worker-driven `st.rerun()` (build progress); streaming joins synchronously via `st.write_stream`.
 - **Everything is a message**: Document context, build progress/errors, logs, and streaming state are all stored as messages (`msg_type` discriminator) in `SessionManager.messages`.
 - **Interactive key protection**: `UIBridge.sync_session()` preserves widget-bound keys during state sync.
 - **Module-level callbacks**: Navigation `on_click` handlers are module-level (not per-render closures).
@@ -37,7 +37,7 @@ Streamlit-based frontend orchestration for the RAG system, managing the two-colu
 
 ## ANTI-PATTERNS
 - **Full reruns for local state**: Use `@st.fragment` instead. Only `st.rerun()` when submitting a message or resetting.
-- **`st.rerun()` after streaming**: Removed — the timeline fragment polls instead.
+- **`st.rerun()` after streaming**: Removed — the tail finalizes in-run (terminalize).
 - **Direct `st.session_state` mutation**: Always go through `SessionManager` then `UIBridge`.
 - **UI Logic in Core**: Keep all Streamlit-specific code within `src/ui/`.
 - **Nested fragments**: `@st.fragment` cannot contain another `@st.fragment` — inline helper functions.
