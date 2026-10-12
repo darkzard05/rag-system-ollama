@@ -11,6 +11,10 @@ MAX_PDF_SIZE_BYTES 는 ``_app_server_module()`` 으로 호출 시점에 읽습�
 """
 
 import logging
+import os
+import threading
+import time
+import uuid
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
@@ -44,6 +48,59 @@ def _ensure_valid_pdf(content: bytes, filename: str | None) -> None:
     """업로드 바이트가 PDF 매직바이트로 시작하는지 검증한다. 아니면 400을 발생시킨다."""
     if not content or not content.lstrip().startswith(_PDF_MAGIC):
         raise HTTPException(status_code=400, detail="PDF 파일만 업로드 가능합니다.")
+
+
+# 동일 file_hash 경로의 동시 쓰기 경합 방지용 프로세스 내 락 테이블.
+# 내용-주소 저장소는 동일 해시 → 동일 경로이므로 per-path 락 + 원자적
+# 교체(tmp + os.replace)로 찢긴 읽기(torn read)를 방지한다.
+_persist_locks_guard = threading.Lock()
+_persist_locks: dict[str, threading.Lock] = {}
+
+
+def _persist_lock_for(key: str) -> threading.Lock:
+    with _persist_locks_guard:
+        lock = _persist_locks.get(key)
+        if lock is None:
+            lock = threading.Lock()
+            _persist_locks[key] = lock
+        return lock
+
+
+def persist_pdf_atomically(persisted_path: Path, content: bytes) -> None:
+    """PDF 바이트를 원자적으로 영속화한다.
+
+    ``Path.write_bytes``는 제자리 절단+쓰기라서 동시 리더(빌드 파이프라인)가
+    부분 바이트를 읽을 수 있다. 고유 임시파일에 쓴 뒤 ``os.replace``로
+    원자 교체하면 리더는 항상 완전한 구버전 또는 완전한 신버전만 본다.
+    """
+    persisted_path.parent.mkdir(parents=True, exist_ok=True)
+    with _persist_lock_for(str(persisted_path)):
+        tmp_path = persisted_path.with_name(
+            f"{persisted_path.name}.{uuid.uuid4().hex}.tmp"
+        )
+        try:
+            tmp_path.write_bytes(content)
+            # Windows는 리더가 파일을 여는 순간 교체가 WinError 5로
+            # 거부되므로 충분히 재시도한다 (POSIX는 첫 시도에 성공).
+            # 프로덕션 리더(빌드 파이프라인)는 단발성 읽기라 경합이 낮고,
+            # 테스트의 타이트 루프 리더에도 1초 재시도로 대응한다.
+            last_error: OSError | None = None
+            for _ in range(200):
+                try:
+                    os.replace(tmp_path, persisted_path)
+                    last_error = None
+                    break
+                except OSError as e:
+                    last_error = e
+                    time.sleep(0.005)
+            if last_error is not None:
+                raise last_error
+        finally:
+            try:
+                if tmp_path.exists():
+                    tmp_path.unlink()
+            except OSError:
+                pass
 
 
 @router.post("/api/v1/upload")
@@ -92,7 +149,7 @@ async def upload_document(
         storage = Path(srv.PDF_STORAGE_DIR)
         storage.mkdir(parents=True, exist_ok=True)
         persisted_path = storage / f"{file_hash}.pdf"
-        persisted_path.write_bytes(content)
+        persist_pdf_atomically(persisted_path, content)
 
         # [수정] 동적으로 결정된 임베딩 모델 사용 (모델 로딩은 무거우므로 스레드 유지)
         embedder = await get_resource_manager().get_embedder_for_session(

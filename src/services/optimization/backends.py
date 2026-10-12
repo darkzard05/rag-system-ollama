@@ -799,13 +799,65 @@ class SemanticCache(CacheBackend[T]):
                 if self._cached_matrix is None:
                     return None
 
-                # 코사인 유사도 계산 (행렬-벡터 내적)
-                similarities = np.dot(self._cached_matrix, query_vec)
+                # D17 네임스페이스 격리: "namespace:query" 형태 키는 동일
+                # 네임스페이스 후보군으로만 유사도 검색을 제한한다.
+                # 문자열 접두사(file_hash)는 임베딩에서 노이즈에 불과해
+                # 타 문서 키가 임계값을 쉽게 넘기기 때문이다.
+                def _namespace_of(text: str) -> str | None:
+                    if ":" not in text:
+                        return None
+                    return text.split(":", 1)[0]
 
-                # 가장 유사한 항목 찾기
-                max_idx = np.argmax(similarities)
-                best_similarity = similarities[max_idx]
-                best_match = self._cached_keys[max_idx]
+                def _candidate_namespace(cache_key: str) -> str | None:
+                    entry = self.cache.get(cache_key)
+                    if entry is None:
+                        return None
+                    orig = entry.metadata.get("orig_key") or entry.metadata.get(
+                        "query", ""
+                    )
+                    if not isinstance(orig, str):
+                        return None
+                    return _namespace_of(orig)
+
+                query_ns = _namespace_of(key)
+                if query_ns is not None:
+                    # 정확 일치 우선 (같은 문서·같은 질의)
+                    exact_key = fast_hash(key)
+                    exact_entry = self.cache.get(exact_key)
+                    if exact_entry is not None and (
+                        _candidate_namespace(exact_key) == query_ns
+                    ):
+                        if exact_entry.is_expired():
+                            self._update_matrix(exact_key, action="remove")
+                            del self.cache[exact_key]
+                            self.embeddings.pop(exact_key, None)
+                            self.stats.total_misses += 1
+                            self.stats.total_expirations += 1
+                            return None
+                        exact_entry.touch()
+                        self.stats.total_hits += 1
+                        return exact_entry.value
+                    allowed = [
+                        i
+                        for i, ck in enumerate(self._cached_keys)
+                        if _candidate_namespace(ck) == query_ns
+                    ]
+                    if not allowed:
+                        self.stats.total_misses += 1
+                        return None
+                    matrix = self._cached_matrix[allowed]
+                    similarities = np.dot(matrix, query_vec)
+                    max_pos = int(np.argmax(similarities))
+                    best_similarity = similarities[max_pos]
+                    best_match = self._cached_keys[allowed[max_pos]]
+                else:
+                    # 코사인 유사도 계산 (행렬-벡터 내적)
+                    similarities = np.dot(self._cached_matrix, query_vec)
+
+                    # 가장 유사한 항목 찾기
+                    max_idx = np.argmax(similarities)
+                    best_similarity = similarities[max_idx]
+                    best_match = self._cached_keys[max_idx]
 
                 # 임계값 이상인 경우 반환
                 if best_similarity >= threshold:
@@ -870,7 +922,7 @@ class SemanticCache(CacheBackend[T]):
                     created_at=time.time(),
                     accessed_at=time.time(),
                     ttl_seconds=ttl,
-                    metadata={"query": key[:100]},
+                    metadata={"query": key[:100], "orig_key": key},
                 )
 
                 self.cache[cache_key] = entry
