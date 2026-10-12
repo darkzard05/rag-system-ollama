@@ -1,0 +1,3 @@
+# Optional semantic chunking backend (P0-2 spike). Install on demand:
+#   pip install -r requirements/optional-chonkie.txt
+chonkie>=1.0.0

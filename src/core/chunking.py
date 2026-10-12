@@ -174,6 +174,36 @@ async def split_documents(
             )
 
         use_semantic = SEMANTIC_CHUNKER_CONFIG.get("enabled", False)
+        chunk_backend = str(SEMANTIC_CHUNKER_CONFIG.get("backend", "builtin")).lower()
+
+        # P0-2 opt-in: chonkie 헤더-어웨어 어댑터. 미설치/실패 시 builtin 폴백.
+        if chunk_backend == "chonkie":
+            try:
+                from core.chonkie_adapter import (
+                    chunk_with_chonkie,
+                    is_chonkie_available,
+                )
+
+                if is_chonkie_available():
+                    with get_performance_monitor().track_operation(
+                        OperationType.SEMANTIC_CHUNKING,
+                        {"doc_count": len(docs), "backend": "chonkie"},
+                    ):
+                        split_docs = await asyncio.to_thread(chunk_with_chonkie, docs)
+                        if embedder:
+                            vectors = await _embed_documents_chunks(
+                                split_docs, embedder
+                            )
+                    msg = f"chonkie 의미 분할 완료 ({len(split_docs)}개 청크 생성)"
+                    SessionManager.add_status_log(msg, session_id=session_id)
+                    logger.info(
+                        f"[RAG] [CHUNKING] 분할 완료 | 원본: {len(docs)} | 청크: {len(split_docs)}"
+                    )
+                    _postprocess_metadata(split_docs)
+                    return split_docs, vectors
+                logger.warning("[CHUNKING] chonkie 미설치로 builtin 폴백")
+            except Exception as e:
+                logger.warning(f"[CHUNKING] chonkie 실패로 builtin 폴백: {e}")
 
         if use_semantic and embedder:
             with get_performance_monitor().track_operation(

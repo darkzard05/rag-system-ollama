@@ -88,6 +88,10 @@ rag:
       k: 18  # Stage-1 풀 크기: dynamic_top_k max_candidates(18)와 일치시켜 18-후보 분기가 도달 가능하도록 복원 (k < max면 max 분기가 dead range가 됨 — F2 fix)
     # BM25와 FAISS의 가중치 기본값
     ensemble_weights: [0.4, 0.6]
+    # BM25 백엔드 선택: "rank-bm25" (기본, 기존 동작) | "bm25s" (opt-in, 고속).
+    # bm25s는 optional 의존성 (requirements/optional-bm25s.txt). 미설치 시
+    # rank-bm25로 폴백하고 경고를 남긴다.
+    bm25_backend: "rank-bm25"
 
     # 동적 Top-K 임계값 — RRF 집계 점수 스케일(1/(k+rank)) 기준
     # MEASURED (2026-10-11, 실코드 WEIGHTED_RRF n=500): gap p50 0.0016/max 0.0023.
@@ -149,6 +153,11 @@ rag:
   # 의미론적 분할 설정
   semantic_chunker:
     enabled: true
+    # 청킹 백엔드: "builtin" (기본, 기존 EmbeddingBasedSemanticChunker) |
+    # "chonkie" (opt-in, 헤더-어웨어 SemanticChunker 어댑터).
+    # chonkie는 optional 의존성 (requirements/optional-chonkie.txt). 미설치 시
+    # builtin으로 폴백한다.
+    backend: "builtin"
     breakpoint_threshold_type: "similarity_threshold"
     breakpoint_threshold_value: 0.6
     # 문장 분할 정규식

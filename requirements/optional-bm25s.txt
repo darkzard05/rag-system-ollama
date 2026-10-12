@@ -1,0 +1,3 @@
+# Optional BM25 backend (P0-1 gradual wrapping). Install on demand:
+#   pip install -r requirements/optional-bm25s.txt
+bm25s>=0.2.0

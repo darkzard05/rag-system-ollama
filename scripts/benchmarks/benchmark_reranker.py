@@ -21,7 +21,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-ROOT_DIR = Path(__file__).parent.parent.absolute()
+ROOT_DIR = Path(__file__).parent.parent.parent.absolute()
 sys.path.append(str(ROOT_DIR / "src"))
 
 QUERY = "cm3가 뭔가요?"

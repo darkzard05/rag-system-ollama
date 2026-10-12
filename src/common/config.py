@@ -223,6 +223,10 @@ DYNAMIC_WEIGHTING_CONFIG: dict = RETRIEVER_CONFIG.get(
     "dynamic_weighting", {"enabled": False}
 )
 ENSEMBLE_WEIGHTS: list[float] = RETRIEVER_CONFIG.get("ensemble_weights", [0.4, 0.6])
+# P0-1: BM25 backend selector (gradual wrapping). "rank-bm25" default.
+RETRIEVER_BM25_BACKEND: str = str(
+    _get_env("BM25_BACKEND", RETRIEVER_CONFIG.get("bm25_backend", "rank-bm25"))
+).lower()
 # R3a-04: RRF 점수 스케일(1/(k+rank)) 기준 동적 top-k 임계값 config (기본 gap 0.003)
 DYNAMIC_TOP_K_CONFIG: dict = RETRIEVER_CONFIG.get(
     "dynamic_top_k",

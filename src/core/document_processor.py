@@ -584,6 +584,36 @@ async def load_pdf_docs(
 
             # context manager 종료로 doc.close() 자동 실행
 
+            # Phase 2 (router signal, 동작 변경 없음): 무거운 파서(Docling/Marker)가
+            # 유리한 페이지를 식별해 로그만 남긴다. 기준 — 표 다수(table_count>=2),
+            # 스캔 의심(50자 미만), 수식 밀집($/\(/\[ 포함). 임계 도달 시에만
+            # status_log에 1회 가시화하고, doc 메타에 needs_heavy_parse를 기록해
+            # 향후 페이지별 라우팅(pdfmux 패턴)의 입력으로 쓴다.
+            heavy_pages: list[int] = []
+            for d in docs:
+                md = d.metadata
+                text = d.page_content or ""
+                is_heavy = (
+                    int(md.get("table_count", 0) or 0) >= 2
+                    or len(text.strip()) < 50
+                    or ("$$" in text or "\\[" in text or "\\(" in text)
+                )
+                md["needs_heavy_parse"] = bool(is_heavy)
+                if is_heavy:
+                    heavy_pages.append(int(md.get("page", 0) or 0))
+            if heavy_pages:
+                logger.info(
+                    "[RAG] [PDF] heavy-parse 후보 %d/%d페이지 %s "
+                    "(향후 Docling/Marker 라우팅 대상; 현재는 pymupdf4llm 유지)",
+                    len(heavy_pages),
+                    total_pages,
+                    heavy_pages[:10],
+                )
+                SessionManager.add_status_log(
+                    f"정밀 파싱 후보 {len(heavy_pages)}페이지 감지 — 기본 파서로 계속합니다.",
+                    session_id=session_id,
+                )
+
             SessionManager.add_status_log(
                 f"문서 분석 완료: 총 {total_pages}페이지 ({len(docs)}개 섹션) 지식 확보",
                 session_id=session_id,

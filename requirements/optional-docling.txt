@@ -1,0 +1,5 @@
+# Optional heavy PDF parsing (Phase 2 router target). Install on demand:
+#   pip install -r requirements/optional-docling.txt
+# NOTE: ~1-2GB model weights, CPU OK / GPU faster. Default pipeline stays
+# on pymupdf4llm; docling is a page-level fallback candidate only.
+docling>=2.0.0

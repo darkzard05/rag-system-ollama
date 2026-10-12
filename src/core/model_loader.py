@@ -601,13 +601,20 @@ class MemoizingEmbedding(Embeddings):
         """메모이제이션 없이 내부 임베더로 순수 위임한다."""
         return self._inner.embed_documents(texts)
 
+    @staticmethod
+    def _norm_key(text: str) -> str:
+        """CacheBackedEmbeddings 패턴: 공백 정규화 키로 경미한 변형을 합친다."""
+        return " ".join(text.split())
+
     def embed_query(self, text: str) -> list[float]:
         """단일-flight 메모이징 쿼리 임베딩.
 
         단계 1(캐시) / 단계 2(단일-flight 판정)는 락 임계구간에서, 실제 계산과
         waiter 대기는 락 밖에서 수행된다. 타임아웃 시 항등 비교로 단일 승계자가
         되어 재계산하고, 나머지는 후임 체인을 따라 다시 대기한다.
+        P1: 캐시/in-flight 키는 공백 정규화 키를 사용한다 (원문은 계산에만).
         """
+        text = self._norm_key(text)
         with self._lock:
             entry = self._cache.get(text)
             if entry is not None:

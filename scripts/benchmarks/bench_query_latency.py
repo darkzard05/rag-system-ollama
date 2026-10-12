@@ -44,6 +44,10 @@ from pathlib import Path
 from typing import Any
 
 ROOT_DIR = Path(__file__).parent.parent.parent.absolute()
+# NOTE: imports below use the `src.` package prefix (repo root needed),
+# while `src/core/__init__.py` internally uses bare `core.*` imports
+# (`src/` itself needed). Both must be on sys.path.
+sys.path.append(str(ROOT_DIR))
 sys.path.append(str(ROOT_DIR / "src"))
 
 from src.common.config import (  # noqa: E402

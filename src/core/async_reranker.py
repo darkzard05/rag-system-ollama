@@ -99,10 +99,19 @@ class AsyncSemanticReranker:
         return ranked_docs, ranked_scores
 
     async def _get_query_embedding(self, query: str) -> np.ndarray:
-        """쿼리 임베딩을 생성합니다 (LRU 캐시 활용)."""
-        cached = self._query_emb_cache.get(query)
+        """쿼리 임베딩을 생성합니다 (LRU 캐시 활용).
+
+        P1: CacheBackedEmbeddings 패턴 — 문서 캐시와 동일하게 모델 네임스페이스와
+        공백 정규화를 키에 포함한다. 기존에는 원문 쿼리만 키라 임베더 교체 시
+        차원 불일치 벡터가 재사용될 수 있었다.
+        """
+        model = str(
+            getattr(self.embedder, "model", getattr(self.embedder, "model_name", ""))
+        )
+        key = f"{model}:{_text_hash(query)}"
+        cached = self._query_emb_cache.get(key)
         if cached is not None:
-            self._query_emb_cache.move_to_end(query)
+            self._query_emb_cache.move_to_end(key)
             return cached
 
         from core.resource_manager import get_resource_manager
@@ -111,8 +120,8 @@ class AsyncSemanticReranker:
         async with coordinator.use_embedder(embedder=self.embedder):
             vec = await asyncio.to_thread(self.embedder.embed_query, query)
         vec_np = np.array(vec, dtype="float32")
-        self._query_emb_cache[query] = vec_np
-        self._query_emb_cache.move_to_end(query)
+        self._query_emb_cache[key] = vec_np
+        self._query_emb_cache.move_to_end(key)
         if len(self._query_emb_cache) > _QUERY_EMB_CACHE_MAX:
             self._query_emb_cache.popitem(last=False)
         return vec_np

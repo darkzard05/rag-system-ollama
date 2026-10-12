@@ -9,7 +9,7 @@ from typing import Any
 from langchain_core.documents import Document
 from langchain_core.embeddings import Embeddings
 
-from common.config import RETRIEVER_CONFIG
+from common.config import RETRIEVER_BM25_BACKEND, RETRIEVER_CONFIG
 from common.exceptions import VectorStoreError
 from common.text_utils import bm25_tokenizer, has_bm25_tokens
 from core.session import SessionManager
@@ -238,13 +238,17 @@ def create_vector_store(
     )
 
 
-def create_bm25_retriever(docs: list[Document]) -> Any:
+def create_bm25_retriever(docs: list[Document], backend: str | None = None) -> Any:
     """BM25 리트리버를 생성합니다.
 
     코퍼스의 모든 문서가 ``bm25_tokenizer`` 로 빈 토큰 목록을 만들면
     ``rank_bm25._calc_idf`` 가 0으로 나눗셈(``ZeroDivisionError``)을 일으키므로,
     이 경우 ``None`` 을 반환해 호출부가 벡터 전용 검색으로 폴백하게 합니다.
     (하류의 ``graph_builder`` 는 ``bm25`` 가 falsy면 BM25 검색을 건너뜁니다.)
+
+    ``backend``: "rank-bm25" (기본) | "bm25s" (opt-in). None이면
+    ``RETRIEVER_BM25_BACKEND`` config를 따른다. bm25s 미설치/실패 시
+    rank-bm25로 폴백한다 (점진적 래핑).
     """
     from langchain_community.retrievers import BM25Retriever
 
@@ -254,8 +258,22 @@ def create_bm25_retriever(docs: list[Document]) -> Any:
         )
         return None
 
+    selected = (backend or RETRIEVER_BM25_BACKEND or "rank-bm25").lower()
+    k = RETRIEVER_CONFIG["search_kwargs"]["k"]
+    if selected == "bm25s":
+        try:
+            from core.bm25_backends import build_bm25s_retriever
+
+            retriever = build_bm25s_retriever(docs, k)
+            logger.info("[BM25] bm25s 백엔드 사용")
+            return retriever
+        except ImportError as e:
+            logger.warning(f"[BM25] bm25s 미설치로 rank-bm25 폴백: {e}")
+        except Exception as e:
+            logger.warning(f"[BM25] bm25s 구축 실패로 rank-bm25 폴백: {e}")
+
     retriever = BM25Retriever.from_documents(docs, preprocess_func=bm25_tokenizer)
-    retriever.k = RETRIEVER_CONFIG["search_kwargs"]["k"]
+    retriever.k = k
     return retriever
 
 
@@ -289,12 +307,30 @@ def _bm25_results_with_scores(retriever: Any, query: str, k: int) -> list[Docume
 async def search_bm25_with_scores(retriever: Any, query: str, k: int) -> list[Document]:
     """BM25 검색 결과를 실제 rank_bm25 점수와 함께 반환합니다.
 
-    실제 ``BM25Retriever``면 동기 내부 호출(``get_top_n`` + ``get_scores``)을
-    스레드로 실행해 점수를 주입하고, 그 외 객체(테스트 대역 등)는 ``ainvoke`` 폴백.
+    실제 ``BM25Retriever``/``Bm25sAdapter``면 동기 내부 호출을 스레드로
+    실행해 점수를 주입하고, 그 외 객체(테스트 대역 등)는 ``ainvoke`` 폴백.
+    (duck-typing: ``vectorizer.get_scores`` + ``docs`` + ``preprocess_func``)
     """
+    from unittest.mock import Mock
+
     from langchain_community.retrievers import BM25Retriever
 
-    if isinstance(retriever, BM25Retriever):
+    # Duck-typing guard must reject AsyncMock/test doubles: they auto-create
+    # any attribute, so require concrete shapes (docs is a real list and
+    # vectorizer.get_scores is a non-Mock callable).
+    vectorizer = getattr(retriever, "vectorizer", None)
+    docs_attr = getattr(retriever, "docs", None)
+    preprocess = getattr(retriever, "preprocess_func", None)
+    get_scores = getattr(vectorizer, "get_scores", None) if vectorizer else None
+    is_scored_retriever = isinstance(retriever, BM25Retriever) or (
+        isinstance(docs_attr, list)
+        and callable(preprocess)
+        and not isinstance(preprocess, Mock)
+        and vectorizer is not None
+        and callable(get_scores)
+        and not isinstance(get_scores, Mock)
+    )
+    if is_scored_retriever:
         return await asyncio.to_thread(_bm25_results_with_scores, retriever, query, k)
     docs = await retriever.ainvoke(query)
     return list(docs)

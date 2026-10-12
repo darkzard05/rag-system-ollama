@@ -402,8 +402,13 @@ class SemanticChunkerEmbeddingsMixin:
 
             # [수정] 모든 배치 성공 후 단일 wait_for + gather 병렬 배치 저장
             # (逐차 per-item wait_for는 miss가 많을수록 t_embed 지배 → 1회로 축소)
+            # P1: CacheBackedEmbeddings 패턴 — 저장 키도 조회와 동일하게
+            # 정규화(" ".join(split))한다. 기존에는 조회는 정규화 키,
+            # 저장은 원문 키라 공백 차이만으로 영구 miss가 발생했다.
             try:
-                unique_new = {text: vec for _, text, vec in newly_embedded}
+                unique_new = {
+                    " ".join(text.split()): vec for _, text, vec in newly_embedded
+                }
                 await asyncio.wait_for(
                     asyncio.gather(
                         *(
