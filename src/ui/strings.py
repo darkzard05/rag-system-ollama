@@ -67,7 +67,7 @@ UI_STRINGS: dict[str, dict[str, str]] = {
         "pdf_highlight_load_failed": (
             "Cannot load highlights (coordinate cache read failed)."
         ),
-        # Navigation
+        # Navigation (VIS-5: geometric ◀/▶ pair in both locales)
         "nav_prev": "◀ Previous",
         # PDF page input (viewer.py render_pdf_controls, visible label + help)
         "pdf_page_label": "Page",
@@ -128,8 +128,7 @@ UI_STRINGS: dict[str, dict[str, str]] = {
         ),
         "sidebar_language": "Language",
         "sidebar_language_help": "Switch the UI language.",
-        "nav_next": "Next ▶",
-        # Ollama error
+        "nav_next": "Next ▶",  # Ollama error
         "error_ollama_not_running": MSG_ERROR_OLLAMA_NOT_RUNNING,
         # Spinner
         "spinner_loading_models": "Loading available models…",
@@ -199,7 +198,7 @@ UI_STRINGS: dict[str, dict[str, str]] = {
         "pdf_highlight_load_failed": (
             "본문 위치 정보를 불러오지 못해 하이라이트 표시를 건너뜁니다."
         ),
-        "nav_prev": "⬅️ 이전",
+        "nav_prev": "◀ 이전",
         "pdf_page_label": "페이지",
         "pdf_page_help": "이동할 페이지 번호 (1–N).",
         "onboarding_guide": (
@@ -247,7 +246,7 @@ UI_STRINGS: dict[str, dict[str, str]] = {
         ),
         "sidebar_language": "언어",
         "sidebar_language_help": "UI 언어를 전환합니다.",
-        "nav_next": "다음 ➡️",
+        "nav_next": "다음 ▶",
         "error_ollama_not_running": MSG_ERROR_OLLAMA_NOT_RUNNING,
         "spinner_loading_models": "사용 가능한 모델 목록을 불러오는 중...",
         # Expanders

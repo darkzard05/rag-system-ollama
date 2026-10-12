@@ -422,7 +422,8 @@ div[data-testid="stBottomBlockContainer"] {
     visibility: visible !important;
     opacity: 1 !important;
     background-color: color-mix(in srgb, var(--background-color), transparent 20%);
-    box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+    /* VIS-6: shadow tokenized (was hardcoded black fade, lost in dark). */
+    box-shadow: 0 2px 8px color-mix(in srgb, var(--text-color) 10%, transparent);
     border-radius: 50%;
 }
 
@@ -600,6 +601,17 @@ border-top: 1px solid color-mix(in srgb, var(--border-color) 30%, transparent) !
     }
 }
 
+/* VIS-8: 1px divider between the PDF and chat columns (desktop only —
+   mobile stacks vertically). Direct-child scoping keeps PDF-controls inner
+   columns untouched. Plain declarations (hygiene budget). */
+@media (min-width: 769px) {
+    [data-testid="stMainBlockContainer"] [data-testid="stHorizontalBlock"]
+    > [data-testid="stColumn"]:first-child {
+        border-right: 1px solid color-mix(in srgb, var(--border-color) 30%, transparent);
+        padding-right: var(--spacing-sm);
+    }
+}
+
 /* 문서 컨텍스트/빌드 배너는 통합 타임라인 내 네이티브 컴포넌트로 대체됨.
    (st.chat_message + st.status) - 커스텀 CSS 제거 완료 */
 
@@ -642,7 +654,8 @@ border-top: 1px solid color-mix(in srgb, var(--border-color) 30%, transparent) !
 .rag-brand__sub {
     font-size: 0.9rem;
     color: var(--primary-color);
-    opacity: 0.8;
+    /* ACC-7: no opacity fade (was 0.8, ~2.7:1) — brand blue carries contrast. */
+    opacity: 1;
 }
 
 /* Chat auto-scroll rollout: sentinel marker only (append-only).
