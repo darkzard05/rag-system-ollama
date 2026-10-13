@@ -182,6 +182,12 @@ UI_STRINGS: dict[str, dict[str, str]] = {
         "chat_placeholder_not_ready": "Preparing the document index. Please wait a moment.",
         "chat_placeholder_ready": "Ask anything about the document.",
         "chat_placeholder_next": "Type a follow-up question...",
+        # Focus-order notice (chat.render_chat_input_area, WCAG 2.4.3 mitigation):
+        # the input is DOM-first for streaming stability but visually last.
+        "focus_order_notice": (
+            "Note: the chat input comes first in keyboard tab order, "
+            "but is shown at the bottom of the chat column."
+        ),
     },
     "ko": {
         "phase_document_search": "문서 검색",
@@ -295,6 +301,12 @@ UI_STRINGS: dict[str, dict[str, str]] = {
         "chat_placeholder_not_ready": "문서 인덱스를 준비 중입니다. 잠시만 기다려 주세요.",
         "chat_placeholder_ready": "문서 내용에 대해 궁금한 점을 질문해 보세요.",
         "chat_placeholder_next": "이어서 추가 질문을 입력하세요...",
+        # 포커스 순서 고지 (chat.render_chat_input_area, WCAG 2.4.3 완화책):
+        # 입력창은 스트리밍 안정성을 위해 DOM상 먼저 두지만 시각적으로는 하단 고정.
+        "focus_order_notice": (
+            "안내: 채팅 입력창은 키보드 탭 순서상 먼저 나오지만, "
+            "화면에서는 채팅 열 하단에 표시됩니다."
+        ),
     },
 }
 

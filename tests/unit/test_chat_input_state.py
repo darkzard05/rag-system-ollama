@@ -117,7 +117,12 @@ def test_ready_enables_input():
 
 
 def test_render_chat_input_area_generating_shows_status_caption() -> None:
-    """generating 입력 영역은 status caption 없이 chat_input placeholder로 안내한다."""
+    """generating 입력 영역은 status caption 없이 chat_input placeholder로 안내한다.
+
+    포커스 순서 고지는 상시 캡션으로 렌더하지 않는다 (시각 공간 0 — C+D 전략:
+    textarea aria-label suffix + 빈 상태 온보딩 1줄). 스트리밍 상태 캡션은
+    여전히 금지.
+    """
     sid = "input_area_generating"
     _reset_session(sid)
     SessionManager.set_session_id(sid)
@@ -142,7 +147,10 @@ def test_render_chat_input_area_generating_shows_status_caption() -> None:
 
 
 def test_render_chat_input_area_idle_has_no_status_caption() -> None:
-    """UX-4: 비생성 상태에서는 상태 캡션이 렌더되지 않는다."""
+    """UX-4: 비생성 상태에서는 상태 캡션이 렌더되지 않는다.
+
+    포커스 순서 고지는 상시 캡션으로 렌더하지 않는다 (시각 공간 0 — C+D 전략).
+    """
     sid = "input_area_idle"
     _reset_session(sid)
     SessionManager.set_session_id(sid)

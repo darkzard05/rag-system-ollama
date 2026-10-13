@@ -94,3 +94,6 @@ def _render_guidance_panel() -> None:
 
     with st.chat_message("assistant", avatar=AVATARS["assistant"]):
         st.markdown(t("onboarding_guide"))
+        # [A11Y-FOCUS-ORDER] D 병행: 빈 대화 상태에서만 보이는 온보딩에 순서
+        # 고지를 덧붙인다. 대화 중에는 공간을 차지하지 않는다 (상시 캡션 제거됨).
+        st.caption(t("focus_order_notice"))

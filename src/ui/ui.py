@@ -118,12 +118,17 @@ def inject_custom_css() -> None:
     inject_header_height_script()
 
     from ui.components.autoscroll_stick import BOTTOM_STICK_PX
+    from ui.strings import t
 
     css_json = json.dumps(css_content)
+    # [A11Y-FOCUS-ORDER] localized order notice for the textarea aria-label
+    # suffix (WCAG 2.4.3 mitigation). ensure_ascii keeps the JS string safe.
+    notice_json = json.dumps(t("focus_order_notice"))
     js = f"""
         <script>
         try {{
             const css = {css_json};
+            const a11yNotice = {notice_json};
             const doc = window.parent.document;
             let el = doc.getElementById('main-app-css');
             if (!el) {{
@@ -195,12 +200,31 @@ def inject_custom_css() -> None:
                 }}
             }};
 
+            // [A11Y-FOCUS-ORDER] WCAG 2.4.3 mitigation: the chat input is
+            // DOM-first (streaming stability) but visually last via CSS order:1.
+            // Append the localized notice to the textarea's accessible name so
+            // screen-reader users hear the order on focus. Visual space cost is
+            // zero (no DOM node added; existing stChatInput testID only).
+            // Re-applied on every probe run and DOM mutation: Streamlit
+            // re-renders reset element attributes, and reruns rebuild nodes.
+            const applyA11yLabel = () => {{
+                const box = doc.querySelector('[data-testid="stChatInput"] textarea');
+                if (!box) return;
+                let label = box.getAttribute('aria-label') || '';
+                if (box.__a11yNotice && label.includes(box.__a11yNotice)) {{
+                    label = label.replace(box.__a11yNotice, '').trim();
+                }}
+                box.setAttribute('aria-label', (label + ' ' + a11yNotice).trim());
+                box.__a11yNotice = a11yNotice;
+            }};
+
             const setupChatObserver = () => {{
                 const container = getChatContainer();
                 if (!container) {{
                     setTimeout(setupChatObserver, 100);
                     return;
                 }}
+                applyA11yLabel();
 
                 // 1. 실제 사용자의 마우스 휠 동작 감지
                 container.removeEventListener('wheel', container.__wheelHandler);
@@ -261,8 +285,10 @@ def inject_custom_css() -> None:
                 container.addEventListener('scroll', container.__scrollSyncHandler, {{ passive: true }});
 
                 // 2. 새 메시지 및 st.write_stream 토큰 스트리밍 DOM 변화 실시간 감시
+                // (DOM 재생성 시 날아간 aria-label suffix도 함께 복원한다)
                 scrollState.observer = new MutationObserver(() => {{
                     scrollToBottom(false);
+                    applyA11yLabel();
                 }});
 
                 scrollState.observer.observe(container, {{
