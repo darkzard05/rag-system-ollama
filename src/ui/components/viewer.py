@@ -8,6 +8,7 @@ import logging
 import os
 
 import streamlit as st
+from streamlit.errors import StreamlitAPIException
 
 from common.config import MSG_PDF_VIEWER_NO_FILE
 from common.exceptions import PDFProcessingError
@@ -279,7 +280,9 @@ def _resolve_pdf_state() -> dict | None:
             # 위젯 생성 이전의 대입이므로 Streamlit 규약상 허용된다.
             SessionManager.delete(PDF_TARGET_PAGE_KEY)
             st.session_state.pop(PDF_TARGET_PAGE_KEY, None)
-            with contextlib.suppress(AttributeError, RuntimeError):
+            with contextlib.suppress(
+                AttributeError, RuntimeError, StreamlitAPIException
+            ):
                 st.session_state[PDF_NAV_INPUT_KEY] = current_page
             return {
                 "pdf_path": pdf_path,

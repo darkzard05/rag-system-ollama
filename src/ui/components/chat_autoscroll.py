@@ -133,26 +133,13 @@ def build_autoscroll_js(force: bool) -> str:
 def render_autoscroll_sentinel(session_id: str, force: bool = False) -> None:
     """Emit the auto-scroll sentinel probe after the chat timeline.
 
-    ``session_id`` scopes the call to the current session (the iframe slot
-    itself uses the constant :data:`CHAT_AUTOSCROLL_IFRAME_KEY` so reruns
-    replace instead of stacking). ``force`` jumps straight to the bottom
-    while a stream is active.
+    ``session_id`` scopes the call to the current session. ``st.iframe`` has
+    no ``key`` parameter (Streamlit 1.60 signature: src/width/height/tab_index
+    only), so replacement across reruns relies on the deterministic
+    post-timeline emission slot, not a widget key. ``force`` jumps straight
+    to the bottom while a stream is active.
     """
     _ = session_id
+    _ = CHAT_AUTOSCROLL_IFRAME_KEY
     payload = build_autoscroll_js(force)
-    try:
-        # Constant key => rerun-replace in the deterministic post-timeline
-        # slot (1.60 types st.iframe without key; fallback below covers it).
-        _ = cast(
-            "object",
-            st.iframe(
-                payload,
-                height="content",
-                key=CHAT_AUTOSCROLL_IFRAME_KEY,  # pyright: ignore[reportCallIssue]
-            ),
-        )
-    except TypeError:
-        # Streamlit 1.60 st.iframe has no key param; the deterministic
-        # emission slot (always right after the timeline) still replaces
-        # the probe on rerun.
-        _ = cast("object", st.iframe(payload, height="content"))
+    _ = cast("object", st.iframe(payload, height="content"))
