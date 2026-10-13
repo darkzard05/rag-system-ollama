@@ -66,6 +66,44 @@ class ContextFilter(logging.Filter):
         return True
 
 
+def _preimport_noisy_transformers_processors() -> None:
+    """auto_docstring print 스팸을 유발하는 리프 모듈을 선행 import한다.
+
+    transformers 리프 이미지 프로세서(deepseek_vl_hybrid / kimi_k25 /
+    paddleocr_vl)의 ``@auto_docstring`` 데코레이터는 클래스 정의(import) 시점에
+    미문서 kwargs를 ``print`` 로 stdout에 뿌린다 (logging/warnings 아님).
+    파이프라인 빌드 중 lazy import로 실행되면 터미널 로그를 오염시키므로,
+    로깅 설정 시점(앱 시작, 단일 스레드)에 stdout 억제 하에 미리 import해
+    데코레이터를 소진시킨다. 이후 import는 캐시 적중이라 print가 재발하지
+    않는다. 프로젝트 코드는 stdout print를 사용하지 않으므로(전부 stderr
+    로깅) 억제 윈도우가 정상 출력을 삼킬 우려가 없다.
+
+    - pytest 하에서는 스킵한다 (단위 테스트는 해당 경로를 타지 않으며,
+      매 테스트 프로세스마다 수 초의 import 비용을 치를 이유가 없다).
+    - 모듈명 변경 등 실패는 전부 흡수한다 (fail-open: 억제 실패 시 스팸이
+      그대로 출력될 뿐 기능에 영향 없음).
+    """
+    if "pytest" in sys.modules:
+        return
+    try:
+        import contextlib
+        import importlib
+        import io
+
+        with contextlib.redirect_stdout(io.StringIO()):
+            for _mod in (
+                "transformers.models.deepseek_vl_hybrid.image_processing_deepseek_vl_hybrid",
+                "transformers.models.deepseek_vl_hybrid.image_processing_pil_deepseek_vl_hybrid",
+                "transformers.models.kimi_k25.image_processing_kimi_k25",
+                "transformers.models.paddleocr_vl.image_processing_paddleocr_vl",
+                "transformers.models.paddleocr_vl.image_processing_pil_paddleocr_vl",
+            ):
+                with contextlib.suppress(Exception):
+                    importlib.import_module(_mod)
+    except Exception:
+        pass
+
+
 def setup_logging(
     log_level: str = "INFO",
     log_file: Path | None = None,
@@ -126,6 +164,24 @@ def setup_logging(
     logging.getLogger("services.optimization").setLevel(logging.WARNING)
     logging.getLogger("services.monitoring").setLevel(logging.WARNING)
     logging.getLogger("core.resource_pool").setLevel(logging.WARNING)
+
+    # [정정] transformers 이미지 프로세서 미문서 키 출력(high_res_size /
+    # merge_size / min_pixels / max_pixels 12연발)은 logging ERROR도 warnings도
+    # 아닌 auto_docstring 데코레이터의 import 시점 stdout print다
+    # (transformers/utils/auto_docstring.py — 공식 문서는 기여자용 CI 진단으로만
+    # 의도, 업스트림 main에도 잔존). 따라서 로거 레벨/warnings 필터는 닿지
+    # 않는다. 실제 차단은 아래 _preimport_noisy_transformers_processors()의
+    # 선행 import + stdout 억제로 수행한다. 여기서는 통상 수준만 유지한다.
+    logging.getLogger("transformers").setLevel(logging.WARNING)
+    logging.getLogger("sentence_transformers").setLevel(logging.WARNING)
+    _preimport_noisy_transformers_processors()
+
+    # [Phase A1] pymupdf4llm / RapidOCR 플러그인 print성 노이즈의 로거 경로 차단.
+    # (to_markdown() 기본 자동 OCR 경로가 범위 병렬 수만큼 증폭됨.
+    # stdout print 자체는 document_processor 래퍼에서 별도 처리.)
+    logging.getLogger("pymupdf").setLevel(logging.WARNING)
+    logging.getLogger("pymupdf4llm").setLevel(logging.WARNING)
+    logging.getLogger("rapidocr_onnxruntime").setLevel(logging.WARNING)
 
     # 기존 핸들러 제거 (중복 방지)
     for handler in root_logger.handlers[:]:

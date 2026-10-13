@@ -346,25 +346,65 @@ def load_embedding_model(
                     return (await self._aembed_with_retry([text]))[0]
 
                 def _embed_once(self, texts: list[str]) -> list[list[float]]:
-                    """단일 시도: 페이로드 크기 분할 → 그룹별 1회 모델 호출."""
+                    """단일 시도: 페이로드 크기 분할 → 그룹별 1회 모델 호출.
+
+                    [Phase C2] 그룹 순차 왕복을 스레드 병렬로 오버랩한다
+                    (신규 의존성 없이 stdlib ThreadPoolExecutor, 순서 보존).
+                    Ollama 로컬 서버의 HTTP 호출은 스레드 안전하며, 그룹 수는
+                    보통 3~6개라 workers를 4로 상한한다.
+                    """
                     if not self._client:
                         msg = (
                             "Ollama client is not initialized. "
                             "Please ensure Ollama is running and the model is loaded."
                         )
                         raise ValueError(msg)
-                    results: list[list[float]] = []
-                    for group in _split_by_payload_size(texts):
-                        results.extend(
-                            self._client.embed(
-                                self.model,
-                                group,
-                                truncate=self.truncate,
-                                options=self._default_params,
-                                keep_alive=self.keep_alive,
-                            )["embeddings"]
+                    import concurrent.futures
+
+                    # [Phase C2] mypy narrowing: self._client는 클로저 안에서
+                    # 좁혀지지 않으므로 로컬에 확정한다.
+                    client = self._client
+                    groups = _split_by_payload_size(texts)
+                    total_chars = sum(len(t) for t in texts)
+                    logger.debug(
+                        "[MODEL] [EMBED] 페이로드 그룹=%d 텍스트=%d 총문자=%d",
+                        len(groups),
+                        len(texts),
+                        total_chars,
+                    )
+                    if len(groups) <= 1:
+                        results: list[list[float]] = []
+                        for group in groups:
+                            results.extend(
+                                client.embed(
+                                    self.model,
+                                    group,
+                                    truncate=self.truncate,
+                                    options=self._default_params,
+                                    keep_alive=self.keep_alive,
+                                )["embeddings"]
+                            )
+                        return results
+
+                    def _embed_group(
+                        group: list[str],
+                    ) -> list[list[float]]:
+                        resp = client.embed(
+                            self.model,
+                            group,
+                            truncate=self.truncate,
+                            options=self._default_params,
+                            keep_alive=self.keep_alive,
                         )
-                    return results
+                        return list(resp["embeddings"])
+
+                    ordered: list[list[float]] = []
+                    with concurrent.futures.ThreadPoolExecutor(
+                        max_workers=min(4, len(groups))
+                    ) as executor:
+                        for embeddings in executor.map(_embed_group, groups):
+                            ordered.extend(embeddings)
+                    return ordered
 
                 def _embed_with_retry(self, texts: list[str]) -> list[list[float]]:
                     """동기 재시도 루프 (기존 시맨틱 유지, 분할 추가)."""

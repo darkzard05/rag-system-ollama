@@ -693,9 +693,11 @@ def main() -> None:
 
 
 # [FIX] 빌드 진행 전파 쓰로틀: 워커 스레드의 on_event마다 rerun을
-# 요청하면 리런 폭주가 나므로, 위상 변경 시 즉시 + 동일 위상 1초 간격으로만
+# 요청하면 리런 폭주가 나므로, 위상 변경 시 즉시 + 동일 위상 2초 간격으로만
 # 화면 갱신을 요청한다. 완료 시 rerun은 async_worker._on_complete가 담당.
-_BUILD_RERUN_MIN_INTERVAL_S = 1.0
+# [Phase D] 1.0 → 2.0: 풀 리런마다 PDF 영역까지 재실행되므로 간격을
+# 넓혀 인덱싱 중 리런 부하를 절반으로 줄인다 (진행 카드 갱신은 2초 단위).
+_BUILD_RERUN_MIN_INTERVAL_S = 2.0
 _BUILD_RERUN_LAST: dict[str, tuple[float, str]] = {}
 
 

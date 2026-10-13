@@ -28,6 +28,43 @@ from services.monitoring.performance_monitor import (
 logger = logging.getLogger(__name__)
 
 
+def _silence_pymupdf_messages() -> None:
+    """PyMuPDF/pymupdf4llm 콘솔 스팸을 logging 경로로 전환한다 (추출 무관).
+
+    - ``=== Document parser messages ===`` + ``Using RapidOCR ...`` 줄은
+      ``pymupdf.message()`` 경유이므로 ``set_messages(text="logging:...")`` 로
+      ``pymupdf`` 로거(DEBUG)로 전환한다. ``logging_config`` 가 해당 로거를
+      WARNING으로 억제하므로 기본 콘솔에서 사라진다.
+    - ``rapidocr_api using backend`` 1줄은 OCR 서브모듈 import 시점 print라
+      모듈 import 시점에 stdout 억제 하에 선행 import한다 (import 시점은
+      단일 스레드이므로 ``redirect_stdout`` 이 안전하다).
+    - 모두 실패 흡수: 노이즈 억제가 추출을 깨뜨리면 안 된다.
+    """
+    try:
+        import pymupdf
+
+        pymupdf.set_messages(text="logging:level=10,name=pymupdf")
+    except Exception:
+        pass
+    try:
+        import contextlib
+        import importlib
+        import io
+
+        with contextlib.redirect_stdout(io.StringIO()):
+            for _mod in (
+                "pymupdf4llm.ocr.rapidocr_api",
+                "pymupdf4llm.ocr.paddleocr_api",
+            ):
+                with contextlib.suppress(Exception):
+                    importlib.import_module(_mod)
+    except Exception:
+        pass
+
+
+_silence_pymupdf_messages()
+
+
 def compute_file_hash(file_path: str, data: bytes | None = None) -> str:
     """파일 또는 데이터의 SHA256 해시를 계산합니다.
 
@@ -510,6 +547,10 @@ async def load_pdf_docs(
 
                 docs: list[Document] = []
                 current_section = "Cover / Overview"
+                # [Phase C3] 좌표 캐시 저장을 배치화: 페이지별 순차 await 대신
+                # 수집 후 gather 1회로 오버랩한다 (키가 페이지별 독립이라
+                # 순서 무관, 실패는 save_coords 내부에서 흡수됨).
+                pending_coords: list[tuple[int, list[Any]]] = []
 
                 for i, chunk in enumerate(page_chunks or []):
                     if isinstance(chunk, dict):
@@ -530,11 +571,9 @@ async def load_pdf_docs(
                     has_coords = HYDRATION_MODE != "none"
                     bbox = None
 
-                    # 단어 좌표가 추출된 경우 즉시 캐시 저장
+                    # 단어 좌표가 추출된 경우 배치 저장용으로 수집
                     if isinstance(chunk, dict) and "words" in chunk and chunk["words"]:
-                        await coord_cache.save_coords(
-                            file_hash, page_num, chunk["words"]
-                        )
+                        pending_coords.append((page_num, chunk["words"]))
 
                     if HYDRATION_MODE == "precision_clip":
                         # [R2-06] 페이지 전체 rect 대신 실제 텍스트 영역(단어 bbox 합집합)으로
@@ -583,6 +622,15 @@ async def load_pdf_docs(
                     )
 
             # context manager 종료로 doc.close() 자동 실행
+
+            # [Phase C3] 수집된 좌표 일괄 저장 (순차 await N회 → gather 1회)
+            if pending_coords:
+                await asyncio.gather(
+                    *(
+                        coord_cache.save_coords(file_hash, page, words)
+                        for page, words in pending_coords
+                    )
+                )
 
             # Phase 2 (router signal, 동작 변경 없음): 무거운 파서(Docling/Marker)가
             # 유리한 페이지를 식별해 로그만 남긴다. 기준 — 표 다수(table_count>=2),

@@ -111,7 +111,9 @@ def cancel_stream(run_id: str) -> None:
     with _stream_lock:
         handle = _active_streams.get(run_id)
     if handle is None:
-        logger.warning("cancel_stream: no active stream for %s", run_id)
+        # [Phase B2] done-vs-unregister 정상 완료 레이스의 관측 노이즈.
+        # 호출자는 peek_stream_task()로 가드하므로 여기 도달은 benign TOCTOU.
+        logger.debug("cancel_stream: no active stream for %s", run_id)
         return
     loop, task = handle
     try:

@@ -493,7 +493,9 @@ def extract_annotations_from_docs(
                             if not search_query:
                                 continue
 
-                            logger.info(
+                            # [후속] 페이지별 탐색 쿼리 로그 폭사 차단 (문서당 수십 줄).
+                            # 하이라이트 정상 동작과 무관한 진단 로그이므로 DEBUG로 강등.
+                            logger.debug(
                                 f"[HIGHLIGHT] Searching query on page {page_val}: '{search_query}'"
                             )
 

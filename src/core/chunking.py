@@ -3,13 +3,25 @@
 """
 
 import asyncio
+import contextlib
+import io
 import logging
 import os
 
 import numpy as np
 from langchain_core.documents import Document
 from langchain_core.embeddings import Embeddings
-from langchain_text_splitters import RecursiveCharacterTextSplitter
+
+# [후속-transformers-print] langchain_text_splitters 패키지 __init__이
+# .sentence_transformers 서브모듈을 끌어오고, 이어 sentence_transformers →
+# transformers 리프 이미지 프로세서(deepseek_vl_hybrid / kimi_k25 / paddleocr_vl)
+# import 시 @auto_docstring 데코레이터가 "[ERROR] ... but not documented"를
+# stdout print로 뿌린다 (logging/warnings 아님 — 공식 문서는 기여자용 CI
+# 진단으로만 의도). 패키지 __init__ 실행은 회피 불가하므로 import 자체를
+# stdout 억제 하에 수행한다. 프로젝트 코드는 stdout print를 사용하지 않고
+# (전부 stderr 로깅) import는 임포트 락 하에 1회만 실행되므로 안전하다.
+with contextlib.redirect_stdout(io.StringIO()):
+    from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 from common.config import (
     EMBEDDING_BATCH_SIZE,
@@ -175,6 +187,77 @@ async def split_documents(
 
         use_semantic = SEMANTIC_CHUNKER_CONFIG.get("enabled", False)
         chunk_backend = str(SEMANTIC_CHUNKER_CONFIG.get("backend", "builtin")).lower()
+        # [Phase C1] 오버플로우 페이지만 하위분할: 20p 중 1페이지가 750자를
+        # 초과해도 전체를 의미분할(문장 임베딩 수백 회)로 보내던 과발동을
+        # 수정한다. 정상 페이지는 그대로 재사용하고, 초과분만 의미분할한다.
+        # (신규 의존성 없이 기존 builtin 경로만 사용. 벡터 캐시 복구 없음.)
+        if needs_sub_chunking and is_already_chunked:
+            threshold = max_chunk_size * 1.5
+            overflow_docs = [d for d in docs if len(d.page_content) > threshold]
+            logger.info(
+                "[RAG] [CHUNKING] 오버플로우 하위분할 | 전체: %d | 초과: %d",
+                len(docs),
+                len(overflow_docs),
+            )
+            if use_semantic and embedder and overflow_docs:
+                semantic_chunker = _init_semantic_chunker(embedder)
+                split_docs, vectors = await semantic_chunker.split_documents(
+                    overflow_docs
+                )
+                # 정상 페이지는 임베딩 1회로 벡터화 후 순서 보존 병합.
+                normal_docs = [d for d in docs if len(d.page_content) <= threshold]
+                if normal_docs:
+                    normal_vectors = await _embed_documents_chunks(
+                        normal_docs, embedder
+                    )
+                    # 순서 보존: 원본 docs 순서대로 재조립
+                    normal_iter = iter(zip(normal_docs, normal_vectors, strict=False))
+                    # overflow 의미분할은 원본 1페이지가 N청크가 되므로
+                    # 페이지 단위 순서로 병합 (정상-초과 교차 순서는
+                    # 원본 페이지 순서 기준 근사).
+                    merged_docs: list[Document] = []
+                    merged_vectors: list[np.ndarray] = []
+                    overflow_set = {id(d) for d in overflow_docs}
+                    pending_overflow = list(zip(split_docs, vectors, strict=False))
+                    for d in docs:
+                        if id(d) in overflow_set:
+                            continue
+                        nd, nv = next(normal_iter)
+                        merged_docs.append(nd)
+                        merged_vectors.append(nv)
+                    for od, ov in pending_overflow:
+                        merged_docs.append(od)
+                        merged_vectors.append(ov)
+                    split_docs, vectors = merged_docs, merged_vectors
+                msg = f"오버플로우 하위분할 완료 ({len(split_docs)}개 청크 생성)"
+                SessionManager.add_status_log(msg, session_id=session_id)
+                logger.info(
+                    f"[RAG] [CHUNKING] 분할 완료 | 원본: {len(docs)} | 청크: {len(split_docs)}"
+                )
+                _postprocess_metadata(split_docs)
+                return split_docs, vectors
+            # 의미분할 비활성/임베더 없음: 초과분만 Recursive로 분할
+            recursive_chunker = RecursiveCharacterTextSplitter(
+                chunk_size=TEXT_SPLITTER_CONFIG["chunk_size"],
+                chunk_overlap=TEXT_SPLITTER_CONFIG["chunk_overlap"],
+            )
+            split_docs = []
+            for d in docs:
+                if len(d.page_content) > threshold:
+                    split_docs.extend(
+                        await asyncio.to_thread(recursive_chunker.split_documents, [d])
+                    )
+                else:
+                    split_docs.append(d)
+            if embedder and vectors is None:
+                vectors = await _embed_documents_chunks(split_docs, embedder)
+            msg = f"오버플로우 표준분할 완료 ({len(split_docs)}개 청크 생성)"
+            SessionManager.add_status_log(msg, session_id=session_id)
+            logger.info(
+                f"[RAG] [CHUNKING] 분할 완료 | 원본: {len(docs)} | 청크: {len(split_docs)}"
+            )
+            _postprocess_metadata(split_docs)
+            return split_docs, vectors
 
         # P0-2 opt-in: chonkie 헤더-어웨어 어댑터. 미설치/실패 시 builtin 폴백.
         if chunk_backend == "chonkie":

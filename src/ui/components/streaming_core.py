@@ -576,7 +576,8 @@ def stream_chunks(
                 UI_STREAMING_HARD_TIMEOUT > 0
                 and (_clock() - _stream_started) >= UI_STREAMING_HARD_TIMEOUT
             ):
-                cancel_stream(run_id)
+                if peek_stream_task(run_id) is not None:
+                    cancel_stream(run_id)
                 raise TimeoutError(
                     "스트리밍 절대 상한 타임아웃이 초과되었습니다. "
                     "네트워크 및 모델 상태를 확인해주세요."
@@ -605,7 +606,8 @@ def stream_chunks(
                         f"[CHAT] 스트리밍 타임아웃 ({_max_timeouts}회 연속): "
                         "백그라운드 작업이 응답하지 않음"
                     )
-                    cancel_stream(run_id)  # 실시간 취소: task.cancel() 전달
+                    if peek_stream_task(run_id) is not None:
+                        cancel_stream(run_id)  # 실시간 취소: task.cancel() 전달
                     raise TimeoutError(
                         "스트리밍 응답을 기다리는 동안 시간이 초과되었습니다. "
                         "네트워크 및 모델 상태를 확인해주세요."
@@ -626,7 +628,7 @@ def stream_chunks(
         # (미등록)는 cancel 자체를 건너뛴다 — cancel_stream의 "no active
         # stream" 오경고를 막기 위해서다.
         if t.is_alive():
-            if _teardown_state["registered"]:
+            if _teardown_state["registered"] and peek_stream_task(run_id) is not None:
                 cancel_stream(run_id)  # real cancel via task.cancel()
             t.join(timeout=3)
             if t.is_alive():

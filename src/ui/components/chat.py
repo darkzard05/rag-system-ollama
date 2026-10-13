@@ -792,12 +792,19 @@ def _render_streaming_with_write_stream(
                 status_ph.caption(_proc_phase_caption(status_text, elapsed_sec))
 
             def _on_aux(aux: dict[str, Any]) -> None:
-                # 인용/지표 중간 렌더 삭제: 스트리밍 중에는 aux 슬롯을 비운 채
-                # 두고 상태 캡션만 유지한다. 점프 스트립은 tail에서 1회 확정
-                # 렌더하므로 mid-stream 위젯/마크다운 비용이 사라진다.
+                # [Phase B1] tail 확정 전진: 최종 citations 일괄을 기다리지 않고
+                # citations_add first_add 시점에 단일 markdown 배지([1] [2] ...)만
+                # aux 슬롯에 선행 표시한다. 전체 참조 목록(버튼 위젯)은 tail에서
+                # 1회 확정 렌더하므로 mid-stream 위젯 비용은 들지 않는다.
+                # (LLM 꼬리 생성 7.7s 동안 UI가 빈 stall로 보이는 문제 완화용.
+                # 출력 토큰량·num_predict는 그대로.)
                 if _is_stale_ghost(aux, msg_id):
                     return
-                aux_ph.empty()
+                if aux.get("citations"):
+                    with aux_ph.container():
+                        _paint_midstream_badges(aux)
+                else:
+                    aux_ph.empty()
 
             # [개선 4] 데이터가 없는 상태에서 불필요하게 빈 익스팬더를 그리던 기존 선행 렌더 블록 제거
             # (기존 lines 410-433 삭제: aux_ph.empty()로 슬롯만 확보하고 실제 렌더링은 _on_aux에 위임)
