@@ -29,7 +29,7 @@ from langchain_core.embeddings import Embeddings
 
 from common.config import MODEL_CACHE_DIR, is_test_env
 from common.constants import ChunkingConstants
-from common.similarity import cosine_distance, cosine_similarity
+from common.similarity import cosine_similarity
 from services.optimization.caching_optimizer import CacheManager
 
 logger = logging.getLogger(__name__)
@@ -538,14 +538,12 @@ class SemanticChunkerEmbeddingsMixin:
         return np.array(combined_embeddings)
 
     def _compute_distances(self, combined_embeddings_arr: np.ndarray) -> list[float]:
-        """인접 combined 벡터 간 유사도를 1-cos_sim 거리로 변환합니다."""
-        distances = []
-        for i in range(len(combined_embeddings_arr) - 1):
-            similarity = cosine_distance(
-                combined_embeddings_arr[i], combined_embeddings_arr[i + 1]
-            )
-            distances.append(float(similarity))
-        return distances
+        """인접 combined 벡터 간 유사도를 1-cos_sim 거리로 변환합니다 (벡터화)."""
+        arr = np.asarray(combined_embeddings_arr, dtype=np.float64)
+        if arr.shape[0] < 2:
+            return []
+        dots = np.einsum("ij,ij->i", arr[:-1], arr[1:])
+        return (1.0 - dots).tolist()
 
 
 class SemanticChunkerBreakpointsMixin:

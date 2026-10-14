@@ -243,9 +243,8 @@ def _apply_ctx_guard(docs: list, query: str) -> tuple[list, str, int]:
 
     Efficiency contract: per-doc blocks are rendered once (stable_id hash +
     metadata format computed once per doc), and each removal only re-joins the
-    surviving blocks and re-counts tokens. ``format_context`` is invoked at
-    most twice (1 pre-guard + 1 post-trim), so the cost is O(D) renders
-    instead of O(removals × D).
+    surviving blocks and re-counts tokens. format_context is not invoked inside
+    the guard, so the cost is strictly O(D) renders.
     """
     # Pre-prompt content dedup: identical chunks add no information and make
     # the LLM echo the repeated claim (raw-side repetition). Pure list filter —
@@ -256,17 +255,14 @@ def _apply_ctx_guard(docs: list, query: str) -> tuple[list, str, int]:
         logger.info(f"[RAG] [CTX] dropped {dedup_removed} duplicate-text docs")
         docs = deduped
 
-    # Pre-guard context format (initial render of all docs).
-    context = format_context(docs) if docs else "일상적인 대화입니다."
-
     if not docs:
-        return docs, context, dedup_removed
+        return docs, "일상적인 대화입니다.", dedup_removed
 
     token_budget = int((OLLAMA_NUM_CTX - OLLAMA_NUM_PREDICT) * 0.85)
     # 문서 조각을 1회 렌더해 초기 추정과 트림 루프에서 공유한다.
-    # (이전: estimate 인라인 조립 + 제거마다 format_context 재렌더 → O(R×D) 재해시)
     blocks = {id(d): _render_doc_block(d) for d in docs}
-    est = count_tokens_rough(_ctx_prompt("".join(blocks[id(d)] for d in docs), query))
+    context = "".join(blocks[id(d)] for d in docs)
+    est = count_tokens_rough(_ctx_prompt(context, query))
 
     removed = dedup_removed
     if est > token_budget:
@@ -282,13 +278,11 @@ def _apply_ctx_guard(docs: list, query: str) -> tuple[list, str, int]:
             order.pop()
             removed += 1
             # 생존 조각만 다시 조립해 카운트 (렌더·stable_id 재해시 없음).
-            # count_tokens_rough는 남은 컨텍스트 전체 텍스트를 받아야 기존의
-            # 마커/길이 기반 추정 계약이 유지된다.
             est = count_tokens_rough(
                 _ctx_prompt("".join(blocks[i] for i in order), query)
             )
         docs = ranked
-        context = format_context(docs)
+        context = "".join(blocks[i] for i in order)
         logger.info(f"[RAG] [CTX] trimmed {removed} docs, est tokens={est}")
     return docs, context, removed
 
