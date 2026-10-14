@@ -160,6 +160,12 @@ def preprocess_text(text: str) -> str:
     return " ".join(text.split())
 
 
+# OPT-1: ASCII 판별 패턴 사전 컴파일 — count_tokens_rough 핫 경로에서
+# 호출마다 문자열 패턴을 넘기면 re 캐시 조회가 반복되므로 모듈 상수로 고정.
+# (패턴 내용은 기존과 바이트 동일 — 추정식 불변.)
+_RE_ASCII = re.compile(r"[a-zA-Z0-9\s.,!?;:()\[\]{}<>\-_=+\x00-\x7F]")
+
+
 def count_tokens_rough(text: str) -> int:
     """
     텍스트의 토큰 수를 대략적으로 계산합니다. (보수적 추정)
@@ -176,8 +182,9 @@ def count_tokens_rough(text: str) -> int:
         return 0
 
     # 1. ASCII 문자(영어, 숫자, 기본 기호, 공백) 개수 파악
-    ascii_pattern = r"[a-zA-Z0-9\s.,!?;:()\[\]{}<>\-_=+\x00-\x7F]"
-    ascii_chars = len(re.findall(ascii_pattern, text))
+    # OPT-1: 모듈 상수 _RE_ASCII 재사용 — 호출마다 패턴 문자열을 넘기면
+    # re 내부 캐시 조회 + findall 결과 리스트 할당이 반복되므로 컴파일済 패턴 고정.
+    ascii_chars = len(_RE_ASCII.findall(text))
 
     # 2. 비ASCII(한글, 한자 등) 문자 개수 파악
     non_ascii_chars = len(text) - ascii_chars

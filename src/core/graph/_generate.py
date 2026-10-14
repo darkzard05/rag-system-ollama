@@ -277,9 +277,16 @@ def _apply_ctx_guard(docs: list, query: str) -> tuple[list, str, int]:
     minimum of 2 documents.
 
     Efficiency contract: per-doc blocks are rendered once (stable_id hash +
-    metadata format computed once per doc), and each removal only re-joins the
-    surviving blocks and re-counts tokens. format_context is not invoked inside
-    the guard, so the cost is strictly O(D) renders.
+    metadata format computed once per doc). The trim search reuses those blocks
+    and probes the token budget with binary search over the removal count, so
+    the cost is O(log R) full-prompt recounts instead of O(R) (R = removals).
+    format_context is not invoked inside the guard, so the cost is strictly
+    O(D) renders.
+
+    Correctness: removing a (non-empty) block can only shrink the prompt, so
+    the estimated cost is monotonic non-increasing in the removal count and
+    binary search finds the same minimal removal count as the linear scan
+    (lowest rerank_score first, minimum 2 documents preserved).
     """
     # Pre-prompt content dedup: identical chunks add no information and make
     # the LLM echo the repeated claim (raw-side repetition). Pure list filter —
@@ -301,23 +308,39 @@ def _apply_ctx_guard(docs: list, query: str) -> tuple[list, str, int]:
 
     removed = dedup_removed
     if est > token_budget:
-        # rerank_score 내림차순(최상위 문서 우선) 사본에서 낮은 점수 문서부터 제거
+        # rerank_score 내림차순(최상위 문서 우선) 사본에서 낮은 점수 문서부터 제거.
+        # OPT-1: 제거 횟수 k에 대한 이진 탐색 — 선형 스캔과 동일한 최소 k를
+        # O(log R)회 재카운트로 찾는다 (R = 최종 제거 수). 각 probe는 렌더済
+        # 블록을 재사용하므로 재렌더·재해시는 없다.
         ranked = sorted(
             docs,
             key=lambda d: float(d.metadata.get("rerank_score", 0.0)),
             reverse=True,
         )
-        order = [id(d) for d in ranked]
-        while est > token_budget and len(ranked) > 2:
-            ranked.pop()
-            order.pop()
-            removed += 1
-            # 생존 조각만 다시 조립해 카운트 (렌더·stable_id 재해시 없음).
-            est = count_tokens_rough(
-                _ctx_prompt("".join(blocks[i] for i in order), query)
+        max_removable = len(ranked) - 2
+
+        def _est_after_removing(k: int) -> int:
+            survivors = ranked[: len(ranked) - k] if k else ranked
+            return count_tokens_rough(
+                _ctx_prompt("".join(blocks[id(d)] for d in survivors), query)
             )
-        docs = ranked
-        context = "".join(blocks[i] for i in order)
+
+        best = max_removable
+        best_est = _est_after_removing(best)
+        lo, hi = 0, max_removable
+        while lo <= hi:
+            mid = (lo + hi) // 2
+            mid_est = _est_after_removing(mid)
+            if mid_est <= token_budget:
+                best = mid
+                best_est = mid_est
+                hi = mid - 1
+            else:
+                lo = mid + 1
+        removed += best
+        docs = ranked[: len(ranked) - best] if best else ranked
+        context = "".join(blocks[id(d)] for d in docs)
+        est = best_est
         logger.info(f"[RAG] [CTX] trimmed {removed} docs, est tokens={est}")
     return docs, context, removed
 

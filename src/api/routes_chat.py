@@ -49,6 +49,18 @@ router = APIRouter()
 # EventSource가 무시하므로 클라이언트에 영향 없음.
 SSE_KEEPALIVE_INTERVAL_SECONDS: float = 15.0
 
+# OPT-2: 클라이언트 연결 끊김 확인 샘플링 간격 (청크 수).
+# `Request.is_disconnected()` 는 매 호출마다 ASGI receive 채널 폴링을 수반하므로
+# 토큰 청크마다 await 하면 스트리밍 루프에 고정 오버헤드가 가산된다. N청크당
+# 1회로 샘플링해도 좀비 스트림 정리 목적에는 충분하며, 최대 감지 지연은
+# 수 청크(전형 1초 이내)로 제한된다. SSE 프레임·배치·종료 시맨스는 불변.
+DISCONNECT_CHECK_EVERY: int = 8
+
+
+def _should_check_disconnect(chunk_index: int) -> bool:
+    """해당 청크에서 연결 끊김을 확인할 차례인지 반환합니다."""
+    return chunk_index % DISCONNECT_CHECK_EVERY == 0
+
 
 def chunk_to_sse_entries(
     chunk: StreamChunk, event_counter: int
@@ -170,6 +182,7 @@ async def stream_query_rag(
         batch_buffer: list[tuple[str | None, dict[str, Any], int | None]] = []
         batch_size = 10  # 10개 이벤트마다 배치 전송
         event_counter = 0
+        chunk_index = 0  # OPT-2: is_disconnected 샘플링용 청크 카운터
 
         try:
             # [개선] RAGSystem 클래스를 통해 통합된 인터페이스 호출 (설정 및 리소스 관리 자동화)
@@ -209,10 +222,14 @@ async def stream_query_rag(
                 except StopAsyncIteration:
                     break
                 waiter = None
-                # 클라이언트 연결 끊김 확인 (자원 보호)
-                if await fastapi_request.is_disconnected():
+                # 클라이언트 연결 끊김 확인 (자원 보호) — OPT-2: 매 청크가
+                # 아닌 DISCONNECT_CHECK_EVERY 간격으로 샘플링.
+                if _should_check_disconnect(chunk_index) and (
+                    await fastapi_request.is_disconnected()
+                ):
                     logger.info(f"[API] Client disconnected, stopping stream: {sid}")
                     break
+                chunk_index += 1
                 entries, event_counter = chunk_to_sse_entries(chunk, event_counter)
                 batch_buffer.extend(entries)
                 if chunk.status:
