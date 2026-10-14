@@ -318,9 +318,9 @@ class PipelineBuilder:
         )
         cache = VectorStoreCache(file_path, emb_model_name, file_hash=file_hash)
 
-        # 1. 캐시 시도
+        # 1. 캐시 시도 (동기 파일/FAISS/BM25 I/O이므로 이벤트 루프 offload)
         if ENABLE_VECTOR_CACHE:
-            cache_data = cache.load(embedder)
+            cache_data = await asyncio.to_thread(cache.load, embedder)
             if cache_data and all(x is not None for x in cache_data):
                 doc_splits, vector_store, bm25_retriever = cache_data
                 if doc_splits is not None:
@@ -443,9 +443,11 @@ class PipelineBuilder:
         )
         _t_register_ms = (time.perf_counter() - _t0) * 1000.0
 
-        # 7. 캐시 저장 (엔진 등록 성공 후에만 저장)
+        # 7. 캐시 저장 (엔진 등록 성공 후에만 저장, 동기 I/O이므로 offload)
         if ENABLE_VECTOR_CACHE:
-            cache.save(doc_splits, vector_store, bm25_retriever)
+            await asyncio.to_thread(
+                cache.save, doc_splits, vector_store, bm25_retriever
+            )
 
         duration = time.time() - start_time
         logger.info(

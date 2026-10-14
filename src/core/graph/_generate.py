@@ -63,6 +63,11 @@ logger = logging.getLogger(__name__)
 # 유사도 점수나 히트 객체를 노출하지 않으므로 신뢰도는 저장 시 함께 직렬화한다.
 _QUERY_CACHE_VALUE_VERSION = "1.0"
 
+# P-OPT: 스트리밍 합침 임계값 — response_chunk dispatch 빈도를 낮춘다.
+# 첫 content 토큰은 항상 즉시 전송하므로 TTFT는 보존된다.
+_RESPONSE_COALESCE_CHUNKS = 4
+_RESPONSE_COALESCE_CHARS = 32
+
 
 def _log_cache_set_done(task: asyncio.Task[None], *, msg_id: str) -> None:
     """Fire-and-forget 완료 콜백: 예외를 소비·기록하고 재발생시키지 않는다."""
@@ -448,6 +453,13 @@ async def _generate_pass(
         coordinator = get_resource_manager()
         async with coordinator.use_llm(model_name=DEFAULT_OLLAMA_MODEL):
             citation_scanner = PartialCitationScanner()
+            # P-OPT: 토큰당 dispatch 왕복을 줄이기 위한 합침 버퍼.
+            # 첫 content 토큰은 즉시 전송해 TTFT를 보존한다. 스캐너는
+            # 커서 유지형이라 flush 시점에만 feed해도 누락이 없다.
+            pending_content = ""
+            pending_thought = ""
+            pending_chunks = 0
+            first_content_flushed = False
             async for chunk in json_llm.astream([sys_msg, human_msg], config=config):
                 if hasattr(llm, "_convert_chunk_to_thought_and_content"):
                     content_chunk, thought_chunk = (
@@ -476,31 +488,93 @@ async def _generate_pass(
 
                 # Phase 0: 완성된 citation 객체를 생성 도중 즉시 디스패치한다.
                 # writer=None / 비구조화 경로는 건드리지 않는다.
-                if content_chunk and writer is not None:
-                    new_cites = citation_scanner.feed(full_response)
-                    if new_cites:
+                # P-OPT: response_chunk를 합쳐서 보내므로 스캐너 feed도
+                # flush 시점에만 수행한다 (토큰당 feed+dispatch → 배치당 1회).
+                if writer is not None and (content_chunk or thought_chunk):
+                    if content_chunk:
+                        pending_content += content_chunk
+                    if thought_chunk:
+                        pending_thought += thought_chunk
+                    pending_chunks += 1
+                    should_flush = (
+                        (content_chunk and not first_content_flushed)
+                        or len(pending_content) + len(pending_thought)
+                        >= _RESPONSE_COALESCE_CHARS
+                        or pending_chunks >= _RESPONSE_COALESCE_CHUNKS
+                    )
+                    if should_flush:
+                        if content_chunk and not first_content_flushed:
+                            first_content_flushed = True
+                        if pending_content:
+                            new_cites = citation_scanner.feed(full_response)
+                            if new_cites:
+                                await _dispatch_event(
+                                    "citations_add",
+                                    {
+                                        "items": [obj for _, obj in new_cites],
+                                        "base_index": new_cites[0][0],
+                                        "arr_len": citation_scanner.emitted,
+                                        "attempt": attempt,
+                                    },
+                                    writer=writer,
+                                    config=config,
+                                )
+                        await _dispatch_event(
+                            "response_chunk",
+                            {
+                                "content": pending_content,
+                                "thought": pending_thought,
+                                "raw_json": use_structured_output,
+                            },
+                            writer=writer,
+                            config=config,
+                        )
+                        pending_content = ""
+                        pending_thought = ""
+                        pending_chunks = 0
+
+                # 원시 JSON 청크도 항상 UI로 전송한다.
+                # 구조화 모드(raw_json=True)에서는 파싱 전 원시 토큰을 먼저 띄우고,
+                # 파싱 후 final_answer로 대체되도록 한다.
+                # (위 합침 블록이 전송을 담당한다 — 개별 토큰 직접 전송 금지.)
+
+            # P-OPT: 스트림 종료 시 잔여 버퍼를 flush한다. flush 사이에
+            # feed되지 않은 꼬리 citation이 있을 수 있어 최종 스캔도 수행한다.
+            if writer is not None and (pending_content or pending_thought):
+                if pending_content:
+                    tail_cites = citation_scanner.feed(full_response)
+                    if tail_cites:
                         await _dispatch_event(
                             "citations_add",
                             {
-                                "items": [obj for _, obj in new_cites],
-                                "base_index": new_cites[0][0],
+                                "items": [obj for _, obj in tail_cites],
+                                "base_index": tail_cites[0][0],
                                 "arr_len": citation_scanner.emitted,
                                 "attempt": attempt,
                             },
                             writer=writer,
                             config=config,
                         )
-
-                # 원시 JSON 청크도 항상 UI로 전송한다.
-                # 구조화 모드(raw_json=True)에서는 파싱 전 원시 토큰을 먼저 띄우고,
-                # 파싱 후 final_answer로 대체되도록 한다.
-                if (content_chunk or thought_chunk) and writer is not None:
+                await _dispatch_event(
+                    "response_chunk",
+                    {
+                        "content": pending_content,
+                        "thought": pending_thought,
+                        "raw_json": use_structured_output,
+                    },
+                    writer=writer,
+                    config=config,
+                )
+            elif writer is not None and full_response:
+                tail_cites = citation_scanner.feed(full_response)
+                if tail_cites:
                     await _dispatch_event(
-                        "response_chunk",
+                        "citations_add",
                         {
-                            "content": content_chunk,
-                            "thought": thought_chunk,
-                            "raw_json": use_structured_output,
+                            "items": [obj for _, obj in tail_cites],
+                            "base_index": tail_cites[0][0],
+                            "arr_len": citation_scanner.emitted,
+                            "attempt": attempt,
                         },
                         writer=writer,
                         config=config,
