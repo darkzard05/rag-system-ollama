@@ -208,50 +208,74 @@ def _extract_final_answer_delta(
     n = len(buffer)
     key = '"final_answer"'
 
-    # --- Phase 1: key search ---
-    key_idx: int
-    if _key_pos is not None and len(_key_pos) > 0 and _key_pos[0] >= 0:
-        key_idx = _key_pos[0]
-    else:
-        key_idx = buffer.find(key, 0)
-        if _key_pos is not None and len(_key_pos) > 0:
-            _key_pos[0] = key_idx
-        if key_idx == -1:
-            return "", 0
-
-    # --- Phase 2: verify key is followed by optional ws + colon ---
-    after_key = key_idx + len(key)
-    j = after_key
-    while j < n and buffer[j] in " \t\n\r":
-        j += 1
-    if j >= n or buffer[j] != ":":
-        return "", start
-
-    # --- Phase 3: find value's opening quote ---
-    i = j + 1
-    while i < n and buffer[i] in " \t\n\r":
-        i += 1
-    if i >= n or buffer[i] != '"':
-        return "", start
-
-    open_quote = i
-    value_start = open_quote + 1
-
-    # --- Phase 4: incremental value scan ---
-    # _key_pos 구조: [key_idx, raw_pos, pending_escape, pending_u, closed]
+    # --- Incremental state / verified fast path ---
+    # _key_pos 구조: [key_idx, raw_pos, pending_escape, pending_u, closed, verified]
+    # verified(6번째 슬롯)는 _FinalAnswerExtractor만 설정한다: 키/콜론/여는
+    # 따옴표를 이미 located 했고, 이후 버퍼가 append-only 이거나 소비된 앞부분만
+    # 잘라내는 tail-compaction 이라는 호출자 불변식을 보증한다. verified 면
+    # Phase 1-3(불변 헤드 재검증)를 통째로 건너뛰고 raw_pos 부터 바로 스캔한다.
+    # NOTE: 스킵 검사는 Phase 1-3 보다 먼저 수행되어야 한다 — 압축된 버퍼는
+    # 헤드를 포함하지 않으므로 Phase 2/3 이 early-return 으로 오판한다.
     is_incremental = _key_pos is not None and len(_key_pos) >= 5
+    use_verified_skip = (
+        is_incremental
+        and _key_pos is not None
+        and len(_key_pos) >= 6
+        and bool(_key_pos[5])
+    )
 
-    if is_incremental:
-        assert _key_pos is not None  # is_incremental이 None 아님을 보장
+    if use_verified_skip:
+        assert _key_pos is not None  # use_verified_skip이 None 아님을 보장
         if _key_pos[4]:  # 이미 닫힌 경우
             return "", start
-        i = _key_pos[1] if _key_pos[1] >= value_start else value_start
+        i = _key_pos[1]
         pending_escape = bool(_key_pos[2])
         pending_u = _key_pos[3]
     else:
-        i = value_start
-        pending_escape = False
-        pending_u = None
+        # --- Phase 1: key search ---
+        key_idx: int
+        if _key_pos is not None and len(_key_pos) > 0 and _key_pos[0] >= 0:
+            key_idx = _key_pos[0]
+        else:
+            key_idx = buffer.find(key, 0)
+            if _key_pos is not None and len(_key_pos) > 0:
+                _key_pos[0] = key_idx
+            if key_idx == -1:
+                return "", 0
+
+        # --- Phase 2: verify key is followed by optional ws + colon ---
+        after_key = key_idx + len(key)
+        j = after_key
+        while j < n and buffer[j] in " \t\n\r":
+            j += 1
+        if j >= n or buffer[j] != ":":
+            return "", start
+
+        # --- Phase 3: find value's opening quote ---
+        i = j + 1
+        while i < n and buffer[i] in " \t\n\r":
+            i += 1
+        if i >= n or buffer[i] != '"':
+            return "", start
+
+        open_quote = i
+        value_start = open_quote + 1
+
+        # --- Phase 4: incremental value scan ---
+        if is_incremental:
+            assert _key_pos is not None  # is_incremental이 None 아님을 보장
+            if _key_pos[4]:  # 이미 닫힌 경우
+                return "", start
+            i = _key_pos[1] if _key_pos[1] >= value_start else value_start
+            pending_escape = bool(_key_pos[2])
+            pending_u = _key_pos[3]
+            if len(_key_pos) >= 6:
+                # 따옴표까지 located — 다음 호출부터 Phase 1-3 생략 가능.
+                _key_pos[5] = 1
+        else:
+            i = value_start
+            pending_escape = False
+            pending_u = None
 
     delta_chars: list[str] = []
 
@@ -369,17 +393,31 @@ def _recover_final_answer(blob: str) -> str | None:
 
 
 class _FinalAnswerExtractor:
-    """structured 모드 raw_json 청크 → final_answer 증분 추출 헬퍼 (O(1) amortized)."""
+    """structured 모드 raw_json 청크 → final_answer 증분 추출 헬퍼 (O(n) total).
+
+    ``_chunks`` 에 입력 전체를 append-only 로 보관하고, 스캐너에 넘기는
+    ``_blob`` 은 스캔이 끝난 앞부분을 매 feed 마다 잘라내는 sliding window 로
+    유지한다. 스캐너가 verified 이후 Phase 1-3 을 생략하므로 앞부분 삭제가
+    안전하고, 매 feed 복사량은 미스캔 꼬리+새 청크로 상수가 된다. 기존의 매
+    토큰 전체 복사(``_blob += content`` O(n²) total)를 제거한다.
+    """
 
     def __init__(self) -> None:
+        self._chunks: list[str] = []
         self._blob: str = ""
         self._scan_pos = 0
-        # [key_idx, raw_pos, pending_escape, pending_u, closed]
-        self._key_pos: list[Any] = [-1, -1, 0, None, 0]
+        # [key_idx, raw_pos, pending_escape, pending_u, closed, verified]
+        self._key_pos: list[Any] = [-1, -1, 0, None, 0, 0]
 
     def feed(self, content: str) -> str:
         """raw_json 청크의 content를 누적하고 새 final_answer delta를 즉시 반환."""
-        self._blob += content  # CPython in-place realloc 최적화 적용
+        self._chunks.append(content)
+        if self._key_pos[5] and self._key_pos[1] > 0:
+            # 소비된 앞부분은 디코드 완료 — 스캐너 재개점만 남기고 버린다.
+            # (pending_escape/pending_u 플래그가 경계 이스케이프를 carries)
+            self._blob = self._blob[self._key_pos[1] :]
+            self._key_pos[1] = 0
+        self._blob += content
         delta, self._scan_pos = _extract_final_answer_delta(
             self._blob, self._scan_pos, self._key_pos
         )
@@ -836,7 +874,7 @@ def _content_generator(
     citations/process_steps)가 변경된 청크에서만 호출된다 (연속 동일 상태는
     재호출되지 않는다). yield 내용은 두 콜백 유무와 무관하게 동일하다.
     """
-    accumulated = ""
+    accumulated_parts: list[str] = []
     thought = ""
     documents: list[Any] = []
     metrics: dict[str, Any] = {}
@@ -907,7 +945,8 @@ def _content_generator(
                             _placeholder_live = True
                 if getattr(chunk, "raw_json", False):
                     delta = raw_json_extractor.feed(chunk.content)
-                    accumulated += delta
+                    if delta:
+                        accumulated_parts.append(delta)
                     if not delta and raw_json_extractor.closed:
                         _report_status(t("status_citation_cleanup"))
                     if delta:
@@ -917,7 +956,7 @@ def _content_generator(
                         _t_last_token = _clock()
                         yield delta
                 else:
-                    accumulated += chunk.content
+                    accumulated_parts.append(chunk.content)
                     _real_yielded = True
                     _placeholder_live = False
                     _yielded_this_chunk = True
@@ -1038,7 +1077,7 @@ def _content_generator(
                 "citations": citations,
                 "process_steps": process_steps,
                 "error": str(exc),
-                "content": accumulated,
+                "content": "".join(accumulated_parts),
                 "complete": False,
                 **_ghost_flags(),
             },
@@ -1053,7 +1092,7 @@ def _content_generator(
                 "metrics": metrics,
                 "citations": citations,
                 "process_steps": process_steps,
-                "content": accumulated,
+                "content": "".join(accumulated_parts),
                 "complete": True,
                 **_ghost_flags(),
             },

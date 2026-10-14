@@ -323,14 +323,28 @@ class SemanticChunkerEmbeddingsMixin:
         text_to_output_indices: dict[str, list[int]] = {}
         newly_embedded: list[tuple[int, str, np.ndarray]] = []
 
-        # 1. 정제 및 캐시 확인
-        for i, text in enumerate(texts):
-            norm_text = " ".join(text.split())
-            cache_key = (
-                f"emb:{self.model_name}:{xxhash.xxh64(norm_text.encode()).hexdigest()}"
-            )
+        # 1. 정제 및 캐시 확인 (중복 제거 후 gather 병렬 조회)
+        norm_texts: list[str] = [" ".join(text.split()) for text in texts]
+        norm_to_indices: dict[str, list[int]] = {}
+        unique_norms: list[str] = []
+        for i, norm_text in enumerate(norm_texts):
+            if norm_text not in norm_to_indices:
+                norm_to_indices[norm_text] = []
+                unique_norms.append(norm_text)
+            norm_to_indices[norm_text].append(i)
+        norm_to_key: dict[str, str] = {
+            norm_text: f"emb:{self.model_name}:{xxhash.xxh64(norm_text.encode()).hexdigest()}"
+            for norm_text in unique_norms
+        }
 
-            cached_raw = await self.cache_manager.get(cache_key)
+        cached_raws = await asyncio.gather(
+            *(
+                self.cache_manager.get(norm_to_key[norm_text])
+                for norm_text in unique_norms
+            )
+        )
+
+        for norm_text, cached_raw in zip(unique_norms, cached_raws, strict=True):
             if cached_raw is not None:
                 cached_vec = (
                     cached_raw["vector"]
@@ -339,12 +353,12 @@ class SemanticChunkerEmbeddingsMixin:
                 )
                 cached_vector = self._as_valid_vector(cached_vec)
                 if cached_vector is not None:
-                    all_results[i] = cached_vector
+                    for i in norm_to_indices[norm_text]:
+                        all_results[i] = cached_vector
                     continue
 
-            if norm_text not in text_to_output_indices:
-                missing_texts.append(norm_text)
-            text_to_output_indices.setdefault(norm_text, []).append(i)
+            missing_texts.append(norm_text)
+            text_to_output_indices[norm_text] = norm_to_indices[norm_text]
 
         # 2. 누락분 배치 임베딩 수행 (캐시 저장은 모든 배치 성공 후 단일 패스)
         if missing_texts:
