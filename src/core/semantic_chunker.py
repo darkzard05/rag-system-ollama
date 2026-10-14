@@ -15,7 +15,7 @@
 """
 
 import asyncio
-import concurrent.futures
+import bisect
 import logging
 import re
 import tempfile
@@ -879,25 +879,38 @@ class SemanticChunkerMetadataMixin:
     ) -> dict[str, Any]:
         """
         청크에 대한 메타데이터를 추출하고 병합합니다.
+
+        ``doc_ranges``는 ``split_documents``가 오프셋 오름차순·비중첩으로
+        생성하므로, 이분 탐색으로 첫 후보를 찾은 뒤 ``c_end`` 이후 범위에서
+        조기 종료한다 (전수 스캔 O(D) → O(log D + 겹침 구간)).
         """
         c_start = chunk["start"]
         c_end = chunk["end"]
 
         overlapping_pages = []
+        seen_pages: set[Any] = set()
         merged_metadata: dict[str, Any] = {}
 
-        for doc_range in doc_ranges:
+        # 첫 후보: end >= c_start 인 범위 (그 이전 범위는 겹칠 수 없다)
+        idx = bisect.bisect_left(doc_ranges, c_start, key=lambda r: r["end"])
+        while idx < len(doc_ranges):
+            doc_range = doc_ranges[idx]
+            if doc_range["start"] >= c_end:
+                # 정렬 가정: 이후 범위는 모두 이 청크보다 뒤에 있어 겹치지 않는다
+                break
             # 범위 겹침 확인: [start1, end1] 과 [start2, end2]
             if max(c_start, doc_range["start"]) < min(c_end, doc_range["end"]):
                 # [수정] Mypy 타입 추론 강화를 위해 cast 사용
                 metadata = cast(dict[str, Any], doc_range["metadata"])
                 page = metadata.get("page")
-                if page and page not in overlapping_pages:
+                if page and page not in seen_pages:
+                    seen_pages.add(page)
                     overlapping_pages.append(page)
 
                 # 기본 메타데이터는 첫 번째 겹치는 문서에서 가져오되, 페이지 정보는 업데이트
                 if not merged_metadata:
                     merged_metadata = metadata.copy()
+            idx += 1
 
         if overlapping_pages:
             merged_metadata["pages"] = sorted(overlapping_pages)
@@ -1107,15 +1120,12 @@ class EmbeddingBasedSemanticChunker(
         def _extract_metadata_batch(
             chunk_dicts: list[dict], doc_ranges: list[dict]
         ) -> list[dict]:
-            with concurrent.futures.ThreadPoolExecutor() as executor:
-                return list(
-                    executor.map(
-                        lambda chunk: self._extract_metadata_for_chunk(
-                            chunk, doc_ranges
-                        ),
-                        chunk_dicts,
-                    )
-                )
+            # asyncio.to_thread는 이미 워커 스레드이므로 중첩 스레드풀을 만들지
+            # 않는다 (빌드마다 ThreadPoolExecutor 생성/파괴 오버헤드 제거).
+            return [
+                self._extract_metadata_for_chunk(chunk, doc_ranges)
+                for chunk in chunk_dicts
+            ]
 
         results = await asyncio.to_thread(
             _extract_metadata_batch, chunk_dicts, doc_ranges

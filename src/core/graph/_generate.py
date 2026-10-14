@@ -180,6 +180,27 @@ def _deduplicate_docs(docs: list[Document]) -> list[Document]:
     return unique
 
 
+def _render_doc_block(d: Document) -> str:
+    """단일 문서의 컨텍스트 렌더 조각 — format_context/CTX 가드의 공유 단위.
+
+    stable_id 해시와 메타 포맷을 문서당 1회만 계산해, 가드 트림 루프가
+    제거할 때마다 전체를 재렌더·재해시하지 않도록 한다.
+    """
+    stable_id = _doc_stable_id(d)
+    section = d.metadata.get("current_section", "일반 본문")
+    page = d.metadata.get("page", "?")
+    score = d.metadata.get("rerank_score", d.metadata.get("score", 0.0))
+    return (
+        f"[doc:{stable_id}] [section:{section}] [page:{page}] [score:{score:.3f}]\n"
+        f"{d.page_content}\n\n"
+    )
+
+
+def _ctx_prompt(context: str, query: str) -> str:
+    """토큰 추정 대상 프롬프트 전체 문자열 (조립 형식의 단일 진원)."""
+    return f"{TOKEN_ESTIMATION_PROXY}\n\n[Context]\n{context}\n\n[Question]\n{query}"
+
+
 def format_context(docs: list[Document]) -> str:
     """검색된 문서들을 LLM이 읽기 좋은 형식의 문자열로 변환합니다.
 
@@ -193,44 +214,21 @@ def format_context(docs: list[Document]) -> str:
     [수정] 정규화 텍스트가 동일한 청크는 최초 1건만 렌더링합니다. 중복 청크가
     프롬프트에 그대로 들어가면 LLM이 같은 주장을 반복 출력합니다 (raw-side).
     """
-    context = ""
-    for d in _deduplicate_docs(docs):
-        stable_id = _doc_stable_id(d)
-        section = d.metadata.get("current_section", "일반 본문")
-        page = d.metadata.get("page", "?")
-        score = d.metadata.get("rerank_score", d.metadata.get("score", 0.0))
-        context += f"[doc:{stable_id}] [section:{section}] [page:{page}] [score:{score:.3f}]\n{d.page_content}\n\n"
-    return context
+    return "".join(_render_doc_block(d) for d in _deduplicate_docs(docs))
 
 
 def _estimate_ctx_tokens(docs: list, query: str) -> int:
-    """Estimate prompt tokens for the analysis-context template.
+    """Estimate prompt tokens for the analysis-context template (standalone).
 
-    Uses a SINGLE call on the assembled full-context string so the estimate
-    matches the historical semantics (and is robust to call-count-based mocks
-    such as a constant ``count_tokens_rough``); the value is the initial `est`
-    before per-removal decrements. O(n) overall: the context is assembled
-    once here and the guard loop only decrements per removal.
-
-    The context string is assembled inline (mirroring :func:`format_context`)
-    rather than by calling the module-level ``format_context``, so this helper
-    does not inflate the ``format_context`` call count observed by
-    ``_apply_ctx_guard`` (invoked at most twice: pre-guard and post-loop).
+    Single assembly + single count, byte-compatible with the historical
+    inline layout. ``_apply_ctx_guard`` does not call this helper: it reuses
+    its pre-rendered per-doc blocks so the trim loop never re-renders or
+    re-hashes documents (O(R×D) -> O(D) renders).
     """
     if not docs:
-        return count_tokens_rough(
-            f"{TOKEN_ESTIMATION_PROXY}\n\n[Context]\n\n[Question]\n{query}"
-        )
-    context = "".join(
-        f"[doc:{_doc_stable_id(d)}] "
-        f"[section:{d.metadata.get('current_section', '일반 본문')}] "
-        f"[page:{d.metadata.get('page', '?')}] "
-        f"[score:{float(d.metadata.get('rerank_score', d.metadata.get('score', 0.0))):.3f}]"
-        f"\n{d.page_content}\n\n"
-        for d in docs
-    )
+        return count_tokens_rough(_ctx_prompt("", query))
     return count_tokens_rough(
-        f"{TOKEN_ESTIMATION_PROXY}\n\n[Context]\n{context}\n\n[Question]\n{query}"
+        _ctx_prompt("".join(_render_doc_block(d) for d in docs), query)
     )
 
 
@@ -241,10 +239,13 @@ def _apply_ctx_guard(docs: list, query: str) -> tuple[list, str, int]:
     normalized-text chunks are dropped first (pre-prompt), then documents are
     dropped from the lowest ``rerank_score`` end of a descending-ranked copy
     until the estimated token cost fits the budget, while always preserving a
-    minimum of 2 documents. On each removal the remaining docs are re-formatted
-    and the full context string is re-counted, so ``format_context`` is invoked
-    at most once per removal (1 + removals, which is bounded by the number of
-    documents).
+    minimum of 2 documents.
+
+    Efficiency contract: per-doc blocks are rendered once (stable_id hash +
+    metadata format computed once per doc), and each removal only re-joins the
+    surviving blocks and re-counts tokens. ``format_context`` is invoked at
+    most twice (1 pre-guard + 1 post-trim), so the cost is O(D) renders
+    instead of O(removals × D).
     """
     # Pre-prompt content dedup: identical chunks add no information and make
     # the LLM echo the repeated claim (raw-side repetition). Pure list filter —
@@ -262,7 +263,10 @@ def _apply_ctx_guard(docs: list, query: str) -> tuple[list, str, int]:
         return docs, context, dedup_removed
 
     token_budget = int((OLLAMA_NUM_CTX - OLLAMA_NUM_PREDICT) * 0.85)
-    est = _estimate_ctx_tokens(docs, query)
+    # 문서 조각을 1회 렌더해 초기 추정과 트림 루프에서 공유한다.
+    # (이전: estimate 인라인 조립 + 제거마다 format_context 재렌더 → O(R×D) 재해시)
+    blocks = {id(d): _render_doc_block(d) for d in docs}
+    est = count_tokens_rough(_ctx_prompt("".join(blocks[id(d)] for d in docs), query))
 
     removed = dedup_removed
     if est > token_budget:
@@ -272,14 +276,19 @@ def _apply_ctx_guard(docs: list, query: str) -> tuple[list, str, int]:
             key=lambda d: float(d.metadata.get("rerank_score", 0.0)),
             reverse=True,
         )
+        order = [id(d) for d in ranked]
         while est > token_budget and len(ranked) > 2:
             ranked.pop()
+            order.pop()
             removed += 1
-            context = format_context(ranked)
+            # 생존 조각만 다시 조립해 카운트 (렌더·stable_id 재해시 없음).
+            # count_tokens_rough는 남은 컨텍스트 전체 텍스트를 받아야 기존의
+            # 마커/길이 기반 추정 계약이 유지된다.
             est = count_tokens_rough(
-                f"{TOKEN_ESTIMATION_PROXY}\n\n[Context]\n{context}\n\n[Question]\n{query}"
+                _ctx_prompt("".join(blocks[i] for i in order), query)
             )
         docs = ranked
+        context = format_context(docs)
         logger.info(f"[RAG] [CTX] trimmed {removed} docs, est tokens={est}")
     return docs, context, removed
 
@@ -709,8 +718,9 @@ async def generate(
     # 문서부터 제거하여 컨텍스트 초과(overflow)를 방지합니다. (최소 2문서 유지)
     # R4-02: num_predict(출력 예산)를 예약한 후 85%만 입력에 허용한다.
     # 입력+출력 합계가 num_ctx를 넘지 않도록 상한 = (num_ctx - num_predict) * 0.85.
-    # O(n^2) 재포맷 방지를 위해 추출한 _apply_ctx_guard에서 per-doc 합산 추정 + 단일
-    # 재포맷을 수행한다. (R1a-03 원칙에 따라 트림 결과는 반환 dict로 전달)
+    # O(n^2) 재포맷 방지를 위해 추출한 _apply_ctx_guard에서 문서 조각을 1회 렌더
+    # 후 제거분만 재조립·재카운트하고, format_context는 사후 1회만 호출한다.
+    # (R1a-03 원칙에 따라 트림 결과는 반환 dict로 전달)
     query = get_state_attr(state, "input") or ""
     docs, context, removed = _apply_ctx_guard(docs, query)
     if removed:
