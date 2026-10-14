@@ -1,0 +1,25 @@
+{
+  "ts": "2026-10-12T16:54:19",
+  "repeat": 5,
+  "memo": {
+    "variants": [
+      " attention mechanism 이란 ",
+      "attention  mechanism 이란",
+      "attention mechanism 이란"
+    ],
+    "calls": 1,
+    "stats": {
+      "hits": 14,
+      "misses": 1,
+      "evictions": 0,
+      "calls": 1,
+      "in_flight": 0
+    },
+    "total_ms": 0.13039999976172112,
+    "hit_rate": 0.9333333333333333
+  },
+  "reranker_namespacing": {
+    "model_b_calls": 2,
+    "ok": true
+  }
+}

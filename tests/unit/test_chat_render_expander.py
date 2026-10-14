@@ -60,7 +60,7 @@ def _doc(page: int = 1) -> MagicMock:
 
 
 def test_metrics_shows_document_count():
-    """문서 턴은 익스팬더/지표 없이 참조 목록 행만 렌더한다."""
+    """문서 턴은 익스팬더 없이 참조 목록 행과 완료 상태 1줄을 렌더한다."""
     mock_st = _render(
         role="assistant",
         content="답변입니다.",
@@ -71,15 +71,13 @@ def test_metrics_shows_document_count():
     )
     assert mock_st.expander.call_args_list == []
     text = _all_text(mock_st)
-    assert "1.5s" not in text
-    assert "tok" not in text
-    assert "Answer complete" not in text
+    assert "1.5s" in text
     assert "references" not in text
     assert any("· p.3" in lbl for lbl in _button_labels(mock_st))
 
 
 def test_metrics_uses_documents_length_over_retrieved_count():
-    """하단 지표 캡션이 없고 retrieved_count가 노출되지 않습니다."""
+    """완료 상태 1줄이 표시되며 retrieved_count가 노출되지 않습니다."""
     mock_st = _render(
         role="assistant",
         content="답변입니다.",
@@ -89,7 +87,7 @@ def test_metrics_uses_documents_length_over_retrieved_count():
         wrap_in_container=False,
     )
     text = _all_text(mock_st)
-    assert "1.5s" not in text
+    assert "1.5s" in text
     assert "99" not in text
     assert "references" not in text
     assert mock_st.expander.call_args_list == []

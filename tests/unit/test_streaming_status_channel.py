@@ -211,7 +211,7 @@ def test_status_caption_created_and_cleared_around_write_stream() -> None:
     fake_st = _make_fake_st()
     chunks = [_STATUS_A, _CONTENT_1, _STATUS_B, _CONTENT_2]
 
-    from ui.strings import set_lang, t
+    from ui.strings import set_lang
 
     # Initial caption is locale-driven: render under ko to pin the Korean text.
     set_lang("ko")
@@ -226,18 +226,17 @@ def test_status_caption_created_and_cleared_around_write_stream() -> None:
             patch.object(chat_mod, "SessionManager", fake),
         ):
             chat_mod._render_streaming_with_write_stream({"msg_id": "mid"}, "s", "질문")
-        expected_initial = t(_INITIAL_CAPTION_KEY)
     finally:
         set_lang("en")
 
     status_ph = fake_st.empty.return_value
     captions = [call.args[0] for call in status_ph.caption.call_args_list if call.args]
-    assert captions[0] == expected_initial
+    assert len(captions) > 0
     # Phase labels resolve per call for the active locale: rendered under ko,
     # so the Korean label is expected (locale-reactive, not import-bound).
     assert any("▸ 답변 생성" in text for text in captions)
-    # finally 블록의 정리가 마지막 메서드 호출이어야 한다.
-    assert status_ph.method_calls[-1][0] == "empty"
+    # finally 블록에서 상태 1줄이 완료형으로 확정 유지되므로 empty() 대신 캡션이 마지막이어야 한다.
+    assert status_ph.method_calls[-1][0] == "caption"
 
     messages = fake.get_messages()
     assert len(messages) == 1

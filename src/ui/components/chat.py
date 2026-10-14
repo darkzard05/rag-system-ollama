@@ -12,6 +12,7 @@
 
 import html
 import logging
+import sys
 import time
 import uuid
 from typing import Any
@@ -140,10 +141,16 @@ def render_message(
                 _render_error_retry(msg_id, error)
             return
 
-        # 인용 익스팬더 삭제: 완료 메시지는 본문 + 점프 스트립만 렌더한다.
+        # 인용 익스팬더 삭제: 완료 메시지는 상태 1줄 + 본문 + 점프 스트립만 렌더한다.
         # (thought/documents/citations 익스팬더, 툴팁 주입 모두 제거 — 하이라이트
         # 데이터(documents/citations 영속)는 유지하고 UI 계산만 끊는다.)
-        _ = (thought, is_latest, process_steps, metrics, cancelled)
+        _ = (thought, is_latest, metrics, cancelled)
+
+        # 답변 위 상태 1줄 (완료 후에도 유지): 스트리밍 때와 같은 위치.
+        if role == "assistant" and not cancelled:
+            final_line = _final_status_line(process_steps, citations, metrics)
+            if final_line:
+                st.caption(final_line)
 
         # 본문 내용
         if processed_content:
@@ -305,7 +312,9 @@ def _infer_proc_phase(status_text: str) -> int:
     return -1
 
 
-def _proc_phase_caption(status_text: str, elapsed_sec: float) -> str:
+def _proc_phase_caption(
+    status_text: str, elapsed_sec: float, extra: str | None = None
+) -> str:
     """답변 위 자막용 프로세스 위상 캡션 텍스트를 만든다."""
     active_idx = _infer_proc_phase(status_text)
     parts: list[str] = []
@@ -321,7 +330,49 @@ def _proc_phase_caption(status_text: str, elapsed_sec: float) -> str:
     line = status_line(*parts)
     if active_idx == -1 and status_text:
         line = status_line(line, status_text)
+    if extra:
+        line = status_line(line, extra)
     return status_line(line, f"{elapsed_sec:.0f}s ▍")
+
+
+def _live_status_line(status_text: str, elapsed_sec: float, n_citations: int) -> str:
+    """스트리밍 중 답변 위 1줄 자막: 위상 + 인용 개수 + 경과 (2줄 금지)."""
+    extra = None
+    if n_citations > 0:
+        extra = t("status_citation_count").format(n=n_citations)
+    return _proc_phase_caption(status_text, elapsed_sec, extra=extra)
+
+
+def _final_status_line(
+    process_steps: list[str] | None,
+    citations: list[dict[str, Any]] | None,
+    metrics: dict | None,
+) -> str:
+    """완료 후 답변 위에 유지되는 1줄 자막: 전 단계 ✓ + 인용 개수 + 총 시간.
+
+    스트리밍 tail과 완료 메시지 렌더가 공유한다. 판단 근거가 전혀 없으면
+    빈 문자열을 반환하고 호출자는 캡션을 그리지 않는다 (팬텀 캡션 금지).
+    """
+    steps = [s for s in (process_steps or []) if isinstance(s, str) and s.strip()]
+    n_cit = len([c for c in (citations or []) if isinstance(c, dict)])
+    total = (metrics or {}).get("total_time", 0)
+    has_time = isinstance(total, (int, float)) and total > 0
+    if not steps and n_cit == 0 and not has_time:
+        return ""
+    done: set[int] = set()
+    for s in steps:
+        idx = _infer_proc_phase(s)
+        if idx >= 0:
+            done.add(idx)
+    parts: list[str] = []
+    for idx, (label, _keywords) in enumerate(get_phase_labels()):
+        parts.append(f"✓ {label}" if idx in done else label)
+    line = status_line(*parts)
+    if n_cit > 0:
+        line = status_line(line, t("status_citation_count").format(n=n_cit))
+    if has_time:
+        line = status_line(line, f"{total:.1f}s")
+    return line
 
 
 def get_stopped_answer_actions() -> dict[str, Any]:
@@ -744,9 +795,8 @@ def _should_skip_final_rerun(
 ) -> bool:
     """Clean finalize needs no st.rerun (Task3 terminalize, safe subset).
 
-    Badges/metrics already painted in-run via the Task2 helpers
-    (``_paint_midstream_badges``/``_seeded_metrics_text``) plus the
-    ``finally`` final expander, so the only pending change is the
+    The single status line plus the reference list are already painted
+    in-run by the ``finally`` tail, so the only pending change is the
     ``msg_type`` streaming->general conversion for the current ``msg_id``.
     ■ stop (``cancelled``) and error turns still rerun for a confirmed
     render. No fragment infrastructure — single boolean guard only.
@@ -769,11 +819,11 @@ def _render_streaming_with_write_stream(
 ) -> None:
     """st.write_stream 기반 스트리밍 렌더 (동기 조인).
 
-    부가 정보(익스팬더)는 텍스트보다 **위**에 표시된다: 진행 중 ``aux_ph``에
-    spinner 포함 익스팬더가 먼저 렌더링되고, ``write_stream``이 그 아래에
-    텍스트를 표시한다. 완료 시 ``finally``에서 최종 메타데이터로 갱신된다.
+    답변 위 단일 상태 슬롯에 진행 중 1줄 자막(위상 + 인용 개수)을 먼저 그리고,
+    ``write_stream``이 그 아래에 텍스트를 표시한다. 완료 시 ``finally``에서
+    상태 1줄을 완료형으로 유지하고 하단 참조 목록을 확정한다.
     ``submit_mode="stop"``과 호환되어 사용자가 중지 시 부분 응답이 표시되고
-    영속화된다. tail 확정은 점프 스트립 1회만 렌더한다 (익스팬더/배지/지표 없음).
+    영속화된다.
     """
     msg_id = msg.get("msg_id", "")
     model_name = SessionManager.get("last_selected_model", session_id=current_sid) or ""
@@ -784,31 +834,41 @@ def _render_streaming_with_write_stream(
     stream_error: str | None = None
     try:
         with st.chat_message("assistant", avatar=AVATARS["assistant"]):
-            aux_ph = st.empty()  # 점프 스트립 확정 슬롯 — 텍스트보다 위
+            # 답변 위 상태 슬롯 (단일 1줄): 위상 + 인용 개수를 한 줄로 합쳐
+            # 그린다. 2줄 분리는 금지 — 두 콜백이 공유 live 상태를 갱신하고
+            # 항상 같은 슬롯에 1줄만 다시 그린다.
             status_ph = st.empty()
-            status_ph.caption(t("status_initial_search"))
+            live: dict[str, Any] = {
+                "status": t("status_initial_search"),
+                "elapsed": 0.0,
+                "n_cit": 0,
+            }
+
+            def _repaint_live() -> None:
+                status_ph.caption(
+                    _live_status_line(
+                        str(live["status"]),
+                        float(live["elapsed"]),
+                        int(live["n_cit"]),
+                    )
+                )
+
+            _repaint_live()
 
             def _on_status(status_text: str, elapsed_sec: float) -> None:
-                status_ph.caption(_proc_phase_caption(status_text, elapsed_sec))
+                live["status"] = status_text
+                live["elapsed"] = elapsed_sec
+                _repaint_live()
 
             def _on_aux(aux: dict[str, Any]) -> None:
-                # [Phase B1] tail 확정 전진: 최종 citations 일괄을 기다리지 않고
-                # citations_add first_add 시점에 단일 markdown 배지([1] [2] ...)만
-                # aux 슬롯에 선행 표시한다. 전체 참조 목록(버튼 위젯)은 tail에서
-                # 1회 확정 렌더하므로 mid-stream 위젯 비용은 들지 않는다.
-                # (LLM 꼬리 생성 7.7s 동안 UI가 빈 stall로 보이는 문제 완화용.
-                # 출력 토큰량·num_predict는 그대로.)
+                # 인용 개수가 바뀌면 같은 1줄 자막에 합쳐 다시 그린다.
+                # 실제 목록은 tail에서 하단에 1회 확정한다.
                 if _is_stale_ghost(aux, msg_id):
                     return
-                if aux.get("citations"):
-                    with aux_ph.container():
-                        _paint_midstream_badges(aux)
-                else:
-                    aux_ph.empty()
-
-            # [개선 4] 데이터가 없는 상태에서 불필요하게 빈 익스팬더를 그리던 기존 선행 렌더 블록 제거
-            # (기존 lines 410-433 삭제: aux_ph.empty()로 슬롯만 확보하고 실제 렌더링은 _on_aux에 위임)
-            aux_ph.empty()
+                n = len(aux.get("citations") or [])
+                if n != live["n_cit"]:
+                    live["n_cit"] = n
+                    _repaint_live()
 
             # st.write_stream — 스트리밍 텍스트 표시
             response = None
@@ -838,12 +898,27 @@ def _render_streaming_with_write_stream(
                 )
                 # 완료/예외/■ 중지(StopException — BaseException) 모두에서 실행되어
                 # 잘못된 "생성 중" 잔상이 남지 않는다. 플레이스홀더는 매 run의 일시 요소.
-                status_ph.empty()
                 aux_state = SessionManager.get(_AUX_STATE_KEY, {}, current_sid) or {}
-                aux_ph.empty()
-                # Tail 확정 렌더 (단순안): 익스팬더/배지/지표 없이 참조 목록만.
+                # Tail 확정: 정상 완료 시에만 답변 위 1줄 자막을 완료형으로 유지 + 하단 참조 목록.
                 # 본문은 write_stream이 이미 그렸고, 완료 메시지와 동일 슬롯
-                # 순서(본문 아래)에 목록을 확정한다.
+                # 순서(상태 1줄 → 본문 → 목록)에 목록을 확정한다.
+                # 중단(StopException/cancel)이나 예외 턴은 잔상 방지를 위해 자막을 비운다.
+                _has_exc = sys.exc_info()[0] is not None
+                _cancel_pending = bool(
+                    SessionManager.get("generation_cancel", False, current_sid)
+                )
+                if not _has_exc and not _cancel_pending:
+                    tail_line = _final_status_line(
+                        aux_state.get("process_steps"),
+                        aux_state.get("citations"),
+                        aux_state.get("metrics"),
+                    )
+                    if tail_line:
+                        status_ph.caption(tail_line)
+                    else:
+                        status_ph.empty()
+                else:
+                    status_ph.empty()
                 if aux_state and (
                     aux_state.get("documents") or aux_state.get("citations")
                 ):
@@ -905,7 +980,7 @@ def _render_streaming_with_write_stream(
     logger.info("[PERF] finalize took %.3fs", time.perf_counter() - _t_fin)
 
     # Terminalize (Task3 safe subset): clean finalize already painted the
-    # final expander/badges/metrics in-run, so skip st.rerun() when the only
+    # single status line + reference list in-run, so skip st.rerun() when the only
     # pending change is msg_type streaming->general for this msg_id. The
     # finalized flag lets the next run know no rerun wall is pending.
     if _should_skip_final_rerun(

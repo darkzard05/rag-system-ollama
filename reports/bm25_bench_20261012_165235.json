@@ -1,0 +1,18 @@
+{
+  "ts": "2026-10-12T16:52:35",
+  "docs": 300,
+  "repeat": 5,
+  "k": 10,
+  "rank_bm25_version": "unknown",
+  "bm25s_version": null,
+  "A_rank_bm25": {
+    "index_ms": 45.27539999980945,
+    "query_ms_p50": 0.9831999996094964,
+    "query_ms_p95": 1.600800002051983,
+    "query_ms_mean": 1.0347259997797664,
+    "qps": 966.4394247490084
+  },
+  "B_bm25s": {
+    "status": "SKIP (bm25s not installed)"
+  }
+}

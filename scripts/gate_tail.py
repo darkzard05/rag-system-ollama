@@ -68,6 +68,7 @@ def main():
 
     baseline_testids = {
         "stAppViewContainer",
+        "stBaseButton-tertiary",
         "stBottomBlockContainer",
         "stChatInput",
         "stChatMessage",
@@ -120,7 +121,7 @@ def main():
             modified_files.append(f)
 
     modified_files = list(dict.fromkeys(modified_files))
-    ruff_files = modified_files
+    ruff_files = [f for f in modified_files if not f.endswith(".css")]
     ruff_cmd = ["python", "-m", "ruff", "check"] + ruff_files
     r_ruff = run_cmd(ruff_cmd)
     results.append(

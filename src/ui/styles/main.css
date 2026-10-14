@@ -684,21 +684,27 @@ border-top: 1px solid color-mix(in srgb, var(--border-color) 30%, transparent) !
    뒤따르는 emotion 단일 클래스와 동점에서 진다. 조상 한정(0,2,0)으로
    이기며, 전역 button 규칙 금지(상단 C8 경고) 및 우선순위 강제 선언 0건
    (hygiene 게이트)을 준수한다. 사용 testID는 모두 베이스라인 포함済み.
-   1.60 DOM: button[data-testid] > div > p(라벨). */
+   1.60 DOM: button[data-testid] > div > p(라벨).
+   밑줄은 버튼 전체가 아니라 파란 발췌 span에만 건다: 버튼 레벨 밑줄은
+   버튼 기본 글자색(흰색 계열)을 따라가지만, span 레벨 밑줄은 span 자체의
+   파란색(currentColor 기본값)을 따라가므로 밑줄·글자 색이 일치한다. */
 [data-testid="stChatMessage"] [data-testid="stBaseButton-tertiary"] {
     justify-content: flex-start;
     text-align: left;
-    text-decoration: underline;
-    text-underline-offset: 3px;
-    /* ACC-5: reference jump buttons are full-width rows — guarantee the
-       44px touch target. Plain declaration to respect the hygiene budget. */
-    min-height: 44px;
+    text-decoration: none;
+    padding-block: 2px;
+    min-height: 0;
 }
 [data-testid="stChatMessage"] [data-testid="stBaseButton-tertiary"] p {
     display: block;
     max-width: 100%;
     overflow: hidden;
+    margin-block: 0;
+    line-height: 1.35;
     text-align: left;
     text-overflow: ellipsis;
     white-space: nowrap;
+}
+[data-testid="stChatMessage"] [data-testid="stBaseButton-tertiary"] p span {
+    text-decoration: underline;
 }

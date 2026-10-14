@@ -1,0 +1,14 @@
+{
+  "tool": "measure_stream_to_citation_gap",
+  "log": null,
+  "fitz_bench": {
+    "n_docs": 6,
+    "cold_s": 0.03544239999973797,
+    "warm_s": 0.03336990000025253,
+    "cold_annotations": 10,
+    "warm_annotations": 10,
+    "recompute_s": 0.0008712000017112587,
+    "n_entries": 1
+  },
+  "verdict": "no suspect over threshold (synthetic gap ~0 or log without stall)"
+}

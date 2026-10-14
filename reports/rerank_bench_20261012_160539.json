@@ -1,0 +1,29 @@
+{
+  "model": "ms-marco-MultiBERT-L-12",
+  "pool_type": "real",
+  "num_candidates": 18,
+  "query": "cm3가 뭔가요?",
+  "repeat": 2,
+  "per_run_ms": [
+    4291.99,
+    4257.74
+  ],
+  "mean_ms": 4274.86,
+  "median_ms": 4274.86,
+  "p95_ms": 4291.99,
+  "providers": [
+    "AzureExecutionProvider",
+    "CPUExecutionProvider"
+  ],
+  "session_info": {
+    "providers": [
+      "CPUExecutionProvider"
+    ],
+    "intra_op_num_threads": 0,
+    "inter_op_num_threads": 0,
+    "execution_mode": "ExecutionMode.ORT_SEQUENTIAL",
+    "graph_optimization_level": "GraphOptimizationLevel.ORT_ENABLE_ALL"
+  },
+  "timestamp": "20261012_160539",
+  "errors": []
+}

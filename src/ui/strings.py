@@ -152,6 +152,7 @@ UI_STRINGS: dict[str, dict[str, str]] = {
         "status_fallback_generating": "Generating...",
         "status_fallback_stopping": "Stopping...",
         "status_citation_cleanup": "Tidying citations...",
+        "status_citation_count": "Citations {n}",
         "error_prefix": "Error: ",
         # Document build progress (chat_build._render_build_progress_block)
         "doc_default_name": "Document",
@@ -273,6 +274,7 @@ UI_STRINGS: dict[str, dict[str, str]] = {
         "status_fallback_generating": "생성 중...",
         "status_fallback_stopping": "중지 중...",
         "status_citation_cleanup": "인용 정리 중...",
+        "status_citation_count": "인용 {n}개",
         "error_prefix": "오류: ",
         # Document build progress (chat_build._render_build_progress_block)
         "doc_default_name": "문서",
