@@ -3,12 +3,10 @@ PDF 뷰어 및 문서 관련 UI 컴포넌트.
 @st.fragment를 사용하여 PDF 렌더링과 네비게이션이 전체 페이지 리런 없이 독립적으로 업데이트됩니다.
 """
 
-import contextlib
 import logging
 import os
 
 import streamlit as st
-from streamlit.errors import StreamlitAPIException
 
 from common.config import MSG_PDF_VIEWER_NO_FILE
 from common.exceptions import PDFProcessingError
@@ -280,10 +278,9 @@ def _resolve_pdf_state() -> dict | None:
             # 위젯 생성 이전의 대입이므로 Streamlit 규약상 허용된다.
             SessionManager.delete(PDF_TARGET_PAGE_KEY)
             st.session_state.pop(PDF_TARGET_PAGE_KEY, None)
-            with contextlib.suppress(
-                AttributeError, RuntimeError, StreamlitAPIException
-            ):
-                st.session_state[PDF_NAV_INPUT_KEY] = current_page
+            # st.session_state[PDF_NAV_INPUT_KEY] 직접 대입 제거 (Streamlit 1.60 규격 준수:
+            # 위젯 생성 전/후 직접 세션 위젯 키 수정 대신 세션 관리자의 current_page와
+            # render_pdf_controls 내부의 상태 분기값에 의존하여 stale/StreamlitAPIException 방지)
             return {
                 "pdf_path": pdf_path,
                 "file_hash": file_hash,

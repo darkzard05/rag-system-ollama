@@ -119,7 +119,7 @@ def build_autoscroll_js(force: bool) -> str:
                     for (const entry of entries) {
                         sentinelState.wasVisible = entry.isIntersecting === true;
                     }
-                }, { root: scroller, threshold: 0 });
+                }, { root: scroller, threshold: 0.1 });
                 sentinelState.observer.observe(marker);
             }
         } catch (e) {}
