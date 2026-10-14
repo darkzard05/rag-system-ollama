@@ -201,15 +201,33 @@ async def split_documents(
             )
             if use_semantic and embedder and overflow_docs:
                 semantic_chunker = _init_semantic_chunker(embedder)
-                split_docs, vectors = await semantic_chunker.split_documents(
-                    overflow_docs
+                # [최적화] 단일 임베딩 왕복: 오버플로우 문장 텍스트와 정상 청크
+                # 텍스트를 합쳐 embed_documents 1회로 처리한다. Ollama는 입력
+                # 전체를 단일 HTTP 요청으로 전송하므로 분할 호출은 왕복만 늘린다.
+                # 문장 벡터는 l2 정규화 후 경계 탐색에, 정상 벡터는 그대로 쓴다.
+                full_text, doc_ranges, sentence_texts = (
+                    semantic_chunker.prepare_overflow_texts(overflow_docs)
                 )
                 # 정상 페이지는 임베딩 1회로 벡터화 후 순서 보존 병합.
                 normal_docs = [d for d in docs if len(d.page_content) <= threshold]
-                if normal_docs:
-                    normal_vectors = await _embed_documents_chunks(
-                        normal_docs, embedder
-                    )
+                normal_texts = [d.page_content for d in normal_docs]
+                combined_texts = [*sentence_texts, *normal_texts]
+                split_docs = []
+                vectors = []
+                if combined_texts:
+                    all_vectors = await semantic_chunker.embed_texts(combined_texts)
+                    n_sent = len(sentence_texts)
+                    normal_vectors = [np.array(v) for v in all_vectors[n_sent:]]
+                    if n_sent:
+                        sent_vectors = semantic_chunker.l2_normalize(
+                            all_vectors[:n_sent]
+                        )
+                        (
+                            split_docs,
+                            vectors,
+                        ) = await semantic_chunker.assemble_overflow_chunks(
+                            full_text, doc_ranges, sent_vectors
+                        )
                     # 순서 보존: 원본 docs 순서대로 재조립
                     normal_iter = iter(zip(normal_docs, normal_vectors, strict=False))
                     # overflow 의미분할은 원본 1페이지가 N청크가 되므로

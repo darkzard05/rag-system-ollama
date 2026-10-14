@@ -32,7 +32,7 @@ from common.config import (
 )
 from common.constants import GRADE_MEMO_KEY
 from common.utils import fast_hash
-from core.graph._generate import format_context
+from core.graph._generate import format_context, resolve_cached_context
 from core.graph._graph_core import (
     _add_stage_ms,
     _doc_stable_id,
@@ -521,8 +521,12 @@ async def verify_answer(
     if not llm:
         return {"verification_route": "end"}
 
-    # 컨텍스트 구성
-    context = format_context(docs) if docs else ""
+    # 컨텍스트 구성 — generate이 상태에 저장한 context를 우선 재사용한다.
+    # 동일 docs를 format_context로 다시 렌더·재해시하지 않는다 (3중 렌더 방지).
+    # 캐시가 없으면(캐시 경로 등 generate 미실행) 기존대로 format_context로 폴백.
+    context = resolve_cached_context(state, docs)
+    if context is None:
+        context = format_context(docs) if docs else ""
 
     # 인용 일관성 검사: 모든 [doc:<stable_id>]가 실제 문서 집합에 존재하는지
     # (위치 기반 int 범위 검사가 아니라 stable id 멤버십 검사).

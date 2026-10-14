@@ -65,6 +65,10 @@ class GraphState(TypedDict):
     relevant_docs: list[Document]
     response: str | None
     thought: str | None
+    # CTX 재사용 채널: generate이 _apply_ctx_guard 결과 context를 기록하면
+    # verify/aquery가 동일 docs 재렌더 없이 재사용한다 (쿼리당 3중 렌더 → 1회).
+    # 순수 str이라 체크포인트 직렬화(JsonPlusSerializer) 제약을 만족한다.
+    context: str | None
     performance: dict[str, Any] | None
     search_weights: dict[str, float] | None  # 👈 동적 가중치 추가
     is_cached: bool

@@ -319,7 +319,6 @@ class SemanticChunkerEmbeddingsMixin:
             return np.array([]).reshape(0, 0)
 
         all_results: list[np.ndarray | None] = [None] * len(texts)
-        missing_indices: list[int] = []
         missing_texts: list[str] = []
         text_to_output_indices: dict[str, list[int]] = {}
         newly_embedded: list[tuple[int, str, np.ndarray]] = []
@@ -346,7 +345,6 @@ class SemanticChunkerEmbeddingsMixin:
             if norm_text not in text_to_output_indices:
                 missing_texts.append(norm_text)
             text_to_output_indices.setdefault(norm_text, []).append(i)
-            missing_indices.append(i)
 
         # 2. 누락분 배치 임베딩 수행 (캐시 저장은 모든 배치 성공 후 단일 패스)
         if missing_texts:
@@ -370,7 +368,11 @@ class SemanticChunkerEmbeddingsMixin:
 
             # [수정] 배치 루프 동안 메모리에만 수집, 캐시 저장은 루프 이후 단일 패스로 수행
             for b_idx, batch in enumerate(embed_batches):
-                batch_indices = missing_indices[b_idx : b_idx + len(batch)]
+                # 배치 텍스트 → 원본 출력 인덱스 역매핑 (중복 텍스트가 섞여도
+                # 슬라이싱 어긋남 없이 실패 배치를 정확히 추적한다).
+                batch_indices = [
+                    idx for t in batch for idx in text_to_output_indices.get(t, [])
+                ]
 
                 try:
                     # [최적화] 동기 임베딩 생성을 비동기 스레드로 분리 (embed 동안 모델 pin)
@@ -460,6 +462,32 @@ class SemanticChunkerEmbeddingsMixin:
                 where=norms > 1e-9,
             )
         return embeddings_matrix
+
+    async def embed_texts(self, texts: list[str]) -> np.ndarray:
+        """외부 텍스트 리스트를 캐시·배치 공유 경로로 임베딩한다 (raw, 비정규화).
+
+        오버플로우 청킹(``core.chunking``)이 문장 텍스트와 정상 청크 텍스트를
+        합쳐 단일 ``embed_documents`` 왕복으로 처리하기 위한 진입점이다.
+        캐시 조회·정제·중복 제거·Ollama 단일 호출·HF 배치 분할은
+        ``_get_embeddings``과 동일하며, 반환 행렬의 행 수는 항상 입력 텍스트 수와
+        동일하다. 문장 벡터로 쓸 때는 호출자가 ``l2_normalize``로 정규화한다
+        (R2-02 단위노름 배선).
+        """
+        return await self._get_embeddings(texts, normalize=False)
+
+    @staticmethod
+    def l2_normalize(matrix: np.ndarray) -> np.ndarray:
+        """행 단위 L2 정규화 — ``_get_embeddings(normalize=True)``와 동일 연산."""
+        arr = np.asarray(matrix, dtype="float32")
+        if arr.size == 0:
+            return arr
+        norms = np.linalg.norm(arr, axis=1, keepdims=True)
+        return np.divide(
+            arr,
+            norms,
+            out=np.zeros_like(arr),
+            where=norms > 1e-9,
+        )
 
     @staticmethod
     def _as_valid_vector(cached_vec: Any) -> np.ndarray | None:
@@ -1006,23 +1034,49 @@ class EmbeddingBasedSemanticChunker(
         # ✅ 정규식 사전 컴파일 (성능 최적화)
         self._sentence_pattern = re.compile(self.sentence_split_regex)
 
-    async def split_text(self, text: str) -> list[dict]:
+    def extract_sentence_units(self, text: str) -> tuple[list[dict], set[int]]:
+        """문장 분할 + 짧은 문장 병합 (동기, 임베딩 없음).
+
+        ``split_text``의 전반부(1단계)를 분리한 것으로, 오버플로우 청킹이
+        문장 텍스트를 미리 모아 단일 임베딩 왕복으로 처리할 때 사용한다.
+        반환값은 ``(병합된 문장 리스트, 헤더 인덱스 집합)``이다.
+        """
+        raw_sentences = self._split_sentences(text)
+        if not raw_sentences:
+            return [], set()
+        return self._merge_short_sentences(raw_sentences)
+
+    async def split_text(
+        self, text: str, precomputed_embeddings: np.ndarray | None = None
+    ) -> list[dict]:
         """
         텍스트를 의미론적으로 분할합니다 (Buffer-based context window 적용).
         [고도화] 마크다운 헤더 뿐만 아니라 대문자 섹션명도 감지하여 구조를 파악합니다.
+
+        ``precomputed_embeddings``가 주어지면 ``_get_embeddings`` 호출 없이
+        해당 행렬(행 수 == 문장 수, ``l2_normalize``된 것)을 사용한다.
+        오버플로우 청킹의 단일 임베딩 왕복 경로에서 사용한다.
         """
         if not text or not text.strip():
             return []
 
-        # 1. 문장 분할 (오프셋 포함)
-        raw_sentences = self._split_sentences(text)
-        if not raw_sentences:
+        # 1. 문장 분할 (오프셋 포함) + 짧은 문장 병합 (오프셋 유지)
+        sentences, header_indices = self.extract_sentence_units(text)
+        if not sentences:
             return []
 
-        # [최적화] 너무 짧은 문장 병합 (오프셋 유지) + 헤더 위치 캐싱
-        sentences, header_indices = self._merge_short_sentences(raw_sentences)
-
-        if len(sentences) <= self.buffer_size:
+        if precomputed_embeddings is not None:
+            if precomputed_embeddings.shape[0] != len(sentences):
+                raise ValueError(
+                    f"[Chunker] 사전 임베딩 행 수({precomputed_embeddings.shape[0]})가 "
+                    f"문장 수({len(sentences)})와 일치하지 않습니다."
+                )
+            indiv_embeddings = np.asarray(precomputed_embeddings, dtype="float32")
+            for s, v in zip(sentences, indiv_embeddings, strict=True):
+                s["vector"] = v
+            if len(sentences) <= self.buffer_size:
+                return sentences
+        elif len(sentences) <= self.buffer_size:
             # 벡터가 없으므로 계산 필요
             if sentences:
                 sentence_texts = [s["text"] for s in sentences]
@@ -1036,19 +1090,19 @@ class EmbeddingBasedSemanticChunker(
                 for s, v in zip(sentences, embeddings, strict=True):
                     s["vector"] = v
             return sentences
-
-        # 2. 개별 문장 임베딩 생성 (캐싱 활용)
-        # [R2-02] 단위노름 배선 — 거리·병합·중복제거 일관성 확보
-        indiv_embeddings = await self._get_embeddings(
-            [s["text"] for s in sentences], normalize=True
-        )
-        if indiv_embeddings.shape[0] != len(sentences):
-            raise ValueError(
-                f"[Chunker] 임베딩 행 수({indiv_embeddings.shape[0]})가 "
-                f"문장 수({len(sentences)})와 일치하지 않습니다."
+        else:
+            # 2. 개별 문장 임베딩 생성 (캐싱 활용)
+            # [R2-02] 단위노름 배선 — 거리·병합·중복제거 일관성 확보
+            indiv_embeddings = await self._get_embeddings(
+                [s["text"] for s in sentences], normalize=True
             )
-        for s, v in zip(sentences, indiv_embeddings, strict=True):
-            s["vector"] = v
+            if indiv_embeddings.shape[0] != len(sentences):
+                raise ValueError(
+                    f"[Chunker] 임베딩 행 수({indiv_embeddings.shape[0]})가 "
+                    f"문장 수({len(sentences)})와 일치하지 않습니다."
+                )
+            for s, v in zip(sentences, indiv_embeddings, strict=True):
+                s["vector"] = v
 
         # 3-4. Buffer 기반 Combined Embeddings + 인접 거리 계산
         combined_embeddings_arr = self._buffer_combined_embeddings(indiv_embeddings)
@@ -1066,21 +1120,9 @@ class EmbeddingBasedSemanticChunker(
         optimized_chunks = self._optimize_chunk_sizes(chunks)
         return self._prune_duplicates(optimized_chunks)
 
-    async def split_documents(
-        self, docs: list["Document"]
-    ) -> tuple[list["Document"], list[np.ndarray]]:
-        """
-        LangChain Document 객체 리스트를 받아 의미론적 분할을 수행합니다.
-        문서들을 통합하여 문맥을 유지하되, 오프셋 매핑을 통해
-        각 청크의 원본 메타데이터(페이지 번호 등)를 정확히 보존합니다.
-        각 청크에 대해 이미 계산된 벡터를 함께 반환하여 재계산을 방지합니다.
-        """
-
-        if not docs:
-            logger.warning("split_documents: 입력 문서 리스트가 비어있습니다.")
-            return [], []
-
-        # 1. 문서 통합 및 오프셋 매핑 구축 (join()을 사용하여 효율성 개선)
+    @staticmethod
+    def _join_docs_text(docs: list["Document"]) -> tuple[str, list[dict]]:
+        """문서들을 공백으로 결합하고 오프셋 매핑을 구축한다 (결합 텍스트, 범위)."""
         text_parts = []
         doc_ranges = []
         current_offset = 0
@@ -1102,18 +1144,43 @@ class EmbeddingBasedSemanticChunker(
             doc_ranges.append({"start": start, "end": end, "metadata": doc.metadata})
             current_offset = end
 
-        full_text = "".join(text_parts)
+        return "".join(text_parts), doc_ranges
 
+    def prepare_overflow_texts(
+        self, docs: list["Document"]
+    ) -> tuple[str, list[dict], list[str]]:
+        """오버플로우 문서 결합 + 문장 텍스트 추출 (임베딩 없음).
+
+        오버플로우 청킹이 문장 텍스트를 정상 청크 텍스트와 합쳐 단일 임베딩
+        왕복으로 처리하기 위한 전반부이다. 반환값은
+        ``(결합 텍스트, 오프셋 범위, 문장 텍스트 리스트)``이다.
+        """
+        full_text, doc_ranges = self._join_docs_text(docs)
         if not full_text.strip():
-            logger.warning("split_documents: 병합된 텍스트가 비어있습니다.")
-            return [], []
+            return "", [], []
+        sentences, _ = self.extract_sentence_units(full_text)
+        return full_text, doc_ranges, [s["text"] for s in sentences]
 
-        # 2. 청킹 수행 (오프셋 및 벡터 정보 포함)
-        chunk_dicts = await self.split_text(full_text)
+    async def assemble_overflow_chunks(
+        self,
+        full_text: str,
+        doc_ranges: list[dict],
+        sentence_vectors: np.ndarray,
+    ) -> tuple[list["Document"], list[np.ndarray]]:
+        """사전 임베딩된 문장 벡터로 의미분할을 완성한다.
 
-        # 3. 메타데이터 역매핑 및 문서 객체 생성 (다중 페이지 지원)
-        final_docs = []
-        final_vectors = []
+        ``sentence_vectors``는 ``prepare_overflow_texts``가 반환한 문장 순서와
+        일치하는 ``l2_normalize``된 행렬이어야 한다 (행 수 불일치 시 ValueError).
+        """
+        chunk_dicts = await self.split_text(
+            full_text, precomputed_embeddings=sentence_vectors
+        )
+        return await self.build_output_documents(chunk_dicts, doc_ranges)
+
+    async def build_output_documents(
+        self, chunk_dicts: list[dict], doc_ranges: list[dict]
+    ) -> tuple[list["Document"], list[np.ndarray]]:
+        """청크 딕셔너리에 메타데이터를 역매핑해 Document·벡터 쌍을 조립한다."""
 
         def _extract_metadata_batch(
             chunk_dicts: list[dict], doc_ranges: list[dict]
@@ -1125,6 +1192,10 @@ class EmbeddingBasedSemanticChunker(
                 for chunk in chunk_dicts
             ]
 
+        # 3. 메타데이터 역매핑 및 문서 객체 생성 (다중 페이지 지원)
+        final_docs: list[Document] = []
+        final_vectors: list[np.ndarray] = []
+
         results = await asyncio.to_thread(
             _extract_metadata_batch, chunk_dicts, doc_ranges
         )
@@ -1134,6 +1205,37 @@ class EmbeddingBasedSemanticChunker(
                 Document(page_content=chunk["text"], metadata=merged_metadata)
             )
             final_vectors.append(chunk["vector"])
+
+        return final_docs, final_vectors
+
+    async def split_documents(
+        self, docs: list["Document"]
+    ) -> tuple[list["Document"], list[np.ndarray]]:
+        """
+        LangChain Document 객체 리스트를 받아 의미론적 분할을 수행합니다.
+        문서들을 통합하여 문맥을 유지하되, 오프셋 매핑을 통해
+        각 청크의 원본 메타데이터(페이지 번호 등)를 정확히 보존합니다.
+        각 청크에 대해 이미 계산된 벡터를 함께 반환하여 재계산을 방지합니다.
+        """
+
+        if not docs:
+            logger.warning("split_documents: 입력 문서 리스트가 비어있습니다.")
+            return [], []
+
+        # 1. 문서 통합 및 오프셋 매핑 구축 (join()을 사용하여 효율성 개선)
+        full_text, doc_ranges = self._join_docs_text(docs)
+
+        if not full_text.strip():
+            logger.warning("split_documents: 병합된 텍스트가 비어있습니다.")
+            return [], []
+
+        # 2. 청킹 수행 (오프셋 및 벡터 정보 포함)
+        chunk_dicts = await self.split_text(full_text)
+
+        # 3. 메타데이터 역매핑 및 문서 객체 생성 (다중 페이지 지원)
+        final_docs, final_vectors = await self.build_output_documents(
+            chunk_dicts, doc_ranges
+        )
 
         logger.info(
             f"의미론적 문서 분할 완료: {len(docs)}개 원본 문서 -> {len(final_docs)}개 청크 생성 (벡터 포함)"

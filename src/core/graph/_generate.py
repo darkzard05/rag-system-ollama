@@ -217,6 +217,36 @@ def format_context(docs: list[Document]) -> str:
     return "".join(_render_doc_block(d) for d in _deduplicate_docs(docs))
 
 
+def resolve_cached_context(
+    source: Any, docs: list[Document] | None = None
+) -> str | None:
+    """generate이 상태에 저장한 context를 재사용한다 (쿼리당 3중 재렌더 방지).
+
+    ``generate`` 노드는 ``_apply_ctx_guard``가 만든 ``context`` 문자열을
+    ``GraphState["context"]`` 채널에 기록한다. 하류(``verify_answer``,
+    ``RAGSystem.aquery``)는 동일 ``docs`` 집합에 대해 ``format_context``를
+    재호출하는 대신 이 헬퍼로 캐시된 문자열을 먼저 조회한다.
+
+    - 캐시에 비어 있지 않은 ``str``이 있으면 그대로 반환 (호출자는
+      ``format_context``를 호출하지 않는다 — 렌더+해시 0회).
+    - 없으면 ``None``을 반환해 호출자가 ``format_context(docs)``로 폴백한다.
+
+    Stale 안전: ``generate``는 실행될 때마다 가드를 다시 계산해 채널을
+    덮어쓰므로, ``verify → regenerate → generate`` 재실행 시에도 오래된
+    컨텍스트가 남지 않는다. ``hydrate_documents``가 추가하는 좌표 메타데이터는
+    렌더 필드(stable_id/section/page/score/page_content)에 영향을 주지 않으므로
+    하이드레이션 전후 렌더 결과는 동일하다.
+    """
+    _ = docs  # 시그니처 예약: 향후 docs-지문 검증 시 사용 (현재 미사용).
+    if isinstance(source, dict):
+        cached = source.get("context")
+    else:
+        cached = getattr(source, "context", None)
+    if isinstance(cached, str) and cached:
+        return cached
+    return None
+
+
 def _estimate_ctx_tokens(docs: list, query: str) -> int:
     """Estimate prompt tokens for the analysis-context template (standalone).
 
@@ -851,6 +881,9 @@ async def generate(
     result: dict[str, Any] = {
         "response": parsed_answer.final_answer if parsed_answer else full_response,
         "thought": full_thought,
+        # CTX 재사용: 가드가 만든 context를 상태 채널에 기록해 verify/aquery가
+        # 동일 docs를 재렌더·재해시하지 않도록 한다 (쿼리당 3중 렌더 → 1회).
+        "context": context,
         "citations": [c.model_dump() for c in parsed_answer.citations]
         if parsed_answer
         else [],

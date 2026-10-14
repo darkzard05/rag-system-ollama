@@ -231,7 +231,12 @@ class RAGSystem:
                 result = await rag_engine.ainvoke({"input": query}, config=config)
             docs = result.get("relevant_docs", [])
             await hydrate_documents(docs)
-            from .graph.graph_builder import format_context
+            from .graph.graph_builder import format_context, resolve_cached_context
+
+            # CTX 재사용: 그래프 generate이 상태에 기록한 context를 우선 사용해
+            # 동일 docs의 3차 렌더·재해시를 건너뛴다. 없으면 기존대로 렌더.
+            # (하이드레이션이 추가하는 좌표 메타데이터는 렌더 필드에 무영향.)
+            cached_context = resolve_cached_context(result, docs)
 
             # perf_report = monitor.get_report() # 이전 코드
             perf_report = _lazy_perf_report()
@@ -239,7 +244,9 @@ class RAGSystem:
             return {
                 "response": result.get("response", ""),
                 "thought": result.get("thought", ""),
-                "context": format_context(docs),
+                "context": cached_context
+                if cached_context is not None
+                else format_context(docs),
                 "documents": docs,
                 "performance": combined_perf,
             }

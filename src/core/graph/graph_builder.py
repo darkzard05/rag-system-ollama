@@ -23,6 +23,7 @@ from core.graph._generate import (  # noqa: F401 — re-exports for backward com
     _split_injection_docs,
     format_context,
     generate,
+    resolve_cached_context,
 )
 from core.graph._grade_verify import (  # noqa: F401 — re-exports for backward compat
     _validate_cited_doc_ids,
