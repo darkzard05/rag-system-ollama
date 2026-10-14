@@ -660,11 +660,19 @@ class SemanticChunkerBreakpointsMixin:
         if sentences:
             current_len = 0
             safety_bps = []
+            # [최적화] any() 전수 스캔 O(b) → set 조회 O(1).
+            # abs(bp - (i+1)) <= 1 ⟺ bp ∈ {i, i+1, i+2} 이므로 동치.
+            # 루프 전 1회 변환으로 전체 O(n·b) → O(n+b).
+            bp_set = set(breakpoints)
             for i, s in enumerate(sentences):
                 current_len += len(s["text"])
                 if current_len > (self.max_chunk_size * 0.9):
                     # 이미 breakpoints에 이 근처 지점이 있는지 확인
-                    if not any(abs(bp - (i + 1)) <= 1 for bp in breakpoints):
+                    if (
+                        (i not in bp_set)
+                        and ((i + 1) not in bp_set)
+                        and ((i + 2) not in bp_set)
+                    ):
                         safety_bps.append(i + 1)
                     current_len = 0
             if safety_bps:

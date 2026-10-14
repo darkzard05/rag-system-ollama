@@ -372,7 +372,6 @@ class _FinalAnswerExtractor:
     """structured 모드 raw_json 청크 → final_answer 증분 추출 헬퍼 (O(1) amortized)."""
 
     def __init__(self) -> None:
-        self._parts: list[str] = []
         self._blob: str = ""
         self._scan_pos = 0
         # [key_idx, raw_pos, pending_escape, pending_u, closed]
@@ -380,7 +379,6 @@ class _FinalAnswerExtractor:
 
     def feed(self, content: str) -> str:
         """raw_json 청크의 content를 누적하고 새 final_answer delta를 즉시 반환."""
-        self._parts.append(content)
         self._blob += content  # CPython in-place realloc 최적화 적용
         delta, self._scan_pos = _extract_final_answer_delta(
             self._blob, self._scan_pos, self._key_pos
