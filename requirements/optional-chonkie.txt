@@ -1,3 +1,4 @@
 # Optional semantic chunking backend (P0-2 spike). Install on demand:
 #   pip install -r requirements/optional-chonkie.txt
-chonkie>=1.0.0
+# 상한핀: SemanticChunker/OverlapRefinery/BaseEmbeddings 시그니처 고정용.
+chonkie>=1.0.0,<2.0.0

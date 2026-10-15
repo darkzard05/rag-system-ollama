@@ -66,11 +66,13 @@ def test_lean_allowlist_contract():
     assert {
         "page",
         "current_section",
+        "section_path",
         "rerank_score",
         "score",
         "doc_id",
     } == FAISS_LEAN_METADATA_KEYS
     assert is_faiss_lean({"page": 1, "current_section": "A"}) is True
+    assert is_faiss_lean({"page": 1, "section_path": "A > B"}) is True
     assert is_faiss_lean({}) is True
     assert is_faiss_lean({"page": 1, "file_path": "x"}) is False
     assert is_faiss_lean({"page": 1, "word_coords": []}) is False

@@ -36,7 +36,8 @@ logger = logging.getLogger(__name__)
 
 # [R3a-03] 캐시 서명 스키마 버전. 상향 시 저장된 VERSION.json과 로드 시
 # 재검증(:216-240)이 새 버전을 인식해 구버전 캐시는 자연 퇴거(재구축)됩니다.
-CACHE_SCHEMA_VERSION: int = 3
+# [Phase2] section_path 메타 추가로 v4 (구캐시 재구축).
+CACHE_SCHEMA_VERSION: int = 4
 
 # [R3a-03] semantic chunker의 임베딩 정규화 배선 (T8/R2-02에서 단위노름으로
 # 일원화 — src/core/semantic_chunker.py:711,724의 normalize=True). 이 배선이

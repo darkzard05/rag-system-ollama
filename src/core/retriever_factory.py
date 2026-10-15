@@ -17,7 +17,7 @@ from core.session import SessionManager
 logger = logging.getLogger(__name__)
 
 FAISS_LEAN_METADATA_KEYS: frozenset[str] = frozenset(
-    {"page", "current_section", "rerank_score", "score", "doc_id"}
+    {"page", "current_section", "section_path", "rerank_score", "score", "doc_id"}
 )
 
 FAISS_COORD_KEYS: frozenset[str] = frozenset({"word_coords", "page_coords", "coords"})

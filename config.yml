@@ -126,6 +126,11 @@ rag:
   text_splitter:
     chunk_size: 500
     chunk_overlap: 100
+    # [Phase2] 토큰 단위 상한 (v2-moe ctx 512 일치). length_function이
+    # HF 토크나이저 우선·rough 폴백으로 측정한다. selected_for: CM3-paper-single.
+    chunk_size_tokens: 512
+    # [Phase2] CTX 초과 시 strip_headers=True 자동 폴백 허용 (상태 로그 기록).
+    strip_headers_fallback: true
   
   # 추출 엔진 설정 (PyMuPDF4LLM 최적화)
   parsing:
@@ -165,6 +170,21 @@ rag:
     min_chunk_size: 200
     max_chunk_size: 1000
     similarity_threshold: 0.6
+    # [Phase3] chonkie 백엔드 파라미터 (12셀 스위프 대상은 threshold/
+    # similarity_window/skip_window, 나머지는 고정). selected_for: CM3-paper-single.
+    # [Phase4 sweep 2026-10-15] winner (thr 0.8/win 3/skip 0): p95 251·max 343
+    # (전셀 최저), mix 0, table 13. skip=1은 Ollama 400-error(컨텍스트 초과)로
+    # 안전 거부. Q5 단일청크 미적중은 인접청크(4.3.1 동일면)로 회수 가능해 수용.
+    chonkie:
+      threshold: 0.8
+      similarity_window: 3
+      min_sentences_per_chunk: 2
+      skip_window: 0
+      filter_window: 5
+      filter_polyorder: 3
+      filter_tolerance: 0.2
+      overlap_ratio: 0.1
+      chunk_size: 512
 
   # 쿼리 캐시 설정 (선택적 opt-in)
   query_cache:

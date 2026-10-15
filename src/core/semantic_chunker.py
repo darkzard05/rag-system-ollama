@@ -1144,20 +1144,26 @@ class EmbeddingBasedSemanticChunker(
 
     @staticmethod
     def _join_docs_text(docs: list["Document"]) -> tuple[str, list[dict]]:
-        """문서들을 공백으로 결합하고 오프셋 매핑을 구축한다 (결합 텍스트, 범위)."""
+        """문서들을 개행으로 결합하고 오프셋 매핑을 구축한다 (결합 텍스트, 범위).
+
+        [Phase2] 구분자를 공백 1칸에서 "\\n\\n"으로 변경 — 헤더 행(`# ...`)이
+        결합 경계에 묻히면 HEADER_SIMPLE이 매치되지 않아 섹션 추적이 붕괴한다.
+        오프셋 매핑은 구분자 길이를 반영하므로 좌표 무결성에 영향 없다.
+        """
         text_parts = []
         doc_ranges = []
         current_offset = 0
+        _sep = "\n\n"
 
         for doc in docs:
             content = doc.page_content
             if not content:
                 continue
 
-            # 문서 사이 공백 추가 (첫 문서 제외)
+            # 문서 사이 개행 구분 (첫 문서 제외)
             if current_offset > 0:
-                text_parts.append(" ")
-                current_offset += 1
+                text_parts.append(_sep)
+                current_offset += len(_sep)
 
             start = current_offset
             text_parts.append(content)

@@ -7,6 +7,8 @@ import contextlib
 import io
 import logging
 import os
+import re
+from typing import Any
 
 import numpy as np
 from langchain_core.documents import Document
@@ -82,6 +84,62 @@ def _get_optimal_batch_size(embedder: Embeddings) -> int:
     return min(max(4, os.cpu_count() or 4), 16)
 
 
+_HEADER_SPLIT_RE = re.compile(r"^(#{1,6}\s+.+)$", re.MULTILINE)
+
+_tokenizer_singleton: Any = None
+_tokenizer_failed: bool = False
+
+
+def split_by_headers(markdown: str) -> list[tuple[str, str]]:
+    """마크다운을 (섹션 제목, 본문) 쌍으로 1차 분할합니다 (헤더 보존).
+
+    헤더가 없으면 [("", 전문)]을 반환합니다. 제목은 `#`을 제거한 텍스트입니다.
+    """
+    parts = _HEADER_SPLIT_RE.split(markdown)
+    if len(parts) == 1:
+        return [("", markdown)]
+    out: list[tuple[str, str]] = []
+    pre = parts[0].strip()
+    if pre:
+        out.append(("", pre))
+    it = iter(parts[1:])
+    for header, body in zip(it, it, strict=False):
+        title = header.lstrip("#").strip()
+        out.append((title, body))
+    return out
+
+
+def _get_token_length_fn() -> Any:
+    """RecursiveCharacterTextSplitter용 토큰 길이 함수 (HF 우선·rough 폴백).
+
+    v2-moe HF 토크나이저를 지연 싱글톤으로 로드하고, 실패 시
+    ``count_tokens_rough``로 폴백합니다. 스레드 호출용 sync 함수입니다.
+    """
+    global _tokenizer_singleton, _tokenizer_failed
+    if _tokenizer_singleton is not None:
+        tok = _tokenizer_singleton
+        return lambda text: len(tok.encode(text, add_special_tokens=False))
+    if _tokenizer_failed:
+        from common.text_utils import count_tokens_rough
+
+        return count_tokens_rough
+    try:
+        from transformers import AutoTokenizer
+
+        _tokenizer_singleton = AutoTokenizer.from_pretrained(
+            "nomic-ai/nomic-embed-text-v2-moe", trust_remote_code=True
+        )
+        tok = _tokenizer_singleton
+        logger.info("[CHUNKING] 토큰 길이 함수: HF v2-moe 토크나이저 사용")
+        return lambda text: len(tok.encode(text, add_special_tokens=False))
+    except Exception as e:
+        _tokenizer_failed = True
+        logger.warning(f"[CHUNKING] HF 토크나이저 실패로 rough 폴백: {e}")
+        from common.text_utils import count_tokens_rough
+
+        return count_tokens_rough
+
+
 def _init_semantic_chunker(embedder: Embeddings) -> EmbeddingBasedSemanticChunker:
     """설정값을 기반으로 의미론적 분할기 초기화"""
     cfg = SEMANTIC_CHUNKER_CONFIG
@@ -101,18 +159,39 @@ def _postprocess_metadata(split_docs: list[Document]) -> None:
     """청크별 메타데이터 정리 및 내용 유형(콘텐츠/참고문헌 등) 식별"""
     ref_start_idx = None
     noise_keywords = ["index", "references", "bibliography", "doi:", "isbn"]
-    ref_keywords = ["## references", "references\n---", "## 참고문헌", "참고문헌\n---"]
+    # [Phase2] 단일 `#` 헤더 포함 ("# REFERENCES" 미검출 수정 — 베이스라인 ref 0건).
+    ref_keywords = [
+        "## references",
+        "# references",
+        "# reference",
+        "# bibliography",
+        "references\n---",
+        "## 참고문헌",
+        "참고문헌\n---",
+    ]
 
     for i, doc in enumerate(split_docs):
         content_lower = doc.page_content.lower()
+        # [Phase3] 메타데이터 기반 검출: chonkie 경로는 헤더 행이 본문에 없어
+        # content 매칭이 불가하므로 섹션명도 함께 본다.
+        section_lower = str(
+            doc.metadata.get("section_path", "")
+            or doc.metadata.get("current_section", "")
+        ).lower()
 
-        if ref_start_idx is None and any(
-            kw in content_lower[:50] for kw in ref_keywords
+        if ref_start_idx is None and (
+            any(kw in content_lower[:50] for kw in ref_keywords)
+            or "refer" in section_lower
+            or "bibliography" in section_lower
         ):
             ref_start_idx = i
 
         doc.metadata = doc.metadata.copy()
         doc.metadata["chunk_index"] = i
+        # [Phase2] section_path 1레벨 (2단계 cap 구조 준비, 값=현 섹션).
+        # citations[].section 키 유지·값만 교체, 렌더는 section_path 우선.
+        if "current_section" in doc.metadata:
+            doc.metadata["section_path"] = doc.metadata.get("current_section", "")
 
         is_noise = any(kw in content_lower[:100] for kw in noise_keywords)
         if not is_noise and (
@@ -145,6 +224,27 @@ async def _embed_documents_chunks(
             embedder.embed_documents, [d.page_content for d in chunks]
         )
     return [np.array(v) for v in raw_vectors]
+
+
+def _get_chonkie_chunk_fn() -> Any:
+    """config chonkie.* 파라미터를 바인딩한 청킹 partial을 반환합니다."""
+    import functools
+
+    from core.chonkie_adapter import chunk_with_chonkie
+
+    _ccfg = SEMANTIC_CHUNKER_CONFIG.get("chonkie", {})
+    return functools.partial(
+        chunk_with_chonkie,
+        chunk_size=int(_ccfg.get("chunk_size", 512)),
+        threshold=float(_ccfg.get("threshold", 0.7)),
+        similarity_window=int(_ccfg.get("similarity_window", 3)),
+        min_sentences_per_chunk=int(_ccfg.get("min_sentences_per_chunk", 2)),
+        skip_window=int(_ccfg.get("skip_window", 0)),
+        filter_window=int(_ccfg.get("filter_window", 5)),
+        filter_polyorder=int(_ccfg.get("filter_polyorder", 3)),
+        filter_tolerance=float(_ccfg.get("filter_tolerance", 0.2)),
+        overlap_ratio=float(_ccfg.get("overlap_ratio", 0.1)),
+    )
 
 
 async def split_documents(
@@ -201,12 +301,112 @@ async def split_documents(
             )
             if use_semantic and embedder and overflow_docs:
                 semantic_chunker = _init_semantic_chunker(embedder)
+                # [Phase2] 헤더 사전분할: 오버플로우 페이지를 섹션 조각으로
+                # 나눠 의미분할에 전달 — 섹션 경계가 임베딩 결합 텍스트에
+                # 묻히지 않고 doc_ranges 메타로 보존된다. 조각 없는 페이지는
+                # 원본 그대로 전달한다.
+                overflow_sections: list[Document] = []
+                for d in overflow_docs:
+                    base_meta = dict(d.metadata or {})
+                    sections = split_by_headers(d.page_content)
+                    if len(sections) <= 1:
+                        overflow_sections.append(d)
+                    else:
+                        for title, body in sections:
+                            if not body.strip():
+                                continue
+                            # 헤더 행을 본문에 유지 — 결합 시 헤더 검출용.
+                            # (제거하면 _join_docs_text의 공백 결합에 묻혀
+                            # HEADER_SIMPLE이 매치되지 않고 전역 Front Matter로 붕괴.)
+                            text = f"# {title}\n{body}" if title else body
+                            meta = {
+                                **base_meta,
+                                "current_section": title
+                                or base_meta.get("current_section", ""),
+                            }
+                            overflow_sections.append(
+                                Document(page_content=text, metadata=meta)
+                            )
+                # [Phase3] chonkie 위임: 백엔드가 chonkie면 섹션 조각을
+                # chonkie 의미분할에 위임한다 (v2-moe 임베딩, L3 캐시 경유).
+                # 실패 시 builtin 경로로 폴백한다.
+                if chunk_backend == "chonkie":
+                    try:
+                        from core.chonkie_adapter import is_chonkie_available
+
+                        if is_chonkie_available():
+                            with get_performance_monitor().track_operation(
+                                OperationType.SEMANTIC_CHUNKING,
+                                {
+                                    "doc_count": len(docs),
+                                    "backend": "chonkie-overflow",
+                                },
+                            ):
+                                _chunk_fn = _get_chonkie_chunk_fn()
+                                chonk_docs = await asyncio.to_thread(
+                                    _chunk_fn, overflow_sections
+                                )
+                                normal_docs = [
+                                    d for d in docs if len(d.page_content) <= threshold
+                                ]
+                                chonk_vectors = await _embed_documents_chunks(
+                                    chonk_docs, embedder
+                                )
+                                normal_vectors = (
+                                    await _embed_documents_chunks(normal_docs, embedder)
+                                    if normal_docs
+                                    else []
+                                )
+                            # 순서 보존: 원본 페이지 위치에 끼워넣기.
+                            co_merged_docs: list[Document] = []
+                            co_merged_vectors: list[np.ndarray] = []
+                            co_overflow_set = {id(d) for d in overflow_docs}
+                            co_by_page: dict[
+                                Any, list[tuple[Document, np.ndarray]]
+                            ] = {}
+                            for od, ov in zip(chonk_docs, chonk_vectors, strict=True):
+                                co_by_page.setdefault(
+                                    od.metadata.get("page"), []
+                                ).append((od, ov))
+                            co_normal_iter = iter(
+                                zip(normal_docs, normal_vectors, strict=False)
+                            )
+                            for d in docs:
+                                if id(d) in co_overflow_set:
+                                    for od, ov in co_by_page.pop(
+                                        d.metadata.get("page"), []
+                                    ):
+                                        co_merged_docs.append(od)
+                                        co_merged_vectors.append(ov)
+                                else:
+                                    nd, nv = next(co_normal_iter)
+                                    co_merged_docs.append(nd)
+                                    co_merged_vectors.append(nv)
+                            for _pg, rest in co_by_page.items():
+                                for od, ov in rest:
+                                    co_merged_docs.append(od)
+                                    co_merged_vectors.append(ov)
+                            split_docs, vectors = co_merged_docs, co_merged_vectors
+                            msg = (
+                                "chonkie 오버플로우 분할 완료 "
+                                f"({len(split_docs)}개 청크 생성)"
+                            )
+                            SessionManager.add_status_log(msg, session_id=session_id)
+                            logger.info(
+                                "[RAG] [CHUNKING] 분할 완료 | "
+                                f"원본: {len(docs)} | 청크: {len(split_docs)}"
+                            )
+                            _postprocess_metadata(split_docs)
+                            return split_docs, vectors
+                        logger.warning("[CHUNKING] chonkie 미설치로 builtin 폴백")
+                    except Exception as e:
+                        logger.warning(f"[CHUNKING] chonkie 실패로 builtin 폴백: {e}")
                 # [최적화] 단일 임베딩 왕복: 오버플로우 문장 텍스트와 정상 청크
                 # 텍스트를 합쳐 embed_documents 1회로 처리한다. Ollama는 입력
                 # 전체를 단일 HTTP 요청으로 전송하므로 분할 호출은 왕복만 늘린다.
                 # 문장 벡터는 l2 정규화 후 경계 탐색에, 정상 벡터는 그대로 쓴다.
                 full_text, doc_ranges, sentence_texts = (
-                    semantic_chunker.prepare_overflow_texts(overflow_docs)
+                    semantic_chunker.prepare_overflow_texts(overflow_sections)
                 )
                 # 정상 페이지는 임베딩 1회로 벡터화 후 순서 보존 병합.
                 normal_docs = [d for d in docs if len(d.page_content) <= threshold]
@@ -228,24 +428,33 @@ async def split_documents(
                         ) = await semantic_chunker.assemble_overflow_chunks(
                             full_text, doc_ranges, sent_vectors
                         )
-                    # 순서 보존: 원본 docs 순서대로 재조립
+                    # 순서 보존: 원본 docs 순서대로 재조립 — 오버플로우 청크를
+                    # 원본 페이지 위치에 끼워넣는다 (기존: 정상 전부 + 초과
+                    # append로 문서 순서 파괴). 청크는 pages 메타로 원천
+                    # 페이지에 귀속시킨다.
                     normal_iter = iter(zip(normal_docs, normal_vectors, strict=False))
-                    # overflow 의미분할은 원본 1페이지가 N청크가 되므로
-                    # 페이지 단위 순서로 병합 (정상-초과 교차 순서는
-                    # 원본 페이지 순서 기준 근사).
                     merged_docs: list[Document] = []
                     merged_vectors: list[np.ndarray] = []
                     overflow_set = {id(d) for d in overflow_docs}
                     pending_overflow = list(zip(split_docs, vectors, strict=False))
+                    by_page: dict[Any, list[tuple[Document, np.ndarray]]] = {}
+                    for od, ov in pending_overflow:
+                        pg = od.metadata.get("page")
+                        by_page.setdefault(pg, []).append((od, ov))
                     for d in docs:
                         if id(d) in overflow_set:
-                            continue
-                        nd, nv = next(normal_iter)
-                        merged_docs.append(nd)
-                        merged_vectors.append(nv)
-                    for od, ov in pending_overflow:
-                        merged_docs.append(od)
-                        merged_vectors.append(ov)
+                            for od, ov in by_page.pop(d.metadata.get("page"), []):
+                                merged_docs.append(od)
+                                merged_vectors.append(ov)
+                        else:
+                            nd, nv = next(normal_iter)
+                            merged_docs.append(nd)
+                            merged_vectors.append(nv)
+                    # 귀속 실패 잔여(페이지 미일치)는 말미에 보존 (유실 방지).
+                    for _pg, rest in by_page.items():
+                        for od, ov in rest:
+                            merged_docs.append(od)
+                            merged_vectors.append(ov)
                     split_docs, vectors = merged_docs, merged_vectors
                 msg = f"오버플로우 하위분할 완료 ({len(split_docs)}개 청크 생성)"
                 SessionManager.add_status_log(msg, session_id=session_id)
@@ -258,6 +467,7 @@ async def split_documents(
             recursive_chunker = RecursiveCharacterTextSplitter(
                 chunk_size=TEXT_SPLITTER_CONFIG["chunk_size"],
                 chunk_overlap=TEXT_SPLITTER_CONFIG["chunk_overlap"],
+                length_function=_get_token_length_fn(),
             )
             split_docs = []
             for d in docs:
@@ -280,17 +490,16 @@ async def split_documents(
         # P0-2 opt-in: chonkie 헤더-어웨어 어댑터. 미설치/실패 시 builtin 폴백.
         if chunk_backend == "chonkie":
             try:
-                from core.chonkie_adapter import (
-                    chunk_with_chonkie,
-                    is_chonkie_available,
-                )
+                from core.chonkie_adapter import is_chonkie_available
 
                 if is_chonkie_available():
                     with get_performance_monitor().track_operation(
                         OperationType.SEMANTIC_CHUNKING,
                         {"doc_count": len(docs), "backend": "chonkie"},
                     ):
-                        split_docs = await asyncio.to_thread(chunk_with_chonkie, docs)
+                        # [Phase3] config chonkie.* 파라미터 전달 (스위프 대상 포함).
+                        _chunk_fn = _get_chonkie_chunk_fn()
+                        split_docs = await asyncio.to_thread(_chunk_fn, docs)
                         if embedder:
                             vectors = await _embed_documents_chunks(
                                 split_docs, embedder
@@ -317,6 +526,7 @@ async def split_documents(
             recursive_chunker = RecursiveCharacterTextSplitter(
                 chunk_size=TEXT_SPLITTER_CONFIG["chunk_size"],
                 chunk_overlap=TEXT_SPLITTER_CONFIG["chunk_overlap"],
+                length_function=_get_token_length_fn(),
             )
             # [최적화] CPU 집약적 청킹 분리
             split_docs = await asyncio.to_thread(

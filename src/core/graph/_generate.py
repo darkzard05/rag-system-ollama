@@ -192,7 +192,9 @@ def _render_doc_block(d: Document) -> str:
     제거할 때마다 전체를 재렌더·재해시하지 않도록 한다.
     """
     stable_id = _doc_stable_id(d)
-    section = d.metadata.get("current_section", "일반 본문")
+    section = d.metadata.get("section_path") or d.metadata.get(
+        "current_section", "일반 본문"
+    )
     page = d.metadata.get("page", "?")
     score = d.metadata.get("rerank_score", d.metadata.get("score", 0.0))
     return (
@@ -308,6 +310,32 @@ def _apply_ctx_guard(docs: list, query: str) -> tuple[list, str, int]:
 
     removed = dedup_removed
     if est > token_budget:
+        # [Phase2-b] 헤더 스트립 폴백: 문서 제거 전에 `#` 마커 제거 버전을
+        # 먼저 시도한다. config strip_headers_fallback=false면 기존 제거 경로.
+        # 스트립은 토큰만 줄이고(문서 수·순서 유지) 로그에 전환을 기록한다.
+        try:
+            from common.config import TEXT_SPLITTER_CONFIG as _TSCFG
+
+            _strip_fallback = bool(_TSCFG.get("strip_headers_fallback", False))
+        except Exception:
+            _strip_fallback = False
+        if _strip_fallback:
+            stripped_blocks = {
+                k: re.sub(r"^#{1,6}\s+", "", v, flags=re.MULTILINE)
+                for k, v in blocks.items()
+            }
+            stripped_context = "".join(stripped_blocks[id(d)] for d in docs)
+            stripped_est = count_tokens_rough(_ctx_prompt(stripped_context, query))
+            if stripped_est <= token_budget:
+                logger.info(
+                    "[RAG] [CTX] strip_headers 폴백 적용 "
+                    f"(est {est}→{stripped_est}, 문서 {len(docs)}건 유지)"
+                )
+                return docs, stripped_context, removed
+            logger.info(
+                "[RAG] [CTX] strip_headers 폴백 미달 "
+                f"(est {stripped_est} 초과) — 문서 제거로 전환"
+            )
         # rerank_score 내림차순(최상위 문서 우선) 사본에서 낮은 점수 문서부터 제거.
         # OPT-1: 제거 횟수 k에 대한 이진 탐색 — 선형 스캔과 동일한 최소 k를
         # O(log R)회 재카운트로 찾는다 (R = 최종 제거 수). 각 probe는 렌더済
