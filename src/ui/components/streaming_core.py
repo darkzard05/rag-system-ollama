@@ -499,22 +499,34 @@ def stream_chunks(
         "registered": False,
         "first_put_at": None,
     }
+    # done은 턴별 큐에 정확히 1회만 보장한다. 슬롯대기 중단·바깥 예외 등
+    # run() finally에 닿지 않는 경로에서도 소비자가 hang 없이 종료되게 한다.
+    _done_once = threading.Event()
+
+    def _emit_done() -> None:
+        if not _done_once.is_set():
+            _done_once.set()
+            with contextlib.suppress(Exception):
+                q.put(("done", None))
 
     def bg_task() -> None:
         # 슬롯 대기는 중단 가능해야 한다: 등록 전 대기는 cancel_stream이
         # no-op이라 join만 만료돼 확정 경고가 되므로(슬롯 고갈 연쇄),
         # _stop_event 폴링으로 즉시 빠져나간다. 전체 대기 상한 30초 유지.
+        # 미등록 취소도 done으로 즉시 복귀해 소비자의 3회 Empty hang을 막는다.
         _slot_deadline = time.perf_counter() + 30
         _slot_ok = False
         while time.perf_counter() < _slot_deadline:
             if _stop_event.is_set():
                 logger.debug(f"[CHAT][STREAM] 슬롯 대기 중 중단 (run_id={run_id})")
+                _emit_done()
                 return
             if acquire_stream_slot(timeout=0.5):
                 _slot_ok = True
                 break
         if not _slot_ok:
             if _stop_event.is_set():
+                _emit_done()
                 return
             logger.warning(
                 f"[CHAT][STREAM] 동시 스트림 슬롯 획득 실패 (run_id={run_id})"
@@ -528,7 +540,7 @@ def stream_chunks(
                     ),
                 )
             )
-            q.put(("done", None))
+            _emit_done()
             return
         SessionManager.set_session_id(session_id or "default")
 
@@ -573,7 +585,7 @@ def stream_chunks(
                         await event_stream.aclose()
                 for c in remaining_chunks:
                     q.put(("chunk", c))
-                q.put(("done", None))
+                _emit_done()
 
         try:
             loop = asyncio.new_event_loop()
@@ -590,8 +602,12 @@ def stream_chunks(
                     loop.close()
         except asyncio.CancelledError:
             logger.info("[CHAT] 스트리밍 작업이 취소되었습니다")
+            _emit_done()
         except Exception as e:
             logger.error(f"[CHAT] 백그라운드 작업 오류: {e}", exc_info=True)
+            with contextlib.suppress(Exception):
+                q.put(("error", e))
+            _emit_done()
 
     t = threading.Thread(
         target=bg_task, daemon=True, name=f"chat-stream-{session_id[-12:]}"
