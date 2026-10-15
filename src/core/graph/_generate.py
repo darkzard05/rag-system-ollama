@@ -224,6 +224,28 @@ def format_context(docs: list[Document]) -> str:
     return "".join(_render_doc_block(d) for d in _deduplicate_docs(docs))
 
 
+def _docs_fingerprint(docs: list[Document] | None) -> str:
+    """docs 집합의 경량 지문 — stale context 재사용 방지용.
+
+    렌더 필드(stable_id/section/page/score/page_content)만 해시하므로
+    하이드레이션 좌표 메타 추가에는 불변이다. SHA-256 hex를 반환한다.
+    """
+    import hashlib
+
+    if not docs:
+        return "empty"
+    parts: list[str] = []
+    for d in _deduplicate_docs(list(docs)):
+        content = d.page_content if isinstance(d.page_content, str) else ""
+        section = d.metadata.get("section_path") or d.metadata.get(
+            "current_section", ""
+        )
+        page = d.metadata.get("page", "?")
+        score = d.metadata.get("rerank_score", d.metadata.get("score", 0.0))
+        parts.append(f"{_doc_stable_id(d)}|{section}|{page}|{score}|{content}")
+    return hashlib.sha256("\n".join(parts).encode("utf-8")).hexdigest()
+
+
 def resolve_cached_context(
     source: Any, docs: list[Document] | None = None
 ) -> str | None:
@@ -238,20 +260,26 @@ def resolve_cached_context(
       ``format_context``를 호출하지 않는다 — 렌더+해시 0회).
     - 없으면 ``None``을 반환해 호출자가 ``format_context(docs)``로 폴백한다.
 
-    Stale 안전: ``generate``는 실행될 때마다 가드를 다시 계산해 채널을
-    덮어쓰므로, ``verify → regenerate → generate`` 재실행 시에도 오래된
-    컨텍스트가 남지 않는다. ``hydrate_documents``가 추가하는 좌표 메타데이터는
-    렌더 필드(stable_id/section/page/score/page_content)에 영향을 주지 않으므로
-    하이드레이션 전후 렌더 결과는 동일하다.
+    Stale 안전: [PoC-2] ``docs``가 주어지면 저장된 ``context_fingerprint``와
+    비교해 불일치 시 ``None``을 반환한다. 지문이 없는 레거시 상태 + docs가
+    주어진 경우도 fail-closed로 ``None``을 반환한다. ``docs``가 ``None``이면
+    레거시 호환을 위해 캐시를 그대로 반환한다.
     """
-    _ = docs  # 시그니처 예약: 향후 docs-지문 검증 시 사용 (현재 미사용).
     if isinstance(source, dict):
         cached = source.get("context")
+        stored_fp = source.get("context_fingerprint")
     else:
         cached = getattr(source, "context", None)
-    if isinstance(cached, str) and cached:
+        stored_fp = getattr(source, "context_fingerprint", None)
+    if not (isinstance(cached, str) and cached):
+        return None
+    if docs is None:
         return cached
-    return None
+    if not isinstance(stored_fp, str) or not stored_fp:
+        return None
+    if stored_fp != _docs_fingerprint(docs):
+        return None
+    return cached
 
 
 def _estimate_ctx_tokens(docs: list, query: str) -> int:
@@ -1009,6 +1037,7 @@ async def generate(
         # CTX 재사용: 가드가 만든 context를 상태 채널에 기록해 verify/aquery가
         # 동일 docs를 재렌더·재해시하지 않도록 한다 (쿼리당 3중 렌더 → 1회).
         "context": context,
+        "context_fingerprint": _docs_fingerprint(docs),
         "citations": [c.model_dump() for c in parsed_answer.citations]
         if parsed_answer
         else [],

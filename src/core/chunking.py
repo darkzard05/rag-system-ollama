@@ -188,6 +188,8 @@ def _postprocess_metadata(split_docs: list[Document]) -> None:
 
         doc.metadata = doc.metadata.copy()
         doc.metadata["chunk_index"] = i
+        # [PoC-1] 내부 귀속 키는 출력 메타에서 제거한다.
+        doc.metadata.pop("_overflow_parent", None)
         # [Phase2] section_path 1레벨 (2단계 cap 구조 준비, 값=현 섹션).
         # citations[].section 키 유지·값만 교체, 렌더는 section_path 우선.
         if "current_section" in doc.metadata:
@@ -308,9 +310,19 @@ async def split_documents(
                 overflow_sections: list[Document] = []
                 for d in overflow_docs:
                     base_meta = dict(d.metadata or {})
+                    # [PoC-1] 동일 page 공유 시 by_page 붕괴 방지: 원본 문서
+                    # 귀속 식별자를 섹션 메타에 기록한다. 청크 메타 역매핑이
+                    # 첫 겹침 메타를 복사하므로 cross-section 청크도 첫 원본에
+                    # 귀속되어 유실 없이 순서가 보존된다.
+                    base_meta["_overflow_parent"] = id(d)
                     sections = split_by_headers(d.page_content)
                     if len(sections) <= 1:
-                        overflow_sections.append(d)
+                        overflow_sections.append(
+                            Document(
+                                page_content=d.page_content,
+                                metadata=dict(base_meta),
+                            )
+                        )
                     else:
                         for title, body in sections:
                             if not body.strip():
@@ -358,31 +370,46 @@ async def split_documents(
                                     else []
                                 )
                             # 순서 보존: 원본 페이지 위치에 끼워넣기.
+                            # [PoC-1] page 키 단독 귀속은 동일 page 공유 시 첫 문서가
+                            # 전부 소비한다. _overflow_parent 우선, page 폴백으로
+                            # 원본별 큐를 분리한다.
                             co_merged_docs: list[Document] = []
                             co_merged_vectors: list[np.ndarray] = []
                             co_overflow_set = {id(d) for d in overflow_docs}
-                            co_by_page: dict[
+                            co_by_parent: dict[
+                                Any, list[tuple[Document, np.ndarray]]
+                            ] = {}
+                            co_page_fallback: dict[
                                 Any, list[tuple[Document, np.ndarray]]
                             ] = {}
                             for od, ov in zip(chonk_docs, chonk_vectors, strict=True):
-                                co_by_page.setdefault(
-                                    od.metadata.get("page"), []
-                                ).append((od, ov))
+                                parent = od.metadata.get("_overflow_parent")
+                                if parent is not None:
+                                    co_by_parent.setdefault(parent, []).append((od, ov))
+                                else:
+                                    co_page_fallback.setdefault(
+                                        od.metadata.get("page"), []
+                                    ).append((od, ov))
                             co_normal_iter = iter(
                                 zip(normal_docs, normal_vectors, strict=False)
                             )
                             for d in docs:
                                 if id(d) in co_overflow_set:
-                                    for od, ov in co_by_page.pop(
-                                        d.metadata.get("page"), []
-                                    ):
+                                    bucket = co_by_parent.pop(id(d), [])
+                                    if not bucket:
+                                        bucket = co_page_fallback.pop(
+                                            d.metadata.get("page"), []
+                                        )
+                                    for od, ov in bucket:
                                         co_merged_docs.append(od)
                                         co_merged_vectors.append(ov)
                                 else:
                                     nd, nv = next(co_normal_iter)
                                     co_merged_docs.append(nd)
                                     co_merged_vectors.append(nv)
-                            for _pg, rest in co_by_page.items():
+                            for _key, rest in list(co_by_parent.items()) + list(
+                                co_page_fallback.items()
+                            ):
                                 for od, ov in rest:
                                     co_merged_docs.append(od)
                                     co_merged_vectors.append(ov)
@@ -430,20 +457,28 @@ async def split_documents(
                         )
                     # 순서 보존: 원본 docs 순서대로 재조립 — 오버플로우 청크를
                     # 원본 페이지 위치에 끼워넣는다 (기존: 정상 전부 + 초과
-                    # append로 문서 순서 파괴). 청크는 pages 메타로 원천
-                    # 페이지에 귀속시킨다.
+                    # append로 문서 순서 파괴). [PoC-1] _overflow_parent 우선
+                    # 귀속으로 동일 page 공유 시 붕괴를 방지한다.
                     normal_iter = iter(zip(normal_docs, normal_vectors, strict=False))
                     merged_docs: list[Document] = []
                     merged_vectors: list[np.ndarray] = []
                     overflow_set = {id(d) for d in overflow_docs}
                     pending_overflow = list(zip(split_docs, vectors, strict=False))
-                    by_page: dict[Any, list[tuple[Document, np.ndarray]]] = {}
+                    by_parent: dict[Any, list[tuple[Document, np.ndarray]]] = {}
+                    page_fallback: dict[Any, list[tuple[Document, np.ndarray]]] = {}
                     for od, ov in pending_overflow:
-                        pg = od.metadata.get("page")
-                        by_page.setdefault(pg, []).append((od, ov))
+                        parent = od.metadata.get("_overflow_parent")
+                        if parent is not None:
+                            by_parent.setdefault(parent, []).append((od, ov))
+                        else:
+                            pg = od.metadata.get("page")
+                            page_fallback.setdefault(pg, []).append((od, ov))
                     for d in docs:
                         if id(d) in overflow_set:
-                            for od, ov in by_page.pop(d.metadata.get("page"), []):
+                            bucket = by_parent.pop(id(d), [])
+                            if not bucket:
+                                bucket = page_fallback.pop(d.metadata.get("page"), [])
+                            for od, ov in bucket:
                                 merged_docs.append(od)
                                 merged_vectors.append(ov)
                         else:
@@ -451,7 +486,9 @@ async def split_documents(
                             merged_docs.append(nd)
                             merged_vectors.append(nv)
                     # 귀속 실패 잔여(페이지 미일치)는 말미에 보존 (유실 방지).
-                    for _pg, rest in by_page.items():
+                    for _key, rest in list(by_parent.items()) + list(
+                        page_fallback.items()
+                    ):
                         for od, ov in rest:
                             merged_docs.append(od)
                             merged_vectors.append(ov)

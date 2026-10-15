@@ -171,6 +171,8 @@ def test_graph_state_declaration_captured():
         "relevant_docs",
         "response",
         "thought",
+        "context",
+        "context_fingerprint",
         "performance",
         "search_weights",
         "is_cached",

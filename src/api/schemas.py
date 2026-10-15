@@ -69,6 +69,9 @@ class GraphState(TypedDict):
     # verify/aquery가 동일 docs 재렌더 없이 재사용한다 (쿼리당 3중 렌더 → 1회).
     # 순수 str이라 체크포인트 직렬화(JsonPlusSerializer) 제약을 만족한다.
     context: str | None
+    # [PoC-2] context가 어떤 docs 집합에서 렌더됐는지 지문. verify/aquery가
+    # docs 불일치 시 stale 재사용을 거부한다 (순수 str, 직렬화 안전).
+    context_fingerprint: str | None
     performance: dict[str, Any] | None
     search_weights: dict[str, float] | None  # 👈 동적 가중치 추가
     is_cached: bool

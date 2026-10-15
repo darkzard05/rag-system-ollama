@@ -5,6 +5,7 @@
 import json
 import logging
 import os
+import re
 import shutil
 import uuid
 from typing import Any
@@ -200,6 +201,20 @@ _shared_vector_object_cache: SyncCacheBridge = SyncCacheBridge(
 )
 
 
+# [PoC-3] file_hash 허용 문자셋 — 경로 구분자(/, \, .)와 절대경로를
+# 원천 차단한다. 프로덕션 해시는 hex(sha256 64자/fast_hash 16자)이며,
+# 기존 테스트의 "fakehash"/"hash-a" 같은 값과도 호환되도록 영숫자·-_ 로
+# 제한한다 (경로 탈출 불가, 기존 테스트 호환).
+_FILE_HASH_PATTERN = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
+
+
+def _validate_file_hash(file_hash: str) -> str:
+    """외부 입력 file_hash를 검증하고 무결한 값을 반환합니다."""
+    if not isinstance(file_hash, str) or not _FILE_HASH_PATTERN.match(file_hash):
+        raise ValueError(f"invalid file_hash: {file_hash!r}")
+    return file_hash
+
+
 class VectorStoreCache:
     """
     벡터 저장소와 관련 컴포넌트를 디스크에 캐싱하고 로드합니다.
@@ -217,9 +232,16 @@ class VectorStoreCache:
     ):
         from core.document_processor import compute_file_hash
 
-        self.file_hash = file_hash or compute_file_hash(file_path)
+        raw_hash = file_hash or compute_file_hash(file_path)
+        self.file_hash = _validate_file_hash(raw_hash)
         cache_key = _build_config_signature(embedding_model_name)
-        self.cache_dir = os.path.join(cache_dir, f"{self.file_hash}_{cache_key}")
+        candidate = os.path.join(cache_dir, f"{self.file_hash}_{cache_key}")
+        # 방어적 깊이: 정규화된 최종 경로가 base를 탈출하지 않음을 보장한다.
+        base = os.path.normpath(os.path.abspath(cache_dir))
+        resolved = os.path.normpath(os.path.abspath(candidate))
+        if os.path.commonpath([base, resolved]) != base:
+            raise ValueError(f"cache directory escapes base: {candidate!r}")
+        self.cache_dir = candidate
         self.doc_splits_path = os.path.join(self.cache_dir, "doc_splits.json")
         self.faiss_index_path = os.path.join(self.cache_dir, "faiss_index")
         self.bm25_retriever_path = os.path.join(self.cache_dir, "bm25_docs.json")
