@@ -48,7 +48,7 @@ from common.stream_worker import (
     release_stream_slot,
     unregister_stream,
 )
-from common.utils import fast_hash
+from common.utils import doc_stable_id, fast_hash
 from core.session import SessionManager
 from ui.components.common import get_doc_metadata
 from ui.components.reference_plan import note_stream_references
@@ -849,8 +849,16 @@ def merge_citations_add(
     items: list[dict[str, Any]],
     base_index: int,
     arr_len: int,
+    valid_ids: set[Any] | None = None,
 ) -> list[dict[str, Any]]:
-    """증분 인용 병합: base_index+i 업서트 → arr_len 절단 → 보조 키 dedupe."""
+    """증분 인용 병합: 검증 → base_index+i 업서트 → arr_len 절단 → 보조 키 dedupe.
+
+    `valid_ids`가 주어지면 `doc_id`(str 정규화)가 집합에 속한 항목만
+    병합한다 — 생산자(`_generate_pass`) 검증의 두 번째 방어망. `None`이면
+    레거시 passthrough(기존 호출·테스트 호환).
+    """
+    if valid_ids is not None:
+        items = [it for it in items if str(it.get("doc_id")) in valid_ids]
     merged = list(incr)
     for i, item in enumerate(items):
         idx = base_index + i
@@ -1019,6 +1027,9 @@ def _content_generator(
                     arr_len=int(arr_len_raw)
                     if isinstance(arr_len_raw, int)
                     else len(incr_citations),
+                    valid_ids={doc_stable_id(d) for d in documents}
+                    if documents
+                    else None,
                 )
                 citations = incr_citations
                 if _t_first_citation_paint is None:

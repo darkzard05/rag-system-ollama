@@ -234,6 +234,26 @@ def _normalize_citations(citations: list[Any], docs: list[Document]) -> list[Any
     return normalized
 
 
+def _filter_stream_cite_items(
+    items: list[Any], docs: list[Document] | None
+) -> list[Any]:
+    """스트리밍 인용 페이로드용 fail-closed 필터 (`_normalize_citations` 재사용).
+
+    `docs`가 주어지면 멤버십 검증·int→stable 매핑을 적용하고 미검증을
+    드롭한다. `docs`가 없으면(레거시 직접 호출·호환 경로) 원본을 그대로
+    반환한다 — 최종 `generate()` 정규화가 authoritative 경계로 남는다.
+    """
+    if not items or not docs:
+        return list(items)
+    kept = _normalize_citations(list(items), docs)
+    dropped = len(items) - len(kept)
+    if dropped:
+        logger.warning(
+            "[RAG] [GENERATE] 스트리밍 인용 %d건 드롭 (미검증 doc_id)", dropped
+        )
+    return kept
+
+
 def _render_doc_block(d: Document) -> str:
     """단일 문서의 컨텍스트 렌더 조각 — format_context/CTX 가드의 공유 단위.
 
@@ -561,8 +581,14 @@ async def _generate_pass(
     config: RunnableConfig,
     writer: StreamWriter | None,
     attempt: int,
+    docs: list[Document] | None = None,
 ) -> dict[str, Any]:
-    """단일 생성 패스: JSON 모드 스트리밍 + 구조화 파싱. 재시도 루프에서 호출된다."""
+    """단일 생성 패스: JSON 모드 스트리밍 + 구조화 파싱. 재시도 루프에서 호출된다.
+
+    `docs`가 주어지면 스트리밍 인용(`citations_add`·`citations` 이벤트)을
+    디스패치 전에 멤버십 검증한다. 없으면 레거시 passthrough —
+    최종 `generate()` 정규화가 authoritative 경계로 남는다.
+    """
     full_response = ""
     full_thought = ""
     last_metadata: dict[str, Any] = {}
@@ -636,17 +662,21 @@ async def _generate_pass(
                         if pending_content:
                             new_cites = citation_scanner.feed(full_response)
                             if new_cites:
-                                await _dispatch_event(
-                                    "citations_add",
-                                    {
-                                        "items": [obj for _, obj in new_cites],
-                                        "base_index": new_cites[0][0],
-                                        "arr_len": citation_scanner.emitted,
-                                        "attempt": attempt,
-                                    },
-                                    writer=writer,
-                                    config=config,
+                                items = _filter_stream_cite_items(
+                                    [obj for _, obj in new_cites], docs
                                 )
+                                if items:
+                                    await _dispatch_event(
+                                        "citations_add",
+                                        {
+                                            "items": items,
+                                            "base_index": new_cites[0][0],
+                                            "arr_len": citation_scanner.emitted,
+                                            "attempt": attempt,
+                                        },
+                                        writer=writer,
+                                        config=config,
+                                    )
                         await _dispatch_event(
                             "response_chunk",
                             {
@@ -672,17 +702,21 @@ async def _generate_pass(
                 if pending_content:
                     tail_cites = citation_scanner.feed(full_response)
                     if tail_cites:
-                        await _dispatch_event(
-                            "citations_add",
-                            {
-                                "items": [obj for _, obj in tail_cites],
-                                "base_index": tail_cites[0][0],
-                                "arr_len": citation_scanner.emitted,
-                                "attempt": attempt,
-                            },
-                            writer=writer,
-                            config=config,
+                        items = _filter_stream_cite_items(
+                            [obj for _, obj in tail_cites], docs
                         )
+                        if items:
+                            await _dispatch_event(
+                                "citations_add",
+                                {
+                                    "items": items,
+                                    "base_index": tail_cites[0][0],
+                                    "arr_len": citation_scanner.emitted,
+                                    "attempt": attempt,
+                                },
+                                writer=writer,
+                                config=config,
+                            )
                 await _dispatch_event(
                     "response_chunk",
                     {
@@ -696,17 +730,21 @@ async def _generate_pass(
             elif writer is not None and full_response:
                 tail_cites = citation_scanner.feed(full_response)
                 if tail_cites:
-                    await _dispatch_event(
-                        "citations_add",
-                        {
-                            "items": [obj for _, obj in tail_cites],
-                            "base_index": tail_cites[0][0],
-                            "arr_len": citation_scanner.emitted,
-                            "attempt": attempt,
-                        },
-                        writer=writer,
-                        config=config,
+                    items = _filter_stream_cite_items(
+                        [obj for _, obj in tail_cites], docs
                     )
+                    if items:
+                        await _dispatch_event(
+                            "citations_add",
+                            {
+                                "items": items,
+                                "base_index": tail_cites[0][0],
+                                "arr_len": citation_scanner.emitted,
+                                "attempt": attempt,
+                            },
+                            writer=writer,
+                            config=config,
+                        )
 
     generate_ms = (t_stream_end := time.perf_counter()) - pass_start
     generate_ms *= 1000
@@ -755,8 +793,13 @@ async def _generate_pass(
         )
 
         # P3: 인라인 [doc:...] 폴백과 별도로 citations[] 자체를 스트림에 태워
-        # 안정적 doc_id 기반 렌더링을 가능케 한다.
+        # 안정적 doc_id 기반 렌더링을 가능케 한다. 디스패치 전에 검증해
+        # 미검증 인용이 스트리밍으로 새지 않게 한다 (authoritative).
         if parsed_answer and writer is not None:
+            if docs:
+                parsed_answer.citations = _normalize_citations(
+                    list(parsed_answer.citations), docs
+                )
             await _dispatch_event(
                 "citations",
                 {"citations": [c.model_dump() for c in parsed_answer.citations]},
@@ -819,9 +862,20 @@ async def _generate_pass(
             _fallback_conf = 0.5
         parsed_answer = AnswerStructure(
             final_answer=_fallback_answer,
-            citations=recovered.get("citations", []),
+            citations=_filter_stream_cite_items(recovered.get("citations", []), docs)
+            if docs
+            else recovered.get("citations", []),
             confidence=_fallback_conf,
         )
+        # 파싱 실패 시에도 확정 citations 이벤트를 반드시 보내 UI의 스트리밍
+        # 잔재(검증 전 인용)를 authoritative 빈/정규화 목록으로 리셋한다.
+        if writer is not None:
+            await _dispatch_event(
+                "citations",
+                {"citations": [c.model_dump() for c in parsed_answer.citations]},
+                writer=writer,
+                config=config,
+            )
     return {
         "full_response": full_response,
         "full_thought": full_thought,
@@ -1031,6 +1085,7 @@ async def generate(
             config=config,
             writer=pass_writer,
             attempt=attempt,
+            docs=docs,
         )
         passes.append(result_pass)
         # [TIMING 구간 정의 — 단일 정본] generate_total_ms는 전 패스 합산,

@@ -19,7 +19,7 @@ from typing import Any
 
 from api.stream_pipeline import chunk_to_stream_events
 from common.config import MSG_ERROR_OLLAMA_NOT_RUNNING
-from common.utils import extract_annotations_from_docs
+from common.utils import doc_stable_id, extract_annotations_from_docs
 from core.session import SessionManager
 from ui.components.reference_plan import (
     adopt_prewarmed_annotations,
@@ -406,6 +406,9 @@ def consume_stream_into_message(
                         arr_len=int(arr_len_raw)
                         if isinstance(arr_len_raw, int)
                         else len(incr_citations),
+                        valid_ids={doc_stable_id(d) for d in documents}
+                        if documents
+                        else None,
                     )
                     citations = incr_citations
                     note_stream_references(
