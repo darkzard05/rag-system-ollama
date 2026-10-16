@@ -247,15 +247,19 @@ async def grade_documents(
     else:
         min_score_to_skip = GRADING_CONFIG.get("min_score_to_skip", 0.70)
 
-    min_top_gap = GRADING_CONFIG.get("min_top_gap_to_skip", 0.03)
+    # Fail-closed: 코드 폴백도 config.yml(0.05)와 동일하게 유지한다.
+    # 누락 시 0.03으로 약화되던 가드 약화 경로를 제거한다.
+    min_top_gap = GRADING_CONFIG.get("min_top_gap_to_skip", 0.05)
     sorted_scores = sorted(
         (float(d.metadata.get("rerank_score", 0.0)) for d in docs), reverse=True
     )
     top_gap = sorted_scores[0] - sorted_scores[1] if len(sorted_scores) > 1 else 1.0
 
-    # 1위가 임계값을 넘고 명확한 선두이거나, 상위 2개 문서가 모두 고신뢰도(0.38 이상) 군집을 형성할 때
+    # 1위가 임계값을 넘고 명확한 선두이거나, 상위 2개 문서가 모두 임계값 이상인
+    # 고신뢰도 군집을 형성할 때만 생략한다. 차상위 허용치(-0.07) 할인은 제거 —
+    # 임계값 직전 점수(예: 0.65/0.70)가 gap 0으로 스킵되던 우회 경로를 차단한다.
     both_high_confidence = len(sorted_scores) > 1 and sorted_scores[1] >= (
-        min_score_to_skip - 0.07
+        min_score_to_skip
     )
     if max_rerank_score >= min_score_to_skip and (
         top_gap >= min_top_gap or both_high_confidence

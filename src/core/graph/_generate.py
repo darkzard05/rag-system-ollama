@@ -185,6 +185,55 @@ def _deduplicate_docs(docs: list[Document]) -> list[Document]:
     return unique
 
 
+def _normalize_citations(citations: list[Any], docs: list[Document]) -> list[Any]:
+    """구조화 citations[]를 docs 멤버십 기준으로 정규화·검증한다.
+
+    - int / 숫자 문자열(0-based 인덱스)은 위치가 아닌 stable_id로 매핑해
+      UI 조회(`span_by_doc.get(sid)`)와 일치시킨다 (프롬프트 0-based 지시와
+      실제 hash 렌더 간 규격 붕괴 보정).
+    - hash 문자열은 docs stable_id 집합에 속할 때만 유지한다.
+    - 범위를 벗어난 int / 알 수 없는 hash(환각)는 드롭하고 경고를 남긴다.
+      text_span 진위(원문 부분문자열) 검사는 paraphrase 허용 정책상 수행하지
+      않는다 — doc_id 멤버십이 fail-closed 경계이다.
+    """
+    if not citations or not docs:
+        return []
+    valid_ids = {_doc_stable_id(d) for d in docs}
+    normalized: list[Any] = []
+    for cit in citations:
+        raw_id = cit.doc_id if hasattr(cit, "doc_id") else cit.get("doc_id")
+        mapped: str | None = None
+        if isinstance(raw_id, int) and not isinstance(raw_id, bool):
+            if 0 <= raw_id < len(docs):
+                mapped = _doc_stable_id(docs[raw_id])
+        elif isinstance(raw_id, str) and raw_id.isdigit():
+            idx = int(raw_id)
+            if 0 <= idx < len(docs):
+                mapped = _doc_stable_id(docs[idx])
+            # 숫자 문자열이면서 hash 집합에도 있으면 hash 우선 (충돌 방지).
+            if raw_id in valid_ids:
+                mapped = raw_id
+        elif isinstance(raw_id, str) and raw_id in valid_ids:
+            mapped = raw_id
+        if mapped is None:
+            logger.warning(
+                "[RAG] [GENERATE] 알 수 없는 인용 doc_id 드롭 (환각 차단): %r",
+                raw_id,
+            )
+            continue
+        try:
+            if hasattr(cit, "model_copy"):
+                normalized.append(cit.model_copy(update={"doc_id": mapped}))
+            else:
+                dup = dict(cit)
+                dup["doc_id"] = mapped
+                normalized.append(dup)
+        except Exception:
+            logger.warning("[RAG] [GENERATE] 인용 정규화 실패 — 원본 유지: %r", raw_id)
+            normalized.append(cit)
+    return normalized
+
+
 def _render_doc_block(d: Document) -> str:
     """단일 문서의 컨텍스트 렌더 조각 — format_context/CTX 가드의 공유 단위.
 
@@ -748,10 +797,30 @@ async def _generate_pass(
                     "[RAG] [GENERATE] citation 메타데이터 일부 누락 — "
                     "하이라이팅 좌표 정확도 저하 가능"
                 )
+        # Fail-closed (정교화): 파싱 실패 원인이 깨진 JSON 시도일 때만 원시
+        # 승격을 차단한다. 일반 텍스트 스트림(레거시/비구조 경로)은 기존처럼
+        # 그대로 전달한다 — 그렇지 않으면 비-JSON LLM 경로 7건이 회귀한다.
+        # 깨진 JSON 판정: { 시작 또는 구조화 키 마커 포함.
+        _stripped = json_str.lstrip()
+        _looks_json = (
+            _stripped.startswith("{")
+            or '"final_answer"' in json_str
+            or '"citations"' in json_str
+            or '"doc_id"' in json_str
+        )
+        if recovered.get("final_answer"):
+            _fallback_answer = recovered["final_answer"]
+            _fallback_conf = 0.0
+        elif _looks_json:
+            _fallback_answer = "제공된 문서에서 확인할 수 없습니다."
+            _fallback_conf = 0.0
+        else:
+            _fallback_answer = full_response
+            _fallback_conf = 0.5
         parsed_answer = AnswerStructure(
-            final_answer=recovered.get("final_answer", full_response),
+            final_answer=_fallback_answer,
             citations=recovered.get("citations", []),
-            confidence=0.5,
+            confidence=_fallback_conf,
         )
     return {
         "full_response": full_response,
@@ -1015,6 +1084,14 @@ async def generate(
     last_metadata = dict(last["last_metadata"])
     parsed_answer = last["parsed_answer"]
     parse_failed = bool(last["parse_failed"])
+    # 인용 fail-closed 정규화: int 인덱스→stable_id 매핑, 알 수 없는 id 드롭.
+    if parsed_answer is not None and getattr(parsed_answer, "citations", None):
+        try:
+            parsed_answer.citations = _normalize_citations(
+                list(parsed_answer.citations), docs
+            )
+        except Exception:
+            logger.warning("[RAG] [GENERATE] 인용 정규화 중 예외 — 원본 유지")
     generate_ms = float(sum(float(p["generate_ms"]) for p in passes))
     ttft_ms: float | None = passes[0]["ttft_ms"]
     first_token_ms: float | None = passes[0]["first_token_ms"]
@@ -1041,7 +1118,7 @@ async def generate(
         "citations": [c.model_dump() for c in parsed_answer.citations]
         if parsed_answer
         else [],
-        "confidence": parsed_answer.confidence if parsed_answer else 0.5,
+        "confidence": parsed_answer.confidence if parsed_answer else 0.0,
         "prompt_version": prompt_version,
         "parse_failed": parse_failed,
         "echo_detected": echo_detected,

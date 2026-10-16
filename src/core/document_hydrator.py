@@ -162,28 +162,52 @@ async def hydrate_documents(docs: list[Document]) -> None:
                         seen_requests.add(key)
                         miss_requests.append((page, bbox))
 
+            # 동일 페이지에 bbox가 여러 개면 clip별 저장 시 PK 덮어쓰기로
+            # 서로의 좌표를 오염시킨다. 이 경우 해당 페이지는 전체 페이지 추출
+            # (bbox=None) 1건으로 붕괴시켜 모든 청크가 완전한 좌표를 공유하게
+            # 한다 (정밀 clip 대신 완전성 우선 — fail-closed).
+            collapsed: list[tuple[int, Any | None]] = []
+            collapsed_keys: list[list[str]] = []
+            _by_page: dict[int, list[tuple[Any | None, str]]] = {}
+            for page, bbox in miss_requests:
+                _by_page.setdefault(page, []).append((bbox, f"{page}|{bbox!r}"))
+            for page, items in _by_page.items():
+                if len(items) > 1:
+                    logger.warning(
+                        f"[HYDRATE] 동일 페이지 다중 bbox({len(items)}건) 감지 "
+                        f"P{page} — 전체 페이지 추출로 붕괴"
+                    )
+                    collapsed.append((page, None))
+                    collapsed_keys.append([k for _, k in items])
+                else:
+                    collapsed.append((page, items[0][0]))
+                    collapsed_keys.append([items[0][1]])
+
             fresh_map: dict[str, list[Any] | None] = {}
             extracted: list[list[Any] | None] = []
-            if miss_requests:
+            if collapsed:
                 logger.info(
                     f"[HYDRATE] 정밀 좌표 추출: {os.path.basename(path)} "
-                    f"{len(miss_requests)}개 (page, bbox) 일괄 (단일 open)"
+                    f"{len(collapsed)}개 (page, bbox) 일괄 (단일 open)"
                 )
                 async with semaphore:
                     extracted = await asyncio.to_thread(
-                        _extract_pages_words_sync, path, miss_requests
+                        _extract_pages_words_sync, path, collapsed
                     )
-                for (page, bbox), coords in zip(miss_requests, extracted, strict=True):
-                    fresh_map[f"{page}|{bbox!r}"] = coords
+                for keys, coords in zip(collapsed_keys, extracted, strict=True):
+                    for k in keys:
+                        fresh_map[k] = coords
 
             # 추출(fresh) 성공 페이지만 병렬 저장한다. 캐시 적중 페이지는
             # 재저장하지 않는다 (기존 추출 데이터 보존 + 불필요한 I/O 방지).
-            # 저장 실패는 하이드레이션 전체를 깨지 않고 로그-온리로 처리한다.
-            save_targets = [
-                (page, coords)
-                for (page, _bbox), coords in zip(miss_requests, extracted, strict=True)
-                if coords
-            ]
+            # 동일 페이지 중복 저장은 첫 결과만 유지해 last-wins 덮어쓰기를
+            # 방지한다. 저장 실패는 전체를 깨지 않고 로그-온리로 처리한다.
+            save_targets: list[tuple[int, list[Any]]] = []
+            _saved_pages: set[int] = set()
+            for (page, _bbox), coords in zip(collapsed, extracted, strict=True):
+                if coords and page not in _saved_pages:
+                    save_targets.append((page, coords))
+                    _saved_pages.add(page)
             if save_targets:
                 save_results = await asyncio.gather(
                     *(

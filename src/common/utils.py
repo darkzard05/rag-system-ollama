@@ -149,7 +149,9 @@ def _build_line_boxes(coords: list, page_val: int, content: str) -> list[dict]:
     """단일 페이지 좌표에서 줄 단위 하이라이트 박스 annotation 목록 생성."""
     # [고도화] 연속성 기반 텍스트 매칭 (Sequence Matching)
     # 1. 청크 텍스트와 PDF 텍스트를 순수 단어 토큰으로 정규화
-    content_tokens = re.findall(r"[\w\d]+", content)
+    # Fail-closed 대소문자: 양쪽 모두 lower() 후 비교한다. 기존에는 content만
+    # 원문 케이스, pdf만 lower()라 영어 대문자 시작 문장이 절대 매칭되지 않았다.
+    content_tokens = [t.lower() for t in re.findall(r"[\w\d]+", content)]
     if not content_tokens:
         return []
 

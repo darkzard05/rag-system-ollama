@@ -92,15 +92,22 @@ async def test_raw_json_live_5_tokens():
         )
 
     responses = [c for c in captured if c["name"] == "response_chunk"]
-    assert len(responses) == 5, (
-        f"expected 5 response_chunk (raw only, no thought re-emit), got {len(responses)}"
+    # P-OPT 합침 버퍼(_RESPONSE_COALESCE_CHARS=32/_CHUNKS=4): 첫 content 토큰은
+    # 즉시 전송(TTFT 보존)하고 나머지는 배치 flush하므로 5토큰 → 2 이벤트다.
+    # 라이브성 의도는 첫 이벤트 즉시성 + 전량 재조립으로 검증한다.
+    assert len(responses) == 2, (
+        f"expected 2 coalesced response_chunk (first-live + tail), got {len(responses)}"
     )
 
-    # 5개 원시 emit 이 각각 raw_json=True, content==토큰
-    for i, ev in enumerate(responses):
-        assert ev["data"]["raw_json"] is True, f"raw emit {i} missing raw_json flag"
-        assert ev["data"]["content"] == tokens[i], f"raw emit {i} content mismatch"
-        assert ev["data"]["thought"] == "", f"raw emit {i} must not carry thought"
+    # 첫 emit은 첫 토큰 즉시 전송이어야 한다 (TTFT).
+    assert responses[0]["data"]["raw_json"] is True
+    assert responses[0]["data"]["content"] == tokens[0]
+    assert responses[0]["data"]["thought"] == ""
+    # 전량 재조립되어야 한다.
+    assert "".join(r["data"]["content"] for r in responses) == "".join(tokens)
+    for ev in responses:
+        assert ev["data"]["raw_json"] is True, "raw emit missing raw_json flag"
+        assert ev["data"]["thought"] == "", "raw emit must not carry thought"
 
     # 네이티브 thinking 추출이 없는 LLM이라 thought는 빈 상태로 영속된다.
     assert result["parse_failed"] is False
@@ -155,5 +162,6 @@ async def test_parse_failure_preserves_flag():
 
     assert result is not None
     assert result["parse_failed"] is True
-    # 폴백 final_answer 는 원시(full) 응답 그대로
-    assert "BROKEN_EXTRA" in result["response"]
+    # Fail-closed: 파싱 실패 시 원시 JSON을 사용자 답변으로 승격하지 않는다.
+    assert "BROKEN_EXTRA" not in result["response"]
+    assert result["confidence"] == 0.0

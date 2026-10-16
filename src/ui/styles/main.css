@@ -510,6 +510,10 @@ header[data-testid="stHeader"] {
         min-width: 0 !important;
         height: auto !important;
         overflow-y: auto !important;
+        /* MOBILE-ANCHOR: 1024 이하에서도 Chromium 앵커링이 scrollTop을 독자
+           조정하지 못하게 데스크톱 규칙과 동일한 옵트아웃을 유지한다.
+           Plain 선언만 사용 (hygiene 예산 준수). */
+        overflow-anchor: none;
     }
 }
 
@@ -536,6 +540,8 @@ header[data-testid="stHeader"] {
         flex-direction: column !important;
         height: 35vh !important;
         overflow-y: auto !important;
+        /* MOBILE-ANCHOR: PDF 프리뷰 스크롤러도 앵커링 옵트아웃. */
+        overflow-anchor: none;
     }
     [data-testid="stMainBlockContainer"] [data-testid="stColumn"]:last-child {
         display: flex !important;
