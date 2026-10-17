@@ -300,37 +300,29 @@ class SearchResultAggregator:
         w0 = weights.get(n0, 1.0) if weights else 1.0
         w1 = weights.get(n1, 1.0) if weights else 1.0
 
-        # Single pass: build rank for n0, accumulate scores for n1 in one go
-        rank0: dict[str, int] = {}
+        kf = float(k)
         doc_map: dict[str, AggregatedResult] = {}
+
+        # 1. r0 순회 및 w0 점수 즉시 반영 (임시 rank0 딕셔너리 불필요)
         for i, r in enumerate(r0):
-            rank0[r.doc_id] = i + 1
-            agg = self._create_agg_result(r, score=0.0)
+            agg = self._create_agg_result(r, score=w0 / (kf + float(i + 1)))
             agg.source_nodes = [n0]
             agg.original_scores = [r.score]
             doc_map[r.doc_id] = agg
 
-        for r in r1:
+        # 2. r1 순회 및 w1 점수 즉시 누적 (추가 순회 제거)
+        for i, r in enumerate(r1):
+            score_delta = w1 / (kf + float(i + 1))
             existing = doc_map.get(r.doc_id)
             if existing:
                 existing.source_nodes.append(n1)
                 existing.original_scores.append(r.score)
+                existing.aggregated_score += score_delta
             else:
-                agg = self._create_agg_result(r, score=0.0)
-                agg.source_nodes = [n0, n1]  # will be scored as 0 from n0
+                agg = self._create_agg_result(r, score=score_delta)
+                agg.source_nodes = [n0, n1]
                 agg.original_scores = [r.score]
                 doc_map[r.doc_id] = agg
-
-        # Inline scoring
-        kf = float(k)
-        for rank1_idx, r in enumerate(r1):
-            agg = doc_map[r.doc_id]
-            agg.aggregated_score += w1 / (kf + float(rank1_idx + 1))
-
-        for doc_id, agg in doc_map.items():
-            rank = rank0.get(doc_id)
-            if rank is not None:
-                agg.aggregated_score += w0 / (kf + float(rank))
 
         metrics.score_adjustments = len(doc_map)
         return list(doc_map.values())

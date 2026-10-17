@@ -311,11 +311,13 @@ async def search_bm25_with_scores(retriever: Any, query: str, k: int) -> list[Do
     실행해 점수를 주입하고, 그 외 객체(테스트 대역 등)는 ``ainvoke`` 폴백.
     (duck-typing: ``vectorizer.get_scores`` + ``docs`` + ``preprocess_func``)
     """
-    from unittest.mock import Mock
+    from unittest.mock import AsyncMock, Mock
 
     from langchain_community.retrievers import BM25Retriever
 
-    if hasattr(retriever, "retrieve_with_scores"):
+    if hasattr(retriever, "retrieve_with_scores") and not isinstance(
+        retriever, (Mock, AsyncMock)
+    ):
         return await asyncio.to_thread(retriever.retrieve_with_scores, query, k)
 
     # Duck-typing guard must reject AsyncMock/test doubles: they auto-create
@@ -420,7 +422,11 @@ async def search_faiss_with_scores(
 
     if isinstance(retriever, VectorStoreRetriever):
         vector_store = retriever.vectorstore
-        if hasattr(vector_store, "similarity_search_with_score"):
+        from unittest.mock import AsyncMock, Mock
+
+        if hasattr(vector_store, "similarity_search_with_score") and not isinstance(
+            vector_store, (Mock, AsyncMock)
+        ):
             return await asyncio.to_thread(
                 _faiss_results_with_scores, retriever, query, k, query_vector
             )
