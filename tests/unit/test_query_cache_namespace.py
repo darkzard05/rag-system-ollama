@@ -72,7 +72,9 @@ async def test_get_uses_namespaced_key(monkeypatch):
     sid = "ns-session-get"
     SessionManager.set("file_hash", "abc123", session_id=sid)
 
-    fake_cm = _make_cache_manager({"response": "cached answer", "confidence": 0.99})
+    fake_cm = _make_cache_manager(
+        {"response": "cached answer", "confidence": 0.99, "version": "1.0"}
+    )
     state = _base_state("reusable query")
     try:
         with (
@@ -167,7 +169,9 @@ async def test_different_file_hashes_do_not_collide(monkeypatch):
     keys: list[str] = []
     for sid, file_hash in (("ns-session-a", "abc123"), ("ns-session-b", "def456")):
         SessionManager.set("file_hash", file_hash, session_id=sid)
-        fake_cm = _make_cache_manager({"response": "cached answer", "confidence": 0.99})
+        fake_cm = _make_cache_manager(
+            {"response": "cached answer", "confidence": 0.99, "version": "1.0"}
+        )
         state = _base_state("reusable query")
         try:
             with (

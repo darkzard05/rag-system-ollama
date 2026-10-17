@@ -94,6 +94,36 @@ def _deserialize_docs(doc_dicts: list[dict]) -> list[Document]:
     ]
 
 
+def _disk_fingerprint(
+    doc_splits_path: str, faiss_index_path: str, bm25_retriever_path: str
+) -> str | None:
+    """디스크 아티팩트 지문 (mtime_ns + size). 메모리 히트 검증용.
+
+    파일 내용을 읽지 않으므로(content 해시 대비) 저비용이다. 아티팩트 중
+    하나라도 없으면 None — 호출자는 미스로 처리한다. mtime 위조까지 하는
+    로컬 공격자는 범위 밖으로 두고 감사 기록에만 남긴다 (단일 로컬 위협
+    모델에서는 .meta HMAC이 최종 경계).
+    """
+    parts: list[str] = []
+    targets = [doc_splits_path, bm25_retriever_path]
+    try:
+        for path in targets:
+            st = os.stat(path)
+            parts.append(f"{path}:{st.st_size}:{st.st_mtime_ns}")
+        for root, _dirs, files in os.walk(faiss_index_path):
+            for name in sorted(files):
+                if name.endswith(".meta"):
+                    continue  # 사이드카는 지문 제외 (검증 대상 아님)
+                fp = os.path.join(root, name)
+                st = os.stat(fp)
+                parts.append(f"{fp}:{st.st_size}:{st.st_mtime_ns}")
+    except OSError:
+        return None
+    if not parts:
+        return None
+    return fast_hash("|".join(parts))
+
+
 # [R3a-06] Pickle-free 정책 — 저장·로드 양쪽에서 pickle(index.pkl)을 생성/사용하지
 # 않는다. langchain의 `FAISS.save_local`은 `index.faiss`와 함께 pickle `index.pkl`
 # (docstore + index_to_docstore_id 2-튜플)을 디스크에 작성하지만, 로드 경로
@@ -287,11 +317,50 @@ class VectorStoreCache:
         # [R4/R9] 통합 객체 캐시: 디스크에서 파싱된 인메모리 객체를 먼저 조회해
         # 중복 파싱(특히 FAISS 인덱스 로드)을 방지합니다. 키는 캐시 디렉터리 경로
         # (legacy 재지정 포함)로, 동일 파일/설정이면 동일 객체를 반환합니다.
+        # 메모리 히트도 fail-closed: stat 지문 + 신뢰 경로를 먼저 확인하고,
+        # 불일치면 파기 후 디스크 전체 검증 경로로 폴백한다 (변조 디스크가
+        # 검증 없이 인용으로 직결되던 우회 차단).
         object_cache_key = self.cache_dir
         cached = self._object_cache.get_sync(object_cache_key)
         if cached is not None:
-            logger.debug(f"[Cache] Unified object-cache hit: {object_cache_key}")
-            return cached
+            # 저장 형태: ((docs, vector_store, bm25), fingerprint).
+            # 구형 3-튜플 항목은 파기 후 전체 검증 경로로 재구축한다.
+            _entry: Any = cached
+            if (
+                isinstance(_entry, tuple)
+                and len(_entry) == 2
+                and isinstance(_entry[1], str)
+            ):
+                _live = _disk_fingerprint(
+                    self.doc_splits_path,
+                    self.faiss_index_path,
+                    self.bm25_retriever_path,
+                )
+                _trusted = all(
+                    self.security_manager.verify_cache_trust(p)
+                    for p in (
+                        self.doc_splits_path,
+                        self.faiss_index_path,
+                        self.bm25_retriever_path,
+                    )
+                )
+                if (
+                    _live is not None
+                    and _live == _entry[1]
+                    and _trusted
+                    and _entry[0] is not None
+                ):
+                    logger.debug(
+                        f"[Cache] Unified object-cache hit: {object_cache_key}"
+                    )
+                    return _entry[0]
+                logger.warning(
+                    "[Cache] 메모리 히트 무효 (지문/신뢰 불일치) — "
+                    "디스크 전체 검증 경로로 폴백"
+                )
+            else:
+                logger.warning("[Cache] 구형 메모리 항목 — 파기 후 재검증")
+            self._object_cache.delete_sync(object_cache_key)
 
         if not all(
             os.path.exists(p)
@@ -396,10 +465,14 @@ class VectorStoreCache:
                     self._cache_invalid = True
                     return None, None, None
             else:
-                # Legacy cache without version info — assume compatible
+                # Tier0-3: VERSION.json 없는 레거시 캐시는 버전핀 검증 불가 —
+                # 호환 가정 금지, fail-closed 재구축 유도.
                 logger.warning(
-                    "[CACHE] No VERSION.json found (legacy cache). Proceeding with compatibility mode."
+                    "[CACHE] No VERSION.json found (legacy cache). "
+                    "버전 검증 불가 — 재구축합니다."
                 )
+                self._cache_invalid = True
+                return None, None, None
 
             index = faiss.read_index(index_file)
 
@@ -453,7 +526,19 @@ class VectorStoreCache:
             logger.info(f"RAG 캐시 안전 로드 완료 (Pickle-free): '{self.cache_dir}'")
             result = (doc_splits, vector_store, bm25_retriever)
             # [R4/R9] 파싱 완료된 객체를 통합 캐시에 보관 (동기 브릿지 경유).
-            self._object_cache.set_sync(object_cache_key, result)
+            # 메모리 히트 검증을 위해 디스크 지문과 함께 저장한다.
+            self._object_cache.set_sync(
+                object_cache_key,
+                (
+                    result,
+                    _disk_fingerprint(
+                        self.doc_splits_path,
+                        self.faiss_index_path,
+                        self.bm25_retriever_path,
+                    )
+                    or "",
+                ),
+            )
             return result
 
         except Exception as e:

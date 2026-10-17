@@ -247,6 +247,11 @@ _query_cache_config = _rag_config.get("query_cache", {})
 QUERY_CACHE_ENABLED: bool = bool(_query_cache_config.get("enabled", False))
 QUERY_CACHE_TTL: int = int(_query_cache_config.get("ttl_seconds", 3600))
 QUERY_CACHE_MIN_CONF: float = float(_query_cache_config.get("min_confidence", 0.85))
+# 시맨틱 캐시 유사도 임계값 — 기본 0.95는 기존 SemanticCache 기본값과 동일해
+# 배선 전후 동작이 같다. config.yml(0.92)이 설정되면 그 값이 적용된다.
+QUERY_CACHE_SIMILARITY: float = float(
+    _query_cache_config.get("similarity_threshold", 0.95)
+)
 
 # 채점(grading) 단계 설정
 _grading_config = _rag_config.get("grading", {})

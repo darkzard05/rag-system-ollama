@@ -193,7 +193,11 @@ class CacheSecurityManager:
         if current_hash != metadata.file_hash:
             raise CacheIntegrityError(f"해시 불일치: {file_path}")
 
-        if self.hmac_secret and metadata.integrity_hmac:
+        if self.hmac_secret:
+            # HMAC 다운그레이드 차단: secret이 설정됐는데 .meta에 HMAC이
+            # 없으면(삭제·구형) hash 대조로 폴백하지 않고 fail-closed.
+            if not metadata.integrity_hmac:
+                raise CacheIntegrityError(f"HMAC 누락 (다운그레이드 거부): {file_path}")
             with open(file_path, "rb") as f:
                 file_data = f.read()
             current_hmac = self.compute_integrity_hmac(file_data)

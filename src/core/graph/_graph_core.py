@@ -19,6 +19,7 @@ import logging
 import re
 import threading
 import time
+from collections import OrderedDict
 from dataclasses import dataclass, field
 from typing import Any, cast
 
@@ -32,6 +33,8 @@ from common.config import (
     DEFAULT_EMBEDDING_MODEL,
     DEFAULT_OLLAMA_MODEL,
     QUERY_CACHE_ENABLED,
+    QUERY_CACHE_SIMILARITY,
+    QUERY_CACHE_TTL,
 )
 from common.utils import doc_stable_id
 from core.graph._speculative_gen import (
@@ -52,6 +55,29 @@ from services.optimization.backends import ObjectCache
 from services.optimization.caching_optimizer import get_cache_manager
 
 logger = logging.getLogger(__name__)
+
+
+# 쿼리 응답 캐시 저장값 버전. 읽기 경로(grade 전 preprocess)와 쓰기 경로가
+# 공유하는 유일 진원 — 버전 불일치 값은 미스로 처리한다.
+_QUERY_CACHE_VALUE_VERSION = "1.0"
+
+
+def _is_valid_query_cache_value(cached: Any, min_conf: float) -> bool:
+    """쿼리 캐시 히트 판정 (테스트 가능한 순수 조건).
+
+    빈 응답·신뢰도 미달·버전 불일치(구 스키마·위조)는 모두 미스다.
+    """
+    if not isinstance(cached, dict):
+        return False
+    if not isinstance(cached.get("response"), str) or not cached["response"].strip():
+        return False
+    try:
+        conf = float(cached.get("confidence", 0.0))
+    except (TypeError, ValueError):
+        return False
+    if conf < min_conf:
+        return False
+    return cached.get("version") == _QUERY_CACHE_VALUE_VERSION
 
 
 # ============================================================================
@@ -209,11 +235,65 @@ def delete_graph_thread(thread_id: str) -> None:
     명시적으로 정리하지 않으면 thread_id(=session_id) 수만큼 체크포인트가 무제한
     누적된다. 체크포인트가 아직 구성되지 않았으면(그래프 미실행) 조용히 무시한다.
     """
+    _untrack_graph_thread(thread_id)
     cp = _graph_cache.checkpointer
     if cp is None:
         logger.debug("[RAG] [GRAPH] 체크포인터 미구성 — thread 정리 생략")
         return
-    cp.delete_thread(thread_id)
+    try:
+        cp.delete_thread(thread_id)
+    except Exception as e:
+        # Tier0-2: 세션 삭제 경로가 그래프 정리 실패로 중단되지 않도록 격리.
+        # 호출자(manager/rag_core)에도 try/except가 있으나 여기서 멱등 보장.
+        logger.warning(f"[RAG] [GRAPH] thread 정리 실패 ({thread_id}): {e}")
+
+
+# ============================================================================
+# 체크포인터 thread 퇴거 — Tier1.5 (InMemorySaver 무제한 누적 방지)
+# ============================================================================
+# InMemorySaver에 퇴거 정책이 없어 크래시·좀비 세션의 고아 thread가 영구 잔류한다.
+# thread 생성 단일 주입점(pipeline_builder config)에서 track하고, 상한 초과 시
+# 가장 오래된 thread부터 delete_thread로 퇴거한다 (LRU). 세션 상한(64)의 2배.
+_MAX_CHECKPOINT_THREADS = 128
+
+_thread_registry_lock = threading.Lock()
+_thread_registry: OrderedDict[str, None] = OrderedDict()
+
+
+def track_graph_thread(thread_id: str) -> None:
+    """체크포인터 thread 생성을 등록하고 상한 초과 시 오래된 thread를 퇴거한다.
+
+    호출은 thread 생성 단일 주입점(``pipeline_builder`` config 구성)에서만 한다.
+    퇴거 실패는 경고로 기록하고 현재 thread 생성을 막지 않는다.
+    """
+    if not thread_id:
+        return
+    with _thread_registry_lock:
+        _thread_registry.pop(thread_id, None)
+        _thread_registry[thread_id] = None
+        overflow = len(_thread_registry) - _MAX_CHECKPOINT_THREADS
+        evicted: list[str] = []
+        for _ in range(max(overflow, 0)):
+            oldest, _ = _thread_registry.popitem(last=False)
+            evicted.append(oldest)
+    for old_id in evicted:
+        try:
+            cp = _graph_cache.checkpointer
+            if cp is not None:
+                cp.delete_thread(old_id)
+            logger.warning(
+                f"[RAG] [GRAPH] 체크포인터 thread 퇴거 (상한 {_MAX_CHECKPOINT_THREADS}): {old_id}"
+            )
+        except Exception as e:
+            logger.warning(f"[RAG] [GRAPH] thread 퇴거 실패 ({old_id}): {e}")
+
+
+def _untrack_graph_thread(thread_id: str) -> None:
+    """명시 삭제된 thread를 레지스트리에서 제거한다 (재등록 시 최신으로 갱신)."""
+    if not thread_id:
+        return
+    with _thread_registry_lock:
+        _thread_registry.pop(thread_id, None)
 
 
 # ============================================================================
@@ -264,6 +344,10 @@ async def _ensure_query_cache_embedder() -> None:
     cm = get_cache_manager()
     if cm.semantic_cache is None:
         return
+    # config 배선 (idempotent): yaml 임계값/TTL을 싱글톤에 반영한다.
+    # 기본값은 기존 코드 기본값과 동일해 배선 전후 동작이 같다.
+    cm.semantic_cache.similarity_threshold = float(QUERY_CACHE_SIMILARITY)
+    cm.semantic_cache.default_ttl = float(QUERY_CACHE_TTL)
     if cm.semantic_cache.embedding_model is not None:
         return
     try:

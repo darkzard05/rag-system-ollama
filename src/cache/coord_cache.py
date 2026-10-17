@@ -542,7 +542,7 @@ class CoordCacheManager:
                 COORD_CACHE_DIR.mkdir(parents=True, exist_ok=True)
             with sqlite3.connect(COORD_CACHE_DB) as conn:
                 cursor = conn.execute(
-                    "SELECT annotations FROM annotation_memo "
+                    "SELECT annotations, created_at FROM annotation_memo "
                     "WHERE file_hash = ? AND page_num = ? AND normtext_hash = ?",
                     (file_hash, page_num, normtext_hash),
                 )
@@ -567,6 +567,14 @@ class CoordCacheManager:
             logger.debug(f"메모 역직렬화 실패 ({file_hash}, p{page_num}): {e}")
             return None
         if not isinstance(payload, list):
+            return None
+        # TTL은 eviction 사이클(주기 실행)까지 만료 행이 서빙되므로,
+        # 읽기 시점에도 만료를 검사한다 (stale 하이라이트 방지).
+        try:
+            _created = float(row[1])
+        except (IndexError, TypeError, ValueError):
+            return None
+        if time.time() - _created > CACHE_TTL_DAYS * 86400:
             return None
         return payload
 
@@ -625,12 +633,18 @@ class CoordCacheManager:
             db = await self._get_connection()
             await db.execute(_ANNOTATION_MEMO_DDL)
             async with db.execute(
-                "SELECT annotations FROM annotation_memo "
+                "SELECT annotations, created_at FROM annotation_memo "
                 "WHERE file_hash = ? AND page_num = ? AND normtext_hash = ?",
                 (file_hash, page_num, normtext_hash),
             ) as cursor:
                 row = await cursor.fetchone()
                 if row:
+                    try:
+                        _created = float(row[1])
+                    except (IndexError, TypeError, ValueError):
+                        return None
+                    if time.time() - _created > CACHE_TTL_DAYS * 86400:
+                        return None
                     payload = orjson.loads(row[0])
                     if isinstance(payload, list):
                         return payload

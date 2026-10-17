@@ -89,7 +89,9 @@ async def test_preprocess_cache_disabled_is_miss(monkeypatch):
     monkeypatch.setattr("core.graph._preprocess.QUERY_CACHE_MIN_CONF", 0.85)
 
     # get() 이 절대 호출되지 않아야 하므로 실패하는 페이크로 교체해도 안전.
-    fake_cm = _make_cache_manager({"response": "cached answer", "confidence": 0.99})
+    fake_cm = _make_cache_manager(
+        {"response": "cached answer", "confidence": 0.99, "version": "1.0"}
+    )
 
     state = _base_state("reusable query")
     with patch("core.graph._preprocess.get_cache_manager", return_value=fake_cm):
@@ -111,7 +113,7 @@ async def test_generate_cache_hit_zero_llm_calls(
     monkeypatch.setattr("core.graph._generate.QUERY_CACHE_ENABLED", True)
     monkeypatch.setattr("core.graph._generate.QUERY_CACHE_MIN_CONF", 0.85)
 
-    cached_value = {"response": "cached answer", "confidence": 0.99}
+    cached_value = {"response": "cached answer", "confidence": 0.99, "version": "1.0"}
     fake_cm = _make_cache_manager(cached_value)
 
     captured_events: list[dict] = []
@@ -173,7 +175,7 @@ async def test_preprocess_cache_hit_marks_cached(monkeypatch):
     monkeypatch.setattr("core.graph._preprocess.QUERY_CACHE_ENABLED", True)
     monkeypatch.setattr("core.graph._preprocess.QUERY_CACHE_MIN_CONF", 0.85)
 
-    cached_value = {"response": "cached answer", "confidence": 0.99}
+    cached_value = {"response": "cached answer", "confidence": 0.99, "version": "1.0"}
     fake_cm = _make_cache_manager(cached_value)
 
     state = _base_state("reusable query")

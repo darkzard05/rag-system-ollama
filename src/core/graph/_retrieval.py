@@ -26,6 +26,7 @@ from core.graph._graph_core import (
     _ensure_query_cache_embedder,
     _enter_stage,
     _get_session_id,
+    _is_valid_query_cache_value,
     _reset_stage_timings,
     get_state_attr,
 )
@@ -124,13 +125,9 @@ async def preprocess(
             except Exception as e:  # noqa: BLE001 - 캐시 실패는 정상 경로로 폴백
                 logger.warning(f"[RAG] [CACHE] 조회 실패 — 우회: {e}")
                 cached = None
-            if (
-                isinstance(cached, dict)
-                and isinstance(cached.get("response"), str)
-                and cached[
-                    "response"
-                ].strip()  # 빈 문자열/공백/Nones는 히트로 취급하지 않음
-                and float(cached.get("confidence", 0.0)) >= QUERY_CACHE_MIN_CONF
+            # 빈 응답·신뢰도 미달·버전 불일치(구 스키마·위조)는 미스.
+            if isinstance(cached, dict) and _is_valid_query_cache_value(
+                cached, QUERY_CACHE_MIN_CONF
             ):
                 response = cached["response"]
                 is_cached = True
@@ -153,6 +150,13 @@ async def preprocess(
         # cross-turn state leakage 방지). 빈 리스트로 교체해 격리한다.
         "relevant_docs": [],
         "retry_count": 0,
+        # Tier1 P0-1: 이전 턴 출력 채널 잔재 제거. 캐시 히트·단축 라우팅 경로에서
+        # generate가 실행되지 않으면 구 response/thought/context가 그대로 남아
+        # 새 답변에 이전 턴 인용 컨텍스트가 혼입된다. 선언된 채널만 리셋한다.
+        "response": None,
+        "thought": None,
+        "context": None,
+        "context_fingerprint": None,
     }
 
 
@@ -182,7 +186,16 @@ def _filter_min_section_len(docs: list[Document]) -> list[Document]:
     if not docs:
         return []
     kept = [d for d in docs if len(d.page_content) >= _MIN_CONTEXT_SECTION_LEN]
-    return kept if kept else docs[:1]
+    if kept:
+        return kept
+    # Tier1 P0-5: 전부 50자 미만이면 첫 1건만 유지하던 폴백. 형제 단답
+    # ("671B", "CM3" 등) 손실을 가시화한다 — 동작은 유지, 경고로 기록.
+    logger.warning(
+        "[RAG] [RETRIEVE] 전 문서 50자 미만 — 첫 1건만 유지 (%d건 중, 대표 %d자)",
+        len(docs),
+        len(docs[0].page_content) if docs else 0,
+    )
+    return docs[:1]
 
 
 async def retrieve_and_rerank(

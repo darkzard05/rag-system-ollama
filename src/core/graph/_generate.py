@@ -34,6 +34,7 @@ from common.config import (
 )
 from common.utils import count_tokens_rough
 from core.graph._graph_core import (
+    _QUERY_CACHE_VALUE_VERSION,
     _dispatch_event,
     _doc_stable_id,
     _emit_query_timing,
@@ -58,10 +59,11 @@ from services.optimization.caching_optimizer import get_cache_manager
 
 logger = logging.getLogger(__name__)
 
-# 쿼리 응답 캐시 저장값 구조: {"response": str, "confidence": float}
+# 쿼리 응답 캐시 저장값 구조: {"response": str, "confidence": float, "version": str}
+# 버전 상수는 _graph_core 단일 진원 (읽기 경로와 공유). 하위 호환을 위해
+# 이 모듈 네임스페이스에서도 동일한 이름으로 접근 가능하다 (import).
 # SemanticCache.get()은 내부 유사도 임계값을 통과한 entry.value(저장값) 또는 None만 반환하며,
 # 유사도 점수나 히트 객체를 노출하지 않으므로 신뢰도는 저장 시 함께 직렬화한다.
-_QUERY_CACHE_VALUE_VERSION = "1.0"
 
 # P-OPT: 스트리밍 합침 임계값 — response_chunk dispatch 빈도를 낮춘다.
 # 첫 content 토큰은 항상 즉시 전송하므로 TTFT는 보존된다.
