@@ -278,12 +278,17 @@ class RAGSystem:
         config = await prepare_query_config_or_build(
             self.session_id, model_name, build_fn=self.build_pipeline
         )
-        rag_engine = await self._get_rag_engine()
-        if not rag_engine:
-            raise VectorStoreError(
-                details={"reason": "파이프라인이 준비되지 않았습니다."}
-            )
         file_hash = SessionManager.get("file_hash", session_id=self.session_id)
+        try:
+            rag_engine = await self._get_rag_engine()
+            if not rag_engine:
+                raise VectorStoreError(
+                    details={"reason": "파이프라인이 준비되지 않았습니다."}
+                )
+        except Exception:
+            if file_hash:
+                get_resource_manager().unpin_retrievers(file_hash)
+            raise
 
         async def _consumer():
             # rewrite 루프가 retrieve 노드를 재실행하면 청크가 2회 발생하므로
