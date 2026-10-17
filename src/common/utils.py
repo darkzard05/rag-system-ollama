@@ -577,13 +577,31 @@ def apply_tooltips_to_response(
     if not documents:
         return text
 
-    # [doc:<stable_id>] -> 문서를 stable id(doc_id 또는 content 해시)로 조회.
-    # 위치 기반 인덱스가 아니라 멤버십 조회하므로 rerank 재정렬 후에도
-    # 동일 청크를 가리킨다 (P2: 안정 ID 매핑). 못 찾으면 원본 그대로 반환.
+    # 1. 문서 메타데이터 및 사전 정제 텍스트 색인 구축 (단일 패스 O(N))
     doc_by_stable_id: dict[str, Any] = {}
+    page_to_docs: dict[
+        int, list[tuple[str, str]]
+    ] = {}  # page -> [(section, clean_content), ...]
+
     for _doc in documents:
         _sid = doc_stable_id(_doc)
         doc_by_stable_id[_sid] = _doc
+
+        meta = (
+            _doc.metadata
+            if hasattr(_doc, "metadata")
+            else (_doc.get("metadata", {}) if isinstance(_doc, dict) else {})
+        )
+        try:
+            p = int(meta.get("page", -1))
+        except (ValueError, TypeError):
+            p = -1
+        sec = str(meta.get("current_section") or "")
+        content = getattr(_doc, "page_content", None) or (
+            _doc.get("page_content", "") if isinstance(_doc, dict) else ""
+        )
+        clean = html.escape(content).replace("\n", " ").strip()[:300] + "..."
+        page_to_docs.setdefault(p, []).append((sec, clean))
 
     def replace_doc_citation(match):
         # [doc:<stable_id>] — stable_id는 page_content 해시/위치가 아니라
@@ -640,35 +658,16 @@ def apply_tooltips_to_response(
 
         # 3. 툴팁에 표시할 문서 내용 찾기
         clean_content = "인용된 원문 정보를 불러올 수 없습니다."
-        best_doc = None
-
-        # [최적화] 섹션명과 페이지가 모두 일치하는 문서를 최우선으로 찾음
-        for doc in documents:
-            meta = (
-                getattr(doc, "metadata", {})
-                if hasattr(doc, "metadata")
-                else doc.get("metadata", {})
-            )
-            doc_page = int(meta.get("page", -1))
-            doc_section = meta.get("current_section", "")
-
-            if doc_page == target_page:
-                if target_section and target_section in doc_section:
-                    best_doc = doc
-                    break
-                if not best_doc:  # 일단 페이지라도 맞으면 후보로 등록
-                    best_doc = doc
-
-        if best_doc:
-            content = (
-                getattr(best_doc, "page_content", "")
-                if hasattr(best_doc, "page_content")
-                else best_doc.get("page_content", "")
-            )
-            # HTML title 속성에 넣기 위해 이스케이프 (XSS 방어)
-            clean_content = (
-                html.escape(content).replace("\n", " ").strip()[:300] + "..."
-            )
+        candidates = page_to_docs.get(target_page)
+        if candidates:
+            # 섹션 일치 우선 탐색, 없으면 해당 페이지 첫 문서 선택 (O(1) 수준)
+            best_clean = candidates[0][1]
+            if target_section:
+                for sec, clean in candidates:
+                    if target_section in sec:
+                        best_clean = clean
+                        break
+            clean_content = best_clean
 
         # 인용 스타일: 색/밑줄로 시각적 구분만 유지한다. 스팬은 클릭
         # 동작이 없으므로 cursor: pointer를 사용하지 않는다 (죽은 제스처 방지).
