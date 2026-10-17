@@ -59,4 +59,9 @@ async def test_no_docs_survive_second_turn():
     merged = {**turn1_end, **turn2_preprocess_out}
 
     assert merged["relevant_docs"] == []
-    assert merged["response"] == "이전 턴 응답"
+    # Tier1 P0-1: 이전 턴 출력 채널도 리셋된다. 캐시 히트·단축 경로에서
+    # generate 미실행 시 구 response/thought/context 혼입을 차단한다.
+    assert merged["response"] is None
+    assert merged["thought"] is None
+    assert merged["context"] is None
+    assert merged["context_fingerprint"] is None

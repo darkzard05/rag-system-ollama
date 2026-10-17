@@ -44,12 +44,12 @@ def test_manual_token_consumed_once(pdf_state: dict[str, object]) -> None:
     assert SessionManager.get("pdf_target_page", session_id=SID) is None
 
     # 두 번째 호출은 매니저 current_page로 폴스루, 재점프 없이 동일 페이지 유지.
-    # 토큰 소비 시 네비 입력 키도 점프 페이지(5)로 동기화되어 desync가 없다.
+    # 위젯 직접 시딩은 Streamlit 1.60 규격상 제거됨 — desync 방지는 매니저
+    # current_page + 렌더 시 위젯 default가 담당한다.
     second = viewer_module._resolve_pdf_state()
     assert second is not None
     assert second["current_page"] == 5
     assert SessionManager.get("current_page", session_id=SID) == 5
-    assert pdf_state.get("pdf_nav_input_v6") == 5
 
 
 def test_auto_token_consumed_when_no_manual_nav(

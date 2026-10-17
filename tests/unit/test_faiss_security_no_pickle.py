@@ -71,6 +71,26 @@ def test_faiss_reconstruction_without_pickle(temp_cache_dir):
         meta = cache.security_manager.create_metadata_for_file(artifact)
         cache.security_manager.save_cache_metadata(artifact + ".meta", meta)
 
+    # Tier0-3 버전핀: VERSION.json 없는 레거시 캐시는 fail-closed 재구축 대상이므로,
+    # pickle-free 재구성 의도 검증을 위해 현재 버전 매니페스트를 함께 기록한다.
+    import json as _json
+    import sys as _sys
+
+    from cache.vector_cache import CACHE_SCHEMA_VERSION
+
+    with open(os.path.join(cache.faiss_index_path, "VERSION.json"), "w") as _vf:
+        _json.dump(
+            {
+                "faiss_version": faiss.__version__,
+                "schema_version": CACHE_SCHEMA_VERSION,
+                "python_version": _sys.version,
+            },
+            _vf,
+        )
+    _vpath = os.path.join(cache.faiss_index_path, "VERSION.json")
+    _vmeta = cache.security_manager.create_metadata_for_file(_vpath)
+    cache.security_manager.save_cache_metadata(_vpath + ".meta", _vmeta)
+
     # 3. 로드 시도
     embedder = MockEmbeddings()
     with (

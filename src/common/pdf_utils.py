@@ -61,3 +61,20 @@ def get_pdf_page_count(file_path: str) -> int | None:
     except Exception as e:
         logger.error(f"PDF 페이지 수 조회 실패 ({file_path}): {e}", exc_info=True)
         return None
+
+
+def get_pdf_page_count_from_bytes(content: bytes) -> int | None:
+    """메모리 내 PDF 바이트의 페이지 수를 반환한다. 파싱 불가 시 ``None``.
+
+    Tier1.5: 업로드 시점 압축폭탄(고페이지·고압축) 조기 거부용. 렌더링 없이
+    xref 테이블만 읽으므로 가볍다. 절대 raise하지 않는다.
+    """
+    if not content:
+        return None
+    fitz = _fitz()
+    try:
+        with fitz.open(stream=content, filetype="pdf") as doc:
+            return len(doc)
+    except Exception as e:
+        logger.error(f"PDF 페이지 수 조회 실패 (bytes {len(content)}B): {e}")
+        return None

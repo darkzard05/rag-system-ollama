@@ -670,6 +670,15 @@ async def prepare_query_config_or_build(
             coordinator.retrievers.unpin(file_hash)
         raise
 
+    # Tier1.5: 체크포인터 thread 등록 — thread 생성 단일 주입점. 상한(128)
+    # 초과 시 오래된 thread부터 퇴거해 InMemorySaver 무제한 누적을 방지한다.
+    try:
+        from core.graph._graph_core import track_graph_thread
+
+        track_graph_thread(session_id)
+    except Exception:
+        pass
+
     return {
         "configurable": {
             "llm": llm,

@@ -39,9 +39,13 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 # PDF 매직바이트: 접미사(.pdf)만 검사하면 비-PDF 바이트가 스토리지에 영속화되어
-# 빌드 경로로 전달된다. 저장·바인딩 전에 매직바이트를 강제한다. 구조적 온전성
-# (페이지 수 등)은 빌드 단계(load_pdf_docs)가 검증한다.
+# 빌드 경로로 전달된다. 저장·바인딩 전에 매직바이트를 강제한다.
 _PDF_MAGIC = b"%PDF"
+
+# Tier1.5: 페이지 수 상한. 50MB 바이트 상한만으로는 고압축·다페이지 폭탄을
+# 막지 못해 파서·FAISS·좌표캐시가 OOM된다. xref만 읽는 가벼운 검사로
+# 업로드 시점에 조기 거부한다 (fail loudly, 무음 잘림 금지).
+MAX_PDF_PAGES = 2000
 
 
 def _ensure_valid_pdf(content: bytes, filename: str | None) -> None:
@@ -143,6 +147,16 @@ async def upload_document(
         # [입력 검증] 저장·소유권 바인딩 전에 실제 PDF인지 검증한다.
         # 검증 실패 시 스토리지/레지스트리를 오염시키지 않고 400으로 거부한다.
         _ensure_valid_pdf(content, file.filename)
+        # Tier1.5: 페이지 수 상한 검사. 파싱 불가(None)는 빌드 단계에서
+        # 확정 판정하므로 여기서 거부하지 않고 통과시킨다.
+        from common.pdf_utils import get_pdf_page_count_from_bytes
+
+        page_count = get_pdf_page_count_from_bytes(content)
+        if page_count is not None and page_count > MAX_PDF_PAGES:
+            raise HTTPException(
+                status_code=413,
+                detail=f"PDF 페이지 수가 상한({MAX_PDF_PAGES})을 초과합니다.",
+            )
         file_hash = compute_file_hash("", data=content)
         # [TOCTOU 방지] 파일 소유권 바인딩을 파일 저장 직전으로 이동.
         _bind_file_owner(file_hash, user_id)

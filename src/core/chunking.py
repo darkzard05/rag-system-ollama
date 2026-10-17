@@ -181,7 +181,9 @@ def _postprocess_metadata(split_docs: list[Document]) -> None:
 
         if ref_start_idx is None and (
             any(kw in content_lower[:50] for kw in ref_keywords)
-            or "refer" in section_lower
+            # Tier1 P0-3a: 부분문자열 매칭("refer" in section)은 "Preferred Methods",
+            # "Referred" 등을 오탐한다. 단어 경계 기준으로 축소.
+            or re.search(r"\brefer(ence)?s?\b", section_lower) is not None
             or "bibliography" in section_lower
         ):
             ref_start_idx = i
@@ -196,8 +198,14 @@ def _postprocess_metadata(split_docs: list[Document]) -> None:
             doc.metadata["section_path"] = doc.metadata.get("current_section", "")
 
         is_noise = any(kw in content_lower[:100] for kw in noise_keywords)
-        if not is_noise and (
-            content_lower.count("doi:") > 2 or content_lower.count(",") > 25
+        # Tier1 P0-3b: 콤마/doi 개수 규칙은 색인·참고문헌 같은 짧은 목록 페이지용이다.
+        # 긴 본문(사양표·수식 포함)이 콤마가 많다는 이유만으로 통째로 버려지는
+        # 과삭제를 막기 위해 개수 규칙은 1000자 미만 문서에만 적용한다.
+        # (짧은 데이터 표 오탐은 잔여 — 색인과의 분리는 별도 측정 필요.)
+        if (
+            not is_noise
+            and len(content_lower) < 1000
+            and (content_lower.count("doi:") > 2 or content_lower.count(",") > 25)
         ):
             is_noise = True
 

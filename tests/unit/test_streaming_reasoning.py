@@ -85,8 +85,9 @@ async def test_generate_streams_thought_and_content(mock_dispatch):
         result = await generate(state, config, writer=writer)
 
     # 4. 검증
-    # adispatch_custom_event가 thought와 content를 포함하여 호출되었는지 확인
-    # "response_chunk" 이벤트가 2번 이상 thought가 있고 2번 이상 content가 있어야 함
+    # adispatch_custom_event가 thought와 content를 포함하여 호출되었는지 확인.
+    # P-OPT 합침 버퍼(32자/4청크)로 thought 2청크(31자)는 1개 이벤트에 합쳐진다.
+    # 라이브성 의도는 thought 전량 전달 + content 전량 전달로 검증한다.
     thought_calls = [
         call
         for call in mock_dispatch.call_args_list
@@ -98,8 +99,12 @@ async def test_generate_streams_thought_and_content(mock_dispatch):
         if len(call.args) > 1 and call.args[1].get("content")
     ]
 
-    assert len(thought_calls) >= 2
+    assert len(thought_calls) >= 1
     assert len(content_calls) >= 2
+    assert "".join(c.args[1]["thought"] for c in thought_calls) == (
+        "I am thinking about the answer."
+    )
+    assert "".join(c.args[1]["content"] for c in content_calls) == ("The answer is 42.")
 
     # 누적된 결과 확인
     assert result["thought"] == "I am thinking about the answer."

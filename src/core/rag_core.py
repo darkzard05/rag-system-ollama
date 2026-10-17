@@ -291,6 +291,12 @@ class RAGSystem:
             hydration_tasks: list[asyncio.Task[Any]] = []
             _aborted = False
             seen_doc_keys: set[str] = set()
+            # Tier1 P0-2: generate 토큰 드롭 합류점 계측. custom response_chunk가
+            # 정상 경로이며 generate 노드 messages는 중복 방지용으로 드롭한다.
+            # writer=None·파서 폴백などで custom이 없으면 무응답이 되므로,
+            # 드롭 수와 custom 수신을 세어 침묵 실패를 로그로 가시화한다.
+            dropped_generate_msgs = 0
+            custom_events = 0
             SessionManager.add_status_log(
                 "답변 생성 시작...",
                 session_id=self.session_id,
@@ -318,9 +324,11 @@ class RAGSystem:
                     metadata = event.get("metadata", {})
                     langgraph_node = metadata.get("langgraph_node")
                     if kind == "on_custom_event":
+                        custom_events += 1
                         yield ("custom", event["data"])
                     elif kind == "on_chat_model_stream":
                         if langgraph_node == "generate":
+                            dropped_generate_msgs += 1
                             continue
                         yield ("messages", event["data"])
                     elif kind == "on_chain_stream":
@@ -349,6 +357,17 @@ class RAGSystem:
                 logger.error(f"[RAG] 스트림 에러: {e}", exc_info=True)
                 raise e
             finally:
+                if dropped_generate_msgs > 0 and custom_events == 0:
+                    # custom 경로 없이 generate 토큰만 드롭됨 — 무응답 후보.
+                    # 동작은 유지(중복 방지)하고 경고로 후속 재현을 유도한다.
+                    logger.warning(
+                        "[RAG] generate 토큰 드롭됨 — custom 이벤트 없음 "
+                        f"(dropped={dropped_generate_msgs}, session={self.session_id})"
+                    )
+                    SessionManager.add_status_log(
+                        "답변 스트림이 비어 있습니다 (generate 폴백 미수신).",
+                        session_id=self.session_id,
+                    )
                 # 하이드레이션은 await가 실패 태스크의 예외를 재발생시키므로
                 # 반드시 try/except로 감싸 스트림 실패 승격 없이 처리한다.
                 # 완료 대기로 UI 경로의 _finalize_pdf_side_effects가

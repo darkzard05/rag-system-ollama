@@ -32,11 +32,12 @@ _SRC_ROOT = pathlib.Path(_common_file).parent.parent.parent
 # 위젯 키 상수 별칭: 스크립트측 쓰기 검사에서 문자열 리터럴과 동일 취급.
 _WIDGET_KEY_ALIASES = {"PDF_NAV_INPUT_KEY", "MAIN_CHAT_INPUT_KEY"}
 
-# Page-sync 개정에서 허용하는 유일한 위젯 키 쓰기 2건 (콜백 단계/토큰 소비
-# 동기화 — number_input desync 회귀 방지). 그 외 쓰기는 모두 금지.
+# Page-sync 개정에서 허용하는 유일한 위젯 키 쓰기 1건 (콜백 단계 동기화 —
+# number_input desync 회귀 방지). viewer 토큰 소비 동기화는 Streamlit 1.60
+# 규격 준수를 위해 제거됨 (매니저 current_page + 렌더 시 default로 대체).
+# 그 외 쓰기는 모두 금지.
 _ALLOWED_WIDGET_WRITES = {
     "common.py: subscript-write",
-    "viewer.py: subscript-write",
 }
 
 
@@ -101,7 +102,7 @@ def _widget_write_offenders() -> list[str]:
 
 
 def test_no_script_side_interactive_key_writes() -> None:
-    """허용 목록에 든 page-sync 동기화 2건 외의 위젯 키 쓰기는 0건."""
+    """허용 목록에 든 page-sync 동기화 1건 외의 위젯 키 쓰기는 0건."""
     offenders = _widget_write_offenders()
     assert set(offenders) <= _ALLOWED_WIDGET_WRITES, (
         f"허용 외 위젯 키 직접 쓰기 잔존: {offenders}"

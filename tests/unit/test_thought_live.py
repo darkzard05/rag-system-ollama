@@ -90,7 +90,10 @@ async def test_non_structured_thought_interleaved():
         )
 
     responses = [c for c in captured if c["name"] == "response_chunk"]
-    assert len(responses) == 4, f"expected 4 response_chunk, got {len(responses)}"
+    # P-OPT 합침 버퍼(32자/4청크): thought+content가 배치 flush되므로 4청크 → 2 이벤트.
+    assert len(responses) == 2, (
+        f"expected 2 coalesced response_chunk, got {len(responses)}"
+    )
 
     thought_events = [c for c in responses if c["data"]["thought"]]
     content_events = [c for c in responses if c["data"]["content"]]
@@ -99,21 +102,22 @@ async def test_non_structured_thought_interleaved():
     assert len(thought_events) >= 1, "no live thought emissions during streaming"
     # content 방출도 존재
     assert len(content_events) >= 1
+    # 전량 재조립: thought/content 모두 유실 없이 전달
+    assert "".join(c["data"]["thought"] for c in thought_events) == "idea1idea2"
+    assert "".join(c["data"]["content"] for c in content_events) == (
+        '{"reasoning":"r","final_answer":"Hello"}'
+    )
 
     # 비구조화 모드: raw_json 플래그가 False 여야 함 (raw_json 이슈 없음)
     for c in responses:
         assert c["data"].get("raw_json") is False
 
-    # thought 와 content 가 인터리브(섞여) 전송되는지:
-    # thought 가 content 보다 앞과 뒤 양쪽에 나타나야 함 (단순 한 덩어리 벌크가 아님)
-    seq = ["T" if c["data"]["thought"] else "C" for c in responses]
-    assert "T" in seq
-    assert "C" in seq
-    assert seq.index("T") < seq.index("C"), "first emit should be thought (live)"
-    # 마지막 thought 위치가 첫 content 위치보다 뒤에 있어야 인터리브됨
-    last_t = max(i for i, v in enumerate(seq) if v == "T")
-    assert last_t > seq.index("C"), (
-        "thought must appear after a content emit (interleaved)"
+    # thought/content 라이브성: 합침 flush는 thought+content를 동봉하므로
+    # 모든 이벤트가 content를 갖고, 첫 이벤트부터 thought가 동행해야 한다
+    # (thought가 완료 시점 벌크로만 오는 것이 아님).
+    assert all(c["data"]["content"] for c in responses)
+    assert responses[0]["data"]["thought"] != "", (
+        "first emit should carry thought (live, not bulk-at-end)"
     )
 
     # 비구조화 모드에서는 완료 시점 one-shot reasoning emit(벌크 duplicate) 이 없다:
@@ -170,8 +174,9 @@ async def test_structured_thought_stays_empty():
         )
 
     responses = [c for c in captured if c["name"] == "response_chunk"]
-    assert len(responses) == len(tokens), (
-        f"expected {len(tokens)} response_chunk (raw only, no thought re-emit), "
+    # P-OPT 합침 버퍼: 첫 토큰 즉시 + 나머지 배치 → 4토큰 2 이벤트.
+    assert len(responses) == 2, (
+        f"expected 2 coalesced response_chunk (raw only, no thought re-emit), "
         f"got {len(responses)}"
     )
 
@@ -179,7 +184,7 @@ async def test_structured_thought_stays_empty():
     for i, ev in enumerate(responses):
         assert ev["data"]["thought"] == "", f"raw emit {i} must not carry thought"
         assert ev["data"]["raw_json"] is True
-        assert ev["data"]["content"] == tokens[i]
+    assert "".join(ev["data"]["content"] for ev in responses) == "".join(tokens)
 
     # 강제 reasoning 제거 후 thought 는 빈 상태로 영속된다 (native 추출 없는 LLM).
     assert result["parse_failed"] is False
