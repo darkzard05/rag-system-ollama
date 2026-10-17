@@ -131,6 +131,7 @@ class AsyncSemanticReranker:
     ) -> np.ndarray:
         """문서 임베딩 배치를 생성합니다 (메타데이터 캐시 재사용)."""
         texts: list[str] = []
+        text_hashes: list[str] = []
         indices_needing_emb: list[int] = []
         vecs: list[np.ndarray | None] = [None] * len(documents)
         model = str(
@@ -138,26 +139,31 @@ class AsyncSemanticReranker:
         )
 
         for i, doc in enumerate(documents):
-            # 1. Metadata FIRST: 정규화 해시 동등 + dim 일치시에만 재사용
+            content = doc.page_content
+            content_hash = _text_hash(content)
             meta_vec = doc.metadata.get("embedding_vector")
-            meta_hash = doc.metadata.get(
-                "embedding_text_hash", _text_hash(doc.page_content)
-            )
+            meta_hash = doc.metadata.get("embedding_text_hash", content_hash)
+
+            # 1. Metadata FIRST: 정규화 해시 일치 + dim 일치 시 재사용
             if (
                 meta_vec is not None
-                and meta_hash == _text_hash(doc.page_content)
+                and meta_hash == content_hash
                 and (dim == 0 or len(meta_vec) == dim)
             ):
                 vecs[i] = np.array(meta_vec, dtype="float32")
                 continue
-            # 2. Module-level persistent cache (model 키, 정규화 해시)
-            cached_vec = _get_cached_emb(doc.page_content, model)
+
+            # 2. Module-level persistent cache
+            cached_vec = _get_cached_emb(content, model)
             if cached_vec is not None and (dim == 0 or len(cached_vec) == dim):
                 vecs[i] = np.array(cached_vec, dtype="float32")
                 doc.metadata["embedding_vector"] = cached_vec
+                doc.metadata["embedding_text_hash"] = content_hash
                 continue
+
             # 3. Need to compute
-            texts.append(doc.page_content)
+            texts.append(content)
+            text_hashes.append(content_hash)
             indices_needing_emb.append(i)
 
         if texts:
@@ -173,14 +179,14 @@ class AsyncSemanticReranker:
                     embedded.extend(
                         await asyncio.to_thread(self.embedder.embed_documents, batch)
                     )
-            for idx, vec in zip(indices_needing_emb, embedded, strict=False):
+            for idx, vec, c_hash in zip(
+                indices_needing_emb, embedded, text_hashes, strict=False
+            ):
                 vec_np = np.array(vec, dtype="float32")
                 vecs[idx] = vec_np
                 vec_list = vec_np.tolist()
                 documents[idx].metadata["embedding_vector"] = vec_list
-                documents[idx].metadata["embedding_text_hash"] = _text_hash(
-                    documents[idx].page_content
-                )
+                documents[idx].metadata["embedding_text_hash"] = c_hash
                 _set_cached_emb(documents[idx].page_content, vec_list, model)
 
         # 모든 벡터가 None이 아닌지 확인
