@@ -83,166 +83,89 @@ async def hydrate_documents(docs: list[Document]) -> None:
     파일 해시 그룹별로 캐시 미스 페이지를 모아 파일을 1회만 열어 일괄 추출하고
     (``_extract_pages_words_sync``), 추출 동시성은 세마포어로 제한한다.
     """
-    # 1. 파일별로 처리 대상 문서 그룹화
-    file_path_map: dict[str, list[Document]] = {}
+    # 1. 파일 경로 및 해시 기준으로 단일 패스 그룹화
+    file_groups: dict[tuple[str, str], list[Document]] = {}
     for doc in docs:
         if "word_coords" in doc.metadata or not doc.metadata.get("has_coordinates"):
             continue
-
         path = doc.metadata.get("file_path")
-        if path and os.path.exists(path):
-            if path not in file_path_map:
-                file_path_map[path] = []
-            file_path_map[path].append(doc)
+        file_hash = doc.metadata.get("file_hash")
+        if path and file_hash and os.path.exists(path):
+            file_groups.setdefault((path, file_hash), []).append(doc)
 
-    if not file_path_map:
+    if not file_groups:
         return
 
-    # 2. 대상 문서(청크)별 좌표 복원 및 비동기 스레드 파싱
-    for path, target_docs in file_path_map.items():
-        # 1. 파일별로 처리 대상 문서 그룹화 (file_hash 기준)
-        file_hash_map: dict[str, list[Document]] = {}
-        for doc in target_docs:
-            file_hash = doc.metadata.get("file_hash")
-            if file_hash:
-                if file_hash not in file_hash_map:
-                    file_hash_map[file_hash] = []
-                file_hash_map[file_hash].append(doc)
-
-        # 2. 대상 문서(청크)별 좌표 복원 및 비동기 스레드 파싱
-        # D4: 그룹별 추출은 워커 스레드 1개의 단일 open 배치로 수행한다.
-        # 호출 내 세마포어(루프 바인딩 회피를 위해 호출별 생성)로 동시 open을 제한.
-        semaphore = asyncio.Semaphore(_HYDRATE_MAX_CONCURRENCY)
-        for file_hash, docs_in_file in file_hash_map.items():
-            page_nums: list[int] = []
-            seen_pages: set[int] = set()
-            for doc in docs_in_file:
-                pages = doc.metadata.get("pages") or (
-                    [doc.metadata["page"]]
-                    if doc.metadata.get("page") is not None
-                    else []
-                )
-                for page in pages:
-                    if page not in seen_pages:
-                        seen_pages.add(page)
-                        page_nums.append(page)
-            try:
-                coords_map = await coord_cache.get_coords_batch(file_hash, page_nums)
-            except CoordCacheReadError as e:
-                logger.warning(
-                    f"[HYDRATE] 좌표 캐시 읽기 실패 ({os.path.basename(path)}, "
-                    f"file_hash={file_hash}): {e}"
-                )
-                # 실패를 명시적 per-file 마커로 기록하고 다른 파일 수화는 계속한다.
-                for doc in docs_in_file:
-                    doc.metadata["coord_cache_error"] = True
-                continue
-
-            # 캐시 미스 (page, bbox) 요청을 그룹 전체에서 1회씩만 수집한다.
-            # 동일 페이지를 여러 청크가 참조해도 추출은 중복하지 않는다.
-            # bbox가 청크마다 다르면 (page, bbox) 쌍 단위로 수집한다.
-            miss_requests: list[tuple[int, Any | None]] = []
-            seen_requests: set[str] = set()
-            doc_bboxes: dict[int, Any | None] = {}
-            for doc in docs_in_file:
-                doc_id = id(doc)
-                doc_bboxes[doc_id] = doc.metadata.get("bbox")
-            for doc in docs_in_file:
-                pages = doc.metadata.get("pages") or (
-                    [doc.metadata["page"]]
-                    if doc.metadata.get("page") is not None
-                    else []
-                )
-                bbox = doc_bboxes[id(doc)]
-                for page in pages:
-                    if coords_map.get(page):
-                        continue
-                    key = f"{page}|{bbox!r}"
-                    if key not in seen_requests:
-                        seen_requests.add(key)
-                        miss_requests.append((page, bbox))
-
-            # 동일 페이지에 bbox가 여러 개면 clip별 저장 시 PK 덮어쓰기로
-            # 서로의 좌표를 오염시킨다. 이 경우 해당 페이지는 전체 페이지 추출
-            # (bbox=None) 1건으로 붕괴시켜 모든 청크가 완전한 좌표를 공유하게
-            # 한다 (정밀 clip 대신 완전성 우선 — fail-closed).
-            collapsed: list[tuple[int, Any | None]] = []
-            collapsed_keys: list[list[str]] = []
-            _by_page: dict[int, list[tuple[Any | None, str]]] = {}
-            for page, bbox in miss_requests:
-                _by_page.setdefault(page, []).append((bbox, f"{page}|{bbox!r}"))
-            for page, items in _by_page.items():
-                # coords 테이블은 페이지 전체 단어 목록을 보관하므로,
-                # 캐시 오염 방지를 위해 항상 전체 페이지 추출(bbox=None)을 수행한다.
-                collapsed.append((page, None))
-                collapsed_keys.append([k for _, k in items])
-
-            fresh_map: dict[str, list[Any] | None] = {}
-            extracted: list[list[Any] | None] = []
-            if collapsed:
-                logger.info(
-                    f"[HYDRATE] 정밀 좌표 추출: {os.path.basename(path)} "
-                    f"{len(collapsed)}개 (page, bbox) 일괄 (단일 open)"
-                )
-                async with semaphore:
-                    extracted = await asyncio.to_thread(
-                        _extract_pages_words_sync, path, collapsed
+    semaphore = asyncio.Semaphore(_HYDRATE_MAX_CONCURRENCY)
+    for (path, file_hash), docs_in_file in file_groups.items():
+        # 대상 고유 페이지 목록 수집 (순서 보존)
+        page_nums = list(
+            dict.fromkeys(
+                p
+                for doc in docs_in_file
+                for p in (
+                    doc.metadata.get("pages")
+                    or (
+                        [doc.metadata["page"]]
+                        if doc.metadata.get("page") is not None
+                        else []
                     )
-                for keys, coords in zip(collapsed_keys, extracted, strict=True):
-                    for k in keys:
-                        fresh_map[k] = coords
+                )
+            )
+        )
+        try:
+            coords_map = await coord_cache.get_coords_batch(file_hash, page_nums)
+        except CoordCacheReadError as e:
+            logger.warning(
+                f"[HYDRATE] 좌표 캐시 읽기 실패 ({os.path.basename(path)}, file_hash={file_hash}): {e}"
+            )
+            for doc in docs_in_file:
+                doc.metadata["coord_cache_error"] = True
+            continue
 
-            # 추출(fresh) 성공 페이지만 병렬 저장한다. 캐시 적중 페이지는
-            # 재저장하지 않는다 (기존 추출 데이터 보존 + 불필요한 I/O 방지).
-            # 동일 페이지 중복 저장은 첫 결과만 유지해 last-wins 덮어쓰기를
-            # 방지한다. 저장 실패는 전체를 깨지 않고 로그-온리로 처리한다.
-            save_targets: list[tuple[int, list[Any]]] = []
-            _saved_pages: set[int] = set()
-            for (page, _bbox), coords in zip(collapsed, extracted, strict=True):
-                if coords and page not in _saved_pages:
-                    save_targets.append((page, coords))
-                    _saved_pages.add(page)
-            if save_targets:
+        # 캐시 미스 페이지는 항상 전체 페이지(bbox=None)로 일괄 추출
+        miss_pages = [p for p in page_nums if not coords_map.get(p)]
+        fresh_coords: dict[int, list[Any]] = {}
+        if miss_pages:
+            collapsed = [(p, None) for p in miss_pages]
+            logger.info(
+                f"[HYDRATE] 정밀 좌표 추출: {os.path.basename(path)} {len(collapsed)}개 (단일 open)"
+            )
+            async with semaphore:
+                extracted = await asyncio.to_thread(
+                    _extract_pages_words_sync, path, collapsed
+                )
+            fresh_coords = {
+                p: c for (p, _), c in zip(collapsed, extracted, strict=True) if c
+            }
+
+            # 신규 추출 성공 페이지만 비동기 배치 저장
+            if fresh_coords:
                 save_results = await asyncio.gather(
                     *(
-                        coord_cache.save_coords(file_hash, page, coords)
-                        for page, coords in save_targets
+                        coord_cache.save_coords(file_hash, p, c)
+                        for p, c in fresh_coords.items()
                     ),
                     return_exceptions=True,
                 )
-                for (page, _coords), outcome in zip(
-                    save_targets, save_results, strict=True
-                ):
+                for p, outcome in zip(fresh_coords.keys(), save_results, strict=True):
                     if isinstance(outcome, BaseException):
                         logger.warning(
-                            f"[HYDRATE] 좌표 저장 실패 ({os.path.basename(path)} "
-                            f"P{page}): {outcome}"
+                            f"[HYDRATE] 좌표 저장 실패 ({os.path.basename(path)} P{p}): {outcome}"
                         )
 
-            for doc in docs_in_file:
-                pages = doc.metadata.get("pages") or (
-                    [doc.metadata["page"]]
-                    if doc.metadata.get("page") is not None
-                    else []
-                )
-                page_coords: dict[int, list] = {}
-                bbox = doc_bboxes[id(doc)]
+        # 문서별 좌표 할당
+        for doc in docs_in_file:
+            pages = doc.metadata.get("pages") or (
+                [doc.metadata["page"]] if doc.metadata.get("page") is not None else []
+            )
+            page_coords = {
+                p: c for p in pages if (c := (coords_map.get(p) or fresh_coords.get(p)))
+            }
 
-                for page_num in pages:
-                    coords = coords_map.get(page_num)
-                    if coords:
-                        page_coords[page_num] = coords
-                        continue
-                    fresh = fresh_map.get(f"{page_num}|{bbox!r}")
-                    if fresh:
-                        page_coords[page_num] = fresh
-
-                doc.metadata["page_coords"] = page_coords
-                if page_coords:
-                    # 첫 페이지 좌표 (하위 호환)
-                    doc.metadata["word_coords"] = page_coords[min(page_coords)]
-                else:
-                    # 좌표 추출 실패 시에도 인용 row(페이지 번호)를 유지해
-                    # UI에서 페이지 점프만이라도 가능하게 한다 (크래시 방지).
-                    doc.metadata.setdefault("citation_pages", pages)
-                    doc.metadata["coord_extract_failed"] = True
+            doc.metadata["page_coords"] = page_coords
+            if page_coords:
+                doc.metadata["word_coords"] = page_coords[min(page_coords)]
+            else:
+                doc.metadata.setdefault("citation_pages", pages)
+                doc.metadata["coord_extract_failed"] = True
