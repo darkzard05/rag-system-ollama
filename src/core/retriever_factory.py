@@ -315,6 +315,9 @@ async def search_bm25_with_scores(retriever: Any, query: str, k: int) -> list[Do
 
     from langchain_community.retrievers import BM25Retriever
 
+    if hasattr(retriever, "retrieve_with_scores"):
+        return await asyncio.to_thread(retriever.retrieve_with_scores, query, k)
+
     # Duck-typing guard must reject AsyncMock/test doubles: they auto-create
     # any attribute, so require concrete shapes (docs is a real list and
     # vectorizer.get_scores is a non-Mock callable).

@@ -13,6 +13,7 @@ backend (``pip install bm25s``) exposes the same duck-typed surface so
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Any
 
@@ -58,10 +59,59 @@ class Bm25sAdapter:
         self._bm25_index = bm25_index
 
     async def ainvoke(self, query: str) -> list[Document]:
-        """Fallback path for generic callers (returns top-k without scores)."""
-        from core.retriever_factory import _bm25_results_with_scores
+        """Fallback path for generic callers (returns top-k with scores)."""
+        return await asyncio.to_thread(self.retrieve_with_scores, query, self.k)
 
-        return _bm25_results_with_scores(self, query, self.k)
+    def retrieve_with_scores(self, query: str, k: int) -> list[Document]:
+        import numpy as np
+
+        tokenized = self.preprocess_func(query)
+        retrieve = getattr(self._bm25_index, "retrieve", None)
+        if callable(retrieve):
+            res = retrieve([tokenized], k=k)
+            if isinstance(res, (tuple, list)) and len(res) == 2:
+                doc_indices, scores = res
+                if doc_indices is None or scores is None:
+                    return []
+                if (
+                    not isinstance(doc_indices, (list, tuple, np.ndarray))
+                    or len(doc_indices) == 0
+                ):
+                    return []
+                d_idx = doc_indices[0]
+                s_vals = scores[0]
+                if not isinstance(d_idx, (list, tuple, np.ndarray)):
+                    d_idx = doc_indices
+                    s_vals = scores
+                results = []
+                for idx, score in zip(d_idx, s_vals, strict=False):
+                    if idx < 0 or int(idx) >= len(self.docs):
+                        continue
+                    src = self.docs[int(idx)]
+                    results.append(
+                        Document(
+                            page_content=src.page_content,
+                            metadata={**src.metadata, "score": float(score)},
+                        )
+                    )
+                return results[:k]
+
+        get_scores = getattr(self._bm25_index, "get_scores", None)
+        if callable(get_scores):
+            scores = np.asarray(get_scores(tokenized))
+            top_k_indices = np.argsort(scores)[::-1][:k]
+            results = []
+            for idx in top_k_indices:
+                src = self.docs[int(idx)]
+                results.append(
+                    Document(
+                        page_content=src.page_content,
+                        metadata={**src.metadata, "score": float(scores[idx])},
+                    )
+                )
+            return results
+
+        raise AttributeError("bm25s index has neither retrieve nor get_scores")
 
 
 def build_bm25s_retriever(docs: list[Document], k: int) -> Bm25sAdapter:
