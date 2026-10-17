@@ -14,7 +14,9 @@ SSE 직렬화 전담으로 유지된다 (5→2).
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import sys
 import time
 from collections.abc import AsyncIterator, Callable, Coroutine
 from dataclasses import dataclass, field
@@ -686,6 +688,11 @@ class StreamingResponseHandler:
             logger.error(f"[Streaming] 스트림 처리 중 오류: {e}", exc_info=True)
             raise
         finally:
+            exc_type, _, _ = sys.exc_info()
+            is_exit = exc_type is not None and issubclass(
+                exc_type, (GeneratorExit, asyncio.CancelledError)
+            )
+
             # Phase 2.2: 두 버퍼 모두 플러시
             _t_tail = time.perf_counter()
             remaining_content, remaining_thought = self.buffer.flush_all()
@@ -721,10 +728,11 @@ class StreamingResponseHandler:
                 if thought_chunk is not None:
                     _remaining.append(thought_chunk)
             else:
-                if final_chunk is not None:
-                    yield final_chunk
-                if thought_chunk is not None:
-                    yield thought_chunk
+                if not is_exit:
+                    if final_chunk is not None:
+                        yield final_chunk
+                    if thought_chunk is not None:
+                        yield thought_chunk
 
             self.metrics.total_time = time.time() - (self.start_time or time.time())
             if self.first_token_time and self.start_time:
@@ -766,7 +774,8 @@ class StreamingResponseHandler:
             if _remaining is not None:
                 _remaining.append(perf_chunk)
             else:
-                yield perf_chunk
+                if not is_exit:
+                    yield perf_chunk
 
     async def stream_response(
         self,
