@@ -82,38 +82,34 @@ def _to_float(value: Any) -> float | None:
 
 
 def _words_bbox(words: list[Any]) -> list[float] | None:
-    """단어 좌표 리스트의 실제 텍스트 영역 bbox ``[x0, y0, x1, y1]``를 계산합니다.
+    """단어 좌표 리스트의 실제 텍스트 영역 bbox ``[x0, y0, x1, y1]``를 계산합니다."""
+    min_x0 = min_y0 = float("inf")
+    max_x1 = max_y1 = float("-inf")
+    has_valid = False
 
-    tuple/리스트(5-tuple·8-tuple)와 dict 형식을 모두 지원하며, 파싱 불가 항목은
-    건너뜁니다. 유효 좌표가 하나도 없으면 None을 반환해 호출부가 페이지 rect로
-    폴백하도록 합니다.
-    """
-    xs0: list[float] = []
-    ys0: list[float] = []
-    xs1: list[float] = []
-    ys1: list[float] = []
     for w in words:
         if isinstance(w, dict):
-            x0 = _to_float(w.get("x0"))
-            y0 = _to_float(w.get("y0"))
-            x1 = _to_float(w.get("x1"))
-            y1 = _to_float(w.get("y1"))
+            coords = (w.get("x0"), w.get("y0"), w.get("x1"), w.get("y1"))
         elif isinstance(w, (tuple, list)) and len(w) >= 4:
-            x0 = _to_float(w[0])
-            y0 = _to_float(w[1])
-            x1 = _to_float(w[2])
-            y1 = _to_float(w[3])
+            coords = (w[0], w[1], w[2], w[3])
         else:
             continue
+
+        x0, y0, x1, y1 = (_to_float(c) for c in coords)
         if x0 is None or y0 is None or x1 is None or y1 is None:
             continue
-        xs0.append(x0)
-        ys0.append(y0)
-        xs1.append(x1)
-        ys1.append(y1)
-    if not xs0:
-        return None
-    return [min(xs0), min(ys0), max(xs1), max(ys1)]
+
+        if x0 < min_x0:
+            min_x0 = x0
+        if y0 < min_y0:
+            min_y0 = y0
+        if x1 > max_x1:
+            max_x1 = x1
+        if y1 > max_y1:
+            max_y1 = y1
+        has_valid = True
+
+    return [min_x0, min_y0, max_x1, max_y1] if has_valid else None
 
 
 def _extraction_progress_pct(page_number: int, total_pages: int) -> int:
