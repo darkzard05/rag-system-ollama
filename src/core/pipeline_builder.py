@@ -676,8 +676,9 @@ async def prepare_query_config_or_build(
         from core.graph._graph_core import track_graph_thread
 
         track_graph_thread(session_id)
-    except Exception:
-        pass
+    except Exception as e:
+        # thread 추적 실패는 파이프라인 준비를 막지 않는다 (관측만 남긴다).
+        logger.debug(f"[RAG] 체크포인터 thread 등록 스킵 ({session_id}): {e}")
 
     return {
         "configurable": {

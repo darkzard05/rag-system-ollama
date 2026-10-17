@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import contextlib
 import logging
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -45,6 +45,22 @@ def open_pdf_document(file_path: str) -> Iterator[Any]:
                 logger.warning(f"[PDF] 파일 종료 중 오류 ({file_path}): {e}")
 
 
+def _count_pages(
+    opener: Callable[[], Any], source: str, *, exc_info: bool = False
+) -> int | None:
+    """문서를 열어 페이지 수를 세고, 실패는 로깅 후 ``None``으로 흡수한다.
+
+    호출부가 로깅 강도(``exc_info``)와 ``source`` 라벨을 지정한다.
+    절대 raise하지 않는다.
+    """
+    try:
+        with opener() as doc:
+            return len(doc)
+    except Exception as e:
+        logger.error(f"PDF 페이지 수 조회 실패 ({source}): {e}", exc_info=exc_info)
+        return None
+
+
 def get_pdf_page_count(file_path: str) -> int | None:
     """PDF 총 페이지 수를 반환한다. 열 수 없거나 손상된 경우 ``None``.
 
@@ -55,12 +71,7 @@ def get_pdf_page_count(file_path: str) -> int | None:
     if not file_path:
         return None
     fitz = _fitz()
-    try:
-        with fitz.open(file_path) as doc:
-            return len(doc)
-    except Exception as e:
-        logger.error(f"PDF 페이지 수 조회 실패 ({file_path}): {e}", exc_info=True)
-        return None
+    return _count_pages(lambda: fitz.open(file_path), file_path, exc_info=True)
 
 
 def get_pdf_page_count_from_bytes(content: bytes) -> int | None:
@@ -72,9 +83,7 @@ def get_pdf_page_count_from_bytes(content: bytes) -> int | None:
     if not content:
         return None
     fitz = _fitz()
-    try:
-        with fitz.open(stream=content, filetype="pdf") as doc:
-            return len(doc)
-    except Exception as e:
-        logger.error(f"PDF 페이지 수 조회 실패 (bytes {len(content)}B): {e}")
-        return None
+    return _count_pages(
+        lambda: fitz.open(stream=content, filetype="pdf"),
+        f"bytes {len(content)}B",
+    )

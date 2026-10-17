@@ -293,7 +293,7 @@ class RAGSystem:
             seen_doc_keys: set[str] = set()
             # Tier1 P0-2: generate 토큰 드롭 합류점 계측. custom response_chunk가
             # 정상 경로이며 generate 노드 messages는 중복 방지용으로 드롭한다.
-            # writer=None·파서 폴백などで custom이 없으면 무응답이 되므로,
+            # writer=None·파서 폴백 등으로 custom이 없으면 무응답이 되므로,
             # 드롭 수와 custom 수신을 세어 침묵 실패를 로그로 가시화한다.
             dropped_generate_msgs = 0
             custom_events = 0

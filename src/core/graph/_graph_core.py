@@ -276,11 +276,14 @@ def track_graph_thread(thread_id: str) -> None:
         for _ in range(max(overflow, 0)):
             oldest, _ = _thread_registry.popitem(last=False)
             evicted.append(oldest)
+    if not evicted:
+        return
+    cp = _graph_cache.checkpointer
+    if cp is None:
+        return
     for old_id in evicted:
         try:
-            cp = _graph_cache.checkpointer
-            if cp is not None:
-                cp.delete_thread(old_id)
+            cp.delete_thread(old_id)
             logger.warning(
                 f"[RAG] [GRAPH] 체크포인터 thread 퇴거 (상한 {_MAX_CHECKPOINT_THREADS}): {old_id}"
             )
