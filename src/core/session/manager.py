@@ -213,10 +213,11 @@ class SessionManager:
         """항상 전역 폴백 저장소를 반환하며 접근 시간을 갱신합니다."""
         sid = session_id or cls.get_session_id()
 
+        pdf_path_to_remove: str | None = None
         with cls._map_lock:
             if sid not in cls._fallback_sessions:
                 if len(cls._fallback_sessions) >= MAX_ACTIVE_SESSIONS:
-                    cls._evict_oldest_session_locked()
+                    pdf_path_to_remove = cls._evict_oldest_session_locked()
                 new_state = cls.DEFAULT_SESSION_STATE.copy()
                 new_state["messages"] = []
                 new_state["status_logs"] = []
@@ -238,10 +239,14 @@ class SessionManager:
 
             state = cls._fallback_sessions[sid]
             state["last_accessed"] = time.time()
-            return state
+
+        if pdf_path_to_remove:
+            cls.safe_remove_file(pdf_path_to_remove)
+
+        return state
 
     @classmethod
-    def _evict_oldest_session_locked(cls) -> None:
+    def _evict_oldest_session_locked(cls) -> str | None:
         """가장 오래 사용되지 않은 세션을 퇴출합니다 (_map_lock 보유 중 호출).
 
         - 답변 생성/스트리밍 중인 세션(is_generating_answer)은 퇴출 대상에서
@@ -269,11 +274,13 @@ class SessionManager:
                 oldest_ts = ts
                 oldest_sid = candidate
         if oldest_sid is not None:
-            cls._delete_session_locked(oldest_sid)
+            pdf_path = cls._delete_session_locked(oldest_sid)
             logger.warning(
                 f"[SESSION] 활성 세션 상한({MAX_ACTIVE_SESSIONS}) 도달, "
                 f"가장 오래된 세션 퇴출: {oldest_sid}"
             )
+            return pdf_path
+        return None
 
     @classmethod
     def init_session(cls, session_id: str | None = None):
@@ -955,6 +962,19 @@ class SessionManager:
             logger.warning(
                 f"[SESSION] speculative thread 정리 실패 ({session_id}): {e}"
             )
+
+        # 다른 활성 세션이 동일한 pdf_path를 참조 중인지 검사
+        if pdf_path:
+            remaining_paths = [
+                s.get("pdf_file_path")
+                for sid, s in cls._fallback_sessions.items()
+                if sid != session_id
+            ]
+            if pdf_path in remaining_paths:
+                logger.info(
+                    f"[SESSION] 다른 세션에서 참조 중이므로 파일 삭제 스킵: {pdf_path}"
+                )
+                pdf_path = None
 
         # 물리적 PDF 삭제는 호출자가 락 해제 후 수행하도록 경로만 반환.
         return pdf_path

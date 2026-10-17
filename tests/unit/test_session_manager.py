@@ -1,5 +1,6 @@
 import threading
 import time
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -499,3 +500,30 @@ def test_reset_conversation_clears_messages():
 
     messages = SessionManager.get("messages", session_id=sid)
     assert messages == []
+
+
+def test_delete_session_does_not_delete_shared_pdf_file(tmp_path: Path):
+    SessionManager.reset()
+    shared_pdf = tmp_path / "shared_doc.pdf"
+    shared_pdf.write_bytes(b"%PDF-1.4 test payload")
+
+    # 두 세션이 동일한 PDF 파일 경로를 공유
+    SessionManager.init_session("session_1")
+    SessionManager.set("pdf_file_path", str(shared_pdf), session_id="session_1")
+
+    SessionManager.init_session("session_2")
+    SessionManager.set("pdf_file_path", str(shared_pdf), session_id="session_2")
+
+    # session_1 삭제
+    SessionManager.delete_session("session_1")
+
+    # session_2가 여전히 참조 중이므로 파일이 디스크에 반드시 생존해야 함
+    assert shared_pdf.exists(), (
+        "Shared PDF file was deleted while session_2 was still active!"
+    )
+
+    # session_2도 삭제하면 파일이 제거되어야 함
+    SessionManager.delete_session("session_2")
+    assert not shared_pdf.exists(), (
+        "Shared PDF file was not deleted after all referencing sessions were removed!"
+    )
