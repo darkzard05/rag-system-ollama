@@ -148,6 +148,14 @@ class PasswordHasher:
         return hmac.compare_digest(computed_hash, stored_hash)
 
 
+def _add_b64_padding(data: str) -> str:
+    """Base64 인코딩된 문자열에 누락된 패딩('=')을 추가합니다."""
+    missing = len(data) % 4
+    if missing:
+        data += "=" * (4 - missing)
+    return data
+
+
 class SimpleJWT:
     """간단한 JWT 토큰 생성/검증"""
 
@@ -222,13 +230,15 @@ class SimpleJWT:
             )
 
             # 패딩 추가
-            signature = base64.urlsafe_b64decode(signature_encoded + "===")
+            signature = base64.urlsafe_b64decode(_add_b64_padding(signature_encoded))
 
             if not hmac.compare_digest(signature, expected_signature):
                 return None
 
             # 페이로드 디코딩
-            payload_json = base64.urlsafe_b64decode(payload_encoded + "==").decode()
+            payload_json = base64.urlsafe_b64decode(
+                _add_b64_padding(payload_encoded)
+            ).decode("utf-8")
 
             payload = json.loads(payload_json)
 

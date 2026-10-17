@@ -85,3 +85,11 @@ def test_jwt_signature_via_crypto_utils(tmp_path):
     assert stored == bytes.fromhex(expected_sig)
 
     assert jwt.verify_token(token) is not None
+
+
+def test_jwt_create_and_verify_padding_error():
+    jwt = SimpleJWT(secret_key="a" * 32)
+    token = jwt.create_token(user_id="admin_user", expires_in=3600)
+    payload = jwt.verify_token(token)
+    assert payload is not None, "정상 발급된 JWT 토큰 검증이 패딩 오류로 실패함"
+    assert payload["user_id"] == "admin_user"
