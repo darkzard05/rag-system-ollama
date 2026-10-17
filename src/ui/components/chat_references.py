@@ -79,20 +79,6 @@ def normalize_excerpt(text: object, max_chars: int = 500) -> str:
     return collapsed
 
 
-def _doc_raw_text_map(documents: list[Any] | None) -> dict[str, str]:
-    """doc 안정 ID -> 원문(page_content) 매핑 (발췌 표시용, 정규화 없음)."""
-    raw_map: dict[str, str] = {}
-    for d in documents or []:
-        sid = doc_stable_id(d)
-        if sid in raw_map:
-            continue
-        content = getattr(d, "page_content", None)
-        if content is None and isinstance(d, dict):
-            content = d.get("page_content")
-        raw_map[sid] = content if isinstance(content, str) else ""
-    return raw_map
-
-
 def render_inline_citation_badges(
     citations: list[dict[str, Any]] | None,
     documents: list[Any] | None = None,
@@ -279,27 +265,25 @@ def ordered_reference_entries(
     if not doc_citations:
         return []
 
-    # 2. 문서 ID별 페이지 매핑 테이블 구축
-    doc_page_map = {}
+    # 2. 문서 메타데이터·텍스트·원문 매핑을 단일 패스(Single-Pass)로 통합 구축
+    doc_page_map: dict[str, int] = {}
+    doc_text_map: dict[str, str] = {}
+    doc_raw_map: dict[str, str] = {}
+
     for d in documents or []:
+        sid = doc_stable_id(d)
         p = get_doc_metadata(d).get("page")
         if p is not None:
             with contextlib.suppress(ValueError, TypeError):
-                doc_page_map[doc_stable_id(d)] = int(p)
+                doc_page_map[sid] = int(p)
 
-    # 2b. Branch-D: 문서 ID별 정규화 본문 매핑 (동일 텍스트 판별용)
-    doc_text_map: dict[str, str] = {}
-    for d in documents or []:
-        sid_d = doc_stable_id(d)
-        if sid_d in doc_text_map:
-            continue
-        content = getattr(d, "page_content", None)
-        if content is None and isinstance(d, dict):
-            content = d.get("page_content")
-        doc_text_map[sid_d] = _normalize_text_for_dedup(content)
-
-    # 2c. 호버 발췌용 원문 매핑 (정규화 없음 — help= 표시용)
-    doc_raw_map = _doc_raw_text_map(documents)
+        if sid not in doc_raw_map:
+            content = getattr(d, "page_content", None)
+            if content is None and isinstance(d, dict):
+                content = d.get("page_content")
+            raw_text = content if isinstance(content, str) else ""
+            doc_raw_map[sid] = raw_text
+            doc_text_map[sid] = _normalize_text_for_dedup(raw_text)
 
     # 3. 페이지 번호(target_p) 및 대표 섹션 기준 그룹화 (중복 버튼 방지)
     # Branch-D: 동일 정규화 텍스트가 여러 페이지에 나타나면 최소 페이지만
