@@ -20,7 +20,7 @@ for p in [str(BASE_DIR), str(SRC_DIR)]:
     if p not in sys.path:
         sys.path.insert(0, p)
 
-import pytest
+import pytest  # noqa: E402
 
 # build_graph() 에 등록된 노드 함수명
 # (graph_builder.py:1681-1685 add_node 첫 인자와 일치해야 함)
@@ -30,6 +30,7 @@ GRAPH_NODE_FUNCS = {
     "grade_documents",
     "rewrite_query",
     "generate",
+    "verify_answer",
 }
 
 GRAPH_BUILDER_PATH = SRC_DIR / "core" / "graph" / "graph_builder.py"
@@ -58,6 +59,10 @@ NODE_FUNC_SOURCE_PATHS: dict[str, list[Path]] = {
     ],
     "generate": [
         SRC_DIR / "core" / "graph" / "_generate.py",
+        GRAPH_BUILDER_PATH,
+    ],
+    "verify_answer": [
+        SRC_DIR / "core" / "graph" / "_grade_verify.py",
         GRAPH_BUILDER_PATH,
     ],
 }
@@ -179,5 +184,8 @@ def test_graph_state_declaration_captured():
         "cached_response",
         "short_query",
         "retry_count",
+        "verification_route",
+        "verification_issues",
+        "regeneration_count",
     }
     assert declared == expected, f"GraphState 키 집합 불일치: {sorted(declared)}"

@@ -80,6 +80,9 @@ class GraphState(TypedDict):
     )  # preprocess:333 반환 키 (FIX-1: LangGraph 채널 드롭 방지)
     short_query: bool  # preprocess:337 반환 키 (FIX-1: fast path 채널 드롭 방지)
     retry_count: Annotated[int, reset_or_add]
+    verification_route: str | None
+    verification_issues: list[str] | None
+    regeneration_count: Annotated[int, reset_or_add]
 
 
 class QueryRequest(BaseModel):
