@@ -13,6 +13,29 @@ logger = logging.getLogger(__name__)
 # --- 최적화된 토크나이저 ---
 _RE_KOREAN_TOKEN = re.compile(r"[가-힣]{2,}|[a-zA-Z]{2,}|[0-9]+")
 
+# 모듈 레벨로 불변 상수 호이스팅 (함수/루프 호출 시 재할당 방지)
+_PARTICLES = (
+    "은",
+    "는",
+    "이",
+    "가",
+    "을",
+    "를",
+    "의",
+    "에",
+    "로",
+    "서",
+    "들",
+    "께서",
+    "에서",
+    "보다",
+    "부터",
+    "까지",
+    "에게",
+    "한테",
+)
+_P_LENS = (2, 1)
+
 
 def bm25_tokenizer(text: str) -> list[str]:
     """
@@ -28,27 +51,6 @@ def bm25_tokenizer(text: str) -> list[str]:
         return text.split()
 
     final_tokens = []
-    # 자주 쓰이는 조사/어미 (간이 불용어 처리)
-    particles = (
-        "은",
-        "는",
-        "이",
-        "가",
-        "을",
-        "를",
-        "의",
-        "에",
-        "로",
-        "서",
-        "들",
-        "께서",
-        "에서",
-        "보다",
-        "부터",
-        "까지",
-        "에게",
-        "한테",
-    )
 
     for token in tokens:
         final_tokens.append(token)
@@ -57,9 +59,9 @@ def bm25_tokenizer(text: str) -> list[str]:
         if "가" <= token[0] <= "힣":
             # 2. 간단한 어미/조사 제거 (끝글자 체크)
             # 2음절 이상의 조사 처리 지원
-            for p_len in [2, 1]:
-                if len(token) > p_len + 1 and token.endswith(particles):
-                    # particles 튜플에 2음절 조사가 포함되어 있으므로 endswith가 올바르게 작동함
+            for p_len in _P_LENS:
+                if len(token) > p_len + 1 and token.endswith(_PARTICLES):
+                    # _PARTICLES 튜플에 2음절 조사가 포함되어 있으므로 endswith가 올바르게 작동함
                     stem = token[:-p_len]
                     if len(stem) >= 2:
                         final_tokens.append(stem)
@@ -101,28 +103,22 @@ def normalize_latex_delimiters(text: str) -> str:
     - 기호 앞뒤의 불필요한 이스케이프 제거
     - 코드 블록 내의 내용은 변환에서 제외하여 코드 예제 보호
     """
-    if not text:
+    # 역슬래시가 없는 일반 텍스트는 LaTeX 구분자(\[, \(, \$)가 존재할 수 없으므로 정규식 엔진을 완전히 건너뜀
+    if not text or "\\" not in text:
         return text
 
-    # 0. 코드 블록(```...``` / `...`) 임시 치환 — 내부 LaTeX 변환 방지
     code_blocks: list[str] = []
-
-    def _save_code(m: re.Match[str]) -> str:
-        code_blocks.append(m.group(0))
-        return f"\x00LATEX_BLOCK_{len(code_blocks) - 1}\x00"
-
-    text = _RE_CODE_BLOCK.sub(_save_code, text)
-
-    # 1. 블록 수식 변환: \[ ... \] -> $$ ... $$
+    text = _RE_CODE_BLOCK.sub(
+        lambda m: (
+            code_blocks.append(m.group(0))  # type: ignore[func-returns-value]
+            or f"\x00LATEX_BLOCK_{len(code_blocks) - 1}\x00"
+        ),
+        text,
+    )
     text = _RE_LATEX_BLOCK.sub(r"$$\1$$", text)
-
-    # 2. 인라인 수식 변환: \( ... \) -> $ ... $
     text = _RE_LATEX_INLINE.sub(r"$\1$", text)
-
-    # 3. 잘못된 이스케이프 문자 정제 (예: \$ -> $)
     text = text.replace(r"\$", "$")
 
-    # 4. 코드 블록 복원
     for i, block in enumerate(code_blocks):
         text = text.replace(f"\x00LATEX_BLOCK_{i}\x00", block)
 
