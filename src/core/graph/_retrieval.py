@@ -520,31 +520,36 @@ def _merge_adjacent_chunks(
 
     from common.utils import count_tokens_rough
 
-    merged_docs: list[Document] = []
+    # (Document, cached_token_count) 튜플로 토큰 수 캐싱
+    merged_entries: list[tuple[Document, int]] = []
 
     for doc in docs:
         merged = False
         doc_tokens = count_tokens_rough(doc.page_content)
+        next_m = doc.metadata
+        n_src, n_page, n_sec = (
+            next_m.get("source"),
+            next_m.get("page"),
+            next_m.get("current_section"),
+        )
+        next_start, next_end = next_m.get("start_index"), next_m.get("end_index")
 
-        for existing_doc in merged_docs:
+        for idx, (existing_doc, current_tokens) in enumerate(merged_entries):
             curr_m = existing_doc.metadata
-            next_m = doc.metadata
 
-            is_same_context = curr_m.get("source") == next_m.get(
-                "source"
-            ) and curr_m.get("page") == next_m.get("page")
+            # 1. 단락 평가(Short-Circuit): 출처/페이지/섹션 불일치 또는 토큰 초과 시 즉시 skip
+            if (
+                curr_m.get("source") != n_src
+                or curr_m.get("page") != n_page
+                or curr_m.get("current_section") != n_sec
+                or current_tokens + doc_tokens + 10 > max_tokens
+            ):
+                continue
 
-            is_same_section = curr_m.get("current_section") == next_m.get(
-                "current_section"
-            )
-
-            curr_end = curr_m.get("end_index")
-            next_start = next_m.get("start_index")
-            curr_start = curr_m.get("start_index")
-            next_end = next_m.get("end_index")
-
+            # 2. 연속성 검증
+            curr_start, curr_end = curr_m.get("start_index"), curr_m.get("end_index")
             if curr_end is not None and next_start is not None:
-                is_actually_consecutive = abs(next_start - curr_end) <= 5 or (
+                is_consecutive = abs(next_start - curr_end) <= 5 or (
                     curr_start is not None
                     and next_end is not None
                     and abs(curr_start - next_end) <= 5
@@ -552,35 +557,37 @@ def _merge_adjacent_chunks(
             else:
                 curr_idx = int(curr_m.get("chunk_index", 0))
                 next_idx = int(next_m.get("chunk_index", 0))
-                is_actually_consecutive = abs(next_idx - curr_idx) <= 1
+                is_consecutive = abs(next_idx - curr_idx) <= 1
 
-            current_tokens = count_tokens_rough(existing_doc.page_content)
-
-            if (
-                is_same_context
-                and is_actually_consecutive
-                and is_same_section
-                and (current_tokens + doc_tokens + 10) <= max_tokens
-            ):
+            if is_consecutive:
+                existing_doc.page_content += "\n\n" + doc.page_content
+                existing_doc.metadata["end_index"] = (
+                    next_end if next_end is not None else curr_end
+                )
                 curr_idx = int(curr_m.get("chunk_index", 0))
                 next_idx = int(next_m.get("chunk_index", 0))
-
-                existing_doc.page_content += "\n\n" + doc.page_content
-                existing_doc.metadata["end_index"] = next_m.get("end_index", curr_end)
                 existing_doc.metadata["chunk_index"] = max(next_idx, curr_idx)
 
                 curr_score = float(curr_m.get("rerank_score", 0.0) or 0.0)
                 next_score = float(next_m.get("rerank_score", 0.0) or 0.0)
                 existing_doc.metadata["rerank_score"] = max(curr_score, next_score)
+
+                # 실제 병합 성공 시에만 1회 토큰 수 갱신
+                merged_entries[idx] = (
+                    existing_doc,
+                    count_tokens_rough(existing_doc.page_content),
+                )
                 merged = True
                 break
 
         if not merged:
-            merged_docs.append(
-                Document(
-                    page_content=doc.page_content,
-                    metadata=copy.copy(doc.metadata),
+            merged_entries.append(
+                (
+                    Document(
+                        page_content=doc.page_content, metadata=copy.copy(doc.metadata)
+                    ),
+                    doc_tokens,
                 )
             )
 
-    return merged_docs
+    return [entry[0] for entry in merged_entries]
