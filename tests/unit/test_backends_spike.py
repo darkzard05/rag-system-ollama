@@ -91,3 +91,26 @@ async def test_memory_cache_set_get_roundtrip() -> None:
 
     stats = cache.get_stats()
     assert stats.cache_size == 0
+
+
+@pytest.mark.asyncio
+async def test_memory_cache_evict_lru_decrements_memory_bytes() -> None:
+    # 1MB 상한의 메모리 캐시 생성 (max_size=10)
+    cache = MemoryCache(max_size=10, max_memory_mb=1)
+    payload = "x" * (200 * 1024)  # 약 200KB
+
+    # 6개 삽입 시 1.2MB가 되어 1MB 초과로 LRU 퇴출 발생
+    for i in range(6):
+        await cache.set(f"k{i}", payload)
+
+    # 퇴출된 항목 크기만큼 total_memory_bytes가 정확히 차감되었는지 검증
+    actual_bytes = sum(
+        entry.metadata.get("size_bytes", 0) for entry in cache.cache.values()
+    )
+    assert cache.stats.total_memory_bytes == actual_bytes
+    assert cache.stats.cache_size == len(cache.cache)
+
+    # 추가 삽입 시 캐시가 전부 비워지지 않고 복수 엔트리가 정상 유지되어야 함
+    for i in range(6, 12):
+        await cache.set(f"k{i}", payload)
+    assert len(cache.cache) >= 3, f"Cache trashed to size {len(cache.cache)}"

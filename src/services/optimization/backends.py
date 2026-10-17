@@ -322,10 +322,16 @@ class MemoryCache(CacheBackend[T]):
 
         # 접근 시간이 가장 오래된 항목 찾기
         lru_key = min(self.cache.keys(), key=lambda k: self.cache[k].accessed_at)
+        entry = self.cache[lru_key]
+        size_bytes = entry.metadata.get("size_bytes", 0)
 
         del self.cache[lru_key]
+        self.stats.total_memory_bytes = max(
+            0, self.stats.total_memory_bytes - size_bytes
+        )
+        self.stats.cache_size = len(self.cache)
         self.stats.total_evictions += 1
-        logger.debug(f"[Cache] LRU 제거: {lru_key}")
+        logger.debug(f"[Cache] LRU 제거: {lru_key} ({size_bytes}B 해제)")
 
 
 class DiskCache(CacheBackend[T]):
