@@ -105,6 +105,29 @@ def _check_windows_integrity():
 
         # 1시간 이상 활동 없는 세션 정리 (물리적 파일 삭제 및 참조 해제 포함)
         SessionManager.cleanup_expired_sessions(max_idle_seconds=3600)
+        # 세션이 하나도 없으면 Ollama 상주 모델을 명시 언로드한다.
+        # 시간당 sweep에서만 발화하므로 활성 사용자에게는 영향이 없다.
+        # (기본 keep_alive=5m가 1차 방어, 여기는 확정 정리.)
+        try:
+            if SessionManager.get_stats().get("active_sessions", 0) == 0:
+                from common.async_worker import AsyncWorker
+                from core.model_loader import ModelManager
+
+                _unload_fut = AsyncWorker().submit(ModelManager.clear_vram())
+
+                def _log_unload_done(fut):
+                    try:
+                        fut.result()
+                    except Exception as ue:
+                        logger.warning(
+                            f"[SYSTEM] [CLEANUP] 유휴 VRAM 언로드 실패: {ue}"
+                        )
+                    else:
+                        logger.info("[SYSTEM] [CLEANUP] 유휴 VRAM 언로드 완료")
+
+                _unload_fut.add_done_callback(_log_unload_done)
+        except Exception as ue:
+            logger.warning(f"[SYSTEM] [CLEANUP] 유휴 VRAM 언로드 스킵: {ue}")
     except Exception as e:
         logger.error(f"[SYSTEM] [CLEANUP] 세션 정리 중 오류: {e}")
 

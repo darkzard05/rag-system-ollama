@@ -215,6 +215,16 @@ async def stream_query_rag(
                     # asyncio.wait (NOT wait_for): wait_for cancels the pending
                     # anext task -> upstream LLM stream would be cancelled on
                     # every stall. wait keeps it alive across keepalive frames.
+                    # 스톨 중에도 끊김을 감지한다 — 청크가 오지 않으면 아래
+                    # per-chunk 샘플링이 발화하지 못해 좀비 스트림이 LLM을
+                    # 계속 붙든다. is_disconnected()는 저렴하므로 스톨 1회당
+                    # 1회 호출은 무시 가능하다.
+                    if await fastapi_request.is_disconnected():
+                        logger.info(
+                            f"[API] Client disconnected during stall, "
+                            f"stopping stream: {sid}"
+                        )
+                        break
                     yield sse_handler.format_sse_keepalive()
                     continue
                 try:

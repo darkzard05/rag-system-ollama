@@ -135,7 +135,7 @@ OLLAMA_THINKING: bool = _get_env(
 )
 OLLAMA_KEEP_ALIVE: str = _get_env(
     "OLLAMA_KEEP_ALIVE",
-    _models_config.get("keep_alive", "30m"),
+    _models_config.get("keep_alive", "5m"),
 )
 MODEL_CACHE_DIR: str = _get_env(
     "MODEL_CACHE_DIR",
@@ -264,6 +264,14 @@ HYDRATION_MODE: str = PARSING_CONFIG.get("hydration_mode", "precision_clip")
 HYDRATION_DRAIN_TIMEOUT_SECONDS: float = _get_env(
     "HYDRATION_DRAIN_TIMEOUT_SECONDS",
     PARSING_CONFIG.get("hydration_drain_timeout_seconds", 30.0),
+    float,
+)
+# 중단(클라이언트 절단·aclose) 시 하이드레이션 태스크 취소 후 대기 상한(초).
+# 정상 종료의 30초 상한과 달리, 이미 포기된 턴은 자원을 즉시 반납해야 하므로
+# 짧게 잡는다. 태스크는 먼저 cancel()되므로 대개 즉시 회수된다.
+HYDRATION_ABORT_DRAIN_TIMEOUT_SECONDS: float = _get_env(
+    "HYDRATION_ABORT_DRAIN_TIMEOUT_SECONDS",
+    PARSING_CONFIG.get("hydration_abort_drain_timeout_seconds", 1.0),
     float,
 )
 VECTOR_STORE_CACHE_DIR: str = str(

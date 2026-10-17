@@ -724,14 +724,23 @@ class SessionManager:
 
     @classmethod
     def get_build_state(cls, session_id: str | None = None) -> BuildState | None:
-        """단일 빌드 상태 객체를 반환한다 (없으면 None)."""
+        """단일 빌드 상태 스냅샷을 반환한다 (없으면 None).
+
+        저장소 live 객체가 아니라 얕은 복사본을 반환한다 — BuildState
+        필드는 전부 불변 스칼라(str/Enum/float/None)이므로 얕은 복사로
+        완전 격리된다. 외부 보유 참조의 락-밖 직접 변이(``build.phase = ...``)
+        가 SSoT를 찢는 torn-write 경로를 차단한다. 변이는
+        update/finalize/init 경로로만 수행한다.
+        """
         sid = session_id or cls.get_session_id()
         with cls._acquire_lock(sid):
             state = cls._fallback_sessions.get(sid)
             if state is None:
                 return None
             build = state.get("build_state")
-            return build if isinstance(build, BuildState) else None
+            if not isinstance(build, BuildState):
+                return None
+            return copy.copy(build)
 
     @classmethod
     def init_build_state(

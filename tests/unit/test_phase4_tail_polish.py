@@ -133,7 +133,7 @@ def test_bridge_forces_sync_on_session_switch() -> None:
     import ui.bridge as bridge_mod
     from ui.bridge import UIBridge
 
-    bridge_mod._last_synced_sid = None
+    bridge_mod._synced_sids.clear()
     with (
         patch.object(
             bridge_mod.SessionManager, "get_session_id", return_value="sid-new"
@@ -147,4 +147,34 @@ def test_bridge_forces_sync_on_session_switch() -> None:
         assert mock_sync.call_count == 1
         UIBridge.sync_session()
         assert mock_sync.call_count == 1
-    assert bridge_mod._last_synced_sid == "sid-new"
+    assert "sid-new" in bridge_mod._synced_sids
+
+
+def test_bridge_tracks_synced_sids_per_session() -> None:
+    """Two concurrent sessions must not clobber each other's forced-sync mark."""
+    import ui.bridge as bridge_mod
+    from ui.bridge import UIBridge
+
+    bridge_mod._synced_sids.clear()
+    current = {"sid": "sid-a"}
+    with (
+        patch.object(
+            bridge_mod.SessionManager,
+            "get_session_id",
+            side_effect=lambda: current["sid"],
+        ),
+        patch.object(
+            bridge_mod.SessionManager, "has_pending_ui_sync", return_value=False
+        ),
+        patch.object(bridge_mod.SessionManager, "sync_to_streamlit") as mock_sync,
+    ):
+        UIBridge.sync_session()
+        assert mock_sync.call_count == 1
+        current["sid"] = "sid-b"
+        UIBridge.sync_session()
+        assert mock_sync.call_count == 2
+        # sid-a was not evicted by sid-b's sync -> returning to it skips.
+        current["sid"] = "sid-a"
+        UIBridge.sync_session()
+        assert mock_sync.call_count == 2
+    assert {"sid-a", "sid-b"} <= set(bridge_mod._synced_sids)

@@ -336,15 +336,15 @@ def _fetch_available_models_cached() -> list[str]:
 
 
 def _keep_alive_seconds() -> int:
-    """OLLAMA_KEEP_ALIVE(기본 "30m")를 초 단위 정수로 변환.
+    """OLLAMA_KEEP_ALIVE(기본 "5m")를 초 단위 정수로 변환.
 
     OllamaEmbeddings.keep_alive는 ``int | None`` 타입이므로 문자열을 그대로
-    넘기면 pydantic 검증 오류가 발생한다. 파싱 실패 시 1800초(30분)로 폴백한다.
+    넘기면 pydantic 검증 오류가 발생한다. 파싱 실패 시 300초(5분)로 폴백한다.
     """
     match = re.fullmatch(r"(\d+)m", OLLAMA_KEEP_ALIVE.strip())
     if match:
         return int(match.group(1)) * 60
-    return 1800
+    return 300
 
 
 def get_available_models() -> list[str]:

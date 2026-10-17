@@ -58,6 +58,12 @@ models:
   # Ollama HTTP 요청 및 추론 세마포어 획득 타임아웃 (초)
   timeout: 120
 
+  # Ollama 모델 상주 시간 — 유휴 시 VRAM 자동 반납까지의 대기.
+  # 30m은 5개 모델을 최대 30분 상주시켜 로컬 VRAM을 압박하므로 5m로 단축.
+  # 세션 0개인 시간당 sweep에서도 keep_alive=0 명시 언로드를 수행한다.
+  # 환경변수 OLLAMA_KEEP_ALIVE 로 재정의 가능.
+  keep_alive: "5m"
+
   # Ollama는 별도 프로세스라 torch.cuda 미사용 시 VRAM 퇴출이 영원히 안 떠짐.
   # 호스트 RAM 압력 폴백으로 퇴출을 유도할지 (기본 배포= Ollama).
   # F3: 핸들 evict가 Ollama host RAM을 해방하지 못해 무효한 퇴출→재로드만

@@ -16,7 +16,10 @@ from typing import Any
 from langchain_core.embeddings import Embeddings
 
 from cache.vector_cache import EngineCacheManager
-from common.config import HYDRATION_DRAIN_TIMEOUT_SECONDS
+from common.config import (
+    HYDRATION_ABORT_DRAIN_TIMEOUT_SECONDS,
+    HYDRATION_DRAIN_TIMEOUT_SECONDS,
+)
 from common.exceptions import VectorStoreError
 from common.resilience import get_circuit_breaker_registry, retry_stream
 from common.utils import doc_stable_id
@@ -44,7 +47,11 @@ class HydrationDrainResult:
 
 
 async def _drain_hydration_tasks(
-    tasks: list[asyncio.Task[Any]], *, timeout: float, msg_id: str = ""
+    tasks: list[asyncio.Task[Any]],
+    *,
+    timeout: float,
+    msg_id: str = "",
+    cancel_pending: bool = False,
 ) -> HydrationDrainResult:
     """하이드레이션 태스크를 동시 대기한다 (순차 드레인 금지).
 
@@ -52,7 +59,14 @@ async def _drain_hydration_tasks(
     태스크 실패는 세기만 하고 스트림 실패로 승격시키지 않으며, 타임아웃이면
     pending을 취소하고 fail-loud로 알린다. UI 턴 id는 스트림까지 전달되지
     않으므로 로그 상관 id는 호출자가 준다.
+
+    ``cancel_pending=True``이면 대기 전에 pending을 먼저 취소한다(중단 경로).
+    이미 포기된 턴의 좌표 작업을 백그라운드에서 계속 붙들지 않고 회수한다.
     """
+    if cancel_pending:
+        for t in tasks:
+            if not t.done():
+                t.cancel()
     pending = [t for t in tasks if not t.done()]
     results: list[Any] = [None] * len(tasks)
     failed = 0
@@ -275,6 +289,7 @@ class RAGSystem:
             # rewrite 루프가 retrieve 노드를 재실행하면 청크가 2회 발생하므로
             # 단일 변수가 아닌 리스트로 보관해 모든 하이드레이션 태스크를 유지한다.
             hydration_tasks: list[asyncio.Task[Any]] = []
+            _aborted = False
             seen_doc_keys: set[str] = set()
             SessionManager.add_status_log(
                 "답변 생성 시작...",
@@ -325,6 +340,11 @@ class RAGSystem:
                                         )
                                         hydration_tasks.append(task)
                             yield ("updates", chunk)
+            except (asyncio.CancelledError, GeneratorExit):
+                # 중단(클라이언트 절단·waiter 취소·aclose) — finally에서
+                # 하이드레이션을 즉시 취소하고 짧게 드레인한다.
+                _aborted = True
+                raise
             except Exception as e:
                 logger.error(f"[RAG] 스트림 에러: {e}", exc_info=True)
                 raise e
@@ -336,10 +356,16 @@ class RAGSystem:
                 # 인용 하이라이트 저하를 UI에 가시화한다 (침묵 성공 방지).
                 drain = await _drain_hydration_tasks(
                     hydration_tasks,
-                    timeout=HYDRATION_DRAIN_TIMEOUT_SECONDS,
+                    timeout=(
+                        HYDRATION_ABORT_DRAIN_TIMEOUT_SECONDS
+                        if _aborted
+                        else HYDRATION_DRAIN_TIMEOUT_SECONDS
+                    ),
                     msg_id=self.session_id,
+                    cancel_pending=_aborted,
                 )
-                if drain.failed or drain.timed_out:
+                # 중단 경로의 취소는 실패가 아니므로 상태 로그로 표면화하지 않는다.
+                if not _aborted and (drain.failed or drain.timed_out):
                     SessionManager.add_status_log(
                         "일부 참조 문서의 하이라이트 좌표를 불러오지 못했습니다.",
                         session_id=self.session_id,
