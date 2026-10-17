@@ -519,3 +519,16 @@ class TestMonitoringIntegration(unittest.TestCase):
         logger.info(
             f"✓ Degradation detected: {stats_fast.avg_duration_seconds:.3f}s → {stats_slow.avg_duration_seconds:.3f}s"
         )
+
+
+def test_performance_monitor_without_psutil():
+    from unittest.mock import patch
+
+    with patch(
+        "services.monitoring.performance_monitor._get_psutil", return_value=None
+    ):
+        from services.monitoring.performance_monitor import MemoryMonitor
+
+        monitor = MemoryMonitor()
+        usage = monitor.get_current_usage()
+        assert usage == {"rss_mb": 0.0, "vms_mb": 0.0}

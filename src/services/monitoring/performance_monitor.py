@@ -209,7 +209,8 @@ class MemoryMonitor:
         self._lock = threading.RLock()
         self._max_history = max_history
         self._memory_samples: deque = deque(maxlen=max_history)
-        self._process = _get_psutil().Process()
+        psutil_mod = _get_psutil()
+        self._process = psutil_mod.Process() if psutil_mod is not None else None
 
     def get_current_usage(self) -> dict[str, float]:
         """
@@ -218,6 +219,8 @@ class MemoryMonitor:
         Returns:
             Dictionary with RSS and VMS in MB
         """
+        if self._process is None:
+            return {"rss_mb": 0.0, "vms_mb": 0.0}
         try:
             with self._lock:
                 mem_info = self._process.memory_info()
