@@ -172,16 +172,10 @@ async def hydrate_documents(docs: list[Document]) -> None:
             for page, bbox in miss_requests:
                 _by_page.setdefault(page, []).append((bbox, f"{page}|{bbox!r}"))
             for page, items in _by_page.items():
-                if len(items) > 1:
-                    logger.warning(
-                        f"[HYDRATE] 동일 페이지 다중 bbox({len(items)}건) 감지 "
-                        f"P{page} — 전체 페이지 추출로 붕괴"
-                    )
-                    collapsed.append((page, None))
-                    collapsed_keys.append([k for _, k in items])
-                else:
-                    collapsed.append((page, items[0][0]))
-                    collapsed_keys.append([items[0][1]])
+                # coords 테이블은 페이지 전체 단어 목록을 보관하므로,
+                # 캐시 오염 방지를 위해 항상 전체 페이지 추출(bbox=None)을 수행한다.
+                collapsed.append((page, None))
+                collapsed_keys.append([k for _, k in items])
 
             fresh_map: dict[str, list[Any] | None] = {}
             extracted: list[list[Any] | None] = []
