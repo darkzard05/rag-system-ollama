@@ -170,16 +170,17 @@ class ResponseTimeTracker:
 
             timings = sorted(self._timings[operation_type])
             count = len(timings)
+            total_duration = sum(timings)
 
             return {
                 "count": count,
-                "min": float(min(timings)),
-                "max": float(max(timings)),
-                "avg": sum(timings) / count,
+                "min": float(timings[0]),
+                "max": float(timings[-1]),
+                "avg": total_duration / count,
                 "p50": self._percentile(timings, 50),
                 "p95": self._percentile(timings, 95),
                 "p99": self._percentile(timings, 99),
-                "total": sum(timings),
+                "total": total_duration,
             }
 
     @staticmethod
@@ -436,64 +437,63 @@ class PerformanceMonitor:
             PerformanceStats object
         """
         with self._lock:
-            # Filter operations of this type
-            ops = [o for o in self._operations if o.operation_type == operation_type]
+            total_ops = 0
+            successful_ops = 0
+            failed_ops = 0
+            durations: list[float] = []
+            memory_deltas: list[float] = []
+            token_counts: list[int] = []
 
-            if not ops:
+            # 단일 패스로 통계 데이터 동시 집계 (중간 임시 리스트 6개 생성 제거)
+            for o in self._operations:
+                if o.operation_type != operation_type:
+                    continue
+                total_ops += 1
+                if o.error is not None:
+                    failed_ops += 1
+                if o.is_completed:
+                    if o.error is None:
+                        successful_ops += 1
+                        if o.duration_seconds is not None:
+                            durations.append(o.duration_seconds)
+                    if o.memory_delta_mb is not None:
+                        memory_deltas.append(o.memory_delta_mb)
+                    if o.tokens > 0:
+                        token_counts.append(o.tokens)
+
+            if total_ops == 0:
                 return PerformanceStats(operation_type=operation_type)
 
-            # Calculate statistics
-            completed_ops = [o for o in ops if o.is_completed]
-            failed_ops = [o for o in ops if o.error is not None]
-            successful_ops = [o for o in completed_ops if o.error is None]
-
-            durations = [
-                o.duration_seconds
-                for o in successful_ops
-                if o.duration_seconds is not None
-            ]
-
-            # Percentiles
             sorted_durations = sorted(durations) if durations else []
+            total_duration = sum(durations)
+            total_mem = sum(memory_deltas)
+            total_toks = sum(token_counts)
 
             def percentile(data: list[float], p: int) -> float:
                 if not data:
                     return 0.0
-                idx = int(len(data) * p / 100)
-                return float(data[min(idx, len(data) - 1)])
-
-            # Memory stats
-            memory_deltas = [
-                o.memory_delta_mb
-                for o in completed_ops
-                if o.memory_delta_mb is not None
-            ]
-
-            # Token stats
-            token_counts = [o.tokens for o in completed_ops if o.tokens > 0]
+                return float(data[min(int(len(data) * p / 100), len(data) - 1)])
 
             return PerformanceStats(
                 operation_type=operation_type,
-                total_operations=len(ops),
-                successful_operations=len(successful_ops),
-                failed_operations=len(failed_ops),
-                total_duration_seconds=sum(durations),
-                min_duration_seconds=min(durations) if durations else None,
-                max_duration_seconds=max(durations) if durations else None,
-                avg_duration_seconds=sum(durations) / len(durations)
+                total_operations=total_ops,
+                successful_operations=successful_ops,
+                failed_operations=failed_ops,
+                total_duration_seconds=total_duration,
+                min_duration_seconds=sorted_durations[0] if sorted_durations else None,
+                max_duration_seconds=sorted_durations[-1] if sorted_durations else None,
+                avg_duration_seconds=total_duration / len(durations)
                 if durations
                 else 0.0,
                 p50_duration_seconds=percentile(sorted_durations, 50),
                 p95_duration_seconds=percentile(sorted_durations, 95),
                 p99_duration_seconds=percentile(sorted_durations, 99),
-                total_memory_delta_mb=sum(memory_deltas),
-                avg_memory_delta_mb=sum(memory_deltas) / len(memory_deltas)
+                total_memory_delta_mb=total_mem,
+                avg_memory_delta_mb=total_mem / len(memory_deltas)
                 if memory_deltas
                 else 0.0,
-                total_tokens=sum(token_counts),
-                avg_tokens=sum(token_counts) / len(token_counts)
-                if token_counts
-                else 0.0,
+                total_tokens=total_toks,
+                avg_tokens=total_toks / len(token_counts) if token_counts else 0.0,
             )
 
     def get_all_stats(self) -> dict[OperationType, PerformanceStats]:
