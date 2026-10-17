@@ -393,7 +393,13 @@ async def _safe_invoke(
     from core.resource_manager import get_resource_manager
 
     coordinator = get_resource_manager()
-    async with coordinator.use_llm(model_name=model_name):
+    active_model = (
+        getattr(llm, "model", None)
+        or getattr(llm, "model_name", None)
+        or model_name
+        or DEFAULT_OLLAMA_MODEL
+    )
+    async with coordinator.use_llm(model_name=active_model):
         res = llm.ainvoke(prompt, config=config)
         if asyncio.iscoroutine(res):
             return await res

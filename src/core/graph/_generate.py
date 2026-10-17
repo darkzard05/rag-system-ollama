@@ -607,7 +607,14 @@ async def _generate_pass(
         # 깨진 JSON 출력을 막는다.
         json_llm = llm.bind(response_format={"type": "json_object"})
         coordinator = get_resource_manager()
-        async with coordinator.use_llm(model_name=DEFAULT_OLLAMA_MODEL):
+        active_model = (
+            getattr(json_llm, "model", None)
+            or getattr(json_llm, "model_name", None)
+            or getattr(llm, "model", None)
+            or getattr(llm, "model_name", None)
+            or DEFAULT_OLLAMA_MODEL
+        )
+        async with coordinator.use_llm(model_name=active_model):
             citation_scanner = PartialCitationScanner()
             # P-OPT: 토큰당 dispatch 왕복을 줄이기 위한 합침 버퍼.
             # 첫 content 토큰은 즉시 전송해 TTFT를 보존한다. 스캐너는

@@ -572,7 +572,12 @@ async def verify_answer(
 
         async with ModelManager.inference_session():
             coordinator = get_resource_manager()
-            async with coordinator.use_llm(model_name=DEFAULT_OLLAMA_MODEL):
+            active_model = (
+                getattr(llm, "model", None)
+                or getattr(llm, "model_name", None)
+                or DEFAULT_OLLAMA_MODEL
+            )
+            async with coordinator.use_llm(model_name=active_model):
                 response = await llm.ainvoke([sys_msg, human_msg], config=config)
 
         import json
