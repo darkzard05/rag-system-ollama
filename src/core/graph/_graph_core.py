@@ -38,6 +38,7 @@ from common.config import (
 )
 from common.utils import doc_stable_id
 from core.graph._speculative_gen import (
+    _current_spec,
     _enforce_spec_registry_bound,
     _spec_generate_events,
     _spec_overlap_enabled,
@@ -732,9 +733,12 @@ async def _dispatch_event(
     leaks partial output to the user. The buffer is scoped to the current
     coroutine context via a ContextVar.
     """
-    buf = _spec_generate_events.get(None)
-    if buf is not None:
-        buf.append(_SpecEvent(name=name, data=data, config=config))
+    spec = _current_spec.get(None)
+    if spec is not None and not spec.is_adopted:
+        event = _SpecEvent(name=name, data=data, config=config)
+        spec.buffer.append(event)
+        if spec.event_queue is not None:
+            await spec.event_queue.put(event)
         return
     await adispatch_custom_event(name, data, config=config)
 
@@ -771,11 +775,17 @@ def _start_speculative_generate(
     # Tag the task so the speculative generate instance does NOT adopt itself
     # (it must run normally and buffer its events instead).
     task._is_speculative = True  # type: ignore[attr-defined]
-    _spec_registry[thread_id] = _SpecGenerate(
-        task=task, buffer=[], created_at=time.monotonic()
+    spec = _SpecGenerate(
+        task=task,
+        buffer=[],
+        created_at=time.monotonic(),
+        event_queue=asyncio.Queue(),
+        is_adopted=False,
     )
+    _spec_registry[thread_id] = spec
     # The speculative task buffers into the ContextVar list we just captured.
-    _spec_registry[thread_id].buffer = _spec_generate_events.get([])
+    spec.buffer = _spec_generate_events.get([])
+    _current_spec.set(spec)
     _enforce_spec_registry_bound()
     logger.info("[RAG] [SPEC] eager generate 시작 (route 결정 대기)")
     return thread_id

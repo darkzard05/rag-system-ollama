@@ -127,8 +127,11 @@ async def test_generate_adopts_speculative_task_and_replays_buffer():
     }
     config = {"configurable": {"llm": MagicMock(), "thread_id": thread_id}}
 
-    with patch(
-        "core.graph._generate.adispatch_custom_event", side_effect=fake_dispatch
+    with (
+        patch("core.graph._generate.adispatch_custom_event", side_effect=fake_dispatch),
+        patch(
+            "core.graph._graph_core.adispatch_custom_event", side_effect=fake_dispatch
+        ),
     ):
         result = await generate(state, config, writer=MagicMock())
 
@@ -273,6 +276,9 @@ async def test_speculative_overlap_generates_route_adopts_single_llm_call():
         patch.object(ModelManager, "inference_session", _mock_session()),
         patch("core.graph._grade.adispatch_custom_event", side_effect=fake_dispatch),
         patch("core.graph._generate.adispatch_custom_event", side_effect=fake_dispatch),
+        patch(
+            "core.graph._graph_core.adispatch_custom_event", side_effect=fake_dispatch
+        ),
     ):
         # 실제 실행 모델: grade가 route=generate를 반환하면 런타임이 generate를
         # 다시 호출하고, speculative task를 채택(단일 astream 호출 완료)한다.
@@ -523,3 +529,75 @@ async def test_double_start_same_thread_id():
     assert len(_spec_registry) == 1  # orphan 없이 정확히 하나
 
     await _drain_tasks([second])  # pending task 정리 (후속 테스트 누수 방지)
+
+
+# ---------------------------------------------------------------------------
+# Step 1.5 Test E: Speculative Generation 채택 시 Event Blackout 방지 검증
+# ---------------------------------------------------------------------------
+@pytest.mark.asyncio
+async def test_speculative_generate_stream_event_blackout():
+    """MAX_CONCURRENT_INFERENCE > 1 환경에서 _start_speculative_generate 실행 후
+    _adopt_speculative_generate 호출 이후 _dispatch_event가 버퍼에 갇히지 않고
+    실제 adispatch_custom_event를 라이브로 트리거하는지 검증.
+    """
+    from core.graph._graph_core import _dispatch_event, _start_speculative_generate
+    from core.graph._speculative_gen import _adopt_speculative_generate
+
+    dispatched = []
+
+    async def fake_dispatch(name, data, config=None):
+        dispatched.append((name, data))
+
+    thread_id = "blackout-test-1"
+    state = {"input": "질문", "relevant_docs": [], "is_cached": False}
+    config = {"configurable": {"thread_id": thread_id, "llm": _json_llm("generate")}}
+
+    async def _dummy_gen(st, cfg, *, writer):
+        # 1. Before adoption, dispatch event should go to buffer
+        await _dispatch_event(
+            "response_chunk", {"content": "early"}, writer=writer, config=cfg
+        )
+        # Wait until adopted
+        for _ in range(100):
+            # Check if current spec is adopted via ContextVar or registry
+            from core.graph._speculative_gen import _current_spec
+
+            curr = _current_spec.get(None)
+            if curr and curr.is_adopted:
+                break
+            await asyncio.sleep(0.01)
+        # 2. After adoption, dispatch event should go live via adispatch_custom_event
+        await _dispatch_event(
+            "response_chunk", {"content": "live"}, writer=writer, config=cfg
+        )
+        return {"response": "earlylive"}
+
+    with (
+        patch("core.graph._speculative_gen.MAX_CONCURRENT_INFERENCE", 2),
+        patch("core.graph._generate.generate", side_effect=_dummy_gen),
+        patch(
+            "core.graph._graph_core.adispatch_custom_event", side_effect=fake_dispatch
+        ),
+    ):
+        # Start speculative generate
+        started_tid = _start_speculative_generate(state, config, writer=MagicMock())
+        assert started_tid == thread_id
+
+        # Adopt speculative generate
+        adoption = _adopt_speculative_generate(config)
+        assert adoption is not None
+        spec_task, spec_buffer = adoption
+
+        # Replay buffer (early event)
+        for ev in spec_buffer:
+            await fake_dispatch(ev.name, ev.data, config=ev.config)
+
+        # Await task completion
+        res = await spec_task
+        assert res["response"] == "earlylive"
+
+    # Verify:
+    # 1. Early event was in buffer (replayed)
+    assert ("response_chunk", {"content": "early"}) in dispatched
+    # 2. Live event after adoption was dispatched immediately without being trapped in buffer
+    assert ("response_chunk", {"content": "live"}) in dispatched

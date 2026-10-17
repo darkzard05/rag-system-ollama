@@ -33,6 +33,10 @@ _spec_generate_events: contextvars.ContextVar[list[_SpecEvent]] = (
     contextvars.ContextVar("_spec_generate_events")
 )
 
+_current_spec: contextvars.ContextVar[_SpecGenerate | None] = contextvars.ContextVar(
+    "_current_spec", default=None
+)
+
 
 @dataclass
 class _SpecEvent:
@@ -51,6 +55,12 @@ class _SpecGenerate:
     buffer: list[_SpecEvent]
     adopter: str | None = None  # thread_id that adopted the task, prevents reuse
     created_at: float = 0.0  # time.monotonic() at registration; 0.0 = unknown
+    event_queue: asyncio.Queue[_SpecEvent | None] | None = None
+    is_adopted: bool = False
+
+    def __post_init__(self) -> None:
+        if self.created_at == 0.0:
+            self.created_at = time.monotonic()
 
 
 # Per-thread_id registry of the currently speculative generate task. Populated
@@ -131,8 +141,8 @@ def _adopt_speculative_generate(
     thread_id = cfg.get("thread_id")
     if not thread_id:
         return None
-    spec = _spec_registry.pop(thread_id, None)
     _purge_expired_spec_entries()
+    spec = _spec_registry.get(thread_id)
     if spec is None:
         return None
     if spec.adopter is not None:
@@ -141,9 +151,11 @@ def _adopt_speculative_generate(
         spec.task.done() and spec.task.exception() is not None
     ):
         logger.warning("[RAG] [SPEC] dead spec task — falling back to fresh generate")
-        spec.buffer.clear()
+        _reap_spec_entry(thread_id)
         return None
     spec.adopter = thread_id
+    spec.is_adopted = True
+    _spec_registry.pop(thread_id, None)
     return spec.task, spec.buffer
 
 
