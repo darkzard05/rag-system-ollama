@@ -512,7 +512,7 @@ async def retrieve_and_rerank(
 def _merge_adjacent_chunks(
     docs: list[Document], max_tokens: int = 1200
 ) -> list[Document]:
-    """같은 페이지의 연속된 청크들을 하나로 합쳐 풍부한 문맥을 제공합니다 (최적화 버전)."""
+    """리랭크 순서를 유지하면서 같은 페이지의 연속된 청크들을 하나로 합칩니다."""
     if not docs:
         return []
     if len(docs) == 1:
@@ -522,68 +522,65 @@ def _merge_adjacent_chunks(
 
     merged_docs: list[Document] = []
 
-    working_docs = sorted(
-        docs,
-        key=lambda x: (
-            str(x.metadata.get("source", "")),
-            int(x.metadata.get("page", 0)),
-            int(x.metadata.get("chunk_index", 0)),
-        ),
-    )
+    for doc in docs:
+        merged = False
+        doc_tokens = count_tokens_rough(doc.page_content)
 
-    current_doc = Document(
-        page_content=working_docs[0].page_content,
-        metadata=copy.copy(working_docs[0].metadata),
-    )
+        for existing_doc in merged_docs:
+            curr_m = existing_doc.metadata
+            next_m = doc.metadata
 
-    current_tokens = count_tokens_rough(current_doc.page_content)
+            is_same_context = curr_m.get("source") == next_m.get(
+                "source"
+            ) and curr_m.get("page") == next_m.get("page")
 
-    for next_doc in working_docs[1:]:
-        curr_m = current_doc.metadata
-        next_m = next_doc.metadata
-
-        is_same_context = curr_m.get("source") == next_m.get("source") and curr_m.get(
-            "page"
-        ) == next_m.get("page")
-
-        is_same_section = curr_m.get("current_section") == next_m.get("current_section")
-
-        curr_end = curr_m.get("end_index")
-        next_start = next_m.get("start_index")
-
-        if curr_end is not None and next_start is not None:
-            is_actually_consecutive = abs(next_start - curr_end) <= 5
-        else:
-            is_actually_consecutive = (
-                abs(next_m.get("chunk_index", 0) - curr_m.get("chunk_index", 0)) <= 1
+            is_same_section = curr_m.get("current_section") == next_m.get(
+                "current_section"
             )
 
-        next_tokens = count_tokens_rough(next_doc.page_content)
+            curr_end = curr_m.get("end_index")
+            next_start = next_m.get("start_index")
+            curr_start = curr_m.get("start_index")
+            next_end = next_m.get("end_index")
 
-        if (
-            is_same_context
-            and is_actually_consecutive
-            and is_same_section
-            and (current_tokens + next_tokens + 10) <= max_tokens
-        ):
-            current_doc.page_content += "\n\n" + next_doc.page_content
-            current_tokens += next_tokens + 10
-            current_doc.metadata["end_index"] = next_m.get("end_index", curr_end)
-            current_doc.metadata["chunk_index"] = next_m.get(
-                "chunk_index", curr_m.get("chunk_index")
-            )
-            # [R3b-05] 병합 문서의 rerank_score는 head가 아닌 그룹 내 최대값으로 결정 —
-            # grade short-circuit의 max_rerank_score와 UI 신뢰도 배지가 최고 관련 청크를 대표하도록 한다.
-            curr_score = float(curr_m.get("rerank_score", 0.0) or 0.0)
-            next_score = float(next_m.get("rerank_score", 0.0) or 0.0)
-            current_doc.metadata["rerank_score"] = max(curr_score, next_score)
-        else:
-            merged_docs.append(current_doc)
-            current_doc = Document(
-                page_content=next_doc.page_content,
-                metadata=copy.copy(next_doc.metadata),
-            )
-            current_tokens = next_tokens
+            if curr_end is not None and next_start is not None:
+                is_actually_consecutive = abs(next_start - curr_end) <= 5 or (
+                    curr_start is not None
+                    and next_end is not None
+                    and abs(curr_start - next_end) <= 5
+                )
+            else:
+                curr_idx = int(curr_m.get("chunk_index", 0))
+                next_idx = int(next_m.get("chunk_index", 0))
+                is_actually_consecutive = abs(next_idx - curr_idx) <= 1
 
-    merged_docs.append(current_doc)
+            current_tokens = count_tokens_rough(existing_doc.page_content)
+
+            if (
+                is_same_context
+                and is_actually_consecutive
+                and is_same_section
+                and (current_tokens + doc_tokens + 10) <= max_tokens
+            ):
+                curr_idx = int(curr_m.get("chunk_index", 0))
+                next_idx = int(next_m.get("chunk_index", 0))
+
+                existing_doc.page_content += "\n\n" + doc.page_content
+                existing_doc.metadata["end_index"] = next_m.get("end_index", curr_end)
+                existing_doc.metadata["chunk_index"] = max(next_idx, curr_idx)
+
+                curr_score = float(curr_m.get("rerank_score", 0.0) or 0.0)
+                next_score = float(next_m.get("rerank_score", 0.0) or 0.0)
+                existing_doc.metadata["rerank_score"] = max(curr_score, next_score)
+                merged = True
+                break
+
+        if not merged:
+            merged_docs.append(
+                Document(
+                    page_content=doc.page_content,
+                    metadata=copy.copy(doc.metadata),
+                )
+            )
+
     return merged_docs
