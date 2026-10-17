@@ -919,6 +919,7 @@ def _content_generator(
     _prewarm_first_add_done = False
     _prewarm_elapsed_done = False
     _t_first_citation_paint: float | None = None
+    _has_error = False
 
     def _ghost_flags() -> dict[str, Any]:
         has_ghost = bool(documents) and not citations
@@ -1094,6 +1095,7 @@ def _content_generator(
     except Exception as exc:
         # 삼킴 금지: aux에는 원문을 보존하되, 로그에 traceback을 남긴다.
         # (UI 정책상 사용자에게는 제네릭 메시지만 노출한다.)
+        _has_error = True
         logger.exception("[CHAT] content_generator 오류: %s", exc)
         _write_aux_state(
             sid,
@@ -1111,16 +1113,17 @@ def _content_generator(
         )
         raise
     finally:
-        _write_aux_state(
-            sid,
-            {
-                "thought": thought,
-                "documents": documents,
-                "metrics": metrics,
-                "citations": citations,
-                "process_steps": process_steps,
-                "content": "".join(accumulated_parts),
-                "complete": True,
-                **_ghost_flags(),
-            },
-        )
+        if not _has_error:
+            _write_aux_state(
+                sid,
+                {
+                    "thought": thought,
+                    "documents": documents,
+                    "metrics": metrics,
+                    "citations": citations,
+                    "process_steps": process_steps,
+                    "content": "".join(accumulated_parts),
+                    "complete": True,
+                    **_ghost_flags(),
+                },
+            )
