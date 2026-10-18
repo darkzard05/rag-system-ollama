@@ -19,6 +19,7 @@ The public facade is ``streaming.py`` which re-exports from this module.
 from __future__ import annotations
 
 import asyncio
+import concurrent.futures
 import contextlib
 import logging
 import queue
@@ -31,9 +32,8 @@ import uuid
 from collections.abc import Callable, Iterator
 from typing import Any
 
-from streamlit.runtime.scriptrunner import add_script_run_ctx
-
 from api.stream_pipeline import StreamChunk, get_streaming_handler
+from common.async_worker import AsyncWorker
 from common.config import (
     UI_STREAMING_HARD_TIMEOUT,
     UI_STREAMING_SETUP_TIMEOUT,
@@ -475,25 +475,32 @@ def stream_chunks(
 ) -> Iterator[StreamChunk]:
     """비동기 스트림을 동기 Streamlit 환경에서 소비하기 위한 브릿지 제너레이터
 
-    스트림 RAG 작업은 공용 AsyncWorker 루프가 아닌 **스트림 전용 daemon 스레드
-    루프**(``asyncio.run``)에서 실행한다. RAG 셋업/LLM 내부의 동기 블로킹
-    구간에서 매달려도 해당 스트림만 지연되고 빌드/다른 스트림을 정지시키지
-    않는다.
+    스트림 RAG 작업은 프로세스 수명주기를 따르는 공용 ``AsyncWorker`` 싱글톤
+    루프에서 실행한다. 매 턴 새 스레드/이벤트 루프를 만들면 풀링된 LLM
+    인스턴스의 ``ollama.AsyncClient``가 들고 있는 httpx 커넥션 풀이 턴마다
+    폐기되어 HTTP Keep-Alive가 무력화되고(매 질문 TCP 3-way handshake 재수행)
+    TIME_WAIT 소켓이 누적된다. 안정된 단일 루프를 재사용하면 AsyncClient가
+    유지되어 연결이 재사용되고 TTFT가 개선된다.
+
+    스트림 내부의 무거운 동기 연산(임베딩/PDF I/O/리랭킹 등)은 모두
+    ``asyncio.to_thread``로 오프로딩되어 있어 공유 루프를 블로킹하지 않는다.
+    슬롯 대기 역시 ``to_thread``로 루프 밖에서 수행하며, 취소로 인해 실행기
+    스레드가 뒤늦게 슬롯을 획득하면 done 콜백이 반납해 누수를 막는다.
 
     취소: 타임아웃/사용자 중단 시 ``cancel_stream(run_id)``가 실제 취소를
     요청한다(등록된 스트림에 한함 — 슬롯 대기 중 중단은 등록이 없으므로
     cancel을 건너뛰고 즉시 복귀한다). ``loop.call_soon_threadsafe(task.cancel)``
     로 이벤트 루프에 즉시 전달되어 협조적 ``_stop_event``와 무관하게 하드
-    취소되며, 이어서 3초 바운드 join으로 스레드 종료를 기다린다.
+    취소되며, 이어서 3초 바운드 대기로 태스크 종료를 기다린다.
     ``_stop_event``는 다음 await 지점에서 즉시 반응하는 협조적 백스톱으로
-    함께 유지한다. join(3s)이 타임아웃되면 daemon 스레드가 남을 수 있지만
-    루프/스트림 슬롯은 finally에서 해제된다. 이때 경고에는 페이즈
-    (setup/streaming)와 활성 슬롯 수가 함께 기록된다.
+    함께 유지한다. 3초 대기가 타임아웃되면 워커 태스크가 남을 수 있지만
+    슬롯은 finally에서 해제된다. 이때 경고에는 페이즈(setup/streaming)와
+    활성 슬롯 수가 함께 기록된다.
     """
     q: queue.Queue[tuple[str, Any]] = queue.Queue()
     _stop_event = threading.Event()
     run_id = f"stream-{session_id}-{uuid.uuid4().hex[:8]}"
-    # bg 스레드와 정리 finally가 공유하는 상태: 스트림 등록 여부(미등록
+    # 워커 태스크와 정리 finally가 공유하는 상태: 스트림 등록 여부(미등록
     # 취소의 오경고 방지), 첫 청크 put 시각(경고 자가진단용 페이즈 판별).
     _teardown_state: dict[str, Any] = {
         "registered": False,
@@ -509,111 +516,135 @@ def stream_chunks(
             with contextlib.suppress(Exception):
                 q.put(("done", None))
 
-    def bg_task() -> None:
+    # 영속 AsyncWorker 싱글톤 루프를 재사용한다 — 풀링된 LLM 인스턴스의
+    # AsyncClient(httpx 커넥션 풀)가 턴 사이에 유지되어 Keep-Alive가 산다.
+    worker = AsyncWorker()
+    worker_loop = worker.loop
+
+    async def _acquire_slot_async(timeout: float) -> bool:
+        """공유 루프를 막지 않도록 슬롯 획득을 워커 스레드로 오프로딩한다.
+
+        취소 시 실행기 스레드는 계속 진행해 뒤늦게 슬롯을 얻을 수 있으므로,
+        그 경우 반드시 반납하도록 done 콜백을 걸어 슬롯 누수를 막는다.
+        """
+
+        def _release_late_win(f: asyncio.Future[bool]) -> None:
+            with contextlib.suppress(Exception):
+                if not f.cancelled() and f.exception() is None and f.result():
+                    release_stream_slot()
+
+        fut = asyncio.ensure_future(asyncio.to_thread(acquire_stream_slot, timeout))
+        try:
+            return await fut
+        except asyncio.CancelledError:
+            fut.add_done_callback(_release_late_win)
+            raise
+
+    async def run() -> None:
+        event_stream: Any = None
+        remaining_chunks: list[Any] = []
+        try:
+            from core.rag_core import RAGSystem
+
+            sid = session_id or "default"
+            _t_setup = time.perf_counter()
+            logger.info("[CHAT][STREAM] RAG 태스크 시작 (session=%s)", sid)
+            rag_sys = RAGSystem(session_id=sid)
+            event_generator = await rag_sys.astream(query, model_name=model_name)
+            handler = get_streaming_handler()
+            event_stream = handler.stream_graph_events(
+                event_generator,
+                _remaining=remaining_chunks,
+            )
+            logger.info(
+                "[CHAT][STREAM] astream 준비 완료 (%.2fs) — 첫 청크 대기",
+                time.perf_counter() - _t_setup,
+            )
+
+            async for chunk in event_stream:
+                if _stop_event.is_set():
+                    break
+                q.put(("chunk", chunk))
+                if _teardown_state["first_put_at"] is None:
+                    _teardown_state["first_put_at"] = time.perf_counter()
+        except asyncio.CancelledError:
+            logger.info("[CHAT] 스트리밍 작업이 취소되었습니다")
+        except Exception as e:
+            logger.error(f"[CHAT] RAG 스트림 처리 오류: {e}", exc_info=True)
+            q.put(("error", e))
+        finally:
+            # 워커 루프는 계속 살아 있으므로 중첩 async generator가 열린 채
+            # 남지 않도록 명시적으로 닫는다. aclose()가 실패해도 무시한다.
+            if event_stream is not None:
+                with contextlib.suppress(Exception):
+                    await event_stream.aclose()
+            for c in remaining_chunks:
+                q.put(("chunk", c))
+            _emit_done()
+
+    async def runner_wrapper() -> None:
         # 슬롯 대기는 중단 가능해야 한다: 등록 전 대기는 cancel_stream이
-        # no-op이라 join만 만료돼 확정 경고가 되므로(슬롯 고갈 연쇄),
+        # no-op이라 대기만 만료돼 확정 경고가 되므로(슬롯 고갈 연쇄),
         # _stop_event 폴링으로 즉시 빠져나간다. 전체 대기 상한 30초 유지.
         # 미등록 취소도 done으로 즉시 복귀해 소비자의 3회 Empty hang을 막는다.
         _slot_deadline = time.perf_counter() + 30
         _slot_ok = False
-        while time.perf_counter() < _slot_deadline:
-            if _stop_event.is_set():
-                logger.debug(f"[CHAT][STREAM] 슬롯 대기 중 중단 (run_id={run_id})")
-                _emit_done()
-                return
-            if acquire_stream_slot(timeout=0.5):
-                _slot_ok = True
-                break
-        if not _slot_ok:
-            if _stop_event.is_set():
-                _emit_done()
-                return
-            logger.warning(
-                f"[CHAT][STREAM] 동시 스트림 슬롯 획득 실패 (run_id={run_id})"
-            )
-            q.put(
-                (
-                    "error",
-                    RuntimeError(
-                        "동시 스트림 실행 한도를 초과했습니다. "
-                        "잠시 후 다시 시도해 주세요."
-                    ),
+        try:
+            while time.perf_counter() < _slot_deadline:
+                if _stop_event.is_set():
+                    logger.debug(f"[CHAT][STREAM] 슬롯 대기 중 중단 (run_id={run_id})")
+                    return
+                if await _acquire_slot_async(0.5):
+                    _slot_ok = True
+                    break
+            if not _slot_ok:
+                if _stop_event.is_set():
+                    return
+                logger.warning(
+                    f"[CHAT][STREAM] 동시 스트림 슬롯 획득 실패 (run_id={run_id})"
                 )
-            )
-            _emit_done()
-            return
-        SessionManager.set_session_id(session_id or "default")
-
-        async def run() -> None:
-            event_stream: Any = None
-            remaining_chunks: list[Any] = []
+                q.put(
+                    (
+                        "error",
+                        RuntimeError(
+                            "동시 스트림 실행 한도를 초과했습니다. "
+                            "잠시 후 다시 시도해 주세요."
+                        ),
+                    )
+                )
+                return
+            SessionManager.set_session_id(session_id or "default")
             try:
-                from core.rag_core import RAGSystem
-
-                sid = session_id or "default"
-                _t_setup = time.perf_counter()
-                logger.info("[CHAT][STREAM] RAG 태스크 시작 (session=%s)", sid)
-                rag_sys = RAGSystem(session_id=sid)
-                event_generator = await rag_sys.astream(query, model_name=model_name)
-                handler = get_streaming_handler()
-                event_stream = handler.stream_graph_events(
-                    event_generator,
-                    _remaining=remaining_chunks,
-                )
-                logger.info(
-                    "[CHAT][STREAM] astream 준비 완료 (%.2fs) — 첫 청크 대기",
-                    time.perf_counter() - _t_setup,
-                )
-
-                async for chunk in event_stream:
-                    if _stop_event.is_set():
-                        break
-                    q.put(("chunk", chunk))
-                    if _teardown_state["first_put_at"] is None:
-                        _teardown_state["first_put_at"] = time.perf_counter()
+                current_task = asyncio.current_task()
+                if current_task is not None:
+                    register_stream(run_id, worker_loop, current_task)
+                    _teardown_state["registered"] = True
+                await run()
             except asyncio.CancelledError:
                 logger.info("[CHAT] 스트리밍 작업이 취소되었습니다")
+                raise
             except Exception as e:
-                logger.error(f"[CHAT] RAG 스트림 처리 오류: {e}", exc_info=True)
-                q.put(("error", e))
-            finally:
-                # 루프 셧다운 전에 스트림을 먼저 닫아 중첩 async generator의
-                # GeneratorExit 경고("async generator ignored GeneratorExit")를
-                # 막는다. aclose()가 도중에 실패해도 무시한다.
-                if event_stream is not None:
-                    with contextlib.suppress(Exception):
-                        await event_stream.aclose()
-                for c in remaining_chunks:
-                    q.put(("chunk", c))
-                _emit_done()
-
-        try:
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            try:
-                task = loop.create_task(run())
-                register_stream(run_id, loop, task)
-                _teardown_state["registered"] = True
-                loop.run_until_complete(task)
-            finally:
+                logger.error(f"[CHAT] 백그라운드 작업 오류: {e}", exc_info=True)
+                with contextlib.suppress(Exception):
+                    q.put(("error", e))
+        finally:
+            if _slot_ok:
                 unregister_stream(run_id)
                 release_stream_slot()
-                if not loop.is_closed():
-                    loop.close()
-        except asyncio.CancelledError:
-            logger.info("[CHAT] 스트리밍 작업이 취소되었습니다")
-            _emit_done()
-        except Exception as e:
-            logger.error(f"[CHAT] 백그라운드 작업 오류: {e}", exc_info=True)
-            with contextlib.suppress(Exception):
-                q.put(("error", e))
             _emit_done()
 
-    t = threading.Thread(
-        target=bg_task, daemon=True, name=f"chat-stream-{session_id[-12:]}"
-    )
-    add_script_run_ctx(t)
-    t.start()
+    # 별도 스레드/루프를 만들지 않고 영속 워커 루프에 태스크로 등록한다.
+    # 제출 실패(워커 루프 미가동 등)는 큐로 error+done을 흘려 소비자가
+    # 3회 Empty hang 없이 실패를 표면화하게 한다.
+    future: concurrent.futures.Future[Any] | None = None
+    _run_coro = runner_wrapper()
+    try:
+        future = worker.submit(_run_coro)
+    except Exception as e:
+        logger.error(f"[CHAT] 스트림 워커 제출 실패: {e}", exc_info=True)
+        _run_coro.close()
+        q.put(("error", e))
+        _emit_done()
 
     # 연속 타임아웃 카운터: 짧은 지연으로 인한 오탐지 방지
     _timeout_count = 0
@@ -674,34 +705,35 @@ def stream_chunks(
                 raise
     finally:
         _stop_event.set()
-        # 하드 취소: 스레드가 아직 살아 있을 때만 시도한다. 정상 완료 경로
+        # 하드 취소: 등록된 스트림에 대해서만 시도한다. 정상 완료 경로
         # (done 수신)에서는 이미 unregister된 run_id에 대해 stream_worker가
         # 불필요한 경고를 남기는 것을 방지한다. 슬롯 대기 중에 중단된 경우
         # (미등록)는 cancel 자체를 건너뛴다 — cancel_stream의 "no active
         # stream" 오경고를 막기 위해서다.
-        if t.is_alive():
-            if _teardown_state["registered"] and peek_stream_task(run_id) is not None:
-                cancel_stream(run_id)  # real cancel via task.cancel()
-            t.join(timeout=3)
-            if t.is_alive():
+        if _teardown_state["registered"] and peek_stream_task(run_id) is not None:
+            cancel_stream(run_id)  # real cancel via task.cancel()
+        # 공유 워커 루프는 계속 실행되므로 스레드 join 대신 워커 태스크의
+        # 완료 future를 3초 바운드로 기다린다. 완료되지 않으면 태스크/await
+        # 지점 스냅샷으로 원인을 남긴다.
+        if future is not None and not future.done():
+            concurrent.futures.wait([future], timeout=3.0)
+            if not future.done():
                 _phase = (
                     "streaming"
                     if _teardown_state["first_put_at"] is not None
                     else "setup"
                 )
-                _parked = _format_stuck_thread_stack(t)
                 _task_parked = _format_stream_task_stack(run_id)
                 _task_state = _describe_stream_task(run_id)
                 logger.warning(
-                    "[CHAT] Stream thread did not exit after cancel: "
-                    f"{t.name} (phase={_phase}, teardown_wait=3.0s, "
+                    "[CHAT] Stream task did not finish after cancel: "
+                    f"(phase={_phase}, teardown_wait=3.0s, "
                     f"active_slots={active_stream_count()}, "
                     f"{_task_state})\n"
-                    f"parked at:\n{_parked}"
                     f"task parked at:\n{_task_parked}"
                 )
             else:
-                logger.debug(f"[CHAT] Stream thread cleanup: {t.name}")
+                logger.debug("[CHAT] Stream task cleanup complete")
 
 
 def stream_content(query: str, model_name: str, session_id: str) -> Iterator[str]:

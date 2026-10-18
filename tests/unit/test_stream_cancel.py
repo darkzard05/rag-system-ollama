@@ -358,8 +358,9 @@ def test_stream_chunks_third_blocks_until_slot_free(monkeypatch):
     try:
         # Two streams are live (2 slots); the 3rd bg thread is blocked waiting.
         _wait_until(
-            lambda: probe.entered_count() == 2
-            and stream_worker.waiting_stream_count() == 1,
+            lambda: (
+                probe.entered_count() == 2 and stream_worker.waiting_stream_count() == 1
+            ),
             10.0,
             "2 slots must be held while the 3rd stream waits for one",
         )
@@ -717,13 +718,14 @@ def test_hard_timeout_ceiling_aborts_hung_stream(monkeypatch):
 
 
 def test_stop_during_slot_wait_exits_promptly(monkeypatch):
-    """Stop while parked in slot acquisition must not wedge the teardown join.
+    """Stop while parked in slot acquisition must not wedge the teardown wait.
 
-    Regression: ``bg_task`` used to block up to 30s in
+    Regression: the background task used to block up to 30s in
     ``acquire_stream_slot()`` while unregistered, so ``cancel_stream()``
-    no-op'd and the 3s join always expired with "Stream thread did not
-    exit after cancel" (slot-exhaustion cascade). Now the wait polls
-    ``_stop_event`` and the abandoned thread exits promptly.
+    no-op'd and the 3s teardown wait always expired with "did not exit
+    after cancel" (slot-exhaustion cascade). The slot wait now polls
+    ``_stop_event`` (via ``_acquire_slot_async`` on the shared worker loop)
+    and exits promptly.
     """
     from ui.components import streaming_core as sc
 
@@ -734,25 +736,19 @@ def test_stop_during_slot_wait_exits_promptly(monkeypatch):
     assert stream_worker.active_stream_count() == 1
 
     try:
-        # Thread name is f"chat-stream-{session_id[-12:]}"; "probe-sid" is
-        # shorter than 12 chars so the name matches exactly — other tests'
-        # lingering threads can never collide with this assertion.
         it = stream_chunks("slot-wait probe", "probe-model", "probe-sid")
         t0 = time.monotonic()
         with pytest.raises(TimeoutError):
             next(it)
         main_elapsed = time.monotonic() - t0
         assert main_elapsed < 10.0, f"main wait took {main_elapsed:.2f}s"
-        # The bg thread was parked in slot acquisition; the stop must
-        # release it promptly instead of riding the 30s acquire + 3s
-        # join into the stuck-thread warning.
+        # 스트림은 이제 영속 AsyncWorker 태스크로 실행되므로 per-stream 스레드가
+        # 없다. 대신 stop 이후 워커 태스크가 슬롯 대기에서 즉시 빠져나와
+        # 30초 대기 + 슬롯 누수로 이어지지 않는지 검증한다.
         _wait_until(
-            lambda: not any(
-                t.name == "chat-stream-probe-sid" and t.is_alive()
-                for t in threading.enumerate()
-            ),
+            lambda: stream_worker.waiting_stream_count() == 0,
             5.0,
-            "bg thread stuck in slot acquisition after stop",
+            "worker task stuck in slot acquisition after stop",
         )
         assert stream_worker.active_stream_count() == 1  # only our hold
     finally:

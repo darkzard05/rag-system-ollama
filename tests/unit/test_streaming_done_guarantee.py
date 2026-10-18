@@ -52,22 +52,26 @@ def test_slot_exhaustion_emits_error_then_done(monkeypatch: Any) -> None:
 
 
 def test_outer_bg_exception_surfaces_error_not_hang(monkeypatch: Any) -> None:
-    """Loop creation failure must send error+done instead of 3x Empty hang."""
+    """Worker submission failure must send error+done instead of 3x Empty hang."""
     _reset_stream_worker_state()
     import ui.components.streaming_core as sm
 
     monkeypatch.setattr(sm, "UI_STREAMING_SETUP_TIMEOUT", 5)
     monkeypatch.setattr(sm, "UI_STREAMING_TIMEOUT", 1)
     monkeypatch.setattr(sm, "UI_STREAMING_HARD_TIMEOUT", 0)
-    monkeypatch.setattr(sm, "acquire_stream_slot", lambda *a, **k: True)
-    monkeypatch.setattr(sm, "release_stream_slot", lambda *a, **k: None)
 
-    boom = RuntimeError("loop boom")
+    boom = RuntimeError("worker boom")
 
-    def _raise_new_event_loop() -> Any:
-        raise boom
+    class _BoomWorker:
+        @property
+        def loop(self) -> Any:
+            return None
 
-    monkeypatch.setattr(sm.asyncio, "new_event_loop", _raise_new_event_loop)
+        def submit(self, coro: Any) -> Any:
+            coro.close()
+            raise boom
+
+    monkeypatch.setattr(sm, "AsyncWorker", _BoomWorker)
 
     with pytest.raises(RuntimeError) as exc_info:
         list(stream_chunks("q", "m", "outer-err-sess"))
@@ -136,11 +140,12 @@ def test_done_sent_exactly_once_on_success(monkeypatch: Any) -> None:
 
 
 def test_slot_wait_stop_sends_done_directly() -> None:
-    """Unit: early-return branches call _emit_done (source-level guard).
+    """Unit: runner funnels every early return through the single _emit_done helper.
 
     The stop-event itself is internal to stream_chunks, so assert the
-    fixed branches exist and share the single _emit_done helper instead
-    of bare returns. Prevents regression to silent hang.
+    runner keeps a single ``finally`` that emits done on all exit paths
+    (early returns included) instead of bare returns. Prevents regression
+    to a silent hang.
     """
     import pathlib
 
@@ -148,11 +153,13 @@ def test_slot_wait_stop_sends_done_directly() -> None:
         encoding="utf-8"
     )
     assert "def _emit_done" in src
-    assert src.count("_emit_done()") >= 5
     # stream_chunks() body must not contain a bare q.put done outside the
-    # helper: extract bg_task onwards and check there.
-    body = src.split("def bg_task", 1)[1]
+    # helper: extract the runner onwards and check there.
+    body = src.split("def runner_wrapper", 1)[1]
     body = body.split("def stream_content", 1)[0]
     assert 'q.put(("done", None))' not in body
-    # No bare early return remains in the slot-wait paths.
+    # The runner has a single finally that emits done for all exit paths.
+    assert "finally:" in body
+    assert "_emit_done()" in body
+    # Stop during slot wait short-circuits without wedging.
     assert "슬롯 대기 중 중단" in src

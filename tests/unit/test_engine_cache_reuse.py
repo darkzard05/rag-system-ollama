@@ -29,8 +29,9 @@ def test_engine_reuse_without_hash():
 def test_engine_reused_across_loops():
     """서로 다른 이벤트 루프에서 set/get 해도 엔진을 재사용한다.
 
-    업로드 빌드(AsyncWorker 루프)와 쿼리 스트림(`asyncio.run` 새 루프)이 서로
-    다른 루프이므로, 루프가 달라도 file_hash 가 같으면 캐시가 유효해야 한다.
+    업로드 빌드와 쿼리 스트림이 이제 같은 AsyncWorker 루프를 공유하지만,
+    엔진 캐시는 루프에 종속되지 않아야 한다 — 루프가 달라도(테스트는 두 개의
+    독립 루프로 검증) file_hash 가 같으면 캐시가 유효해야 한다.
     """
     sid = "engine_across_loops"
     SessionManager.reset()
