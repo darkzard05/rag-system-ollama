@@ -1,22 +1,22 @@
-"""GATE-1b growth repro: multi-session state with no purge grows without bound.
+"""GATE-1b growth characterization: process-global surfaces are bounded.
 
-Red-phase (TDD) harness for hyperplan T1. Shows monotonic growth in
-process-global dicts/registries that have no cap, LRU, TTL sweeper, or
-automatic purge:
+T1 fix (``f343ba2``) moved each previously unbounded growth surface onto a
+write-path cap, so unique keys can no longer grow it without bound:
 
-* ``ResourceCoordinator._build_locks`` — the dict itself has no intrinsic
-  bound (no max-size/LRU/TTL). ``_cleanup_build_locks``
-  (resource_manager.py:466-487) only runs on call-site cadence (every 50
-  builds: lines 641-643, 701-703; plus ``clear_vram``/``clear_all``) and only
-  removes keys absent from the pools AND not in-flight — so every cached
-  entry keeps its lock and failed/never-built keys linger between sweeps.
-* ``ResourceCoordinator._build_failures`` — negative-cache entries are
-  removed only on later success (lines 672, 728) or on a TTL-expired *read*
-  (line 511). Unique failed keys with no retry accumulate forever.
-* ``core.graph._speculative_gen._spec_registry`` — per-thread_id entries are
-  popped only on adopt (``_adopt_speculative_generate``) or same-thread
-  restart (``_start_speculative_generate``). Abandoned thread_ids (session
-  never completes the generate path) are never reaped; there is no sweeper.
+* ``ResourceCoordinator._build_locks`` — capped at ``_BUILD_LOCK_MAX_ENTRIES``
+  by ``_evict_excess_build_locks``, which evicts idle, non-in-flight keys on
+  every insert (held/in-flight keys are spared for correctness). The
+  call-site ``_cleanup_build_locks`` sweep additionally reaps keys absent from
+  every pool.
+* ``ResourceCoordinator._build_failures`` — capped at
+  ``_BUILD_FAILURE_MAX_ENTRIES`` by ``_record_build_failure``, which first
+  purges TTL-expired records then evicts the oldest beyond the cap.
+* ``core.graph._speculative_gen._spec_registry`` — one entry per thread_id,
+  capped at ``_SPEC_REGISTRY_MAX_SIZE`` by ``_enforce_spec_registry_bound`` on
+  the registration write path.
+
+Each surface is bounded on its write path (the cap is enforced wherever the
+entry is inserted), which is what the tests below assert.
 
 One characterization test documents the sufficient sub-case
 (``_cleanup_build_locks`` DOES purge idle non-pool keys when it runs).
@@ -25,27 +25,28 @@ One characterization test documents the sufficient sub-case
 import asyncio
 from collections.abc import Iterator
 from typing import Any
+from unittest.mock import patch
 
 import pytest
 
 from core.graph._speculative_gen import (
-    _adopt_speculative_generate,
+    _SPEC_REGISTRY_MAX_SIZE,
     _spec_registry,
-    _SpecGenerate,
 )
-from core.resource_manager import get_resource_manager
+from core.resource_manager import (
+    _BUILD_FAILURE_MAX_ENTRIES,
+    _BUILD_LOCK_MAX_ENTRIES,
+    get_resource_manager,
+)
 
-_BUILD_LOCK_KEYS = 100
-_BUILD_LOCK_BOUND = 10
-_FAILURE_KEYS = 25
-_FAILURE_BOUND = 5
-_ORPHAN_THREADS = 10
-_ORPHAN_BOUND = 1
+_BUILD_LOCK_KEYS = _BUILD_LOCK_MAX_ENTRIES * 10
+_FAILURE_KEYS = _BUILD_FAILURE_MAX_ENTRIES + 20
+_SPEC_THREADS = _SPEC_REGISTRY_MAX_SIZE + 20
 
 
 @pytest.fixture(autouse=True)
 def _isolate_growth_globals() -> Iterator[None]:
-    """Reset growth surfaces so repros never leak into other tests."""
+    """Reset growth surfaces so tests never leak into each other."""
     get_resource_manager().reset()
     _spec_registry.clear()
     yield
@@ -53,89 +54,82 @@ def _isolate_growth_globals() -> Iterator[None]:
     _spec_registry.clear()
 
 
-def test_build_locks_have_no_intrinsic_bound() -> None:
-    """GATE-1b: N distinct build keys leave N entries in ``_build_locks``.
+def test_build_locks_are_bounded_on_write_path() -> None:
+    """GATE-1b: N distinct build keys are capped at ``_BUILD_LOCK_MAX_ENTRIES``.
 
-    The dict has no max-size/LRU/TTL of its own; boundedness relies entirely
-    on the every-50-builds call-site sweep, which additionally spares every
-    key present in the pools. Unique keys therefore grow the dict
-    monotonically between (and beyond) sweeps.
+    ``_get_build_lock`` enforces the intrinsic cap on every insert via
+    ``_evict_excess_build_locks`` (sparing held/in-flight keys), so unique
+    keys cannot grow the dict without bound even between the call-site sweeps.
     """
     coordinator = get_resource_manager()
     for i in range(_BUILD_LOCK_KEYS):
         coordinator._get_build_lock(f"t1-growth-build-{i}")
     size = len(coordinator._build_locks)
-    assert size <= _BUILD_LOCK_BOUND, (
+    assert size <= _BUILD_LOCK_MAX_ENTRIES, (
         f"_build_locks grew to {size} entries for {_BUILD_LOCK_KEYS} "
-        "distinct keys with no intrinsic bound (no cap/LRU/TTL on the dict)"
+        f"distinct keys (cap is {_BUILD_LOCK_MAX_ENTRIES} on the write path)"
     )
 
 
-def test_build_failures_are_never_purged() -> None:
-    """GATE-1b: N distinct failed keys leave N entries in ``_build_failures``.
+def test_build_failures_are_capped_on_write_path() -> None:
+    """GATE-1b: N distinct failed keys are capped at ``_BUILD_FAILURE_MAX_ENTRIES``.
 
-    Failure records are dropped only on a later success for the SAME key or
-    on a TTL-expired read of that key — there is no background purge and no
-    size cap, so offline-flapping keys (e.g. per-file retriever builds)
-    accumulate one entry each, forever.
+    ``_record_build_failure`` purges TTL-expired records and then evicts the
+    oldest beyond the cap, so offline-flapping keys (e.g. per-file retriever
+    builds) no longer accumulate one entry each forever.
     """
     coordinator = get_resource_manager()
     for i in range(_FAILURE_KEYS):
         coordinator._record_build_failure(f"t1-growth-failure-{i}")
     size = len(coordinator._build_failures)
-    assert size <= _FAILURE_BOUND, (
+    assert size <= _BUILD_FAILURE_MAX_ENTRIES, (
         f"_build_failures grew to {size} entries for {_FAILURE_KEYS} "
-        "distinct failed keys with no purge path (no cap/sweeper)"
+        f"distinct failed keys (cap is {_BUILD_FAILURE_MAX_ENTRIES} on the write path)"
     )
 
 
-async def _never_finishes() -> dict[str, Any]:
+async def _pending_generate(
+    state: dict[str, Any], config: dict[str, Any], *, writer: Any
+) -> dict[str, Any]:
     """Placeholder speculative body that stays pending until cancelled."""
     await asyncio.sleep(3600.0)
     return {}
 
 
-def test_spec_registry_orphans_are_never_reaped() -> None:
-    """GATE-1b: abandoned thread_ids stay in ``_spec_registry`` forever.
+async def test_spec_registry_is_bounded_on_write_path() -> None:
+    """GATE-1b: the registry cap is enforced on the write path.
 
-    Ten speculative tasks are registered on distinct thread_ids (simulating
-    ten sessions); only one completes the adopt path. The other nine have no
-    reaper — pop happens solely on adopt or same-thread restart — so the
-    registry grows monotonically with abandoned sessions.
+    ``_spec_registry`` holds at most one entry per thread_id and is bounded by
+    ``_SPEC_REGISTRY_MAX_SIZE``. Registering far more distinct thread_ids via
+    ``_start_speculative_generate`` must reap the oldest entries instead of
+    growing without bound — the cap lives inside the registration entrypoint,
+    mirroring ``_get_build_lock`` / ``_record_build_failure``.
     """
-    previous: asyncio.AbstractEventLoop | None = None
-    try:
-        previous = asyncio.get_event_loop()
-    except RuntimeError:
-        previous = None
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    tasks: list[asyncio.Task[dict[str, Any]]] = []
-    try:
-        for i in range(_ORPHAN_THREADS):
-            task = loop.create_task(_never_finishes())
-            tasks.append(task)
-            _spec_registry[f"t1-growth-thread-{i}"] = _SpecGenerate(
-                task=task, buffer=[]
+    from core.graph._graph_core import _start_speculative_generate
+
+    with (
+        patch("core.graph._speculative_gen.MAX_CONCURRENT_INFERENCE", 2),
+        patch("core.graph._generate.generate", side_effect=_pending_generate),
+    ):
+        for i in range(_SPEC_THREADS):
+            _start_speculative_generate(
+                {"input": "q", "relevant_docs": [], "is_cached": False},
+                {"configurable": {"thread_id": f"t1-growth-spec-{i}"}},
+                None,
             )
-        adopted = _adopt_speculative_generate(
-            {"configurable": {"thread_id": "t1-growth-thread-0"}}
-        )
-        assert adopted is not None
         size = len(_spec_registry)
-        assert size <= _ORPHAN_BOUND, (
-            f"_spec_registry holds {size} entries after {_ORPHAN_THREADS} "
-            "registrations with a single adopt: abandoned thread_ids are "
-            "never reaped (no sweeper/TTL)"
+        assert size <= _SPEC_REGISTRY_MAX_SIZE, (
+            f"_spec_registry grew to {size} entries for {_SPEC_THREADS} distinct "
+            "thread_ids: the write path did not enforce _SPEC_REGISTRY_MAX_SIZE"
         )
-    finally:
-        for task in tasks:
+        assert size == _SPEC_REGISTRY_MAX_SIZE
+
+    # Cancel surviving pending tasks so no task leaks across tests.
+    survivors = [spec.task for spec in list(_spec_registry.values())]
+    for task in survivors:
+        if not task.done():
             task.cancel()
-        loop.run_until_complete(asyncio.gather(*tasks, return_exceptions=True))
-        loop.close()
-        if previous is not None:
-            asyncio.set_event_loop(previous)
-        _spec_registry.clear()
+    await asyncio.gather(*survivors, return_exceptions=True)
 
 
 def test_cleanup_purges_idle_nonpool_locks_characterization() -> None:
