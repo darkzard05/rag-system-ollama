@@ -112,11 +112,16 @@ async def hydrate_documents(docs: list[Document]) -> None:
         return
 
     semaphore = asyncio.Semaphore(_HYDRATE_MAX_CONCURRENCY)
-    for (path, file_hash), docs_in_file in file_groups.items():
-        # 대상 고유 페이지 목록 수집 (순서 보존)
+
+    async def _hydrate_file_group(
+        path: str, file_hash: str, docs_in_file: list[Document]
+    ) -> None:
+        # doc별 pages 조회 결과를 1회만 계산하여 재사용
+        doc_pages_map = {id(doc): _get_doc_pages(doc) for doc in docs_in_file}
         page_nums = list(
-            dict.fromkeys(p for doc in docs_in_file for p in _get_doc_pages(doc))
+            dict.fromkeys(p for pages in doc_pages_map.values() for p in pages)
         )
+
         try:
             coords_map = await coord_cache.get_coords_batch(file_hash, page_nums)
         except CoordCacheReadError as e:
@@ -125,7 +130,7 @@ async def hydrate_documents(docs: list[Document]) -> None:
             )
             for doc in docs_in_file:
                 doc.metadata["coord_cache_error"] = True
-            continue
+            return
 
         # 캐시 미스 페이지는 항상 전체 페이지(bbox=None)로 일괄 추출
         miss_pages = [p for p in page_nums if not coords_map.get(p)]
@@ -161,7 +166,7 @@ async def hydrate_documents(docs: list[Document]) -> None:
         # 단일 병합 딕셔너리로 O(1) 매핑 및 중복 조회 제거
         all_coords = coords_map | fresh_coords
         for doc in docs_in_file:
-            pages = _get_doc_pages(doc)
+            pages = doc_pages_map[id(doc)]
             page_coords = {p: all_coords[p] for p in pages if p in all_coords}
             doc.metadata["page_coords"] = page_coords
             if page_coords:
@@ -169,3 +174,11 @@ async def hydrate_documents(docs: list[Document]) -> None:
             else:
                 doc.metadata.setdefault("citation_pages", pages)
                 doc.metadata["coord_extract_failed"] = True
+
+    # 각 파일 그룹은 독립적인 PDF 경로/캐시 키를 가지므로 동시 실행
+    await asyncio.gather(
+        *(
+            _hydrate_file_group(path, file_hash, docs)
+            for (path, file_hash), docs in file_groups.items()
+        )
+    )
