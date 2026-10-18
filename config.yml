@@ -242,6 +242,7 @@ rag:
     # 4. 최종 답변 보조 메시지
     generate:
       human_message: "Think step by step, then output ONLY the JSON object."
+      max_context_tokens: 2200
 
     # 4b. 생성 출력 검증 플래그 (S1 관측용 — 동작 변경 없음, 재생성 OFF)
     generation_validation:

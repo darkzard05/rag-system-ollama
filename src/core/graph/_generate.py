@@ -460,7 +460,12 @@ def _apply_ctx_guard(docs: list, query: str) -> tuple[list, str, int]:
     if not docs:
         return docs, "일상적인 대화입니다.", dedup_removed
 
-    token_budget = int((OLLAMA_NUM_CTX - OLLAMA_NUM_PREDICT) * 0.85)
+    # 실질적인 답변 생성에 최적인 토큰 한도로 타이트하게 압축 (기본 2,200 토큰 상한)
+    # 8192 토큰 중 prefill 연산 부하를 줄이기 위해 최대 컨텍스트 길이를 동적 제한
+    max_allowed_ctx_tokens = int(GENERATE_PROMPT_CONFIG.get("max_context_tokens", 2200))
+    token_budget = min(
+        int((OLLAMA_NUM_CTX - OLLAMA_NUM_PREDICT) * 0.85), max_allowed_ctx_tokens
+    )
     # 문서 조각을 1회 렌더해 초기 추정과 트림 루프에서 공유한다.
     blocks = {id(d): _render_doc_block(d) for d in docs}
     context = "".join(blocks[id(d)] for d in docs)
