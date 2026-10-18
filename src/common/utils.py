@@ -144,6 +144,9 @@ _RE_DOC_CITATION = re.compile(r"\[doc:([\w-]+)\]")
 
 _RE_EXTRACT_PAGES = re.compile(r"(\d+)")
 
+# 단어 토큰 정규화용 사전 컴파일 정규식 (hot path에서 매 호출 재컴파일 방지).
+_RE_WORD_CLEAN = re.compile(r"[^\w\d]+")
+
 
 def _build_line_boxes(coords: list, page_val: int, content: str) -> list[dict]:
     """단일 페이지 좌표에서 줄 단위 하이라이트 박스 annotation 목록 생성."""
@@ -155,7 +158,7 @@ def _build_line_boxes(coords: list, page_val: int, content: str) -> list[dict]:
     if not content_tokens:
         return []
 
-    pdf_tokens = [re.sub(r"[^\w\d]", "", str(c[4]).lower()) for c in coords]
+    pdf_tokens = [_RE_WORD_CLEAN.sub("", str(c[4]).lower()) for c in coords]
 
     # 2. PDF 단어 리스트에서 현재 청크가 시작되는 최적의 지점 검색 (Sliding Window)
     best_start = -1
@@ -183,10 +186,13 @@ def _build_line_boxes(coords: list, page_val: int, content: str) -> list[dict]:
         filtered_coords = coords[best_start : best_start + len(content_tokens)]
     else:
         # 매칭 실패 시에만 기존의 루즈한 필터링으로 폴백 (최소 가시성)
+        # [최적화] 상단에서 계산한 pdf_tokens 재사용(정규식 재실행 0회) +
+        # set O(1) 조회로 O(N*K) 선형 탐색을 O(N)으로 축소.
+        target_token_set = set(content_tokens[:50])
         filtered_coords = [
             c
-            for c in coords
-            if re.sub(r"[^\w\d]", "", str(c[4]).lower()) in content_tokens[:50]
+            for c, tok in zip(coords, pdf_tokens, strict=True)
+            if tok in target_token_set
         ]
 
     if not filtered_coords:
@@ -480,13 +486,20 @@ def extract_annotations_from_docs(
     for file_path, items in grouped.items():
         try:
             with open_pdf_document(file_path) as pdf:
+                # [최적화] 동일 페이지에 매핑된 여러 청크의 get_textpage() 중복
+                # 호출 제거. TextPage는 PDF 바이너리 전체 글리프를 파싱하는
+                # 고비용 C 연산이므로 파일 컨텍스트 스코프 내에서만 캐시하고
+                # (doc.close() 이후 무효화 방지) 외부로 누출하지 않는다.
+                textpage_cache: dict[int, Any] = {}
                 for item in items:
                     page_val = int(item["page_val"])
                     content = str(item["content"])
                     memo_key = item["memo_key"]
                     try:
                         page = pdf[page_val - 1]
-                        textpage = page.get_textpage()
+                        if page_val not in textpage_cache:
+                            textpage_cache[page_val] = page.get_textpage()
+                        textpage = textpage_cache[page_val]
                         sentences = _extract_search_sentences(content)
 
                         doc_quads = []
