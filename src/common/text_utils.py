@@ -93,6 +93,7 @@ def has_bm25_tokens(corpus: list[str]) -> bool:
 _RE_LATEX_BLOCK = re.compile(r"\\\[(.*?)\\\]", re.DOTALL)
 _RE_LATEX_INLINE = re.compile(r"\\\((.*?)\\\)", re.DOTALL)
 _RE_CODE_BLOCK = re.compile(r"(```[\s\S]*?```|`[^`\n]+`)")
+_RE_LATEX_PLACEHOLDER = re.compile(r"\x00LATEX_BLOCK_(\d+)\x00")
 
 
 def normalize_latex_delimiters(text: str) -> str:
@@ -119,8 +120,8 @@ def normalize_latex_delimiters(text: str) -> str:
     text = _RE_LATEX_INLINE.sub(r"$\1$", text)
     text = text.replace(r"\$", "$")
 
-    for i, block in enumerate(code_blocks):
-        text = text.replace(f"\x00LATEX_BLOCK_{i}\x00", block)
+    if code_blocks:
+        text = _RE_LATEX_PLACEHOLDER.sub(lambda m: code_blocks[int(m.group(1))], text)
 
     return text
 
