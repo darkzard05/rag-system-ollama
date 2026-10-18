@@ -538,14 +538,20 @@ class ResourceCoordinator:
         always a live critical section — evicting it would fork mutual
         exclusion. When nothing is evictable the dict temporarily overflows
         (correctness first); the every-50-builds sweep reaps the idle rest.
+
+        Single-pass collection (O(K) over the excess) instead of the previous
+        re-scan-from-head-per-eviction loop (O(K^2)).
         """
-        while len(self._build_locks) > _BUILD_LOCK_MAX_ENTRIES:
-            for candidate, candidate_lock in self._build_locks.items():
-                if candidate not in self._in_flight and not candidate_lock.locked():
-                    del self._build_locks[candidate]
-                    break
-            else:
-                break
+        excess = len(self._build_locks) - _BUILD_LOCK_MAX_ENTRIES
+        if excess <= 0:
+            return
+        to_evict = [
+            candidate
+            for candidate, candidate_lock in self._build_locks.items()
+            if candidate not in self._in_flight and not candidate_lock.locked()
+        ][:excess]
+        for candidate in to_evict:
+            self._build_locks.pop(candidate, None)
 
     def _cleanup_build_locks(self) -> None:
         """Remove build locks for keys no longer tracked in any pool.
@@ -730,17 +736,20 @@ class ResourceCoordinator:
             return pool.get(key)
         return None
 
-    async def get_or_build(
+    async def _get_or_build_entry(
         self,
         pool: BaseResourcePool[Any],
         key: str,
-        build_fn: Callable[..., Any] | None = None,
+        build_fn: Callable[..., Any] | None,
+        pin: bool,
         *args: Any,
         **kwargs: Any,
-    ) -> Any:
-        """
-        Retrieves a resource or builds it atomically if not present.
-        If build_fn is None and resource is missing, raises ValueError.
+    ) -> tuple[Any, str]:
+        """단일 SSoT 비동기 빌드/핀 조율 코어.
+
+        ``pin``이 True이면 풀 락 임계구역 안에서(pool.put 직후, await 없이)
+        원자적으로 ``pool.pin(key)``을 수행해 acquire↔pin 사이의 use-after-free
+        퇴출 경쟁을 막는다. 모든 반환은 ``(resource, key)``.
         """
         # [Proactive Eviction] Models: check VRAM pressure before acquisition.
         # Retrievers: defer the memory-pressure check until AFTER a missing
@@ -748,6 +757,10 @@ class ResourceCoordinator:
         # immediately rebuilt.
         if pool is self.models:
             await self.models.check_vram_pressure()
+
+        # ``pin``은 선택적 기능이다: FakePool 등 pin이 없는 duck-typed 풀도
+        # 허용한다(단위 테스트 호환). pin이 없으면 핀 없이 그대로 진행한다.
+        can_pin = pin and hasattr(pool, "pin")
 
         lock = self._get_build_lock(key)
         async with lock:
@@ -763,7 +776,9 @@ class ResourceCoordinator:
 
                 res = pool.get(key)
                 if res is not None:
-                    return res
+                    if can_pin:
+                        pool.pin(key)
+                    return res, key
 
                 # [Proactive Eviction] Only trigger retriever eviction when the
                 # resource is actually missing and must be rebuilt. A present doc
@@ -786,10 +801,33 @@ class ResourceCoordinator:
                     self._record_build_failure(key)
                     raise
                 self._build_failures.pop(key, None)
+                # put() already holds _lock internally; pin() also acquires it,
+                # so do NOT wrap pin in a second `with pool._lock` (non-reentrant
+                # threading.Lock would deadlock). Atomicity is preserved: this
+                # coroutine runs put() then pin() with no await in between.
                 await pool.put(key, res)
-                return res
+                if can_pin:
+                    pool.pin(key)
+                return res, key
             finally:
                 self._in_flight.discard(key)
+
+    async def get_or_build(
+        self,
+        pool: BaseResourcePool[Any],
+        key: str,
+        build_fn: Callable[..., Any] | None = None,
+        *args: Any,
+        **kwargs: Any,
+    ) -> Any:
+        """
+        Retrieves a resource or builds it atomically if not present.
+        If build_fn is None and resource is missing, raises ValueError.
+        """
+        res, _ = await self._get_or_build_entry(
+            pool, key, build_fn, False, *args, **kwargs
+        )
+        return res
 
     async def get_or_pin(
         self,
@@ -801,56 +839,15 @@ class ResourceCoordinator:
     ) -> tuple[Any, str]:
         """Acquire + pin atomically (fixes use-after-free eviction race).
 
-        Must pin inside the pool's ``_lock`` critical section right after the
-        object is fetched/inserted, so no concurrent ``check_vram_pressure`` can
-        evict the key in the gap between acquire and a separate caller-side pin.
+        Delegates to ``_get_or_build_entry``; the pin happens inside the pool's
+        ``_lock`` critical section right after the object is fetched/inserted,
+        so no concurrent ``check_vram_pressure`` can evict the key in the gap
+        between acquire and a separate caller-side pin.
         Returns ``(resource, key)``; caller must ``unpin(key)`` when done.
         """
-        if pool is self.models:
-            await self.models.check_vram_pressure()
-
-        lock = self._get_build_lock(key)
-        async with lock:
-            self._in_flight.add(key)
-            try:
-                self._build_call_counter += 1
-                if self._build_call_counter >= 50:
-                    self._build_call_counter = 0
-                    self._cleanup_build_locks()
-
-                self._check_build_circuit(key)
-
-                res = pool.get(key)
-                if res is not None:
-                    pool.pin(key)
-                    return res, key
-
-                if pool is self.retrievers:
-                    await self.retrievers.check_memory_pressure()
-
-                if build_fn is None:
-                    raise ValueError(
-                        f"Resource '{key}' not found in {pool.name} and no build_fn provided."
-                    )
-
-                try:
-                    if asyncio.iscoroutinefunction(build_fn):
-                        res = await build_fn(*args, **kwargs)
-                    else:
-                        res = await asyncio.to_thread(build_fn, *args, **kwargs)
-                except Exception:
-                    self._record_build_failure(key)
-                    raise
-                self._build_failures.pop(key, None)
-                # put() already holds _lock internally; pin() also acquires it,
-                # so do NOT wrap pin in a second `with pool._lock` (non-reentrant
-                # threading.Lock would deadlock). Atomicity is preserved: this
-                # coroutine runs put() then pin() with no await in between.
-                await pool.put(key, res)
-                pool.pin(key)
-                return res, key
-            finally:
-                self._in_flight.discard(key)
+        return await self._get_or_build_entry(
+            pool, key, build_fn, True, *args, **kwargs
+        )
 
     async def get_llm(self, model_name: str, **kwargs) -> Any:
         from core.model_loader import load_llm
