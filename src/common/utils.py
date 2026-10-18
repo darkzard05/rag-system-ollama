@@ -587,7 +587,11 @@ def apply_tooltips_to_response(
     # 1. LaTeX 정규화 먼저 수행
     text = normalize_latex_delimiters(response_text)
 
-    if not documents:
+    # 조기 반환 (Early Return): 문서가 없거나 인용 트리거 문자('[', '(')가
+    # 전혀 없으면 O(D) 인덱싱 전에 즉시 반환한다. _RE_DOC_CITATION과
+    # _RE_CITATION_BLOCK 모두 선두가 '[' 또는 '('로 시작해야 매칭되므로
+    # 두 문자가 없는 텍스트는 정규식 치환 결과가 원본과 동일하다.
+    if not documents or ("[" not in text and "(" not in text):
         return text
 
     # 1. 문서 메타데이터 및 사전 정제 텍스트 색인 구축 (단일 패스 O(N))

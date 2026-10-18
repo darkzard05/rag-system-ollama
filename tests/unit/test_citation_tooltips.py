@@ -9,6 +9,7 @@
 
 from dataclasses import dataclass
 from typing import Any
+from unittest.mock import patch
 
 from common.utils import apply_tooltips_to_response
 
@@ -83,3 +84,13 @@ def test_page_citation_still_resolves_by_page_with_doc_present():
     # page 3 인 documents[2] 의 내용이 툴팁에 들어가야 함.
     assert "doc2 content page3" in result
     assert 'data-page="3"' in result
+
+
+def test_bypasses_processing_when_no_citation_triggers():
+    """인용 트리거 문자('[', '(')가 없으면 O(D) 인덱싱을 건너뛴다."""
+    docs = _build_docs()
+    with patch("common.utils.doc_stable_id") as mock_stable_id:
+        result = apply_tooltips_to_response("일반 응답 본문입니다.", docs)
+
+    assert result == "일반 응답 본문입니다."
+    mock_stable_id.assert_not_called()
