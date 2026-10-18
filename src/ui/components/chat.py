@@ -832,6 +832,7 @@ def _render_streaming_with_write_stream(
             # 그린다. 2줄 분리는 금지 — 두 콜백이 공유 live 상태를 갱신하고
             # 항상 같은 슬롯에 1줄만 다시 그린다.
             status_ph = st.empty()
+            thought_ph = st.empty()  # 사고 과정 실시간 렌더링용 슬롯
             live: dict[str, Any] = {
                 "status": t("status_initial_search"),
                 "elapsed": 0.0,
@@ -863,6 +864,15 @@ def _render_streaming_with_write_stream(
                 if n != live["n_cit"]:
                     live["n_cit"] = n
                     _repaint_live()
+
+                current_thought = aux.get("thought", "")
+                if current_thought:
+                    thought_ph.markdown(
+                        f"""<div style="color: #6c757d; font-size: 0.88rem; border-left: 2px solid #ced4da; padding-left: 8px; margin-bottom: 8px;">
+                        💭 <i>Thinking...</i><br>{html.escape(current_thought[-300:])} ▌
+                        </div>""",
+                        unsafe_allow_html=True,
+                    )
 
             # st.write_stream — 스트리밍 텍스트 표시
             response = None
@@ -913,6 +923,7 @@ def _render_streaming_with_write_stream(
                         status_ph.empty()
                 else:
                     status_ph.empty()
+                thought_ph.empty()
                 if aux_state and (
                     aux_state.get("documents") or aux_state.get("citations")
                 ):

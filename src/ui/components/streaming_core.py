@@ -1109,8 +1109,8 @@ def _content_generator(
                 **_ghost_flags(),
             }
             if on_aux is not None:
-                # thought가 진행되는 동안 40자 단위 또는 변경 시점에 UI를 점진적 갱신
-                thought_bucket = len(thought) // 40 if thought else 0
+                # thought가 진행되는 동안 15자 단위 또는 변경 시점에 UI를 점진적 갱신
+                thought_bucket = len(thought) // 15 if thought else 0
                 snapshot = (
                     tuple(process_steps),
                     tuple(documents),

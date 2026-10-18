@@ -134,6 +134,7 @@ def _make_fake_st() -> MagicMock:
     fake_st = MagicMock()
     fake_st.write_stream.side_effect = _join_stream
     fake_st.chat_message = MagicMock()
+    fake_st.empty.side_effect = [MagicMock(), MagicMock()]
     return fake_st
 
 

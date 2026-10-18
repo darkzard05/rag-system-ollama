@@ -197,6 +197,18 @@ def _make_fake_st() -> MagicMock:
     """write_stream 이 제너레이터를 소진하는 최소 Streamlit 하네스."""
     fake_st = MagicMock()
     fake_st.write_stream.side_effect = _join_stream
+    status_mock = MagicMock()
+    thought_mock = MagicMock()
+    call_count = [0]
+
+    def _empty_mock() -> MagicMock:
+        if call_count[0] == 0:
+            call_count[0] += 1
+            return status_mock
+        return thought_mock
+
+    fake_st.empty.side_effect = _empty_mock
+    fake_st.empty.return_value = status_mock
     return fake_st
 
 
