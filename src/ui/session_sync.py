@@ -8,30 +8,16 @@ on whatever adapter is installed via ``SessionManager.set_ui_sync``; when none
 is installed it falls back to the global store only (see core.session.manager).
 
 The ``write`` semantics intentionally reproduce the previous in-core behavior
-(manager.py lines ~240-245): lists are sliced and dicts are ``copy.copy``'d
-before assignment so the UI never aliases the internal mutable state.
+(manager.py): the top-level list is sliced and the top-level dict is copied
+before assignment so the UI never aliases the internal mutable container.
+Nested values are shared by reference to avoid a recursive copy on every rerun.
 """
 
 from __future__ import annotations
 
-import copy
 from typing import Any
 
 import streamlit as st
-
-
-def _copy_plain(value: Any) -> Any:
-    """Plain 컨테이너만 재귀 복사하고 불투명 객체(엔진/락 등)는 참조 유지."""
-    if type(value) is dict:
-        return {k: _copy_plain(v) for k, v in value.items()}
-    if type(value) is list:
-        return [_copy_plain(v) for v in value]
-    if type(value) is tuple:
-        return tuple(_copy_plain(v) for v in value)
-    if type(value) in (set, frozenset):
-        return type(value)(_copy_plain(v) for v in value)
-    # dict 서브클래스(FriendlyError 등)는 재구성 시 동작이 깨지므로 공유한다.
-    return value
 
 
 class StreamlitSessionSync:
@@ -41,21 +27,18 @@ class StreamlitSessionSync:
     def write(key: str, val: Any) -> None:
         """Mirror ``val`` into ``st.session_state[key]``.
 
-        D3: plain 컨테이너는 재귀 복사해 UI가 중첩 가변 상태(메시지 원소
-        dict 등)를 별칭하지 않게 한다. 이전 slice/``copy.copy``는 원소 dict를
-        공유해 백그라운드 ``add_message``의 제자리 ``update``와 UI 순회가
-        경합했다. 엔진 같은 불투명 객체는 참조 유지(정체성 보존).
+        최상위 list/dict만 얕게 복사해 UI 미러가 저장소 컨테이너
+        (``messages``/``doc_pool`` 등)에 대한 제자리 변이(``append``/``update``)를
+        공유하지 않게 한다. 중첩 데이터와 불투명 객체(엔진/락 등)는 복사하지
+        않아 매 rerun마다 발생하던 재귀 복사 비용을 제거한다.
+
+        dict/list 서브클래스(``FriendlyError`` 등)는 ``type is`` 가드로 참조를
+        유지한다 — 재구성 시 ``__eq__`` 등 동작이 깨지기 때문이다.
         """
-        if isinstance(val, (dict, list, tuple, set, frozenset)):
-            try:
-                st.session_state[key] = _copy_plain(val)
-                return
-            except (TypeError, copy.Error):
-                pass
-        if isinstance(val, list):
+        if type(val) is list:
             st.session_state[key] = val[:]
-        elif isinstance(val, dict):
-            st.session_state[key] = copy.copy(val)
+        elif type(val) is dict:
+            st.session_state[key] = val.copy()
         else:
             st.session_state[key] = val
 

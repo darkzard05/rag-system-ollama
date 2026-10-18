@@ -545,48 +545,30 @@ class SessionManager:
                 state.setdefault("_deleted_keys", set()).add(key)
 
     @classmethod
-    def _copy_plain(cls, value: Any) -> Any:
-        """Plain 컨테이너(dict/list/tuple/set + primitives)만 재귀 복사한다.
-
-        엔진/클라이언트/락 같은 불투명 객체는 절대 복사하지 않고 참조를
-        유지한다 — deepcopy는 정체성(``is``)을 깨뜨리고(엔진 재사용 테스트
-        회귀) 비용도 크다. torn-read는 plain 메타데이터(documents 키 목록,
-        metrics, citations)의 별칭에서 오므로 이 층만 끊으면 충분하다.
-        dict 서브클래스(``FriendlyError`` 등)는 재구성 시 동작(``__eq__``)이
-        깨지므로 복사하지 않고 참조를 유지한다.
-        """
-        if type(value) is dict:
-            return {k: cls._copy_plain(v) for k, v in value.items()}
-        if type(value) is list:
-            return [cls._copy_plain(v) for v in value]
-        if type(value) is tuple:
-            return tuple(cls._copy_plain(v) for v in value)
-        if type(value) in (set, frozenset):
-            return type(value)(cls._copy_plain(v) for v in value)
-        return value
-
-    @classmethod
     def _copy_value(cls, value: Any) -> Any:
-        """반환값의 복사본을 만들어 호출자가 내부 가변 상태를 돌연변이하지
+        """반환값의 최상위 컨테이너만 복사해 호출자와의 별칭을 끊는다.
 
-        못하게 합니다. ``get``/``get_messages``는 실제 저장소 객체(리스트/딕트)
-        참조를 그대로 반환했고, 백그라운드 ``add_message``가 동일 리스트를 제자리
-        변이(append/update)하는 동안 UI 스레드가 순회하면 torn read
-        (``list changed size during iteration``)가 발생했습니다. D3: 1레벨
-        복사(``list()``/``dict()``)는 원소 dict(``documents/citations/metrics``)
-        별칭을 남겨 ``current[i].update(msg)``와 UI 순회가 여전히 경합하므로
-        plain 컨테이너 층은 재귀 복사한다. 엔진 등 불투명 객체는 참조 유지
-        (``_copy_plain``) — 정체성 보존 및 비용 회피.
+        이전에는 plain 컨테이너 전체를 재귀 복사(``_copy_plain``)했다.
+        그러나 RAG 메시지는 문서 metadata(``page_coords``/``word_coords``)
+        평탄 구조와 수많은 메시지 dict를 포함해, 매 rerun마다 수만~수십만
+        개의 임시 객체를 새로 할당하고 GC 부담을 유발했다. 지금은 최상위
+        list/dict만 얕게 복사하여:
+
+        - ``list.append``/``dict[k]=v`` 같은 제자리 컨테이너 변이가 저장소로
+          새어드는 것을 막고 (torn read/race 방지),
+        - 중첩 데이터와 불투명 객체(엔진/클라이언트/락)는 복사하지 않아
+          O(N) 재귀 순회/할당 비용을 제거한다.
+
+        dict/list 서브클래스(``FriendlyError`` 등)는 ``type is`` 가드로
+        참조를 유지한다 — 재구성 시 ``__eq__``/``.message`` 등 동작이
+        깨지기 때문이다.
         """
-        if isinstance(value, (dict, list, tuple, set, frozenset)):
-            try:
-                return cls._copy_plain(value)
-            except (TypeError, copy.Error):
-                pass
-            if isinstance(value, list):
-                return list(value)
-            if isinstance(value, dict):
-                return dict(value)
+        if value is None or isinstance(value, (str, int, float, bool)):
+            return value
+        if type(value) is list:
+            return value[:]
+        if type(value) is dict:
+            return value.copy()
         return value
 
     @classmethod
