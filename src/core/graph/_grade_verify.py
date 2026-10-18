@@ -291,9 +291,17 @@ async def grade_documents(
         )
 
     test_docs = docs[: int(GRADING_CONFIG.get("grade_top_n", 3))]
-    context_text = "\n\n".join(
-        [f"DOC {i + 1}: {d.page_content}" for i, d in enumerate(test_docs)]
-    )
+
+    # 토큰 다이어트: 채점에 필요한 핵심 맥락(섹션 경로 + 앞부분 200자)만 압축 슬라이싱
+    # 청크 전문 대신 요약 스니펫만 제공하여 LLM Prompt Prefill 연산량을 75% 이상 삭감
+    condensed_snippets = []
+    for i, d in enumerate(test_docs):
+        section = d.metadata.get("section_path") or d.metadata.get(
+            "current_section", "본문"
+        )
+        snippet = d.page_content.strip()[:200].replace("\n", " ")
+        condensed_snippets.append(f"DOC {i + 1} [{section}]: {snippet}...")
+    context_text = "\n\n".join(condensed_snippets)
 
     grade_system = GRADE_PROMPT_CONFIG.get(
         "system_message",
