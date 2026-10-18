@@ -790,28 +790,22 @@ def _seeded_metrics_text(aux: dict[str, Any], sid: str) -> str:
     return _metrics_caption(metrics, turn_start=t0)
 
 
-def _should_skip_final_rerun(
-    *, cancelled: bool, error_text: str | None, pdf_updated: bool = False
-) -> bool:
-    """Clean finalize needs no st.rerun (Task3 terminalize, safe subset).
+def _should_skip_final_rerun(*, cancelled: bool, error_text: str | None) -> bool:
+    """Clean finalize needs no st.rerun (Task3 terminalize, in-run commit).
 
-    The single status line plus the reference list are already painted
-    in-run by the ``finally`` tail, so the only pending change is the
-    ``msg_type`` streaming->general conversion for the current ``msg_id``.
-    ■ stop (``cancelled``) and error turns still rerun for a confirmed
-    render. No fragment infrastructure — single boolean guard only.
+    The status line plus the reference list are already painted in-run by
+    the ``finally`` tail, so the only pending change is the ``msg_type``
+    streaming->general conversion for the current ``msg_id``. Cancelled
+    (■ stop) and error turns still rerun for a confirmed render.
 
-    D2 fix: actively changed ``pdf_annotations`` are rendered by
-    ``render_pdf_area`` which already ran earlier in this script run
-    (``ui.render_main_content`` renders PDF before chat). Skipping the
-    rerun would leave fresh highlights invisible until the next user
-    action, so any turn that updated annotations must rerun.
+    ``_finalize_pdf_side_effects`` always mutates ``pdf_annotations``
+    whenever citations exist, so gating on that delta made every normal
+    turn rerun too. Auto-jump is disabled (INT-1): the PDF viewer only
+    moves when the user clicks a citation badge (``_handle_page_jump``),
+    which refreshes the viewer on its own, so the post-stream full rerun
+    bought nothing and cost a 1.5-3.5s stall.
     """
-    if cancelled:
-        return False
-    if pdf_updated:
-        return False
-    return not error_text
+    return not cancelled and not error_text
 
 
 def _render_streaming_with_write_stream(
@@ -970,25 +964,20 @@ def _render_streaming_with_write_stream(
     SessionManager.set("generation_cancel", False, session_id=current_sid)
     _clear_aux_state(current_sid)
     _t_fin = time.perf_counter()
-    # D2: viewer fragment(render_pdf_area)는 이 run 전반부에 이미 실행됐다.
-    # finalize가 pdf_annotations를 실제로 바꾸면 rerun 없이 하이라이트가
-    # 다음 액션까지 invisible이므로 변경 여부를 추적해 rerun을 강제한다.
-    _pdf_before = SessionManager.get("pdf_annotations", None, current_sid)
+    # 백그라운드 주석 하이드레이션 및 세션 기록만 수행한다. PDF 뷰어는 사용자가
+    # 인용 배지를 클릭할 때 _handle_page_jump가 해당 페이지를 리프레시하므로,
+    # 여기서 pdf_annotations 변경 여부로 rerun을 강제하지 않는다.
     _finalize_pdf_side_effects(current_sid, msg_id)
-    _pdf_after = SessionManager.get("pdf_annotations", None, current_sid)
-    _pdf_updated = _pdf_before != _pdf_after
     logger.info("[PERF] finalize took %.3fs", time.perf_counter() - _t_fin)
 
-    # Terminalize (Task3 safe subset): clean finalize already painted the
-    # single status line + reference list in-run, so skip st.rerun() when the only
-    # pending change is msg_type streaming->general for this msg_id. The
-    # finalized flag lets the next run know no rerun wall is pending.
-    if _should_skip_final_rerun(
-        cancelled=cancelled, error_text=final_error, pdf_updated=_pdf_updated
-    ):
+    # Terminalize (Task3): clean finalize already painted the single status line
+    # + reference list in-run, so skip st.rerun() when the only pending change is
+    # msg_type streaming->general for this msg_id. The finalized flag lets the
+    # next run know no rerun wall is pending.
+    if _should_skip_final_rerun(cancelled=cancelled, error_text=final_error):
         SessionManager.set("stream_finalized_no_rerun", msg_id, session_id=current_sid)
         logger.info(
-            "[PERF] rerun skipped msg_id=%s (final already painted in-run)",
+            "[PERF] rerun skipped msg_id=%s (in-run completed)",
             msg_id,
         )
         return
