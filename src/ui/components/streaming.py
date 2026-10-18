@@ -461,13 +461,31 @@ def consume_stream_into_message(
     cancelled = bool(SessionManager.get("generation_cancel", False, session_id=sid))
     SessionManager.set("is_generating_answer", False, session_id=sid)
     _t_persist = time.perf_counter()
+
+    from core.retriever_factory import strip_coord_metadata
+
+    lean_documents = []
+    for d in documents or []:
+        if hasattr(d, "metadata"):
+            lean_documents.append(
+                type(d)(
+                    page_content=d.page_content,
+                    metadata=strip_coord_metadata(d.metadata),
+                )
+            )
+        elif isinstance(d, dict):
+            lean_meta = strip_coord_metadata(d.get("metadata", {}))
+            lean_documents.append({**d, "metadata": lean_meta})
+        else:
+            lean_documents.append(d)
+
     SessionManager.add_message(
         "assistant",
         accumulated,
         msg_type="general",
         msg_id=resolved_id,
         thought=thought,
-        documents=documents,
+        documents=lean_documents,
         metrics=metrics,
         citations=citations,
         process_steps=process_steps[-10:],

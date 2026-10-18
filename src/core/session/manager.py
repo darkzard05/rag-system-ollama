@@ -585,6 +585,25 @@ class SessionManager:
         **kwargs,
     ):
         sid = session_id or cls.get_session_id()
+        if "documents" in kwargs and kwargs["documents"]:
+            from core.retriever_factory import strip_coord_metadata
+
+            lean_docs = []
+            for d in kwargs["documents"]:
+                if hasattr(d, "metadata"):
+                    lean_docs.append(
+                        type(d)(
+                            page_content=d.page_content,
+                            metadata=strip_coord_metadata(d.metadata),
+                        )
+                    )
+                elif isinstance(d, dict):
+                    lean_meta = strip_coord_metadata(d.get("metadata", {}))
+                    lean_docs.append({**d, "metadata": lean_meta})
+                else:
+                    lean_docs.append(d)
+            kwargs["documents"] = lean_docs
+
         # Hold the per-session lock across the entire read-modify-write cycle
         # to prevent TOCTOU races with concurrent state["messages"] mutations.
         with cls._acquire_lock(sid):

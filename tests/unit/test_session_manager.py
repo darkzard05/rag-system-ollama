@@ -527,3 +527,45 @@ def test_delete_session_does_not_delete_shared_pdf_file(tmp_path: Path):
     assert not shared_pdf.exists(), (
         "Shared PDF file was not deleted after all referencing sessions were removed!"
     )
+
+
+def test_add_message_strips_coord_metadata():
+    """SessionManager.add_message는 documents 내의 대용량 좌표 메타데이터(word_coords, page_coords)를 영속 적재 제거해야 합니다."""
+    from langchain_core.documents import Document
+
+    SessionManager.init_session()
+    sid = SessionManager.get_session_id()
+
+    fat_doc = Document(
+        page_content="test content",
+        metadata={
+            "file_path": "C:/docs/report.pdf",
+            "file_hash": "abc123",
+            "page": 1,
+            "word_coords": [(1.0, 2.0, 3.0, 4.0, "word")],
+            "page_coords": {1: [(1.0, 2.0, 3.0, 4.0, "word")]},
+            "coords": [(1.0, 2.0, 3.0, 4.0, "word")],
+            "has_coordinates": True,
+            "bbox": [0.0, 0.0, 100.0, 100.0],
+        },
+    )
+
+    SessionManager.add_message(
+        "assistant", "answer", documents=[fat_doc], session_id=sid
+    )
+    messages = SessionManager.get("messages", session_id=sid)
+    stored_docs = messages[0]["documents"]
+    meta = (
+        stored_docs[0].metadata
+        if hasattr(stored_docs[0], "metadata")
+        else stored_docs[0].get("metadata", {})
+    )
+
+    assert "word_coords" not in meta
+    assert "page_coords" not in meta
+    assert "coords" not in meta
+    assert meta.get("file_path") == "C:/docs/report.pdf"
+    assert meta.get("file_hash") == "abc123"
+    assert meta.get("page") == 1
+    assert meta.get("has_coordinates") is True
+    assert meta.get("bbox") == [0.0, 0.0, 100.0, 100.0]
