@@ -486,20 +486,17 @@ def extract_annotations_from_docs(
     for file_path, items in grouped.items():
         try:
             with open_pdf_document(file_path) as pdf:
-                # [최적화] 동일 페이지에 매핑된 여러 청크의 get_textpage() 중복
-                # 호출 제거. TextPage는 PDF 바이너리 전체 글리프를 파싱하는
-                # 고비용 C 연산이므로 파일 컨텍스트 스코프 내에서만 캐시하고
-                # (doc.close() 이후 무효화 방지) 외부로 누출하지 않는다.
-                textpage_cache: dict[int, Any] = {}
+                # page와 textpage를 함께 보관하여 C-Level 약참조가 해제되지 않도록 강한 참조 유지
+                page_cache: dict[int, tuple[Any, Any]] = {}
                 for item in items:
                     page_val = int(item["page_val"])
                     content = str(item["content"])
                     memo_key = item["memo_key"]
                     try:
-                        page = pdf[page_val - 1]
-                        if page_val not in textpage_cache:
-                            textpage_cache[page_val] = page.get_textpage()
-                        textpage = textpage_cache[page_val]
+                        if page_val not in page_cache:
+                            p = pdf[page_val - 1]
+                            page_cache[page_val] = (p, p.get_textpage())
+                        page, textpage = page_cache[page_val]
                         sentences = _extract_search_sentences(content)
 
                         doc_quads = []
