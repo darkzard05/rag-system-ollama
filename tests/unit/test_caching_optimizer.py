@@ -215,3 +215,56 @@ async def test_set_uses_provided_query_embedding():
     assert cache.cache_size == 1
     assert await cache.get("q", query_embedding=v) == "value"
     assert not embedder.called
+
+
+@pytest.mark.asyncio
+async def test_semantic_cache_matrix_incremental_add():
+    cache = SemanticCache(similarity_threshold=0.90)
+    vec1 = [1.0] + [0.0] * 383
+    vec2 = [0.0, 1.0] + [0.0] * 382
+
+    await cache.set("k1", "val1", query_embedding=vec1)
+    assert cache._cached_matrix.shape == (1, 384)
+
+    await cache.set("k2", "val2", query_embedding=vec2)
+    assert cache._cached_matrix.shape == (2, 384)
+    assert len(cache._cached_keys) == 2
+
+    assert await cache.get("k1", query_embedding=vec1) == "val1"
+    assert await cache.get("k2", query_embedding=vec2) == "val2"
+
+
+@pytest.mark.asyncio
+async def test_semantic_cache_matrix_overwrite_no_duplicate_row():
+    cache = SemanticCache(similarity_threshold=0.90)
+    vec1 = [1.0] + [0.0] * 383
+    vec2 = [0.0, 1.0] + [0.0] * 382
+    vec3 = [0.0, 0.0, 1.0] + [0.0] * 381
+
+    await cache.set("k1", "val1", query_embedding=vec1)
+    await cache.set("k2", "val2", query_embedding=vec2)
+
+    # 기존 키 재저장은 중복 행 없이 해당 인덱스 행만 치환해야 한다.
+    await cache.set("k1", "val1b", query_embedding=vec3)
+    assert cache._cached_matrix.shape == (2, 384)
+    assert len(cache._cached_keys) == 2
+
+    assert await cache.get("k1", query_embedding=vec3) == "val1b"
+    assert await cache.get("k2", query_embedding=vec2) == "val2"
+
+
+@pytest.mark.asyncio
+async def test_semantic_cache_matrix_incremental_remove():
+    cache = SemanticCache(similarity_threshold=0.90)
+    vec1 = [1.0] + [0.0] * 383
+    vec2 = [0.0, 1.0] + [0.0] * 382
+
+    await cache.set("k1", "val1", query_embedding=vec1)
+    await cache.set("k2", "val2", query_embedding=vec2)
+
+    await cache.delete(fast_hash("k1"))
+    assert cache._cached_matrix.shape == (1, 384)
+    assert fast_hash("k1") not in cache._cached_keys
+
+    assert await cache.get("k2", query_embedding=vec2) == "val2"
+    assert await cache.get("k1", query_embedding=vec1) is None

@@ -929,9 +929,24 @@ class SemanticCache(CacheBackend[T]):
                     metadata={"query": key[:100], "orig_key": key},
                 )
 
+                is_new_key = cache_key not in self.cache
                 self.cache[cache_key] = entry
                 self.embeddings[cache_key] = query_vec
-                self._update_matrix()  # 행렬 업데이트
+
+                # [최적화] 신규 키만 O(D) 증분 추가(vstack)하고, 기존 키는
+                # O(N·D) 전체 행렬 재할당 없이 해당 행을 제자리 치환한다.
+                if is_new_key:
+                    self._update_matrix(cache_key, action="add")
+                else:
+                    try:
+                        idx = self._cached_keys.index(cache_key)
+                        if self._cached_matrix is not None:
+                            self._cached_matrix[idx] = query_vec
+                        else:
+                            self._update_matrix()
+                    except (ValueError, IndexError):
+                        self._update_matrix()
+
                 self.stats.cache_size = len(self.cache)
 
             except Exception as e:
@@ -944,7 +959,7 @@ class SemanticCache(CacheBackend[T]):
                 del self.cache[key]
             if key in self.embeddings:
                 del self.embeddings[key]
-                self._update_matrix()  # 행렬 업데이트
+                self._update_matrix(key, action="remove")  # 증분 삭제
             self.stats.cache_size = len(self.cache)
 
     async def clear(self) -> None:
@@ -967,7 +982,7 @@ class SemanticCache(CacheBackend[T]):
         del self.cache[oldest_key]
         if oldest_key in self.embeddings:
             del self.embeddings[oldest_key]
-            self._update_matrix()  # 행렬 업데이트
+            self._update_matrix(oldest_key, action="remove")  # 증분 삭제
 
         self.stats.total_evictions += 1
         logger.debug(f"[SemanticCache] 가장 오래된 항목 제거: {oldest_key}")
