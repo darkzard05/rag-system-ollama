@@ -77,20 +77,35 @@ def _extract_page_words_sync(
     return _extract_pages_words_sync(path, [(page_num, chunk_bbox)])[0]
 
 
+def _get_doc_pages(doc: Document) -> list[int]:
+    """문서 메타데이터에서 페이지 번호 목록 추출 헬퍼."""
+    pages = doc.metadata.get("pages")
+    if pages:
+        return list(pages)
+    page = doc.metadata.get("page")
+    return [page] if page is not None else []
+
+
 async def hydrate_documents(docs: list[Document]) -> None:
     """문서 리스트의 좌표 데이터를 캐시에서 복구하거나, 없으면 즉시 추출(Lazy)합니다.
 
     파일 해시 그룹별로 캐시 미스 페이지를 모아 파일을 1회만 열어 일괄 추출하고
     (``_extract_pages_words_sync``), 추출 동시성은 세마포어로 제한한다.
     """
-    # 1. 파일 경로 및 해시 기준으로 단일 패스 그룹화
+    # 1. 파일 경로 및 해시 기준으로 단일 패스 그룹화 (경로 존재 여부는 캐시)
     file_groups: dict[tuple[str, str], list[Document]] = {}
+    path_exists_cache: dict[str, bool] = {}
+
     for doc in docs:
         if "word_coords" in doc.metadata or not doc.metadata.get("has_coordinates"):
             continue
         path = doc.metadata.get("file_path")
         file_hash = doc.metadata.get("file_hash")
-        if path and file_hash and os.path.exists(path):
+        if not (path and file_hash):
+            continue
+        if path not in path_exists_cache:
+            path_exists_cache[path] = os.path.exists(path)
+        if path_exists_cache[path]:
             file_groups.setdefault((path, file_hash), []).append(doc)
 
     if not file_groups:
@@ -100,18 +115,7 @@ async def hydrate_documents(docs: list[Document]) -> None:
     for (path, file_hash), docs_in_file in file_groups.items():
         # 대상 고유 페이지 목록 수집 (순서 보존)
         page_nums = list(
-            dict.fromkeys(
-                p
-                for doc in docs_in_file
-                for p in (
-                    doc.metadata.get("pages")
-                    or (
-                        [doc.metadata["page"]]
-                        if doc.metadata.get("page") is not None
-                        else []
-                    )
-                )
-            )
+            dict.fromkeys(p for doc in docs_in_file for p in _get_doc_pages(doc))
         )
         try:
             coords_map = await coord_cache.get_coords_batch(file_hash, page_nums)
@@ -154,15 +158,11 @@ async def hydrate_documents(docs: list[Document]) -> None:
                             f"[HYDRATE] 좌표 저장 실패 ({os.path.basename(path)} P{p}): {outcome}"
                         )
 
-        # 문서별 좌표 할당
+        # 단일 병합 딕셔너리로 O(1) 매핑 및 중복 조회 제거
+        all_coords = coords_map | fresh_coords
         for doc in docs_in_file:
-            pages = doc.metadata.get("pages") or (
-                [doc.metadata["page"]] if doc.metadata.get("page") is not None else []
-            )
-            page_coords = {
-                p: c for p in pages if (c := (coords_map.get(p) or fresh_coords.get(p)))
-            }
-
+            pages = _get_doc_pages(doc)
+            page_coords = {p: all_coords[p] for p in pages if p in all_coords}
             doc.metadata["page_coords"] = page_coords
             if page_coords:
                 doc.metadata["word_coords"] = page_coords[min(page_coords)]
