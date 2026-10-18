@@ -796,11 +796,16 @@ async def _generate_pass(
         return recovered
 
     try:
-        # P1-4: 깨진 JSON 우선 복구 시도 (값 내부 escape 누락 큰따옴표 보정)
-        repaired = _repair_json(json_str)
-        if repaired is not None:
+        # P1-4: 정상 JSON은 고속 C 파서(json.loads)로 즉시 처리하고, 파싱 실패
+        # 시에만 복구 시도 (EAFP). 값 내부 escape 누락 큰따옴표 보정은 실패 경로에서만.
+        try:
+            parsed_data = json.loads(json_str)
+        except (json.JSONDecodeError, ValueError):
+            repaired = _repair_json(json_str)
+            if repaired is None:
+                raise
             json_str = repaired
-        parsed_data = json.loads(json_str)
+            parsed_data = json.loads(repaired)
 
         parsed_answer = AnswerStructure(**parsed_data)
         logger.info(
