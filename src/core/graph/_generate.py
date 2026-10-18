@@ -200,36 +200,42 @@ def _normalize_citations(citations: list[Any], docs: list[Document]) -> list[Any
     """
     if not citations or not docs:
         return []
-    valid_ids = {_doc_stable_id(d) for d in docs}
+
+    doc_ids = [_doc_stable_id(d) for d in docs]
+    valid_ids = set(doc_ids)
+    doc_count = len(doc_ids)
     normalized: list[Any] = []
+
     for cit in citations:
-        raw_id = cit.doc_id if hasattr(cit, "doc_id") else cit.get("doc_id")
+        raw_id = (
+            getattr(cit, "doc_id", None)
+            if not isinstance(cit, dict)
+            else cit.get("doc_id")
+        )
         mapped: str | None = None
+
         if isinstance(raw_id, int) and not isinstance(raw_id, bool):
-            if 0 <= raw_id < len(docs):
-                mapped = _doc_stable_id(docs[raw_id])
-        elif isinstance(raw_id, str) and raw_id.isdigit():
-            idx = int(raw_id)
-            if 0 <= idx < len(docs):
-                mapped = _doc_stable_id(docs[idx])
+            if 0 <= raw_id < doc_count:
+                mapped = doc_ids[raw_id]
+        elif isinstance(raw_id, str):
+            if raw_id.isdigit() and 0 <= int(raw_id) < doc_count:
+                mapped = doc_ids[int(raw_id)]
             # 숫자 문자열이면서 hash 집합에도 있으면 hash 우선 (충돌 방지).
             if raw_id in valid_ids:
                 mapped = raw_id
-        elif isinstance(raw_id, str) and raw_id in valid_ids:
-            mapped = raw_id
+
         if mapped is None:
             logger.warning(
                 "[RAG] [GENERATE] 알 수 없는 인용 doc_id 드롭 (환각 차단): %r",
                 raw_id,
             )
             continue
+
         try:
             if hasattr(cit, "model_copy"):
                 normalized.append(cit.model_copy(update={"doc_id": mapped}))
             else:
-                dup = dict(cit)
-                dup["doc_id"] = mapped
-                normalized.append(dup)
+                normalized.append({**cit, "doc_id": mapped})
         except Exception:
             logger.warning("[RAG] [GENERATE] 인용 정규화 실패 — 원본 유지: %r", raw_id)
             normalized.append(cit)
