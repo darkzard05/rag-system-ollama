@@ -48,16 +48,22 @@ def _text_hash(text: str) -> str:
     ).hexdigest()
 
 
-def _get_cached_emb(text: str, model: str = "") -> list[float] | None:
-    h = f"{model}:{_text_hash(text)}"
+def _get_cached_emb(
+    text: str, model: str = "", text_hash: str | None = None
+) -> list[float] | None:
+    h_val = text_hash if text_hash is not None else _text_hash(text)
+    h = f"{model}:{h_val}"
     if h in _doc_emb_cache:
         _doc_emb_cache.move_to_end(h)  # LRU refresh
         return _doc_emb_cache[h]
     return None
 
 
-def _set_cached_emb(text: str, vec: list[float], model: str = "") -> None:
-    h = f"{model}:{_text_hash(text)}"
+def _set_cached_emb(
+    text: str, vec: list[float], model: str = "", text_hash: str | None = None
+) -> None:
+    h_val = text_hash if text_hash is not None else _text_hash(text)
+    h = f"{model}:{h_val}"
     _doc_emb_cache[h] = vec
     _doc_emb_cache.move_to_end(h)
     if len(_doc_emb_cache) > _DOC_EMB_CACHE_MAX:
@@ -154,7 +160,7 @@ class AsyncSemanticReranker:
                 continue
 
             # 2. Module-level persistent cache
-            cached_vec = _get_cached_emb(content, model)
+            cached_vec = _get_cached_emb(content, model, text_hash=content_hash)
             if cached_vec is not None and (dim == 0 or len(cached_vec) == dim):
                 vecs[i] = np.array(cached_vec, dtype="float32")
                 doc.metadata["embedding_vector"] = cached_vec
@@ -187,7 +193,9 @@ class AsyncSemanticReranker:
                 vec_list = vec_np.tolist()
                 documents[idx].metadata["embedding_vector"] = vec_list
                 documents[idx].metadata["embedding_text_hash"] = c_hash
-                _set_cached_emb(documents[idx].page_content, vec_list, model)
+                _set_cached_emb(
+                    documents[idx].page_content, vec_list, model, text_hash=c_hash
+                )
 
         # 모든 벡터가 None이 아닌지 확인
         result_vecs = [v if v is not None else np.zeros_like(vecs[0]) for v in vecs]

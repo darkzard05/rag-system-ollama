@@ -5,6 +5,8 @@
 - model_name 키 + dim 불일치시 재계산.
 """
 
+from unittest.mock import patch
+
 import pytest
 from langchain_core.documents import Document
 
@@ -46,6 +48,23 @@ def _docs_with_vectors(n: int = 5, dim: int = 4) -> list[Document]:
 def test_text_hash_normalizes_like_chunker() -> None:
     """정규화 해시 동등성: 공백 변형이 동일 해시 (chunker:329 동일)."""
     assert _text_hash("a  b\n c") == _text_hash("a b c")
+
+
+def test_get_cached_emb_bypasses_hash_when_provided() -> None:
+    """text_hash가 주어지면 _text_hash를 재호출하지 않는다."""
+    with patch.object(ar, "_text_hash") as mock_hash:
+        ar._get_cached_emb("dummy text", "model_x", text_hash="precomputed_hash")
+    mock_hash.assert_not_called()
+
+
+def test_set_cached_emb_bypasses_hash_when_provided() -> None:
+    """text_hash가 주어지면 _set_cached_emb도 _text_hash를 재호출하지 않는다."""
+    with patch.object(ar, "_text_hash") as mock_hash:
+        ar._set_cached_emb("dummy text", [1.0], "model_x", text_hash="precomputed_hash")
+    mock_hash.assert_not_called()
+    assert ar._get_cached_emb(
+        "dummy text", "model_x", text_hash="precomputed_hash"
+    ) == [1.0]
 
 
 @pytest.mark.asyncio
