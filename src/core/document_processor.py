@@ -73,30 +73,29 @@ def compute_file_hash(file_path: str, data: bytes | None = None) -> str:
     return _utils_compute_file_hash(file_path, data=data)
 
 
-def _to_float(value: Any) -> float | None:
-    """값을 float로 변환합니다. 파싱 불가(None 포함) 시 None을 반환합니다."""
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return None
-
-
 def _words_bbox(words: list[Any]) -> list[float] | None:
     """단어 좌표 리스트의 실제 텍스트 영역 bbox ``[x0, y0, x1, y1]``를 계산합니다."""
+    if not words:
+        return None
+
     min_x0 = min_y0 = float("inf")
     max_x1 = max_y1 = float("-inf")
     has_valid = False
 
     for w in words:
-        if isinstance(w, dict):
-            coords = (w.get("x0"), w.get("y0"), w.get("x1"), w.get("y1"))
-        elif isinstance(w, (tuple, list)) and len(w) >= 4:
-            coords = (w[0], w[1], w[2], w[3])
-        else:
-            continue
-
-        x0, y0, x1, y1 = (_to_float(c) for c in coords)
-        if x0 is None or y0 is None or x1 is None or y1 is None:
+        try:
+            if isinstance(w, (tuple, list)) and len(w) >= 4:
+                x0, y0, x1, y1 = float(w[0]), float(w[1]), float(w[2]), float(w[3])
+            elif isinstance(w, dict):
+                x0, y0, x1, y1 = (
+                    float(w["x0"]),
+                    float(w["y0"]),
+                    float(w["x1"]),
+                    float(w["y1"]),
+                )
+            else:
+                continue
+        except (KeyError, TypeError, ValueError):
             continue
 
         if x0 < min_x0:
