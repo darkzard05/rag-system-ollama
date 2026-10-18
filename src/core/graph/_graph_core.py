@@ -560,10 +560,8 @@ def _repair_json(blob: str) -> str | None:
                 tok = blob[tok_start:i]
                 out.append(':"' + tok + '"')
             else:
-                # 이미 따옴표 있는 정상 형태면 ":" 만 붙이고 값은 기존 스캐너가 처리
+                # 이미 따옴표가 있는 정상 형태는 ":"만 붙이고, 따옴표 스캔은 다음 루프(if ch == '"':)에 위임
                 out.append(":")
-                if i < n and blob[i] == '"':
-                    out.append('"')
             continue
         if ch == '"':
             # 문자열 값 시작
