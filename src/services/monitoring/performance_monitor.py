@@ -426,6 +426,75 @@ class PerformanceMonitor:
     # Statistics Retrieval
     # ========================================================================
 
+    @staticmethod
+    def _compute_stats_from_list(
+        operation_type: OperationType, ops: list[OperationMetrics]
+    ) -> PerformanceStats:
+        """
+        Compute aggregated statistics from a pre-filtered list of metrics.
+
+        Args:
+            operation_type: Type of operation the metrics belong to
+            ops: Pre-filtered list of operation metrics
+
+        Returns:
+            PerformanceStats object
+        """
+        total_ops = 0
+        successful_ops = 0
+        failed_ops = 0
+        durations: list[float] = []
+        memory_deltas: list[float] = []
+        token_counts: list[int] = []
+
+        # 단일 패스로 통계 데이터 동시 집계 (중간 임시 리스트 6개 생성 제거)
+        for o in ops:
+            total_ops += 1
+            if o.error is not None:
+                failed_ops += 1
+            if o.is_completed:
+                if o.error is None:
+                    successful_ops += 1
+                    if o.duration_seconds is not None:
+                        durations.append(o.duration_seconds)
+                if o.memory_delta_mb is not None:
+                    memory_deltas.append(o.memory_delta_mb)
+                if o.tokens > 0:
+                    token_counts.append(o.tokens)
+
+        if total_ops == 0:
+            return PerformanceStats(operation_type=operation_type)
+
+        sorted_durations = sorted(durations) if durations else []
+        total_duration = sum(durations)
+        total_mem = sum(memory_deltas)
+        total_toks = sum(token_counts)
+
+        def percentile(data: list[float], p: int) -> float:
+            if not data:
+                return 0.0
+            return float(data[min(int(len(data) * p / 100), len(data) - 1)])
+
+        return PerformanceStats(
+            operation_type=operation_type,
+            total_operations=total_ops,
+            successful_operations=successful_ops,
+            failed_operations=failed_ops,
+            total_duration_seconds=total_duration,
+            min_duration_seconds=sorted_durations[0] if sorted_durations else None,
+            max_duration_seconds=sorted_durations[-1] if sorted_durations else None,
+            avg_duration_seconds=total_duration / len(durations) if durations else 0.0,
+            p50_duration_seconds=percentile(sorted_durations, 50),
+            p95_duration_seconds=percentile(sorted_durations, 95),
+            p99_duration_seconds=percentile(sorted_durations, 99),
+            total_memory_delta_mb=total_mem,
+            avg_memory_delta_mb=total_mem / len(memory_deltas)
+            if memory_deltas
+            else 0.0,
+            total_tokens=total_toks,
+            avg_tokens=total_toks / len(token_counts) if token_counts else 0.0,
+        )
+
     def get_operation_stats(self, operation_type: OperationType) -> PerformanceStats:
         """
         Get aggregated statistics for operation type.
@@ -437,75 +506,26 @@ class PerformanceMonitor:
             PerformanceStats object
         """
         with self._lock:
-            total_ops = 0
-            successful_ops = 0
-            failed_ops = 0
-            durations: list[float] = []
-            memory_deltas: list[float] = []
-            token_counts: list[int] = []
-
-            # 단일 패스로 통계 데이터 동시 집계 (중간 임시 리스트 6개 생성 제거)
-            for o in self._operations:
-                if o.operation_type != operation_type:
-                    continue
-                total_ops += 1
-                if o.error is not None:
-                    failed_ops += 1
-                if o.is_completed:
-                    if o.error is None:
-                        successful_ops += 1
-                        if o.duration_seconds is not None:
-                            durations.append(o.duration_seconds)
-                    if o.memory_delta_mb is not None:
-                        memory_deltas.append(o.memory_delta_mb)
-                    if o.tokens > 0:
-                        token_counts.append(o.tokens)
-
-            if total_ops == 0:
-                return PerformanceStats(operation_type=operation_type)
-
-            sorted_durations = sorted(durations) if durations else []
-            total_duration = sum(durations)
-            total_mem = sum(memory_deltas)
-            total_toks = sum(token_counts)
-
-            def percentile(data: list[float], p: int) -> float:
-                if not data:
-                    return 0.0
-                return float(data[min(int(len(data) * p / 100), len(data) - 1)])
-
-            return PerformanceStats(
-                operation_type=operation_type,
-                total_operations=total_ops,
-                successful_operations=successful_ops,
-                failed_operations=failed_ops,
-                total_duration_seconds=total_duration,
-                min_duration_seconds=sorted_durations[0] if sorted_durations else None,
-                max_duration_seconds=sorted_durations[-1] if sorted_durations else None,
-                avg_duration_seconds=total_duration / len(durations)
-                if durations
-                else 0.0,
-                p50_duration_seconds=percentile(sorted_durations, 50),
-                p95_duration_seconds=percentile(sorted_durations, 95),
-                p99_duration_seconds=percentile(sorted_durations, 99),
-                total_memory_delta_mb=total_mem,
-                avg_memory_delta_mb=total_mem / len(memory_deltas)
-                if memory_deltas
-                else 0.0,
-                total_tokens=total_toks,
-                avg_tokens=total_toks / len(token_counts) if token_counts else 0.0,
-            )
+            ops = [o for o in self._operations if o.operation_type == operation_type]
+            return self._compute_stats_from_list(operation_type, ops)
 
     def get_all_stats(self) -> dict[OperationType, PerformanceStats]:
         """
-        Get statistics for all operation types.
+        Get statistics for all operation types in a single pass O(N).
 
         Returns:
             Dictionary mapping operation types to statistics
         """
         with self._lock:
+            grouped: dict[OperationType, list[OperationMetrics]] = {
+                op: [] for op in OperationType
+            }
+            for op in self._operations:
+                grouped[op.operation_type].append(op)
+
             return {
-                op_type: self.get_operation_stats(op_type) for op_type in OperationType
+                op_type: self._compute_stats_from_list(op_type, ops)
+                for op_type, ops in grouped.items()
             }
 
     def get_memory_stats(self) -> dict[str, float]:
