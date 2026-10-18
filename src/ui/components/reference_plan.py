@@ -30,6 +30,7 @@ from types import MappingProxyType
 from typing import Any
 
 from common.utils import doc_stable_id, fast_hash
+from ui.components.chat_references import ordered_reference_view
 from ui.components.common import get_doc_metadata
 
 logger = logging.getLogger(__name__)
@@ -48,11 +49,6 @@ PREWARM_WAIT_S = 10.0
 #: 레지스트리 상한 (턴 종료 후 정리되지만 방어용으로 유지).
 _MAX_ACTIVE_PLANS = 64
 _MAX_PREWARM_FUTURES = 16
-
-# 플레이스홀더 취급 섹션명 (chat_references._render_references_content와 동일).
-_GENERIC_SECTIONS = frozenset(
-    {"general content", "none", "?", "문서 본문", "일반 본문"}
-)
 
 
 @dataclass(frozen=True, slots=True)
@@ -90,19 +86,6 @@ def _normalize_text(text: object) -> str:
     if not isinstance(text, str):
         return ""
     return re.sub(r"\s+", " ", text).strip().lower()
-
-
-def _clean_section(raw: str) -> str:
-    """의미 없는 플레이스홀더 섹션명을 빈 문자열로 정규화한다."""
-    stripped = (raw or "").strip()
-    if not stripped or stripped.lower() in _GENERIC_SECTIONS:
-        return ""
-    return re.sub(
-        r"[\(\[]\s*p(?:age)?\.?\s*\d+\s*[\)\]]",
-        "",
-        stripped,
-        flags=re.IGNORECASE,
-    ).strip()
 
 
 def _doc_page(doc: Any) -> int:
@@ -174,104 +157,38 @@ def _build_reference_plan(
 ) -> ReferencePlan:
     """불변 레퍼런스 플랜을 계산한다 (순수 함수, 락 없음).
 
-    ``chat_references._render_references_content`` 의 그룹화(페이지 기준
-    1버튼, Branch-D 텍스트 dedup, 구체적 섹션명 보존)와 동일한 규칙으로
-    ``page_to_refs`` / ``page_to_excerpt`` / ``labels`` / ``button_keys``
-    를 만든다. Streamlit 호출 없음 — 렌더는 호출자가 담당한다.
+    ``chat_references.ordered_reference_view`` 를 단일 진원으로 사용해
+    그룹화(페이지 기준 1버튼, Branch-D 텍스트 dedup, 구체적 섹션명 보존)와
+    발췌를 재계산 없이 공유한다. ``page_to_refs`` / ``page_to_excerpt`` /
+    ``labels`` / ``button_keys`` 는 그 결과를 그대로 사상하므로 플랜과 UI
+    렌더러가 100% 동일한 순서·값을 갖는다. Streamlit 호출 없음 — 렌더는
+    호출자가 담당한다.
     """
     docs = list(documents or [])
     cits = [c for c in (citations or []) if isinstance(c, dict)]
 
-    doc_citations = [c for c in cits if c.get("doc_id") is not None]
-    if not doc_citations and docs:
-        seen_keys: set[tuple[str, int]] = set()
-        fallback: list[dict[str, Any]] = []
-        for d in docs:
-            meta = get_doc_metadata(d)
-            sec = str(meta.get("current_section", "문서 본문"))
-            page = _doc_page(d)
-            key = (sec, page)
-            if key not in seen_keys:
-                seen_keys.add(key)
-                fallback.append(
-                    {"doc_id": doc_stable_id(d), "section": sec, "page": page}
-                )
-        doc_citations = fallback
+    entries, page_to_excerpt = ordered_reference_view(docs, cits)
 
-    doc_page_map: dict[str, int] = {}
-    for d in docs:
-        page_num = _doc_page(d)
-        doc_page_map.setdefault(doc_stable_id(d), page_num)
-
-    doc_text_map: dict[str, str] = {}
-    for d in docs:
-        sid = doc_stable_id(d)
-        if sid not in doc_text_map:
-            doc_text_map[sid] = _normalize_text(_doc_content(d))
-
-    doc_raw_map: dict[str, str] = {}
-    for d in docs:
-        sid = doc_stable_id(d)
-        if sid not in doc_raw_map:
-            doc_raw_map[sid] = _doc_content(d)
-
-    targets: list[tuple[int, dict[str, Any]]] = []
-    for cit in doc_citations:
-        sid = str(cit.get("doc_id"))
-        target_p = cit.get("page") or doc_page_map.get(sid, 1)
-        try:
-            target_p = int(target_p)  # type: ignore[assignment]
-        except (ValueError, TypeError):
-            target_p = 1
-        targets.append((target_p, cit))
-    targets.sort(key=lambda item: item[0])
-
-    page_to_refs: dict[int, dict[str, str]] = {}
-    page_to_excerpt: dict[int, str] = {}
-    seen_text_hashes: dict[str, int] = {}
-    for target_p, cit in targets:
-        sid = str(cit.get("doc_id"))
-        clean_sec = _clean_section(str(cit.get("section") or ""))
-        raw_sec = str(cit.get("section") or "").strip()
-
-        span = cit.get("text_span")
-        norm = (
-            _normalize_text(span)
-            if isinstance(span, str)
-            else doc_text_map.get(sid, "")
-        )
-        span_raw = span if isinstance(span, str) and span else doc_raw_map.get(sid, "")
-        if target_p not in page_to_excerpt and span_raw:
-            page_to_excerpt[target_p] = span_raw
-        if norm:
-            text_hash = fast_hash(norm)
-            if text_hash in seen_text_hashes:
-                kept = seen_text_hashes[text_hash]
-                prev_sec = page_to_refs[kept]["section"]
-                cand_sec = clean_sec or raw_sec
-                if cand_sec and len(cand_sec) > len(prev_sec):
-                    page_to_refs[kept]["section"] = cand_sec
-                continue
-            seen_text_hashes[text_hash] = target_p
-
-        if target_p not in page_to_refs:
-            page_to_refs[target_p] = {"sid": sid, "section": clean_sec}
-        elif not page_to_refs[target_p]["section"] and clean_sec:
-            page_to_refs[target_p]["section"] = clean_sec
-
-    sorted_pages = sorted(page_to_refs.keys())
-    labels: dict[int, str] = {}
-    button_keys: dict[int, str] = {}
-    for idx, page_num in enumerate(sorted_pages):
-        sec_title = page_to_refs[page_num]["section"]
-        labels[page_num] = (
-            f"{sec_title} · p.{page_num}" if sec_title else f"p.{page_num}"
-        )
-        button_keys[page_num] = f"pop_doc_{msg_id}_{page_num}_{idx}"
-
+    sorted_pages = [entry["page"] for entry in entries]
     frozen_refs: dict[int, Mapping[str, str]] = {
-        page: MappingProxyType(dict(info)) for page, info in page_to_refs.items()
+        entry["page"]: MappingProxyType(
+            {"sid": entry["sid"], "section": entry["section"]}
+        )
+        for entry in entries
     }
+    labels = {
+        entry["page"]: (
+            f"{entry['section']} · p.{entry['page']}"
+            if entry["section"]
+            else f"p.{entry['page']}"
+        )
+        for entry in entries
+    }
+    button_keys = {
+        entry["page"]: f"pop_doc_{msg_id}_{entry['page']}_{idx}"
+        for idx, entry in enumerate(entries)
+    }
+
     docs_sig = _docs_signature(docs)
     cits_sig = _citations_signature(cits)
     plan_hash = fast_hash(
@@ -282,9 +199,9 @@ def _build_reference_plan(
         docs_signature=docs_sig,
         pages=tuple(sorted_pages),
         page_to_refs=MappingProxyType(frozen_refs),
-        page_to_excerpt=MappingProxyType(dict(page_to_excerpt)),
-        labels=MappingProxyType(dict(labels)),
-        button_keys=MappingProxyType(dict(button_keys)),
+        page_to_excerpt=MappingProxyType(page_to_excerpt),
+        labels=MappingProxyType(labels),
+        button_keys=MappingProxyType(button_keys),
     )
 
 

@@ -34,6 +34,7 @@ __all__ = [
     "is_ghost_state",
     "normalize_excerpt",
     "ordered_reference_entries",
+    "ordered_reference_view",
     "render_generation_expander",
     "render_inline_citation_badges",
     "render_reference_list",
@@ -232,18 +233,26 @@ def is_ghost_state(
     return bool(documents) and not citations
 
 
-def ordered_reference_entries(
+def ordered_reference_view(
     documents: list[Any] | None,
     citations: list[dict[str, Any]] | None,
-) -> list[dict[str, Any]]:
-    """인용 행의 순서 단일 소스 (익스팬더 행 + 말미 배지가 공유).
+) -> tuple[list[dict[str, Any]], dict[int, str]]:
+    """참조 순서·발췌의 단일 소스 (익스팬더 행 + 배지 + 프리패치 플랜 공유).
 
     페이지 번호(target_p) 및 대표 섹션 기준 그룹화, Branch-D 텍스트
     dedup(동일 정규화 텍스트는 최소 페이지만 유지, 가장 구체적인 섹션명
     보존), 페이지 오름차순 정렬을 수행한다. 인용이 없고 문서만 있으면
-    섹션·페이지 기준 폴백 인용을 만든다. 반환은
-    ``[{"page", "section", "sid", "excerpt"}]`` 리스트이며 순수 함수다
-    (Streamlit 호출 없음 — 단위 테스트 직접 검증 가능).
+    섹션·페이지 기준 폴백 인용을 만든다.
+
+    반환은 ``(entries, page_to_excerpt)`` 튜플이다:
+
+    - ``entries``: ``[{"page", "section", "sid", "excerpt"}]`` — 익스팬더 행과
+      말미 배지가 공유하는 페이지 오름차순 행 목록.
+    - ``page_to_excerpt``: ``{page: 첫 원문 발췌}`` — Branch-D dedup으로
+      병합돼 행에서 제외된 페이지도 포함해 ``ReferencePlan.page_to_excerpt``
+      와 정확히 동일한 값을 만든다.
+
+    순수 함수다(Streamlit 호출 없음 — 단위 테스트 직접 검증 가능).
     """
     # 1. 인용 데이터 수집
     doc_citations = [c for c in (citations or []) if c.get("doc_id") is not None]
@@ -263,7 +272,7 @@ def ordered_reference_entries(
         doc_citations = fallback_citations
 
     if not doc_citations:
-        return []
+        return [], {}
 
     # 2. 문서 메타데이터·텍스트·원문 매핑을 단일 패스(Single-Pass)로 통합 구축
     doc_page_map: dict[str, int] = {}
@@ -345,7 +354,7 @@ def ordered_reference_entries(
             page_to_refs[target_p]["section"] = clean_sec
 
     # 4. 페이지 번호 오름차순 정렬
-    return [
+    entries = [
         {
             "page": page_num,
             "section": page_to_refs[page_num]["section"],
@@ -354,6 +363,18 @@ def ordered_reference_entries(
         }
         for page_num in sorted(page_to_refs.keys())
     ]
+    return entries, page_to_excerpt
+
+
+def ordered_reference_entries(
+    documents: list[Any] | None,
+    citations: list[dict[str, Any]] | None,
+) -> list[dict[str, Any]]:
+    """인용 행의 순서 단일 소스 (익스팬더 행 + 말미 배지가 공유).
+
+    ``ordered_reference_view`` 가 계산한 ``entries`` 만 반환하는 얇은 래퍼다.
+    """
+    return ordered_reference_view(documents, citations)[0]
 
 
 def _render_references_content(
