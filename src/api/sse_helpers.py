@@ -8,6 +8,8 @@ from __future__ import annotations
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
+import orjson
+
 if TYPE_CHECKING:
     from api.stream_pipeline import StreamChunk
 
@@ -30,19 +32,11 @@ def gzip_compress(data: str) -> bytes:
 class ServerSentEventsHandler:
     @staticmethod
     def format_sse_event(
-        event_type: str, data: dict[str, Any], event_id: int | None = None
+        event_type: str | None, data: dict[str, Any], event_id: int | None = None
     ) -> str:
-        import orjson
-
-        lines = []
-        if event_id is not None:
-            lines.append(f"id: {event_id}")
-        if event_type:
-            lines.append(f"event: {event_type}")
-        json_data = orjson.dumps(data).decode("utf-8")
-        lines.append(f"data: {json_data}")
-        lines.append("")
-        return "\n".join(lines) + "\n"
+        id_part = f"id: {event_id}\n" if event_id is not None else ""
+        event_part = f"event: {event_type}\n" if event_type else ""
+        return f"{id_part}{event_part}data: {orjson.dumps(data).decode('utf-8')}\n\n"
 
     @staticmethod
     def format_sse_error(error_message: str, error_code: int = 500) -> str:
@@ -65,21 +59,13 @@ class ServerSentEventsHandler:
         여러 SSE 이벤트를 배치로 직렬화합니다.
         Phase 2.4: 네트워크 라운드트립 감소용 배치 포장
         """
-        import orjson
-
         if not events:
             return ""
 
-        lines = []
-        for event_type, data, event_id in events:
-            if event_id is not None:
-                lines.append(f"id: {event_id}")
-            if event_type:
-                lines.append(f"event: {event_type}")
-            json_data = orjson.dumps(data).decode("utf-8")
-            lines.append(f"data: {json_data}")
-            lines.append("")
-        return "\n".join(lines) + "\n"
+        return "".join(
+            ServerSentEventsHandler.format_sse_event(event_type, data, event_id)
+            for event_type, data, event_id in events
+        )
 
     @staticmethod
     def gzip_compress(data: str) -> bytes:
