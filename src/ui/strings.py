@@ -170,7 +170,7 @@ UI_STRINGS: dict[str, dict[str, str]] = {
         "build_step_chunk": "Chunk",
         "build_step_index": "Index",
         "build_step_finalize": "Finalize",
-        "build_progress_caption": "%{progress}% complete · {elapsed}s elapsed",
+        "build_progress_caption": "{progress}% complete · {elapsed}s elapsed",
         "build_complete_caption": "Analysis took {elapsed}s",
         "build_complete_default": "Analysis complete",
         # Chat input placeholders (chat._resolve_chat_input_state)

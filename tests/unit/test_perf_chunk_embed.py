@@ -89,8 +89,8 @@ async def test_cache_save_is_batched_outside_single_wait() -> None:
     Baseline: miss가 많을수록(저hit율)逐차 per-item wait_for가 t_embed 지배.
     6건 miss × set 0.1s →逐차 0.6s 이상, 병렬 배치 ≈ 0.1s.
     동시성 구조로 판정(max_in_flight)하여 타이머 플레이크를 제거한다.
-    디스크 영속 계약(test_chunking_does_not_write_response_cache_to_disk)은
-    유지되므로 persist_to_disk=True를 함께 고정한다.
+    [최적화-04] 청킹 hot path는 persist_to_disk=False로 호출하여 문장마다
+    개별 디스크 파일/HMAC 검증을 유발하지 않는다 (L1 메모리 캐시로 dedup).
     """
     embedder = FakeEmbedder(delay=0.0)
     cache = FakeCacheManager(set_delay=0.1)
@@ -99,7 +99,9 @@ async def test_cache_save_is_batched_outside_single_wait() -> None:
     result = await chunker._get_embeddings(texts)
     assert result.shape == (len(texts), embedder.dimension)
     assert len(cache.persist_flags) == len(texts)
-    assert all(flag is True for flag in cache.persist_flags)
+    assert all(flag is False for flag in cache.persist_flags), (
+        f"청킹 문장 임베딩은 디스크에 영속화하지 않아야 함: {cache.persist_flags}"
+    )
     assert cache.max_in_flight == len(texts), (
         f"逐차 저장 의심: max_in_flight={cache.max_in_flight}"
     )

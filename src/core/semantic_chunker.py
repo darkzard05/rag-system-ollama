@@ -421,6 +421,14 @@ class SemanticChunkerEmbeddingsMixin:
             # P1: CacheBackedEmbeddings 패턴 — 저장 키도 조회와 동일하게
             # 정규화(" ".join(split))한다. 기존에는 조회는 정규화 키,
             # 저장은 원문 키라 공백 차이만으로 영구 miss가 발생했다.
+            #
+            # [최적화-04] 청킹 중 문장 단위 임베딩은 L1 메모리 캐시에만 저장한다.
+            # persist_to_disk=True는 문장마다 개별 .cache/.cache.meta 파일을 쓰고
+            # security_manager.full_verification(SHA-256 + HMAC)을 유발해, 20p PDF
+            # 한 건당 수백 회의 디스크 I/O 및 해시 계산을 asyncio.to_thread로
+            # 폭발시켰다. 최종 결과물은 VectorStoreCache가 index.faiss/
+            # doc_splits.json으로 원자적 일괄 영속화하므로(동일 PDF 재업로드 시
+            # file_hash 캐시 히트) 문장 임베딩의 중복 디스크 저장은 불필요하다.
             try:
                 unique_new = {
                     " ".join(text.split()): vec for _, text, vec in newly_embedded
@@ -431,12 +439,12 @@ class SemanticChunkerEmbeddingsMixin:
                             self.cache_manager.set(
                                 f"emb:{self.model_name}:{xxhash.xxh64(t.encode()).hexdigest()}",
                                 {"vector": v.tolist(), "cache_version": "1.0"},
-                                persist_to_disk=True,
+                                persist_to_disk=False,
                             )
                             for t, v in unique_new.items()
                         )
                     ),
-                    timeout=30.0,
+                    timeout=10.0,
                 )
             except asyncio.TimeoutError:
                 logger.error("[Chunker] 캐시 저장 타임아웃 (일부 항목 미저장 가능)")
@@ -1019,12 +1027,14 @@ class EmbeddingBasedSemanticChunker(
         self.batch_size = batch_size
 
         # [최적화] 청킹 임베딩 전용 캐시 관리자 설정.
-        # 변경 전에는 메모리 전용(enable_disk_cache=False) + persist_to_disk=False
-        # 였어서, 재시작/재수집 시 동일 청크라도 항상 Ollama 왕복이 발생했다.
-        # 이제 영구 디스크 캐시(L3)를 켜 동일 콘텐츠 해시 키로 재수집 시 Ollama
-        # 라운드트립을 건너뛴다. 메모리 레이어(L1)도 함께 두어 동일 프로세스 내
-        # 반복 조회는 디스크 I/O 없이 처리한다. 디스크 경로는 전역 MODEL_CACHE_DIR
-        # 하위의 embedding_cache 로 격리해 기타 응답 캐시와 혼재되지 않게 한다.
+        # 메모리 레이어(L1)로 동일 프로세스 내 동일 문장의 중복 임베딩을
+        # 방지한다. 디스크 레이어(L3)는 캐시 매니저에 구성해 두되, 청킹 hot
+        # path(``_get_embeddings``)는 [최적화-04]에 따라 persist_to_disk=False로
+        # 호출하여 문장마다 개별 파일을 쓰지 않는다 (청크 벡터는 VectorStoreCache가
+        # index.faiss/doc_splits.json으로 일괄 영속화). 희귀한 차원 불일치 복구
+        # 경로(``_reembed_single``)만 보정 벡터를 디스크에 남긴다.
+        # 디스크 경로는 전역 MODEL_CACHE_DIR 하위의 embedding_cache 로 격리해
+        # 기타 응답 캐시와 혼재되지 않게 한다.
         #
         # [안전장치] 테스트 환경(IS_UNIT_TEST/IS_CI_TEST)에서는 가짜 임베더
         # (FakeEmbeddings 등)가 생성한 벡터가 프로덕션 캐시 공간을 오염하지

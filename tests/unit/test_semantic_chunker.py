@@ -262,10 +262,12 @@ async def test_cache_version_field_present():
 async def test_default_cache_manager_isolates_test_env_cache():
     """청커 전용 캐시는 L1 메모리 + L3 영구 디스크 캐시를 사용한다.
 
-    영구 디스크 캐시는 동일 콘텐츠(해시 키) 재수집 시 Ollama 왕복을 건너뛰기 위해
-    켜져 있으며, 테스트 환경(IS_UNIT_TEST)에서는 프로덕션 ``embedding_cache`` 를
-    가짜 임베더가 오염시키지 않도록 OS 임시 격리 경로(``embedding_cache_test``)를
-    사용한다 (세맨틱 캐시는 임베딩 키에 부적합하므로 비활성)."""
+    [최적화-04] 청킹 hot path는 문장 임베딩을 L1 메모리에만 저장하고 디스크에는
+    쓰지 않지만, 캐시 매니저에는 L3 디스크 레이어가 여전히 구성된다(희귀한 차원
+    불일치 복구 경로 등). 테스트 환경(IS_UNIT_TEST)에서는 프로덕션
+    ``embedding_cache`` 를 가짜 임베더가 오염시키지 않도록 OS 임시 격리
+    경로(``embedding_cache_test``)를 사용한다 (세맨틱 캐시는 임베딩 키에
+    부적합하므로 비활성)."""
     embedder = MockEmbeddings(dimension=32)
     chunker = EmbeddingBasedSemanticChunker(
         embedder=embedder,
@@ -284,9 +286,10 @@ async def test_default_cache_manager_isolates_test_env_cache():
 @pytest.mark.asyncio
 async def test_chunking_does_not_write_response_cache_to_disk(tmp_path, monkeypatch):
     """청킹 실행 후 전역 ./model_cache/response_cache (응답 캐시)에는 임베딩 항목이
-    기록되지 않아야 한다. 테스트 환경에서는 프로덕션 ``embedding_cache`` 도 건드리지
-    않고, 가짜 임베더 벡터는 OS 임시 격리 경로(``embedding_cache_test``)에만
-    영속화된다."""
+    기록되지 않아야 한다. [최적화-04] 청킹 hot path는 문장 임베딩을 디스크에
+    영속화하지 않으므로(L1 메모리 캐시로 dedup), 프로덕션 ``embedding_cache`` 뿐
+    아니라 OS 임시 격리 경로(``embedding_cache_test``)에도 새 파일을 쓰지 않는다.
+    최종 청크 벡터는 VectorStoreCache(index.faiss/doc_splits.json)로 일괄 영속화된다."""
     # 전역 디스크 캐시 디렉터리를 tmp_path 로 리다이렉트하여 격리
     # (MODEL_CACHE_DIR 은 common.config 에서 import 시점에 상수로 바인딩되므로
     #  환경변수가 아닌 해당 모듈 속성을 직접 monkeypatch 해야 반영됨)
@@ -320,8 +323,12 @@ async def test_chunking_does_not_write_response_cache_to_disk(tmp_path, monkeypa
     assert list(embedding_cache.glob("*.cache")) == [], (
         "Chunker must not write fake vectors into PROD embedding_cache from test env"
     )
-    # 임베딩 벡터는 OS 임시 격리 경로에 영속화된다
-    assert len(list(test_cache.glob("*.cache"))) > test_cache_before
+    # [최적화-04] 청킹 hot path는 문장 임베딩을 디스크에 쓰지 않는다 (L1 전용)
+    test_cache_after = len(list(test_cache.glob("*.cache")))
+    assert test_cache_after == test_cache_before, (
+        "Chunker must not persist per-sentence embeddings to disk "
+        f"(before={test_cache_before}, after={test_cache_after})"
+    )
 
 
 @pytest.mark.asyncio
