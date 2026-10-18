@@ -310,6 +310,13 @@ rag:
       # 애매한 문서 집합으로 판단해 short-circuit을 막고 LLM 검증을 수행한다.
       # (모델 교체/스케일 변화 시 wrong-answer 잠재 위험 차단)
       min_top_gap_to_skip: 0.05
+      # [OPT-01] 고신뢰도 군집 Fast-Path: 상위 2개 문서가 임계값 직전에 몰려도
+      # (예: 1위 0.68 / 2위 0.65) 직렬 LLM 채점을 생략한다. MAX_CONCURRENT_INFERENCE=1
+      # 단일 락 경합으로 generate TTFT가 수 초 지연되는 병목을 제거한다.
+      # 1위 점수가 이 값 이상이면 군집으로 판정 (문서가 2개 이상일 때만 적용).
+      cluster_top1_floor: 0.60
+      # [OPT-01] 또는 상위 2개 문서 평균이 이 값 이상이면 고신뢰도 군집으로 판정.
+      cluster_avg_floor: 0.55
       # [R3b-01] 리랭킹 최종 선별 풀 크기 (graph_builder.py retrieve_and_rerank의 rerank_top_k로 배선)
       top_k: 10
       # grade에 전달할 상위 문서 수 상한 (graph_builder.py grade_documents test_docs로 배선)

@@ -5,6 +5,8 @@
 내부 로직은 변경 없이 이동했으며 — 특히 grade short-circuit의
 ``min_score_to_skip``/``min_top_gap_to_skip`` 분기는 byte-identical —
 구경로는 alias shim으로 유지한다.
+[OPT-01] 추가로 ``cluster_top1_floor``/``cluster_avg_floor`` 고신뢰도 군집
+Fast-Path를 short-circuit 하단에 결합해 불필요한 직렬 LLM 채점을 건너뛴다.
 """
 
 import hashlib
@@ -261,11 +263,28 @@ async def grade_documents(
     both_high_confidence = len(sorted_scores) > 1 and sorted_scores[1] >= (
         min_score_to_skip
     )
-    if max_rerank_score >= min_score_to_skip and (
-        top_gap >= min_top_gap or both_high_confidence
-    ):
+
+    # [OPT-01] 고신뢰도 군집 Fast-Path: FlashRank 교차 인코더가 이미 관련성을
+    # 교차 스코어링했음에도 1·2위가 임계값 직전에 몰려(예: 0.68/0.65) 매번 직렬
+    # LLM 채점(_safe_invoke)을 호출하면 MAX_CONCURRENT_INFERENCE=1 단일 락 경합
+    # 때문에 generate 첫 토큰(TTFT)이 수 초 지연된다. 상위 2개 문서가 고신뢰도
+    # 군집을 이루면(1위 >= cluster_top1_floor 또는 상위 2개 평균 >= cluster_avg_floor)
+    # LLM 채점을 생략하고 generate 로 직행한다.
+    top1 = sorted_scores[0] if sorted_scores else 0.0
+    top2 = sorted_scores[1] if len(sorted_scores) > 1 else 0.0
+    cluster_high = len(sorted_scores) > 1 and (
+        top1 >= GRADING_CONFIG.get("cluster_top1_floor", 0.60)
+        or (top1 + top2) / 2 >= GRADING_CONFIG.get("cluster_avg_floor", 0.55)
+    )
+
+    if (
+        max_rerank_score >= min_score_to_skip
+        and (top_gap >= min_top_gap or both_high_confidence)
+    ) or cluster_high:
         logger.info(
-            f"[RAG] [GRADE] Short-circuit 활성화 (Max Rerank Score: {max_rerank_score:.3f} >= {min_score_to_skip})"
+            f"[RAG] [GRADE] Fast-path Short-circuit 활성화 "
+            f"(Top1: {top1:.3f}, Top2: {top2:.3f}, "
+            f"Max Rerank Score: {max_rerank_score:.3f} >= {min_score_to_skip})"
         )
         SessionManager.add_status_log(
             "질문과 밀접한 문서를 확인하여 답변을 생성합니다.",
