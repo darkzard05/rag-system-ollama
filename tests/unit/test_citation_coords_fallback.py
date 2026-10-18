@@ -44,16 +44,15 @@ async def test_citation_preserved_on_extract_failure(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_full_page_retry_when_bbox_fails(tmp_path: Path) -> None:
+async def test_full_page_extraction_ignores_chunk_bbox(tmp_path: Path) -> None:
     pdf = tmp_path / "f.pdf"
     pdf.write_bytes(b"dummy")
     doc = _make_doc(str(pdf), file_hash="h2", page=1, bbox=[0, 0, 100, 100])
 
-    # D4: bbox 폴백은 배치 추출 내부에서 수행되므로, 이음새 수준에서는
-    # 최종 성공 좌표 1건을 반환해 인용 보존 계약을 검증한다.
+    # coords 테이블은 페이지 전체 단어 목록을 보관하므로, 캐시 오염 방지를 위해
+    # 캐시 미스 시 청크 bbox를 무시하고 항상 전체 페이지(bbox=None)를 추출한다.
     def _extract(path: str, requests: list) -> list:
-        assert len(requests) == 1
-        assert requests[0][1] == [0, 0, 100, 100]
+        assert requests == [(1, None)]
         return [[("a", 1.0, 2.0, 3.0, 4.0)]]
 
     with (
