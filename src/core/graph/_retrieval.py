@@ -254,8 +254,9 @@ async def retrieve_and_rerank(
     search_k = int(RETRIEVER_CONFIG.get("search_kwargs", {}).get("k", 25))
 
     # [TIMING 구간 정의 — 단일 정본]
-    # embed_ms: 쿼리 임베딩 라운드트립(Ollama HTTP)만의 시간. FAISS 이전에
-    #   별도 계측해 pre-embedded 벡터를 전달한다.
+    # embed_ms: 쿼리 임베딩 라운드트립(Ollama HTTP)만의 시간. FAISS 파이프라인
+    #   태스크 내부에서 BM25와 동시 실행되며, pre-embedded 벡터로 FAISS 연산을
+    #   분리 계측한다.
     # faiss_ms: FAISS index.search 연산만의 시간(임베딩 제외).
     # bm25_ms: BM25 rank 연산만의 시간.
     # search_ms: gather 전체 wall-time(embed+검색 병렬 구간 포함).
@@ -264,6 +265,8 @@ async def retrieve_and_rerank(
     # rerank_ex_ms: 리랭킹 구간만의 순수 소요(리랭크 시작~종료).
     # merge_ex_ms: 문맥 병합 구간만의 순수 소요(리랭크 종료~머지 종료).
     task_ms: dict[str, float] = {}
+    # FAISS 미구성 시에도 "embed_ms=n/a" 표기 경로가 참조하므로 선초기화한다.
+    task_ms["embed"] = 0.0
 
     async def _timed_search(
         source: str, coro: Awaitable[list[Document]]
@@ -274,46 +277,51 @@ async def retrieve_and_rerank(
         finally:
             task_ms[source] = (time.perf_counter() - started) * 1000
 
-    # FAISS 임베딩을 gather 전에 분리 계측한다. 성공 시 pre-embedded 벡터로
-    # FAISS 연산만 timed-search에 태워 embed_ms/faiss_ms를 분리한다.
-    # 테스트 대역(MagicMock 등)에서는 embed가 None/실패 → 기존 경로 폴백.
-    embed_ms = 0.0
-    query_vector: Any | None = None
-    if faiss:
+    async def _search_faiss_pipeline() -> list[Document]:
+        """FAISS 쿼리 임베딩(I/O)과 벡터 검색을 단일 태스크로 캡슐화한다.
+
+        기존 구현은 임베딩 라운드트립(Ollama HTTP, 150~400ms)을 ``await``로
+        직렬 대기한 뒤에야 BM25(CPU 역색인)를 스케줄해, 네트워크 유휴 시간이
+        검색 지연에 그대로 누적됐다. 이 코루틴을 BM25 태스크와 함께
+        ``asyncio.create_task``로 동시 스케줄하면 두 경로가 겹쳐 실행된다.
+
+        ``_timed_search``의 외부 wall-time 계측과 별개로 embed_ms/faiss_ms를
+        각 구간에서 개별 기록해 벤치마크 로거의 시간 분리 계약을 보존한다.
+
+        임베드 실패(테스트 대역 MagicMock 등) 시 pre-embedded 벡터 없이 기존
+        경로로 폴백한다.
+        """
+        q_vec: Any | None = None
         try:
             from core.retriever_factory import embed_faiss_query_vector
 
             _t_embed = time.perf_counter()
-            query_vector = await asyncio.to_thread(
-                embed_faiss_query_vector, faiss, query
+            q_vec = await asyncio.to_thread(embed_faiss_query_vector, faiss, query)
+            task_ms["embed"] = (
+                (time.perf_counter() - _t_embed) * 1000 if q_vec is not None else 0.0
             )
-            if query_vector is None:
-                embed_ms = 0.0
-            else:
-                embed_ms = (time.perf_counter() - _t_embed) * 1000
         except Exception as e:  # noqa: BLE001 - 임베드 실패 시 기존 경로 폴백
             logger.warning(f"[RAG] [RETRIEVE] 쿼리 임베드 실패 — 통합 경로 폴백: {e}")
-            query_vector = None
-            embed_ms = 0.0
-    task_ms["embed"] = embed_ms
+            q_vec = None
+            task_ms["embed"] = 0.0
 
+        _t_faiss = time.perf_counter()
+        try:
+            if q_vec is not None:
+                return await search_faiss_with_scores(faiss, query, search_k, q_vec)
+            return await search_faiss_with_scores(faiss, query, search_k)
+        finally:
+            # faiss_ms는 순수 FAISS 연산 구간만 기록한다 (embed 제외).
+            task_ms["faiss"] = (time.perf_counter() - _t_faiss) * 1000
+
+    # BM25(CPU 역색인)와 FAISS(임베딩 I/O + index.search)를 즉시 동시 스케줄한다.
     search_tasks = {}
     if bm25:
         search_tasks["bm25"] = asyncio.create_task(
             _timed_search("bm25", search_bm25_with_scores(bm25, query, search_k))
         )
     if faiss:
-        if query_vector is not None:
-            search_tasks["faiss"] = asyncio.create_task(
-                _timed_search(
-                    "faiss",
-                    search_faiss_with_scores(faiss, query, search_k, query_vector),
-                )
-            )
-        else:
-            search_tasks["faiss"] = asyncio.create_task(
-                _timed_search("faiss", search_faiss_with_scores(faiss, query, search_k))
-            )
+        search_tasks["faiss"] = asyncio.create_task(_search_faiss_pipeline())
 
     results = {}
     if search_tasks:
