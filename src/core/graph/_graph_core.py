@@ -476,8 +476,10 @@ def _extract_json_string(blob: str, start: int) -> tuple[str | None, int]:
 def _recover_citations(blob: str) -> list[dict[str, Any]]:
     """깨진 JSON 에서 citations[] 를 객체 단위로 추출한다.
 
-    각 citation 객체를 독립적으로 파싱하므로 doc_id/text_span 간 교차 매칭(D4)
-    을 방지한다. section/page/score 도 실제 값을 보존한다(D1 해소).
+    각 citation 객체를 독립적으로 파싱하므로 doc_id/anchor 간 교차 매칭(D4)
+    을 방지한다. 경량 인용 스키마(doc_id + anchor)에 맞춰 anchor(핵심 키워드)만
+    복원하고, section/page/score 는 문서 메타데이터 하이드레이션이 채우므로
+    복구 대상에서 제외한다.
     """
     citations: list[dict[str, Any]] = []
     obj_start = blob.find('"doc_id"')
@@ -493,29 +495,12 @@ def _recover_citations(blob: str) -> list[dict[str, Any]]:
             obj_start = blob.find('"doc_id"', obj_end)
             continue
         doc_id = doc_id_m.group(2)
-        span_m = re.search(r'"text_span"\s*:', obj)
-        text_span: str = ""
-        if span_m:
-            _span, _ = _extract_json_string(obj, span_m.end())
-            text_span = _span or ""
-        section_m = re.search(r'"section"\s*:', obj)
-        section: str = ""
-        if section_m:
-            _sec, _ = _extract_json_string(obj, section_m.end())
-            section = _sec or ""
-        page_m = re.search(r'"page"\s*:\s*(\d+)', obj)
-        page = int(page_m.group(1)) if page_m else 0
-        score_m = re.search(r'"score"\s*:\s*([\d.]+)', obj)
-        score = float(score_m.group(1)) if score_m else 0.0
-        citations.append(
-            {
-                "doc_id": doc_id,
-                "text_span": text_span,
-                "section": section,
-                "page": page,
-                "score": score,
-            }
-        )
+        anchor_m = re.search(r'"anchor"\s*:', obj)
+        anchor: str = ""
+        if anchor_m:
+            _anchor, _ = _extract_json_string(obj, anchor_m.end())
+            anchor = _anchor or ""
+        citations.append({"doc_id": doc_id, "anchor": anchor})
         obj_start = blob.find('"doc_id"', obj_end)
     return citations
 

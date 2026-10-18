@@ -262,6 +262,59 @@ def _filter_stream_cite_items(
     return kept
 
 
+def _citation_field(cit: Any, key: str, default: Any = None) -> Any:
+    """dict/Citation 양쪽에서 인용 필드 값을 읽는다 (하이드레이션 공용 접근자)."""
+    if isinstance(cit, dict):
+        return cit.get(key, default)
+    return getattr(cit, key, default)
+
+
+def _enrich_citations(
+    raw_citations: list[Any], docs: list[Document] | None
+) -> list[dict[str, Any]]:
+    """경량 인용(doc_id + anchor)을 검색 문서 메타데이터로 하이드레이션한다.
+
+    LLM 은 ``doc_id`` 와 짧은 ``anchor`` 만 생성하고, ``text_span``·``section``·
+    ``page``·``score`` 는 Python 런타임이 ``Document.metadata`` 와
+    ``page_content`` 에서 채운다. 원문에 이미 존재하는 값을 로컬 LLM 이
+    토큰 단위로 재출력하며 발생하던 수백 토큰의 꼬리 생성 지연을 제거한다.
+
+    다운스트림(UI/API)은 기존과 동일한 5필드 dict 를 받아 동작 동치성이
+    보존된다. ``docs`` 가 비어 있으면 하이드레이션 소스가 없으므로 입력을
+    dict 로 정규화해 그대로 반환한다 (레거시 직접 호출 호환).
+    """
+    if not raw_citations:
+        return []
+    if not docs:
+        return [
+            dict(cit) if isinstance(cit, dict) else cit.model_dump()
+            for cit in raw_citations
+        ]
+    doc_lookup = {_doc_stable_id(d): d for d in docs}
+    enriched: list[dict[str, Any]] = []
+    for cit in raw_citations:
+        cid = str(_citation_field(cit, "doc_id", "") or "")
+        target = doc_lookup.get(cid)
+        if target is None:
+            # 정규화 경계를 통과한 인용은 docs 에 존재해야 한다. 도달 시 원본 보존.
+            enriched.append(dict(cit) if isinstance(cit, dict) else cit.model_dump())
+            continue
+        meta = target.metadata
+        content = target.page_content if isinstance(target.page_content, str) else ""
+        anchor = str(_citation_field(cit, "anchor", "") or "")
+        enriched.append(
+            {
+                "doc_id": cid,
+                "text_span": anchor or content[:100],
+                "section": meta.get("section_path")
+                or meta.get("current_section", "일반 본문"),
+                "page": meta.get("page", 1),
+                "score": meta.get("rerank_score", meta.get("score", 0.0)),
+            }
+        )
+    return enriched
+
+
 def _render_doc_block(d: Document) -> str:
     """단일 문서의 컨텍스트 렌더 조각 — format_context/CTX 가드의 공유 단위.
 
@@ -677,8 +730,11 @@ async def _generate_pass(
                         if pending_content:
                             new_cites = citation_scanner.feed(full_response)
                             if new_cites:
-                                items = _filter_stream_cite_items(
-                                    [obj for _, obj in new_cites], docs
+                                items = _enrich_citations(
+                                    _filter_stream_cite_items(
+                                        [obj for _, obj in new_cites], docs
+                                    ),
+                                    docs,
                                 )
                                 if items:
                                     await _dispatch_event(
@@ -717,8 +773,11 @@ async def _generate_pass(
                 if pending_content:
                     tail_cites = citation_scanner.feed(full_response)
                     if tail_cites:
-                        items = _filter_stream_cite_items(
-                            [obj for _, obj in tail_cites], docs
+                        items = _enrich_citations(
+                            _filter_stream_cite_items(
+                                [obj for _, obj in tail_cites], docs
+                            ),
+                            docs,
                         )
                         if items:
                             await _dispatch_event(
@@ -745,8 +804,9 @@ async def _generate_pass(
             elif writer is not None and full_response:
                 tail_cites = citation_scanner.feed(full_response)
                 if tail_cites:
-                    items = _filter_stream_cite_items(
-                        [obj for _, obj in tail_cites], docs
+                    items = _enrich_citations(
+                        _filter_stream_cite_items([obj for _, obj in tail_cites], docs),
+                        docs,
                     )
                     if items:
                         await _dispatch_event(
@@ -822,7 +882,7 @@ async def _generate_pass(
                 )
             await _dispatch_event(
                 "citations",
-                {"citations": [c.model_dump() for c in parsed_answer.citations]},
+                {"citations": _enrich_citations(parsed_answer.citations, docs)},
                 writer=writer,
                 config=config,
             )
@@ -844,21 +904,19 @@ async def _generate_pass(
         recovered = _extract_partial(json_str)
         if recovered:
             cites = recovered.get("citations", [])
-            # P3-1: 복구 완전성 가시화 — 메타데이터 보존 여부를 명시
-            meta_preserved = sum(
-                1
-                for c in cites
-                if c.get("section") != "" or c.get("page") != 0 or c.get("score") != 0.0
-            )
+            # P3-1: 복구 완전성 가시화 — anchor(핵심 키워드) 보존 여부를 명시.
+            # section/page/score 는 문서 메타데이터로 하이드레이션되므로
+            # 복구 단계에서는 anchor 만 복원되면 충분하다.
+            anchor_preserved = sum(1 for c in cites if c.get("anchor"))
             logger.info(
                 f"[RAG] [GENERATE] 부분 복구 성공: "
                 f"final_answer={'Y' if recovered.get('final_answer') else 'N'}, "
-                f"citations={len(cites)} (메타데이터 보존 {meta_preserved}/{len(cites)})"
+                f"citations={len(cites)} (anchor 보존 {anchor_preserved}/{len(cites)})"
             )
-            if cites and meta_preserved < len(cites):
+            if cites and anchor_preserved < len(cites):
                 logger.warning(
-                    "[RAG] [GENERATE] citation 메타데이터 일부 누락 — "
-                    "하이라이팅 좌표 정확도 저하 가능"
+                    "[RAG] [GENERATE] citation anchor 일부 누락 — "
+                    "원문 스팬 폴백(page_content) 사용"
                 )
         # Fail-closed (정교화): 파싱 실패 원인이 깨진 JSON 시도일 때만 원시
         # 승격을 차단한다. 일반 텍스트 스트림(레거시/비구조 경로)은 기존처럼
@@ -892,7 +950,7 @@ async def _generate_pass(
         if writer is not None:
             await _dispatch_event(
                 "citations",
-                {"citations": [c.model_dump() for c in parsed_answer.citations]},
+                {"citations": _enrich_citations(parsed_answer.citations, docs)},
                 writer=writer,
                 config=config,
             )
@@ -1190,7 +1248,7 @@ async def generate(
         # 동일 docs를 재렌더·재해시하지 않도록 한다 (쿼리당 3중 렌더 → 1회).
         "context": context,
         "context_fingerprint": _docs_fingerprint(docs),
-        "citations": [c.model_dump() for c in parsed_answer.citations]
+        "citations": _enrich_citations(parsed_answer.citations, docs)
         if parsed_answer
         else [],
         "confidence": parsed_answer.confidence if parsed_answer else 0.0,

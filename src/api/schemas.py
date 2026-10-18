@@ -140,17 +140,22 @@ class AggregatedSearchResult(BaseModel):
 
 
 class Citation(BaseModel):
-    """답변 내 인용 정보"""
+    """답변 내 인용 정보 (경량 LLM 페이로드).
 
-    # 실제 doc_id 는 정수 인덱스가 아니라 fast_hash() 해시 문자열인 경우가 많다
-    # (graph_builder.py: doc_id = metadata.get("doc_id", fast_hash(page_content))).
-    # 모델이 따옴표 없이 해시를 넣으면 JSON 파싱이 실패하므로, 복구 후 문자열도
-    # 수용하도록 int | str 로 완화한다.
+    LLM 은 ``doc_id`` 와 짧은 ``anchor``(핵심 키워드)만 생성한다. 원문 스팬
+    (text_span)·섹션(section)·페이지(page)·점수(score)는 검색된 Document 의
+    metadata/page_content 에 이미 존재하므로 백엔드가 하이드레이션한다
+    (``_generate._enrich_citations``). 이로써 로컬 LLM 이 원문을 토큰 단위로
+    재출력(echo)하며 발생하던 꼬리 지연(tail stall)을 제거한다.
+
+    실제 doc_id 는 정수 인덱스가 아니라 fast_hash() 해시 문자열인 경우가 많다
+    (graph_builder.py: doc_id = metadata.get("doc_id", fast_hash(page_content))).
+    모델이 따옴표 없이 해시를 넣으면 JSON 파싱이 실패하므로, 복구 후 문자열도
+    수용하도록 int | str 로 완화한다.
+    """
+
     doc_id: int | str
-    text_span: str
-    section: str
-    page: int
-    score: float
+    anchor: str = ""
 
 
 class AnswerStructure(BaseModel):
