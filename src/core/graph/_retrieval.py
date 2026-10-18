@@ -513,41 +513,31 @@ def _merge_adjacent_chunks(
     docs: list[Document], max_tokens: int = 1200
 ) -> list[Document]:
     """리랭크 순서를 유지하면서 같은 페이지의 연속된 청크들을 하나로 합칩니다."""
-    if not docs:
-        return []
-    if len(docs) == 1:
+    if len(docs) <= 1:
         return docs
 
     from common.utils import count_tokens_rough
 
-    # (Document, cached_token_count) 튜플로 토큰 수 캐싱
     merged_entries: list[tuple[Document, int]] = []
+    group_map: dict[tuple[Any, Any, Any], list[int]] = {}
 
     for doc in docs:
-        merged = False
         doc_tokens = count_tokens_rough(doc.page_content)
         next_m = doc.metadata
-        n_src, n_page, n_sec = (
-            next_m.get("source"),
-            next_m.get("page"),
-            next_m.get("current_section"),
-        )
+        key = (next_m.get("source"), next_m.get("page"), next_m.get("current_section"))
         next_start, next_end = next_m.get("start_index"), next_m.get("end_index")
+        next_idx = int(next_m.get("chunk_index", 0))
+        next_score = float(next_m.get("rerank_score", 0.0) or 0.0)
 
-        for idx, (existing_doc, current_tokens) in enumerate(merged_entries):
-            curr_m = existing_doc.metadata
-
-            # 1. 단락 평가(Short-Circuit): 출처/페이지/섹션 불일치 또는 토큰 초과 시 즉시 skip
-            if (
-                curr_m.get("source") != n_src
-                or curr_m.get("page") != n_page
-                or curr_m.get("current_section") != n_sec
-                or current_tokens + doc_tokens + 10 > max_tokens
-            ):
+        merged = False
+        for idx in group_map.get(key, []):
+            existing_doc, current_tokens = merged_entries[idx]
+            if current_tokens + doc_tokens + 10 > max_tokens:
                 continue
 
-            # 2. 연속성 검증
+            curr_m = existing_doc.metadata
             curr_start, curr_end = curr_m.get("start_index"), curr_m.get("end_index")
+
             if curr_end is not None and next_start is not None:
                 is_consecutive = abs(next_start - curr_end) <= 5 or (
                     curr_start is not None
@@ -556,7 +546,6 @@ def _merge_adjacent_chunks(
                 )
             else:
                 curr_idx = int(curr_m.get("chunk_index", 0))
-                next_idx = int(next_m.get("chunk_index", 0))
                 is_consecutive = abs(next_idx - curr_idx) <= 1
 
             if is_consecutive:
@@ -565,14 +554,11 @@ def _merge_adjacent_chunks(
                     next_end if next_end is not None else curr_end
                 )
                 curr_idx = int(curr_m.get("chunk_index", 0))
-                next_idx = int(next_m.get("chunk_index", 0))
                 existing_doc.metadata["chunk_index"] = max(next_idx, curr_idx)
+                existing_doc.metadata["rerank_score"] = max(
+                    float(curr_m.get("rerank_score", 0.0) or 0.0), next_score
+                )
 
-                curr_score = float(curr_m.get("rerank_score", 0.0) or 0.0)
-                next_score = float(next_m.get("rerank_score", 0.0) or 0.0)
-                existing_doc.metadata["rerank_score"] = max(curr_score, next_score)
-
-                # 실제 병합 성공 시에만 1회 토큰 수 갱신
                 merged_entries[idx] = (
                     existing_doc,
                     count_tokens_rough(existing_doc.page_content),
@@ -581,11 +567,10 @@ def _merge_adjacent_chunks(
                 break
 
         if not merged:
+            group_map.setdefault(key, []).append(len(merged_entries))
             merged_entries.append(
                 (
-                    Document(
-                        page_content=doc.page_content, metadata=copy.copy(doc.metadata)
-                    ),
+                    Document(page_content=doc.page_content, metadata=copy.copy(next_m)),
                     doc_tokens,
                 )
             )
