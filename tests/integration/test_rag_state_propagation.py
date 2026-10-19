@@ -36,6 +36,7 @@ from langchain_core.documents import Document
 
 import core.graph.graph_builder as gb  # noqa: E402
 from core.graph._graph_core import (  # noqa: E402
+    _QUERY_CACHE_VALUE_VERSION,
     delete_graph_thread,
     invalidate_graph_cache,
 )
@@ -255,7 +256,17 @@ class TestQueryCachePropagation:
         try:
             # preprocess :306-328 캐시 히트 경로 stub (value-import 패치 대상)
             cm = MagicMock()
-            cm.get = AsyncMock(return_value={"response": "CACHED", "confidence": 0.9})
+            # 버전 필드 필수: `_is_valid_query_cache_value` 는
+            # `version == _QUERY_CACHE_VALUE_VERSION` 를 요구한다
+            # (94bc8c0 "verify every cache read path, reject downgrades").
+            # version 누락 시 캐시 미스로 처리되어 이 테스트가 red 가 된다.
+            cm.get = AsyncMock(
+                return_value={
+                    "response": "CACHED",
+                    "confidence": 0.9,
+                    "version": _QUERY_CACHE_VALUE_VERSION,
+                }
+            )
             with (
                 patch(
                     "core.graph.graph_builder.retrieve_and_rerank",
@@ -311,7 +322,15 @@ class TestQueryCachePropagation:
         thread_id = "fix3-cachepollute-thread"
         try:
             cm = MagicMock()
-            cm.get = AsyncMock(return_value={"response": "  ", "confidence": 0.9})
+            # version 은 유효하게 둔다: 이 테스트는 "빈 응답" 가드를 검증해야지
+            # 버전 불일치로 인한 미스를 검증하는 것이 아니다.
+            cm.get = AsyncMock(
+                return_value={
+                    "response": "  ",
+                    "confidence": 0.9,
+                    "version": _QUERY_CACHE_VALUE_VERSION,
+                }
+            )
             with (
                 patch(
                     "core.graph.graph_builder.retrieve_and_rerank",

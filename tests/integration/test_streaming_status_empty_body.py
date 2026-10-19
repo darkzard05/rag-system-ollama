@@ -1,29 +1,29 @@
 """
-Deterministic seeded AppTest repro (Q1): a streaming message rendered while
-``thought=""`` keeps its body EMPTY (no spurious content), while the pipeline
-step ``status`` is still surfaced in the "Answer details" expander label/body.
+Deterministic seeded AppTest repro: a seeded streaming message renders through
+``_draw_streaming_message`` (chat.py) → ``render_generation_expander``
+(chat_references.py), which draws the "Answer details" evidence expander only
+when there is something to show.
 
-The current streaming render path is ``msg_type=="streaming"`` →
-``_draw_streaming_message`` (chat.py:633) → ``render_generation_expander``
-(chat.py:208) which draws a single native ``st.expander("Answer details")``.
-This is NOT the old ``st.status`` box; the ``st.status`` widget is now used
-only for the build-progress system message. The streaming renderer shows the
-status step only when there is something to show (steps / thought / metrics /
-documents); with ``thought=""`` and no steps the expander renders just a
-spinner and an empty body.
+Current contract (render_generation_expander):
+- ``thought=""`` AND no references (documents/citations) → early return, NO
+  expander is drawn at all (the strongest "no spurious content" guarantee for a
+  thought-less streaming turn).
+- ``thought`` only → "Thought Process" expander whose body carries the thought.
+- references only → "Cited Sources" expander.
+- ``thought`` + references → "Sources & Reasoning" expander.
 
-AppTest idioms (streamlit 1.60.0; see test_chat_expander_verify_b.py:16-33,
-52-70): SessionManager is a process-global store shared with the AppTest
-script thread (sid "test session id"), so state is seeded with
-``SessionManager.add_message(...)`` between ``.run()`` calls. No real Ollama:
-``IS_CI_TEST=true`` makes ``load_llm`` return ``GenericFakeChatModel``
-(model_loader.py:455-469).
+AppTest idioms (streamlit 1.60.0; see test_chat_expander_verify_b.py): the
+SessionManager store is a process-global shared with the AppTest script thread
+(sid "test session id"), so state is seeded with ``SessionManager.add_message``
+between ``.run()`` calls. No real Ollama: ``IS_CI_TEST=true`` makes ``load_llm``
+return ``GenericFakeChatModel`` (model_loader.py).
 """
 
 import os
 import sys
 
 import pytest
+from langchain_core.documents import Document
 from streamlit.testing.v1 import AppTest
 
 # Headless stub: model_loader returns fake LLM/embedders, no real Ollama calls.
@@ -36,6 +36,17 @@ from core.session import SessionManager  # noqa: E402
 
 # How long each script run may take before AppTest raises. Boot is ~1.5s.
 _RUN_TIMEOUT = 60
+
+# render_generation_expander titles (strings.py, both locales) — used to locate
+# the streaming evidence expander among unrelated ones (e.g. sidebar "Settings").
+_GEN_EXPANDER_LABELS = (
+    "Thought Process",
+    "Cited Sources",
+    "Sources & Reasoning",
+    "사고 과정",
+    "인용 출처",
+    "출처 및 추론 과정",
+)
 
 
 @pytest.fixture(autouse=True)
@@ -63,7 +74,12 @@ def _app_session_id() -> str:
 
 
 def _set_ready_state(sid: str) -> None:
-    """Satisfy SessionManager.is_ready_for_chat (manager.py:350-357)."""
+    """Satisfy SessionManager.is_ready_for_chat (manager.py) + pin locale.
+
+    ``ui_lang`` is pinned to "en" so the expander titles are deterministic
+    (AppTest default is "en"; sidebar.py calls ``set_lang`` from this key).
+    """
+    SessionManager.set("ui_lang", "en", sid)
     SessionManager.set("pdf_processed", True, sid)
     SessionManager.set("rag_engine", object(), sid)
     SessionManager.set("is_building_rag", False, sid)
@@ -72,12 +88,12 @@ def _set_ready_state(sid: str) -> None:
     SessionManager.set("pdf_processing_error", None, sid)
 
 
-def _seed_streaming(sid: str, *, status: str, thought: str, process_steps=None):
+def _seed_streaming(sid: str, *, status: str, thought: str, documents=None):
     """Seed/re-seed the streaming message.
 
     ``SessionManager.add_message`` merges kwargs and UPDATES in place by
-    ``msg_id`` (manager.py:429-468), so re-seeding with the same
-    ``msg_id`` mutates the existing message in the shared store.
+    ``msg_id``, so re-seeding with the same ``msg_id`` mutates the existing
+    message in the shared store.
     """
     SessionManager.add_message(
         "assistant",
@@ -85,73 +101,78 @@ def _seed_streaming(sid: str, *, status: str, thought: str, process_steps=None):
         msg_type="streaming",
         status=status,
         thought=thought,
-        documents=[],
+        documents=documents or [],
         metrics={},
         msg_id="repro_1",
         session_id=sid,
-        **({"process_steps": process_steps} if process_steps is not None else {}),
     )
 
 
-def _answer_details(at):
-    """Return the 'Answer details' expander element, or None."""
-    return next((e for e in at.expander if e.label == "Answer details"), None)
+def _gen_expander(at):
+    """Return the streaming generation/evidence expander element, or None."""
+    return next((e for e in at.expander if e.label in _GEN_EXPANDER_LABELS), None)
 
 
-def test_streaming_status_body_empty_when_thought_empty():
-    """The streaming "Answer details" expander body is EMPTY when thought="";
-    the sequential pipeline step still surfaces via the status/process flow."""
+def _doc(page: int = 3) -> Document:
+    return Document(
+        page_content="참조 본문입니다.",
+        metadata={"page": page, "section": "Intro"},
+    )
+
+
+def test_streaming_expander_reflects_thought_and_references():
+    """A streaming turn's evidence expander mirrors thought/references:
+
+    - ``thought=""`` + no refs → NO expander (empty-body guarantee);
+    - ``thought`` only → "Thought Process" with the thought body;
+    - refs only → "Cited Sources";
+    - both → "Sources & Reasoning".
+    """
     SessionManager.reset()
     at = AppTest.from_file("src/main.py").run(timeout=_RUN_TIMEOUT)
     sid = _app_session_id()
     assert not at.exception
     _set_ready_state(sid)
 
-    # (a) A seeded streaming message renders the native "Answer details"
-    #     expander (the streaming renderer, chat.py:633/208).
+    # (a) thought="" and no references → the evidence expander is NOT drawn
+    #     (render_generation_expander early-returns). This is the "빈 박스 없음"
+    #     guarantee: a thought-less, reference-less streaming turn shows nothing
+    #     spurious above the body.
     _seed_streaming(sid, status="답변 논리 설계 및 생성 중...", thought="")
     at.run(timeout=_RUN_TIMEOUT)
+    assert _gen_expander(at) is None, [e.label for e in at.expander]
 
-    exp = _answer_details(at)
-    assert exp is not None, [e.label for e in at.expander]
-
-    # (b) With thought="" and no process_steps, the body markdown stays EMPTY
-    #     (T4/F1 "빈 박스" proof inverted: the box is present but body is empty).
-    body_markdown = [m.value for m in exp.markdown]
-    body_text = [t.value for t in exp.text]
-    assert len(body_markdown) == 0, (
-        f"expected EMPTY expander body markdown, got markdown={body_markdown}"
-    )
-    assert len(body_text) == 0, (
-        f"expected EMPTY expander body text, got text={body_text}"
-    )
-
-    # (c) Re-seed with a different status → the SAME streaming expander persists
-    #     (single fixed widget, no label churn). The status is carried on the
-    #     message and consumed by the renderer for the spinner caption.
-    _seed_streaming(sid, status="문서 관련성 검증 중...", thought="")
-    at.run(timeout=_RUN_TIMEOUT)
-    assert _answer_details(at) is not None
-
-    # (d) Seed a thought → the body renders it: isolates thought-emptiness as
-    #     the cause of the empty body.
+    # (b) thought only → "Thought Process" expander carrying the thought body.
     _seed_streaming(sid, status="답변 논리 설계 및 생성 중...", thought="생각 중...")
     at.run(timeout=_RUN_TIMEOUT)
-    exp = _answer_details(at)
+    exp = _gen_expander(at)
+    assert exp is not None, [e.label for e in at.expander]
+    assert exp.label == "Thought Process", exp.label
     thought_text = "".join(m.value for m in exp.markdown)
     assert "생각 중..." in thought_text, thought_text
 
-    # (e) Seed process_steps → the process-steps rendering path
-    #     (chat.py:280, " · ".join(steps)) fills the body even when thought="" —
-    #     the sequential pipeline steps populate the expander.
+    # (c) references only (thought="") → "Cited Sources" expander.
     _seed_streaming(
         sid,
         status="답변 논리 설계 및 생성 중...",
         thought="",
-        process_steps=["관련 지식 탐색 중...", "관련 문서 2개를 찾았습니다."],
+        documents=[_doc(3)],
     )
     at.run(timeout=_RUN_TIMEOUT)
-    exp = _answer_details(at)
-    steps_text = "".join(m.value for m in exp.markdown)
-    assert "관련 지식 탐색 중..." in steps_text, steps_text
+    exp = _gen_expander(at)
+    assert exp is not None, [e.label for e in at.expander]
+    assert exp.label == "Cited Sources", exp.label
+
+    # (d) thought + references → "Sources & Reasoning" expander.
+    _seed_streaming(
+        sid,
+        status="답변 논리 설계 및 생성 중...",
+        thought="생각 중...",
+        documents=[_doc(3)],
+    )
+    at.run(timeout=_RUN_TIMEOUT)
+    exp = _gen_expander(at)
+    assert exp is not None, [e.label for e in at.expander]
+    assert exp.label == "Sources & Reasoning", exp.label
+    assert "생각 중..." in "".join(m.value for m in exp.markdown)
     assert not at.exception
