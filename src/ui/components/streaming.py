@@ -11,6 +11,7 @@ the pure-logic core:
 - ``_finalize_pdf_side_effects``: post-turn PDF annotation hydration.
 """
 
+import html
 import logging
 import time
 import uuid
@@ -19,7 +20,12 @@ from typing import Any
 
 from api.stream_pipeline import chunk_to_stream_events
 from common.config import MSG_ERROR_OLLAMA_NOT_RUNNING
-from common.utils import doc_stable_id, extract_annotations_from_docs
+from common.utils import (
+    doc_stable_id,
+    extract_annotations_from_docs,
+    normalize_latex_delimiters,
+    strip_context_tokens,
+)
 from core.session import SessionManager
 from ui.components.reference_plan import (
     adopt_prewarmed_annotations,
@@ -479,6 +485,12 @@ def consume_stream_into_message(
         else:
             lean_documents.append(d)
 
+    cached_processed = None
+    if accumulated:
+        escaped = html.escape(accumulated)
+        normalized = normalize_latex_delimiters(escaped)
+        cached_processed = strip_context_tokens(normalized)
+
     SessionManager.add_message(
         "assistant",
         accumulated,
@@ -489,7 +501,7 @@ def consume_stream_into_message(
         metrics=metrics,
         citations=citations,
         process_steps=process_steps[-10:],
-        processed_content=None,
+        processed_content=cached_processed,
         cancelled=cancelled,
         session_id=sid,
     )

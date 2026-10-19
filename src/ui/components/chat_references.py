@@ -41,6 +41,17 @@ __all__ = [
 ]
 
 
+_RE_LABEL_HEADER = re.compile(r"(?m)^\s*#{1,6}\s*")
+_RE_LABEL_BULLET = re.compile(r"(?m)^\s*[-•·]\s+")
+_RE_LABEL_LINK = re.compile(r"\[([^\]]*)\]\([^)]*\)")
+_RE_LABEL_BOLD = re.compile(r"\*\*(.+?)\*\*")
+_RE_LABEL_UNDERLINE = re.compile(r"__(.+?)__")
+_RE_LABEL_SPECIAL = re.compile(r"[*`~]")
+_RE_LABEL_BRACKETS = re.compile(r"[\[\]]")
+_RE_COLLAPSE_WS = re.compile(r"\s+")
+_RE_TRAILING_DOTS = re.compile(r"[.…\s]+$")
+
+
 def _strip_markdown_for_label(text: str) -> str:
     """행 라벨용 마크다운 걷어내기: 헤더 마커·불릿·표 파이프·강조·링크 정리.
 
@@ -48,15 +59,15 @@ def _strip_markdown_for_label(text: str) -> str:
     행에 그대로 노출된다(스크린샷 P1). 단어 내 단일 ``_``(snake_case 식별자
     보호)는 유지하고, 짝을 이루는 강조 마커만 제거한다.
     """
-    cleaned = re.sub(r"(?m)^\s*#{1,6}\s*", "", text)
-    cleaned = re.sub(r"(?m)^\s*[-•·]\s+", "", cleaned)
+    cleaned = _RE_LABEL_HEADER.sub("", text)
+    cleaned = _RE_LABEL_BULLET.sub("", cleaned)
     cleaned = cleaned.replace("![", "[")
-    cleaned = re.sub(r"\[([^\]]*)\]\([^)]*\)", r"\1", cleaned)
-    cleaned = re.sub(r"\*\*(.+?)\*\*", r"\1", cleaned)
-    cleaned = re.sub(r"__(.+?)__", r"\1", cleaned)
-    cleaned = re.sub(r"[*`~]", "", cleaned)
+    cleaned = _RE_LABEL_LINK.sub(r"\1", cleaned)
+    cleaned = _RE_LABEL_BOLD.sub(r"\1", cleaned)
+    cleaned = _RE_LABEL_UNDERLINE.sub(r"\1", cleaned)
+    cleaned = _RE_LABEL_SPECIAL.sub("", cleaned)
     # bare 대괄호 제거: 행 라벨의 :blue[] 색 래퍼 파싱을 깨뜨리므로.
-    cleaned = re.sub(r"[\[\]]", "", cleaned)
+    cleaned = _RE_LABEL_BRACKETS.sub("", cleaned)
     return cleaned.replace("|", " ")
 
 
@@ -71,11 +82,11 @@ def normalize_excerpt(text: object, max_chars: int = 500) -> str:
     """
     if not isinstance(text, str):
         return ""
-    collapsed = re.sub(r"\s+", " ", _strip_markdown_for_label(text)).strip()
+    collapsed = _RE_COLLAPSE_WS.sub(" ", _strip_markdown_for_label(text)).strip()
     if len(collapsed) > max_chars:
         # 절단 경계의 마침표 런을 접은 뒤 ...付与: 발췌원 trailing "..."와
         # 겹쳐 "...." 이중 말줄임이 되지 않도록 한다 (P5).
-        cut = re.sub(r"[.…\s]+$", "", collapsed[:max_chars].rstrip())
+        cut = _RE_TRAILING_DOTS.sub("", collapsed[:max_chars].rstrip())
         return (cut if cut else collapsed[:max_chars].rstrip()) + "..."
     return collapsed
 

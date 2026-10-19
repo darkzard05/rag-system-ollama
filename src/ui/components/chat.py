@@ -949,10 +949,19 @@ def _render_streaming_with_write_stream(
         final_error: str | None = _friendly_stream_error(Exception(error_text))
     else:
         final_error = stream_error
+
+    final_text = str(response) if response else (aux_state.get("content") or "")
+    # 영속화 시점에 display HTML을 1회만 선계산하여 타임라인 Rerun 시 O(1) 마운트 지원
+    cached_processed = None
+    if final_text and not final_error:
+        escaped = html.escape(final_text)
+        normalized = normalize_latex_delimiters(escaped)
+        cached_processed = strip_context_tokens(normalized)
+
     _t_persist = time.perf_counter()
     SessionManager.add_message(
         "assistant",
-        str(response) if response else (aux_state.get("content") or ""),
+        final_text,
         msg_type="general",
         msg_id=msg_id,
         thought=aux_state.get("thought", ""),
@@ -960,7 +969,7 @@ def _render_streaming_with_write_stream(
         metrics=aux_state.get("metrics", {}),
         citations=aux_state.get("citations", []),
         process_steps=aux_state.get("process_steps", [])[-10:],
-        processed_content=None,
+        processed_content=cached_processed,
         cancelled=cancelled,
         error=final_error,
         session_id=current_sid,
