@@ -368,12 +368,20 @@ def on_file_upload() -> None:
 def _find_cached_upload(
     temp_dir: str, file_bytes: bytes, uploaded_hash: str
 ) -> str | None:
-    """Return the path of an existing upload with identical bytes, if any."""
-
+    """해시 기반 결정론적 파일명(Content-Addressed)으로 O(1) 파일 존재 여부 확인."""
     from core.document_processor import compute_file_hash
 
     if not uploaded_hash:
         return None
+    # 업로드 파일명을 해시 기반으로 정규화하여 디스크 전수 조사 제거
+    target_file = Path(temp_dir) / f"upload_{uploaded_hash}.pdf"
+    try:
+        if target_file.is_file() and target_file.stat().st_size == len(file_bytes):
+            return str(target_file)
+    except OSError:
+        pass
+
+    # Fallback for legacy timestamp-based filenames if any
     try:
         candidates = sorted(Path(temp_dir).glob("upload_*.pdf"))
     except OSError as e:
@@ -382,6 +390,8 @@ def _find_cached_upload(
     expected_size = len(file_bytes)
     for entry in candidates:
         try:
+            if entry.name == f"upload_{uploaded_hash}.pdf":
+                continue
             if entry.stat().st_size != expected_size:
                 continue
             if compute_file_hash(str(entry)) == uploaded_hash:
@@ -466,11 +476,10 @@ def _process_uploaded_file(uploaded_file) -> None:
                 tmp_path = cached_path
                 logger.info(f"[UPLOAD] 동일 파일 재사용 (dedup): {tmp_path}")
             else:
-                tmp_path = os.path.join(
-                    temp_dir, f"upload_{sid}_{int(time.time())}.pdf"
-                )
-                with open(tmp_path, "wb") as f:
-                    shutil.copyfileobj(uploaded_file, f)
+                tmp_path = os.path.join(temp_dir, f"upload_{uploaded_hash}.pdf")
+                if not os.path.exists(tmp_path):
+                    with open(tmp_path, "wb") as f:
+                        shutil.copyfileobj(uploaded_file, f)
 
             SessionManager.set("pdf_file_path", tmp_path)
             # [UX] 분석 진행 자리표시자 메시지: _bg_rebuild_task가 동일 msg_id로 업데이트
