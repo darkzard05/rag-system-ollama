@@ -92,22 +92,7 @@ def _get_pdf_total_pages(pdf_path: str) -> int | None:
 
 @safe_cache_data(ttl=300, show_spinner=False)
 def _get_pdf_page_bytes(pdf_path: str, file_hash: str, page: int) -> bytes:
-    """요청한 단일 페이지만 담은 PDF 바이트를 반환한다.
-
-    streamlit_pdf_viewer base64-encodes and re-serializes whatever it is
-    given on every call, so passing the whole document defeats caching.
-    그래서 전체가 아닌 1페이지 추출본만 전달해 매 rerun 전송량을 줄인다.
-    file_hash는 캐시 키 전용이다 (본문에서 참조하지 않음): 같은 경로에
-    다른 파일이 업로드되면 캐시 키가 달라져 오래된 추출본을 피한다.
-
-    ``garbage=4``가 필수다: select()는 페이지 트리만 줄이고 다른 페이지의
-    간접 객체(폰트/이미지)는 그대로 직렬화되어, 이 값이 없으면 실제로는
-    0.7%만 줄어 최적화가 무효가 된다. garbage=4는 참조되지 않는 객체를
-    제거하며 렌더링 결과는 픽셀 단위로 동일하다(측정: 20쪽 논문 5,563,865
-    → 평균 332,903 바이트, 94.0% 감소 / 최대 1,925,259, 최소 46,522).
-    텍스트만 있는 페이지는 46KB까지 줄지만 이미지가 많은 페이지는 1.9MB가
-    남는다(그 페이지의 실제 이미지 데이터이므로 더 줄이면 화질이 상한다).
-    """
+    """1페이지 추출: 불필요한 전수 스트림 검사(garbage=4)를 생략하고 고속 압축(garbage=3) 적용."""
     if not pdf_path or page < 1:
         return b""
     if not os.path.exists(pdf_path):
@@ -117,7 +102,9 @@ def _get_pdf_page_bytes(pdf_path: str, file_hash: str, page: int) -> bytes:
             if doc.page_count == 0 or page > doc.page_count:
                 return b""
             doc.select([page - 1])
-            return doc.tobytes(garbage=4)
+            # garbage=3: 참조 해제된 타 페이지 객체 제거 + xref 압축 (O(S) 선형 처리)
+            # deflate=True: 스트림 압축 유지
+            return doc.tobytes(garbage=3, deflate=True)
     except Exception as e:
         logger.warning(f"[PDF] {page}페이지 추출 실패 ({pdf_path}): {e}")
         return b""
