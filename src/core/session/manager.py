@@ -121,6 +121,24 @@ class SessionManager:
         "current_page": 1,
     }
 
+    # UI 렌더링에 전혀 필요 없는 무거운 백엔드 런타임 객체 키.
+    # 여기 등록된 키는 SSoT(``_fallback_sessions``)에만 보관하고 UI 미러
+    # (``st.session_state``)로는 값을 복사하지 않는다. 그렇지 않으면 FAISS
+    # docstore/index, BM25 역색인, LangGraph 컴파일 그래프, LLM/임베더
+    # 클라이언트가 Streamlit 세션마다 복제되어 세션당 수백 MB가 팽창한다.
+    # 소비(참조)는 항상 ``SessionManager.get`` 또는 ResourceCoordinator를
+    # 통해 SSoT에서 수행해야 한다.
+    _NON_UI_SYNC_KEYS: frozenset[str] = frozenset(
+        {
+            "active_faiss_retriever",
+            "active_bm25_retriever",
+            "rag_engine",
+            "llm",
+            "embedder",
+            "doc_pool",
+        }
+    )
+
     _fallback_sessions: dict[str, dict[str, Any]] = {}
     _session_locks: dict[str, threading.Lock] = {}
     _map_lock = threading.Lock()
@@ -328,31 +346,37 @@ class SessionManager:
         snap_versions: dict[str, int] = {}
         with cls._acquire_lock(sid):
             versions = state.setdefault("_dirty_versions", {})
+
+            def _stage(k: str) -> None:
+                # 모든 dirty 키를 버전과 함께 스냅샷한다. 백엔드 전용 키는
+                # 값을 UI로 내보내지 않고(메모리 격리) ``target_keys``에만
+                # 포함해 dirty 해소 대상으로 삼는다 — 그렇지 않으면 이 키들이
+                # ``_dirty_keys``에 영구 잔류해 매 sync마다 재시도된다.
+                try:
+                    snap_versions[k] = int(versions.get(k, 0))
+                except (TypeError, ValueError):
+                    snap_versions[k] = 0
+                target_keys.add(k)
+                if k not in cls._NON_UI_SYNC_KEYS:
+                    values[k] = state[k]
+
             if key:
                 if key in state:
-                    values[key] = state[key]
-                    target_keys.add(key)
-                    try:
-                        snap_versions[key] = int(versions.get(key, 0))
-                    except (TypeError, ValueError):
-                        snap_versions[key] = 0
+                    _stage(key)
                 deleted_keys = {key} & state.setdefault("_deleted_keys", set()).copy()
             else:
                 dirty = state["_dirty_keys"].copy()
                 for k in dirty:
                     if k in state:
-                        values[k] = state[k]
-                        target_keys.add(k)
-                        try:
-                            snap_versions[k] = int(versions.get(k, 0))
-                        except (TypeError, ValueError):
-                            snap_versions[k] = 0
+                        _stage(k)
             # 삭제 tombstone 스냅샷: state에 이미 없으므로 values에 담지 않고
             # 별도로 전달한다. set() 후 add는 동일 키 부활(set)과의 경합에서
             # tombstone이 지지 않도록 스냅샷 시점에 고정한다.
             deleted_keys = state.setdefault("_deleted_keys", set()).copy()
 
-        if not values and not deleted_keys:
+        # 값이 하나도 없더라도 소비 대상(target_keys)이 있으면 진행한다 —
+        # 백엔드 전용 키만 dirty인 경우에도 dirty 해소를 위해 필요하다.
+        if not target_keys and not deleted_keys:
             return
 
         if cls._ui_sync is not None:

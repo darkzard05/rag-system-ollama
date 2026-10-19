@@ -217,6 +217,38 @@ def test_partial_sync():
         assert len(state["_dirty_keys"]) == 0
 
 
+def test_heavy_backend_keys_are_not_mirrored_to_ui():
+    """Regression: heavy backend runtime objects must stay out of st.session_state.
+
+    FAISS/BM25 retrievers, the compiled LangGraph, LLM and embedder clients are
+    stored in the SSoT only. Mirroring them into ``st.session_state`` clones
+    hundreds of MB per browser session. They must be skipped by
+    ``sync_to_streamlit`` while their dirty markers are still consumed (no
+    permanent ``_dirty_keys`` residue).
+    """
+    sid = "heavy_key_sid"
+    SessionManager.init_session(sid)
+
+    st_state: dict = {}
+    p1, p2, p3 = _patch_sync_deps(st_state)
+    with p1, p2, p3:
+        for key in SessionManager._NON_UI_SYNC_KEYS:
+            SessionManager.set(key, object(), session_id=sid)
+        SessionManager.set("messages", ["kept"], session_id=sid)
+
+        SessionManager.sync_to_streamlit(session_id=sid)
+
+        for key in SessionManager._NON_UI_SYNC_KEYS:
+            assert key not in st_state, f"{key} leaked into st.session_state"
+        assert st_state.get("messages") == ["kept"]
+
+        # SSoT remains authoritative for the skipped keys.
+        assert SessionManager.get("llm", session_id=sid) is not None
+
+        # Dirty markers consumed even though values were not mirrored.
+        assert SessionManager.has_pending_ui_sync(sid) is False
+
+
 def test_get_messages_returns_copy_not_shared_reference():
     """Regression: get_messages() must return a copy, not the live stored list.
 
