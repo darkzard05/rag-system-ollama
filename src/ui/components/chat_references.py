@@ -15,6 +15,7 @@ import html
 import logging
 import re
 import time
+from collections import OrderedDict
 from typing import Any
 
 import streamlit as st
@@ -31,6 +32,7 @@ __all__ = [
     "_handle_doc_jump",
     "_handle_page_jump",
     "_render_references_content",
+    "clear_reference_rows_cache",
     "is_ghost_state",
     "normalize_excerpt",
     "ordered_reference_entries",
@@ -39,6 +41,18 @@ __all__ = [
     "render_inline_citation_badges",
     "render_reference_list",
 ]
+
+
+# [최적화] 행 요약 및 발췌 계산 캐시 (FIFO/LRU 256 슬롯)
+_REFERENCE_ROWS_CACHE: OrderedDict[tuple[Any, ...], list[tuple[str, int]]] = (
+    OrderedDict()
+)
+_MAX_REF_ROWS_CACHE_SIZE = 256
+
+
+def clear_reference_rows_cache() -> None:
+    """단위 테스트 및 세션 초기화용 캐시 초기화 함수."""
+    _REFERENCE_ROWS_CACHE.clear()
 
 
 _RE_LABEL_HEADER = re.compile(r"(?m)^\s*#{1,6}\s*")
@@ -161,6 +175,8 @@ def render_reference_list(
     기존 ``_handle_page_jump`` 콜백 경로를 그대로 사용해
     ``pdf_target_page(manual)`` 토큰을 세팅한다 (P0 콜백 계약 유지).
     """
+    if not documents and not citations:
+        return False
 
     def _doc_text(doc: Any) -> str:
         content = getattr(doc, "page_content", None)
@@ -168,40 +184,69 @@ def render_reference_list(
             content = doc.get("page_content")
         return content if isinstance(content, str) else ""
 
-    span_by_doc: dict[str, str] = {}
-    page_by_doc: dict[str, int] = {}
-    for cit in citations or []:
-        if not isinstance(cit, dict):
-            continue
-        doc_id = cit.get("doc_id")
-        if doc_id is None:
-            continue
-        key = str(doc_id)
-        span = cit.get("text_span")
-        if key not in span_by_doc and isinstance(span, str) and span.strip():
-            span_by_doc[key] = span
-        page = _coerce_page(cit.get("page"))
-        if key not in page_by_doc and page is not None:
-            page_by_doc[key] = page
-
-    rows: list[tuple[str, int]] = []
-    seen: set[str] = set()
-    for doc in documents or []:
-        sid = doc_stable_id(doc)
-        if sid in seen:
-            continue
-        seen.add(sid)
-        excerpt = normalize_excerpt(
-            span_by_doc.get(sid) or _doc_text(doc), excerpt_chars
+    # 문서 및 인용구 목록의 지문 기반 캐시 키 구성 (동일 렌더링 재계산 스킵)
+    doc_sigs = tuple(
+        (
+            getattr(d, "metadata", {}).get("doc_id")
+            if hasattr(d, "metadata")
+            else (d.get("metadata", {}).get("doc_id") if isinstance(d, dict) else None)
         )
-        if not excerpt:
-            continue
-        page = page_by_doc.get(sid)
-        if page is None:
-            page = _coerce_page(get_doc_metadata(doc).get("page")) or 1
-        rows.append((excerpt, page))
-        if len(rows) >= max(1, max_rows):
-            break
+        or id(d)
+        for d in (documents or [])[:max_rows]
+    )
+    cit_count = len(citations or [])
+    cache_key = (
+        msg_id,
+        len(documents or []),
+        doc_sigs,
+        cit_count,
+        max_rows,
+        excerpt_chars,
+    )
+
+    if cache_key in _REFERENCE_ROWS_CACHE:
+        _REFERENCE_ROWS_CACHE.move_to_end(cache_key)
+        rows = _REFERENCE_ROWS_CACHE[cache_key]
+    else:
+        span_by_doc: dict[str, str] = {}
+        page_by_doc: dict[str, int] = {}
+        for cit in citations or []:
+            if not isinstance(cit, dict):
+                continue
+            doc_id = cit.get("doc_id")
+            if doc_id is None:
+                continue
+            key = str(doc_id)
+            span = cit.get("text_span")
+            if key not in span_by_doc and isinstance(span, str) and span.strip():
+                span_by_doc[key] = span
+            page = _coerce_page(cit.get("page"))
+            if key not in page_by_doc and page is not None:
+                page_by_doc[key] = page
+
+        rows = []
+        seen: set[str] = set()
+        for doc in documents or []:
+            sid = doc_stable_id(doc)
+            if sid in seen:
+                continue
+            seen.add(sid)
+            excerpt = normalize_excerpt(
+                span_by_doc.get(sid) or _doc_text(doc), excerpt_chars
+            )
+            if not excerpt:
+                continue
+            page = page_by_doc.get(sid)
+            if page is None:
+                page = _coerce_page(get_doc_metadata(doc).get("page")) or 1
+            rows.append((excerpt, page))
+            if len(rows) >= max(1, max_rows):
+                break
+
+        _REFERENCE_ROWS_CACHE[cache_key] = rows
+        if len(_REFERENCE_ROWS_CACHE) > _MAX_REF_ROWS_CACHE_SIZE:
+            _REFERENCE_ROWS_CACHE.popitem(last=False)
+
     if not rows:
         return False
     st.markdown(f"**{t('ref_section_title')}**")
