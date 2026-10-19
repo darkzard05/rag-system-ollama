@@ -774,7 +774,7 @@ _BUILD_RERUN_LAST: dict[str, tuple[float, str]] = {}
 
 
 def _request_build_progress_rerun(session_id: str, phase_name: str) -> None:
-    """Throttled progress rerun from the background worker thread."""
+    """진행률 보고: 위상 변화와 무관하게 최소 1.5초의 리런 쿨다운을 절대 강제하여 뷰어 언마운트 방지."""
     from core.build_state import BuildPhase, is_terminal
     from core.session import SessionManager
 
@@ -790,18 +790,17 @@ def _request_build_progress_rerun(session_id: str, phase_name: str) -> None:
 
     now = time.monotonic()
     last = _BUILD_RERUN_LAST.get(session_id)
-    if (
-        last is not None
-        and last[1] == phase_name
-        and now - last[0] < _BUILD_RERUN_MIN_INTERVAL_S
-    ):
+    # 위상이 바뀌더라도 최소 1.5초 이내에는 추가적인 전역 Rerun 요청을 철저히 차단
+    if last is not None and (now - last[0] < 1.5):
         return
+
     _BUILD_RERUN_LAST[session_id] = (now, phase_name)
     try:
         from common.async_worker import request_session_rerun
+
+        request_session_rerun(session_id)
     except ImportError:
         return
-    request_session_rerun(session_id)
 
 
 async def _bg_rebuild_task(
