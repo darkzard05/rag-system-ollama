@@ -82,9 +82,18 @@ def _log_cache_set_done(task: asyncio.Task[None], *, msg_id: str) -> None:
 
 
 async def _cache_set_worker(
-    *, key: str, value: dict[str, Any], ttl_seconds: int
+    *,
+    key: str,
+    value: dict[str, Any],
+    ttl_seconds: int,
+    query_embedding: list[float] | None = None,
 ) -> None:
-    """백그라운드 캐시 쓰기: 임베더 준비 + set (실패는 호출자 콜백이 기록)."""
+    """백그라운드 캐시 쓰기: 임베더 준비 + set (실패는 호출자 콜백이 기록).
+
+    [최적화-01] ``query_embedding`` 이 주어지면 세맨틱 저장 시 재임베딩을
+    생략한다. 조회 경로가 주입한 것과 동일한 순수 쿼리 벡터를 사용해야
+    저장/조회 임베딩 텍스트가 일치해 세맨틱 히트가 일관된다.
+    """
     await _ensure_query_cache_embedder()
     await get_cache_manager().set(
         key,
@@ -92,15 +101,28 @@ async def _cache_set_worker(
         ttl_seconds=ttl_seconds,
         use_semantic=True,
         persist_to_disk=False,
+        query_embedding=query_embedding,
     )
 
 
 def _run_cache_worker_sync(
-    *, key: str, value: dict[str, Any], ttl_seconds: int, msg_id: str
+    *,
+    key: str,
+    value: dict[str, Any],
+    ttl_seconds: int,
+    msg_id: str,
+    query_embedding: list[float] | None = None,
 ) -> None:
     """실행 중 루프가 없을 때의 폴백: 데몬 스레드의 일회성 루프로 쓰기."""
     try:
-        asyncio.run(_cache_set_worker(key=key, value=value, ttl_seconds=ttl_seconds))
+        asyncio.run(
+            _cache_set_worker(
+                key=key,
+                value=value,
+                ttl_seconds=ttl_seconds,
+                query_embedding=query_embedding,
+            )
+        )
     except (OSError, RuntimeError) as exc:
         logger.warning("[RAG] [CACHE] 저장 실패 — 무시 msg_id=%s: %s", msg_id, exc)
 
@@ -112,6 +134,7 @@ def _schedule_query_cache_set(
     confidence: float,
     file_hash: str,
     msg_id: str = "",
+    query_embedding: list[float] | None = None,
 ) -> bool:
     """쿼리 캐시 쓰기를 크리티컬 패스 밖으로 예약한다. 예약되면 True.
 
@@ -148,6 +171,7 @@ def _schedule_query_cache_set(
                 "value": value,
                 "ttl_seconds": ttl_seconds,
                 "msg_id": tag,
+                "query_embedding": query_embedding,
             },
             daemon=True,
             name=f"query-cache-set-{tag}",
@@ -156,7 +180,12 @@ def _schedule_query_cache_set(
         logger.info("[PERF] cache-set scheduled (thread) msg_id=%s", tag)
         return True
     task: asyncio.Task[None] = loop.create_task(
-        _cache_set_worker(key=key, value=value, ttl_seconds=ttl_seconds)
+        _cache_set_worker(
+            key=key,
+            value=value,
+            ttl_seconds=ttl_seconds,
+            query_embedding=query_embedding,
+        )
     )
     task.add_done_callback(lambda t: _log_cache_set_done(t, msg_id=tag))
     logger.info("[PERF] cache-set scheduled msg_id=%s (off critical path)", tag)
@@ -1316,6 +1345,10 @@ async def generate(
             response=result["response"],
             confidence=result.get("confidence", 0.0),
             file_hash=file_hash or "",
+            # [최적화-01] preprocess가 선계산한 순수 쿼리 벡터를 저장에도 재사용해
+            # 세맨틱 저장 시 재임베딩(Ollama HTTP)을 제거하고, 조회 경로와 동일한
+            # 임베딩 텍스트를 보장한다.
+            query_embedding=get_state_attr(state, "query_embedding"),
         )
 
     _emit_query_timing(_query_timings)

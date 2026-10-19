@@ -42,6 +42,36 @@ logger = logging.getLogger(__name__)
 # ============================================================================
 
 
+async def _precompute_query_embedding(
+    config: RunnableConfig, query: str
+) -> list[float] | None:
+    """FAISS 리트리버 임베더로 쿼리 벡터를 1회 선계산한다 (L2 정규화).
+
+    [최적화-01] 이전에는 세맨틱 캐시 조회가 네임스페이스 키
+    ``f"{file_hash}:{query}"`` 를, retrieve 노드가 순수 쿼리를 각각 임베딩해
+    쿼리당 Ollama HTTP 라운드트립이 2회 직렬 발생했다. 여기서 순수 쿼리 벡터를
+    한 번만 만들어 캐시 조회와 retrieve가 공유한다.
+
+    ``embed_faiss_query_vector`` 는 VectorStoreRetriever가 아니면 ``None``을
+    반환하므로 테스트 대역/미구성 경로에서는 자연히 비활성화된다. 반환값은
+    체크포인트 직렬화를 위해 순수 ``list[float]`` 로 변환한다.
+    """
+    cfg = config.get("configurable", {}) if config else {}
+    faiss = cfg.get("faiss_retriever")
+    if faiss is None:
+        return None
+    try:
+        from core.retriever_factory import embed_faiss_query_vector
+
+        vec = await asyncio.to_thread(embed_faiss_query_vector, faiss, query)
+    except Exception as e:  # noqa: BLE001 - 선계산 실패는 기존 경로로 폴백
+        logger.debug(f"[RAG] [CACHE] 쿼리 벡터 선계산 실패 — 기존 경로 폴백: {e}")
+        return None
+    if vec is None:
+        return None
+    return [float(x) for x in vec]
+
+
 async def preprocess(
     state: GraphState, config: RunnableConfig, *, writer: StreamWriter
 ) -> dict[str, Any]:
@@ -112,16 +142,27 @@ async def preprocess(
     # 후보군으로 삼는다 — 문서 없는 세션의 캐시 히트는 부정확하므로 무시한다.
     is_cached = False
     cached_response: str | None = None
+    # [최적화-01] 캐시 조회·retrieve가 공유할 선계산 쿼리 벡터. 문서가 있는
+    # 세션에서 쿼리 캐시가 켜져 있을 때만 계산한다 (아니면 retrieve가 1회만
+    # 임베딩하므로 중복이 없다).
+    query_embedding: list[float] | None = None
     if QUERY_CACHE_ENABLED:
         sid = _get_session_id(config)
         file_hash = SessionManager.get("file_hash", session_id=sid, default=None)
         has_doc = bool(file_hash)
         if has_doc:
+            query_embedding = await _precompute_query_embedding(config, query)
             await _ensure_query_cache_embedder()
             try:
                 # D17 — cache key namespaced by file_hash so cross-document queries can't collide.
                 cache_key = f"{file_hash}:{query}"
-                cached = await get_cache_manager().get(cache_key, use_semantic=True)
+                # [최적화-01] 선계산 벡터를 주입해 내부 재임베딩(네임스페이스 키
+                # 대상 HTTP)을 원천 차단한다. None이면 기존 계약대로 내부 임베딩.
+                cached = await get_cache_manager().get(
+                    cache_key,
+                    use_semantic=True,
+                    query_embedding=query_embedding,
+                )
             except Exception as e:  # noqa: BLE001 - 캐시 실패는 정상 경로로 폴백
                 logger.warning(f"[RAG] [CACHE] 조회 실패 — 우회: {e}")
                 cached = None
@@ -140,6 +181,8 @@ async def preprocess(
         "is_cached": is_cached,
         "cached_response": cached_response,
         "search_weights": weights,
+        # [최적화-01] retrieve 노드가 재임베딩 없이 재사용할 선계산 쿼리 벡터.
+        "query_embedding": query_embedding,
         # 초단문 쿼리(<5자)는 그레이더 과해석(오타/타 문서에서의 환각) 위험이 커
         # strict 모드로 다룬다. grade_documents에서 활용한다.
         "short_query": len(query) < 5,
@@ -290,20 +333,33 @@ async def retrieve_and_rerank(
 
         임베드 실패(테스트 대역 MagicMock 등) 시 pre-embedded 벡터 없이 기존
         경로로 폴백한다.
-        """
-        q_vec: Any | None = None
-        try:
-            from core.retriever_factory import embed_faiss_query_vector
 
-            _t_embed = time.perf_counter()
-            q_vec = await asyncio.to_thread(embed_faiss_query_vector, faiss, query)
-            task_ms["embed"] = (
-                (time.perf_counter() - _t_embed) * 1000 if q_vec is not None else 0.0
-            )
-        except Exception as e:  # noqa: BLE001 - 임베드 실패 시 기존 경로 폴백
-            logger.warning(f"[RAG] [RETRIEVE] 쿼리 임베드 실패 — 통합 경로 폴백: {e}")
-            q_vec = None
+        [최적화-01] preprocess가 state에 실어 보낸 선계산 벡터가 있으면
+        재임베딩(Ollama HTTP)을 건너뛰고 그대로 사용한다.
+        """
+        q_vec: Any | None = precomputed_q_vec
+        if q_vec is not None:
             task_ms["embed"] = 0.0
+            logger.debug(
+                "[RAG] [RETRIEVE] preprocess 선계산 쿼리 벡터 재사용 — 재임베딩 생략"
+            )
+        else:
+            try:
+                from core.retriever_factory import embed_faiss_query_vector
+
+                _t_embed = time.perf_counter()
+                q_vec = await asyncio.to_thread(embed_faiss_query_vector, faiss, query)
+                task_ms["embed"] = (
+                    (time.perf_counter() - _t_embed) * 1000
+                    if q_vec is not None
+                    else 0.0
+                )
+            except Exception as e:  # noqa: BLE001 - 임베드 실패 시 기존 경로 폴백
+                logger.warning(
+                    f"[RAG] [RETRIEVE] 쿼리 임베드 실패 — 통합 경로 폴백: {e}"
+                )
+                q_vec = None
+                task_ms["embed"] = 0.0
 
         _t_faiss = time.perf_counter()
         try:
@@ -313,6 +369,16 @@ async def retrieve_and_rerank(
         finally:
             # faiss_ms는 순수 FAISS 연산 구간만 기록한다 (embed 제외).
             task_ms["faiss"] = (time.perf_counter() - _t_faiss) * 1000
+
+    # [최적화-01] preprocess가 계산한 쿼리 벡터 재사용. 재작성 쿼리(search_queries)로
+    # 검색하는 재시도 라운드에는 원본 벡터가 부적합하므로 첫 검색에만 적용한다.
+    precomputed_q_vec: Any | None = None
+    if faiss is not None and not search_queries:
+        _state_vec = get_state_attr(state, "query_embedding")
+        if _state_vec:
+            import numpy as np
+
+            precomputed_q_vec = np.asarray(_state_vec, dtype="float32")
 
     # BM25(CPU 역색인)와 FAISS(임베딩 I/O + index.search)를 즉시 동시 스케줄한다.
     search_tasks = {}

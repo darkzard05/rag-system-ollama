@@ -85,8 +85,19 @@ class CacheManager:
 
         self.lock = RLock()
 
-    async def get(self, key: str, use_semantic: bool = False) -> Any | None:
-        """값 조회 (L1 -> L2 -> L3)"""
+    async def get(
+        self,
+        key: str,
+        use_semantic: bool = False,
+        query_embedding: list[float] | None = None,
+    ) -> Any | None:
+        """값 조회 (L1 -> L2 -> L3)
+
+        [최적화-01] ``query_embedding`` 이 주어지면 L2 세맨틱 캐시 조회 시
+        재임베딩(내부 ``_embed``) 대신 그대로 사용한다. 호출자가 이미 계산한
+        쿼리 벡터를 검색 경로와 공유해 쿼리당 Ollama HTTP 라운드트립을 1회로
+        줄이기 위한 것이다 (미제공 시 기존 계약대로 내부 재임베딩).
+        """
         with get_performance_monitor().track_operation(
             OperationType.QUERY_PROCESSING,
             {"stage": "cache_lookup", "semantic": use_semantic},
@@ -100,7 +111,9 @@ class CacheManager:
 
             # 2. L2 세맨틱 캐시 확인 (의미적 유사성)
             if self.semantic_cache and use_semantic:
-                result = await self.semantic_cache.get(key)
+                result = await self.semantic_cache.get(
+                    key, query_embedding=query_embedding
+                )
                 if result is not None:
                     op.metadata = {"cache_level": "L2"}
 
@@ -131,8 +144,14 @@ class CacheManager:
         ttl_seconds: float = 0,
         use_semantic: bool = False,
         persist_to_disk: bool = True,
+        query_embedding: list[float] | None = None,
     ) -> None:
-        """값 저장 (L1, L2, L3)"""
+        """값 저장 (L1, L2, L3)
+
+        [최적화-01] ``query_embedding`` 이 주어지면 L2 세맨틱 저장 시 재임베딩을
+        생략한다. 조회 경로가 같은 벡터를 주입하므로 저장·조회 임베딩 텍스트가
+        일치해 세맨틱 히트 일관성이 유지된다.
+        """
         with self.lock:
             # L1에 저장
             if self.memory_cache:
@@ -140,7 +159,9 @@ class CacheManager:
 
             # L2 (세맨틱) 저장
             if self.semantic_cache and use_semantic:
-                await self.semantic_cache.set(key, value, ttl_seconds)
+                await self.semantic_cache.set(
+                    key, value, ttl_seconds, query_embedding=query_embedding
+                )
 
             # L3 (디스크) 저장
             # [최적화] persist_to_disk=False 시 디스크 저장 생략

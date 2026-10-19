@@ -180,6 +180,7 @@ def test_graph_state_declaration_captured():
         "context_fingerprint",
         "performance",
         "search_weights",
+        "query_embedding",
         "is_cached",
         "cached_response",
         "short_query",

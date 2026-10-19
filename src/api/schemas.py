@@ -74,6 +74,10 @@ class GraphState(TypedDict):
     context_fingerprint: str | None
     performance: dict[str, Any] | None
     search_weights: dict[str, float] | None  # 👈 동적 가중치 추가
+    # [최적화-01] preprocess가 1회 선계산한 쿼리 벡터(L2 정규화, 순수 list).
+    # 캐시 조회와 retrieve가 공유해 쿼리당 Ollama 임베딩 HTTP를 2회→1회로 줄인다.
+    # 순수 list[float]라 체크포인트 직렬화 제약을 만족한다.
+    query_embedding: list[float] | None
     is_cached: bool
     cached_response: (
         str | None

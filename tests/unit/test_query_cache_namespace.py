@@ -86,7 +86,9 @@ async def test_get_uses_namespaced_key(monkeypatch):
         ):
             result = await preprocess(state, _base_config(sid), writer=None)
 
-        fake_cm.get.assert_called_once_with("abc123:reusable query", use_semantic=True)
+        fake_cm.get.assert_called_once_with(
+            "abc123:reusable query", use_semantic=True, query_embedding=None
+        )
         assert result["is_cached"] is True
     finally:
         SessionManager.delete("file_hash", session_id=sid)
