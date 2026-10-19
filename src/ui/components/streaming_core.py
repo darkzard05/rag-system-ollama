@@ -1099,27 +1099,29 @@ def _content_generator(
                 )
                 logger.info("[PREWARM] submit reason=final msg_id=%s", msg_id)
                 _note_reference_prewarm(sid, msg_id, documents, citations)
-            _aux_state = {
-                "thought": thought,
-                "documents": documents,
-                "metrics": metrics,
-                "citations": citations,
-                "process_steps": process_steps,
-                "complete": False,
-                **_ghost_flags(),
-            }
             if on_aux is not None:
-                # thought가 진행되는 동안 15자 단위 또는 변경 시점에 UI를 점진적 갱신
-                thought_bucket = len(thought) // 15 if thought else 0
+                # [최적화] 스냅샷을 길이/버킷 비교로 저렴하게 구성하고, thought
+                # 갱신 버킷을 50자로 완화하여 고속 스트리밍 중 세션 락 획득 및
+                # dict/tuple 할당을 줄인다. _aux_state는 실제 갱신이 있을 때만
+                # 늦게 생성(Lazy)한다.
+                thought_bucket = len(thought) // 50 if thought else 0
                 snapshot = (
-                    tuple(process_steps),
-                    tuple(documents),
-                    tuple(metrics.items()),
-                    tuple(citations),
+                    len(process_steps),
+                    len(documents),
+                    len(citations),
                     thought_bucket,
                 )
                 if snapshot != _last_on_aux_snapshot:
                     _last_on_aux_snapshot = snapshot
+                    _aux_state = {
+                        "thought": thought,
+                        "documents": documents,
+                        "metrics": metrics,
+                        "citations": citations,
+                        "process_steps": process_steps,
+                        "complete": False,
+                        **_ghost_flags(),
+                    }
                     _write_aux_state(sid, _aux_state)
                     on_aux(_aux_state)
         if _placeholder_live:
