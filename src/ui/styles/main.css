@@ -701,16 +701,38 @@ border-top: 1px solid color-mix(in srgb, var(--border-color) 30%, transparent) !
     padding-block: 2px;
     min-height: 0;
 }
+/* 안쪽 flex 래퍼 고정: Streamlit은 button > div > span 을 각각
+   justify-content:center 로 렌더하므로, 바깥 button만 좌측 고정하면
+   stretch 폭에서 라벨이 다시 가운데로 몰린다. 래퍼까지 flex-start로
+   내려 발췌가 실제로 좌측에 붙는다(실측 pLeft≈좌측 패딩). */
+[data-testid="stChatMessage"] [data-testid="stBaseButton-tertiary"] > div,
+[data-testid="stChatMessage"] [data-testid="stBaseButton-tertiary"] > div > span {
+    justify-content: flex-start;
+}
+/* 라벨을 flex 행으로: 좌측 발췌(파랑, 말줄임) + 우측 페이지(회색).
+   라벨은 "{i}. :blue[발췌] :gray[p.N]" — 발췌/페이지가 각각 span이므로
+   페이지 span에 margin-left:auto를 주어 우측 끝으로 민다. 발췌 span만
+   축소·말줄임해 페이지 번호는 항상 노출된다. */
 [data-testid="stChatMessage"] [data-testid="stBaseButton-tertiary"] p {
-    display: block;
+    display: flex;
+    align-items: baseline;
     max-width: 100%;
     overflow: hidden;
     margin-block: 0;
     line-height: 1.35;
     text-align: left;
-    text-overflow: ellipsis;
     white-space: nowrap;
 }
-[data-testid="stChatMessage"] [data-testid="stBaseButton-tertiary"] p span {
+[data-testid="stChatMessage"] [data-testid="stBaseButton-tertiary"] p span:first-of-type {
+    flex: 0 1 auto;
+    min-width: 0;
+    margin-left: 0.4em;
+    overflow: hidden;
+    text-overflow: ellipsis;
     text-decoration: underline;
+}
+[data-testid="stChatMessage"] [data-testid="stBaseButton-tertiary"] p span:last-of-type {
+    flex: none;
+    margin-left: auto;
+    padding-left: 0.5rem;
 }

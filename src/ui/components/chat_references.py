@@ -138,11 +138,13 @@ def render_reference_list(
     max_rows: int = 5,
     excerpt_chars: int = 80,
 ) -> bool:
-    """문서별 한 줄 요약 링크 목록: Reference見出 + tertiary 점프 버튼.
+    """문서별 한 줄 요약 링크 목록: Reference見出 + 발췌/페이지 단일 행.
 
-    문서 입력 순서(관련도 순)대로 문서별 최대 1행,
-    ``"{i}. :blue[{요약}] · p.{N}"`` tertiary 버튼으로 렌더한다. 내용은 파랑,
-    번호·페이지는 기본색으로 구분된다 (버튼 라벨 StreamlitMarkdown 렌더).
+    문서 입력 순서(관련도 순)대로 문서별 최대 1행을 tertiary 버튼으로
+    렌더한다. 라벨은 ``"{i}. :blue[{요약}] :gray[p.{N}]"`` 이며, CSS가 라벨
+    ``<p>``를 flex로 만들어 발췌는 좌측(말줄임), 페이지는 우측 끝에 붙인다.
+    내용은 파랑, 페이지는 회색으로 구분된다.
+
     발췌는 해당 문서의 citation ``text_span`` 우선, 없으면 ``page_content``
     앞부분이며 ``normalize_excerpt``로 공백 축소 + ``...`` 절단한다. 클릭은
     기존 ``_handle_page_jump`` 콜백 경로를 그대로 사용해
@@ -193,13 +195,17 @@ def render_reference_list(
         return False
     st.markdown(f"**{t('ref_section_title')}**")
     for idx, (excerpt, page) in enumerate(rows, start=1):
+        # 단일 버튼 라벨을 flex로 렌더한다(좌측 발췌 + 우측 페이지, R2 CSS).
+        # 페이지수를 라벨의 별도 `:gray[...]` 스팬으로 두어, 긴 발췌가
+        # 말줄임으로 잘려도 페이지 번호가 항상 우측 끝에 노출된다.
         st.button(
-            f"{idx}. :blue[{excerpt}] · p.{page}",
+            f"{idx}. :blue[{excerpt}] :gray[p.{page}]",
             key=f"reflink_{msg_id}_{idx}_{page}",
             type="tertiary",
             width="stretch",
             on_click=_handle_page_jump,
             args=(page,),
+            help=t("ref_jump_help").format(page=page),
         )
     return True
 

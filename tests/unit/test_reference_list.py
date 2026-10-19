@@ -43,16 +43,17 @@ def _button_calls(st_mock):
 
 
 def test_long_excerpt_truncated_single_line() -> None:
-    """80자 초과 발췌는 ``...``로 끝나고 줄바꿈이 없다."""
+    """80자 초과 발췌는 ``...``로 끝나고 페이지는 우측 끝 스팬에 남는다."""
     long_text = "관련 문장입니다. " * 30
     ok, st_mock = _render([_doc(3, long_text)])
     assert ok is True
     (call,) = _button_calls(st_mock)
     label = call.args[0]
     assert label.startswith("1. "), label
-    assert "· p.3" in label
     assert "..." in label
     assert "\n" not in label
+    # 페이지는 별도 :gray 스팬이라 발췌 말줄임에 잘리지 않는다.
+    assert ":gray[p.3]" in label
 
 
 def test_duplicate_document_single_row() -> None:
@@ -88,13 +89,13 @@ def test_citation_span_preferred_over_content() -> None:
 
 
 def test_citation_page_fallback_to_doc_meta() -> None:
-    """인용에 페이지가 없으면 문서 메타 페이지를 사용한다."""
+    """인용에 페이지가 없으면 문서 메타 페이지를 우측 스팬에 사용한다."""
     doc = _doc(9, "메타 페이지 문서입니다.", doc_id="docB")
     citations = [{"doc_id": "docB", "section": "S", "text_span": "핵심"}]
     ok, st_mock = _render([doc], citations)
     assert ok is True
     (call,) = _button_calls(st_mock)
-    assert "· p.9" in call.args[0]
+    assert ":gray[p.9]" in call.args[0]
 
 
 def test_button_wiring_tertiary_and_callback() -> None:
@@ -107,6 +108,7 @@ def test_button_wiring_tertiary_and_callback() -> None:
     assert call.kwargs["on_click"] is refs._handle_page_jump
     assert call.kwargs["args"] == (5,)
     assert call.kwargs["key"].startswith("reflink_m1_1_5")
+    assert call.args[0].endswith(":gray[p.5]")
 
 
 def test_empty_documents_returns_false() -> None:
@@ -164,14 +166,14 @@ def test_truncation_collapses_trailing_dots() -> None:
 
 
 def test_row_label_blue_excerpt() -> None:
-    """내용만 파랑(:blue), 번호·페이지는 기본색. 대괄호 잔재는 제거된다."""
+    """내용만 파랑(:blue), 페이지는 우측 :gray 스팬. 대괄호 잔재는 제거된다."""
     ok, st_mock = _render([_doc(8, "XMC-GAN (Zhao et al.) [draft] 결과입니다.")])
     assert ok is True
     (call,) = _button_calls(st_mock)
     label = call.args[0]
     assert label.startswith("1. :blue[")
-    assert "] · p.8" in label
-    excerpt_part = label.split(":blue[", 1)[1].rsplit("]", 1)[0]
+    assert ":gray[p.8]" in label
+    excerpt_part = label.split(":blue[", 1)[1].split("] :gray[", 1)[0]
     assert "[" not in excerpt_part
     assert "]" not in excerpt_part
 
@@ -193,6 +195,11 @@ def test_reference_row_css_contract() -> None:
         assert prop in css, f"R2 CSS 속성 누락: {prop}"
     block = css[css.index("/* R2:") :]
     assert "!important" not in block, "R2 블록에 !important 금지"
+    # 안쪽 flex 래퍼 좌측 고정(중앙 정렬 방지)이 R2 블록에 있어야 한다.
+    assert "justify-content: flex-start" in block
+    # 라벨 flex + 페이지 우측 끝 정렬(margin-left:auto) 계약.
+    assert "display: flex" in block
+    assert "margin-left: auto" in block
     # 스코프 전제: tertiary의 유일한 생산자는 render_reference_list이다.
     src_root = pathlib.Path(refs_file).parent.parent.parent
     producers = [
