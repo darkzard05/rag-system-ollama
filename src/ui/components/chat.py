@@ -33,7 +33,7 @@ from ui.components.streaming import (
     _content_generator,
     _finalize_pdf_side_effects,
 )
-from ui.strings import get_phase_labels, t
+from ui.strings import PHASE_KEYWORDS, get_phase_labels, t
 from ui.widget_keys import MAIN_CHAT_INPUT_KEY, SAMPLE_QUESTION_STATE_KEY
 
 logger = logging.getLogger(__name__)
@@ -302,12 +302,20 @@ def _render_unified_timeline(current_sid: str) -> None:
 # _PHASE_LABELS는 하위 호환용 별칭으로만 유지한다.
 _PHASE_LABELS = get_phase_labels()
 
+# [최적화] 위상 판정용 정적 소문자 키워드 튜플 (언어팩 t() 호출 오버헤드 0화)
+_STATIC_PHASE_KEYWORDS: tuple[tuple[str, ...], ...] = tuple(
+    tuple(k.lower() for k in keywords) for _, keywords in PHASE_KEYWORDS
+)
+
 
 def _infer_proc_phase(status_text: str) -> int:
     """status 텍스트가 속한 프로세스 위상 인덱스를 반환한다 (미검출 -1)."""
+    if not status_text:
+        return -1
     lowered = status_text.lower()
-    for idx, (_label, _keywords) in enumerate(get_phase_labels()):
-        if any(k.lower() in lowered for k in _keywords):
+    # [최적화] UI 번역 문자열(t())을 호출하는 get_phase_labels() 대신 정적 키워드 튜플 직접 조회
+    for idx, keywords in enumerate(_STATIC_PHASE_KEYWORDS):
+        if any(k in lowered for k in keywords):
             return idx
     return -1
 
