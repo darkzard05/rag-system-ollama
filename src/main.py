@@ -546,7 +546,18 @@ def _handle_pending_tasks() -> None:
 
     current_sid = SessionManager.get_session_id()
     is_building = bool(SessionManager.get("is_building_rag", False, current_sid))
+    is_generating = bool(SessionManager.get("is_generating_answer", False, current_sid))
     needs_rerun = False
+
+    if not is_building and not is_generating:
+        _BUILD_RERUN_LAST.pop(current_sid, None)
+        has_pending = (
+            SessionManager.get("new_file_uploaded", False, current_sid)
+            or SessionManager.get("needs_rag_rebuild", False, current_sid)
+            or SessionManager.get("needs_qa_chain_update", False, current_sid)
+        )
+        if not has_pending:
+            return
 
     def _safe_dispatch(kind: str, coro: Any) -> None:
         """백그라운드 디스패치를 감싸 실패 시 플래그가 영구 잔류되지 않게 한다.
@@ -726,6 +737,19 @@ _BUILD_RERUN_LAST: dict[str, tuple[float, str]] = {}
 
 def _request_build_progress_rerun(session_id: str, phase_name: str) -> None:
     """Throttled progress rerun from the background worker thread."""
+    from core.build_state import BuildPhase, is_terminal
+    from core.session import SessionManager
+
+    if not SessionManager.get("is_building_rag", False, session_id):
+        _BUILD_RERUN_LAST.pop(session_id, None)
+        return
+    build = SessionManager.get_build_state(session_id=session_id)
+    if build is not None and (
+        is_terminal(build.phase) or build.phase == BuildPhase.DONE
+    ):
+        _BUILD_RERUN_LAST.pop(session_id, None)
+        return
+
     now = time.monotonic()
     last = _BUILD_RERUN_LAST.get(session_id)
     if (
@@ -750,6 +774,7 @@ async def _bg_rebuild_task(
     """
     from core.build_state import (
         BuildEvent,
+        BuildPhase,
         cancel_build,
         complete_build,
         fail_build,
@@ -806,10 +831,13 @@ async def _bg_rebuild_task(
         SessionManager.update_build_state(
             event, session_id=session_id, status_text=event.status or None
         )
-        # [FIX] 진행 중 화면 전파: 상태만 바꾸면 프론트가 모르므로
-        # 쓰로틀된 rerun으로 st.status(running) 마운트·갱신을 유발한다.
-        # Core(SessionManager)는 UI를 모르므로 호출은 여기서 수행한다.
-        _request_build_progress_rerun(session_id, event.phase.value)
+        if is_terminal(event.phase) or event.phase == BuildPhase.DONE:
+            _BUILD_RERUN_LAST.pop(session_id, None)
+        else:
+            # [FIX] 진행 중 화면 전파: 상태만 바꾸면 프론트가 모르므로
+            # 쓰로틀된 rerun으로 st.status(running) 마운트·갱신을 유발한다.
+            # Core(SessionManager)는 UI를 모르므로 호출은 여기서 수행한다.
+            _request_build_progress_rerun(session_id, event.phase.value)
 
     def _finalize_cancelled(reason: str) -> None:
         build = SessionManager.get_build_state(session_id=session_id)
@@ -817,6 +845,7 @@ async def _bg_rebuild_task(
             SessionManager.finalize_build_state(
                 cancel_build(build), session_id=session_id
             )
+        _BUILD_RERUN_LAST.pop(session_id, None)
         SessionManager.set("rebuild_cancelled", False, session_id=session_id)
         SessionManager.add_status_log(
             "Document analysis cancelled.", session_id=session_id
@@ -867,6 +896,7 @@ async def _bg_rebuild_task(
                 complete_build(done_build, cache_used=bool(cache_used)),
                 session_id=session_id,
             )
+        _BUILD_RERUN_LAST.pop(session_id, None)
         SessionManager.set("pdf_processed", True, session_id=session_id)
         SessionManager.set("pdf_processing_error", None, session_id=session_id)
         SessionManager.set(
@@ -904,6 +934,7 @@ async def _bg_rebuild_task(
             SessionManager.finalize_build_state(
                 fail_build(failed, error_msg), session_id=session_id
             )
+        _BUILD_RERUN_LAST.pop(session_id, None)
         SessionManager.set("rebuild_error", error_msg, session_id=session_id)
         SessionManager.set("pdf_processing_error", error_msg, session_id=session_id)
         SessionManager.set("pdf_processed", False, session_id=session_id)
@@ -923,6 +954,7 @@ async def _bg_rebuild_task(
         )
     finally:
         SessionManager.set("is_building_rag", False, session_id=session_id)
+        _BUILD_RERUN_LAST.pop(session_id, None)
 
 
 def _swap_llm_core(session_id: str) -> None:
