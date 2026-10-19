@@ -18,7 +18,7 @@ from langchain_core.embeddings import Embeddings
 from cache.vector_cache import EngineCacheManager
 from common.config import (
     HYDRATION_ABORT_DRAIN_TIMEOUT_SECONDS,
-    HYDRATION_DRAIN_TIMEOUT_SECONDS,
+    HYDRATION_TAIL_DRAIN_TIMEOUT_SECONDS,
 )
 from common.exceptions import VectorStoreError
 from common.resilience import get_circuit_breaker_registry, retry_stream
@@ -36,6 +36,12 @@ logger = logging.getLogger(__name__)
 # 함께 정리가 중단될 수 있으므로 모듈 레벨 셋에 보관한다.
 _pending_cleanup_tasks: set[asyncio.Task[Any]] = set()
 
+# 정상 스트림 종료 후 tail 대기에서 포기했지만 취소하지 않은 하이드레이션
+# 태스크 보관소. asyncio 이벤트 루프는 태스크를 약하게만 참조하므로, 강한
+# 참조를 유지하지 않으면 "Task was destroyed but it is pending" 경고와 함께
+# 좌표 추출이 중단될 수 있다. 완료 시 자동으로 제거된다.
+_pending_hydration_tasks: set[asyncio.Task[Any]] = set()
+
 
 @dataclass(frozen=True)
 class HydrationDrainResult:
@@ -52,59 +58,70 @@ async def _drain_hydration_tasks(
     timeout: float,
     msg_id: str = "",
     cancel_pending: bool = False,
+    cancel_on_timeout: bool = True,
 ) -> HydrationDrainResult:
     """하이드레이션 태스크를 동시 대기한다 (순차 드레인 금지).
 
-    ``asyncio.gather`` 단일 경로로 병렬 대기하며 결과 순서를 보존한다.
-    태스크 실패는 세기만 하고 스트림 실패로 승격시키지 않으며, 타임아웃이면
-    pending을 취소하고 fail-loud로 알린다. UI 턴 id는 스트림까지 전달되지
-    않으므로 로그 상관 id는 호출자가 준다.
+    ``asyncio.wait`` 단일 경로로 병렬 대기하며 결과 순서를 보존한다.
+    태스크 실패는 세기만 하고 스트림 실패로 승격시키지 않는다. UI 턴 id는
+    스트림까지 전달되지 않으므로 로그 상관 id는 호출자가 준다.
 
     ``cancel_pending=True``이면 대기 전에 pending을 먼저 취소한다(중단 경로).
     이미 포기된 턴의 좌표 작업을 백그라운드에서 계속 붙들지 않고 회수한다.
+
+    ``cancel_on_timeout=True``(기본)이면 타임아웃 시 pending을 취소하고
+    fail-loud로 알린다. ``False``이면 취소하지 않고 백그라운드에서 계속
+    완료되게 두며 ``timed_out``만 표시한다(정상 스트림 tail 지연 방지).
+    태스크는 호출자가 강한 참조로 보관해 GC되지 않게 해야 한다.
     """
     if cancel_pending:
         for t in tasks:
             if not t.done():
                 t.cancel()
-    pending = [t for t in tasks if not t.done()]
     results: list[Any] = [None] * len(tasks)
     failed = 0
     timed_out = False
     _t0 = time.perf_counter()
+    pending = [t for t in tasks if not t.done()]
     if pending:
         index_of = {id(t): i for i, t in enumerate(tasks)}
         try:
-            gathered = await asyncio.wait_for(
-                asyncio.gather(*pending, return_exceptions=True),
-                timeout=timeout,
-            )
-        except asyncio.TimeoutError:
-            timed_out = True
+            done, still_pending = await asyncio.wait(pending, timeout=timeout)
+        except asyncio.CancelledError:
+            # 바깥 취소: 태스크를 방치하지 않고 함께 회수한 뒤 재발생.
             for t in pending:
                 if not t.done():
                     t.cancel()
-            unsettled = [t for t in pending if not t.done()]
-            if unsettled:
-                await asyncio.gather(*unsettled, return_exceptions=True)
-            for t in pending:
-                if t.cancelled():
-                    failed += 1
-                elif t.done() and t.exception() is not None:
-                    failed += 1
-                    logger.error(f"[RAG] 문서 하이드레이션 실패: {t.exception()}")
-            logger.error("[RAG] 하이드레이션 드레인 타임아웃")
-        except (Exception, asyncio.CancelledError) as exc:
-            failed += 1
-            logger.error(f"[RAG] 문서 하이드레이션 실패: {exc}")
-        else:
-            for task, outcome in zip(pending, gathered, strict=True):
-                results[index_of[id(task)]] = (
-                    None if isinstance(outcome, BaseException) else outcome
+            await asyncio.gather(*pending, return_exceptions=True)
+            raise
+        if still_pending:
+            timed_out = True
+            if cancel_on_timeout:
+                for t in still_pending:
+                    if not t.done():
+                        t.cancel()
+                await asyncio.gather(*still_pending, return_exceptions=True)
+                for t in still_pending:
+                    if t.cancelled() or t.exception() is not None:
+                        failed += 1
+                logger.error("[RAG] 하이드레이션 드레인 타임아웃")
+            else:
+                logger.info(
+                    "[RAG] 하이드레이션 드레인 타임아웃 — %d개 태스크 "
+                    "백그라운드 계속 msg_id=%s",
+                    len(still_pending),
+                    msg_id or "-",
                 )
-                if isinstance(outcome, BaseException):
-                    failed += 1
-                    logger.error(f"[RAG] 문서 하이드레이션 실패: {outcome}")
+        for task in done:
+            if task.cancelled():
+                failed += 1
+                continue
+            exc = task.exception()
+            if exc is not None:
+                failed += 1
+                logger.error(f"[RAG] 문서 하이드레이션 실패: {exc}")
+                continue
+            results[index_of[id(task)]] = task.result()
     elapsed = time.perf_counter() - _t0
     logger.info(
         "[PERF] hydration drain took %.3fs (%d task(s), waited=%s skipped_cache_hit=%s) msg_id=%s",
@@ -348,6 +365,10 @@ class RAGSystem:
                                         task = asyncio.create_task(
                                             hydrate_documents(new_docs)
                                         )
+                                        _pending_hydration_tasks.add(task)
+                                        task.add_done_callback(
+                                            _pending_hydration_tasks.discard
+                                        )
                                         task.add_done_callback(
                                             _log_hydration_task_failure
                                         )
@@ -373,23 +394,30 @@ class RAGSystem:
                         "답변 스트림이 비어 있습니다 (generate 폴백 미수신).",
                         session_id=self.session_id,
                     )
-                # 하이드레이션은 await가 실패 태스크의 예외를 재발생시키므로
-                # 반드시 try/except로 감싸 스트림 실패 승격 없이 처리한다.
-                # 완료 대기로 UI 경로의 _finalize_pdf_side_effects가
-                # 좌표 완성 문서를 읽게 보장한다. 실패는 상태 로그에 남겨
-                # 인용 하이라이트 저하를 UI에 가시화한다 (침묵 성공 방지).
+                # [최적화] 텍스트 스트리밍 완료 후 UI 응답 차단을 막기 위해
+                # 정상 경로는 짧은 tail 상한만 기다리고, 미완료 좌표 작업은
+                # 취소하지 않고 백그라운드에서 계속 완료되게 둔다. 중단 경로는
+                # 이미 포기된 턴이므로 기존처럼 즉시 취소·회수한다.
                 drain = await _drain_hydration_tasks(
                     hydration_tasks,
                     timeout=(
                         HYDRATION_ABORT_DRAIN_TIMEOUT_SECONDS
                         if _aborted
-                        else HYDRATION_DRAIN_TIMEOUT_SECONDS
+                        else HYDRATION_TAIL_DRAIN_TIMEOUT_SECONDS
                     ),
                     msg_id=self.session_id,
                     cancel_pending=_aborted,
+                    cancel_on_timeout=_aborted,
                 )
-                # 중단 경로의 취소는 실패가 아니므로 상태 로그로 표면화하지 않는다.
-                if not _aborted and (drain.failed or drain.timed_out):
+                if not _aborted and drain.timed_out:
+                    logger.debug(
+                        "[RAG] 하이드레이션 백그라운드 연속 처리 진행 "
+                        "(Tail Latency 방지: msg_id=%s)",
+                        self.session_id,
+                    )
+                # 중단/백그라운드 계속은 실패가 아니므로, 실제로 완료된 태스크의
+                # 실패만 상태 로그로 표면화한다.
+                if not _aborted and drain.failed:
                     SessionManager.add_status_log(
                         "일부 참조 문서의 하이라이트 좌표를 불러오지 못했습니다.",
                         session_id=self.session_id,

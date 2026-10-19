@@ -159,6 +159,34 @@ async def test_hydration_drain_timeout_cancels_pending_fail_loud(
 
 
 @pytest.mark.asyncio
+async def test_hydration_drain_tail_timeout_leaves_tasks_running(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """tail 타임아웃(cancel_on_timeout=False)은 pending을 취소하지 않는다."""
+
+    async def _wait_release() -> str:
+        await release.wait()
+        return "late"
+
+    release = asyncio.Event()
+    task = asyncio.create_task(_wait_release())
+    with caplog.at_level(logging.INFO):
+        drain = await _drain_hydration_tasks(
+            [task],
+            timeout=0.05,
+            msg_id=_MSG,
+            cancel_on_timeout=False,
+        )
+    assert drain.timed_out is True
+    assert drain.failed == 0
+    assert not task.done(), "tail 타임아웃은 백그라운드 계속이어야 한다"
+    assert any("백그라운드 계속" in rec.message for rec in caplog.records)
+
+    release.set()
+    assert await task == "late"
+
+
+@pytest.mark.asyncio
 async def test_hydration_drain_counts_failures_without_raising(
     caplog: pytest.LogCaptureFixture,
 ) -> None:

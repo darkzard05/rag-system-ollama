@@ -260,10 +260,20 @@ GRADING_ENABLED: bool = bool(_grading_config.get("enabled", True))
 # --- 4. 파싱 및 하이드레이션 (Parsing) ---
 PARSING_CONFIG: dict = _rag_config.get("parsing", {})
 HYDRATION_MODE: str = PARSING_CONFIG.get("hydration_mode", "precision_clip")
-# T2 bounded drain 상한(초) — 초과 시 fail-loud 타임아웃. 기본 30초.
+# T2 bounded drain 상한(초) — 명시적 전체 드레인 호출용(하위 호환). 기본 30초.
+# 참고: 정상 스트림 종료 경로는 tail 지연 방지를 위해 아래 tail 상한만 짧게
+# 기다리고, 미완료 태스크는 취소하지 않고 백그라운드에서 계속 진행시킨다.
 HYDRATION_DRAIN_TIMEOUT_SECONDS: float = _get_env(
     "HYDRATION_DRAIN_TIMEOUT_SECONDS",
     PARSING_CONFIG.get("hydration_drain_timeout_seconds", 30.0),
+    float,
+)
+# 정상 스트림 종료 후 done 방출 전 하이드레이션 tail 대기 상한(초).
+# 이 시간을 넘긴 태스크는 취소하지 않고 백그라운드에서 완료되도록 둔다
+# (UI는 좌표 미도착을 논블로킹으로 처리하므로 체감 지연을 만들지 않는다).
+HYDRATION_TAIL_DRAIN_TIMEOUT_SECONDS: float = _get_env(
+    "HYDRATION_TAIL_DRAIN_TIMEOUT_SECONDS",
+    PARSING_CONFIG.get("hydration_tail_drain_timeout_seconds", 0.15),
     float,
 )
 # 중단(클라이언트 절단·aclose) 시 하이드레이션 태스크 취소 후 대기 상한(초).
