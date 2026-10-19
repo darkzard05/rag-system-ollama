@@ -113,10 +113,21 @@ def _doc_content(doc: Any) -> str:
     return content if isinstance(content, str) else ""
 
 
+# [최적화] 문서 시그니처 계산 캐시 (단일 프로세스 내 중복 해싱 방지)
+_DOCS_SIG_CACHE: dict[tuple[int, int, str], str] = {}
+
+
 def _docs_signature(documents: list[Any]) -> str:
     """문서 집합 서명: file key + page + 정규 본문 해시 (순서 무관)."""
+    if not documents:
+        return fast_hash("[]")
+
+    cache_key = (id(documents), len(documents), str(_doc_file_key(documents[0])))
+    if cache_key in _DOCS_SIG_CACHE:
+        return _DOCS_SIG_CACHE[cache_key]
+
     parts: list[str] = []
-    for doc in documents or []:
+    for doc in documents:
         norm = _normalize_text(_doc_content(doc))
         parts.append(
             "|".join(
@@ -128,7 +139,11 @@ def _docs_signature(documents: list[Any]) -> str:
                 ]
             )
         )
-    return fast_hash(json.dumps(sorted(parts), sort_keys=True))
+    sig = fast_hash(json.dumps(sorted(parts), sort_keys=True))
+    if len(_DOCS_SIG_CACHE) > 128:
+        _DOCS_SIG_CACHE.clear()
+    _DOCS_SIG_CACHE[cache_key] = sig
+    return sig
 
 
 def _citations_signature(citations: list[dict[str, Any]]) -> str:
@@ -248,6 +263,15 @@ def note_stream_references(
     try:
         if not SessionManager.get("pdf_file_path", "", sid):
             return None
+
+        # 빠른 검사: 이미 플랜이 등록되어 있고 인용과 문서 수가 동일한 경우 재계산 바이패스
+        with _registry_lock:
+            existing_plan = _ACTIVE_PLANS.get((sid, msg_id))
+
+        # 인용구 변경이 없는 동일 호출이면 기존 플랜 즉시 반환
+        if existing_plan is not None and not citations and len(existing_plan.pages) > 0:
+            return existing_plan
+
         plan = _build_reference_plan(documents, citations, msg_id)
     except Exception as exc:
         logger.debug("[PREFETCH] 플랜 계산 생략: %s", exc)
