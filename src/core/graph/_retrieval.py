@@ -241,6 +241,51 @@ def _filter_min_section_len(docs: list[Document]) -> list[Document]:
     return docs[:1]
 
 
+def _embed_and_search_faiss_sync(
+    faiss_retriever: Any, query_text: str, k: int, query_vector: Any | None = None
+) -> tuple[list[Document], float, float] | None:
+    """임베딩 추출과 FAISS 인덱스 검색을 단일 동기 작업으로 일괄 수행한다.
+
+    [최적화-03] 기존 경로는 쿼리 임베딩 추출과 FAISS 검색을 각각 별도
+    ``asyncio.to_thread`` 로 디스패치해 연속 2회의 스레드 풀 전환(작업 큐잉 +
+    Future 래핑 + 이벤트 루프 복귀) 오버헤드가 발생했다. FAISS ``Index.search``
+    는 C++ 네이티브 단일 호출(수 ms)로 매우 가벼워 스레드 전환 비용이 검색
+    시간을 상회할 수 있으므로, 두 작업을 하나의 동기 단위로 묶어 ``to_thread``
+    를 1회만 사용한다.
+
+    순수 CPU/IO 동기 작업만 포함하며 내부에서 이벤트 루프를 재호출하지 않는다.
+    ``VectorStoreRetriever`` 가 아니면(테스트 대역 등) ``None`` 을 반환해
+    호출자가 기존 비동기 경로(``search_faiss_with_scores``)로 폴백하게 한다.
+    ``query_vector`` 가 주어지면 재임베딩을 건너뛰고 FAISS 연산만 계측한다.
+
+    반환: ``(docs, embed_ms, faiss_ms)`` 또는 폴백 신호 ``None``.
+    """
+    from langchain_core.vectorstores import VectorStoreRetriever
+
+    from core.retriever_factory import (
+        _faiss_results_with_scores,
+        embed_faiss_query_vector,
+    )
+
+    if not isinstance(faiss_retriever, VectorStoreRetriever):
+        return None
+
+    embed_ms = 0.0
+    if query_vector is None:
+        _t_embed = time.perf_counter()
+        try:
+            query_vector = embed_faiss_query_vector(faiss_retriever, query_text)
+        except Exception as e:  # noqa: BLE001 - 임베드 실패 시 기존 경로 폴백
+            logger.warning(f"[RAG] [RETRIEVE] 쿼리 임베드 실패 — 통합 경로 폴백: {e}")
+            return None
+        embed_ms = (time.perf_counter() - _t_embed) * 1000.0
+
+    _t_search = time.perf_counter()
+    docs = _faiss_results_with_scores(faiss_retriever, query_text, k, query_vector)
+    faiss_ms = (time.perf_counter() - _t_search) * 1000.0
+    return docs, embed_ms, faiss_ms
+
+
 async def retrieve_and_rerank(
     state: GraphState, config: RunnableConfig, *, writer: StreamWriter
 ) -> dict[str, Any]:
@@ -287,10 +332,7 @@ async def retrieve_and_rerank(
     faiss = cfg.get("faiss_retriever")
 
     from common.config import DYNAMIC_TOP_K_CONFIG, ENSEMBLE_WEIGHTS, RETRIEVER_CONFIG
-    from core.retriever_factory import (
-        search_bm25_with_scores,
-        search_faiss_with_scores,
-    )
+    from core.retriever_factory import search_bm25_with_scores
 
     # [수정] R3a-01: 리트리버가 실제 반환한 점수를 메타데이터에서 캡처하도록
     # 점수 주입 검색 헬퍼를 사용한다 (FAISS similarity_search_with_score / BM25 get_top_n+get_scores).
@@ -336,14 +378,31 @@ async def retrieve_and_rerank(
 
         [최적화-01] preprocess가 state에 실어 보낸 선계산 벡터가 있으면
         재임베딩(Ollama HTTP)을 건너뛰고 그대로 사용한다.
+
+        [최적화-03] 임베딩 추출 + FAISS ``index.search`` 를 단일 동기 작업으로
+        묶어 ``asyncio.to_thread`` 를 1회만 디스패치한다(기존 2회 → 1회). 실제
+        ``VectorStoreRetriever`` 가 아니면 ``_embed_and_search_faiss_sync`` 가
+        ``None`` 을 반환하므로 아래 비동기 폴백으로 분기한다.
         """
+        from core.retriever_factory import search_faiss_with_scores
+
         q_vec: Any | None = precomputed_q_vec
         if q_vec is not None:
-            task_ms["embed"] = 0.0
             logger.debug(
                 "[RAG] [RETRIEVE] preprocess 선계산 쿼리 벡터 재사용 — 재임베딩 생략"
             )
-        else:
+
+        fast = await asyncio.to_thread(
+            _embed_and_search_faiss_sync, faiss, query, search_k, q_vec
+        )
+        if fast is not None:
+            docs, emb_ms, faiss_calc_ms = fast
+            task_ms["embed"] = emb_ms
+            task_ms["faiss"] = faiss_calc_ms
+            return docs
+
+        # 비동기 폴백: VectorStoreRetriever가 아닌 대역/미구성 경로.
+        if q_vec is None:
             try:
                 from core.retriever_factory import embed_faiss_query_vector
 
