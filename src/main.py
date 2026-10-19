@@ -172,9 +172,19 @@ def _start_global_background_worker():
     return thread
 
 
-@st.cache_data(ttl=300, show_spinner=False)
 def _get_available_models_cached():
-    """Ollama 모델 목록을 캐싱하여 UI 블로킹을 최소화합니다."""
+    """Ollama 모델 목록을 프로세스 전역 TTL 캐시로 조회합니다.
+
+    캐시의 단일 진원은 ``core._loaders._fetch_available_models_cached`` 의
+    프로세스 전역 TTL 캐시(성공 300s / 실패 15s)다. Streamlit 세션과 무관하게
+    모든 세션이 공유하므로 새 탭/새로고침마다 ``list()`` HTTP 호출(최대 5s)이
+    다시 발생하지 않는다. 실패는 짧게만 캐시해 Ollama가 늦게 기동해도 UI가
+    오류 상태로 오래 고정되지 않는다.
+
+    Caveat: Ollama CLI에서 신규 모델을 pull한 경우 사이드바의 "모델 새로고침"
+    버튼(``on_refresh_models`` → ``clear_available_models_cache``)으로
+    명시적으로 갱신해야 한다.
+    """
     from core.model_loader import get_available_models
 
     return get_available_models()
@@ -213,10 +223,10 @@ def _is_ollama_reachable() -> bool:
 def _warm_available_models() -> None:
     """RC-C: 프로세스 부트 시 Ollama 모델 목록을 비동기 프리워밍합니다.
 
-    _get_available_models_cached(ttl=300)는 app 런타임 캐시이므로 import 시점
-    호출은 부팅 미리채우기에 쓰이지 않는다. 대신 데몬 스레드로 최대 1회만
-    조회하여 캐시를 데우고, 첫 사용자 렌더가 ~5s 블로킹(list 호출)되는 것을
-    막는다. Ollama 미연결 시 예외는 무시 — 첫 렌더의 기존 폴백/스피너가 보완.
+    ``_get_available_models_cached`` 는 프로세스 전역 TTL 캐시(성공 300s)이므로
+    부팅 시 데몬 스레드에서 최대 1회 조회해 캐시를 데우고, 첫 사용자 렌더가
+    ~5s 블로킹(list 호출)되는 것을 막는다. Ollama 미연결 시 예외는 무시 —
+    첫 렌더의 기존 폴백/스피너가 보완.
     """
     try:
         _get_available_models_cached()
@@ -225,9 +235,16 @@ def _warm_available_models() -> None:
 
 
 # 프로세스 시작 직후(import 직후) 백그라운드 웜업 — UI 첫 렌더 블로킹 제거.
-threading.Thread(
-    target=_warm_available_models, name="model-list-warmup", daemon=True
-).start()
+# st.cache_resource 가드로 rerun마다 스레드가 재생성되는 것을 막는다.
+@st.cache_resource(show_spinner=False)
+def _start_model_list_warmup() -> bool:
+    threading.Thread(
+        target=_warm_available_models, name="model-list-warmup", daemon=True
+    ).start()
+    return True
+
+
+_start_model_list_warmup()
 
 
 @safe_cache_resource(show_spinner=False)
@@ -294,16 +311,25 @@ async def _warmup_models() -> None:
     await _core_warmup()
 
 
-# [WARMUP] 부팅 시 1회 프리웜을 백그라운드 워커에 제출(비차단, 비치명적).
-# Streamlit은 스크립트 rerun 시 모듈 최상위 코드를 재실행하므로, 가드 없으면
-# 매 rerun마다 프리웜이 중복 제출되어 LLM astream("warmup") 이多次 실행된다.
-# session_state 플래그로 1회만 제출되도록 보장한다.
-if not st.session_state.get("_warmup_submitted", False):
+# [WARMUP] 프로세스(서버) 단위 1회 프리웜.
+# Streamlit은 스크립트 rerun 시 모듈 최상위 코드를 새 모듈 네임스페이스에서
+# 재실행하고, 새 탭/새로고침은 별도 세션(st.session_state)을 만든다. 따라서
+# 모듈 전역 변수나 세션 플래그는 프로세스 단위 보장이 안 된다(세션마다 프리웜이
+# 재제출되어 MAX_CONCURRENT_INFERENCE=1 락을 점유, 첫 질의가 대기). 프로세스
+# 전역인 st.cache_resource 싱글턴을 1회 제출 가드로 사용한다.
+@st.cache_resource(show_spinner=False)
+def _trigger_global_warmup_once() -> bool:
+    """서버 라이프사이클당 정확히 1회만 프리웜을 제출합니다."""
+    coro = _warmup_models()
     try:
-        _async_worker.submit(_warmup_models())
-        st.session_state["_warmup_submitted"] = True
+        _async_worker.submit(coro)
     except Exception as e:
+        coro.close()  # 미제출 코루틴의 "never awaited" 경고 방지
         logger.warning(f"[WARMUP] 모델 프리웜 실패 — 첫 쿼리에서 로드됨: {e}")
+    return True
+
+
+_trigger_global_warmup_once()
 
 
 def on_file_upload() -> None:
@@ -511,7 +537,10 @@ def on_embedding_change() -> None:
 
 def on_refresh_models() -> None:
     """Ollama 모델 목록을 재조회하여 사이드바 셀렉터를 갱신합니다."""
-    _get_available_models_cached.clear()
+    from core.model_loader import clear_available_models_cache
+
+    # 코어 프로세스 전역 TTL 캐시를 무효화해야 신규 pull 모델이 보인다.
+    clear_available_models_cache()
     st.session_state.available_models_list = _load_available_models()
     # 버튼 위젯 interaction 자체가 리런을 유발하므로 명시 rerun 금지 (중복 리런 방지).
 

@@ -18,6 +18,8 @@ import itertools
 import logging
 import os
 import re
+import threading
+import time
 from collections.abc import Awaitable, Callable
 from typing import Any, TypeVar
 
@@ -308,8 +310,8 @@ async def _warmup_models() -> None:
     logger.info("[WARMUP] LLM+임베더 프리웜 완료")
 
 
-def _fetch_available_models_cached() -> list[str]:
-    """Ollama 모델 목록을 가져옵니다. (UI 종속성 제거)"""
+def _fetch_available_models() -> list[str]:
+    """Ollama 모델 목록을 실제로 조회합니다. (캐시 없음)"""
     try:
         import ollama
 
@@ -333,6 +335,50 @@ def _fetch_available_models_cached() -> list[str]:
     except Exception as e:
         logger.warning(f"Ollama 모델 목록 조회 실패: {e}")
         return []
+
+
+# 프로세스 전역 TTL 캐시. UI(Streamlit)뿐 아니라 API 등 비-Streamlit 호출자도
+# Ollama ``list()`` HTTP 호출(최대 5s)을 반복하지 않도록 한다. 빈 결과(조회
+# 실패)는 짧은 TTL로만 캐시해, Ollama가 늦게 기동해도 빠르게 복구되면서
+# 동시에 매 호출마다 5s 타임아웃을 물지 않도록 한다.
+_MODELS_CACHE_TTL_SECONDS = 300.0
+_MODELS_FAILURE_TTL_SECONDS = 15.0
+_models_cache: tuple[float, list[str]] | None = None
+_models_cache_lock = threading.Lock()
+
+
+def _models_cache_ttl(models: list[str]) -> float:
+    return _MODELS_CACHE_TTL_SECONDS if models else _MODELS_FAILURE_TTL_SECONDS
+
+
+def _fetch_available_models_cached() -> list[str]:
+    """Ollama 모델 목록을 TTL 캐시와 함께 반환합니다. (UI 종속성 제거)"""
+    global _models_cache
+
+    cached = _models_cache
+    if cached is not None and time.monotonic() - cached[0] < _models_cache_ttl(
+        cached[1]
+    ):
+        return list(cached[1])
+
+    with _models_cache_lock:
+        cached = _models_cache
+        if cached is not None and time.monotonic() - cached[0] < _models_cache_ttl(
+            cached[1]
+        ):
+            return list(cached[1])
+
+        models = _fetch_available_models()
+        _models_cache = (time.monotonic(), models)
+        return list(models)
+
+
+def clear_available_models_cache() -> None:
+    """모델 목록 캐시를 무효화합니다. (사이드바 "모델 새로고침" 경로)"""
+    global _models_cache
+
+    with _models_cache_lock:
+        _models_cache = None
 
 
 def _keep_alive_seconds() -> int:

@@ -49,6 +49,7 @@ from core._loaders import (  # noqa: F401 — re-exports for backward compat
     _PayloadCappedEmbeddings,
     _split_by_payload_size,
     _warmup_models,
+    clear_available_models_cache,
     get_available_models,
     load_llm,
 )
