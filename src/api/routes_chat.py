@@ -183,6 +183,7 @@ async def stream_query_rag(
         batch_size = 10  # 10개 이벤트마다 배치 전송
         event_counter = 0
         chunk_index = 0  # OPT-2: is_disconnected 샘플링용 청크 카운터
+        first_token_emitted = False
 
         try:
             # [개선] RAGSystem 클래스를 통해 통합된 인터페이스 호출 (설정 및 리소스 관리 자동화)
@@ -244,7 +245,26 @@ async def stream_query_rag(
                 batch_buffer.extend(entries)
                 if chunk.status:
                     srv.SessionManager.add_status_log(chunk.status, session_id=sid)
-                if len(batch_buffer) >= batch_size:
+
+                # [최적화] 첫 콘텐츠 토큰 이전이거나, 즉시 인지가 필요한
+                # 상태/출처/사고/부분 인용 이벤트는 batch_size를 기다리지
+                # 않고 즉시 플러시한다 (TTFT·체감 반응성 보존).
+                has_immediate_event = any(
+                    event_type in ("status", "sources", "thought", "citations_add")
+                    for event_type, _, _ in entries
+                )
+                has_first_content = not first_token_emitted and any(
+                    event_type == "message" and payload.get("content")
+                    for event_type, payload, _ in entries
+                )
+
+                if (
+                    has_first_content
+                    or has_immediate_event
+                    or len(batch_buffer) >= batch_size
+                ):
+                    if has_first_content:
+                        first_token_emitted = True
                     yield sse_handler.format_sse_batch(batch_buffer)
                     batch_buffer.clear()
             if batch_buffer:
