@@ -86,9 +86,6 @@ def _get_optimal_batch_size(embedder: Embeddings) -> int:
 
 _HEADER_SPLIT_RE = re.compile(r"^(#{1,6}\s+.+)$", re.MULTILINE)
 
-_tokenizer_singleton: Any = None
-_tokenizer_failed: bool = False
-
 
 def split_by_headers(markdown: str) -> list[tuple[str, str]]:
     """마크다운을 (섹션 제목, 본문) 쌍으로 1차 분할합니다 (헤더 보존).
@@ -110,34 +107,15 @@ def split_by_headers(markdown: str) -> list[tuple[str, str]]:
 
 
 def _get_token_length_fn() -> Any:
-    """RecursiveCharacterTextSplitter용 토큰 길이 함수 (HF 우선·rough 폴백).
+    """RecursiveCharacterTextSplitter용 초고속 토큰 길이 함수.
 
-    v2-moe HF 토크나이저를 지연 싱글톤으로 로드하고, 실패 시
-    ``count_tokens_rough``로 폴백합니다. 스레드 호출용 sync 함수입니다.
+    [최적화] 청킹 재귀 분할 루프 내부에서 수만 번 호출되는 tok.encode()의
+    무거운 C-FFI 및 메모리 할당 오버헤드를 제거하기 위해,
+    실측 보정된 고속 토큰 추정 함수(count_tokens_rough)로 일원화합니다.
     """
-    global _tokenizer_singleton, _tokenizer_failed
-    if _tokenizer_singleton is not None:
-        tok = _tokenizer_singleton
-        return lambda text: len(tok.encode(text, add_special_tokens=False))
-    if _tokenizer_failed:
-        from common.text_utils import count_tokens_rough
+    from common.text_utils import count_tokens_rough
 
-        return count_tokens_rough
-    try:
-        from transformers import AutoTokenizer
-
-        _tokenizer_singleton = AutoTokenizer.from_pretrained(
-            "nomic-ai/nomic-embed-text-v2-moe", trust_remote_code=True
-        )
-        tok = _tokenizer_singleton
-        logger.info("[CHUNKING] 토큰 길이 함수: HF v2-moe 토크나이저 사용")
-        return lambda text: len(tok.encode(text, add_special_tokens=False))
-    except Exception as e:
-        _tokenizer_failed = True
-        logger.warning(f"[CHUNKING] HF 토크나이저 실패로 rough 폴백: {e}")
-        from common.text_utils import count_tokens_rough
-
-        return count_tokens_rough
+    return count_tokens_rough
 
 
 def _init_semantic_chunker(embedder: Embeddings) -> EmbeddingBasedSemanticChunker:
