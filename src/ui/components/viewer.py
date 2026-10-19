@@ -285,7 +285,8 @@ def _resolve_pdf_state() -> dict | None:
     except (TypeError, ValueError):
         managed_page = 1
     current_page = min(max(1, managed_page), total_pages)
-    SessionManager.set("current_page", current_page)
+    if managed_page != current_page:
+        SessionManager.set("current_page", current_page)
 
     return {
         "pdf_path": pdf_path,
