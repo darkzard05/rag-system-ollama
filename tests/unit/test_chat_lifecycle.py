@@ -109,7 +109,9 @@ def test_streaming_documents_set_pdf_side_effects():
     messages = SessionManager.get_messages(session_id=session_id)
     target = next(m for m in messages if m.get("msg_id") == msg["msg_id"])
     assert target["role"] == "assistant"
-    assert target["documents"] == [doc]
+    # 영속화 시 좌표 메타데이터를 제거한 lean 복사본으로 저장된다 (원본 객체 아님).
+    assert len(target["documents"]) == 1
+    assert target["documents"][0].metadata == {"page": 7}
     _wait_for_pdf_side_effects(session_id)
     pdf_annotations = SessionManager.get("pdf_annotations", session_id=session_id)
     assert pdf_annotations["file_hash"] is None  # 테스트에서 file_hash 미설정

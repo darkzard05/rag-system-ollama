@@ -65,6 +65,9 @@ async def _run_generate(mock_llm: MagicMock, docs, fake_count) -> tuple:
     with (
         patch("core.graph._generate.OLLAMA_NUM_CTX", _NUM_CTX),
         patch("core.graph._generate.OLLAMA_NUM_PREDICT", _NUM_PREDICT),
+        patch(
+            "core.graph._generate.GENERATE_PROMPT_CONFIG", {"max_context_tokens": 6000}
+        ),
         patch("core.graph._generate.count_tokens_rough", side_effect=fake_count),
         patch("core.graph._glue.adispatch_custom_event", new=AsyncMock()),
         patch.object(ModelManager, "inference_session", _patch_inference_session()),

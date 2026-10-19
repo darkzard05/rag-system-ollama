@@ -1,9 +1,11 @@
 """
 Phase 1 성능 리팩터 테스트.
 
-배치 임베딩 + 영구 캐시 히트 경로를 검증한다.
+배치 임베딩 + L1 캐시 히트 경로를 검증한다.
 - Ollama 임베더는 누락분 전체를 단일 ``embed_documents`` 호출로 묶어야 한다 (HTTP 왕복 1회).
-- 동일 텍스트(콘텐츠 해시 키) 재임베딩 시 영구 디스크 캐시에서 히트하여 Ollama 왕복을 건너뛴다.
+- 동일 텍스트(콘텐츠 해시 키) 재임베딩 시 L1 메모리 캐시에서 히트하여 Ollama 왕복을 건너뛴다.
+  [최적화-04] 문장 단위 임베딩은 L1 메모리 캐시에만 저장되고 디스크(L3)로 영속화하지
+  않는다. 최종 결과물은 VectorStoreCache가 index.faiss/doc_splits.json으로 일괄 영속화한다.
 임베더는 목으로 대체하므로 실제 Ollama 호출은 발생하지 않는다.
 """
 
@@ -94,7 +96,7 @@ async def test_ollama_embedder_coalesces_into_single_call():
 
 @pytest.mark.asyncio
 async def test_identical_text_reuses_cache_without_ollama_roundtrip():
-    """동일 텍스트 재임베딩 시 영구 캐시에서 히트하여 Ollama 왕복을 건너뛴다."""
+    """동일 텍스트 재임베딩 시 L1 캐시에서 히트하여 Ollama 왕복을 건너뛴다."""
     tmp_dir = tempfile.mkdtemp()
     embedder = OllamaLikeEmbeddings(dimension=32)
     cache = _make_persistent_cache(tmp_dir)
@@ -111,27 +113,55 @@ async def test_identical_text_reuses_cache_without_ollama_roundtrip():
     first = await chunker._get_embeddings(texts)
     assert embedder.call_count == 1
 
-    # L1 메모리 캐시만 비워도 L3 디스크 캐시에서 복구되는지 검증
-    # (전체 clear()는 디스크까지 지우므로 영구 캐시 보존을 테스트할 수 없음)
-    assert cache.memory_cache is not None
-    await cache.memory_cache.clear()
-
+    # L1 메모리 캐시 히트로 임베더 호출이 추가로 발생하지 않음
     second = await chunker._get_embeddings(texts)
 
-    # 1. 디스크 캐시 히트로 임베더 호출이 추가로 발생하지 않음
     assert embedder.call_count == 1
     assert np.allclose(first, second)
 
 
 @pytest.mark.asyncio
-async def test_split_documents_hits_persistent_cache_across_instances():
-    """재수집 시 신규 청커 인스턴스도 영구 캐시에서 히트한다 (프로세스 재시작 모사)."""
+async def test_split_documents_reuses_l1_cache_within_instance():
+    """동일 인스턴스 재분할 시 L1 캐시를 재사용해 임베더 호출이 늘지 않는다.
+
+    [최적화-04] 문장 임베딩은 디스크로 영속화하지 않으므로 재사용은 동일
+    인스턴스(동일 CacheManager) 범위에서 보장된다.
+    """
     tmp_dir = tempfile.mkdtemp()
     text = " ".join(
         f"Sentence {i} about a stable topic that should be cached." for i in range(12)
     )
 
-    # 첫 수집: 실제 임베딩 생성 + 디스크 캐시 기록
+    embedder = OllamaLikeEmbeddings(dimension=32)
+    chunker = EmbeddingBasedSemanticChunker(
+        embedder=embedder,
+        cache_manager=_make_persistent_cache(tmp_dir),
+        min_chunk_size=0,
+        max_chunk_size=500,
+    )
+    chunks1 = await chunker.split_text(text)
+    assert embedder.call_count == 1
+
+    chunks2 = await chunker.split_text(text)
+
+    # L1 캐시 히트로 임베더를 추가 호출하지 않고 분할 결과가 동일해야 함
+    assert embedder.call_count == 1
+    assert len(chunks1) == len(chunks2)
+    assert [c["text"] for c in chunks1] == [c["text"] for c in chunks2]
+
+
+@pytest.mark.asyncio
+async def test_sentence_embeddings_not_persisted_to_disk():
+    """[최적화-04] 새 인스턴스는 디스크 캐시가 아닌 재임베딩 경로를 탄다.
+
+    문장 단위 임베딩은 L3 디스크에 기록되지 않으므로, 동일 디스크 캐시
+    디렉터리를 공유하는 신규 청커는 캐시 히트 없이 임베더를 다시 호출한다.
+    """
+    tmp_dir = tempfile.mkdtemp()
+    text = " ".join(
+        f"Sentence {i} about a stable topic that should be cached." for i in range(12)
+    )
+
     first_embedder = OllamaLikeEmbeddings(dimension=32)
     first = EmbeddingBasedSemanticChunker(
         embedder=first_embedder,
@@ -139,10 +169,9 @@ async def test_split_documents_hits_persistent_cache_across_instances():
         min_chunk_size=0,
         max_chunk_size=500,
     )
-    chunks1 = await first.split_text(text)
+    await first.split_text(text)
     assert first_embedder.call_count == 1
 
-    # 두 번째 수집: 새 임베더/새 청커지만 동일 디스크 캐시 공유
     second_embedder = OllamaLikeEmbeddings(dimension=32)
     second = EmbeddingBasedSemanticChunker(
         embedder=second_embedder,
@@ -150,9 +179,7 @@ async def test_split_documents_hits_persistent_cache_across_instances():
         min_chunk_size=0,
         max_chunk_size=500,
     )
-    chunks2 = await second.split_text(text)
+    await second.split_text(text)
 
-    # 임베더를 한 번도 호출하지 않고 분할 결과가 동일해야 함
-    assert second_embedder.call_count == 0
-    assert len(chunks1) == len(chunks2)
-    assert [c["text"] for c in chunks1] == [c["text"] for c in chunks2]
+    # 디스크 영속화가 없으므로 신규 인스턴스는 재임베딩한다.
+    assert second_embedder.call_count == 1
