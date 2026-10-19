@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import time
+import asyncio
 from dataclasses import FrozenInstanceError
 from types import SimpleNamespace
 from typing import Any
@@ -333,3 +334,58 @@ def test_persist_precedes_finalize(monkeypatch: Any) -> None:
     last_persist = max(i for i, item in enumerate(order) if item == "persist")
     assert last_persist < len(order) - 1
     SessionManager.reset_all_state(sid)
+
+
+def test_extract_annotations_hits_coord_cache_without_opening_pdf(
+    tmp_path, monkeypatch
+):
+    """Given coord_cache에 좌표가 존재할 때 / When extract_annotations_from_docs 호출 / Then PDF 오픈 없이 coord_cache에서 좌표를 가져온다."""
+    import contextlib
+    import importlib
+    from cache.coord_cache import coord_cache
+    from common.utils import extract_annotations_from_docs
+
+    db_dir = tmp_path / "coord_cache"
+    db_dir.mkdir()
+    mod = importlib.import_module("cache.coord_cache")
+    with contextlib.suppress(Exception):
+        asyncio.run(coord_cache.close())
+    coord_cache._conn = None
+    coord_cache._schema_ready = False
+    coord_cache._conn_healthy = False
+    monkeypatch.setattr(mod, "COORD_CACHE_DIR", db_dir)
+    monkeypatch.setattr(mod, "COORD_CACHE_DB", db_dir / "coords.db")
+
+    file_hash = "hash-coord-cache-test"
+    page_num = 3
+    sample_coords = [(10.0, 20.0, 50.0, 30.0, "Elasticsearch")]
+    coord_cache.save_coords_sync(file_hash, page_num, sample_coords)
+
+    pdf_file = tmp_path / "report.pdf"
+    pdf_file.touch()
+
+    docs = [
+        {
+            "page_content": "Elasticsearch",
+            "metadata": {
+                "file_path": str(pdf_file),
+                "file_hash": file_hash,
+                "page": page_num,
+            },
+        }
+    ]
+
+    opened = False
+
+    def _fail_open(*args, **kwargs):
+        nonlocal opened
+        opened = True
+        raise RuntimeError("Should not open PDF when coord_cache hits!")
+
+    with patch("common.utils.open_pdf_document", side_effect=_fail_open):
+        annots = extract_annotations_from_docs(docs)
+
+    assert not opened, "coord_cache 적중 시 PDF를 열지 않아야 합니다."
+    assert len(annots) > 0
+    with contextlib.suppress(Exception):
+        asyncio.run(coord_cache.close())

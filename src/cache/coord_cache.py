@@ -527,6 +527,76 @@ class CoordCacheManager:
             # 외층 get_coords가 CoordCacheReadError로 변환하도록 재발생.
             raise
 
+    def get_coords_sync(self, file_hash: str, page_num: int) -> list[Any] | None:
+        """캐시에서 좌표 단건을 동기로 조회합니다 (이벤트 루프 불요, never raise)."""
+        if not file_hash:
+            return None
+        try:
+            if not COORD_CACHE_DIR.exists():
+                COORD_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+            with sqlite3.connect(COORD_CACHE_DB) as conn:
+                cursor = conn.execute(
+                    "SELECT coords FROM coords WHERE file_hash = ? AND page_num = ?",
+                    (file_hash, page_num),
+                )
+                row = cursor.fetchone()
+        except sqlite3.OperationalError as e:
+            if "no such table" in str(e):
+                try:
+                    self._create_schema_sync()
+                except (OSError, sqlite3.Error) as schema_e:
+                    logger.debug(f"좌표 캐시 스키마 생성 실패: {schema_e}")
+            else:
+                logger.debug(f"좌표 캐시 조회 실패 ({file_hash}, p{page_num}): {e}")
+            return None
+        except (sqlite3.Error, OSError) as e:
+            logger.debug(f"좌표 캐시 조회 실패 ({file_hash}, p{page_num}): {e}")
+            return None
+        if row is None:
+            return None
+        try:
+            payload = orjson.loads(row[0])
+        except (ValueError, TypeError) as e:
+            logger.debug(f"좌표 캐시 역직렬화 실패 ({file_hash}, p{page_num}): {e}")
+            return None
+        if isinstance(payload, list):
+            return payload
+        return None
+
+    def save_coords_sync(
+        self,
+        file_hash: str,
+        page_num: int,
+        coords: list[Any],
+    ) -> bool:
+        """좌표 데이터를 캐시에 동기로 저장합니다 (이벤트 루프 불요, 즉시 반영)."""
+        if not file_hash or not coords:
+            return False
+        normalized = [to_coord5(w) for w in coords]
+        try:
+            self._create_schema_sync()
+        except (OSError, sqlite3.Error) as e:
+            logger.debug(f"좌표 캐시 스키마 생성 실패: {e}")
+            return False
+        try:
+            blob = orjson.dumps(normalized)
+        except (TypeError, ValueError) as e:
+            logger.debug(f"좌표 캐시 직렬화 실패 ({file_hash}, p{page_num}): {e}")
+            return False
+        try:
+            if not COORD_CACHE_DIR.exists():
+                COORD_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+            with sqlite3.connect(COORD_CACHE_DB) as conn:
+                _ = conn.execute(
+                    "INSERT OR REPLACE INTO coords (file_hash, page_num, coords, created_at) VALUES (?, ?, ?, ?)",
+                    (file_hash, page_num, blob, time.time()),
+                )
+                conn.commit()
+        except (sqlite3.Error, OSError) as e:
+            logger.debug(f"좌표 캐시 저장 실패 ({file_hash}, p{page_num}): {e}")
+            return False
+        return True
+
     def get_annotation_memo_sync(
         self, file_hash: str, page_num: int, normtext_hash: str
     ) -> list[dict[str, Any]] | None:

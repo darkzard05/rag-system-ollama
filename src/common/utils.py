@@ -16,6 +16,7 @@ import html
 import logging
 import os
 import re
+import time
 from typing import Any
 
 import streamlit as st
@@ -266,6 +267,22 @@ def _memo_lookup(key: tuple[str, int, str]) -> list[dict] | None:
         return None
 
 
+def _coord_cache_lookup(file_hash: str, page_num: int) -> list[Any] | None:
+    """좌표 캐시 DB(coord_cache)에서 단어 좌표를 동기로 조회합니다."""
+    try:
+        from cache.coord_cache import coord_cache
+    except ImportError as e:
+        logger.debug(f"[HIGHLIGHT] 좌표 캐시 로드 불가: {e}")
+        return None
+    try:
+        if hasattr(coord_cache, "get_coords_sync"):
+            return coord_cache.get_coords_sync(file_hash, page_num)
+        return None
+    except (OSError, ValueError, TypeError, RuntimeError) as e:
+        logger.debug(f"[HIGHLIGHT] 좌표 캐시 조회 실패: {e}")
+        return None
+
+
 def _memo_store(key: tuple[str, int, str], doc_annots: list[dict]) -> None:
     """확정 라인박스를 메모에 저장합니다 (실패해도 추출 결과에 영향 없음)."""
     try:
@@ -469,6 +486,26 @@ def extract_annotations_from_docs(
             if memo_hit is not None:
                 annotations.extend(memo_hit)
                 continue
+
+        # [Task 3] 좌표 캐시(coord_cache) 우선 확인: hydrate_documents가 백그라운드에서
+        # 좌표를 복구/저장 중일 수 있으므로 짧은 폴링으로 동기화하여 온디맨드 fitz 검색을 건너뛴다.
+        file_hash = meta.get("file_hash")
+        if file_hash:
+            cached_coords = None
+            for _attempt in range(3):
+                cached_coords = _coord_cache_lookup(str(file_hash), page_val)
+                if cached_coords is not None:
+                    break
+                if _attempt < 2:
+                    time.sleep(0.02)
+            if cached_coords is not None:
+                cache_annots = _build_line_boxes(cached_coords, page_val, content)
+                if cache_annots:
+                    annotations.extend(cache_annots)
+                    if memo_key is not None:
+                        _memo_store(memo_key, cache_annots)
+                    continue
+
         pending.append(
             {
                 "content": content,
