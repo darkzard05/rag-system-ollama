@@ -142,39 +142,43 @@ async def preprocess(
     # 후보군으로 삼는다 — 문서 없는 세션의 캐시 히트는 부정확하므로 무시한다.
     is_cached = False
     cached_response: str | None = None
-    # [최적화-01] 캐시 조회·retrieve가 공유할 선계산 쿼리 벡터. 문서가 있는
-    # 세션에서 쿼리 캐시가 켜져 있을 때만 계산한다 (아니면 retrieve가 1회만
-    # 임베딩하므로 중복이 없다).
+    # [최적화-04] 캐시 조회·retrieve가 공유할 선계산 쿼리 벡터. 쿼리 캐시
+    # 활성화 여부와 무관하게 문서 기반 질의(intent != "general")라면 전처리
+    # 단계에서 1회 선계산하여 후속 검색 노드가 재임베딩 없이 즉시 FAISS/BM25를
+    # 병렬 착수하도록 한다.
     query_embedding: list[float] | None = None
-    if QUERY_CACHE_ENABLED:
-        sid = _get_session_id(config)
-        file_hash = SessionManager.get("file_hash", session_id=sid, default=None)
-        has_doc = bool(file_hash)
-        if has_doc:
-            query_embedding = await _precompute_query_embedding(config, query)
-            await _ensure_query_cache_embedder()
-            try:
-                # D17 — cache key namespaced by file_hash so cross-document queries can't collide.
-                cache_key = f"{file_hash}:{query}"
-                # [최적화-01] 선계산 벡터를 주입해 내부 재임베딩(네임스페이스 키
-                # 대상 HTTP)을 원천 차단한다. None이면 기존 계약대로 내부 임베딩.
-                cached = await get_cache_manager().get(
-                    cache_key,
-                    use_semantic=True,
-                    query_embedding=query_embedding,
-                )
-            except Exception as e:  # noqa: BLE001 - 캐시 실패는 정상 경로로 폴백
-                logger.warning(f"[RAG] [CACHE] 조회 실패 — 우회: {e}")
-                cached = None
-            # 빈 응답·신뢰도 미달·버전 불일치(구 스키마·위조)는 미스.
-            if isinstance(cached, dict) and _is_valid_query_cache_value(
-                cached, QUERY_CACHE_MIN_CONF
-            ):
-                response = cached["response"]
-                is_cached = True
-                cached_response = response
-                intent = "general"  # 라우터가 generate로 단축 라우팅
-                logger.info("[RAG] [PREPROCESS] 쿼리 캐시 히트 — generate 단축 경로")
+
+    sid = _get_session_id(config)
+    file_hash = SessionManager.get("file_hash", session_id=sid, default=None)
+    has_doc = bool(file_hash)
+
+    if has_doc and intent != "general":
+        query_embedding = await _precompute_query_embedding(config, query)
+
+    if QUERY_CACHE_ENABLED and has_doc:
+        await _ensure_query_cache_embedder()
+        try:
+            # D17 — cache key namespaced by file_hash so cross-document queries can't collide.
+            cache_key = f"{file_hash}:{query}"
+            # [최적화-01] 선계산 벡터를 주입해 내부 재임베딩(네임스페이스 키
+            # 대상 HTTP)을 원천 차단한다. None이면 기존 계약대로 내부 임베딩.
+            cached = await get_cache_manager().get(
+                cache_key,
+                use_semantic=True,
+                query_embedding=query_embedding,
+            )
+        except Exception as e:  # noqa: BLE001 - 캐시 실패는 정상 경로로 폴백
+            logger.warning(f"[RAG] [CACHE] 조회 실패 — 우회: {e}")
+            cached = None
+        # 빈 응답·신뢰도 미달·버전 불일치(구 스키마·위조)는 미스.
+        if isinstance(cached, dict) and _is_valid_query_cache_value(
+            cached, QUERY_CACHE_MIN_CONF
+        ):
+            response = cached["response"]
+            is_cached = True
+            cached_response = response
+            intent = "general"  # 라우터가 generate로 단축 라우팅
+            logger.info("[RAG] [PREPROCESS] 쿼리 캐시 히트 — generate 단축 경로")
 
     return {
         "intent": intent,
