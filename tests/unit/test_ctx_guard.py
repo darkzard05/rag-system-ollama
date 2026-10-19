@@ -258,3 +258,39 @@ def test_config_loads_updated_num_ctx_and_num_predict(monkeypatch):
     reloaded = importlib.reload(config_module)
     assert reloaded.OLLAMA_NUM_CTX == 8192
     assert reloaded.OLLAMA_NUM_PREDICT == 2048
+
+
+@pytest.mark.asyncio
+async def test_generate_tail_truncates_when_minor_over_budget():
+    """예산이 100토큰 미세 초과할 때 하위 문서 꼬리 압축으로 문서 제거 없이 모든 문서를 유지하는지 검증합니다."""
+    docs = [
+        Document(
+            page_content="doc_A_low rerank content " + "x" * 500,
+            metadata={"rerank_score": 0.1, "page": 1},
+        ),
+        Document(
+            page_content="doc_B_mid rerank content " + "x" * 500,
+            metadata={"rerank_score": 0.5, "page": 2},
+        ),
+        Document(
+            page_content="doc_C_high rerank content " + "x" * 500,
+            metadata={"rerank_score": 0.9, "page": 3},
+        ),
+    ]
+
+    def fake_count(text: str) -> int:
+        if "..." in text:
+            return _BUDGET - 100
+        return _BUDGET + 100
+
+    mock_llm = MagicMock()
+    with patch(
+        "core.graph._generate.GENERATE_PROMPT_CONFIG", {"max_context_tokens": 6000}
+    ):
+        result, sent_messages, _state = await _run_generate(mock_llm, docs, fake_count)
+
+    assert result["performance"]["relevant_docs_count"] == 3
+    assert len(docs) == 3
+    human_content = sent_messages[0][0].content
+    assert "doc_A_low" in human_content
+    assert "..." in human_content

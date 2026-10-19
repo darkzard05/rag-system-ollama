@@ -473,6 +473,26 @@ def _apply_ctx_guard(docs: list, query: str) -> tuple[list, str, int]:
 
     removed = dedup_removed
     if est > token_budget:
+        ranked = sorted(
+            docs,
+            key=lambda d: float(d.metadata.get("rerank_score", 0.0)),
+            reverse=True,
+        )
+        over_tokens = est - token_budget
+        if 0 < over_tokens <= 150 and len(ranked) > 2:
+            last_doc = ranked[-1]
+            trim_chars = int(over_tokens * 3.5)
+            if len(last_doc.page_content) > trim_chars + 100:
+                last_doc.page_content = last_doc.page_content[:-trim_chars] + "..."
+                blocks[id(last_doc)] = _render_doc_block(last_doc)
+                context = "".join(blocks[id(d)] for d in docs)
+                est = count_tokens_rough(_ctx_prompt(context, query))
+                if est <= token_budget:
+                    logger.info(
+                        f"[RAG] [CTX] 미세 초과({over_tokens} tok) 하위 문서 꼬리 압축으로 전체 문서 유지 성공"
+                    )
+                    return docs, context, removed
+
         # [Phase2-b] 헤더 스트립 폴백: 문서 제거 전에 `#` 마커 제거 버전을
         # 먼저 시도한다. config strip_headers_fallback=false면 기존 제거 경로.
         # 스트립은 토큰만 줄이고(문서 수·순서 유지) 로그에 전환을 기록한다.
