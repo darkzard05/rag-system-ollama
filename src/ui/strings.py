@@ -173,6 +173,7 @@ UI_STRINGS: dict[str, dict[str, str]] = {
         "build_progress_caption": "{progress}% complete · {elapsed}s elapsed",
         "build_complete_caption": "Analysis took {elapsed}s",
         "build_complete_default": "Analysis complete",
+        "build_complete_status": "Ready",
         # Chat input placeholders (chat._resolve_chat_input_state)
         "chat_placeholder_generating": "Generating an answer... (■ button on the right of the input to stop)",
         "chat_placeholder_swapping": "Switching the AI model... Please wait a moment.",
@@ -295,6 +296,7 @@ UI_STRINGS: dict[str, dict[str, str]] = {
         "build_progress_caption": "{progress}% 완료 · {elapsed}초 경과",
         "build_complete_caption": "분석 소요 시간: {elapsed}초",
         "build_complete_default": "분석 완료",
+        "build_complete_status": "준비 완료",
         # Chat input placeholders (chat._resolve_chat_input_state)
         "chat_placeholder_generating": "답변을 생성하고 있습니다... (중지는 입력창 우측 ■ 버튼)",
         "chat_placeholder_swapping": "AI 모델을 전환하는 중입니다... 잠시만 기다려 주세요.",

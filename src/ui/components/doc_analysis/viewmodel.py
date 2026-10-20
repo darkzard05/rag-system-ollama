@@ -143,7 +143,7 @@ def to_viewmodel(
 
     if build.phase == BuildPhase.DONE:
         return BuildVM(
-            label=f"{file_name} · 준비 완료{tag}",
+            label=f"{file_name} · {t('build_complete_status')}{tag}",
             status_state="complete",
             expanded=False,
             progress=None,

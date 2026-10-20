@@ -20,6 +20,10 @@ from ui.widget_keys import cancel_rebuild_key, retry_build_key
 
 def _doc_cache_override(sid: str, build: BuildState) -> bool | None:
     """Prefer fresh doc_stats cache flag; fall back to BuildState value."""
+    # A resolved BuildState value is authoritative: skip the session lookup
+    # (and its lock acquisition) on every render frame.
+    if build.cache_used is not None:
+        return build.cache_used
     doc_stats = SessionManager.get("doc_stats", {}, sid)
     if isinstance(doc_stats, dict) and "cache_used" in doc_stats:
         value = doc_stats.get("cache_used")

@@ -97,6 +97,7 @@ def test_build_status_banner_lifecycle():
     at = AppTest.from_file("src/main.py").run(timeout=_RUN_TIMEOUT)
     sid = _app_session_id()
     assert not at.exception
+    SessionManager.set("ui_lang", "ko", sid)
 
     # Phase 1 — analysis running. Seed the BuildState exactly like
     # main.py's _bg_rebuild_task via init/update_build_state; the native
