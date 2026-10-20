@@ -45,7 +45,11 @@ def render_document_panel(sid: str) -> None:
     except (TypeError, ValueError):
         attempt = 0
 
-    with st.status(vm.label, expanded=vm.expanded, state=vm.status_state):  # type: ignore[arg-type]
+    with st.status(
+        vm.label,
+        expanded=vm.expanded,
+        state=vm.status_state,  # type: ignore[arg-type]
+    ) as status_container:
         if vm.progress is not None:
             st.progress(vm.progress)
         if vm.stepper:
@@ -60,6 +64,11 @@ def render_document_panel(sid: str) -> None:
                 ui_error(str(error))
         if "cancel" in vm.actions:
             if bool(SessionManager.get("rebuild_cancelled", False, sid)):
+                status_container.update(
+                    label=vm.label,
+                    expanded=vm.expanded,
+                    state=vm.status_state,  # type: ignore[arg-type]
+                )
                 return
             st.button(
                 t("action_cancel_build"),
@@ -80,6 +89,13 @@ def render_document_panel(sid: str) -> None:
                 help=t("action_retry_build_help"),
                 width="stretch",
             )
+        # st.status __exit__ defaults to state="complete" + expanded=False;
+        # re-assert the viewmodel state so running/error panels stay expanded.
+        status_container.update(
+            label=vm.label,
+            expanded=vm.expanded,
+            state=vm.status_state,  # type: ignore[arg-type]
+        )
 
 
 def should_mount_fragment(sid: str) -> bool:
