@@ -502,6 +502,18 @@ def _recover_citations(blob: str) -> list[dict[str, Any]]:
             anchor = _anchor or ""
         citations.append({"doc_id": doc_id, "anchor": anchor})
         obj_start = blob.find('"doc_id"', obj_end)
+
+    if citations:
+        return citations
+
+    # `[doc:<id>]` 토큰이 객체 키로 승격된 형태({"doc:<id>": "<anchor>"})를
+    # 복구한다. 소형 모델이 스키마 대신 doc 토큰을 키로 쓰는 이탈 케이스.
+    for key_m in re.finditer(r'"\s*doc\s*:\s*([^"\\]+?)\s*"\s*:\s*', blob):
+        token = key_m.group(1).strip().rstrip("”’")
+        if not token:
+            continue
+        anchor_text, _ = _extract_json_string(blob, key_m.end())
+        citations.append({"doc_id": token, "anchor": anchor_text or ""})
     return citations
 
 

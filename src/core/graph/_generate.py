@@ -17,8 +17,9 @@ from langchain_core.documents import Document
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_core.runnables import RunnableConfig
 from langgraph.types import StreamWriter
+from pydantic import ValidationError
 
-from api.schemas import AnswerStructure, GraphState
+from api.schemas import AnswerStructure, Citation, GraphState
 from common.config import (
     ANALYSIS_PROTOCOL,
     DEFAULT_OLLAMA_MODEL,
@@ -32,7 +33,7 @@ from common.config import (
     QUERY_CACHE_TTL,
     TOKEN_ESTIMATION_PROXY,
 )
-from common.utils import count_tokens_rough
+from common.utils import coerce_citation_mapping, count_tokens_rough
 from core.graph._graph_core import (
     _QUERY_CACHE_VALUE_VERSION,
     _dispatch_event,
@@ -234,8 +235,12 @@ def _normalize_citations(citations: list[Any], docs: list[Document]) -> list[Any
     valid_ids = set(doc_ids)
     doc_count = len(doc_ids)
     normalized: list[Any] = []
+    dropped_ids: list[Any] = []
 
     for cit in citations:
+        # 소형 모델의 스키마 이탈({"doc:<id>": "<anchor>"}, "doc:<id>" 값 등)을
+        # 멤버십 검증 전에 정상 형태로 복원한다.
+        cit = coerce_citation_mapping(cit)
         raw_id = (
             getattr(cit, "doc_id", None)
             if not isinstance(cit, dict)
@@ -254,20 +259,27 @@ def _normalize_citations(citations: list[Any], docs: list[Document]) -> list[Any
                 mapped = raw_id
 
         if mapped is None:
-            logger.warning(
-                "[RAG] [GENERATE] 알 수 없는 인용 doc_id 드롭 (환각 차단): %r",
-                raw_id,
-            )
+            dropped_ids.append(raw_id)
             continue
 
         try:
-            if hasattr(cit, "model_copy"):
-                normalized.append(cit.model_copy(update={"doc_id": mapped}))
-            else:
+            copier = getattr(cit, "model_copy", None)
+            if callable(copier):
+                normalized.append(copier(update={"doc_id": mapped}))
+            elif isinstance(cit, dict):
                 normalized.append({**cit, "doc_id": mapped})
+            else:
+                normalized.append(cit)
         except Exception:
             logger.warning("[RAG] [GENERATE] 인용 정규화 실패 — 원본 유지: %r", raw_id)
             normalized.append(cit)
+    if dropped_ids:
+        # 인용 1건당 1줄씩 찍히던 경고를 호출당 1줄로 합쳐 로그 폭주를 막는다.
+        logger.warning(
+            "[RAG] [GENERATE] 알 수 없는 인용 doc_id %d건 드롭 (환각 차단): %s",
+            len(dropped_ids),
+            dropped_ids[:5],
+        )
     return normalized
 
 
@@ -285,7 +297,7 @@ def _filter_stream_cite_items(
     kept = _normalize_citations(list(items), docs)
     dropped = len(items) - len(kept)
     if dropped:
-        logger.warning(
+        logger.debug(
             "[RAG] [GENERATE] 스트리밍 인용 %d건 드롭 (미검증 doc_id)", dropped
         )
     return kept
@@ -687,6 +699,33 @@ def _has_echo(text: str, n: int = 5) -> bool:
     return False
 
 
+def _schema_fallback_answer(payload: Any) -> AnswerStructure:
+    """JSON 문법은 유효하지만 스키마 검증이 실패했을 때 final_answer 를 보존한다.
+
+    citations[] 는 정상 형태로 변환 가능한 항목만 유지하고(나머지는 fail-closed
+    드롭), confidence 는 [0.0, 1.0] 으로 클램프한다. 멤버십 검증은 호출자의
+    ``_normalize_citations`` 가 authoritative 경계로 수행한다.
+    """
+    data = payload if isinstance(payload, dict) else {}
+    raw_answer = data.get("final_answer")
+    final_answer = raw_answer if isinstance(raw_answer, str) else ""
+    citations: list[Citation] = []
+    raw_citations = data.get("citations")
+    if isinstance(raw_citations, list):
+        for item in raw_citations:
+            try:
+                citations.append(Citation.model_validate(item))
+            except (ValidationError, TypeError):
+                continue
+    raw_conf = data.get("confidence")
+    confidence = float(raw_conf) if isinstance(raw_conf, (int, float)) else 0.0
+    return AnswerStructure(
+        final_answer=final_answer,
+        citations=citations,
+        confidence=min(max(confidence, 0.0), 1.0),
+    )
+
+
 async def _generate_pass(
     *,
     llm: Any,
@@ -920,32 +959,6 @@ async def _generate_pass(
                 raise
             json_str = repaired
             parsed_data = json.loads(repaired)
-
-        parsed_answer = AnswerStructure(**parsed_data)
-        logger.info(
-            f"[RAG] [GENERATE] 구조화된 답변 파싱 성공: prompt_version={prompt_version}"
-        )
-
-        # P3: 인라인 [doc:...] 폴백과 별도로 citations[] 자체를 스트림에 태워
-        # 안정적 doc_id 기반 렌더링을 가능케 한다. 디스패치 전에 검증해
-        # 미검증 인용이 스트리밍으로 새지 않게 한다 (authoritative).
-        if parsed_answer and writer is not None:
-            if docs:
-                parsed_answer.citations = _normalize_citations(
-                    list(parsed_answer.citations), docs
-                )
-            await _dispatch_event(
-                "citations",
-                {"citations": _enrich_citations(parsed_answer.citations, docs)},
-                writer=writer,
-                config=config,
-            )
-            logger.info(
-                "[PERF] citations-dispatch count=%d tail_content_ms=%.1f parse_ms=%.1f",
-                len(parsed_answer.citations),
-                tail_content_ms,
-                (time.perf_counter() - t_parse_start) * 1000,
-            )
     except (json.JSONDecodeError, ValueError) as e:
         parse_failed = True
         # 진단: 재현/원인 분석을 위해 원시 출력을 기록 (blind spot 해소)
@@ -953,7 +966,11 @@ async def _generate_pass(
             f"[RAG] [GENERATE] JSON 파싱 실패, 폴백 사용: {e} "
             f"(output_chars={len(full_response)})"
         )
-        logger.debug(f"[RAG] [GENERATE] 파싱 실패 원시 출력:\n{json_str}")
+        # 진단: 실패 원시 출력을 1회, 잘라서 남긴다 (DEBUG 는 운영 콘솔에서 안 보임).
+        logger.warning(
+            "[RAG] [GENERATE] 파싱 실패 원시 출력(앞 400자): %s",
+            " ".join(json_str[:400].split()),
+        )
         # 강건화: 깨진 JSON에서 final_answer/citations 부분 복구 시도
         recovered = _extract_partial(json_str)
         if recovered:
@@ -982,6 +999,7 @@ async def _generate_pass(
             or '"final_answer"' in json_str
             or '"citations"' in json_str
             or '"doc_id"' in json_str
+            or '"doc:' in json_str
         )
         if recovered.get("final_answer"):
             _fallback_answer = recovered["final_answer"]
@@ -1007,6 +1025,45 @@ async def _generate_pass(
                 {"citations": _enrich_citations(parsed_answer.citations, docs)},
                 writer=writer,
                 config=config,
+            )
+    else:
+        # JSON 문법은 유효하다 — 스키마 검증 실패(예: citations 형태 이탈)만으로
+        # 정상 파싱된 final_answer 를 폐기하지 않는다.
+        try:
+            parsed_answer = AnswerStructure(**parsed_data)
+            logger.info(
+                "[RAG] [GENERATE] 구조화된 답변 파싱 성공: prompt_version=%s",
+                prompt_version,
+            )
+        except (ValidationError, TypeError) as e:
+            parse_failed = True
+            logger.warning(
+                "[RAG] [GENERATE] 구조화 스키마 검증 실패 — final_answer 보존: %s",
+                e,
+            )
+            parsed_answer = _schema_fallback_answer(parsed_data)
+            if not parsed_answer.final_answer:
+                parsed_answer.final_answer = "제공된 문서에서 확인할 수 없습니다."
+
+        # P3: 인라인 [doc:...] 폴백과 별도로 citations[] 자체를 스트림에 태워
+        # 안정적 doc_id 기반 렌더링을 가능케 한다. 디스패치 전에 검증해
+        # 미검증 인용이 스트리밍으로 새지 않게 한다 (authoritative).
+        if writer is not None:
+            if docs:
+                parsed_answer.citations = _normalize_citations(
+                    list(parsed_answer.citations), docs
+                )
+            await _dispatch_event(
+                "citations",
+                {"citations": _enrich_citations(parsed_answer.citations, docs)},
+                writer=writer,
+                config=config,
+            )
+            logger.info(
+                "[PERF] citations-dispatch count=%d tail_content_ms=%.1f parse_ms=%.1f",
+                len(parsed_answer.citations),
+                tail_content_ms,
+                (time.perf_counter() - t_parse_start) * 1000,
             )
     return {
         "full_response": full_response,

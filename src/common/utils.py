@@ -74,6 +74,81 @@ def doc_stable_id(
     return fast_hash(str(content))
 
 
+_DOC_TOKEN_PREFIX = re.compile(r"^doc\s*:\s*", re.IGNORECASE)
+_DOC_TOKEN_TRAILING = re.compile(r"[\]\"'”’,\s]")
+_CITATION_ID_ALIASES = ("doc_id", "document_id", "docId", "doc_index", "id", "doc")
+_CITATION_ANCHOR_ALIASES = ("anchor", "text_span", "quote", "span", "keyword", "text")
+
+
+def normalize_doc_id_token(value: Any) -> Any:
+    """``[doc:<id>]`` / ``doc:<id>`` 표기에서 안정 ID 토큰만 남긴다.
+
+    소형 LLM 은 프롬프트의 ``[doc:<id>]`` 토큰을 doc_id 값이나 객체 키로
+    그대로 복사하는 경우가 많고, 드물게 곱은따옴표(``”``)·꼬리 구두점을
+    섞기도 한다. 문자열에 ``doc:`` 접두사가 있을 때만 토큰을 추출하며,
+    그 외 타입/문자열은 그대로 둔다(멤버십 검증은 호출자가 수행).
+    """
+    if not isinstance(value, str):
+        return value
+    text = value.strip()
+    unwrapped = text.lstrip("[\"'` ")
+    prefixed = _DOC_TOKEN_PREFIX.match(unwrapped)
+    if prefixed is None:
+        return text
+    remainder = unwrapped[prefixed.end() :]
+    token = _DOC_TOKEN_TRAILING.split(remainder, maxsplit=1)[0]
+    return token or text
+
+
+def coerce_citation_mapping(cit: Any) -> Any:
+    """LLM 인용 객체의 흔한 스키마 이탈을 정규화한다.
+
+    지원 형태:
+    - ``{"doc_id": "<id>", "anchor": "..."}`` (정상 스키마)
+    - ``{"doc:<id>": "<anchor>"}`` — ``[doc:<id>]`` 토큰이 객체 키로 승격된 형태
+    - ``{"doc_id": "doc:<id>"}`` / ``{"doc_id": "[doc:<id>]"}`` — 토큰이 값에 섞인 형태
+    - ``{"id"|"document_id"|"doc": ...}`` 별칭 키
+
+    ``dict`` 가 아니거나 식별자를 찾지 못하면 원본을 그대로 반환한다.
+    fail-closed 경계(멤버십 검증)는 호출자가 유지한다 — 여기서는 형태만 본다.
+    """
+    if not isinstance(cit, dict):
+        return cit
+    item = dict(cit)
+
+    doc_id: Any = None
+    for key in _CITATION_ID_ALIASES:
+        value = item.get(key)
+        if value is not None and value != "":
+            doc_id = item.pop(key)
+            break
+
+    anchor = ""
+    if doc_id is None:
+        # `[doc:<id>]`/`doc:<id>` 토큰이 객체 키로 승격된 형태를 복원한다.
+        for key in list(item):
+            token = normalize_doc_id_token(key)
+            if token == key.strip():
+                continue
+            doc_id = token
+            value = item.pop(key)
+            if isinstance(value, str):
+                anchor = value.strip()
+            break
+
+    if doc_id is None:
+        return cit
+
+    if not anchor:
+        for key in _CITATION_ANCHOR_ALIASES:
+            value = item.get(key)
+            if isinstance(value, str) and value.strip():
+                anchor = value.strip()
+                break
+
+    return {**item, "doc_id": normalize_doc_id_token(doc_id), "anchor": anchor}
+
+
 def compute_file_hash(
     file_path: str,
     *,

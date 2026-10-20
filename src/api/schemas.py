@@ -5,7 +5,9 @@
 from typing import Annotated, Any, Literal, TypedDict
 
 from langchain_core.documents import Document
-from pydantic import BaseModel, Field, computed_field
+from pydantic import BaseModel, Field, computed_field, model_validator
+
+from common.utils import coerce_citation_mapping
 
 
 class PerformanceStats(BaseModel):
@@ -160,6 +162,12 @@ class Citation(BaseModel):
 
     doc_id: int | str
     anchor: str = ""
+
+    @model_validator(mode="before")
+    @classmethod
+    def _coerce_llm_shape(cls, data: Any) -> Any:
+        """``{"doc:<id>": "<anchor>"}`` 같은 소형 모델 이탈 형태를 정상화한다."""
+        return coerce_citation_mapping(data)
 
 
 class AnswerStructure(BaseModel):
