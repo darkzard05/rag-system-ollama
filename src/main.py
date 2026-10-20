@@ -827,6 +827,12 @@ async def _bg_rebuild_task(
     from core.rag_core import RAGSystem
     from core.session import SessionManager
 
+    # [최적화] 빌드 착수 시점에 리런 쿨다운 기준점을 등록한다. 첫 추출
+    # 이벤트가 수십 ms 만에 도착해 전역 Rerun을 발화하면, 아직 마운트 중인
+    # PDF 뷰어가 리셋되어 깜빡이고 표시가 지연된다. 빌드 시작 직후 최소
+    # 쿨다운 동안은 진행 이벤트의 전역 Rerun을 억제해 뷰어 안착을 보장한다.
+    _BUILD_RERUN_LAST[session_id] = (time.monotonic(), "start")
+
     SessionManager.set_session_id(session_id)
     SessionManager.set("rebuild_error", None, session_id=session_id)
     SessionManager.set("rebuild_start_time", time.time(), session_id=session_id)
