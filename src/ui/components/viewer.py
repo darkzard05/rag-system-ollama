@@ -222,13 +222,20 @@ def _resolve_pdf_state() -> dict | None:
     pdf_path = os.path.abspath(pdf_path_raw)
     file_hash = SessionManager.get("file_hash", "none")
 
-    # 캐시 계층(st.cache_data)이 예외를 재전파할 수 있으므로 호출부에서도
-    # 이중 안전망을 둔다. get_pdf_total_pages 자체는 raise하지 않는다.
-    try:
-        total_pages = _get_pdf_total_pages(pdf_path)
-    except Exception as e:
-        logger.error(f"PDF 페이지 수 조회 중 오류: {e}", exc_info=True)
-        total_pages = None
+    # [최적화] 업로드 시 사전 계산된 total_pages가 세션에 있으면 디스크 I/O 없이 즉시 사용
+    cached_total = SessionManager.get("total_pages")
+    if isinstance(cached_total, int) and cached_total > 0:
+        total_pages = cached_total
+    else:
+        # 캐시 계층(st.cache_data)이 예외를 재전파할 수 있으므로 호출부에서도
+        # 이중 안전망을 둔다. get_pdf_total_pages 자체는 raise하지 않는다.
+        try:
+            total_pages = _get_pdf_total_pages(pdf_path)
+            if total_pages:
+                SessionManager.set("total_pages", total_pages)
+        except Exception as e:
+            logger.error(f"PDF 페이지 수 조회 중 오류: {e}", exc_info=True)
+            total_pages = None
 
     if not total_pages:
         # 파일 삭제/손상 등으로 페이지 수를 알 수 없음: 토큰 self-clean.

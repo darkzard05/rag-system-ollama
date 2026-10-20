@@ -18,7 +18,9 @@ def setup_session(monkeypatch: pytest.MonkeyPatch):
     SessionManager.set_session_id(SID)
     SessionManager.set("pdf_file_path", "dummy.pdf", SID)
     SessionManager.set("file_hash", "testhash", SID)
-    # PDF 총 페이지 수를 10으로 모킹하여 파일 I/O 우회
+    # 업로드 시점에 사전 계산되는 total_pages(프로덕션 불변식)를 시드한다.
+    # 폴백 캐싱이 dirty 플래그를 남기지 않도록 디스크 조회 자체를 우회한다.
+    SessionManager.set("total_pages", 10, SID)
     monkeypatch.setattr(viewer_module, "_get_pdf_total_pages", lambda path: 10)
     fake_session_state: dict[str, object] = {}
     monkeypatch.setattr(viewer_module.st, "session_state", fake_session_state)
