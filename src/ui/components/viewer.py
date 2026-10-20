@@ -92,19 +92,24 @@ def _get_pdf_total_pages(pdf_path: str) -> int | None:
 
 @safe_cache_data(ttl=300, show_spinner=False)
 def _get_pdf_page_bytes(pdf_path: str, file_hash: str, page: int) -> bytes:
-    """1페이지 추출: 불필요한 전수 스트림 검사(garbage=4)를 생략하고 고속 압축(garbage=3) 적용."""
+    """1페이지 추출: 원본 doc.select 대신 insert_pdf 클로닝으로 타 페이지 객체 검사 오버헤드 제거."""
     if not pdf_path or page < 1:
         return b""
     if not os.path.exists(pdf_path):
         return b""
     try:
+        import pymupdf as fitz
+
         with open_pdf_document(pdf_path) as doc:
             if doc.page_count == 0 or page > doc.page_count:
                 return b""
-            doc.select([page - 1])
-            # garbage=3: 참조 해제된 타 페이지 객체 제거 + xref 압축 (O(S) 선형 처리)
-            # deflate=True: 스트림 압축 유지
-            return doc.tobytes(garbage=3, deflate=True)
+            new_doc = fitz.open()
+            try:
+                new_doc.insert_pdf(doc, from_page=page - 1, to_page=page - 1)
+                # insert_pdf로 필요한 객체만 클론되었으므로 garbage=1로도 타 페이지 객체가 배제됨
+                return new_doc.tobytes(garbage=1, deflate=True)
+            finally:
+                new_doc.close()
     except Exception as e:
         logger.warning(f"[PDF] {page}페이지 추출 실패 ({pdf_path}): {e}")
         return b""
