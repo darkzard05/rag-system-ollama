@@ -17,7 +17,7 @@ class TestChatUI(unittest.TestCase):
 
             # 현행 계약 (chat_references.render_reference_list):
             - 見出 markdown: 'Reference' 포함
-            - 행 라벨: '{i}. {요약} · p.{page}' (예: '1. ... · p.1')
+            - 행 라벨: '{i}. :blue[{요약}] :gray[p.{page}]' (예: '1. :blue[...] :gray[p.1]')
             - 키: 'reflink_{msg_id}_{i}_{page}'
             - 상한: 문서별 1행, 최대 5행
         """
@@ -76,12 +76,14 @@ render_message(
             button_labels = [b.label for b in at.button]
             assert len(button_labels) == 5, f"참조 행 상한 위반: {button_labels}"
 
-            # 3. '{i}. {요약} · p.{page}' 형식 확인
+            # 3. '{i}. :blue[{요약}] :gray[p.{page}]' 형식 확인
             first = button_labels[0]
-            assert first.startswith("1. "), f"행 번호 접두사 오류: {first}"
-            assert "· p.1" in first, f"페이지 병기 오류: {first}"
+            assert first.startswith("1. :blue["), f"행 번호/발췌 형식 오류: {first}"
+            assert ":gray[p.1]" in first, f"페이지 병기 오류: {first}"
             for label in button_labels:
-                assert "· p." in label, f"페이지 병기 누락: {label}"
+                assert ":blue[" in label, f"발췌 스팬 누락: {label}"
+                assert ":gray[p." in label, f"페이지 병기 누락: {label}"
+                assert label.endswith("]"), f"페이지 스팬 미종료: {label}"
                 assert "\\n" not in label, f"행 줄바꿈 위반: {label}"
 
             # 4. 버튼 키 접두사 확인 (첫 행)

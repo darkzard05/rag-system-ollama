@@ -73,7 +73,10 @@ def test_metrics_shows_document_count():
     text = _all_text(mock_st)
     assert "1.5s" in text
     assert "references" not in text
-    assert any("· p.3" in lbl for lbl in _button_labels(mock_st))
+    assert any(
+        lbl.startswith("1. :blue[") and lbl.endswith(":gray[p.3]")
+        for lbl in _button_labels(mock_st)
+    )
 
 
 def test_metrics_uses_documents_length_over_retrieved_count():
@@ -111,7 +114,10 @@ def test_detailed_thinking_skips_missing_keys_in_top_scores():
         wrap_in_container=False,
     )
     assert mock_st.expander.call_args_list == []
-    assert any("· p.3" in lbl for lbl in _button_labels(mock_st))
+    assert any(
+        lbl.startswith("1. :blue[") and lbl.endswith(":gray[p.3]")
+        for lbl in _button_labels(mock_st)
+    )
 
 
 def test_no_detailed_thinking_when_process_none():
@@ -151,7 +157,10 @@ def test_cancelled_hides_thought_but_shows_references():
         cancelled=True,
     )
     assert mock_st.expander.call_args_list == []
-    assert any("· p.1" in lbl for lbl in _button_labels(mock_st))
+    assert any(
+        lbl.startswith("1. :blue[") and lbl.endswith(":gray[p.1]")
+        for lbl in _button_labels(mock_st)
+    )
     assert "미완료 추론" not in _all_text(mock_st)
     assert "Stopped" in _all_text(mock_st)
 
@@ -182,7 +191,10 @@ def test_completed_assistant_message_opens_expander():
         wrap_in_container=False,
     )
     assert mock_st.expander.call_args_list == []
-    assert any("· p.5" in lbl for lbl in _button_labels(mock_st))
+    assert any(
+        lbl.startswith("1. :blue[") and lbl.endswith(":gray[p.5]")
+        for lbl in _button_labels(mock_st)
+    )
 
 
 # ---------------------------------------------------------------------------
