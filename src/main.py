@@ -41,7 +41,6 @@ import atexit
 import contextlib
 import logging
 import os
-import shutil
 import threading
 import time
 from pathlib import Path
@@ -499,7 +498,7 @@ def _process_uploaded_file(uploaded_file) -> None:
                 tmp_path = os.path.join(temp_dir, f"upload_{uploaded_hash}.pdf")
                 if not os.path.exists(tmp_path):
                     with open(tmp_path, "wb") as f:
-                        shutil.copyfileobj(uploaded_file, f)
+                        f.write(file_bytes)
 
             SessionManager.set("pdf_file_path", tmp_path)
             # [UX] 분석 진행 자리표시자 메시지: _bg_rebuild_task가 동일 msg_id로 업데이트

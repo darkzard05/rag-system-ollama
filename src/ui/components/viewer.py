@@ -106,8 +106,8 @@ def _get_pdf_page_bytes(pdf_path: str, file_hash: str, page: int) -> bytes:
             new_doc = fitz.open()
             try:
                 new_doc.insert_pdf(doc, from_page=page - 1, to_page=page - 1)
-                # insert_pdf로 필요한 객체만 클론되었으므로 garbage=1로도 타 페이지 객체가 배제됨
-                return new_doc.tobytes(garbage=1, deflate=True)
+                # deflate=False로 불필요한 zlib 압축 CPU 소모 제거 (단일 페이지 고속 직렬화)
+                return new_doc.tobytes(garbage=1, deflate=False)
             finally:
                 new_doc.close()
     except Exception as e:
