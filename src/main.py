@@ -373,7 +373,7 @@ def _find_cached_upload(
 
     if not uploaded_hash:
         return None
-    # 업로드 파일명을 해시 기반으로 정규화하여 디스크 전수 조사 제거
+    # 1. Content-Addressed 타깃 파일 O(1) 우선 검사
     target_file = Path(temp_dir) / f"upload_{uploaded_hash}.pdf"
     try:
         if target_file.is_file() and target_file.stat().st_size == len(file_bytes):
@@ -381,19 +381,22 @@ def _find_cached_upload(
     except OSError:
         pass
 
-    # Fallback for legacy timestamp-based filenames if any
+    # 2. 레거시 파일 스캔은 크기가 완전히 일치하는 파일만 최대 3건으로 엄격히 제한
     try:
-        candidates = sorted(Path(temp_dir).glob("upload_*.pdf"))
+        expected_size = len(file_bytes)
+        candidates = [
+            p
+            for p in Path(temp_dir).glob("upload_*.pdf")
+            if p.name != target_file.name
+            and p.is_file()
+            and p.stat().st_size == expected_size
+        ]
     except OSError as e:
         logger.warning(f"[UPLOAD] 재사용 스캔 실패: {e}")
         return None
-    expected_size = len(file_bytes)
-    for entry in candidates:
+
+    for entry in candidates[:3]:
         try:
-            if entry.name == f"upload_{uploaded_hash}.pdf":
-                continue
-            if entry.stat().st_size != expected_size:
-                continue
             if compute_file_hash(str(entry)) == uploaded_hash:
                 return str(entry)
         except OSError:
@@ -440,8 +443,11 @@ def _process_uploaded_file(uploaded_file) -> None:
         )
         return
 
+    # 검증 완료된 페이지 수를 세션에 선행 등록하여 뷰어 렌더링 시 중복 파싱 방지
+    sid = SessionManager.get_session_id()
+    SessionManager.set("total_pages", page_count, session_id=sid)
+
     if uploaded_file.name != last_file_name or uploaded_hash != last_file_hash:
-        sid = SessionManager.get_session_id()
         temp_dir = os.path.abspath(FilePathConstants.TEMP_DIR)
         cached_path = _find_cached_upload(temp_dir, file_bytes, uploaded_hash)
         # [UX] 새 파일 전환: 대화/플래그를 렌더 전(콜백 시점)에 초기화하여
