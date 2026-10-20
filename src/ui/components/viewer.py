@@ -363,8 +363,22 @@ def render_pdf_viewer(pdf_path, current_page, file_hash):
             annotations = raw_annotations  # legacy list 형식 호환
         viewer_key = pdf_viewer_key(file_hash, current_page)
 
+        # [FAST-PATH] 1페이지는 업로드 검증 단계에서 선행 추출된 메모리
+        # 바이트가 있으면 디스크 재오픈/재파싱 없이 즉시 렌더링한다.
+        page_bytes = b""
+        if current_page == 1:
+            preview = SessionManager.get("first_page_preview")
+            if (
+                isinstance(preview, dict)
+                and preview.get("file_hash") == file_hash
+                and isinstance(preview.get("bytes"), bytes)
+                and preview["bytes"]
+            ):
+                page_bytes = preview["bytes"]
+
         # 단일 페이지 우선: 전체 문서 재전송을 피한다.
-        page_bytes = _get_pdf_page_bytes(pdf_path, file_hash, current_page)
+        if not page_bytes:
+            page_bytes = _get_pdf_page_bytes(pdf_path, file_hash, current_page)
         if page_bytes:
             pdf_viewer(
                 input=page_bytes,

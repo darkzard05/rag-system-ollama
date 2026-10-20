@@ -424,9 +424,10 @@ def _process_uploaded_file(uploaded_file) -> None:
     except Exception:
         uploaded_hash = ""
 
-    # [확장자 위조 방지] .pdf 확장자지만 실제로는 PDF가 아닌 바이트를 차단한다.
-    # 손상된 파일이 temp에 복사되거나 빌드가 시작되면 뷰어/파이프라인이 크래시
-    # 하므로, 여기서 즉시 검증하고 실패 시 아무 상태도 바꾸지 않는다.
+    # [확장자 위조 방지 및 1페이지 선행 추출]
+    # 업로드 검증 시점에 이미 열려 있는 문서 객체로부터 1페이지 바이트를 즉시
+    # 추출해 두면, 뷰어 첫 프레임이 디스크 재오픈/재파싱 없이 렌더링된다.
+    first_page_bytes = b""
     try:
         import pymupdf as fitz  # lazy import: 검증이 필요한 시점에만 로드
 
@@ -434,8 +435,14 @@ def _process_uploaded_file(uploaded_file) -> None:
             raise ValueError("PDF file is empty.")
         with fitz.open(stream=file_bytes, filetype="pdf") as upload_doc:
             page_count = len(upload_doc)
-        if page_count < 1:
-            raise ValueError("PDF file has no pages.")
+            if page_count < 1:
+                raise ValueError("PDF file has no pages.")
+            first_doc = fitz.open()
+            try:
+                first_doc.insert_pdf(upload_doc, from_page=0, to_page=0)
+                first_page_bytes = first_doc.tobytes(garbage=1, deflate=True)
+            finally:
+                first_doc.close()
     except Exception as e:
         logger.warning(f"손상되었거나 읽을 수 없는 PDF 업로드 차단: {e}")
         _post_upload_error(
@@ -443,9 +450,7 @@ def _process_uploaded_file(uploaded_file) -> None:
         )
         return
 
-    # 검증 완료된 페이지 수를 세션에 선행 등록하여 뷰어 렌더링 시 중복 파싱 방지
     sid = SessionManager.get_session_id()
-    SessionManager.set("total_pages", page_count, session_id=sid)
 
     if uploaded_file.name != last_file_name or uploaded_hash != last_file_hash:
         temp_dir = os.path.abspath(FilePathConstants.TEMP_DIR)
@@ -454,6 +459,15 @@ def _process_uploaded_file(uploaded_file) -> None:
         # 업로드 직후 불필요한 전체 rerun 없이도 빈 화면 깜빡임이 사라진다.
         # (reset_for_new_file이 current_page/pdf_annotations/pdf_target_page 초기화 포함)
         SessionManager.reset_for_new_file(session_id=sid)
+        # 검증 완료된 페이지 수/1페이지 미리보기를 초기화 직후 등록한다
+        # (first_page_preview는 reset_for_new_file에서 None으로 비워진 뒤 기록).
+        SessionManager.set("total_pages", page_count, session_id=sid)
+        if first_page_bytes:
+            SessionManager.set(
+                "first_page_preview",
+                {"file_hash": uploaded_hash, "bytes": first_page_bytes},
+                session_id=sid,
+            )
         # 새 문서는 항상 1페이지부터: 단일 navigate_to_page(1) 경로로
         # SessionManager.current_page를 리셋한다. 위젯 키(INTERACTIVE_KEYS)는
         # 직접 쓰지 않으며, 네비 입력 위젯은 렌더 시 매니저에서 default를 받는다.

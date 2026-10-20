@@ -745,6 +745,7 @@ class SessionManager:
         cls.set("rebuild_done", False, session_id)
         cls.set("rebuild_cancelled", False, session_id)
         cls.set("build_state", None, session_id)
+        cls.set("first_page_preview", None, session_id)
         cls.set("needs_rag_rebuild", False, session_id)
         cls.set("needs_qa_chain_update", False, session_id)
         cls.set("rag_build_complete_flag", False, session_id)
