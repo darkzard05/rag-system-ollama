@@ -167,8 +167,10 @@ def complete_build(
 
 
 def elapsed_sec(state: BuildState, now: float | None = None) -> int:
-    """시작 기준 경과 초 (시작 시각 없으면 0)."""
+    """시작 기준 경과 초 (터미널이면 finished_at 기준 고정, 시작 시각 없으면 0)."""
     if not state.started_at:
         return 0
+    if is_terminal(state.phase) and state.finished_at is not None:
+        return max(0, int(state.finished_at - state.started_at))
     ref = now if now is not None else time.time()
     return max(0, int(ref - state.started_at))
