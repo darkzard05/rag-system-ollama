@@ -483,12 +483,6 @@ def _process_uploaded_file(uploaded_file) -> None:
 
         SessionManager.set("last_uploaded_file_name", uploaded_file.name)
         SessionManager.set("file_hash", uploaded_hash)
-        # [FIX] 동기 init: 업로드 콜백 시점에 BuildState(PREPARING)를 미리
-        # 생성하여 첫 페인트부터 st.status(running) 카드가 마운트되게 한다.
-        # _bg_rebuild_task는 동일 파일의 비터미널 상태가 있으면 재사용한다.
-        SessionManager.init_build_state(
-            uploaded_file.name, uploaded_hash, session_id=sid
-        )
 
         try:
             if cached_path is not None:
@@ -501,24 +495,12 @@ def _process_uploaded_file(uploaded_file) -> None:
                         f.write(file_bytes)
 
             SessionManager.set("pdf_file_path", tmp_path)
-            # [UX] 분석 진행 자리표시자 메시지: _bg_rebuild_task가 동일 msg_id로 업데이트
-            SessionManager.add_message(
-                "system",
-                f"Analysis started for '{uploaded_file.name}'",
-                msg_type="build_progress",
-                msg_id=f"build_{sid}",
-                progress=0,
-                status="Preparing analysis...",
-                cancelable=True,
-                logs=[],
-                session_id=sid,
-            )
+            # 1단계: PDF 첫 페이지 표시 우선권 보장.
+            # 업로드 시점에는 뷰어 표시 데이터만 확정하고 BuildState/is_building_rag
+            # 선점을 하지 않음으로써 첫 렌더링 프레임에서 왼쪽 PDF 첫 페이지가
+            # 즉시 단독으로 화면에 나타나도록 한다. 분석 개시는
+            # _handle_pending_tasks가 new_file_uploaded를 감지한 프레임에서 수행.
             SessionManager.set("new_file_uploaded", True)
-            # 선점: on_change 자동 rerun의 첫 페인트 프레임이 빌드 메시지와
-            # 동일한 정착 상태를 보도록 is_building_rag를 미리 True로 세팅.
-            # reset_for_new_file은 이 플래그를 건드리지 않음. 디스패치 가드는
-            # _handle_pending_tasks에서 new_file_uploaded 단독으로 판단한다.
-            SessionManager.set("is_building_rag", True)
             SystemNotifier.success(f"Document uploaded: {uploaded_file.name}")
         except Exception as e:
             SystemNotifier.error("Error while saving the file", details=str(e))
@@ -645,8 +627,6 @@ def _handle_pending_tasks() -> None:
         "new_file_uploaded", False, current_sid
     ) and not SessionManager.get("is_generating_answer", False, current_sid):
         SessionManager.set("new_file_uploaded", False, current_sid)
-        # is_building_rag는 업로드 콜백에서 이미 True로 선점됨. 가드를
-        # new_file_uploaded 단독으로 풀어 디스패치가 차단되지 않게 한다.
 
         current_file_path = SessionManager.get("pdf_file_path", None, current_sid)
         current_file_name = SessionManager.get(
@@ -657,9 +637,17 @@ def _handle_pending_tasks() -> None:
             or DEFAULT_EMBEDDING_MODEL
         )
 
-        # [UX] 리셋/진행 메시지와 동기 init은 on_file_upload가 렌더 전에
-        # 이미 수행했으므로 여기서는 빌드 시작만 한다. 진행 중 갱신은
-        # _report_event의 쓰로틀 rerun + 완료 시 rerun이 담당한다.
+        # 2단계: 첫 페이지 렌더링 완료 후 자연스러운 문서 분석 개시.
+        # 첫 페이지 뷰어가 렌더링된 이후 프레임에서 BuildState를 초기화하고
+        # 백그라운드 태스크를 가동한다.
+        if current_file_name:
+            SessionManager.init_build_state(
+                str(current_file_name),
+                str(SessionManager.get("file_hash", "", current_sid) or ""),
+                session_id=current_sid,
+            )
+        SessionManager.set("is_building_rag", True, current_sid)
+
         _safe_dispatch(
             "rebuild",
             _bg_rebuild_task(
@@ -669,6 +657,7 @@ def _handle_pending_tasks() -> None:
                 current_embedding_model,
             ),
         )
+        needs_rerun = True
 
     elif (
         SessionManager.get("needs_rag_rebuild", False, current_sid)
