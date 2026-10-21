@@ -20,6 +20,7 @@ sys.path.append(
 
 import src.main as main_module  # noqa: E402
 
+from core.build_state import BuildPhase  # noqa: E402
 from core.session import SessionManager  # noqa: E402
 
 
@@ -63,8 +64,8 @@ class TestUploadStagedLifecycle(unittest.TestCase):
         uploaded.size = len(pdf_bytes)
         return FakeSessionState({"pdf_uploader": uploaded})
 
-    def test_stage_1_upload_sets_preview_without_starting_build(self):
-        """1단계: 업로드 직후에는 첫 페이지 프리뷰만 세팅되고 분석은 미시작."""
+    def test_stage_1_upload_sets_preview_and_preparing_state(self):
+        """1단계: 업로드 즉시 1페이지 미리보기와 함께 PREPARING 상태가 조기 세팅되어 공백을 방지함."""
         with (
             tempfile.TemporaryDirectory() as tmp_dir,
             patch("src.main.FilePathConstants.TEMP_DIR", tmp_dir),
@@ -79,18 +80,21 @@ class TestUploadStagedLifecycle(unittest.TestCase):
         assert SessionManager.get("total_pages", session_id=self.sid) == 1
         assert SessionManager.get("new_file_uploaded", session_id=self.sid) is True
 
-        # 첫 페이지 단독 선행 렌더 보장: 빌드 상태는 아직 비활성.
-        assert (
-            SessionManager.get("is_building_rag", False, session_id=self.sid) is False
-        )
-        assert SessionManager.get_build_state(session_id=self.sid) is None
+        # 공백 방지: BuildState가 PREPARING 상태로 준비되어 자연스러운 패널 표시 가능
+        build_state = SessionManager.get_build_state(session_id=self.sid)
+        assert build_state is not None
+        assert build_state.phase == BuildPhase.PREPARING
+        assert build_state.file_name == "sample.pdf"
+        # 빌드 상태가 PREPARING으로 초기화됨에 따라 is_building_rag도 True로 설정됨 (백그라운드 워커는 2단계에서 디스패치)
+        assert SessionManager.get("is_building_rag", False, session_id=self.sid) is True
 
     def test_stage_2_handle_pending_tasks_starts_build_naturally(self):
-        """2단계: 첫 페이지 렌더 이후 펜딩 태스크 핸들러가 빌드를 개시한다."""
+        """2단계: 첫 페이지 렌더 후 펜딩 핸들러가 기존 PREPARING 상태를 이어받아 빌드를 자연스럽게 가동함."""
         SessionManager.set("new_file_uploaded", True, session_id=self.sid)
         SessionManager.set("last_uploaded_file_name", "sample.pdf", session_id=self.sid)
         SessionManager.set("file_hash", "hash_abc", session_id=self.sid)
         SessionManager.set("pdf_file_path", "/fake/sample.pdf", session_id=self.sid)
+        SessionManager.init_build_state("sample.pdf", "hash_abc", session_id=self.sid)
 
         with (
             patch("src.main._bg_rebuild_task", MagicMock()) as mock_task,
@@ -102,12 +106,10 @@ class TestUploadStagedLifecycle(unittest.TestCase):
         assert SessionManager.get("is_building_rag", False, session_id=self.sid) is True
         build_state = SessionManager.get_build_state(session_id=self.sid)
         assert build_state is not None
-        assert build_state.file_name == "sample.pdf"
-        assert build_state.file_hash == "hash_abc"
+        assert build_state.phase == BuildPhase.PREPARING
 
         mock_task.assert_called_once()
         mock_worker.assert_called_once()
-        # 첫 페이지 페인트 프레임 보존: 업로드 직후 강제 rerun 금지.
         mock_rerun.assert_not_called()
         assert (
             SessionManager.get("new_file_uploaded", False, session_id=self.sid) is False
