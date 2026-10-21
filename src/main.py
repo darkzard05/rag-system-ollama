@@ -305,9 +305,22 @@ async def _warmup_models() -> None:
     AsyncWorker 전용 루프에서 비차단으로 실행된다. Ollama 미연결 등 실패 시에도
     UI 시작은 계속되어야 하므로 호출부에서 비치명적으로 감싼다.
     """
+    await asyncio.sleep(1.0)
+    from core.session import SessionManager
+
+    if (
+        SessionManager.get("new_file_uploaded")
+        or SessionManager.get("is_building_rag")
+        or SessionManager.get("pdf_file_path")
+    ):
+        return
+
     from core.model_loader import _warmup_models as _core_warmup
 
-    await _core_warmup()
+    try:
+        await _core_warmup()
+    except Exception as e:
+        logger.debug(f"[WARMUP] warmup interrupted or failed: {e}")
 
 
 # [WARMUP] 프로세스(서버) 단위 1회 프리웜.
@@ -496,9 +509,13 @@ def _process_uploaded_file(uploaded_file) -> None:
                         f.write(file_bytes)
 
             SessionManager.set("pdf_file_path", tmp_path, session_id=sid)
-            # 1단계: 업로드 직후에는 뷰어 표시용 데이터(first_page_preview 등)만 확정하고
-            # BuildState 생성을 지연시킵니다. 이를 통해 첫 렌더링 프레임에서 좌측 PDF 1페이지만
-            # 최우선으로 화면에 즉시 단독 페인트되며, 분석 패널과의 렌더링 경합을 원천 방지합니다.
+            # [TASK C] 업로드 직후 BuildState를 즉시 PREPARING 상태로 초기화하여
+            # 첫 번째 렌더링 프레임에서 1페이지 뷰어와 PREPARING 상태 패널이 온전히 함께 페인트되도록 보장합니다.
+            SessionManager.init_build_state(
+                uploaded_file.name,
+                uploaded_hash,
+                session_id=sid,
+            )
             SessionManager.set("new_file_uploaded", True, session_id=sid)
             SystemNotifier.success(f"Document uploaded: {uploaded_file.name}")
         except Exception as e:
@@ -636,13 +653,15 @@ def _handle_pending_tasks() -> None:
             or DEFAULT_EMBEDDING_MODEL
         )
 
-        # 2단계: 첫 페이지 페인트 완료 후 펜딩 핸들러 단계에서 비로소 BuildState를 초기화합니다.
-        # 뷰어가 먼저 화면에 뜬 직후 분석 패널이 시작되어 시각적 순서가 명확해집니다.
-        SessionManager.init_build_state(
-            str(current_file_name or "document.pdf"),
-            str(SessionManager.get("file_hash", "", current_sid) or ""),
-            session_id=current_sid,
-        )
+        # [TASK C] 이미 업로드 시점에 PREPARING으로 초기화된 build_state가 있다면 덮어쓰지 않고 재사용하며,
+        # 없는 경우에만 방어적으로 초기화한 후 백그라운드 태스크를 디스패치합니다.
+        _existing_build = SessionManager.get_build_state(session_id=current_sid)
+        if _existing_build is None:
+            SessionManager.init_build_state(
+                str(current_file_name or "document.pdf"),
+                str(SessionManager.get("file_hash", "", current_sid) or ""),
+                session_id=current_sid,
+            )
         SessionManager.set("is_building_rag", True, current_sid)
         # [UX-FIRST-PAGE] 백그라운드 태스크의 초기 preparing -> extracting 위상 전이가
         # 첫 페이지 페인트 보호 윈도우(0.8s) 동안 즉각 리런을 유발하지 않도록 기준 시각을 등록한다.

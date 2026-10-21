@@ -15,15 +15,10 @@ from ui.components.viewer import render_pdf_viewer
 
 
 def _ensure_pdf_viewer_module(monkeypatch: pytest.MonkeyPatch, stub: Any) -> Any:
-    try:
-        import streamlit_pdf_viewer
-    except ImportError:
-        module = types.ModuleType("streamlit_pdf_viewer")
-        module.__dict__["pdf_viewer"] = stub
-        sys.modules["streamlit_pdf_viewer"] = module
-        return module
-    monkeypatch.setattr(streamlit_pdf_viewer, "pdf_viewer", stub)
-    return streamlit_pdf_viewer
+    module = types.ModuleType("streamlit_pdf_viewer")
+    module.__dict__["pdf_viewer"] = stub
+    sys.modules["streamlit_pdf_viewer"] = module
+    return module
 
 
 def test_first_page_preview_bypasses_disk_extraction(

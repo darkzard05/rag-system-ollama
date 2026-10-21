@@ -13,7 +13,6 @@ import logging.handlers
 import os
 import shutil
 import sys
-import threading
 import warnings
 from pathlib import Path
 
@@ -65,58 +64,6 @@ class ContextFilter(logging.Filter):
         """
         # 함수명과 라인 번호는 이미 포함됨
         return True
-
-
-def _preimport_noisy_transformers_processors() -> None:
-    """auto_docstring print 스팸을 유발하는 리프 모듈을 선행 import한다.
-
-    transformers 리프 이미지 프로세서(deepseek_vl_hybrid / kimi_k25 /
-    paddleocr_vl)의 ``@auto_docstring`` 데코레이터는 클래스 정의(import) 시점에
-    미문서 kwargs를 ``print`` 로 stdout에 뿌린다 (logging/warnings 아님).
-    파이프라인 빌드 중 lazy import로 실행되면 터미널 로그를 오염시키므로,
-    stdout 억제 하에 미리 import해 데코레이터를 소진시킨다. 이후 import는
-    캐시 적중이라 print가 재발하지 않는다. 프로젝트 코드는 stdout print를
-    사용하지 않으므로(전부 stderr 로깅) 억제 윈도우가 정상 출력을 삼킬
-    우려가 없다.
-
-    이 선행 import는 PyTorch/torchvision/PIL/HF Hub 등 대형 의존성을 연쇄
-    로드해 3~5초간 스레드를 블로킹한다. 로깅 설정 시점은 앱 콜드스타트 경로
-    (``main.py`` → ``_init_logging()``)이므로, 메인 스레드를 막지 않도록
-    데몬 스레드로 위임한다. 실제 OCR/멀티모달 로딩 전에 완료되면 원래의
-    노이즈 억제 목적이 그대로 달성된다.
-
-    - pytest 하에서는 스킵한다 (단위 테스트는 해당 경로를 타지 않으며,
-      매 테스트 프로세스마다 수 초의 import 비용을 치를 이유가 없다).
-    - 모듈명 변경 등 실패는 전부 흡수한다 (fail-open: 억제 실패 시 스팸이
-      그대로 출력될 뿐 기능에 영향 없음).
-    """
-    if "pytest" in sys.modules:
-        return
-
-    def _background_preimport() -> None:
-        try:
-            import contextlib
-            import importlib
-            import io
-
-            with contextlib.redirect_stdout(io.StringIO()):
-                for _mod in (
-                    "transformers.models.deepseek_vl_hybrid.image_processing_deepseek_vl_hybrid",
-                    "transformers.models.deepseek_vl_hybrid.image_processing_pil_deepseek_vl_hybrid",
-                    "transformers.models.kimi_k25.image_processing_kimi_k25",
-                    "transformers.models.paddleocr_vl.image_processing_paddleocr_vl",
-                    "transformers.models.paddleocr_vl.image_processing_pil_paddleocr_vl",
-                ):
-                    with contextlib.suppress(Exception):
-                        importlib.import_module(_mod)
-        except Exception:
-            pass
-
-    threading.Thread(
-        target=_background_preimport,
-        name="noisy-transformers-preimport",
-        daemon=True,
-    ).start()
 
 
 def setup_logging(
@@ -185,12 +132,9 @@ def setup_logging(
     # 아닌 auto_docstring 데코레이터의 import 시점 stdout print다
     # (transformers/utils/auto_docstring.py — 공식 문서는 기여자용 CI 진단으로만
     # 의도, 업스트림 main에도 잔존). 따라서 로거 레벨/warnings 필터는 닿지
-    # 않는다. 실제 차단은 아래 _preimport_noisy_transformers_processors()의
-    # 백그라운드 선행 import + stdout 억제로 수행한다. 여기서는 통상 수준만
-    # 유지한다.
+    # 않는다. 여기서는 통상 수준만 유지한다.
     logging.getLogger("transformers").setLevel(logging.WARNING)
     logging.getLogger("sentence_transformers").setLevel(logging.WARNING)
-    _preimport_noisy_transformers_processors()
 
     # [Phase A1] pymupdf4llm / RapidOCR 플러그인 print성 노이즈의 로거 경로 차단.
     # (to_markdown() 기본 자동 OCR 경로가 범위 병렬 수만큼 증폭됨.

@@ -67,7 +67,7 @@ class TestUploadStagedLifecycle(unittest.TestCase):
         return FakeSessionState({"pdf_uploader": uploaded})
 
     def test_stage_1_upload_does_not_initialize_build_state(self):
-        """1단계: 업로드 즉시 1페이지 미리보기는 등록되지만 build_state는 생성되지 않아 뷰어 선행 렌더링을 보장함."""
+        """1단계: 업로드 즉시 1페이지 미리보기 및 build_state(PREPARING)가 즉시 등록됨."""
         with (
             tempfile.TemporaryDirectory() as tmp_dir,
             patch("src.main.FilePathConstants.TEMP_DIR", tmp_dir),
@@ -82,22 +82,22 @@ class TestUploadStagedLifecycle(unittest.TestCase):
         assert SessionManager.get("total_pages", session_id=self.sid) == 1
         assert SessionManager.get("new_file_uploaded", session_id=self.sid) is True
 
-        # 업로드 콜백 단계(Stage 1)에서는 BuildState가 생성되지 않아야 함 (뷰어 선행 렌더링 보장)
+        # 업로드 콜백 직후 BuildState가 PREPARING 상태로 즉시 초기화되어 첫 프레임부터 함께 렌더링됨
         build_state = SessionManager.get_build_state(session_id=self.sid)
-        assert build_state is None
-        assert (
-            SessionManager.get("is_building_rag", False, session_id=self.sid) is False
-        )
+        assert build_state is not None
+        assert build_state.phase == BuildPhase.PREPARING
 
     def test_stage_2_handle_pending_tasks_starts_build_naturally(self):
-        """2단계: 첫 페이지 렌더 후 펜딩 핸들러가 BuildState를 초기화하고 빌드를 가동함."""
+        """2단계: 펜딩 핸들러가 기존 PREPARING 상태의 build_state를 유지하며 빌드를 가동함."""
         SessionManager.set("new_file_uploaded", True, session_id=self.sid)
         SessionManager.set("last_uploaded_file_name", "sample.pdf", session_id=self.sid)
         SessionManager.set("file_hash", "hash_abc", session_id=self.sid)
         SessionManager.set("pdf_file_path", "/fake/sample.pdf", session_id=self.sid)
+        SessionManager.init_build_state("sample.pdf", "hash_abc", session_id=self.sid)
 
-        # 업로드 직후 상태이므로 build_state는 None
-        assert SessionManager.get_build_state(session_id=self.sid) is None
+        build_state_before = SessionManager.get_build_state(session_id=self.sid)
+        assert build_state_before is not None
+        assert build_state_before.phase == BuildPhase.PREPARING
 
         with (
             patch("src.main._bg_rebuild_task", MagicMock()) as mock_task,

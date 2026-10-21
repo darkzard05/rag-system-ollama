@@ -51,7 +51,7 @@ def setup_session():
 
 
 def test_stage_1_upload_does_not_initialize_build_state(setup_session: str):
-    """Stage 1: 파일 업로드 콜백 완료 직후 뷰어 미리보기는 등록되지만 build_state는 없어야 함."""
+    """Stage 1: 파일 업로드 콜백 완료 직후 뷰어 미리보기 및 build_state(PREPARING)가 즉시 등록되어야 함."""
     sid = setup_session
     pdf_bytes = _make_dummy_pdf()
 
@@ -77,25 +77,30 @@ def test_stage_1_upload_does_not_initialize_build_state(setup_session: str):
     assert SessionManager.get("total_pages", session_id=sid) == 1
     assert SessionManager.get("new_file_uploaded", session_id=sid) is True
 
-    # 2. 첫 페이지 우선 노출을 위해 우측 분석 패널의 build_state는 아직 생성되지 않아야 함
-    assert SessionManager.get_build_state(session_id=sid) is None, (
-        "첫 렌더링 프레임 전에 build_state가 조기 생성되어 뷰어 선행 표시를 방해함"
+    # 2. 첫 프레임에서 1페이지 뷰어와 PREPARING 상태 패널이 함께 렌더링되도록 build_state가 즉시 초기화되어야 함
+    build_state = SessionManager.get_build_state(session_id=sid)
+    assert build_state is not None, (
+        "업로드 즉시 build_state가 PREPARING으로 초기화되어야 함"
     )
-    assert SessionManager.get("is_building_rag", False, session_id=sid) is False
+    assert build_state.phase == BuildPhase.PREPARING
 
 
 def test_stage_2_pending_tasks_initializes_build_state_after_first_frame(
     setup_session: str,
 ):
-    """Stage 2: 첫 페인트 이후 _handle_pending_tasks 단계에서 BuildState가 비로소 활성화됨."""
+    """Stage 2: 펜딩 핸들러 단계에서 이미 초기화된 build_state를 유지하며 백그라운드 태스크를 디스패치함."""
     sid = setup_session
     SessionManager.set("new_file_uploaded", True, session_id=sid)
     SessionManager.set("last_uploaded_file_name", "preview_first.pdf", session_id=sid)
     SessionManager.set("file_hash", "hash_test_123", session_id=sid)
     SessionManager.set("pdf_file_path", "/tmp/preview_first.pdf", session_id=sid)
+    SessionManager.init_build_state(
+        "preview_first.pdf", "hash_test_123", session_id=sid
+    )
 
-    # 업로드 직후 상태이므로 build_state는 None
-    assert SessionManager.get_build_state(session_id=sid) is None
+    build_state_before = SessionManager.get_build_state(session_id=sid)
+    assert build_state_before is not None
+    assert build_state_before.phase == BuildPhase.PREPARING
 
     with (
         patch("src.main._bg_rebuild_task", MagicMock()) as mock_task,
@@ -104,9 +109,8 @@ def test_stage_2_pending_tasks_initializes_build_state_after_first_frame(
     ):
         main_module._handle_pending_tasks()
 
-    # 태스크 디스패치 후 BuildState가 초기화되고 워커가 시작됨
     build_state = SessionManager.get_build_state(session_id=sid)
-    assert build_state is not None, "Stage 2에서 build_state가 정상 생성되어야 함"
+    assert build_state is not None
     assert build_state.phase == BuildPhase.PREPARING
     assert SessionManager.get("is_building_rag", False, session_id=sid) is True
     assert SessionManager.get("new_file_uploaded", False, session_id=sid) is False
