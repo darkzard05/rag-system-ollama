@@ -137,9 +137,9 @@ def to_viewmodel(
         return BuildVM(
             label=f"{file_name} · {phase_text}",
             status_state="running",
-            expanded=(not is_preparing),
+            expanded=True,
             progress=(None if is_preparing else max(0, min(100, build.pct)) / 100),
-            stepper=(None if is_preparing else stepper_caption(build.phase)),
+            stepper=stepper_caption(build.phase),
             caption=(
                 t("build_analyzing")
                 if is_preparing

@@ -643,7 +643,11 @@ border-top: 1px solid color-mix(in srgb, var(--border-color) 30%, transparent) !
     overflow: hidden !important;
     display: block !important;
 }
-[data-testid="stIFrame"] {
+[data-testid="stMainBlockContainer"] > [data-testid="stVerticalBlock"]
+> .stElementContainer:has(> [data-testid="stIFrame"]) [data-testid="stIFrame"],
+#chat-autoscroll-sentinel,
+iframe[title="ui.ui.inject_header_height_script"],
+iframe[title="ui.ui.inject_custom_css"] {
     height: 0 !important;
     min-height: 0 !important;
     border: none !important;
