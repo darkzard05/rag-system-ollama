@@ -482,8 +482,10 @@ def _process_uploaded_file(uploaded_file) -> None:
                 logger.warning(f"이전 업로드 파일 삭제 실패 (잠금 가능): {old_path}")
                 SystemNotifier.warning(f"이전 파일 정리에 실패했습니다: {old_path}")
 
-        SessionManager.set("last_uploaded_file_name", uploaded_file.name)
-        SessionManager.set("file_hash", uploaded_hash)
+        SessionManager.set(
+            "last_uploaded_file_name", uploaded_file.name, session_id=sid
+        )
+        SessionManager.set("file_hash", uploaded_hash, session_id=sid)
 
         try:
             if cached_path is not None:
@@ -495,11 +497,11 @@ def _process_uploaded_file(uploaded_file) -> None:
                     with open(tmp_path, "wb") as f:
                         f.write(file_bytes)
 
-            SessionManager.set("pdf_file_path", tmp_path)
+            SessionManager.set("pdf_file_path", tmp_path, session_id=sid)
             # 1단계: 업로드 직후에는 뷰어 표시용 데이터(first_page_preview 등)만 확정하고
             # BuildState 생성을 지연시킵니다. 이를 통해 첫 렌더링 프레임에서 좌측 PDF 1페이지만
             # 최우선으로 화면에 즉시 단독 페인트되며, 분석 패널과의 렌더링 경합을 원천 방지합니다.
-            SessionManager.set("new_file_uploaded", True)
+            SessionManager.set("new_file_uploaded", True, session_id=sid)
             SystemNotifier.success(f"Document uploaded: {uploaded_file.name}")
         except Exception as e:
             SystemNotifier.error("Error while saving the file", details=str(e))
