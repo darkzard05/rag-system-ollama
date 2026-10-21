@@ -6,6 +6,8 @@ Upload must no longer pre-empt the build on the callback thread. Stage 1
 ``BuildState`` and dispatches the rebuild worker.
 """
 
+from __future__ import annotations
+
 import io
 import os
 import sys
@@ -60,12 +62,12 @@ class TestUploadStagedLifecycle(unittest.TestCase):
         pdf_bytes = _make_dummy_pdf("Page 1 Content")
         uploaded = io.BytesIO(pdf_bytes)
         uploaded.name = "sample.pdf"
-        uploaded.type = "application/pdf"
-        uploaded.size = len(pdf_bytes)
+        uploaded.type = "application/pdf"  # type: ignore[attr-defined]
+        uploaded.size = len(pdf_bytes)  # type: ignore[attr-defined]
         return FakeSessionState({"pdf_uploader": uploaded})
 
-    def test_stage_1_upload_sets_preview_and_preparing_state(self):
-        """1단계: 업로드 즉시 1페이지 미리보기와 함께 PREPARING 상태가 조기 세팅되어 공백을 방지함."""
+    def test_stage_1_upload_does_not_initialize_build_state(self):
+        """1단계: 업로드 즉시 1페이지 미리보기는 등록되지만 build_state는 생성되지 않아 뷰어 선행 렌더링을 보장함."""
         with (
             tempfile.TemporaryDirectory() as tmp_dir,
             patch("src.main.FilePathConstants.TEMP_DIR", tmp_dir),
@@ -80,21 +82,22 @@ class TestUploadStagedLifecycle(unittest.TestCase):
         assert SessionManager.get("total_pages", session_id=self.sid) == 1
         assert SessionManager.get("new_file_uploaded", session_id=self.sid) is True
 
-        # 공백 방지: BuildState가 PREPARING 상태로 준비되어 자연스러운 패널 표시 가능
+        # 업로드 콜백 단계(Stage 1)에서는 BuildState가 생성되지 않아야 함 (뷰어 선행 렌더링 보장)
         build_state = SessionManager.get_build_state(session_id=self.sid)
-        assert build_state is not None
-        assert build_state.phase == BuildPhase.PREPARING
-        assert build_state.file_name == "sample.pdf"
-        # 빌드 상태가 PREPARING으로 초기화됨에 따라 is_building_rag도 True로 설정됨 (백그라운드 워커는 2단계에서 디스패치)
-        assert SessionManager.get("is_building_rag", False, session_id=self.sid) is True
+        assert build_state is None
+        assert (
+            SessionManager.get("is_building_rag", False, session_id=self.sid) is False
+        )
 
     def test_stage_2_handle_pending_tasks_starts_build_naturally(self):
-        """2단계: 첫 페이지 렌더 후 펜딩 핸들러가 기존 PREPARING 상태를 이어받아 빌드를 자연스럽게 가동함."""
+        """2단계: 첫 페이지 렌더 후 펜딩 핸들러가 BuildState를 초기화하고 빌드를 가동함."""
         SessionManager.set("new_file_uploaded", True, session_id=self.sid)
         SessionManager.set("last_uploaded_file_name", "sample.pdf", session_id=self.sid)
         SessionManager.set("file_hash", "hash_abc", session_id=self.sid)
         SessionManager.set("pdf_file_path", "/fake/sample.pdf", session_id=self.sid)
-        SessionManager.init_build_state("sample.pdf", "hash_abc", session_id=self.sid)
+
+        # 업로드 직후 상태이므로 build_state는 None
+        assert SessionManager.get_build_state(session_id=self.sid) is None
 
         with (
             patch("src.main._bg_rebuild_task", MagicMock()) as mock_task,

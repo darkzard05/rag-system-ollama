@@ -496,15 +496,9 @@ def _process_uploaded_file(uploaded_file) -> None:
                         f.write(file_bytes)
 
             SessionManager.set("pdf_file_path", tmp_path)
-            # 1단계: 첫 페이지 미리보기와 함께 부드러운 대기 상태(PREPARING)를 초기화합니다.
-            # 이를 통해 첫 렌더링 프레임에서 좌측 첫 페이지가 렌더링되는 동안,
-            # 우측 화면이 휑하게 비어있지 않고 차분한 준비 패널(스텝 ○ 대기 상태)로 자연스럽게 정돈됩니다.
-            if uploaded_file.name:
-                SessionManager.init_build_state(
-                    str(uploaded_file.name),
-                    str(uploaded_hash or ""),
-                    session_id=sid,
-                )
+            # 1단계: 업로드 직후에는 뷰어 표시용 데이터(first_page_preview 등)만 확정하고
+            # BuildState 생성을 지연시킵니다. 이를 통해 첫 렌더링 프레임에서 좌측 PDF 1페이지만
+            # 최우선으로 화면에 즉시 단독 페인트되며, 분석 패널과의 렌더링 경합을 원천 방지합니다.
             SessionManager.set("new_file_uploaded", True)
             SystemNotifier.success(f"Document uploaded: {uploaded_file.name}")
         except Exception as e:
@@ -642,15 +636,13 @@ def _handle_pending_tasks() -> None:
             or DEFAULT_EMBEDDING_MODEL
         )
 
-        # 2단계: 첫 페이지 페인트 프레임 이후 백그라운드 빌드 가동
-        # 이미 PREPARING으로 초기화된 상태가 있으면 재사용하고 플래그를 활성화합니다.
-        existing_build = SessionManager.get_build_state(session_id=current_sid)
-        if existing_build is None and current_file_name:
-            SessionManager.init_build_state(
-                str(current_file_name),
-                str(SessionManager.get("file_hash", "", current_sid) or ""),
-                session_id=current_sid,
-            )
+        # 2단계: 첫 페이지 페인트 완료 후 펜딩 핸들러 단계에서 비로소 BuildState를 초기화합니다.
+        # 뷰어가 먼저 화면에 뜬 직후 분석 패널이 시작되어 시각적 순서가 명확해집니다.
+        SessionManager.init_build_state(
+            str(current_file_name or "document.pdf"),
+            str(SessionManager.get("file_hash", "", current_sid) or ""),
+            session_id=current_sid,
+        )
         SessionManager.set("is_building_rag", True, current_sid)
 
         _safe_dispatch(
