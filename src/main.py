@@ -439,8 +439,8 @@ def _process_uploaded_file(uploaded_file) -> None:
             first_doc = fitz.open()
             try:
                 first_doc.insert_pdf(upload_doc, from_page=0, to_page=0)
-                # deflate=False로 zlib 압축 CPU 소모를 제거하여 첫 페이지를 즉각 생성
-                first_page_bytes = first_doc.tobytes(garbage=1, deflate=False)
+                # garbage=0 및 deflate=False로 불필요한 객체 테이블 스캔과 압축 CPU 소모를 모두 제거하여 즉각 생성
+                first_page_bytes = first_doc.tobytes(garbage=0, deflate=False)
             finally:
                 first_doc.close()
     except Exception as e:
