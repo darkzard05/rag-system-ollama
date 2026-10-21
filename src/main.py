@@ -776,11 +776,13 @@ def main() -> None:
 # 빌드 진행 Rerun 제어: 위상 전이(Phase Transition)는 지연 없이 즉시 반영하고,
 # 동일 위상 내의 세부 진행률(%) 업데이트만 인터벌(2.0초)로 쓰로틀링하여 렌더링 부하를 제어합니다.
 _BUILD_RERUN_MIN_INTERVAL_S = 2.0
+_INITIAL_PAINT_WINDOW_S = 0.8
 _BUILD_RERUN_LAST: dict[str, tuple[float, str]] = {}
 
 
 def _request_build_progress_rerun(session_id: str, phase_name: str) -> None:
-    """위상 변경 시 즉각 반응하고, 동일 위상 내 세부 진행률은 2초 주기로 부드럽게 전파합니다."""
+    """위상 변경 시 즉각 반응하고, 동일 위상 내 세부 진행률은 2초 주기로 부드럽게 전파합니다.
+    단, 업로드 직후 preparing -> extracting 조기 전이는 첫 페이지 페인트를 위해 0.8초간 억제합니다."""
     from core.build_state import BuildPhase, is_terminal
     from core.session import SessionManager
 
@@ -797,7 +799,16 @@ def _request_build_progress_rerun(session_id: str, phase_name: str) -> None:
     now = time.monotonic()
     last = _BUILD_RERUN_LAST.get(session_id)
 
-    # 위상이 변경된 경우(예: preparing -> extracting): 억제 없이 즉시 1회 Rerun 트리거
+    # [UX-FIRST-PAGE] 초기 preparing -> extracting 위상 전이는 첫 페이지 페인트 보호 윈도우(0.8s) 내에서 억제
+    if (
+        last is not None
+        and last[1] == "preparing"
+        and phase_name == "extracting"
+        and (now - last[0] < _INITIAL_PAINT_WINDOW_S)
+    ):
+        return
+
+    # 위상이 변경된 경우: 억제 없이 즉시 1회 Rerun 트리거
     is_phase_transition = last is None or last[1] != phase_name
 
     # 동일 위상 내의 세부 진행률(%) 업데이트만 최소 간격(2초)으로 쓰로틀링
