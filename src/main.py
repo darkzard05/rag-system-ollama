@@ -646,6 +646,9 @@ def _handle_pending_tasks() -> None:
             session_id=current_sid,
         )
         SessionManager.set("is_building_rag", True, current_sid)
+        # [UX-FIRST-PAGE] 백그라운드 태스크의 초기 preparing -> extracting 위상 전이가
+        # 첫 페이지 페인트 보호 윈도우(0.8s) 동안 즉각 리런을 유발하지 않도록 기준 시각을 등록한다.
+        _BUILD_RERUN_LAST[current_sid] = (time.monotonic(), "preparing")
 
         _safe_dispatch(
             "rebuild",

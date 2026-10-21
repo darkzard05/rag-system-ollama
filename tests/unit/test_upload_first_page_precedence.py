@@ -24,8 +24,10 @@ def setup_session():
     SessionManager.reset()
     SessionManager.reset_all_state(SID)
     SessionManager.set_session_id(SID)
+    main_module._BUILD_RERUN_LAST.clear()
     yield
     SessionManager.reset()
+    main_module._BUILD_RERUN_LAST.clear()
 
 
 def test_new_file_uploaded_dispatches_without_rerun():
@@ -112,4 +114,43 @@ def test_extracting_rerun_allowed_after_initial_paint_window():
         with patch("time.monotonic", return_value=now + 1.0):
             main_module._request_build_progress_rerun(SID, "extracting")
 
+        mock_rerun.assert_called_once_with(SID)
+
+
+def test_pending_tasks_registers_preparing_timestamp_for_paint_protection():
+    """_handle_pending_tasks 실행 시 _BUILD_RERUN_LAST에 preparing 기준 시각이 등록되어
+    즉시 뒤따르는 extracting 이벤트가 0.8초 윈도우 내에서 차단되는지 검증."""
+    SessionManager.set("new_file_uploaded", True, session_id=SID)
+    SessionManager.set("last_uploaded_file_name", "preview_doc.pdf", session_id=SID)
+    SessionManager.set("file_hash", "hash_preview_123", session_id=SID)
+    SessionManager.set("pdf_file_path", "/tmp/preview_doc.pdf", session_id=SID)
+
+    # 실행 전 상태: _BUILD_RERUN_LAST가 비어 있음
+    assert SID not in main_module._BUILD_RERUN_LAST
+
+    with (
+        patch("src.main._bg_rebuild_task", MagicMock()),
+        patch("common.utils.run_in_background_worker"),
+        patch("src.main.st.rerun"),
+    ):
+        main_module._handle_pending_tasks()
+
+    # 1. 펜딩 작업 디스패치 직후 preparing 상태와 모노토닉 타임스탬프가 등록되어야 함
+    assert SID in main_module._BUILD_RERUN_LAST
+    registered_time, phase = main_module._BUILD_RERUN_LAST[SID]
+    assert phase == "preparing"
+    assert isinstance(registered_time, float)
+
+    # 2. 백그라운드 워커가 0.1초 후 즉시 extracting 이벤트를 전달해도 0.8초 윈도우 내이므로 Rerun이 억제됨
+    with patch("common.async_worker.request_session_rerun") as mock_rerun:
+        with patch("time.monotonic", return_value=registered_time + 0.1):
+            main_module._request_build_progress_rerun(SID, "extracting")
+        mock_rerun.assert_not_called()
+
+    # 3. 0.8초 윈도우 경과 후에는 extracting 위상 전이 Rerun이 정상 허용됨
+    with patch(
+        "common.async_worker.request_session_rerun", return_value=True
+    ) as mock_rerun:
+        with patch("time.monotonic", return_value=registered_time + 0.9):
+            main_module._request_build_progress_rerun(SID, "extracting")
         mock_rerun.assert_called_once_with(SID)
