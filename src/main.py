@@ -410,8 +410,9 @@ def _process_uploaded_file(uploaded_file) -> None:
     from services.monitoring.notification_system import SystemNotifier
     from ui.components.common import navigate_to_page
 
-    last_file_name = SessionManager.get("last_uploaded_file_name")
-    last_file_hash = SessionManager.get("file_hash")
+    sid = SessionManager.get_session_id()
+    last_file_name = SessionManager.get("last_uploaded_file_name", session_id=sid)
+    last_file_hash = SessionManager.get("file_hash", session_id=sid)
 
     file_bytes = b""
     try:
@@ -450,8 +451,6 @@ def _process_uploaded_file(uploaded_file) -> None:
         )
         return
 
-    sid = SessionManager.get_session_id()
-
     if uploaded_file.name != last_file_name or uploaded_hash != last_file_hash:
         temp_dir = os.path.abspath(FilePathConstants.TEMP_DIR)
         cached_path = _find_cached_upload(temp_dir, file_bytes, uploaded_hash)
@@ -459,9 +458,13 @@ def _process_uploaded_file(uploaded_file) -> None:
         # 업로드 직후 불필요한 전체 rerun 없이도 빈 화면 깜빡임이 사라진다.
         # (reset_for_new_file이 current_page/pdf_annotations/pdf_target_page 초기화 포함)
         SessionManager.reset_for_new_file(session_id=sid)
-        # 검증 완료된 페이지 수/1페이지 미리보기를 초기화 직후 등록한다
-        # (first_page_preview는 reset_for_new_file에서 None으로 비워진 뒤 기록).
         SessionManager.set("total_pages", page_count, session_id=sid)
+        # [FAST-PATH 동기화] file_hash와 last_uploaded_file_name을 미리보기 등록과 동시에
+        # 즉시 설정하여, 뷰어가 first_page_preview의 해시 일치 검사를 즉시 통과할 수 있도록 보장한다.
+        SessionManager.set("file_hash", uploaded_hash, session_id=sid)
+        SessionManager.set(
+            "last_uploaded_file_name", uploaded_file.name, session_id=sid
+        )
         if first_page_bytes:
             SessionManager.set(
                 "first_page_preview",
@@ -475,17 +478,12 @@ def _process_uploaded_file(uploaded_file) -> None:
         # UI 미러만 정리한다.
         navigate_to_page(1)
         st.session_state.pop("pdf_target_page", None)
-        old_path = SessionManager.get("pdf_file_path")
+        old_path = SessionManager.get("pdf_file_path", session_id=sid)
         if old_path and old_path != cached_path:
             still_referenced = SessionManager.get_all_pdf_paths().count(old_path) > 1
             if not still_referenced and not SessionManager.safe_remove_file(old_path):
                 logger.warning(f"이전 업로드 파일 삭제 실패 (잠금 가능): {old_path}")
                 SystemNotifier.warning(f"이전 파일 정리에 실패했습니다: {old_path}")
-
-        SessionManager.set(
-            "last_uploaded_file_name", uploaded_file.name, session_id=sid
-        )
-        SessionManager.set("file_hash", uploaded_hash, session_id=sid)
 
         try:
             if cached_path is not None:

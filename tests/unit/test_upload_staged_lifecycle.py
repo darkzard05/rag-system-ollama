@@ -117,3 +117,42 @@ class TestUploadStagedLifecycle(unittest.TestCase):
         assert (
             SessionManager.get("new_file_uploaded", False, session_id=self.sid) is False
         )
+
+    def test_stage_1_preview_and_hash_atomically_consistent(self):
+        """업로드 직후 세션의 file_hash와 first_page_preview['file_hash']가 완벽하게 일치하여
+        viewer._resolve_pdf_state() 및 render_pdf_viewer()가 즉시 1페이지를 준비할 수 있는지 검증."""
+        sid = self.sid
+        pdf_bytes = _make_dummy_pdf("STAGE 1 TEST PDF CONTENT")
+        uploaded = io.BytesIO(pdf_bytes)
+        uploaded.name = "atomic_sample.pdf"
+        uploaded.type = "application/pdf"  # type: ignore[attr-defined]
+        uploaded.size = len(pdf_bytes)  # type: ignore[attr-defined]
+
+        fake_state = FakeSessionState({"pdf_uploader": uploaded})
+
+        import ui.components.viewer as viewer_module
+
+        with (
+            tempfile.TemporaryDirectory() as tmp_dir,
+            patch("src.main.FilePathConstants.TEMP_DIR", tmp_dir),
+            patch("src.main.st.session_state", fake_state),
+            patch("services.monitoring.notification_system.SystemNotifier.success"),
+        ):
+            main_module.on_file_upload()
+
+        # 1. file_hash와 first_page_preview가 세션에 즉시 유효하게 존재해야 함
+        current_hash = SessionManager.get("file_hash", session_id=sid)
+        preview = SessionManager.get("first_page_preview", session_id=sid)
+
+        assert current_hash is not None, "세션의 file_hash가 누락됨"
+        assert preview is not None, "세션의 first_page_preview가 누락됨"
+        assert preview["file_hash"] == current_hash, (
+            f"해시 불일치 발생: preview={preview['file_hash']} vs session={current_hash}"
+        )
+
+        # 2. 뷰어 상태 해석기가 즉시 유효한 1페이지 상태를 반환하는지 검증
+        with patch("ui.components.viewer.st.session_state", {}):
+            state = viewer_module._resolve_pdf_state()
+            assert state is not None
+            assert state["current_page"] == 1
+            assert state["file_hash"] == current_hash
