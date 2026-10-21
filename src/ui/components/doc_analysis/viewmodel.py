@@ -129,14 +129,23 @@ def to_viewmodel(
 
     if build.phase in _RUNNING_PHASES:
         phase_text = t(PHASE_DETAIL_KEY.get(build.phase, "build_in_progress"))
+        # PREPARING is a pre-extraction wait state: keep the card compact
+        # instead of showing a 0% gauge that competes with the PDF viewer
+        # for attention while the first page is still mounting. The gauge
+        # and stepper appear naturally once EXTRACTING starts.
+        is_preparing = build.phase == BuildPhase.PREPARING
         return BuildVM(
             label=f"{file_name} · {phase_text}",
             status_state="running",
             expanded=True,
-            progress=max(0, min(100, build.pct)) / 100,
-            stepper=stepper_caption(build.phase),
-            caption=t("build_progress_caption").format(
-                progress=build.pct, elapsed=elapsed
+            progress=(None if is_preparing else max(0, min(100, build.pct)) / 100),
+            stepper=None if is_preparing else stepper_caption(build.phase),
+            caption=(
+                None
+                if is_preparing
+                else t("build_progress_caption").format(
+                    progress=build.pct, elapsed=elapsed
+                )
             ),
             actions=("cancel",),
         )
