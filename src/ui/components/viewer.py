@@ -211,52 +211,54 @@ def _resolve_pdf_state() -> dict | None:
       (레거시 "auto" 토큰과 방어적 처리를 위해 로직은 유지)
     - 레거시 int 값도 수용한다 (source="manual" 취급).
     """
-    pdf_path_raw = SessionManager.get("pdf_file_path")
+    sid = SessionManager.get_session_id()
+    pdf_path_raw = SessionManager.get("pdf_file_path", session_id=sid)
     if not pdf_path_raw:
         # PDF를 소비할 수 없는 상태: 일회성 점프 토큰이 남아 이후 PDF 로드 시
         # 옛 문서 페이지로 자동 점프하지 않도록 self-clean 한다.
-        SessionManager.delete(PDF_TARGET_PAGE_KEY)
+        SessionManager.delete(PDF_TARGET_PAGE_KEY, session_id=sid)
         st.session_state.pop(PDF_TARGET_PAGE_KEY, None)
         return None
 
     pdf_path = os.path.abspath(pdf_path_raw)
-    file_hash = SessionManager.get("file_hash", "none")
+    file_hash = SessionManager.get("file_hash", "none", session_id=sid)
 
-    # [최적화] 업로드 시 사전 계산된 total_pages가 세션에 있으면 디스크 I/O 없이 즉시 사용
-    cached_total = SessionManager.get("total_pages")
-    if isinstance(cached_total, int) and cached_total > 0:
-        total_pages = cached_total
-    else:
-        # 캐시 계층(st.cache_data)이 예외를 재전파할 수 있으므로 호출부에서도
-        # 이중 안전망을 둔다. get_pdf_total_pages 자체는 raise하지 않는다.
-        try:
-            total_pages = _get_pdf_total_pages(pdf_path)
-            if total_pages:
-                SessionManager.set("total_pages", total_pages)
-        except Exception as e:
-            logger.error(f"PDF 페이지 수 조회 중 오류: {e}", exc_info=True)
-            total_pages = None
+    # [최적화] 1. 세션에 캐시된 total_pages 확인
+    cached_total = SessionManager.get("total_pages", session_id=sid)
+    total_pages = (
+        cached_total if isinstance(cached_total, int) and cached_total > 0 else None
+    )
+
+    # [FAST-PATH 우선순위 보장] 1페이지 미리보기가 유효하면 디스크 I/O를 기다리지 않고 우선 1페이지 허용
+    preview = SessionManager.get("first_page_preview", session_id=sid)
+    has_valid_preview = (
+        isinstance(preview, dict)
+        and preview.get("file_hash") == file_hash
+        and bool(preview.get("bytes"))
+    )
 
     if not total_pages:
-        preview = SessionManager.get("first_page_preview")
-        if (
-            isinstance(preview, dict)
-            and preview.get("file_hash") == file_hash
-            and bool(preview.get("bytes"))
-        ):
+        if has_valid_preview:
             total_pages = 1
             logger.info(
-                "[PDF] total_pages 미확보 상태이나 1페이지 미리보기가 유효하여 1페이지 우선 렌더링으로 폴백"
+                "[PDF] 1페이지 미리보기가 유효하여 디스크 I/O 없이 1페이지 우선 렌더링 상태로 즉시 확정"
             )
+        else:
+            try:
+                total_pages = _get_pdf_total_pages(pdf_path)
+                if total_pages:
+                    SessionManager.set("total_pages", total_pages, session_id=sid)
+            except Exception as e:
+                logger.error(f"PDF 페이지 수 조회 중 오류: {e}", exc_info=True)
+                total_pages = None
 
     if not total_pages:
-        # 파일 삭제/손상 등으로 페이지 수를 알 수 없음: 토큰 self-clean.
-        SessionManager.delete(PDF_TARGET_PAGE_KEY)
+        SessionManager.delete(PDF_TARGET_PAGE_KEY, session_id=sid)
         st.session_state.pop(PDF_TARGET_PAGE_KEY, None)
         return None
 
     # Handle external page navigation (e.g., from chat references)
-    target = SessionManager.get(PDF_TARGET_PAGE_KEY)
+    target = SessionManager.get(PDF_TARGET_PAGE_KEY, session_id=sid)
     if target is not None:
         if isinstance(target, dict):
             page = target.get("page")
@@ -268,26 +270,27 @@ def _resolve_pdf_state() -> dict | None:
             ts = 0.0
         if page is None:
             # 형식 오류 토큰(page 누락): 폴링마다 재평가되지 않도록 폐기한다.
-            SessionManager.delete(PDF_TARGET_PAGE_KEY)
+            SessionManager.delete(PDF_TARGET_PAGE_KEY, session_id=sid)
             st.session_state.pop(PDF_TARGET_PAGE_KEY, None)
         elif (
             source == "auto"
-            and float(SessionManager.get(MANUAL_NAV_TS_KEY, 0) or 0) > ts
+            and float(SessionManager.get(MANUAL_NAV_TS_KEY, 0, session_id=sid) or 0)
+            > ts
         ):
             # 사용자가 자동 점프 토큰 설정 이후 더 최근에 수동 네비게이션함
             # → 토큰 폐기 (점프 없음), 정상 nav-input 분기로 폴스루.
-            SessionManager.delete(PDF_TARGET_PAGE_KEY)
+            SessionManager.delete(PDF_TARGET_PAGE_KEY, session_id=sid)
             st.session_state.pop(PDF_TARGET_PAGE_KEY, None)
         else:
             current_page = min(max(1, int(page)), total_pages)
-            SessionManager.set("current_page", current_page)
+            SessionManager.set("current_page", current_page, session_id=sid)
             # pdf_target_page는 일회성 소비: 점프 적용 후 키를 삭제하여
             # 사용자가 수동 네비게이션으로 벗어나도 매 rerun마다 참조 페이지로
             # 되돌아가지 않도록 보장한다. 점프한 페이지를 네비 입력 위젯에도
             # 동기화한다: navigate_to_page()가 콜백 단계에서 위젯 키를 쓰지만,
             # 토큰 소비 경로는 콜백을 거치지 않으므로 여기서 직접 맞춘다.
             # 위젯 생성 이전의 대입이므로 Streamlit 규약상 허용된다.
-            SessionManager.delete(PDF_TARGET_PAGE_KEY)
+            SessionManager.delete(PDF_TARGET_PAGE_KEY, session_id=sid)
             st.session_state.pop(PDF_TARGET_PAGE_KEY, None)
             # st.session_state[PDF_NAV_INPUT_KEY] 직접 대입 제거 (Streamlit 1.60 규격 준수:
             # 위젯 생성 전/후 직접 세션 위젯 키 수정 대신 세션 관리자의 current_page와
@@ -305,12 +308,12 @@ def _resolve_pdf_state() -> dict | None:
     # 무효화된다. 사용자 입력은 on_change 콜백이 매니저에 동기화하므로 여기서
     # 다시 읽을 필요가 없으며, 위젯 default는 렌더 시 매니저에서 받는다.
     try:
-        managed_page = int(SessionManager.get("current_page", 1) or 1)
+        managed_page = int(SessionManager.get("current_page", 1, session_id=sid) or 1)
     except (TypeError, ValueError):
         managed_page = 1
     current_page = min(max(1, managed_page), total_pages)
     if managed_page != current_page:
-        SessionManager.set("current_page", current_page)
+        SessionManager.set("current_page", current_page, session_id=sid)
 
     return {
         "pdf_path": pdf_path,
@@ -364,7 +367,8 @@ def render_pdf_viewer(pdf_path, current_page, file_hash):
     try:
         from streamlit_pdf_viewer import pdf_viewer  # lazy: PDF 표시 시에만 import
 
-        raw_annotations = SessionManager.get("pdf_annotations", [])
+        sid = SessionManager.get_session_id()
+        raw_annotations = SessionManager.get("pdf_annotations", [], session_id=sid)
         if isinstance(raw_annotations, dict):
             annotations = (
                 raw_annotations.get("annotations", [])
@@ -379,7 +383,7 @@ def render_pdf_viewer(pdf_path, current_page, file_hash):
         # 바이트가 있으면 디스크 재오픈/재파싱 없이 즉시 렌더링한다.
         page_bytes = b""
         if current_page == 1:
-            preview = SessionManager.get("first_page_preview")
+            preview = SessionManager.get("first_page_preview", session_id=sid)
             if (
                 isinstance(preview, dict)
                 and preview.get("file_hash") == file_hash
