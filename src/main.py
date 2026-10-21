@@ -484,6 +484,16 @@ def _process_uploaded_file(uploaded_file) -> None:
                 {"file_hash": uploaded_hash, "bytes": first_page_bytes},
                 session_id=sid,
             )
+
+        # === [추가 시작] Frame 1에서 우측 분석 패널이 1페이지 뷰어와 동시 출력되도록 즉시 초기화 ===
+        SessionManager.init_build_state(
+            file_name=uploaded_file.name,
+            file_hash=uploaded_hash,
+            session_id=sid,
+        )
+        SessionManager.set("is_building_rag", True, session_id=sid)
+        # === [추가 끝] ===
+
         # 새 문서는 항상 1페이지부터: 단일 navigate_to_page(1) 경로로
         # SessionManager.current_page를 리셋한다. 위젯 키(INTERACTIVE_KEYS)는
         # 직접 쓰지 않으며, 네비 입력 위젯은 렌더 시 매니저에서 default를 받는다.
@@ -509,8 +519,6 @@ def _process_uploaded_file(uploaded_file) -> None:
                         f.write(file_bytes)
 
             SessionManager.set("pdf_file_path", tmp_path, session_id=sid)
-            # 1페이지 뷰어가 Frame 1에서 우측 패널의 시각적 방해 없이 우선 렌더링되도록
-            # 업로드 시점에는 build_state를 생성하지 않고 new_file_uploaded 플래그만 세팅합니다.
             SessionManager.set("new_file_uploaded", True, session_id=sid)
             SystemNotifier.success(f"Document uploaded: {uploaded_file.name}")
         except Exception as e:
@@ -648,12 +656,13 @@ def _handle_pending_tasks() -> None:
             or DEFAULT_EMBEDDING_MODEL
         )
 
-        # Stage 2: 첫 렌더링 프레임 완료 후 펜딩 핸들러 단계에서 비로소 build_state를 PREPARING으로 초기화합니다.
-        SessionManager.init_build_state(
-            str(current_file_name or "document.pdf"),
-            str(SessionManager.get("file_hash", "", current_sid) or ""),
-            session_id=current_sid,
-        )
+        # 이미 업로드 핸들러에서 생성되었는지 확인 후 없을 때만 폴백 생성
+        if SessionManager.get_build_state(session_id=current_sid) is None:
+            SessionManager.init_build_state(
+                str(current_file_name or "document.pdf"),
+                str(SessionManager.get("file_hash", "", current_sid) or ""),
+                session_id=current_sid,
+            )
         SessionManager.set("is_building_rag", True, current_sid)
         # [UX-FIRST-PAGE] 백그라운드 태스크의 초기 preparing -> extracting 위상 전이가
         # 첫 페이지 페인트 보호 윈도우(0.8s) 동안 즉각 리런을 유발하지 않도록 기준 시각을 등록한다.
