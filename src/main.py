@@ -658,7 +658,11 @@ def _handle_pending_tasks() -> None:
                 current_embedding_model,
             ),
         )
-        needs_rerun = True
+        # [UX-FIRST-PAGE] 신규 파일 업로드 직후 st.rerun()을 호출하지 않는다.
+        # 첫 렌더링 프레임에서 브라우저가 좌측 PDF 1페이지 뷰어를 즉시 화면에
+        # 온전히 페인트하도록 보장한다. 분석 패널은 백그라운드 워커의 첫 위상
+        # 이벤트가 자연스러운 Rerun을 트리거할 때 렌더링된다.
+        needs_rerun = False
 
     elif (
         SessionManager.get("needs_rag_rebuild", False, current_sid)

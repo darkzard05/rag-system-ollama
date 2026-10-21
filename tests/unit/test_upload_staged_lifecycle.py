@@ -107,7 +107,8 @@ class TestUploadStagedLifecycle(unittest.TestCase):
 
         mock_task.assert_called_once()
         mock_worker.assert_called_once()
-        mock_rerun.assert_called_once()
+        # 첫 페이지 페인트 프레임 보존: 업로드 직후 강제 rerun 금지.
+        mock_rerun.assert_not_called()
         assert (
             SessionManager.get("new_file_uploaded", False, session_id=self.sid) is False
         )
