@@ -131,19 +131,17 @@ def to_viewmodel(
         phase_text = t(PHASE_DETAIL_KEY.get(build.phase, "build_in_progress"))
         is_preparing = build.phase == BuildPhase.PREPARING
 
-        # [UX-SMOOTH-PANEL] PREPARING 단계에서도 전체 스텝 흐름(○ 대기 표시)과
-        # 준비 안내 캡션을 온전히 제공하여 패널이 거칠게 튀는 현상을 방지한다.
-        # (0% 게이지 깜빡임을 방지하기 위해 progress 막대만 None으로 유지)
-        preparing_caption = t("build_analyzing")
-
+        # [UX-NATURAL-EXPANSION] 초기 준비(PREPARING) 단계에서는 패널을 간결하게(expanded=False) 유지하여
+        # 좌측 1페이지 PDF 뷰어의 시각적 선행성을 확보하고, 실제 분석(EXTRACTING 이후) 단계에서
+        # expanded=True로 부드럽게 확장 전개되어 진행 상태를 자연스럽게 노출합니다.
         return BuildVM(
             label=f"{file_name} · {phase_text}",
             status_state="running",
-            expanded=True,
+            expanded=(not is_preparing),
             progress=(None if is_preparing else max(0, min(100, build.pct)) / 100),
-            stepper=stepper_caption(build.phase),
+            stepper=(None if is_preparing else stepper_caption(build.phase)),
             caption=(
-                preparing_caption
+                t("build_analyzing")
                 if is_preparing
                 else t("build_progress_caption").format(
                     progress=build.pct, elapsed=elapsed
