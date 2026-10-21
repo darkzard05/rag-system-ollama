@@ -1,8 +1,9 @@
 """Document analysis panel transition tests (viewer mount protection).
 
-PREPARING must render a compact wait state so the first PDF page mount is
-not competing with a 0% progress gauge. Real extraction phases must still
-surface the full progress controls.
+PREPARING must not render a 0% progress gauge that competes with the first PDF
+page mount, but it must still surface the all-pending stepper and a guidance
+caption so the panel does not snap open as a blank shell. Real extraction
+phases must still surface the full progress controls.
 """
 
 import os
@@ -15,7 +16,7 @@ sys.path.append(
 
 from core.build_state import BuildPhase, initial_build_state  # noqa: E402
 from ui.components.doc_analysis.viewmodel import to_viewmodel  # noqa: E402
-from ui.strings import set_lang  # noqa: E402
+from ui.strings import set_lang, t  # noqa: E402
 
 
 class TestDocAnalysisPanelTransition(unittest.TestCase):
@@ -26,17 +27,18 @@ class TestDocAnalysisPanelTransition(unittest.TestCase):
         set_lang("en")
 
     def test_preparing_phase_renders_clean_transition_state(self):
-        """PREPARING must not render a distracting progress bar."""
+        """PREPARING must skip the gauge but keep the stepper and caption."""
         build = initial_build_state("document.pdf", "hash_123")
         build.phase = BuildPhase.PREPARING
 
         vm = to_viewmodel(build)
         assert vm is not None
         assert vm.status_state == "running"
-        # Keep the viewer mount unobstructed: no gauge/stepper/caption yet.
+        # Skip the 0% gauge, but keep the pending stepper + guidance caption.
         assert vm.progress is None
-        assert vm.stepper is None
-        assert vm.caption is None
+        assert vm.stepper is not None
+        assert "○" in vm.stepper
+        assert vm.caption == t("build_analyzing")
         assert "document.pdf" in vm.label
 
     def test_extracting_phase_renders_full_progress_controls(self):

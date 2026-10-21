@@ -129,19 +129,21 @@ def to_viewmodel(
 
     if build.phase in _RUNNING_PHASES:
         phase_text = t(PHASE_DETAIL_KEY.get(build.phase, "build_in_progress"))
-        # PREPARING is a pre-extraction wait state: keep the card compact
-        # instead of showing a 0% gauge that competes with the PDF viewer
-        # for attention while the first page is still mounting. The gauge
-        # and stepper appear naturally once EXTRACTING starts.
         is_preparing = build.phase == BuildPhase.PREPARING
+
+        # [UX-SMOOTH-PANEL] PREPARING 단계에서도 전체 스텝 흐름(○ 대기 표시)과
+        # 준비 안내 캡션을 온전히 제공하여 패널이 거칠게 튀는 현상을 방지한다.
+        # (0% 게이지 깜빡임을 방지하기 위해 progress 막대만 None으로 유지)
+        preparing_caption = t("build_analyzing")
+
         return BuildVM(
             label=f"{file_name} · {phase_text}",
             status_state="running",
             expanded=True,
             progress=(None if is_preparing else max(0, min(100, build.pct)) / 100),
-            stepper=None if is_preparing else stepper_caption(build.phase),
+            stepper=stepper_caption(build.phase),
             caption=(
-                None
+                preparing_caption
                 if is_preparing
                 else t("build_progress_caption").format(
                     progress=build.pct, elapsed=elapsed
