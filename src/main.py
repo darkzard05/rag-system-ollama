@@ -787,7 +787,7 @@ _BUILD_RERUN_LAST: dict[str, tuple[float, str]] = {}
 
 
 def _request_build_progress_rerun(session_id: str, phase_name: str) -> None:
-    """진행률 보고: 첫 페이지 뷰어 안착을 위해 초기 시작 시 쿨다운을 엄격히 적용하여 뷰어 리셋 방지."""
+    """진행률 보고: 위상 변화 시 즉시 갱신하고, 동일 위상 내에서만 쓰로틀을 적용하여 부드러운 패널 전환 지원."""
     from core.build_state import BuildPhase, is_terminal
     from core.session import SessionManager
 
@@ -803,10 +803,13 @@ def _request_build_progress_rerun(session_id: str, phase_name: str) -> None:
 
     now = time.monotonic()
     last = _BUILD_RERUN_LAST.get(session_id)
-    # 초기 "start" 기준점(build 착수 직후 등록)이 남아 있는 동안에는 위상이
-    # 바뀌더라도 전역 Rerun을 차단해, 아직 마운트 중인 PDF 뷰어(Canvas/SVG
-    # 첫 페이지 렌더링)가 리셋되지 않도록 최소 1.5초 쿨다운을 강제한다.
-    if last is not None and (now - last[0] < 1.5):
+    # [UX-RESPONSIVE] 새로운 위상으로 전이될 때는 지연 없이 즉시 화면을 갱신하고,
+    # 동일 위상 내에서의 세부 진행률 갱신 시에만 최소 인터벌로 쓰로틀링한다.
+    if (
+        last is not None
+        and last[1] == phase_name
+        and (now - last[0] < _BUILD_RERUN_MIN_INTERVAL_S)
+    ):
         return
 
     _BUILD_RERUN_LAST[session_id] = (now, phase_name)
@@ -836,12 +839,10 @@ async def _bg_rebuild_task(
     from core.rag_core import RAGSystem
     from core.session import SessionManager
 
-    # [최적화] 빌드 착수 시점에 리런 쿨다운 기준점을 등록한다. 첫 추출
-    # 이벤트가 수십 ms 만에 도착해 전역 Rerun을 발화하면, 아직 마운트 중인
-    # PDF 뷰어가 리셋되어 깜빡이고 표시가 지연된다. 뷰어가 첫 페이지
-    # Canvas/SVG를 안정적으로 그릴 때까지(최소 1.5초)는 진행 이벤트의 전역
-    # Rerun을 억제해 마운트를 온전히 보호한다.
-    _BUILD_RERUN_LAST[session_id] = (time.monotonic(), "start")
+    # [UX-RESPONSIVE] 초기 1.5초 강제 쿨다운 제거: 첫 페이지는 업로드 런에서
+    # 선행 렌더링되었으므로, 백그라운드 빌드 이벤트가 시작되자마자 즉시 문서
+    # 분석 패널로 전환되어 화면 정체(Freeze)를 방지한다.
+    _BUILD_RERUN_LAST.pop(session_id, None)
 
     SessionManager.set_session_id(session_id)
     SessionManager.set("rebuild_error", None, session_id=session_id)
