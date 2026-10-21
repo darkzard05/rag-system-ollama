@@ -782,12 +782,15 @@ def main() -> None:
 # 화면 갱신을 요청한다. 완료 시 rerun은 async_worker._on_complete가 담당.
 # [Phase D] 1.0 → 2.0: 풀 리런마다 PDF 영역까지 재실행되므로 간격을
 # 넓혀 인덱싱 중 리런 부하를 절반으로 줄인다 (진행 카드 갱신은 2초 단위).
+# 초기 1페이지 페인트 보호 윈도우 (초): 신규 업로드 직후 브라우저가 첫 페이지 뷰어를
+# 온전히 렌더링할 시간을 보장하기 위해 워커 착수 초기 Rerun을 억제합니다.
+_INITIAL_PAGE_PAINT_WINDOW_S = 0.8
 _BUILD_RERUN_MIN_INTERVAL_S = 2.0
 _BUILD_RERUN_LAST: dict[str, tuple[float, str]] = {}
 
 
 def _request_build_progress_rerun(session_id: str, phase_name: str) -> None:
-    """진행률 보고: 위상 변화 시 즉시 갱신하고, 동일 위상 내에서만 쓰로틀을 적용하여 부드러운 패널 전환 지원."""
+    """진행률 보고: 첫 페이지 페인트를 보호하고, 이후 위상 변화 및 진행률을 부드럽게 전파합니다."""
     from core.build_state import BuildPhase, is_terminal
     from core.session import SessionManager
 
@@ -803,8 +806,18 @@ def _request_build_progress_rerun(session_id: str, phase_name: str) -> None:
 
     now = time.monotonic()
     last = _BUILD_RERUN_LAST.get(session_id)
-    # [UX-RESPONSIVE] 새로운 위상으로 전이될 때는 지연 없이 즉시 화면을 갱신하고,
-    # 동일 위상 내에서의 세부 진행률 갱신 시에만 최소 인터벌로 쓰로틀링한다.
+
+    # [UX-FIRST-PAGE] 신규 업로드 직후 초기 페인트 윈도우 보호:
+    # PREPARING 상태에서 최초 EXTRACTING 이벤트가 수십 ms 만에 도달하더라도,
+    # 브라우저의 첫 페이지 렌더링 파이프라인이 인터럽트되지 않도록 유예 시간을 둡니다.
+    if (
+        last is not None
+        and last[1] == "preparing"
+        and (now - last[0] < _INITIAL_PAGE_PAINT_WINDOW_S)
+    ):
+        return
+
+    # 동일 위상 내 세부 진행률은 최소 인터벌(2.0초)로 쓰로틀링
     if (
         last is not None
         and last[1] == phase_name
@@ -839,10 +852,10 @@ async def _bg_rebuild_task(
     from core.rag_core import RAGSystem
     from core.session import SessionManager
 
-    # [UX-RESPONSIVE] 초기 1.5초 강제 쿨다운 제거: 첫 페이지는 업로드 런에서
-    # 선행 렌더링되었으므로, 백그라운드 빌드 이벤트가 시작되자마자 즉시 문서
-    # 분석 패널로 전환되어 화면 정체(Freeze)를 방지한다.
-    _BUILD_RERUN_LAST.pop(session_id, None)
+    # [UX-FIRST-PAGE] 신규 파일 빌드 착수 시 초기 1페이지 페인트 윈도우를 등록합니다.
+    # 백그라운드 태스크가 즉각 Rerun을 난사하여 브라우저의 1페이지 Canvas 렌더링을
+    # 중단시키는 경합을 차단합니다.
+    _BUILD_RERUN_LAST[session_id] = (time.monotonic(), "preparing")
 
     SessionManager.set_session_id(session_id)
     SessionManager.set("rebuild_error", None, session_id=session_id)

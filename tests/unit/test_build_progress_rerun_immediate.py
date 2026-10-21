@@ -37,13 +37,11 @@ def setup_session():
     main_module._BUILD_RERUN_LAST.clear()
 
 
-def test_phase_transition_reruns_immediately_without_cooldown():
-    """위상이 변경될 때 1.5초 쿨다운에 걸리지 않고 즉시 리런이 트리거되는지 검증."""
+def test_phase_transition_preparing_to_extracting_within_window_blocked():
+    """PREPARING에서 EXTRACTING으로의 초기 위상 전이가 0.8초 윈도우 내에서는 억제되어 첫 페이지 페인트를 보장함."""
     start_time = time.monotonic()
-    # 이전 위상 기록
     main_module._BUILD_RERUN_LAST[SID] = (start_time, "preparing")
 
-    # 0.1초 직후 새 위상(extracting) 이벤트 도착 시뮬레이션
     build = SessionManager.get_build_state(session_id=SID)
     assert build is not None
     build.phase = BuildPhase.EXTRACTING
@@ -52,10 +50,30 @@ def test_phase_transition_reruns_immediately_without_cooldown():
     with patch(
         "common.async_worker.request_session_rerun", return_value=True
     ) as mock_rerun:
-        with patch("time.monotonic", return_value=start_time + 0.1):
+        with patch("time.monotonic", return_value=start_time + 0.2):
             main_module._request_build_progress_rerun(SID, "extracting")
 
-        # 위상이 달라졌으므로 즉각적으로 리런이 호출되어야 함 (1.5초 차단 없음)
+        # 초기 0.8초 페인트 보호 윈도우 내이므로 리런이 호출되지 않아야 함
+        mock_rerun.assert_not_called()
+
+
+def test_phase_transition_after_initial_window_reruns_immediately():
+    """초기 페인트 윈도우(0.8초) 경과 후의 위상 전이는 즉시 리런이 트리거되는지 검증."""
+    start_time = time.monotonic()
+    main_module._BUILD_RERUN_LAST[SID] = (start_time, "preparing")
+
+    build = SessionManager.get_build_state(session_id=SID)
+    assert build is not None
+    build.phase = BuildPhase.EXTRACTING
+    SessionManager.set("build_state", build, SID)
+
+    with patch(
+        "common.async_worker.request_session_rerun", return_value=True
+    ) as mock_rerun:
+        with patch("time.monotonic", return_value=start_time + 1.0):
+            main_module._request_build_progress_rerun(SID, "extracting")
+
+        # 윈도우 경과 후 위상 전이이므로 즉시 리런 호출
         mock_rerun.assert_called_once_with(SID)
 
 

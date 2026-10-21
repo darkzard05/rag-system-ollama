@@ -73,3 +73,43 @@ def test_embedding_rebuild_still_requests_rerun():
         main_module._handle_pending_tasks()
 
     mock_rerun.assert_called_once()
+
+
+def test_extracting_rerun_blocked_during_initial_paint_window():
+    """업로드 직후 initial_paint_window(0.8s) 내의 조기 EXTRACTING 리런은 억제되어야 함."""
+    from core.build_state import BuildPhase, initial_build_state
+
+    SessionManager.set("is_building_rag", True, session_id=SID)
+    build = initial_build_state("doc.pdf", "hash123")
+    build.phase = BuildPhase.EXTRACTING
+    SessionManager.set("build_state", build, session_id=SID)
+
+    now = 1000.0
+    main_module._BUILD_RERUN_LAST[SID] = (now, "preparing")
+
+    with patch("common.async_worker.request_session_rerun") as mock_rerun:
+        with patch("time.monotonic", return_value=now + 0.2):
+            main_module._request_build_progress_rerun(SID, "extracting")
+
+        mock_rerun.assert_not_called()
+
+
+def test_extracting_rerun_allowed_after_initial_paint_window():
+    """initial_paint_window(0.8s)가 경과한 후에는 EXTRACTING 리런이 정상 트리거되어야 함."""
+    from core.build_state import BuildPhase, initial_build_state
+
+    SessionManager.set("is_building_rag", True, session_id=SID)
+    build = initial_build_state("doc.pdf", "hash123")
+    build.phase = BuildPhase.EXTRACTING
+    SessionManager.set("build_state", build, session_id=SID)
+
+    now = 1000.0
+    main_module._BUILD_RERUN_LAST[SID] = (now, "preparing")
+
+    with patch(
+        "common.async_worker.request_session_rerun", return_value=True
+    ) as mock_rerun:
+        with patch("time.monotonic", return_value=now + 1.0):
+            main_module._request_build_progress_rerun(SID, "extracting")
+
+        mock_rerun.assert_called_once_with(SID)
