@@ -238,6 +238,18 @@ def _resolve_pdf_state() -> dict | None:
             total_pages = None
 
     if not total_pages:
+        preview = SessionManager.get("first_page_preview")
+        if (
+            isinstance(preview, dict)
+            and preview.get("file_hash") == file_hash
+            and bool(preview.get("bytes"))
+        ):
+            total_pages = 1
+            logger.info(
+                "[PDF] total_pages 미확보 상태이나 1페이지 미리보기가 유효하여 1페이지 우선 렌더링으로 폴백"
+            )
+
+    if not total_pages:
         # 파일 삭제/손상 등으로 페이지 수를 알 수 없음: 토큰 self-clean.
         SessionManager.delete(PDF_TARGET_PAGE_KEY)
         st.session_state.pop(PDF_TARGET_PAGE_KEY, None)
