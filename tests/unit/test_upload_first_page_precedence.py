@@ -117,6 +117,46 @@ def test_extracting_rerun_allowed_after_initial_paint_window():
         mock_rerun.assert_called_once_with(SID)
 
 
+def test_non_extracting_transition_also_blocked_during_initial_paint_window():
+    """0.8s 윈도우 동안에는 EXTRACTING뿐 아니라 모든 비-terminal 전이가 억제된다."""
+    from core.build_state import BuildPhase, initial_build_state
+
+    SessionManager.set("is_building_rag", True, session_id=SID)
+    build = initial_build_state("doc.pdf", "hash123")
+    build.phase = BuildPhase.CHUNKING
+    SessionManager.set("build_state", build, session_id=SID)
+
+    now = 1000.0
+    main_module._BUILD_RERUN_LAST[SID] = (now, "preparing")
+
+    with patch("common.async_worker.request_session_rerun") as mock_rerun:
+        with patch("time.monotonic", return_value=now + 0.2):
+            main_module._request_build_progress_rerun(SID, "chunking")
+
+        mock_rerun.assert_not_called()
+
+
+def test_non_extracting_transition_allowed_after_initial_paint_window():
+    """윈도우가 끝나면 CHUNKING 전이도 정상 rerun을 트리거한다."""
+    from core.build_state import BuildPhase, initial_build_state
+
+    SessionManager.set("is_building_rag", True, session_id=SID)
+    build = initial_build_state("doc.pdf", "hash123")
+    build.phase = BuildPhase.CHUNKING
+    SessionManager.set("build_state", build, session_id=SID)
+
+    now = 1000.0
+    main_module._BUILD_RERUN_LAST[SID] = (now, "preparing")
+
+    with patch(
+        "common.async_worker.request_session_rerun", return_value=True
+    ) as mock_rerun:
+        with patch("time.monotonic", return_value=now + 0.9):
+            main_module._request_build_progress_rerun(SID, "chunking")
+
+        mock_rerun.assert_called_once_with(SID)
+
+
 def test_pending_tasks_registers_preparing_timestamp_for_paint_protection():
     """_handle_pending_tasks 실행 시 _BUILD_RERUN_LAST에 preparing 기준 시각이 등록되어
     즉시 뒤따르는 extracting 이벤트가 0.8초 윈도우 내에서 차단되는지 검증."""

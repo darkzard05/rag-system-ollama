@@ -1,9 +1,8 @@
 """Document analysis panel transition tests (viewer mount protection).
 
-PREPARING must not render a 0% progress gauge that competes with the first PDF
-page mount, but it must still surface the all-pending stepper and a guidance
-caption so the panel does not snap open as a blank shell. Real extraction
-phases must still surface the full progress controls.
+PREPARING must stay collapsed so the first PDF page wins the first paint, with
+only a short guidance caption. Real extraction phases expand the panel and
+surface the full progress controls.
 """
 
 import os
@@ -27,17 +26,16 @@ class TestDocAnalysisPanelTransition(unittest.TestCase):
         set_lang("en")
 
     def test_preparing_phase_renders_clean_transition_state(self):
-        """PREPARING must skip the gauge but keep the stepper and caption."""
+        """PREPARING stays collapsed with no gauge/stepper, keeping the caption."""
         build = initial_build_state("document.pdf", "hash_123")
         build.phase = BuildPhase.PREPARING
 
         vm = to_viewmodel(build)
         assert vm is not None
         assert vm.status_state == "running"
-        # Skip the 0% gauge, but keep the pending stepper + guidance caption.
+        assert vm.expanded is False
         assert vm.progress is None
-        assert vm.stepper is not None
-        assert "○" in vm.stepper
+        assert vm.stepper is None
         assert vm.caption == t("build_analyzing")
         assert "document.pdf" in vm.label
 

@@ -30,6 +30,25 @@ def _mock_st_status_container():
         yield mock_st, mock_container
 
 
+def test_preparing_panel_is_compact_until_extracting():
+    """PREPARING은 접힌 카드(stepper/progress 없음)로 뷰어 선행성을 보장한다."""
+    sid = "test-panel-preparing"
+    SessionManager.reset_all_state(sid)
+
+    build = initial_build_state("doc.pdf", "hash1")
+    SessionManager.set("build_state", build, session_id=sid)
+    SessionManager.set("is_building_rag", True, session_id=sid)
+
+    with _mock_st_status_container() as (mock_st, container):
+        render_document_panel(sid)
+
+    assert mock_st.status.call_args.kwargs["expanded"] is False
+    assert mock_st.status.call_args.kwargs["state"] == "running"
+    container.update.assert_called_once()
+    assert container.update.call_args.kwargs["expanded"] is False
+    assert container.update.call_args.kwargs["state"] == "running"
+
+
 def test_running_panel_explicitly_updates_expanded_true():
     """running 상태는 status_container.update로 expanded=True/state='running'을 유지해야 한다."""
     sid = "test-panel-running"

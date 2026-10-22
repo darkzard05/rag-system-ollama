@@ -313,8 +313,10 @@ class PipelineBuilder:
         _t_bm25_ms = 0.0
         _t_register_ms = 0.0
 
-        emb_model_name = getattr(
-            embedder, "model", getattr(embedder, "model_name", "unknown")
+        emb_model_name = (
+            getattr(embedder, "model", None)
+            or getattr(embedder, "model_name", None)
+            or "unknown"
         )
         cache = VectorStoreCache(file_path, emb_model_name, file_hash=file_hash)
 

@@ -17,20 +17,19 @@ class TestDocAnalysisNaturalExpansion(unittest.TestCase):
         set_lang("en")
 
     def test_preparing_phase_remains_compact_for_viewer_precedence(self):
-        """PREPARING 위상: 0% 프로그레스바를 숨기되 패널은 펼쳐져(expanded=True) 스텝퍼와 안내 캡션을 노출함을 검증."""
+        """PREPARING 위상: 패널은 접힌 채(expanded=False) 안내 캡션만 노출한다."""
         build = initial_build_state("report_2026.pdf", "hash_999")
         build.phase = BuildPhase.PREPARING
 
         vm = to_viewmodel(build)
         assert vm is not None
         assert vm.status_state == "running"
-        # 1. 패널은 펼쳐진 상태 유지 (expanded=True)
-        assert vm.expanded is True, "PREPARING 단계에서도 패널은 expanded=True여야 함"
+        # 1. 뷰어 선행성을 위해 패널은 접힌 상태
+        assert vm.expanded is False, "PREPARING 단계에서는 패널이 접혀 있어야 함"
         # 2. 0% 게이지는 숨김
         assert vm.progress is None
-        # 3. 대기 스텝퍼 및 준비 안내 캡션 제공
-        assert vm.stepper is not None
-        assert "○" in vm.stepper
+        # 3. stepper 없이 준비 안내 캡션만 제공
+        assert vm.stepper is None
         assert vm.caption == t("build_analyzing")
         assert "report_2026.pdf" in vm.label
 

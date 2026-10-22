@@ -110,6 +110,7 @@ def _render_settings_internal(
     set_lang(str(SessionManager.get("ui_lang", "en") or "en"))
     """Render the settings section logic (accessibility-optimized)."""
     safe_models = available_models if isinstance(available_models, list) else []
+    is_building = bool(SessionManager.get("is_building_rag", False))
 
     # DEFECT #6: loading indicator while the LLM model is being swapped.
     if is_swapping_model:
@@ -123,7 +124,7 @@ def _render_settings_internal(
             key="pdf_uploader",
             on_change=file_uploader_callback,
             help=t("sidebar_upload_help"),
-            disabled=is_generating,
+            disabled=is_generating or is_building,
         )
 
     # 2. 고급 설정 (익스팬더)
@@ -210,7 +211,6 @@ def _render_settings_internal(
         )
 
         # 새 대화 (문서 유지, 대화만 초기화)
-        is_building = bool(SessionManager.get("is_building_rag", False))
         if (
             st.button(
                 t("sidebar_new_chat"),

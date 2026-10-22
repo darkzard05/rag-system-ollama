@@ -24,24 +24,20 @@ class TestDocAnalysisPreparingVisual(unittest.TestCase):
         set_lang("en")
 
     def test_preparing_phase_renders_stepper_and_guidance_caption(self):
-        """PREPARING 상태에서 게이지는 숨기되, 스텝 안내(stepper)와 캡션이 부드럽게 제공되는지 검증."""
+        """PREPARING 상태에서는 패널을 접고 게이지/스텝퍼 없이 안내 캡션만 제공한다."""
         build = initial_build_state("sample_document.pdf", "hash_abc_999")
         build.phase = BuildPhase.PREPARING
 
         vm = to_viewmodel(build)
         assert vm is not None
         assert vm.status_state == "running"
-        assert vm.expanded is True
+        assert vm.expanded is False
+        assert vm.stepper is None
 
         # 1. 0% 막대 경쟁 방지: progress는 None 유지
         assert vm.progress is None
 
-        # 2. 자연스러운 단계 인지를 위한 stepper는 준비 상태(○ 대기)로 출력되어야 함
-        assert vm.stepper is not None
-        assert "○" in vm.stepper
-        assert "추출" in vm.stepper
-
-        # 3. 빈 공간 방지를 위한 준비 안내 캡션이 존재해야 함
+        # 2. 빈 공간 방지를 위한 준비 안내 캡션이 존재해야 함
         assert vm.caption is not None
         assert vm.caption == t("build_analyzing")
         assert "sample_document.pdf" in vm.label

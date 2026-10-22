@@ -411,9 +411,11 @@ def load_llm(model_name: str) -> Any:
             messages=itertools.cycle(
                 [
                     AIMessage(
-                        content="안녕하세요! RAG 시스템 테스트 응답입니다. <thinking>테스트 생각 중...</thinking> 질문에 답변해 드릴게요."
+                        content='{"final_answer": "안녕하세요! RAG 시스템 테스트 응답입니다. <thinking>테스트 생각 중...</thinking> 질문에 답변해 드릴게요.", "citations": []}'
                     ),
-                    "이것은 두 번째 테스트 스트리밍 조각입니다.",
+                    AIMessage(
+                        content='{"final_answer": "이것은 두 번째 테스트 스트리밍 조각입니다.", "citations": []}'
+                    ),
                 ]
             )
         )

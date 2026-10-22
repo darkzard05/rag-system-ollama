@@ -41,6 +41,7 @@ import atexit
 import contextlib
 import logging
 import os
+import tempfile
 import threading
 import time
 from pathlib import Path
@@ -57,7 +58,7 @@ from common.config import (
 )
 from common.constants import FilePathConstants, StringConstants
 from common.logging_config import setup_logging
-from common.utils import safe_cache_resource
+from common.utils import compute_file_hash, safe_cache_resource
 from ui.strings import t
 
 # 1. Streamlit 페이지 설정 (최우선 실행 - 가이드라인 준수)
@@ -233,12 +234,32 @@ def _warm_available_models() -> None:
         logger.debug("[SYSTEM] model-list warmup skipped (Ollama not ready)")
 
 
+def _warm_heavy_imports() -> None:
+    """첫 업로드/뷰어 렌더 전에 무거운 모듈을 백그라운드에서 선행 로드한다.
+
+    ``streamlit_pdf_viewer`` 는 첫 PDF 렌더에서 lazy import되며 cold 기준
+    ~1s가 걸린다. 업로드 콜백이 아닌 부트 스레드에서 미리 로드해 첫 프레임
+    critical path에서 제거한다. 실패는 무시한다(첫 사용 시 재시도).
+    """
+    try:
+        import pymupdf  # noqa: F401
+    except Exception as exc:  # noqa: BLE001 - best-effort warmup
+        logger.debug("[WARMUP] pymupdf import skipped: %s", exc)
+    try:
+        import streamlit_pdf_viewer  # noqa: F401
+    except Exception as exc:  # noqa: BLE001 - best-effort warmup
+        logger.debug("[WARMUP] streamlit_pdf_viewer import skipped: %s", exc)
+
+
 # 프로세스 시작 직후(import 직후) 백그라운드 웜업 — UI 첫 렌더 블로킹 제거.
 # st.cache_resource 가드로 rerun마다 스레드가 재생성되는 것을 막는다.
 @st.cache_resource(show_spinner=False)
 def _start_model_list_warmup() -> bool:
     threading.Thread(
         target=_warm_available_models, name="model-list-warmup", daemon=True
+    ).start()
+    threading.Thread(
+        target=_warm_heavy_imports, name="heavy-import-warmup", daemon=True
     ).start()
     return True
 
@@ -344,13 +365,77 @@ def _trigger_global_warmup_once() -> bool:
 _trigger_global_warmup_once()
 
 
-def on_file_upload() -> None:
-    from core.document_processor import compute_file_hash
+def _active_build_state(session_id: str | None = None):
+    """Return the non-terminal BuildState when a build is genuinely active.
+
+    ``is_building_rag`` alone can outlive a failed dispatch or a stale test
+    fixture. Requiring a non-terminal state prevents a permanently stuck flag
+    from blocking future uploads.
+    """
+    from core.build_state import is_terminal
     from core.session import SessionManager
-    from services.monitoring.notification_system import SystemNotifier
+
+    if not SessionManager.get("is_building_rag", False, session_id):
+        return None
+    build = SessionManager.get_build_state(session_id=session_id)
+    if build is None or is_terminal(build.phase):
+        return None
+    return build
+
+
+def _persist_upload_atomically(target: str, content: bytes) -> None:
+    """Write ``content`` to ``target`` via unique temp file + os.replace.
+
+    In-place ``open(..., "wb")`` truncates the destination, so a concurrent
+    reader can observe a torn PDF. Windows also rejects replaces while a
+    reader holds the file, hence the bounded retry loop.
+    """
+    target_path = Path(target)
+    target_path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_name = tempfile.mkstemp(
+        prefix=f".{target_path.name}.", suffix=".tmp", dir=str(target_path.parent)
+    )
+    tmp_path = Path(tmp_name)
+    try:
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(content)
+            handle.flush()
+            os.fsync(handle.fileno())
+        last_error: OSError | None = None
+        for _ in range(200):
+            try:
+                os.replace(tmp_path, target_path)
+                last_error = None
+                break
+            except OSError as exc:
+                last_error = exc
+                time.sleep(0.005)
+        if last_error is not None:
+            raise last_error
+    finally:
+        try:
+            if tmp_path.exists():
+                tmp_path.unlink()
+        except OSError:
+            pass
+
+
+def on_file_upload() -> None:
+    from core.session import SessionManager
 
     uploaded_file = st.session_state.get("pdf_uploader")
     if uploaded_file is None or not hasattr(uploaded_file, "type"):
+        return
+
+    # A build is already running. The sidebar uploader is disabled in that
+    # state, but programmatic/race uploads still reach this callback; reject
+    # them before reset_for_new_file can clobber the in-flight build state.
+    if _active_build_state() is not None and not SessionManager.get(
+        "new_file_uploaded", False
+    ):
+        _post_upload_error(
+            "A document is already being analyzed. Please wait for it to finish."
+        )
         return
 
     if uploaded_file.type != "application/pdf":
@@ -381,8 +466,6 @@ def _find_cached_upload(
     temp_dir: str, file_bytes: bytes, uploaded_hash: str
 ) -> str | None:
     """해시 기반 결정론적 파일명(Content-Addressed)으로 O(1) 파일 존재 여부 확인."""
-    from core.document_processor import compute_file_hash
-
     if not uploaded_hash:
         return None
     # 1. Content-Addressed 타깃 파일 O(1) 우선 검사
@@ -418,7 +501,6 @@ def _find_cached_upload(
 
 def _process_uploaded_file(uploaded_file) -> None:
     """실제 업로드 처리 로직. on_file_upload 가 멱등 가드 후 호출한다."""
-    from core.document_processor import compute_file_hash
     from core.session import SessionManager
     from services.monitoring.notification_system import SystemNotifier
     from ui.components.common import navigate_to_page
@@ -426,6 +508,9 @@ def _process_uploaded_file(uploaded_file) -> None:
     sid = SessionManager.get_session_id()
     last_file_name = SessionManager.get("last_uploaded_file_name", session_id=sid)
     last_file_hash = SessionManager.get("file_hash", session_id=sid)
+    # reset_for_new_file clears pdf_file_path; capture the old path first so
+    # cleanup can still run after the new file is committed.
+    old_path = SessionManager.get("pdf_file_path", session_id=sid)
 
     file_bytes = b""
     try:
@@ -471,6 +556,24 @@ def _process_uploaded_file(uploaded_file) -> None:
         # 업로드 직후 불필요한 전체 rerun 없이도 빈 화면 깜빡임이 사라진다.
         # (reset_for_new_file이 current_page/pdf_annotations/pdf_target_page 초기화 포함)
         SessionManager.reset_for_new_file(session_id=sid)
+
+        # Persist before publishing viewer/build metadata. If this fails, the
+        # session stays in a clean "no document" state instead of a permanent
+        # PREPARING panel pointing at a half-written file.
+        try:
+            if cached_path is not None:
+                tmp_path = cached_path
+                logger.info(f"[UPLOAD] 동일 파일 재사용 (dedup): {tmp_path}")
+            else:
+                tmp_path = os.path.join(temp_dir, f"upload_{uploaded_hash}.pdf")
+                _persist_upload_atomically(tmp_path, file_bytes)
+        except OSError as e:
+            logger.error("[UPLOAD] 파일 저장 실패: %s", e, exc_info=True)
+            _post_upload_error(
+                "Error while saving the uploaded file. Please try again."
+            )
+            return
+
         SessionManager.set("total_pages", page_count, session_id=sid)
         # [FAST-PATH 동기화] file_hash와 last_uploaded_file_name을 미리보기 등록과 동시에
         # 즉시 설정하여, 뷰어가 first_page_preview의 해시 일치 검사를 즉시 통과할 수 있도록 보장한다.
@@ -501,28 +604,18 @@ def _process_uploaded_file(uploaded_file) -> None:
         # UI 미러만 정리한다.
         navigate_to_page(1)
         st.session_state.pop("pdf_target_page", None)
-        old_path = SessionManager.get("pdf_file_path", session_id=sid)
-        if old_path and old_path != cached_path:
-            still_referenced = SessionManager.get_all_pdf_paths().count(old_path) > 1
+
+        SessionManager.set("pdf_file_path", tmp_path, session_id=sid)
+        SessionManager.set("new_file_uploaded", True, session_id=sid)
+        SystemNotifier.success(f"Document uploaded: {uploaded_file.name}")
+
+        if old_path and old_path != tmp_path:
+            # reset_for_new_file already removed this session's reference, so
+            # any remaining reference belongs to another session.
+            still_referenced = SessionManager.get_all_pdf_paths().count(old_path) > 0
             if not still_referenced and not SessionManager.safe_remove_file(old_path):
                 logger.warning(f"이전 업로드 파일 삭제 실패 (잠금 가능): {old_path}")
                 SystemNotifier.warning(f"이전 파일 정리에 실패했습니다: {old_path}")
-
-        try:
-            if cached_path is not None:
-                tmp_path = cached_path
-                logger.info(f"[UPLOAD] 동일 파일 재사용 (dedup): {tmp_path}")
-            else:
-                tmp_path = os.path.join(temp_dir, f"upload_{uploaded_hash}.pdf")
-                if not os.path.exists(tmp_path):
-                    with open(tmp_path, "wb") as f:
-                        f.write(file_bytes)
-
-            SessionManager.set("pdf_file_path", tmp_path, session_id=sid)
-            SessionManager.set("new_file_uploaded", True, session_id=sid)
-            SystemNotifier.success(f"Document uploaded: {uploaded_file.name}")
-        except Exception as e:
-            SystemNotifier.error("Error while saving the file", details=str(e))
     else:
         SystemNotifier.success(f"'{uploaded_file.name}' was already uploaded.")
 
@@ -633,6 +726,14 @@ def _handle_pending_tasks() -> None:
             logger.error("[MAIN] 백그라운드 디스패치 실패 (%s): %s", kind, exc)
             if kind == "rebuild":
                 SessionManager.set("needs_rag_rebuild", True, current_sid)
+                from core.build_state import fail_build, is_terminal
+
+                failed = SessionManager.get_build_state(session_id=current_sid)
+                if failed is not None and not is_terminal(failed.phase):
+                    message = f"Background task dispatch failed: {exc}"
+                    SessionManager.finalize_build_state(
+                        fail_build(failed, message), session_id=current_sid
+                    )
             elif kind == "qa_update":
                 SessionManager.set("needs_qa_chain_update", True, current_sid)
             SessionManager.set("is_building_rag", False, current_sid)
@@ -641,6 +742,7 @@ def _handle_pending_tasks() -> None:
                 f"Background task dispatch failed: {exc}",
                 current_sid,
             )
+            _BUILD_RERUN_LAST.pop(current_sid, None)
 
     if SessionManager.get(
         "new_file_uploaded", False, current_sid
@@ -651,6 +753,7 @@ def _handle_pending_tasks() -> None:
         current_file_name = SessionManager.get(
             "last_uploaded_file_name", None, current_sid
         )
+        current_file_hash = str(SessionManager.get("file_hash", "", current_sid) or "")
         current_embedding_model = (
             SessionManager.get("last_selected_embedding_model", None, current_sid)
             or DEFAULT_EMBEDDING_MODEL
@@ -660,7 +763,7 @@ def _handle_pending_tasks() -> None:
         if SessionManager.get_build_state(session_id=current_sid) is None:
             SessionManager.init_build_state(
                 str(current_file_name or "document.pdf"),
-                str(SessionManager.get("file_hash", "", current_sid) or ""),
+                current_file_hash,
                 session_id=current_sid,
             )
         SessionManager.set("is_building_rag", True, current_sid)
@@ -675,6 +778,7 @@ def _handle_pending_tasks() -> None:
                 current_file_path,
                 current_file_name,
                 current_embedding_model,
+                expected_file_hash=current_file_hash,
             ),
         )
         # [UX-FIRST-PAGE] 신규 파일 업로드 직후 st.rerun()을 호출하지 않는다.
@@ -698,6 +802,7 @@ def _handle_pending_tasks() -> None:
         current_file_name = SessionManager.get(
             "last_uploaded_file_name", None, current_sid
         )
+        current_file_hash = str(SessionManager.get("file_hash", "", current_sid) or "")
         current_embedding_model = SessionManager.get(
             "last_selected_embedding_model", None, current_sid
         )
@@ -706,7 +811,7 @@ def _handle_pending_tasks() -> None:
         if current_file_name:
             SessionManager.init_build_state(
                 str(current_file_name),
-                str(SessionManager.get("file_hash", "", current_sid) or ""),
+                current_file_hash,
                 session_id=current_sid,
             )
 
@@ -717,6 +822,7 @@ def _handle_pending_tasks() -> None:
                 current_file_path,
                 current_file_name,
                 current_embedding_model,
+                expected_file_hash=current_file_hash,
             ),
         )
         needs_rerun = True
@@ -805,7 +911,8 @@ _BUILD_RERUN_LAST: dict[str, tuple[float, str]] = {}
 
 def _request_build_progress_rerun(session_id: str, phase_name: str) -> None:
     """위상 변경 시 즉각 반응하고, 동일 위상 내 세부 진행률은 2초 주기로 부드럽게 전파합니다.
-    단, 업로드 직후 preparing -> extracting 조기 전이는 첫 페이지 페인트를 위해 0.8초간 억제합니다."""
+    단, 업로드 직후 첫 페인트 보호 윈도우(0.8s) 동안에는 모든 비-terminal 위상 전이를
+    억제하여 브라우저가 좌측 1페이지를 먼저 그릴 시간을 보장합니다."""
     from core.build_state import BuildPhase, is_terminal
     from core.session import SessionManager
 
@@ -822,11 +929,12 @@ def _request_build_progress_rerun(session_id: str, phase_name: str) -> None:
     now = time.monotonic()
     last = _BUILD_RERUN_LAST.get(session_id)
 
-    # [UX-FIRST-PAGE] 초기 preparing -> extracting 위상 전이는 첫 페이지 페인트 보호 윈도우(0.8s) 내에서 억제
+    # [UX-FIRST-PAGE] 업로드 직후 첫 페인트 보호 윈도우(0.8s) 내에서는 어떤
+    # 비-terminal 위상 전이도 rerun을 유발하지 않는다. 마커는 갱신하지 않아
+    # 윈도우 시작 시각이 고정되며, 윈도우가 끝난 뒤 첫 이벤트가 패널을 갱신한다.
     if (
         last is not None
         and last[1] == "preparing"
-        and phase_name == "extracting"
         and (now - last[0] < _INITIAL_PAINT_WINDOW_S)
     ):
         return
@@ -852,7 +960,12 @@ def _request_build_progress_rerun(session_id: str, phase_name: str) -> None:
 
 
 async def _bg_rebuild_task(
-    session_id: str, file_path: str, file_name: str, embedder_name: str
+    session_id: str,
+    file_path: str,
+    file_name: str,
+    embedder_name: str,
+    *,
+    expected_file_hash: str | None = None,
 ):
     """
     [Background Task] 업로드된 파일과 선택된 모델을 사용하여 RAG 파이프라인을 비동기로 재구축합니다.
@@ -870,6 +983,26 @@ async def _bg_rebuild_task(
     from core.session import SessionManager
 
     SessionManager.set_session_id(session_id)
+    worker_file_hash = str(
+        expected_file_hash
+        if expected_file_hash is not None
+        else SessionManager.get("file_hash", "", session_id) or ""
+    )
+
+    # A newer upload may have reset/replaced the build state before this
+    # worker body runs. Never touch flags/state in that case.
+    _initial_state = SessionManager.get_build_state(session_id=session_id)
+    if expected_file_hash is not None and (
+        _initial_state is None or _initial_state.file_hash != expected_file_hash
+    ):
+        logger.info(
+            "[MAIN] stale build worker ignored (session=%s expected=%s current=%s)",
+            session_id,
+            expected_file_hash,
+            None if _initial_state is None else _initial_state.file_hash,
+        )
+        return
+
     SessionManager.set("rebuild_error", None, session_id=session_id)
     SessionManager.set("rebuild_start_time", time.time(), session_id=session_id)
     # 단일 상태 객체 초기화 (3B: 평탄 레거시 이중기록 폐지).
@@ -879,16 +1012,29 @@ async def _bg_rebuild_task(
     if (
         _existing is None
         or _existing.file_name != file_name
+        or _existing.file_hash != worker_file_hash
         or is_terminal(_existing.phase)
     ):
         SessionManager.init_build_state(
             file_name,
-            str(SessionManager.get("file_hash", "", session_id) or ""),
+            worker_file_hash,
             session_id=session_id,
         )
     else:
         SessionManager.set("is_building_rag", True, session_id=session_id)
         SessionManager.set("rebuild_cancelled", False, session_id=session_id)
+
+    _started_state = SessionManager.get_build_state(session_id=session_id)
+    build_token = _started_state.started_at if _started_state is not None else None
+
+    def _is_current_build() -> bool:
+        """True only while this worker's BuildState is still the session's own."""
+        current = SessionManager.get_build_state(session_id=session_id)
+        if current is None or build_token is None:
+            return False
+        return (
+            current.started_at == build_token and current.file_hash == worker_file_hash
+        )
 
     # 타임라인에 분석 시작 메시지 추가 (하나의 메시지를 업데이트)
     # on_file_upload가 만든 자리표시자(msg_id=build_{session_id})를 재사용하여
@@ -913,6 +1059,13 @@ async def _bg_rebuild_task(
         _ = (pct, msg, detail)
 
     def _report_event(event: BuildEvent) -> None:
+        if not _is_current_build():
+            logger.debug(
+                "[MAIN] stale build event ignored (session=%s phase=%s)",
+                session_id,
+                event.phase.value,
+            )
+            return
         SessionManager.update_build_state(
             event, session_id=session_id, status_text=event.status or None
         )
@@ -925,6 +1078,8 @@ async def _bg_rebuild_task(
             _request_build_progress_rerun(session_id, event.phase.value)
 
     def _finalize_cancelled(reason: str) -> None:
+        if not _is_current_build():
+            return
         build = SessionManager.get_build_state(session_id=session_id)
         if build is not None:
             SessionManager.finalize_build_state(
@@ -975,6 +1130,12 @@ async def _bg_rebuild_task(
             on_event=_report_event,
         )
 
+        if not _is_current_build():
+            logger.info(
+                "[MAIN] stale build completion ignored (session=%s)", session_id
+            )
+            return
+
         done_build = SessionManager.get_build_state(session_id=session_id)
         if done_build is not None:
             SessionManager.finalize_build_state(
@@ -1013,6 +1174,9 @@ async def _bg_rebuild_task(
         _finalize_cancelled("async task cancelled")
     except Exception as e:
         logger.error(f"Background RAG rebuild error: {e}", exc_info=True)
+        if not _is_current_build():
+            logger.info("[MAIN] stale build error ignored (session=%s)", session_id)
+            return
         error_msg = "문서 분석 중 오류가 발생했습니다. 파일 상태를 확인하신 후 다시 업로드해 주세요."
         failed = SessionManager.get_build_state(session_id=session_id)
         if failed is not None:
@@ -1038,8 +1202,12 @@ async def _bg_rebuild_task(
             session_id=session_id,
         )
     finally:
-        SessionManager.set("is_building_rag", False, session_id=session_id)
-        _BUILD_RERUN_LAST.pop(session_id, None)
+        # Only the worker that still owns the current BuildState may clear the
+        # shared build flag / throttle marker. A stale worker must not unfreeze
+        # or re-render the newer build.
+        if _is_current_build():
+            SessionManager.set("is_building_rag", False, session_id=session_id)
+            _BUILD_RERUN_LAST.pop(session_id, None)
 
 
 def _swap_llm_core(session_id: str) -> None:

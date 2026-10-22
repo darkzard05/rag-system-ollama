@@ -3,22 +3,22 @@
 from __future__ import annotations
 
 import io
-import os
 import sys
 import tempfile
 from pathlib import Path
 from unittest.mock import patch
 
-import pytest
 import pymupdf
+import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
 
 import src.main as main_module
+
+import ui.components.viewer as viewer_module
 from core.build_state import BuildPhase
 from core.session import SessionManager
 from ui.components.doc_analysis.viewmodel import to_viewmodel
-import ui.components.viewer as viewer_module
 
 SID = "test_instant_simultaneous_sid"
 
@@ -36,8 +36,8 @@ class FakeSessionState(dict):
 
 def _create_sample_pdf() -> bytes:
     doc = pymupdf.open()
-    page = doc.new_page()
-    page.insert_text((72, 72), "INSTANT SIMULTANEOUS TEST")
+    doc.new_page().insert_text((72, 72), "INSTANT SIMULTANEOUS TEST - PAGE 1")
+    doc.new_page().insert_text((72, 72), "INSTANT SIMULTANEOUS TEST - PAGE 2")
     data = doc.tobytes()
     doc.close()
     return data
@@ -77,12 +77,14 @@ def test_upload_instantly_prepares_both_viewer_and_panel_for_frame1():
     assert preview["bytes"] != b""
 
     with patch("ui.components.viewer.st.session_state", {}):
-        viewer_state = viewer_module._resolve_pdf_state()
+        with patch("ui.components.viewer._get_pdf_page_bytes") as mock_page_bytes:
+            viewer_state = viewer_module._resolve_pdf_state()
+        mock_page_bytes.assert_not_called()
         assert viewer_state is not None, (
             "뷰어 상태 해석기가 즉시 유효한 상태를 반환해야 함"
         )
         assert viewer_state["current_page"] == 1
-        assert viewer_state["total_pages"] == 1
+        assert viewer_state["total_pages"] == 2
 
     # [검증 2: 우측 분석 패널 상태 - Frame 1 렌더 준비 완료 여부]
     build_state = SessionManager.get_build_state(session_id=SID)
@@ -92,13 +94,14 @@ def test_upload_instantly_prepares_both_viewer_and_panel_for_frame1():
     assert build_state.phase == BuildPhase.PREPARING
     assert SessionManager.get("is_building_rag", False, session_id=SID) is True
 
-    # [검증 3: 우측 분석 패널 뷰모델 - 0% 바 없이 정적 스텝퍼로 즉시 표출 가능한 형태인지 검증]
+    # [검증 3: 우측 분석 패널 뷰모델 - PREPARING은 compact, EXTRACTING부터 확장]
     vm = to_viewmodel(build_state)
     assert vm is not None
     assert vm.status_state == "running"
-    assert vm.expanded is True
+    assert vm.expanded is False, (
+        "PREPARING 단계에서는 패널이 접힌 채로 1페이지 뷰어의 선행성을 보장해야 함"
+    )
     assert vm.progress is None, (
         "PREPARING 단계에서는 0% 게이지가 숨겨져 뷰어와의 마운트 경쟁이 없어야 함"
     )
-    assert vm.stepper is not None
-    assert "○" in vm.stepper
+    assert vm.stepper is None, "PREPARING 단계에서는 stepper를 노출하지 않아야 함"
