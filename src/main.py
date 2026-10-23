@@ -235,20 +235,19 @@ def _warm_available_models() -> None:
 
 
 def _warm_heavy_imports() -> None:
-    """첫 업로드/뷰어 렌더 전에 무거운 모듈을 백그라운드에서 선행 로드한다.
+    """ScriptRunContext 없이 안전하게 선행 로드할 수 있는 무거운 모듈만 예열한다.
 
-    ``streamlit_pdf_viewer`` 는 첫 PDF 렌더에서 lazy import되며 cold 기준
-    ~1s가 걸린다. 업로드 콜백이 아닌 부트 스레드에서 미리 로드해 첫 프레임
-    critical path에서 제거한다. 실패는 무시한다(첫 사용 시 재시도).
+    ``streamlit_pdf_viewer`` 는 모듈 임포트 시점에 ``declare_component`` 를
+    호출한다. Streamlit 은 ScriptRunContext 가 없는 스레드에서는 컴포넌트
+    등록을 건너뛰므로, 백그라운드 스레드에서 먼저 임포트하면 모듈만
+    ``sys.modules`` 에 캐시되고 컴포넌트는 미등록 상태로 남는다. 이후 script
+    스레드의 lazy import 는 캐시를 재사용해 등록을 다시 시도하지 않으므로
+    뷰어 iframe 이 404 가 된다. 따라서 이 함수에서 임포트하면 안 된다.
     """
     try:
         import pymupdf  # noqa: F401
     except Exception as exc:  # noqa: BLE001 - best-effort warmup
         logger.debug("[WARMUP] pymupdf import skipped: %s", exc)
-    try:
-        import streamlit_pdf_viewer  # noqa: F401
-    except Exception as exc:  # noqa: BLE001 - best-effort warmup
-        logger.debug("[WARMUP] streamlit_pdf_viewer import skipped: %s", exc)
 
 
 # 프로세스 시작 직후(import 직후) 백그라운드 웜업 — UI 첫 렌더 블로킹 제거.
