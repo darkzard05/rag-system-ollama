@@ -344,7 +344,8 @@ class PipelineBuilder:
                     )
                     return f"'{file_name}' 캐시 데이터 로드 완료", True
 
-        # 2. 신규 문서 로드
+        # 2. 신규 문서 로드 (고비용 추출 진입 전 취소 확인)
+        _check()
         SessionManager.add_status_log(
             f"'{file_name}' 텍스트 추출 중...", session_id=self.session_id
         )
@@ -372,6 +373,9 @@ class PipelineBuilder:
             raise EmptyPDFError()
 
         _report(BuildPhase.EXTRACTING, 40, "Text extraction complete")
+
+        # [추가] 텍스트 추출 직후 및 고비용 청킹/임베딩 진입 전 취소 확인
+        _check()
 
         # 3. 청크 분할 (Async)
         SessionManager.add_status_log(

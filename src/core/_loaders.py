@@ -352,25 +352,40 @@ def _models_cache_ttl(models: list[str]) -> float:
 
 
 def _fetch_available_models_cached() -> list[str]:
-    """Ollama 모델 목록을 TTL 캐시와 함께 반환합니다. (UI 종속성 제거)"""
+    """Ollama 모델 목록을 non-blocking TTL 캐시로 반환합니다.
+
+    Stale-While-Revalidate: 캐시가 만료돼도 다른 스레드가 이미 갱신 중이면
+    락을 기다리지 않고 이전(만료된) 값을 즉시 반환합니다. 이로써 Streamlit
+    메인 렌더 스레드가 최대 5s의 동기 ``ollama.Client.list()`` 호출에
+    블로킹되지 않습니다.
+    """
     global _models_cache
 
     cached = _models_cache
-    if cached is not None and time.monotonic() - cached[0] < _models_cache_ttl(
-        cached[1]
-    ):
+    now = time.monotonic()
+    if cached is not None and (now - cached[0] < _models_cache_ttl(cached[1])):
         return list(cached[1])
 
-    with _models_cache_lock:
+    # 락이 잡혀 있으면(= 다른 스레드가 갱신 중) 오래된 캐시를 즉시 반환한다.
+    if not _models_cache_lock.acquire(blocking=False):
+        if cached is not None:
+            return list(cached[1])
+        from common.config import DEFAULT_OLLAMA_MODEL
+
+        return [DEFAULT_OLLAMA_MODEL]
+
+    try:
+        # 락 획득 후 더블 체크 (다른 스레드가 먼저 갱신했을 수 있음)
         cached = _models_cache
-        if cached is not None and time.monotonic() - cached[0] < _models_cache_ttl(
-            cached[1]
-        ):
+        now = time.monotonic()
+        if cached is not None and (now - cached[0] < _models_cache_ttl(cached[1])):
             return list(cached[1])
 
         models = _fetch_available_models()
         _models_cache = (time.monotonic(), models)
         return list(models)
+    finally:
+        _models_cache_lock.release()
 
 
 def clear_available_models_cache() -> None:
