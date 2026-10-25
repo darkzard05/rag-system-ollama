@@ -63,20 +63,16 @@ def render_document_panel(sid: str) -> None:
             if error:
                 ui_error(str(error))
         if "cancel" in vm.actions:
-            if bool(SessionManager.get("rebuild_cancelled", False, sid)):
-                status_container.update(
-                    label=vm.label,
-                    expanded=vm.expanded,
-                    state=vm.status_state,  # type: ignore[arg-type]
+            # Once cancellation is requested, hide the CTA and let the
+            # post-block update below settle the final visual state.
+            if not bool(SessionManager.get("rebuild_cancelled", False, sid)):
+                st.button(
+                    t("action_cancel_build"),
+                    key=cancel_rebuild_key(sid, attempt),
+                    on_click=on_cancel,
+                    args=(sid,),
+                    width="stretch",
                 )
-                return
-            st.button(
-                t("action_cancel_build"),
-                key=cancel_rebuild_key(sid, attempt),
-                on_click=on_cancel,
-                args=(sid,),
-                width="stretch",
-            )
         elif "retry" in vm.actions:
             # CANCELLED shows the retry CTA directly (2B); ERROR shows it
             # below the friendly error message.
@@ -89,13 +85,16 @@ def render_document_panel(sid: str) -> None:
                 help=t("action_retry_build_help"),
                 width="stretch",
             )
-        # st.status __exit__ defaults to state="complete" + expanded=False;
-        # re-assert the viewmodel state so running/error panels stay expanded.
-        status_container.update(
-            label=vm.label,
-            expanded=vm.expanded,
-            state=vm.status_state,  # type: ignore[arg-type]
-        )
+
+    # st.status.__exit__ force-transitions a running container to
+    # state="complete" + expanded=False on block exit, which strobes the
+    # panel and swallows the cancel click. Re-assert the viewmodel state
+    # only after __exit__ has run so running/error panels stay expanded.
+    status_container.update(
+        label=vm.label,
+        expanded=vm.expanded,
+        state=vm.status_state,  # type: ignore[arg-type]
+    )
 
 
 def should_mount_fragment(sid: str) -> bool:
