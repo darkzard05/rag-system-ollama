@@ -238,19 +238,21 @@ def _resolve_pdf_state() -> dict | None:
     )
 
     if not total_pages:
-        if has_valid_preview:
+        try:
+            # _get_pdf_total_pages는 @safe_cache_data로 캐싱되어 0.5ms 미만 소요
+            total_pages = _get_pdf_total_pages(pdf_path)
+            if total_pages:
+                SessionManager.set("total_pages", total_pages, session_id=sid)
+        except Exception as e:
+            logger.error(f"PDF 페이지 수 조회 중 오류: {e}", exc_info=True)
+            total_pages = None
+
+        # 실제 파일로부터 페이지 수 조회가 불가능한 극단적 경우에만 1페이지 미리보기로 폴백
+        if not total_pages and has_valid_preview:
             total_pages = 1
             logger.info(
-                "[PDF] 1페이지 미리보기가 유효하여 디스크 I/O 없이 1페이지 우선 렌더링 상태로 즉시 확정"
+                "[PDF] total_pages 산출 지연/실패로 1페이지 미리보기를 통해 임시 확정"
             )
-        else:
-            try:
-                total_pages = _get_pdf_total_pages(pdf_path)
-                if total_pages:
-                    SessionManager.set("total_pages", total_pages, session_id=sid)
-            except Exception as e:
-                logger.error(f"PDF 페이지 수 조회 중 오류: {e}", exc_info=True)
-                total_pages = None
 
     if not total_pages:
         SessionManager.delete(PDF_TARGET_PAGE_KEY, session_id=sid)
