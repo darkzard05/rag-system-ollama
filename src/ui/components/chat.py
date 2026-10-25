@@ -572,12 +572,19 @@ def render_chat_messages_area() -> None:
     # 입력 placeholder 가드(_resolve_chat_input_state)용으로만 유지한다.
     # 유휴 폴링 금지, run_every 없음(4A). 진행 중 갱신은 빌드 워커의
     # 상태 전파 rerun으로 전달된다.
-    from ui.components.doc_analysis.panel import should_mount_fragment
+    has_uploaded_file = bool(
+        SessionManager.get("last_uploaded_file_name", "", current_sid)
+        or SessionManager.get("file_hash", "", current_sid)
+    )
 
-    if should_mount_fragment(current_sid):
-        _render_build_progress_fragment(current_sid)
-    else:
-        _render_build_progress_block(current_sid)
+    # [최적화] 문서가 전혀 없는 초기 상태에서는 빌드 상태 블록/프래그먼트를 평가하지 않고 건너뜀
+    if has_uploaded_file:
+        from ui.components.doc_analysis.panel import should_mount_fragment
+
+        if should_mount_fragment(current_sid):
+            _render_build_progress_fragment(current_sid)
+        else:
+            _render_build_progress_block(current_sid)
 
     # 통합 타임라인 렌더. 스트리밍 메시지도 단일 pass로 직접 렌더하므로
     # 익스팬더 위치가 안정적으로 유지된다.

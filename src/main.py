@@ -359,7 +359,8 @@ async def _warmup_models() -> None:
     AsyncWorker 전용 루프에서 비차단으로 실행된다. Ollama 미연결 등 실패 시에도
     UI 시작은 계속되어야 하므로 호출부에서 비치명적으로 감싼다.
     """
-    await asyncio.sleep(1.0)
+    # [최적화] 첫 화면 렌더링 및 가이드 패널 페인트가 완료될 때까지 프리웜 시작 유예 (1.0s -> 2.5s)
+    await asyncio.sleep(2.5)
     from core.session import SessionManager
 
     if (
@@ -898,7 +899,9 @@ def main() -> None:
     # 백그라운드에서 목록을 갱신한다. 첫 프레임 렌더가 소켓 I/O에 묶이지 않는다.
     if "available_models_list" not in st.session_state:
         _t_models = time.perf_counter()
-        st.session_state.available_models_list = _load_available_models()
+        st.session_state.available_models_list = _load_available_models(
+            non_blocking_fallback=True
+        )
         logger.debug(
             "[PERF] main(): _load_available_models took %.3fs",
             time.perf_counter() - _t_models,
@@ -908,7 +911,10 @@ def main() -> None:
         SessionManager.set("is_generating_answer", False)
 
     available_models = st.session_state.available_models_list
-    ollama_reachable = _is_ollama_reachable()
+    # [최적화] 중복 호출 없이 이미 로드된 available_models 리스트로 reachable 여부 O(1) 판정
+    ollama_reachable = bool(available_models) and (
+        MSG_ERROR_OLLAMA_NOT_RUNNING not in available_models
+    )
 
     if not ollama_reachable:
         st.error(t("error_ollama_not_running"))
