@@ -187,7 +187,9 @@ def _finalize_pdf_side_effects(sid: str, msg_id: str) -> None:
     citations: list[dict[str, Any]] = []
     has_error = False
     with SessionManager._acquire_lock(sid):
-        state = SessionManager._get_state(sid)
+        state = SessionManager._fallback_sessions.get(sid)
+        if state is None:
+            return
         for msg in state["messages"]:
             if msg.get("msg_id") == msg_id:
                 has_error = bool(msg.get("error"))

@@ -141,6 +141,7 @@ class SessionManager:
 
     _fallback_sessions: dict[str, dict[str, Any]] = {}
     _session_locks: dict[str, threading.Lock] = {}
+    _deleted_sessions: dict[str, float] = {}
     _map_lock = threading.Lock()
 
     # 생성 중인 세션을 퇴출 대상에서 제외할 최대 시간(초).
@@ -167,6 +168,7 @@ class SessionManager:
         with cls._map_lock:
             cls._fallback_sessions.clear()
             cls._session_locks.clear()
+            cls._deleted_sessions.clear()
         # Detach any UI-sync adapter installed via set_ui_sync (e.g. by main.py
         # at import time). Leaving it attached makes `get()` prefer the live UI
         # store over the global fallback, which breaks test isolation and any
@@ -307,6 +309,8 @@ class SessionManager:
             cls.set_session_id(session_id)
 
         sid = session_id or cls.get_session_id()
+        with cls._map_lock:
+            cls._deleted_sessions.pop(sid, None)
         cls._get_state(sid)
         logger.debug(f"[SESSION] 세션 초기화 완료: {sid}")
 
@@ -471,7 +475,7 @@ class SessionManager:
         key: str,
         default: Any = None,
         session_id: str | None = None,
-        create: bool = True,
+        create: bool = False,
     ) -> Any:
         """세션 상태에서 값을 가져옵니다.
 
@@ -968,6 +972,7 @@ class SessionManager:
                 state[k] = None
 
         del cls._fallback_sessions[session_id]
+        cls._deleted_sessions[session_id] = time.time()
 
         if session_id in cls._session_locks:
             # 잡히지 않은 락만 제거. 스트리밍 스레드가 잡고 있는 락을
