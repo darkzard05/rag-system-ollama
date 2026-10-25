@@ -119,6 +119,21 @@ class UnifiedGradeRewriteResponse(BaseModel):
     )
 
 
+def _safe_rerank_score(doc: Document) -> float:
+    raw = (
+        doc.metadata.get("rerank_score")
+        if hasattr(doc, "metadata") and doc.metadata
+        else None
+    )
+    if raw is None:
+        return 0.0
+    try:
+        val = float(raw)
+        return 0.0 if (val != val) else val  # NaN 방어 (val != val is True for NaN)
+    except (TypeError, ValueError):
+        return 0.0
+
+
 async def grade_documents(
     state: GraphState, config: RunnableConfig, *, writer: StreamWriter
 ) -> dict[str, Any]:
@@ -231,9 +246,8 @@ async def grade_documents(
         logger.debug(f"[RAG] [GRADE] 메모 조회 실패, LLM 경로로 진행: {e}")
 
     # Short-circuit: 리랭킹 점수가 충분히 높으면 LLM 검증 생략
-    max_rerank_score = max(
-        (d.metadata.get("rerank_score", 0.0) for d in docs), default=0.0
-    )
+    scores_list = [_safe_rerank_score(d) for d in docs]
+    max_rerank_score = max(scores_list, default=0.0)
     # [R3b-02] rerank_score 스케일은 엔진에 따라 다르다 — FlashRank 시그모이드(실측 0.06~0.91)와
     # bi-encoder 코사인(실측 0.32~0.57). 활성 엔진에 따라 임계값을 분기한다.
     from core.async_reranker import get_active_rerank_engine
@@ -252,9 +266,7 @@ async def grade_documents(
     # Fail-closed: 코드 폴백도 config.yml(0.05)와 동일하게 유지한다.
     # 누락 시 0.03으로 약화되던 가드 약화 경로를 제거한다.
     min_top_gap = GRADING_CONFIG.get("min_top_gap_to_skip", 0.05)
-    sorted_scores = sorted(
-        (float(d.metadata.get("rerank_score", 0.0)) for d in docs), reverse=True
-    )
+    sorted_scores = sorted(scores_list, reverse=True)
     top_gap = sorted_scores[0] - sorted_scores[1] if len(sorted_scores) > 1 else 1.0
 
     # 1위가 임계값을 넘고 명확한 선두이거나, 상위 2개 문서가 모두 임계값 이상인

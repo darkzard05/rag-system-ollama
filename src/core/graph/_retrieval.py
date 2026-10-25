@@ -646,6 +646,16 @@ async def retrieve_and_rerank(
     return {"relevant_docs": merged_context_docs}
 
 
+def _safe_score(raw: Any) -> float:
+    if raw is None:
+        return 0.0
+    try:
+        val = float(raw)
+        return 0.0 if (val != val) else val
+    except (TypeError, ValueError):
+        return 0.0
+
+
 def _merge_adjacent_chunks(
     docs: list[Document], max_tokens: int = 1200
 ) -> list[Document]:
@@ -664,7 +674,7 @@ def _merge_adjacent_chunks(
         key = (next_m.get("source"), next_m.get("page"), next_m.get("current_section"))
         next_start, next_end = next_m.get("start_index"), next_m.get("end_index")
         next_idx = int(next_m.get("chunk_index", 0))
-        next_score = float(next_m.get("rerank_score", 0.0) or 0.0)
+        next_score = _safe_score(next_m.get("rerank_score"))
 
         merged = False
         for idx in group_map.get(key, []):
@@ -693,7 +703,7 @@ def _merge_adjacent_chunks(
                 curr_idx = int(curr_m.get("chunk_index", 0))
                 existing_doc.metadata["chunk_index"] = max(next_idx, curr_idx)
                 existing_doc.metadata["rerank_score"] = max(
-                    float(curr_m.get("rerank_score", 0.0) or 0.0), next_score
+                    _safe_score(curr_m.get("rerank_score")), next_score
                 )
 
                 merged_entries[idx] = (
