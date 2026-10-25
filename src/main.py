@@ -95,6 +95,10 @@ os.environ.setdefault("NUMEXPR_MAX_THREADS", str(_numexpr_threads))
 # 비동기 워커 초기화 (서버 인스턴스당 단일 이벤트 루프, nest_asyncio 대체)
 _async_worker = AsyncWorker()
 
+# 부팅 시각: VRAM 언로드 유예 판단에 사용한다 (프리웜과의 쓰래싱 방지).
+_APP_START_TIME = time.monotonic()
+_BOOT_VRAM_UNLOAD_GRACE_SECONDS = 120.0
+
 # current_page / is_generating_answer are initialized via DEFAULT_SESSION_STATE
 # and synced by UIBridge.sync_session(). pdf_target_page는 일회성 점프 토큰(dict
 # 또는 None)으로 DEFAULT_SESSION_STATE에 포함되지 않으므로 여기서 초기화한다.
@@ -102,10 +106,17 @@ if "pdf_target_page" not in st.session_state:
     st.session_state.pdf_target_page = None
 
 
-def _check_windows_integrity():
+def _check_windows_integrity(uptime_seconds: float | None = None):
     """
     [Background] Windows 환경의 라이브러리 충돌을 체크하고 주기적으로 세션을 정리합니다.
+
+    ``uptime_seconds`` 기동 후 경과 시간을 주입해 부팅 유예 기간을 검증할 수 있다.
     """
+    current_uptime = (
+        uptime_seconds
+        if uptime_seconds is not None
+        else (time.monotonic() - _APP_START_TIME)
+    )
     try:
         from core.session import SessionManager
 
@@ -114,8 +125,13 @@ def _check_windows_integrity():
         # 세션이 하나도 없으면 Ollama 상주 모델을 명시 언로드한다.
         # 시간당 sweep에서만 발화하므로 활성 사용자에게는 영향이 없다.
         # (기본 keep_alive=5m가 1차 방어, 여기는 확정 정리.)
+        # [부팅 유예] 기동 직후에는 백그라운드 프리웜이 모델을 VRAM에 올리는
+        # 중이므로, 언로드를 보내면 로드/언로드 쓰래싱이 발생한다.
         try:
-            if SessionManager.get_stats().get("active_sessions", 0) == 0:
+            if (
+                current_uptime >= _BOOT_VRAM_UNLOAD_GRACE_SECONDS
+                and SessionManager.get_stats().get("active_sessions", 0) == 0
+            ):
                 from common.async_worker import AsyncWorker
                 from core.model_loader import ModelManager
 
@@ -165,9 +181,14 @@ def _start_global_background_worker():
 
     def maintenance_loop():
         logger.info("[SYSTEM] 전역 백그라운드 워커 시작됨")
+        # [부팅 유예] 첫 sweep 전에 프리웜이 끝날 시간을 준다. Worker 시작
+        # 시각을 고정해 Streamlit rerun으로 모듈 전역이 재할당돼도 유예가
+        # 리셋되지 않게 한다.
+        started_at = time.monotonic()
+        time.sleep(60)
         while True:
             with contextlib.suppress(Exception):
-                _check_windows_integrity()
+                _check_windows_integrity(uptime_seconds=time.monotonic() - started_at)
             # 1시간(3600초) 대기 후 반복
             time.sleep(3600)
 
@@ -178,7 +199,7 @@ def _start_global_background_worker():
     return thread
 
 
-def _get_available_models_cached():
+def _get_available_models_cached(non_blocking_fallback: bool = False):
     """Ollama 모델 목록을 프로세스 전역 TTL 캐시로 조회합니다.
 
     캐시의 단일 진원은 ``core._loaders._fetch_available_models_cached`` 의
@@ -187,24 +208,31 @@ def _get_available_models_cached():
     다시 발생하지 않는다. 실패는 짧게만 캐시해 Ollama가 늦게 기동해도 UI가
     오류 상태로 오래 고정되지 않는다.
 
+    ``non_blocking_fallback=True`` 는 UI 메인 스레드용으로, 캐시 미스 시
+    동기 HTTP 호출 없이 백그라운드 갱신만 예약하고 기본 모델을 즉시 반환한다.
+
     Caveat: Ollama CLI에서 신규 모델을 pull한 경우 사이드바의 "모델 새로고침"
     버튼(``on_refresh_models`` → ``clear_available_models_cache``)으로
     명시적으로 갱신해야 한다.
     """
     from core.model_loader import get_available_models
 
-    return get_available_models()
+    return get_available_models(non_blocking_fallback=non_blocking_fallback)
 
 
-def _load_available_models() -> list[str]:
+def _load_available_models(non_blocking_fallback: bool = True) -> list[str]:
     """Ollama 모델 목록을 동적으로 조회하여 반환합니다.
 
+    기본값은 UI 메인 스레드를 블로킹하지 않는 fast path다. 명시적 새로고침처럼
+    최신 값이 즉시 필요한 경로만 ``non_blocking_fallback=False`` 로 호출한다.
     get_available_models는 Ollama 미연결 시 기본 모델과 오류 문자열을 함께
     반환할 수 있으므로, UI에 노출되면 안 되는 오류 문자열은 걸러냅니다.
     조회가 실패(타임아웃/비정상 종료 등)하면 안전하게 기본 모델로 폴백합니다.
     """
     try:
-        models = _get_available_models_cached()
+        models = _get_available_models_cached(
+            non_blocking_fallback=non_blocking_fallback
+        )
     except Exception:
         logger.exception("[SYSTEM] Ollama 모델 목록 조회 실패, 기본 모델로 대체")
         return [DEFAULT_OLLAMA_MODEL]
@@ -216,11 +244,11 @@ def _load_available_models() -> list[str]:
 def _is_ollama_reachable() -> bool:
     """Return True if the cached model list indicates Ollama is reachable.
 
-    Reads the raw cached result from ``_get_available_models_cached`` (no extra
-    blocking call) and checks for the sentinel error string or an empty list.
+    Reads the cached result through the non-blocking path (no extra blocking
+    call) and checks for the sentinel error string or an empty list.
     """
     try:
-        models = _get_available_models_cached()
+        models = _get_available_models_cached(non_blocking_fallback=True)
     except Exception:
         return False
     return bool(models) and MSG_ERROR_OLLAMA_NOT_RUNNING not in models
@@ -235,7 +263,7 @@ def _warm_available_models() -> None:
     첫 렌더의 기존 폴백/스피너가 보완.
     """
     try:
-        _get_available_models_cached()
+        _get_available_models_cached(non_blocking_fallback=True)
     except Exception:  # noqa: BLE001 - best-effort warmup; first render handles failure
         logger.debug("[SYSTEM] model-list warmup skipped (Ollama not ready)")
 
@@ -668,7 +696,10 @@ def on_refresh_models() -> None:
 
     # 코어 프로세스 전역 TTL 캐시를 무효화해야 신규 pull 모델이 보인다.
     clear_available_models_cache()
-    st.session_state.available_models_list = _load_available_models()
+    # 명시적 새로고침은 최신 값이 즉시 필요하므로 동기 조회를 허용한다.
+    st.session_state.available_models_list = _load_available_models(
+        non_blocking_fallback=False
+    )
     # 버튼 위젯 interaction 자체가 리런을 유발하므로 명시 rerun 금지 (중복 리런 방지).
 
 
@@ -863,13 +894,11 @@ def main() -> None:
     _ensure_ui_globals()  # heavy session init AFTER css is already streamed
     logger.debug("[PERF] main(): css+globals took %.3fs", time.perf_counter() - _t_main)
 
-    # 부트 스플래시 제거: 스플래시는 실제 지연(모듈 스코프 웜업·첫 쿼리 로드)을
-    # 커버하지 못하는 가짜 로더였다. 유일한 실제 블로킹(_load_available_models,
-    # Ollama list 최대 5s)에만 정직한 스피너를 표시한다.
+    # [FIX] 동기 블로킹 스피너 제거: 캐시 미스여도 기본 모델을 즉시 바인딩하고
+    # 백그라운드에서 목록을 갱신한다. 첫 프레임 렌더가 소켓 I/O에 묶이지 않는다.
     if "available_models_list" not in st.session_state:
         _t_models = time.perf_counter()
-        with st.spinner(t("spinner_loading_models")):
-            st.session_state.available_models_list = _load_available_models()
+        st.session_state.available_models_list = _load_available_models()
         logger.debug(
             "[PERF] main(): _load_available_models took %.3fs",
             time.perf_counter() - _t_models,

@@ -8,6 +8,7 @@ import contextlib
 import logging
 import os
 import re
+import threading
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
@@ -27,18 +28,20 @@ from services.monitoring.performance_monitor import (
 
 logger = logging.getLogger(__name__)
 
+_OCR_SILENCED = False
+_OCR_SILENCE_LOCK = threading.Lock()
+
 
 def _silence_pymupdf_messages() -> None:
-    """PyMuPDF/pymupdf4llm 콘솔 스팸을 logging 경로로 전환한다 (추출 무관).
+    """PyMuPDF 콘솔 메시지를 logging 경로로 전환한다 (경량, OCR 임포트 없음).
 
-    - ``=== Document parser messages ===`` + ``Using RapidOCR ...`` 줄은
-      ``pymupdf.message()`` 경유이므로 ``set_messages(text="logging:...")`` 로
-      ``pymupdf`` 로거(DEBUG)로 전환한다. ``logging_config`` 가 해당 로거를
-      WARNING으로 억제하므로 기본 콘솔에서 사라진다.
-    - ``rapidocr_api using backend`` 1줄은 OCR 서브모듈 import 시점 print라
-      모듈 import 시점에 stdout 억제 하에 선행 import한다 (import 시점은
-      단일 스레드이므로 ``redirect_stdout`` 이 안전하다).
-    - 모두 실패 흡수: 노이즈 억제가 추출을 깨뜨리면 안 된다.
+    ``=== Document parser messages ===`` + ``Using RapidOCR ...`` 줄은
+    ``pymupdf.message()`` 경유이므로 ``set_messages(text="logging:...")`` 로
+    ``pymupdf`` 로거(DEBUG)로 전환한다. ``logging_config`` 가 해당 로거를
+    WARNING으로 억제하므로 기본 콘솔에서 사라진다.
+
+    무거운 OCR 서브패키지 import는 여기서 수행하지 않는다 (부팅 지연 방지).
+    실제 PDF 파싱 진입 시 ``_ensure_ocr_silenced`` 가 1회 담당한다.
     """
     try:
         import pymupdf
@@ -46,23 +49,39 @@ def _silence_pymupdf_messages() -> None:
         pymupdf.set_messages(text="logging:level=10,name=pymupdf")
     except Exception:
         pass
-    try:
-        import contextlib
-        import importlib
-        import io
-
-        with contextlib.redirect_stdout(io.StringIO()):
-            for _mod in (
-                "pymupdf4llm.ocr.rapidocr_api",
-                "pymupdf4llm.ocr.paddleocr_api",
-            ):
-                with contextlib.suppress(Exception):
-                    importlib.import_module(_mod)
-    except Exception:
-        pass
 
 
 _silence_pymupdf_messages()
+
+
+def _ensure_ocr_silenced() -> None:
+    """실제 PDF 파싱 진입 시점에만 OCR 서브모듈을 1회 선행 import한다.
+
+    ``rapidocr_api using backend`` 1줄은 OCR 서브모듈 import 시점 print라
+    stdout 억제 하에 선행 import해 노이즈를 막는다. 부팅 시점이 아니라 추출
+    호출 시점에 실행되므로 첫 화면 렌더가 OCR/ONNX 로드에 블로킹되지 않는다.
+    """
+    global _OCR_SILENCED
+
+    if _OCR_SILENCED:
+        return
+    with _OCR_SILENCE_LOCK:
+        if _OCR_SILENCED:
+            return
+        try:
+            import importlib
+            import io
+
+            with contextlib.redirect_stdout(io.StringIO()):
+                for _mod in (
+                    "pymupdf4llm.ocr.rapidocr_api",
+                    "pymupdf4llm.ocr.paddleocr_api",
+                ):
+                    with contextlib.suppress(Exception):
+                        importlib.import_module(_mod)
+        except Exception:
+            pass
+        _OCR_SILENCED = True
 
 
 def compute_file_hash(file_path: str, data: bytes | None = None) -> str:
@@ -166,6 +185,7 @@ def _extract_markdown_range(
     ``pages``는 0-based 페이지 번호 리스트. 실패 시 예외를 그대로 전달해
     호출부가 해당 범위를 C-Engine 단건 추출로 폴백한다.
     """
+    _ensure_ocr_silenced()
     import pymupdf4llm
 
     with open_pdf_document(file_path) as doc:
@@ -310,6 +330,7 @@ def _extract_markdown_via_thread(
 
     fitz Document는 스레드 간 공유가 안전하지 않으므로 파일 경로로 자체 열어 사용합니다.
     """
+    _ensure_ocr_silenced()
     import pymupdf4llm
 
     def _extract() -> list:

@@ -130,8 +130,6 @@ UI_STRINGS: dict[str, dict[str, str]] = {
         "sidebar_language_help": "Switch the UI language.",
         "nav_next": "Next ▶",  # Ollama error
         "error_ollama_not_running": MSG_ERROR_OLLAMA_NOT_RUNNING,
-        # Spinner
-        "spinner_loading_models": "Loading available models…",
         # Expanders
         "expander_sources_reasoning": "Sources & Reasoning",
         "expander_sources_only": "Cited Sources",
@@ -256,7 +254,6 @@ UI_STRINGS: dict[str, dict[str, str]] = {
         "sidebar_language_help": "UI 언어를 전환합니다.",
         "nav_next": "다음 ▶",
         "error_ollama_not_running": MSG_ERROR_OLLAMA_NOT_RUNNING,
-        "spinner_loading_models": "사용 가능한 모델 목록을 불러오는 중...",
         # Expanders
         "expander_sources_reasoning": "출처 및 추론 과정",
         "expander_sources_only": "인용 출처",

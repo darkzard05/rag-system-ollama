@@ -345,19 +345,50 @@ _MODELS_CACHE_TTL_SECONDS = 300.0
 _MODELS_FAILURE_TTL_SECONDS = 15.0
 _models_cache: tuple[float, list[str]] | None = None
 _models_cache_lock = threading.Lock()
+_models_fetch_schedule_lock = threading.Lock()
+_models_fetching_event = threading.Event()
 
 
 def _models_cache_ttl(models: list[str]) -> float:
     return _MODELS_CACHE_TTL_SECONDS if models else _MODELS_FAILURE_TTL_SECONDS
 
 
-def _fetch_available_models_cached() -> list[str]:
-    """Ollama 모델 목록을 non-blocking TTL 캐시로 반환합니다.
+def _bg_fetch_models_task() -> None:
+    """백그라운드에서 모델 목록을 조회해 전역 TTL 캐시를 채웁니다."""
+    global _models_cache
 
-    Stale-While-Revalidate: 캐시가 만료돼도 다른 스레드가 이미 갱신 중이면
-    락을 기다리지 않고 이전(만료된) 값을 즉시 반환합니다. 이로써 Streamlit
-    메인 렌더 스레드가 최대 5s의 동기 ``ollama.Client.list()`` 호출에
-    블로킹되지 않습니다.
+    try:
+        models = _fetch_available_models()
+        _models_cache = (time.monotonic(), models)
+    finally:
+        _models_fetching_event.clear()
+
+
+def _schedule_background_models_fetch() -> None:
+    """진행 중인 조회가 없을 때만 단일 백그라운드 조회를 예약합니다."""
+    with _models_fetch_schedule_lock:
+        if _models_fetching_event.is_set():
+            return
+        _models_fetching_event.set()
+        threading.Thread(
+            target=_bg_fetch_models_task,
+            name="AsyncModelListFetcher",
+            daemon=True,
+        ).start()
+
+
+def _fetch_available_models_cached(
+    non_blocking_fallback: bool = False,
+) -> list[str]:
+    """Ollama 모델 목록을 TTL 캐시로 반환합니다.
+
+    ``non_blocking_fallback=True`` (UI 메인 스레드 경로)에서는 캐시 미스 시
+    ``ollama.Client.list()`` 를 직접 호출하지 않고 백그라운드 조회만 예약한 뒤
+    이전 캐시(또는 기본 모델)를 즉시 반환합니다. Streamlit 메인 렌더 스레드가
+    최대 5s의 동기 소켓 I/O에 블로킹되는 것을 막습니다.
+
+    ``non_blocking_fallback=False`` (CLI/테스트/명시적 새로고침)에서는 기존처럼
+    동기 조회로 최신 값을 반환합니다.
     """
     global _models_cache
 
@@ -366,15 +397,15 @@ def _fetch_available_models_cached() -> list[str]:
     if cached is not None and (now - cached[0] < _models_cache_ttl(cached[1])):
         return list(cached[1])
 
-    # 락이 잡혀 있으면(= 다른 스레드가 갱신 중) 오래된 캐시를 즉시 반환한다.
-    if not _models_cache_lock.acquire(blocking=False):
+    if non_blocking_fallback:
+        _schedule_background_models_fetch()
         if cached is not None:
             return list(cached[1])
         from common.config import DEFAULT_OLLAMA_MODEL
 
         return [DEFAULT_OLLAMA_MODEL]
 
-    try:
+    with _models_cache_lock:
         # 락 획득 후 더블 체크 (다른 스레드가 먼저 갱신했을 수 있음)
         cached = _models_cache
         now = time.monotonic()
@@ -384,8 +415,6 @@ def _fetch_available_models_cached() -> list[str]:
         models = _fetch_available_models()
         _models_cache = (time.monotonic(), models)
         return list(models)
-    finally:
-        _models_cache_lock.release()
 
 
 def clear_available_models_cache() -> None:
@@ -408,8 +437,8 @@ def _keep_alive_seconds() -> int:
     return 300
 
 
-def get_available_models() -> list[str]:
-    models = _fetch_available_models_cached()
+def get_available_models(non_blocking_fallback: bool = False) -> list[str]:
+    models = _fetch_available_models_cached(non_blocking_fallback=non_blocking_fallback)
     from common.config import DEFAULT_OLLAMA_MODEL
 
     return models or [DEFAULT_OLLAMA_MODEL, MSG_ERROR_OLLAMA_NOT_RUNNING]
