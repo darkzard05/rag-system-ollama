@@ -55,7 +55,6 @@ from typing import Any, Literal, cast
 
 import streamlit as st
 
-from cache.coord_cache import coord_cache
 from common.async_worker import AsyncWorker
 from common.config import (
     DEFAULT_EMBEDDING_MODEL,
@@ -326,8 +325,10 @@ def _cleanup_current_file():
 
 
 def _cleanup_coord_cache() -> None:
-    """프로세스 종료 시 좌표 캐시를 정리합니다."""
+    """프로세스 종료 시 좌표 캐시를 정리합니다 (지연 임포트로 부팅 지연 방지)."""
     with contextlib.suppress(Exception):
+        from cache.coord_cache import coord_cache
+
         asyncio.run(coord_cache.close())
 
 
@@ -354,21 +355,20 @@ SessionManager.set_ui_sync(StreamlitSessionSync())
 
 
 async def _warmup_models() -> None:
-    """[WARMUP] 시작 시 LLM+임베더 1회 프리웜 — 첫 쿼리 TTFT 제거.
-
-    AsyncWorker 전용 루프에서 비차단으로 실행된다. Ollama 미연결 등 실패 시에도
-    UI 시작은 계속되어야 하므로 호출부에서 비치명적으로 감싼다.
-    """
-    # [최적화] 첫 화면 렌더링 및 가이드 패널 페인트가 완료될 때까지 프리웜 시작 유예 (1.0s -> 2.5s)
-    await asyncio.sleep(2.5)
+    """사용자 상호작용 발생 시 즉각 양보하는 안전한 백그라운드 프리워밍."""
     from core.session import SessionManager
 
-    if (
-        SessionManager.get("new_file_uploaded")
-        or SessionManager.get("is_building_rag")
-        or SessionManager.get("pdf_file_path")
-    ):
-        return
+    # 2.5초 대기를 100ms 단위 폴링으로 분할하여 사용자 상호작용 즉시 감지
+    for _ in range(25):
+        await asyncio.sleep(0.1)
+        if (
+            SessionManager.get("new_file_uploaded")
+            or SessionManager.get("is_building_rag")
+            or SessionManager.get("pdf_file_path")
+            or SessionManager.get("is_generating_answer")
+        ):
+            logger.info("[WARMUP] 사용자 상호작용 감지 — 프리워밍 즉시 중단")
+            return
 
     from core.model_loader import _warmup_models as _core_warmup
 
@@ -895,26 +895,16 @@ def main() -> None:
     _ensure_ui_globals()  # heavy session init AFTER css is already streamed
     logger.debug("[PERF] main(): css+globals took %.3fs", time.perf_counter() - _t_main)
 
-    # [FIX] 동기 블로킹 스피너 제거: 캐시 미스여도 기본 모델을 즉시 바인딩하고
-    # 백그라운드에서 목록을 갱신한다. 첫 프레임 렌더가 소켓 I/O에 묶이지 않는다.
-    if "available_models_list" not in st.session_state:
-        _t_models = time.perf_counter()
-        st.session_state.available_models_list = _load_available_models(
-            non_blocking_fallback=True
-        )
-        logger.debug(
-            "[PERF] main(): _load_available_models took %.3fs",
-            time.perf_counter() - _t_models,
-        )
+    # [SSoT 동기화] 세션에 고착시키지 않고 전역 캐시의 갱신 상태를 매 프레임 O(1) 검사
+    current_models = _load_available_models(non_blocking_fallback=True)
+    st.session_state.available_models_list = current_models
 
     if SessionManager.get("pdf_file_path") and not SessionManager.get("pdf_processed"):
         SessionManager.set("is_generating_answer", False)
 
     available_models = st.session_state.available_models_list
-    # [최적화] 중복 호출 없이 이미 로드된 available_models 리스트로 reachable 여부 O(1) 판정
-    ollama_reachable = bool(available_models) and (
-        MSG_ERROR_OLLAMA_NOT_RUNNING not in available_models
-    )
+    # Ollama 도달성 판별: 기본 모델 단일 폴백 상태가 아닌 실제 유효 목록 존재 여부 검증
+    ollama_reachable = _is_ollama_reachable()
 
     if not ollama_reachable:
         st.error(t("error_ollama_not_running"))

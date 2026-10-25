@@ -281,33 +281,60 @@ def _ollama_backend_active() -> bool:
     return sp.ollama_backend_active()
 
 
-async def _warmup_models() -> None:
-    """[WARMUP] 시작 시 LLM+임베더를 1회 프리웜하여 첫 쿼리 TTFT를 제거한다.
+def _is_ollama_server_up() -> bool:
+    """캐시의 실제 상태를 기반으로 Ollama 서버 연결 상태 판별."""
+    global _models_cache
+    if _models_cache is None:
+        return True
+    models = _models_cache[1]
+    return bool(models) and (MSG_ERROR_OLLAMA_NOT_RUNNING not in models)
 
-    - LLM / 임베더 각각 한 번씩만 로드(캐시 히트 보장).
-    - 임베더는 ``None`` 전달로 설정 기본 모델 사용(앱 정상 로드 경로와 동일).
-    - LLM은 ``keep_alive=OLLAMA_KEEP_ALIVE``(로더 기본값)로 빌드되어 즉시
-      축출되지 않는다.
-    - 호출부에서 비치명적으로 감싸야 하므로 여기선 예외를 잡지 않는다.
-    - 모델 로드/쿼리 경로는 건드리지 않고 프리웜 전용 throwaway 토큰만 소비.
-    """
+
+async def _warmup_models() -> None:
+    """시스템 추론 세마포어를 점유하지 않는 조건부 프리워밍."""
     from common.config import DEFAULT_OLLAMA_MODEL
-    from core.model_loader import ModelManager  # 순환 방지 lazy import
+    from core.model_loader import ModelManager
     from core.resource_manager import get_resource_manager
+    from core.session import SessionManager
+
+    # Ollama 서버가 오프라인이면 워밍업을 시도하지 않고 즉시 반환 (13초 백오프 방지)
+    if not _is_ollama_server_up():
+        logger.debug("[WARMUP] Ollama 미연결 상태 — 프리워밍 스킵")
+        return
 
     coordinator = get_resource_manager()
 
-    # Throwaway 토큰: 임베더 1회, LLM minimal 스트리밍 → 즉시 중단.
+    # 사용자 질문/업로드가 시작되었는지 락 획득 직전 체크
+    if SessionManager.get("is_generating_answer") or SessionManager.get(
+        "is_building_rag"
+    ):
+        logger.info("[WARMUP] 사용자 작업 우선 — 임베더 워밍업 양보")
+        return
+
     async with coordinator.use_embedder(model_name=DEFAULT_EMBEDDING_MODEL):
         embedder = await ModelManager.get_embedder(None)
         await embedder.aembed_query("warmup")
 
-    async with coordinator.use_llm(model_name=DEFAULT_OLLAMA_MODEL):
-        llm = await ModelManager.get_llm(DEFAULT_OLLAMA_MODEL)
-        async for _ in llm.astream("warmup"):
-            break
+    if SessionManager.get("is_generating_answer") or SessionManager.get(
+        "is_building_rag"
+    ):
+        logger.info("[WARMUP] 사용자 작업 우선 — LLM 워밍업 양보")
+        return
 
-    logger.info("[WARMUP] LLM+임베더 프리웜 완료")
+    # 추론 락 획득 타임아웃을 2초로 제한하여 사용자 쿼리 진입 시 데드락 방지
+    try:
+        async with (
+            coordinator.inference_session(timeout=2.0),
+            coordinator.use_llm(model_name=DEFAULT_OLLAMA_MODEL),
+        ):
+            llm = await ModelManager.get_llm(DEFAULT_OLLAMA_MODEL)
+            async for _ in llm.astream("warmup"):
+                break
+        logger.info("[WARMUP] LLM+임베더 프리웜 완료")
+    except (asyncio.TimeoutError, TimeoutError) as e:
+        logger.debug(
+            f"[WARMUP] LLM 프리웜 건너뜀 (사용자 작업 진행 또는 타임아웃): {e}"
+        )
 
 
 def _fetch_available_models() -> list[str]:

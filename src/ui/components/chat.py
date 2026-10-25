@@ -180,8 +180,16 @@ def _render_unified_timeline(current_sid: str) -> None:
     messages = SessionManager.get_messages() or []
     n_msgs = len(messages)
 
-    # 실제 대화 메시지(사용자/어시스턴트) 추출
-    chat_messages = [m for m in messages if m.get("msg_type") != "build_progress"]
+    # 순수 대화 턴(사용자 질문 또는 어시스턴트 응답)만 엄격하게 필터링.
+    # 시스템 제어 토큰(READY_FOR_QUERY), 로그(log), 빌드 진행/에러(build_progress/build_error)는 제외하여
+    # 실제 대화가 없으면 반드시 온보딩 가이드 패널이 노출되도록 보장한다.
+    chat_messages = [
+        m
+        for m in messages
+        if m.get("role") in ("user", "assistant")
+        and m.get("msg_type") in ("general", "streaming")
+        and str(m.get("content", "")).strip() != "READY_FOR_QUERY"
+    ]
 
     # 실제 대화가 아직 시작되지 않은 경우:
     if not chat_messages:
