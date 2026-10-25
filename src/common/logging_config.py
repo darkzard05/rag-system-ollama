@@ -8,6 +8,7 @@
 - 구조화된 형식 (분석 용이)
 """
 
+import importlib
 import logging
 import logging.handlers
 import os
@@ -15,6 +16,39 @@ import shutil
 import sys
 import warnings
 from pathlib import Path
+from typing import Any
+
+_AUTO_DOCSTRING_SILENCED = False
+
+
+def _noop_print(*args: Any, **kwargs: Any) -> None:
+    return None
+
+
+def silence_transformers_auto_docstring() -> None:
+    """transformers ``auto_docstring`` 데코레이터의 import 시점 stdout 노이즈를 차단한다.
+
+    해당 메시지(``[ERROR] ... but not documented``)는 ``logging``/``warnings``가
+    아니라 데코레이터가 직접 호출하는 ``print`` 출력이며, 기여자용 CI 진단으로만
+    의도된 것이다.
+
+    주의: ``transformers.utils.auto_docstring`` 속성은 데코레이터 **함수**로
+    재노출되어 ``import transformers.utils.auto_docstring as m`` 으로는 모듈
+    핸들을 얻지 못한다(함수에 print 속성을 붙이게 되어 무효). 반드시
+    ``importlib`` 로 실제 모듈을 가져와야 한다.
+    """
+    global _AUTO_DOCSTRING_SILENCED
+
+    if _AUTO_DOCSTRING_SILENCED:
+        return
+    try:
+        module: Any = importlib.import_module("transformers.utils.auto_docstring")
+    except ImportError:
+        return
+    if not getattr(module, "_stdout_silenced", False):
+        module.print = _noop_print
+        module._stdout_silenced = True
+    _AUTO_DOCSTRING_SILENCED = True
 
 
 class WindowsSafeRotatingFileHandler(logging.handlers.RotatingFileHandler):
@@ -131,8 +165,8 @@ def setup_logging(
     # merge_size / min_pixels / max_pixels 12연발)은 logging ERROR도 warnings도
     # 아닌 auto_docstring 데코레이터의 import 시점 stdout print다
     # (transformers/utils/auto_docstring.py — 공식 문서는 기여자용 CI 진단으로만
-    # 의도, 업스트림 main에도 잔존). 따라서 로거 레벨/warnings 필터는 닿지
-    # 않는다. 여기서는 통상 수준만 유지한다.
+    # 의도, 업스트림 main에도 잔존). 로거 레벨/warnings 필터로는 닿지 않으므로
+    # 실제 차단은 silence_transformers_auto_docstring()이 담당한다.
     logging.getLogger("transformers").setLevel(logging.WARNING)
     logging.getLogger("sentence_transformers").setLevel(logging.WARNING)
 

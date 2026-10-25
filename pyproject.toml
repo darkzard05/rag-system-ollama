@@ -45,6 +45,7 @@ ignore = [
 "src/core/rag_core.py" = ["E402"] # 지연 임포트 허용
 "src/core/model_loader.py" = ["E402"] # 지연 임포트 허용
 "src/common/utils.py" = ["E402"] # 지연 임포트 허용
+"src/api/api_server.py" = ["E402"] # transformers 노이즈 차단을 import보다 먼저 수행
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

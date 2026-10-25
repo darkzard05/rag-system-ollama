@@ -52,9 +52,11 @@ async def test_split_documents_single_embed_pass():
             "src.core.chunking.TEXT_SPLITTER_CONFIG",
             {"chunk_size": 500, "chunk_overlap": 50},
         ),
-        patch("src.core.chunking.RecursiveCharacterTextSplitter") as mock_splitter_cls,
+        patch("src.core.chunking._recursive_splitter_cls") as mock_splitter_func,
         patch("src.core.chunking.SessionManager.add_status_log"),
     ):
+        mock_splitter_cls = MagicMock()
+        mock_splitter_func.return_value = mock_splitter_cls
         mock_splitter_inst = mock_splitter_cls.return_value
         sql_split = mock_splitter_inst.split_documents
         sql_split.return_value = [_make_doc(content=f"조각 {i}") for i in range(30)]

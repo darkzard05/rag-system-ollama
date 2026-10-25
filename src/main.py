@@ -35,6 +35,12 @@ _SRC_DIR = str(Path(__file__).resolve().parent)
 if _SRC_DIR not in sys.path:
     sys.path.insert(0, _SRC_DIR)
 
+# [패치] transformers 5.x auto_docstring stdout noise 원천 차단
+# (importlib 기반 — 해당 속성은 서브모듈이 아닌 데코레이터 함수로 노출된다)
+from common.logging_config import silence_transformers_auto_docstring
+
+silence_transformers_auto_docstring()
+
 # [Lazy Import용] 런타임에 필요한 모듈들
 import asyncio
 import atexit

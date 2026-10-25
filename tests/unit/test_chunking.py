@@ -82,9 +82,11 @@ async def test_split_documents_already_chunked_with_overflow():
             "src.core.chunking.TEXT_SPLITTER_CONFIG",
             {"chunk_size": 500, "chunk_overlap": 50},
         ),
-        patch("src.core.chunking.RecursiveCharacterTextSplitter") as mock_splitter_cls,
+        patch("src.core.chunking._recursive_splitter_cls") as mock_splitter_func,
         patch("src.core.chunking.SessionManager.add_status_log") as mock_log,
     ):
+        mock_splitter_cls = MagicMock()
+        mock_splitter_func.return_value = mock_splitter_cls
         mock_splitter_inst = mock_splitter_cls.return_value
         mock_splitter_inst.split_documents.return_value = [
             create_mock_document(content="sub-chunk 1"),
@@ -117,12 +119,13 @@ async def test_split_documents_standard_recursive():
             "src.core.chunking.TEXT_SPLITTER_CONFIG",
             {"chunk_size": 500, "chunk_overlap": 50},
         ),
-        patch(
-            "src.core.chunking.RecursiveCharacterTextSplitter.split_documents",
-            return_value=[doc],
-        ),
+        patch("src.core.chunking._recursive_splitter_cls") as mock_splitter_func,
         patch("src.core.chunking.SessionManager.add_status_log") as mock_log,
     ):
+        mock_splitter_cls = MagicMock()
+        mock_splitter_func.return_value = mock_splitter_cls
+        mock_splitter_inst = mock_splitter_cls.return_value
+        mock_splitter_inst.split_documents.return_value = [doc]
         split_docs, vectors = await split_documents(docs, embedder=mock_embedder)
 
         assert len(split_docs) == 1

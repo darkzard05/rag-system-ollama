@@ -18,6 +18,12 @@ import secrets
 import time
 from contextlib import asynccontextmanager
 
+# [패치] transformers 5.x auto_docstring stdout noise 원천 차단
+# (importlib 기반 — 해당 속성은 서브모듈이 아닌 데코레이터 함수로 노출된다)
+from common.logging_config import silence_transformers_auto_docstring
+
+silence_transformers_auto_docstring()
+
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPAuthorizationCredentials

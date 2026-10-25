@@ -3,8 +3,6 @@
 """
 
 import asyncio
-import contextlib
-import io
 import logging
 import os
 import re
@@ -14,23 +12,13 @@ import numpy as np
 from langchain_core.documents import Document
 from langchain_core.embeddings import Embeddings
 
-# [후속-transformers-print] langchain_text_splitters 패키지 __init__이
-# .sentence_transformers 서브모듈을 끌어오고, 이어 sentence_transformers →
-# transformers 리프 이미지 프로세서(deepseek_vl_hybrid / kimi_k25 / paddleocr_vl)
-# import 시 @auto_docstring 데코레이터가 "[ERROR] ... but not documented"를
-# stdout print로 뿌린다 (logging/warnings 아님 — 공식 문서는 기여자용 CI
-# 진단으로만 의도). 패키지 __init__ 실행은 회피 불가하므로 import 자체를
-# stdout 억제 하에 수행한다. 프로젝트 코드는 stdout print를 사용하지 않고
-# (전부 stderr 로깅) import는 임포트 락 하에 1회만 실행되므로 안전하다.
-with contextlib.redirect_stdout(io.StringIO()):
-    from langchain_text_splitters import RecursiveCharacterTextSplitter
-
 from common.config import (
     EMBEDDING_BATCH_SIZE,
     EMBEDDING_DEVICE,
     SEMANTIC_CHUNKER_CONFIG,
     TEXT_SPLITTER_CONFIG,
 )
+from common.logging_config import silence_transformers_auto_docstring
 from core.semantic_chunker import EmbeddingBasedSemanticChunker
 from core.session import SessionManager
 from services.monitoring.performance_monitor import (
@@ -39,6 +27,21 @@ from services.monitoring.performance_monitor import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _recursive_splitter_cls() -> Any:
+    """``RecursiveCharacterTextSplitter`` 를 지연 임포트한다.
+
+    ``langchain_text_splitters`` 패키지 ``__init__`` 은 ``sentence_transformers``
+    서브모듈을 끌어오고, 그 경로에서 transformers ``auto_docstring`` 데코레이터가
+    import 시점에 stdout print를 뿌릴 수 있다. 패키지 ``__init__`` 실행은 회피할
+    수 없으므로, print 차단을 먼저 적용한 뒤 임포트한다. 또한 이 임포트는
+    모듈 로드 비용이 커서 실제 분할 시점까지 미룬다.
+    """
+    silence_transformers_auto_docstring()
+    from langchain_text_splitters import RecursiveCharacterTextSplitter
+
+    return RecursiveCharacterTextSplitter
 
 
 def _is_ollama_embedder(embedder: Embeddings) -> bool:
@@ -487,7 +490,7 @@ async def split_documents(
                 _postprocess_metadata(split_docs)
                 return split_docs, vectors
             # 의미분할 비활성/임베더 없음: 초과분만 Recursive로 분할
-            recursive_chunker = RecursiveCharacterTextSplitter(
+            recursive_chunker = _recursive_splitter_cls()(
                 chunk_size=TEXT_SPLITTER_CONFIG["chunk_size"],
                 chunk_overlap=TEXT_SPLITTER_CONFIG["chunk_overlap"],
                 length_function=_get_token_length_fn(),
@@ -546,7 +549,7 @@ async def split_documents(
                 split_docs, vectors = await semantic_chunker.split_documents(docs)
                 msg = f"의미론적 분할 완료 ({len(split_docs)}개 청크 생성)"
         else:
-            recursive_chunker = RecursiveCharacterTextSplitter(
+            recursive_chunker = _recursive_splitter_cls()(
                 chunk_size=TEXT_SPLITTER_CONFIG["chunk_size"],
                 chunk_overlap=TEXT_SPLITTER_CONFIG["chunk_overlap"],
                 length_function=_get_token_length_fn(),
