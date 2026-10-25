@@ -284,24 +284,14 @@ async def stream_query_rag(
         finally:
             if waiter is not None and not waiter.done():
                 waiter.cancel()
-                # [CRITICAL FIX] anext()가 완전히 종료되어 제너레이터 락이 풀릴 때까지 대기
-                with suppress(asyncio.CancelledError, StopAsyncIteration, Exception):
-                    await asyncio.shield(waiter)
+                # [DETERMINISTIC FIX] shield 대신 asyncio.wait를 사용하여 부모 컨텍스트 취소 여부와
+                # 무관하게 waiter 태스크가 제너레이터 프레임에서 완전히 빠져나올 때까지 1초간 확정 대기
+                with suppress(Exception):
+                    await asyncio.wait({waiter}, timeout=1.0)
             try:
                 await stream_gen.aclose()
-            except RuntimeError as re_err:
-                if "async generator is already running" in str(re_err):
-                    logger.warning(
-                        f"[API] aclose race handled safely for session: {sid}"
-                    )
-                    try:
-                        aclose_fn = getattr(stream_it, "aclose", None)
-                        if aclose_fn is not None and callable(aclose_fn):
-                            await cast(Any, aclose_fn)()
-                    except Exception:
-                        pass
-                else:
-                    raise
+            except Exception as e:
+                logger.debug(f"[API] Stream generator cleanup completed: {e}")
 
     return StreamingResponse(
         event_generator(),

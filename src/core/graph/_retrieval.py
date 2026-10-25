@@ -656,6 +656,15 @@ def _safe_score(raw: Any) -> float:
         return 0.0
 
 
+def _safe_int(raw: Any, default: int = 0) -> int:
+    if raw is None:
+        return default
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return default
+
+
 def _merge_adjacent_chunks(
     docs: list[Document], max_tokens: int = 1200
 ) -> list[Document]:
@@ -673,7 +682,7 @@ def _merge_adjacent_chunks(
         next_m = doc.metadata
         key = (next_m.get("source"), next_m.get("page"), next_m.get("current_section"))
         next_start, next_end = next_m.get("start_index"), next_m.get("end_index")
-        next_idx = int(next_m.get("chunk_index", 0))
+        next_idx = _safe_int(next_m.get("chunk_index"))
         next_score = _safe_score(next_m.get("rerank_score"))
 
         merged = False
@@ -692,7 +701,7 @@ def _merge_adjacent_chunks(
                     and abs(curr_start - next_end) <= 5
                 )
             else:
-                curr_idx = int(curr_m.get("chunk_index", 0))
+                curr_idx = _safe_int(curr_m.get("chunk_index"))
                 is_consecutive = abs(next_idx - curr_idx) <= 1
 
             if is_consecutive:
@@ -700,7 +709,7 @@ def _merge_adjacent_chunks(
                 existing_doc.metadata["end_index"] = (
                     next_end if next_end is not None else curr_end
                 )
-                curr_idx = int(curr_m.get("chunk_index", 0))
+                curr_idx = _safe_int(curr_m.get("chunk_index"))
                 existing_doc.metadata["chunk_index"] = max(next_idx, curr_idx)
                 existing_doc.metadata["rerank_score"] = max(
                     _safe_score(curr_m.get("rerank_score")), next_score
