@@ -772,21 +772,22 @@ def _start_speculative_generate(
     _spec_generate_events.set([])
     from core.graph._generate import generate
 
-    task = asyncio.ensure_future(generate(state, config, writer=writer))
-    # Tag the task so the speculative generate instance does NOT adopt itself
-    # (it must run normally and buffer its events instead).
-    task._is_speculative = True  # type: ignore[attr-defined]
     spec = _SpecGenerate(
-        task=task,
+        task=cast(Any, None),
         buffer=[],
         created_at=time.monotonic(),
         event_queue=asyncio.Queue(),
         is_adopted=False,
     )
-    _spec_registry[thread_id] = spec
-    # The speculative task buffers into the ContextVar list we just captured.
     spec.buffer = _spec_generate_events.get([])
     _current_spec.set(spec)
+    _spec_registry[thread_id] = spec
+
+    task = asyncio.ensure_future(generate(state, config, writer=writer))
+    # Tag the task so the speculative generate instance does NOT adopt itself
+    # (it must run normally and buffer its events instead).
+    task._is_speculative = True  # type: ignore[attr-defined]
+    spec.task = task
     _enforce_spec_registry_bound()
     logger.info("[RAG] [SPEC] eager generate 시작 (route 결정 대기)")
     return thread_id
