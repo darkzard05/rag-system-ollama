@@ -14,6 +14,7 @@ import asyncio
 import logging
 import time
 from collections.abc import AsyncGenerator
+from contextlib import suppress
 from typing import Any, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -283,7 +284,24 @@ async def stream_query_rag(
         finally:
             if waiter is not None and not waiter.done():
                 waiter.cancel()
-            await stream_gen.aclose()
+                # [CRITICAL FIX] anext()가 완전히 종료되어 제너레이터 락이 풀릴 때까지 대기
+                with suppress(asyncio.CancelledError, StopAsyncIteration, Exception):
+                    await asyncio.shield(waiter)
+            try:
+                await stream_gen.aclose()
+            except RuntimeError as re_err:
+                if "async generator is already running" in str(re_err):
+                    logger.warning(
+                        f"[API] aclose race handled safely for session: {sid}"
+                    )
+                    try:
+                        aclose_fn = getattr(stream_it, "aclose", None)
+                        if aclose_fn is not None and callable(aclose_fn):
+                            await cast(Any, aclose_fn)()
+                    except Exception:
+                        pass
+                else:
+                    raise
 
     return StreamingResponse(
         event_generator(),
