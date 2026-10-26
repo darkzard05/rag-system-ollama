@@ -243,14 +243,17 @@ class SessionManager:
                 # holds a single {} for doc_pool, so a shallow copy would alias
                 # it across all sessions (cross-session contamination).
                 new_state["doc_pool"] = {}
-                new_state["_dirty_keys"] = set()
+                # [FIX-INIT-SYNC] UI가 첫 렌더링 프레임에 기본 SSoT 값을 읽을 수 있도록
+                # 백엔드 전용 객체를 제외한 초기 키들을 dirty로 마킹한다.
+                initial_keys = set(new_state.keys()) - cls._NON_UI_SYNC_KEYS
+                new_state["_dirty_keys"] = initial_keys
                 # 삭제 tombstone: delete()로 제거된 키는 UI 미러에서도 제거해야
                 # 하므로 별도 집합에 보관한다 (sync_to_streamlit이 소비).
                 new_state["_deleted_keys"] = set()
                 # 더티 버전: sync 스냅샷 이후 동일 키 재쓰기를 감지한다.
                 # 스냅샷 시점 버전을 기록하고, 소비 시 버전이 동일할 때만
                 # 해소한다 (버전 불일치 = 전달되지 않은 V2 존재 → 잔류).
-                new_state["_dirty_versions"] = {}
+                new_state["_dirty_versions"] = dict.fromkeys(initial_keys, 1)
                 new_state["last_accessed"] = time.time()
                 cls._fallback_sessions[sid] = new_state
                 logger.debug(f"[SESSION] 신규 세션 저장소 생성: {sid}")

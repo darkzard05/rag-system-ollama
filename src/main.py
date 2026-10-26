@@ -396,9 +396,6 @@ def _trigger_global_warmup_once() -> bool:
     return True
 
 
-_trigger_global_warmup_once()
-
-
 def _active_build_state(session_id: str | None = None):
     """Return the non-terminal BuildState when a build is genuinely active.
 
@@ -892,44 +889,47 @@ def main() -> None:
 
     _t_main = time.perf_counter()
     inject_custom_css()  # light import (ui.ui only); CSS lands in the first frame
-    _ensure_ui_globals()  # heavy session init AFTER css is already streamed
+    _ensure_ui_globals()  # baseline state 원자적 동기화
     logger.debug("[PERF] main(): css+globals took %.3fs", time.perf_counter() - _t_main)
 
-    # [SSoT 동기화] 세션에 고착시키지 않고 전역 캐시의 갱신 상태를 매 프레임 O(1) 검사
+    # [최적화] 모델 목록 1회만 조회하여 available_models와 reachable 여부를 동시에 도출
     current_models = _load_available_models(non_blocking_fallback=True)
     st.session_state.available_models_list = current_models
+    ollama_reachable = bool(current_models) and (
+        MSG_ERROR_OLLAMA_NOT_RUNNING not in current_models
+    )
 
     if SessionManager.get("pdf_file_path") and not SessionManager.get("pdf_processed"):
         SessionManager.set("is_generating_answer", False)
-
-    available_models = st.session_state.available_models_list
-    # Ollama 도달성 판별: 기본 모델 단일 폴백 상태가 아닌 실제 유효 목록 존재 여부 검증
-    ollama_reachable = _is_ollama_reachable()
 
     if not ollama_reachable:
         st.error(t("error_ollama_not_running"))
 
     _t_layout = time.perf_counter()
     _render_app_layout(
-        available_models=available_models, ollama_reachable=ollama_reachable
+        available_models=current_models, ollama_reachable=ollama_reachable
     )
     logger.debug(
-        "[PERF] main(): _render_app_layout(sidebar) took %.3fs",
+        "[PERF] main(): _render_app_layout took %.3fs",
         time.perf_counter() - _t_layout,
     )
+
     _t_pending = time.perf_counter()
     _handle_pending_tasks()
     logger.debug(
         "[PERF] main(): _handle_pending_tasks took %.3fs",
         time.perf_counter() - _t_pending,
     )
-    logger.debug("[PERF] main(): TOTAL rerun %.3fs", time.perf_counter() - _t_main)
 
-    # 온보딩 단일 소스 (TASK 5-e): 온보딩 렌더 판단은
-    # chat_build._render_guidance_panel 내부 게이트가 유일한 출처다.
-    # is_first_run은 렌더 게이트가 아닌 세션 부기용 플래그로만 유지한다.
     if SessionManager.get("is_first_run"):
         SessionManager.set("is_first_run", False)
+
+    # [FIX-DEFER-WARMUP] 첫 프레임 UI(온보딩 가이드 패널 포함)가 완벽히 그려진 후 유휴 시간에 프리웜 실행
+    _trigger_global_warmup_once()
+    logger.debug(
+        "[PERF] main(): TOTAL first paint complete in %.3fs",
+        time.perf_counter() - _t_main,
+    )
 
 
 # 빌드 진행 Rerun 제어: 위상 전이(Phase Transition)는 지연 없이 즉시 반영하고,

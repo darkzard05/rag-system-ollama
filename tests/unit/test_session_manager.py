@@ -178,7 +178,7 @@ def test_dirty_key_tracking():
 
     with p1, p2, p3:
         state = SessionManager._get_state(sid)
-        assert len(state["_dirty_keys"]) == 0
+        assert len(state["_dirty_keys"]) > 0
 
         SessionManager.set("key1", "value1", session_id=sid)
         assert "key1" in state["_dirty_keys"]

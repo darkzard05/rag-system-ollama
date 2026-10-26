@@ -180,6 +180,11 @@ def _render_unified_timeline(current_sid: str) -> None:
     messages = SessionManager.get_messages() or []
     n_msgs = len(messages)
 
+    # [FAST-PATH] 콜드 스타트 시 messages가 비어있으면 불필요한 루프 없이 온보딩 즉시 렌더링
+    if not messages:
+        _render_guidance_panel()
+        return
+
     # 순수 대화 턴(사용자 질문 또는 어시스턴트 응답)만 엄격하게 필터링.
     # 시스템 제어 토큰(READY_FOR_QUERY), 로그(log), 빌드 진행/에러(build_progress/build_error)는 제외하여
     # 실제 대화가 없으면 반드시 온보딩 가이드 패널이 노출되도록 보장한다.
@@ -191,7 +196,7 @@ def _render_unified_timeline(current_sid: str) -> None:
         and str(m.get("content", "")).strip() != "READY_FOR_QUERY"
     ]
 
-    # 실제 대화가 아직 시작되지 않은 경우:
+    # 시스템/로그 메시지만 있고 실제 대화가 아직 시작되지 않은 경우
     if not chat_messages:
         # 온보딩은 _render_guidance_panel 단일 소스에 위임한다 (파일 게이트는
         # 패널 내부에 일원화 — 여기서 중복 검사하지 않는다).

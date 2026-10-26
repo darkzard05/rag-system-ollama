@@ -430,6 +430,7 @@ def _fetch_available_models_cached(
             return list(cached[1])
         from common.config import DEFAULT_OLLAMA_MODEL
 
+        # fallback 반환 시 방어적으로 복사본 전달 (호출자의 mutate 방지)
         return [DEFAULT_OLLAMA_MODEL]
 
     with _models_cache_lock:
