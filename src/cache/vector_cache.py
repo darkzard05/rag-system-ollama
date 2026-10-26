@@ -199,6 +199,9 @@ def _build_config_signature(embedding_model_name: str) -> str:
             "embedding_model": str(embedding_model_name),
             "chunk_size": splitter.get("chunk_size"),
             "chunk_overlap": splitter.get("chunk_overlap"),
+            "page_overflow_threshold_chars": splitter.get(
+                "page_overflow_threshold_chars"
+            ),
             "separators": list(splitter.get("separators") or []),
             "semantic_chunker_enabled": semantic.get("enabled", False),
             # [R3a-03] 인덱스 전략 — use_l2_norm/hnsw_m/quantization_threshold/nprobe

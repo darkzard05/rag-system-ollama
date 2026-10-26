@@ -20,6 +20,8 @@ from core.session import SessionManager  # noqa: E402
 def _seed_build_state(sid: str, phase: BuildPhase | None) -> None:
     SessionManager.reset_all_state(sid)
     SessionManager.set_session_id(sid)
+    # render_chat_messages_area는 업로드된 문서가 있을 때만 진행 패널을 평가한다.
+    SessionManager.set("last_uploaded_file_name", "doc.pdf", session_id=sid)
     if phase is None:
         return
     build = initial_build_state("doc.pdf", "h1")

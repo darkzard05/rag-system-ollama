@@ -238,7 +238,12 @@ RERANKER_MODEL_NAME: str = _reranker_config.get("model_name", "ms-marco-MultiBER
 RERANKER_ENGINE: str = _reranker_config.get("engine", "auto")
 
 TEXT_SPLITTER_CONFIG: dict = _rag_config.get(
-    "text_splitter", {"chunk_size": 500, "chunk_overlap": 100}
+    "text_splitter",
+    {
+        "chunk_size": 500,
+        "chunk_overlap": 100,
+        "page_overflow_threshold_chars": 2000,
+    },
 )
 SEMANTIC_CHUNKER_CONFIG: dict = _rag_config.get("semantic_chunker", {"enabled": False})
 

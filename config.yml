@@ -137,6 +137,10 @@ rag:
     chunk_size_tokens: 512
     # [Phase2] CTX 초과 시 strip_headers=True 자동 폴백 허용 (상태 로그 기록).
     strip_headers_fallback: true
+    # 페이지 단위 분할 시 오버플로우로 판정할 문자 수 임계치 (기본 2000자).
+    # A4 1페이지 텍스트(평균 1200~1800자)가 불필요하게 시맨틱 청커로
+    # 빠지는 것을 방지한다. 이 값을 넘는 페이지만 하위 분할한다.
+    page_overflow_threshold_chars: 2000
   
   # 추출 엔진 설정 (PyMuPDF4LLM 최적화)
   parsing:

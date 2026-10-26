@@ -69,8 +69,8 @@ async def test_split_documents_already_chunked_no_overflow():
 @pytest.mark.asyncio
 async def test_split_documents_already_chunked_with_overflow():
     """Documents already chunked but with overflow should trigger sub-chunking."""
-    # max_chunk_size is 500. 500 * 1.5 = 750.
-    long_content = "a" * 1000
+    # page_overflow_threshold_chars defaults to 2000 chars.
+    long_content = "a" * 2500
     doc = create_mock_document(
         content=long_content, metadata={"is_already_chunked": True}
     )

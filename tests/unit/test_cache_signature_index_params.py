@@ -182,6 +182,27 @@ def test_signature_changes_when_min_chunk_size_changes(tmp_path, monkeypatch):
     assert cache_a.cache_dir != cache_b.cache_dir
 
 
+def test_signature_changes_when_page_overflow_threshold_changes(tmp_path, monkeypatch):
+    """Given: page_overflow_threshold_chars 2000 → 750 / When: 캐시 생성 / Then: 서명이 달라야 함."""
+    _patch_base(monkeypatch)
+    _patch_index_params(monkeypatch, dict(_DEFAULT_INDEX_PARAMS))
+    monkeypatch.setattr(
+        vc_module,
+        "TEXT_SPLITTER_CONFIG",
+        {**_BASE_SPLITTER, "page_overflow_threshold_chars": 2000},
+    )
+    cache_a = _make_cache(tmp_path)
+
+    monkeypatch.setattr(
+        vc_module,
+        "TEXT_SPLITTER_CONFIG",
+        {**_BASE_SPLITTER, "page_overflow_threshold_chars": 750},
+    )
+    cache_b = _make_cache(tmp_path)
+
+    assert cache_a.cache_dir != cache_b.cache_dir
+
+
 def test_signature_changes_when_sentence_split_regex_changes(tmp_path, monkeypatch):
     """Given: sentence_split_regex 패턴 변경 / When: 캐시 생성 / Then: cache_dir이 달라야 함."""
     _patch_base(monkeypatch)

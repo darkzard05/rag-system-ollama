@@ -70,8 +70,8 @@ def test_phase_transition_reruns_after_initial_paint_window():
         assert main_module._BUILD_RERUN_LAST[SID][1] == "extracting"
 
 
-def test_same_phase_progress_is_properly_throttled():
-    """동일 위상(EXTRACTING) 내에서의 진행률 갱신은 2.0초 동안 쓰로틀링되는지 검증."""
+def test_same_phase_progress_never_triggers_global_rerun():
+    """동일 위상(EXTRACTING) 내 진행률 갱신은 시간이 지나도 Rerun을 유발하지 않는다."""
     start_time = time.monotonic()
     main_module._BUILD_RERUN_LAST[SID] = (start_time, "extracting")
 
@@ -83,12 +83,11 @@ def test_same_phase_progress_is_properly_throttled():
     with patch(
         "common.async_worker.request_session_rerun", return_value=True
     ) as mock_rerun:
-        # 1초 경과는 2초 미만이므로 리런 스킵
         with patch("time.monotonic", return_value=start_time + 1.0):
             main_module._request_build_progress_rerun(SID, "extracting")
-        mock_rerun.assert_not_called()
 
-        # 2.1초 경과 시에는 리런 허용
+        # 2초가 지나도 동일 위상 내 세부 % 갱신은 전역 Rerun을 유발하지 않는다.
         with patch("time.monotonic", return_value=start_time + 2.1):
             main_module._request_build_progress_rerun(SID, "extracting")
-        mock_rerun.assert_called_once_with(SID)
+
+        mock_rerun.assert_not_called()

@@ -252,9 +252,11 @@ async def split_documents(
     vectors: list[np.ndarray] | None = None
 
     # [최적화] 페이지 단위로 이미 분할되었더라도 너무 긴 경우(오버플로우) 재분할 수행
-    max_chunk_size = TEXT_SPLITTER_CONFIG.get("chunk_size", 500)
+    page_overflow_threshold = int(
+        TEXT_SPLITTER_CONFIG.get("page_overflow_threshold_chars", 2000)
+    )
     needs_sub_chunking = is_already_chunked and any(
-        len(d.page_content) > max_chunk_size * 1.5 for d in docs
+        len(d.page_content) > page_overflow_threshold for d in docs
     )
 
     if is_already_chunked and not needs_sub_chunking:
@@ -278,12 +280,13 @@ async def split_documents(
 
         use_semantic = SEMANTIC_CHUNKER_CONFIG.get("enabled", False)
         chunk_backend = str(SEMANTIC_CHUNKER_CONFIG.get("backend", "builtin")).lower()
-        # [Phase C1] 오버플로우 페이지만 하위분할: 20p 중 1페이지가 750자를
-        # 초과해도 전체를 의미분할(문장 임베딩 수백 회)로 보내던 과발동을
-        # 수정한다. 정상 페이지는 그대로 재사용하고, 초과분만 의미분할한다.
+        # [Phase C1] 오버플로우 페이지만 하위분할: 일반 페이지(1,200~1,800자)가
+        # 낮은 임계치에 걸려 전체가 의미분할(문장 임베딩 수백 회)로 보내지던
+        # 과발동을 수정한다. 정상 페이지는 그대로 재사용하고, 초과분만
+        # 의미분할한다. 임계치는 config의 page_overflow_threshold_chars를 따른다.
         # (신규 의존성 없이 기존 builtin 경로만 사용. 벡터 캐시 복구 없음.)
         if needs_sub_chunking and is_already_chunked:
-            threshold = max_chunk_size * 1.5
+            threshold = page_overflow_threshold
             overflow_docs = [d for d in docs if len(d.page_content) > threshold]
             logger.info(
                 "[RAG] [CHUNKING] 오버플로우 하위분할 | 전체: %d | 초과: %d",

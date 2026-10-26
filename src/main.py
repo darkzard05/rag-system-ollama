@@ -296,9 +296,6 @@ def _start_model_list_warmup() -> bool:
     return True
 
 
-_start_model_list_warmup()
-
-
 @safe_cache_resource(show_spinner=False)
 def _init_temp_directory():
     """임시 디렉토리를 초기화합니다."""
@@ -931,18 +928,26 @@ def main() -> None:
         time.perf_counter() - _t_main,
     )
 
+    # [FIX-GIL-CONTENTION] 모델 목록/pymupdf 예열 스레드는 첫 프레임이
+    # 완전히 그려진 뒤에 시작한다. 모듈 임포트 시점에 띄우면 메인 렌더
+    # 스레드와 GIL을 경합해 첫 페인트가 지연된다.
+    _start_model_list_warmup()
 
-# 빌드 진행 Rerun 제어: 위상 전이(Phase Transition)는 지연 없이 즉시 반영하고,
-# 동일 위상 내의 세부 진행률(%) 업데이트만 인터벌(2.0초)로 쓰로틀링하여 렌더링 부하를 제어합니다.
-_BUILD_RERUN_MIN_INTERVAL_S = 2.0
+
+# 빌드 진행 Rerun 제어: 메이저 위상(Phase) 전이 시에만 전역 Rerun을 허용한다.
+# 동일 위상 내의 세부 진행률(%) 변경은 전역 main() 리런을 유발하지 않는다.
 _INITIAL_PAINT_WINDOW_S = 0.8
 _BUILD_RERUN_LAST: dict[str, tuple[float, str]] = {}
 
 
 def _request_build_progress_rerun(session_id: str, phase_name: str) -> None:
-    """위상 변경 시 즉각 반응하고, 동일 위상 내 세부 진행률은 2초 주기로 부드럽게 전파합니다.
-    단, 업로드 직후 첫 페인트 보호 윈도우(0.8s) 동안에는 모든 비-terminal 위상 전이를
-    억제하여 브라우저가 좌측 1페이지를 먼저 그릴 시간을 보장합니다."""
+    """메이저 위상 전이 시에만 전역 Rerun을 트리거합니다.
+
+    동일 위상 내의 세부 진행률(%) 갱신은 무시하여 CSS 주입·사이드바·메인
+    레이아웃 전체를 다시 평가하는 Full Rerun 폭사를 차단합니다. 단, 업로드
+    직후 첫 페인트 보호 윈도우(0.8s) 동안에는 모든 비-terminal 위상 전이를
+    억제하여 브라우저가 좌측 1페이지를 먼저 그릴 시간을 보장합니다.
+    """
     from core.build_state import BuildPhase, is_terminal
     from core.session import SessionManager
 
@@ -969,15 +974,8 @@ def _request_build_progress_rerun(session_id: str, phase_name: str) -> None:
     ):
         return
 
-    # 위상이 변경된 경우: 억제 없이 즉시 1회 Rerun 트리거
-    is_phase_transition = last is None or last[1] != phase_name
-
-    # 동일 위상 내의 세부 진행률(%) 업데이트만 최소 간격(2초)으로 쓰로틀링
-    if (
-        last is not None
-        and not is_phase_transition
-        and (now - last[0] < _BUILD_RERUN_MIN_INTERVAL_S)
-    ):
+    # 동일 위상 내 세부 진행률(%) 갱신은 전역 Rerun을 유발하지 않는다.
+    if last is not None and last[1] == phase_name:
         return
 
     _BUILD_RERUN_LAST[session_id] = (now, phase_name)
@@ -1102,8 +1100,8 @@ async def _bg_rebuild_task(
         if is_terminal(event.phase) or event.phase == BuildPhase.DONE:
             _BUILD_RERUN_LAST.pop(session_id, None)
         else:
-            # [FIX] 진행 중 화면 전파: 상태만 바꾸면 프론트가 모르므로
-            # 쓰로틀된 rerun으로 st.status(running) 마운트·갱신을 유발한다.
+            # [FIX] 진행 중 화면 전파: 메이저 위상 전이일 때만 rerun을 유발한다.
+            # 동일 위상 내 세부 % 갱신은 전역 main() 리런을 만들지 않는다.
             # Core(SessionManager)는 UI를 모르므로 호출은 여기서 수행한다.
             _request_build_progress_rerun(session_id, event.phase.value)
 
