@@ -28,6 +28,10 @@ from services.monitoring.performance_monitor import (
 
 logger = logging.getLogger(__name__)
 
+# [P0-Resilience] 정상 페이지 임베딩 입력의 안전 상한(문자 수). 이 길이를 넘는
+# 단일 텍스트는 모델 컨텍스트를 초과해 Ollama 400을 유발할 수 있다.
+_EMBED_SAFE_NORMAL_CHARS = 1500
+
 
 def _recursive_splitter_cls() -> Any:
     """``RecursiveCharacterTextSplitter`` 를 지연 임포트한다.
@@ -47,15 +51,22 @@ def _recursive_splitter_cls() -> Any:
 def _is_ollama_embedder(embedder: Embeddings) -> bool:
     """Ollama 기반 임베더인지 판별합니다.
 
-    model_loader가 이미 langchain_ollama를 로드한 뒤 호출되므로 추가 임포트
-    비용 없이 정확한 isinstance 판별이 가능합니다. langchain_ollama가
-    설치되지 않은 환경(HuggingFace 전용)에서는 False를 반환합니다.
+    ``load_embedding_model`` 은 결과를 ``MemoizingEmbedding`` 으로 감싸므로
+    ``_inner`` 체인을 따라 실제 위임 객체까지 언래핑한다. 래퍼 체인은 깊이를
+    제한해 순환/무한 확장을 방어한다. langchain_ollama가 설치되지 않은
+    환경(HuggingFace 전용)에서는 False를 반환합니다.
     """
+    current: Any = embedder
+    for _ in range(16):
+        inner = getattr(current, "_inner", None)
+        if inner is None or inner is current:
+            break
+        current = inner
     try:
         from langchain_ollama import OllamaEmbeddings
     except ImportError:
         return False
-    return isinstance(embedder, OllamaEmbeddings)
+    return isinstance(current, OllamaEmbeddings)
 
 
 def _get_optimal_batch_size(embedder: Embeddings) -> int:
@@ -429,8 +440,18 @@ async def split_documents(
                 )
                 # 정상 페이지는 임베딩 1회로 벡터화 후 순서 보존 병합.
                 normal_docs = [d for d in docs if len(d.page_content) <= threshold]
-                normal_texts = [d.page_content for d in normal_docs]
-                combined_texts = [*sentence_texts, *normal_texts]
+                # [P0-Resilience] 오버플로우 임계치 이하라도 단일 페이지가 임베딩
+                # 모델 컨텍스트를 위협할 수 있다(표/수식/긴 텍스트). 임베딩 입력만
+                # 안전 길이로 절삭해 400 크래시를 예방한다. 저장되는 문서 본문은
+                # 원본 그대로이므로 좌표·메타데이터 정합성에는 영향이 없다.
+                safe_normal_texts: list[str] = []
+                for d in normal_docs:
+                    text = d.page_content
+                    if len(text) > _EMBED_SAFE_NORMAL_CHARS:
+                        safe_normal_texts.append(text[:_EMBED_SAFE_NORMAL_CHARS])
+                    else:
+                        safe_normal_texts.append(text)
+                combined_texts = [*sentence_texts, *safe_normal_texts]
                 split_docs = []
                 vectors = []
                 if combined_texts:

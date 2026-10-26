@@ -38,15 +38,24 @@ logger = logging.getLogger(__name__)
 def _is_ollama_embedder(embedder: Embeddings) -> bool:
     """Ollama 기반 임베더인지 판별합니다.
 
+    ``load_embedding_model`` 은 결과를 ``MemoizingEmbedding`` 으로 감싸서
+    반환하므로, ``_inner`` 체인을 따라 실제 위임 객체까지 언래핑한 뒤
+    판별합니다. 래퍼 체인은 깊이를 제한해 순환/무한 확장을 방어합니다.
     model_loader가 이미 langchain_ollama를 로드한 뒤 호출되므로 추가 임포트
     비용 없이 정확한 isinstance 판별이 가능합니다. langchain_ollama가
     설치되지 않은 환경에서는 False를 반환합니다.
     """
+    current: Any = embedder
+    for _ in range(16):
+        inner = getattr(current, "_inner", None)
+        if inner is None or inner is current:
+            break
+        current = inner
     try:
         from langchain_ollama import OllamaEmbeddings
     except ImportError:
         return False
-    return isinstance(embedder, OllamaEmbeddings)
+    return isinstance(current, OllamaEmbeddings)
 
 
 # [상수] 표준 섹션 키워드 (정제 시 활용)

@@ -17,6 +17,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 import numpy as np
+import ollama
 from langchain_core.embeddings import Embeddings
 
 from common.config import (
@@ -289,6 +290,174 @@ def _resolve_embedding_batch_size(target_device: str) -> int:
     return invalid
 
 
+def _resolve_no_truncate_ollama_cls() -> Any:
+    """``_NoTruncateOllamaEmbeddings`` 클래스를 지연 생성해 반환한다.
+
+    ``langchain_ollama`` 는 Ollama 임베딩 경로에서만 필요하므로 모듈 임포트
+    시점이 아니라 최초 사용 시점에 로드한다. 생성된 클래스는 모듈 전역에
+    캐시되어 이후 호출과 테스트의 네임스페이스 패치가 동일 객체를 공유한다.
+    """
+    existing = globals().get("_NoTruncateOllamaEmbeddings")
+    if existing is not None:
+        return existing
+
+    from langchain_ollama import OllamaEmbeddings
+
+    class _NoTruncateOllamaEmbeddings(OllamaEmbeddings):
+        """Ollama 임베딩 — `/api/embed` truncate=False 명시.
+
+        [B11] 동기·비동기 공용 단일 시도 코어(``_embed_once``)를 기준으로
+        재시도 루프를 두 갈래로 갖는다: 동기(``_embed_with_retry``)는
+        기존대로 ``time.sleep`` 백오프, 비동기(``_aembed_with_retry``)는
+        시도별 ``asyncio.wait_for`` 타임아웃 + ``await asyncio.sleep``.
+        양쪽 모두 페이로드 크기 선분할을 적용한다.
+
+        [P0-Resilience] truncate=False 는 과잉 입력을 에러로 표면화하지만,
+        단일 청크가 컨텍스트를 넘으면 전체 파이프라인이 붕괴한다. 따라서
+        컨텍스트 초과(400)에 한해 ``truncate=True`` 로 1회 폴백한다.
+        """
+
+        truncate: bool = False
+
+        def embed_documents(self, texts: list[str]) -> list[list[float]]:
+            return self._embed_with_retry(texts)
+
+        async def aembed_documents(self, texts: list[str]) -> list[list[float]]:
+            return await self._aembed_with_retry(texts)
+
+        async def aembed_query(self, text: str) -> list[float]:
+            return (await self._aembed_with_retry([text]))[0]
+
+        @staticmethod
+        def _is_context_length_error(err: ollama.ResponseError) -> bool:
+            """Ollama 컨텍스트 길이 초과(400) 오류인지 판별한다."""
+            if getattr(err, "status_code", None) != 400:
+                return False
+            return "context length" in str(err).lower()
+
+        def _embed_one_group(self, client: Any, group: list[str]) -> list[list[float]]:
+            """단일 그룹을 임베딩하고, 컨텍스트 초과 시 truncate 폴백한다."""
+            try:
+                resp = client.embed(
+                    self.model,
+                    group,
+                    truncate=self.truncate,
+                    options=self._default_params,
+                    keep_alive=self.keep_alive,
+                )
+                return list(resp["embeddings"])
+            except ollama.ResponseError as err:
+                if self.truncate or not self._is_context_length_error(err):
+                    raise
+                logger.warning(
+                    "[MODEL] [EMBED] 청크가 모델 컨텍스트 길이를 초과하여 "
+                    "truncate=True로 자동 절삭 후 임베딩을 완료합니다. "
+                    "(texts=%d, chars=%d)",
+                    len(group),
+                    sum(len(t) for t in group),
+                )
+                resp = client.embed(
+                    self.model,
+                    group,
+                    truncate=True,
+                    options=self._default_params,
+                    keep_alive=self.keep_alive,
+                )
+                return list(resp["embeddings"])
+
+        def _embed_once(self, texts: list[str]) -> list[list[float]]:
+            """단일 시도: 페이로드 크기 분할 → 그룹별 1회 모델 호출.
+
+            [Phase C2] 그룹 순차 왕복을 스레드 병렬로 오버랩한다
+            (신규 의존성 없이 stdlib ThreadPoolExecutor, 순서 보존).
+            Ollama 로컬 서버의 HTTP 호출은 스레드 안전하며, 그룹 수는
+            보통 3~6개라 workers를 4로 상한한다.
+            """
+            if not self._client:
+                msg = (
+                    "Ollama client is not initialized. "
+                    "Please ensure Ollama is running and the model is loaded."
+                )
+                raise ValueError(msg)
+            import concurrent.futures
+
+            # [Phase C2] mypy narrowing: self._client는 클로저 안에서
+            # 좁혀지지 않으므로 로컬에 확정한다.
+            client = self._client
+            groups = _split_by_payload_size(texts)
+            total_chars = sum(len(t) for t in texts)
+            logger.debug(
+                "[MODEL] [EMBED] 페이로드 그룹=%d 텍스트=%d 총문자=%d",
+                len(groups),
+                len(texts),
+                total_chars,
+            )
+            if len(groups) <= 1:
+                results: list[list[float]] = []
+                for group in groups:
+                    results.extend(self._embed_one_group(client, group))
+                return results
+
+            def _embed_group(
+                group: list[str],
+            ) -> list[list[float]]:
+                return self._embed_one_group(client, group)
+
+            ordered: list[list[float]] = []
+            with concurrent.futures.ThreadPoolExecutor(
+                max_workers=min(4, len(groups))
+            ) as executor:
+                for embeddings in executor.map(_embed_group, groups):
+                    ordered.extend(embeddings)
+            return ordered
+
+        def _embed_with_retry(self, texts: list[str]) -> list[list[float]]:
+            """동기 재시도 루프 (기존 시맨틱 유지, 분할 추가)."""
+            last_exc: Exception | None = None
+            for attempt in range(_EMBED_RETRY_MAX_ATTEMPTS):
+                try:
+                    return self._embed_once(texts)
+                except Exception as exc:
+                    last_exc = exc
+                    if not _is_embed_transient_failure(exc):
+                        raise
+                    if attempt + 1 >= _EMBED_RETRY_MAX_ATTEMPTS:
+                        break
+                    wait = _EMBED_RETRY_BACKOFF_SECONDS[
+                        min(attempt, len(_EMBED_RETRY_BACKOFF_SECONDS) - 1)
+                    ]
+                    logger.info(
+                        "[MODEL] [EMBED] 임베딩 콜드스타트 감지, "
+                        "재시도 %d/%d (대기 %ds)",
+                        attempt + 2,
+                        _EMBED_RETRY_MAX_ATTEMPTS,
+                        wait,
+                    )
+                    time.sleep(wait)
+            assert last_exc is not None
+            raise last_exc
+
+        async def _aembed_with_retry(self, texts: list[str]) -> list[list[float]]:
+            """비동기 재시도 루프 — 시도별 wait_for(1회 모델 왕복 상한)."""
+            return await _aembed_retry_loop(
+                lambda: asyncio.wait_for(
+                    asyncio.to_thread(self._embed_once, texts),
+                    timeout=_EMBED_REQUEST_TIMEOUT_SECONDS,
+                ),
+                "임베딩 콜드스타트 감지",
+            )
+
+    globals()["_NoTruncateOllamaEmbeddings"] = _NoTruncateOllamaEmbeddings
+    return _NoTruncateOllamaEmbeddings
+
+
+def __getattr__(name: str) -> Any:
+    """지연 생성 클래스를 ``core.model_loader.<name>`` import 경로로 노출한다."""
+    if name == "_NoTruncateOllamaEmbeddings":
+        return _resolve_no_truncate_ollama_cls()
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
 def load_embedding_model(
     embedding_model_name: str | None = None,
 ) -> Any:
@@ -316,134 +485,10 @@ def load_embedding_model(
     try:
         result: Embeddings
         if is_ollama_embedding:
-            # [지연 로딩] 무거운 라이브러리는 실제 사용 시점에 임포트
-            from langchain_ollama import OllamaEmbeddings
-
             from core.session import SessionManager
 
-            # [R2-07] Ollama `/api/embed` truncate 기본값(true)은 임베딩 모델
-            # 컨텍스트 초과 입력을 무음 잘라낸다. langchain_ollama 0.3.x는
-            # truncate를 생성자로 받지도 않으므로, 서브클래스에서 명시적으로
-            # truncate=False를 전달해 과잉 입력을 에러로 표면화한다.
-            class _NoTruncateOllamaEmbeddings(OllamaEmbeddings):
-                """Ollama 임베딩 — `/api/embed` truncate=False 명시.
-
-                [B11] 동기·비동기 공용 단일 시도 코어(``_embed_once``)를 기준으로
-                재시도 루프를 두 갈래로 갖는다: 동기(``_embed_with_retry``)는
-                기존대로 ``time.sleep`` 백오프, 비동기(``_aembed_with_retry``)는
-                시도별 ``asyncio.wait_for`` 타임아웃 + ``await asyncio.sleep``.
-                양쪽 모두 페이로드 크기 선분할을 적용한다.
-                """
-
-                truncate: bool = False
-
-                def embed_documents(self, texts: list[str]) -> list[list[float]]:
-                    return self._embed_with_retry(texts)
-
-                async def aembed_documents(self, texts: list[str]) -> list[list[float]]:
-                    return await self._aembed_with_retry(texts)
-
-                async def aembed_query(self, text: str) -> list[float]:
-                    return (await self._aembed_with_retry([text]))[0]
-
-                def _embed_once(self, texts: list[str]) -> list[list[float]]:
-                    """단일 시도: 페이로드 크기 분할 → 그룹별 1회 모델 호출.
-
-                    [Phase C2] 그룹 순차 왕복을 스레드 병렬로 오버랩한다
-                    (신규 의존성 없이 stdlib ThreadPoolExecutor, 순서 보존).
-                    Ollama 로컬 서버의 HTTP 호출은 스레드 안전하며, 그룹 수는
-                    보통 3~6개라 workers를 4로 상한한다.
-                    """
-                    if not self._client:
-                        msg = (
-                            "Ollama client is not initialized. "
-                            "Please ensure Ollama is running and the model is loaded."
-                        )
-                        raise ValueError(msg)
-                    import concurrent.futures
-
-                    # [Phase C2] mypy narrowing: self._client는 클로저 안에서
-                    # 좁혀지지 않으므로 로컬에 확정한다.
-                    client = self._client
-                    groups = _split_by_payload_size(texts)
-                    total_chars = sum(len(t) for t in texts)
-                    logger.debug(
-                        "[MODEL] [EMBED] 페이로드 그룹=%d 텍스트=%d 총문자=%d",
-                        len(groups),
-                        len(texts),
-                        total_chars,
-                    )
-                    if len(groups) <= 1:
-                        results: list[list[float]] = []
-                        for group in groups:
-                            results.extend(
-                                client.embed(
-                                    self.model,
-                                    group,
-                                    truncate=self.truncate,
-                                    options=self._default_params,
-                                    keep_alive=self.keep_alive,
-                                )["embeddings"]
-                            )
-                        return results
-
-                    def _embed_group(
-                        group: list[str],
-                    ) -> list[list[float]]:
-                        resp = client.embed(
-                            self.model,
-                            group,
-                            truncate=self.truncate,
-                            options=self._default_params,
-                            keep_alive=self.keep_alive,
-                        )
-                        return list(resp["embeddings"])
-
-                    ordered: list[list[float]] = []
-                    with concurrent.futures.ThreadPoolExecutor(
-                        max_workers=min(4, len(groups))
-                    ) as executor:
-                        for embeddings in executor.map(_embed_group, groups):
-                            ordered.extend(embeddings)
-                    return ordered
-
-                def _embed_with_retry(self, texts: list[str]) -> list[list[float]]:
-                    """동기 재시도 루프 (기존 시맨틱 유지, 분할 추가)."""
-                    last_exc: Exception | None = None
-                    for attempt in range(_EMBED_RETRY_MAX_ATTEMPTS):
-                        try:
-                            return self._embed_once(texts)
-                        except Exception as exc:
-                            last_exc = exc
-                            if not _is_embed_transient_failure(exc):
-                                raise
-                            if attempt + 1 >= _EMBED_RETRY_MAX_ATTEMPTS:
-                                break
-                            wait = _EMBED_RETRY_BACKOFF_SECONDS[
-                                min(attempt, len(_EMBED_RETRY_BACKOFF_SECONDS) - 1)
-                            ]
-                            logger.info(
-                                "[MODEL] [EMBED] 임베딩 콜드스타트 감지, "
-                                "재시도 %d/%d (대기 %ds)",
-                                attempt + 2,
-                                _EMBED_RETRY_MAX_ATTEMPTS,
-                                wait,
-                            )
-                            time.sleep(wait)
-                    assert last_exc is not None
-                    raise last_exc
-
-                async def _aembed_with_retry(
-                    self, texts: list[str]
-                ) -> list[list[float]]:
-                    """비동기 재시도 루프 — 시도별 wait_for(1회 모델 왕복 상한)."""
-                    return await _aembed_retry_loop(
-                        lambda: asyncio.wait_for(
-                            asyncio.to_thread(self._embed_once, texts),
-                            timeout=_EMBED_REQUEST_TIMEOUT_SECONDS,
-                        ),
-                        "임베딩 콜드스타트 감지",
-                    )
+            # [지연 로딩] 무거운 라이브러리는 실제 사용 시점에 임포트
+            _NoTruncateOllamaEmbeddings = _resolve_no_truncate_ollama_cls()
 
             logger.info(
                 f"[MODEL] [LOAD] Ollama 임베딩 엔진 사용 | 모델: {clean_model_name}"
