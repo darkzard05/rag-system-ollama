@@ -23,7 +23,7 @@ import time
 from collections import OrderedDict
 from collections.abc import Callable
 from contextlib import asynccontextmanager
-from typing import Any, Generic, ParamSpec, TypeVar, cast
+from typing import Any, Generic, ParamSpec, TypeVar
 
 from common.config import (
     ENABLE_OLLAMA_PRESSURE_FALLBACK,  # noqa: F401 - patch seam (tests patch this attr)
@@ -127,6 +127,24 @@ def get_effective_inference_bound(configured: int | None = None) -> int:
 # 참이 되어 매 호출 "퇴출→즉시 재로드" 쓰래시가 난다. 풀 인스턴스별 쿨다운으로
 # 최대 빈도를 제한한다.
 EVICT_COOLDOWN_SECONDS: float = 30.0
+
+
+class CrossLoopAsyncLock:
+    """모든 비동기 이벤트 루프 및 스레드에서 안전하게 진입 가능한 비차단 비동기 락"""
+
+    def __init__(self):
+        self._lock = threading.Lock()
+
+    async def __aenter__(self):
+        # OS 스레드 풀에서 락 획득을 수행하여 현재 이벤트 루프를 블로킹하지 않음
+        await asyncio.to_thread(self._lock.acquire)
+        return self
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        self._lock.release()
+
+    def locked(self) -> bool:
+        return self._lock.locked()
 
 
 class BaseResourcePool(Generic[T]):
@@ -477,13 +495,15 @@ class ResourceCoordinator:
             "Retriever", MAX_RESOURCE_POOL_SIZE, MAX_RESOURCE_POOL_SIZE_BYTES
         )
         self.clients = ClientPool()
-        self._build_locks: dict[str, asyncio.Lock] = {}
+        self._build_locks: dict[str, CrossLoopAsyncLock] = {}
+        self._build_locks_guard = threading.Lock()
         self._in_flight: set[str] = set()
         self._build_call_counter = 0
         self._build_failures: dict[str, tuple[int, float]] = {}
-        self._inference_semaphore: asyncio.Semaphore | None = None
-        self._inference_semaphore_bound: int | None = None
-        self._semaphore_loop: asyncio.AbstractEventLoop | None = None
+        self._inference_sem_lock = threading.Lock()
+        self._inference_sem: threading.Semaphore | None = None
+        self._inference_sem_limit: int | None = 0
+        self._inference_active_count: int = 0
         self._inference_held: int = 0
 
     def reset(self) -> None:
@@ -494,54 +514,31 @@ class ResourceCoordinator:
         self.models.clear()
         self.retrievers.clear()
         self.clients = ClientPool()
-        self._build_locks.clear()
-        self._in_flight.clear()
+        with self._build_locks_guard:
+            self._build_locks.clear()
+            self._in_flight.clear()
         self._build_call_counter = 0
         self._build_failures.clear()
-        self._inference_semaphore = None
-        self._inference_semaphore_bound = None
-        self._semaphore_loop = None
-        self._inference_held = 0
+        with self._inference_sem_lock:
+            self._inference_sem = None
+            self._inference_sem_limit = 0
+            self._inference_active_count = 0
+            self._inference_held = 0
 
-    def _get_build_lock(self, key: str) -> asyncio.Lock:
-        # T1 unified rule (strategy A — single entry per key, recreate only
-        # when idle; per-loop dict rejected: handing loop B a fresh UNLOCKED
-        # lock while loop A still holds the same key forks mutual exclusion
-        # and opens a double-build window (GATE-1a proves it); anyio rejected:
-        # these factories are sync and consumed by asyncio code, so a backend
-        # migration is out of scope for this fix).
-        # Held (possibly on a retired loop): NEVER fork — return the same
-        # object so the critical section stays exclusive; a contender on a
-        # foreign loop fails loud instead of silently double-building. Idle +
-        # foreign-bound: recreate so the new loop gets a usable lock (no hang).
-        existing = self._build_locks.get(key)
-        if existing is not None:
-            if existing.locked():
-                return existing
-            # asyncio.Lock._loop is private; cast to Any to read the bound loop
-            # (None until the first contended acquire).
-            bound_loop = cast("Any", existing)._loop
-            if bound_loop is None or bound_loop is asyncio.get_event_loop():
-                # LRU refresh: hot keys survive the intrinsic cap below.
-                self._build_locks.pop(key, None)
-                self._build_locks[key] = existing
-                return existing
-        self._build_locks.pop(key, None)
-        self._build_locks[key] = asyncio.Lock()
-        self._evict_excess_build_locks()
-        return self._build_locks[key]
+    def _get_build_lock(self, key: str) -> CrossLoopAsyncLock:
+        with self._build_locks_guard:
+            lock = self._build_locks.get(key)
+            if lock is None:
+                lock = CrossLoopAsyncLock()
+                self._build_locks[key] = lock
+                self._evict_excess_build_locks_locked()
+            return lock
 
     def _evict_excess_build_locks(self) -> None:
-        """Enforce the intrinsic cap, sparing held/in-flight keys.
+        with self._build_locks_guard:
+            self._evict_excess_build_locks_locked()
 
-        ``async with`` guarantees unlock on exception, so a locked entry is
-        always a live critical section — evicting it would fork mutual
-        exclusion. When nothing is evictable the dict temporarily overflows
-        (correctness first); the every-50-builds sweep reaps the idle rest.
-
-        Single-pass collection (O(K) over the excess) instead of the previous
-        re-scan-from-head-per-eviction loop (O(K^2)).
-        """
+    def _evict_excess_build_locks_locked(self) -> None:
         excess = len(self._build_locks) - _BUILD_LOCK_MAX_ENTRIES
         if excess <= 0:
             return
@@ -631,19 +628,30 @@ class ResourceCoordinator:
                 f"[RESOURCE] '{key}' 빌드 실패 ({count}/{_BUILD_FAILURE_LIMIT}) — 재시도 허용"
             )
 
+    def _get_inference_semaphore(self) -> Any:
+        bound = get_effective_inference_bound()
+        with self._inference_sem_lock:
+            if self._inference_sem is None or (
+                self._inference_sem_limit is not None
+                and self._inference_sem_limit != bound
+                and self._inference_active_count == 0
+                and not isinstance(self._inference_sem, asyncio.Semaphore)
+            ):
+                self._inference_sem = threading.Semaphore(bound)
+                self._inference_sem_limit = bound
+            return self._inference_sem
+
     @property
-    def inference_semaphore(self) -> asyncio.Semaphore | None:
-        return self._inference_semaphore
+    def inference_semaphore(self) -> Any:
+        return self._inference_sem
 
     @inference_semaphore.setter
-    def inference_semaphore(self, sem: asyncio.Semaphore) -> None:
-        self._inference_semaphore = sem
-        self._inference_semaphore_bound = None
-        self._inference_held = 0
-        try:
-            self._semaphore_loop = asyncio.get_running_loop()
-        except RuntimeError:
-            self._semaphore_loop = None
+    def inference_semaphore(self, sem: Any) -> None:
+        with self._inference_sem_lock:
+            self._inference_sem = sem
+            self._inference_sem_limit = None
+            self._inference_active_count = 0
+            self._inference_held = 0
 
     async def acquire_inference_lock(self, timeout: float | None = None) -> None:
         """LLM 추론을 위한 세마포어 락을 획득합니다.
@@ -651,92 +659,108 @@ class ResourceCoordinator:
         timeout(초) 내에 획득하지 못하면 LLMInferenceError(reason="timeout")를
         발생시킵니다. 기본값은 config의 OLLAMA_TIMEOUT입니다.
         """
-        loop = asyncio.get_running_loop()
-        # T2: get_effective_inference_bound로 위임. 게이트 미통과/기본값(1)에서는
-        # host_pressure_exceeded 호출 없이 기존 흐름과 동일(동작/성능 변화 없음).
-        effective_bound = get_effective_inference_bound()
-        # T1 unified rule: recreate on loop/bound change ONLY when idle
-        # (_inference_held == 0). Recreating while permits are outstanding
-        # discards held-permit accounting and over-admits on the new loop
-        # (GATE-1a: bound=1 held on A, B must NOT acquire). When held, reuse
-        # the same semaphore so the contender parks and times out loud.
-        if self._inference_semaphore is None:
-            # No semaphore: nothing can be held — reset any drifted counter
-            # (tests poke _inference_semaphore directly) and create fresh.
-            self._inference_held = 0
-            self._inference_semaphore = asyncio.Semaphore(effective_bound)
-            self._inference_semaphore_bound = effective_bound
-            self._semaphore_loop = loop
-        elif self._semaphore_loop is not loop:
-            # Loop change -> recreate ONLY when idle (see T1 rule above).
-            if self._inference_held == 0:
-                self._inference_semaphore = asyncio.Semaphore(effective_bound)
-                self._inference_semaphore_bound = effective_bound
-                self._semaphore_loop = loop
-        elif self._inference_semaphore_bound is not None:
-            # Managed semaphore only: re-create on VRAM-pressure bound change.
-            # Track the CREATION bound (not _value) to avoid permit-leak recreation.
-            if (
-                self._inference_semaphore_bound != effective_bound
-                and self._inference_held == 0
-            ):
-                self._inference_semaphore = asyncio.Semaphore(effective_bound)
-                self._inference_semaphore_bound = effective_bound
-        # Injected semaphores (bound is None) are respected as-is — never recreated.
-        wait_seconds = timeout if timeout is not None else OLLAMA_TIMEOUT
-        sem = self._inference_semaphore
-        acquired = False
-        try:
-            acquire_coro = sem.acquire()
-            if wait_seconds is None or wait_seconds <= 0:
-                await acquire_coro
-                acquired = True
-            else:
-                # asyncio.wait_for 취소 시 내부 acquire_coro 완료 여부를 안전하게 처리
-                acquire_task = asyncio.create_task(acquire_coro)
-                try:
-                    await asyncio.wait_for(
-                        asyncio.shield(acquire_task), timeout=wait_seconds
-                    )
+        sem = self._get_inference_semaphore()
+        wait_seconds = timeout if timeout is not None else float(OLLAMA_TIMEOUT)
+
+        if isinstance(sem, asyncio.Semaphore):
+            acquired = False
+            try:
+                acquire_coro = sem.acquire()
+                if wait_seconds is None or wait_seconds <= 0:
+                    await acquire_coro
                     acquired = True
-                except (asyncio.TimeoutError, asyncio.CancelledError):
-                    # 취소나 타임아웃 발생 시 태스크가 이미 acquire에 성공했는지 검사
-                    if (
-                        acquire_task.done()
-                        and not acquire_task.cancelled()
-                        and not acquire_task.exception()
-                    ):
+                else:
+                    acquire_task = asyncio.create_task(acquire_coro)
+                    try:
+                        await asyncio.wait_for(
+                            asyncio.shield(acquire_task), timeout=wait_seconds
+                        )
+                        acquired = True
+                    except (asyncio.TimeoutError, asyncio.CancelledError):
+                        if (
+                            acquire_task.done()
+                            and not acquire_task.cancelled()
+                            and not acquire_task.exception()
+                        ):
+                            sem.release()
+                        else:
+                            acquire_task.cancel()
+
+                            def _cleanup_late_acquire(t: asyncio.Task) -> None:
+                                if not t.cancelled() and not t.exception():
+                                    sem.release()
+
+                            acquire_task.add_done_callback(_cleanup_late_acquire)
+                        raise
+            except asyncio.TimeoutError as e:
+                raise LLMInferenceError(
+                    reason="timeout",
+                    details={
+                        "operation": "acquire_inference_lock",
+                        "timeout_seconds": wait_seconds,
+                    },
+                ) from e
+            except Exception:
+                if acquired:
+                    sem.release()
+                raise
+            self._inference_held += 1
+            return
+
+        state = {"acquired": False, "aborted": False}
+        state_lock = threading.Lock()
+
+        def _blocking_acquire() -> bool:
+            ok = sem.acquire(
+                timeout=max(0.001, wait_seconds) if wait_seconds > 0 else None
+            )
+            with state_lock:
+                if ok:
+                    if state["aborted"]:
                         sem.release()
-                    else:
-                        acquire_task.cancel()
+                        return False
+                    state["acquired"] = True
+                    return True
+                return False
 
-                        # 태스크가 나중에 획득 성공하는 레이스 방지
-                        def _cleanup_late_acquire(t: asyncio.Task) -> None:
-                            if not t.cancelled() and not t.exception():
-                                sem.release()
-
-                        acquire_task.add_done_callback(_cleanup_late_acquire)
-                    raise
-        except asyncio.TimeoutError as e:
-            raise LLMInferenceError(
-                reason="timeout",
-                details={
-                    "operation": "acquire_inference_lock",
-                    "timeout_seconds": wait_seconds,
-                },
-            ) from e
-        except Exception:
-            if acquired:
-                sem.release()
+        try:
+            success = await asyncio.to_thread(_blocking_acquire)
+            if not success:
+                raise LLMInferenceError(
+                    reason="timeout",
+                    details={
+                        "operation": "acquire_inference_lock",
+                        "timeout_seconds": wait_seconds,
+                    },
+                )
+            with self._inference_sem_lock:
+                self._inference_active_count += 1
+                self._inference_held += 1
+        except asyncio.CancelledError:
+            with state_lock:
+                state["aborted"] = True
+                if state["acquired"]:
+                    sem.release()
             raise
-        self._inference_held += 1
 
     def release_inference_lock(self) -> None:
         """획득한 LLM 추론 락을 해제합니다."""
-        if self._inference_semaphore is not None:
-            self._inference_semaphore.release()
+        sem = self._inference_sem
+        if isinstance(sem, asyncio.Semaphore):
+            with contextlib.suppress(ValueError):
+                sem.release()
             if self._inference_held > 0:
                 self._inference_held -= 1
+            return
+
+        with self._inference_sem_lock:
+            if self._inference_active_count > 0:
+                self._inference_active_count -= 1
+            if self._inference_held > 0:
+                self._inference_held -= 1
+            if self._inference_sem is not None:
+                with contextlib.suppress(ValueError):
+                    self._inference_sem.release()
 
     @asynccontextmanager
     async def inference_session(self, timeout: float | None = None):
@@ -1102,6 +1126,7 @@ def get_resource_manager() -> ResourceCoordinator:
 __all__ = [
     "BaseResourcePool",
     "ClientPool",
+    "CrossLoopAsyncLock",
     "EVICT_COOLDOWN_SECONDS",
     "ModelPool",
     "ResourceCoordinator",

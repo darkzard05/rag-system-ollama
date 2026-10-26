@@ -20,7 +20,7 @@ import logging
 import threading
 from collections.abc import Awaitable
 from concurrent.futures import Future
-from typing import Any
+from typing import Any, cast
 
 logger = logging.getLogger(__name__)
 
@@ -37,6 +37,8 @@ class AsyncWorker:
     _instance: AsyncWorker | None = None
     _init_lock = threading.Lock()
     _initialized: bool = False
+    _loop: asyncio.AbstractEventLoop = cast(Any, None)
+    _thread: threading.Thread = cast(Any, None)
 
     def __new__(cls) -> AsyncWorker:
         if cls._instance is None:

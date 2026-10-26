@@ -47,6 +47,7 @@ from core.graph._speculative_gen import (
     _SpecGenerate,
 )
 from core.model_loader import ModelManager
+from core.resource_manager import CrossLoopAsyncLock
 from core.session import SessionManager
 from services.monitoring.performance_monitor import (
     OperationType,
@@ -155,36 +156,13 @@ class _GraphCache:
     """컴파일된 그래프, 체크포인터, 빌드 락을 안전하게 캡슐화하는 프록시.
 
     실제 항목은 통합 캐시(_graph_object_cache: ObjectCache)에 보관되며,
-    본 프록시는 (1) 단일 전역 asyncio.Lock + 이중 확인 불변식을 보유하고,
-    (2) 테스트/삭제 콜백이 직접 찌르는 동기 surface
-    (.compiled/.checkpointer/.get_lock())를 노출한다.
+    본 프록시는 크로스 루프 안전 단일 락(_lock)을 노출한다.
     """
 
     def __init__(self) -> None:
-        self._lock: asyncio.Lock | None = None
+        self._lock = CrossLoopAsyncLock()
 
-    def get_lock(self) -> asyncio.Lock:
-        """지연 초기화된 단일 그래프 빌드 락을 반환합니다.
-
-        T1 unified rule (strategy A): loop change recreates the lock ONLY when
-        idle. A lock HELD on a retired loop is returned as-is so the in-flight
-        compile stays exclusive — recreating while held forks mutual exclusion
-        and opens a double-compile window (GATE-1a). A contender on the foreign
-        loop then fails loud instead of silently double-compiling.
-        """
-        if self._lock is None:
-            self._lock = asyncio.Lock()
-            return self._lock
-        if self._lock.locked():
-            return self._lock
-        # asyncio.Lock._loop is private; cast to Any to read the bound loop
-        # (None until first contended acquire). Idle + foreign-bound: safe to
-        # recreate so the new loop gets a usable lock (GATE-2a: no hang).
-        if (
-            cast("Any", self._lock)._loop is not None
-            and cast("Any", self._lock)._loop is not asyncio.get_event_loop()
-        ):
-            self._lock = asyncio.Lock()
+    def get_lock(self) -> CrossLoopAsyncLock:
         return self._lock
 
     def _get_entry(self) -> _CompiledGraphEntry | None:

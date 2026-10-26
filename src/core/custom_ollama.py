@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import threading
 from typing import Any
 
 import ollama
@@ -43,45 +44,39 @@ class DeepThinkingChatOllama(ChatOllama):
         super().__init__(**kwargs)
         self._active_loop: asyncio.AbstractEventLoop | None = None
         self._loop_safe_async_client: ollama.AsyncClient | None = None
+        self._client_init_lock = threading.Lock()
 
     # =========================================================================
     # [FIX] Event loop is closed 오류 해결:
     # 스트리밍 턴마다 새 스레드/루프가 생성되므로, 루프 변경 감지 시 클라이언트를 자동 갱신
+    # 락으로 동시 덮어쓰기(Torn Connection) 방지
     # =========================================================================
     @property
-    def _async_client(self) -> ollama.AsyncClient:
+    def _async_client(self) -> ollama.AsyncClient:  # type: ignore[override]
         try:
             current_loop = asyncio.get_running_loop()
         except RuntimeError:
             current_loop = None
 
-        if (
-            self._loop_safe_async_client is None
-            or self._active_loop is not current_loop
-            or (current_loop and current_loop.is_closed())
-        ):
-            client_kwargs = dict(getattr(self, "client_kwargs", None) or {})
-            self._loop_safe_async_client = ollama.AsyncClient(
-                host=self.base_url,
-                **client_kwargs,
-            )
-            self._active_loop = current_loop
-        return self._loop_safe_async_client
+        with self._client_init_lock:
+            if (
+                self._loop_safe_async_client is None
+                or self._active_loop is not current_loop
+                or (current_loop and current_loop.is_closed())
+            ):
+                client_kwargs = dict(getattr(self, "client_kwargs", None) or {})
+                self._loop_safe_async_client = ollama.AsyncClient(
+                    host=self.base_url,
+                    **client_kwargs,
+                )
+                self._active_loop = current_loop
+            return self._loop_safe_async_client
 
-    @_async_client.setter
+    @_async_client.setter  # type: ignore
     def _async_client(self, value: ollama.AsyncClient) -> None:
-        """langchain-ollama declares _async_client as a writeable PrivateAttr, so a
-        getter-only override is an unsafe narrowing and mypy rejects it with
-        [override]. Declaring the setter restores the writeable contract.
-
-        This setter is defensive: pydantic routes the parent __init__ assignment into
-        __pydantic_private__ rather than through this descriptor, so reads keep coming
-        from the getter above and the eagerly built parent client stays unused. If it
-        ever is called, drop the cached client so the next read rebuilds it against the
-        running event loop instead of pinning a dead one.
-        """
-        self._loop_safe_async_client = None
-        self._active_loop = None
+        with self._client_init_lock:
+            self._loop_safe_async_client = None
+            self._active_loop = None
 
     def _convert_chunk_to_thought_and_content(
         self, chunk: AIMessageChunk
