@@ -684,14 +684,39 @@ class ResourceCoordinator:
                 self._inference_semaphore_bound = effective_bound
         # Injected semaphores (bound is None) are respected as-is — never recreated.
         wait_seconds = timeout if timeout is not None else OLLAMA_TIMEOUT
-        if wait_seconds is None or wait_seconds <= 0:
-            await self._inference_semaphore.acquire()
-            self._inference_held += 1
-            return
+        sem = self._inference_semaphore
+        acquired = False
         try:
-            await asyncio.wait_for(
-                self._inference_semaphore.acquire(), timeout=wait_seconds
-            )
+            acquire_coro = sem.acquire()
+            if wait_seconds is None or wait_seconds <= 0:
+                await acquire_coro
+                acquired = True
+            else:
+                # asyncio.wait_for 취소 시 내부 acquire_coro 완료 여부를 안전하게 처리
+                acquire_task = asyncio.create_task(acquire_coro)
+                try:
+                    await asyncio.wait_for(
+                        asyncio.shield(acquire_task), timeout=wait_seconds
+                    )
+                    acquired = True
+                except (asyncio.TimeoutError, asyncio.CancelledError):
+                    # 취소나 타임아웃 발생 시 태스크가 이미 acquire에 성공했는지 검사
+                    if (
+                        acquire_task.done()
+                        and not acquire_task.cancelled()
+                        and not acquire_task.exception()
+                    ):
+                        sem.release()
+                    else:
+                        acquire_task.cancel()
+
+                        # 태스크가 나중에 획득 성공하는 레이스 방지
+                        def _cleanup_late_acquire(t: asyncio.Task) -> None:
+                            if not t.cancelled() and not t.exception():
+                                sem.release()
+
+                        acquire_task.add_done_callback(_cleanup_late_acquire)
+                    raise
         except asyncio.TimeoutError as e:
             raise LLMInferenceError(
                 reason="timeout",
@@ -700,6 +725,10 @@ class ResourceCoordinator:
                     "timeout_seconds": wait_seconds,
                 },
             ) from e
+        except Exception:
+            if acquired:
+                sem.release()
+            raise
         self._inference_held += 1
 
     def release_inference_lock(self) -> None:

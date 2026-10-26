@@ -47,17 +47,22 @@ class AsyncWorker:
         return cls._instance
 
     def __init__(self) -> None:
-        if self._initialized:
-            return
-        self._initialized = True
-        self._loop: asyncio.AbstractEventLoop = asyncio.new_event_loop()
-        self._thread: threading.Thread = threading.Thread(
-            target=self._run_loop,
-            daemon=True,
-            name="AsyncWorkerLoop",
-        )
-        self._thread.start()
-        logger.info("[ASYNC_WORKER] Dedicated event loop started")
+        with self._init_lock:
+            if (
+                getattr(self, "_initialized", False)
+                and getattr(self, "_loop", None)
+                and self._loop.is_running()
+            ):
+                return
+            self._initialized = True
+            self._loop = asyncio.new_event_loop()
+            self._thread = threading.Thread(
+                target=self._run_loop,
+                daemon=True,
+                name="AsyncWorkerLoop",
+            )
+            self._thread.start()
+            logger.info("[ASYNC_WORKER] Dedicated event loop started")
 
     # -- internal -----------------------------------------------------------
 

@@ -296,6 +296,14 @@ class RAGSystem:
             self.session_id, model_name, build_fn=self.build_pipeline
         )
         file_hash = SessionManager.get("file_hash", session_id=self.session_id)
+        unpinned = False
+
+        def _safe_unpin():
+            nonlocal unpinned
+            if not unpinned and file_hash:
+                unpinned = True
+                get_resource_manager().unpin_retrievers(file_hash)
+
         try:
             rag_engine = await self._get_rag_engine()
             if not rag_engine:
@@ -303,8 +311,7 @@ class RAGSystem:
                     details={"reason": "파이프라인이 준비되지 않았습니다."}
                 )
         except Exception:
-            if file_hash:
-                get_resource_manager().unpin_retrievers(file_hash)
+            _safe_unpin()
             raise
 
         async def _consumer():
@@ -398,36 +405,40 @@ class RAGSystem:
                 # 정상 경로는 짧은 tail 상한만 기다리고, 미완료 좌표 작업은
                 # 취소하지 않고 백그라운드에서 계속 완료되게 둔다. 중단 경로는
                 # 이미 포기된 턴이므로 기존처럼 즉시 취소·회수한다.
-                drain = await _drain_hydration_tasks(
-                    hydration_tasks,
-                    timeout=(
-                        HYDRATION_ABORT_DRAIN_TIMEOUT_SECONDS
-                        if _aborted
-                        else HYDRATION_TAIL_DRAIN_TIMEOUT_SECONDS
-                    ),
-                    msg_id=self.session_id,
-                    cancel_pending=_aborted,
-                    cancel_on_timeout=_aborted,
-                )
-                if not _aborted and drain.timed_out:
-                    logger.debug(
-                        "[RAG] 하이드레이션 백그라운드 연속 처리 진행 "
-                        "(Tail Latency 방지: msg_id=%s)",
-                        self.session_id,
+                try:
+                    drain = await _drain_hydration_tasks(
+                        hydration_tasks,
+                        timeout=(
+                            HYDRATION_ABORT_DRAIN_TIMEOUT_SECONDS
+                            if _aborted
+                            else HYDRATION_TAIL_DRAIN_TIMEOUT_SECONDS
+                        ),
+                        msg_id=self.session_id,
+                        cancel_pending=_aborted,
+                        cancel_on_timeout=_aborted,
                     )
-                # 중단/백그라운드 계속은 실패가 아니므로, 실제로 완료된 태스크의
-                # 실패만 상태 로그로 표면화한다.
-                if not _aborted and drain.failed:
-                    SessionManager.add_status_log(
-                        "일부 참조 문서의 하이라이트 좌표를 불러오지 못했습니다.",
-                        session_id=self.session_id,
-                    )
-                # D1: 쿼리 스코프 pin 균형 — prepare 단계의 pin(+1)은 스트림 종료 시
-                # 반드시 해제한다 (단일 문서 no-evict는 check_memory_pressure가 담당).
-                if file_hash:
-                    get_resource_manager().unpin_retrievers(file_hash)
+                    if not _aborted and drain.timed_out:
+                        logger.debug(
+                            "[RAG] 하이드레이션 백그라운드 연속 처리 진행 "
+                            "(Tail Latency 방지: msg_id=%s)",
+                            self.session_id,
+                        )
+                    # 중단/백그라운드 계속은 실패가 아니므로, 실제로 완료된 태스크의
+                    # 실패만 상태 로그로 표면화한다.
+                    if not _aborted and drain.failed:
+                        SessionManager.add_status_log(
+                            "일부 참조 문서의 하이라이트 좌표를 불러오지 못했습니다.",
+                            session_id=self.session_id,
+                        )
+                finally:
+                    # 어떠한 예외/취소 상황에서도 unpin 확정 실행
+                    _safe_unpin()
 
-        return _consumer()
+        gen = _consumer()
+        import weakref
+
+        weakref.finalize(gen, _safe_unpin)
+        return gen
 
     def get_status(self) -> list[str]:
         self._ensure_session_context()

@@ -470,6 +470,40 @@ def _q_get_with_stop_poll(
             continue
 
 
+async def _acquire_slot_async(timeout: float) -> bool:
+    """공유 루프를 막지 않도록 슬롯 획득을 워커 스레드로 오프로딩한다.
+
+    태스크가 취소되더라도 실행 중인 OS 스레드가 슬롯을 획득(True)하면
+    스레드 완료 시점에 반드시 release_stream_slot()을 호출하여 슬롯 누수를 원천 차단한다.
+    """
+    acquired_event = threading.Event()
+    is_aborted = False
+    abort_lock = threading.Lock()
+
+    def _blocking_acquire() -> bool:
+        got = acquire_stream_slot(timeout)
+        with abort_lock:
+            if got:
+                if is_aborted:
+                    # 호출자가 이미 취소하고 떠난 경우 즉시 반납
+                    release_stream_slot()
+                    return False
+                acquired_event.set()
+                return True
+            return False
+
+    fut = asyncio.ensure_future(asyncio.to_thread(_blocking_acquire))
+    try:
+        return await asyncio.shield(fut)
+    except asyncio.CancelledError:
+        with abort_lock:
+            is_aborted = True
+            if acquired_event.is_set():
+                # 취소 시점에 이미 획득된 상태였다면 즉시 반납
+                release_stream_slot()
+        raise
+
+
 def stream_chunks(
     query: str, model_name: str, session_id: str
 ) -> Iterator[StreamChunk]:
@@ -520,25 +554,6 @@ def stream_chunks(
     # AsyncClient(httpx 커넥션 풀)가 턴 사이에 유지되어 Keep-Alive가 산다.
     worker = AsyncWorker()
     worker_loop = worker.loop
-
-    async def _acquire_slot_async(timeout: float) -> bool:
-        """공유 루프를 막지 않도록 슬롯 획득을 워커 스레드로 오프로딩한다.
-
-        취소 시 실행기 스레드는 계속 진행해 뒤늦게 슬롯을 얻을 수 있으므로,
-        그 경우 반드시 반납하도록 done 콜백을 걸어 슬롯 누수를 막는다.
-        """
-
-        def _release_late_win(f: asyncio.Future[bool]) -> None:
-            with contextlib.suppress(Exception):
-                if not f.cancelled() and f.exception() is None and f.result():
-                    release_stream_slot()
-
-        fut = asyncio.ensure_future(asyncio.to_thread(acquire_stream_slot, timeout))
-        try:
-            return await fut
-        except asyncio.CancelledError:
-            fut.add_done_callback(_release_late_win)
-            raise
 
     async def run() -> None:
         event_stream: Any = None

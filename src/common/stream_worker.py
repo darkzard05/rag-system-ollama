@@ -75,9 +75,11 @@ def acquire_stream_slot(timeout: float) -> bool:
 def release_stream_slot() -> None:
     """Release a previously acquired stream slot."""
     global _active_slots
+    sem = _stream_semaphore()
     with _stream_lock:
-        _active_slots -= 1
-    _stream_semaphore().release()
+        if _active_slots > 0:
+            _active_slots -= 1
+    sem.release()
 
 
 def register_stream(
