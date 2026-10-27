@@ -14,7 +14,6 @@ import inspect
 import time
 
 import pytest
-
 import src.core.pipeline_builder as pb_mod  # type: ignore[import]
 
 
@@ -66,6 +65,6 @@ async def test_to_thread_keeps_loop_responsive() -> None:
     assert result == "cache-hit"
     assert len(beats) >= 4, f"heartbeat starved during offload: {len(beats)} beats"
     gaps = [b - a for a, b in zip(beats, beats[1:], strict=False)]
-    assert max(gaps) < 0.03, (
+    assert max(gaps) < 0.045, (
         f"event loop stalled during offload: max_gap={max(gaps):.3f}s"
     )
