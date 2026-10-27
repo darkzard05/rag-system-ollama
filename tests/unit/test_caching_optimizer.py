@@ -3,8 +3,8 @@ import asyncio
 import numpy as np
 import pytest
 
-from common.utils import fast_hash
-from services.optimization.backends import DiskCache, SemanticCache
+from src.common.utils import fast_hash  # type: ignore[import]
+from src.services.optimization.backends import DiskCache, SemanticCache  # type: ignore[import]
 
 
 class _FakeEmbedder:
@@ -155,13 +155,14 @@ async def test_semantic_cache_expired_entry_not_returned():
 
     query = "hello world"
     embedding = make_query_embedding()
-    await cache.set(query, "stored_value", ttl_seconds=1, query_embedding=embedding)
+    await cache.set(query, "stored_value", ttl_seconds=10, query_embedding=embedding)
 
     cached_key = fast_hash(query)
     assert cached_key in cache.cache
     assert cached_key in cache.embeddings
 
-    await asyncio.sleep(1.1)
+    cache.cache[cached_key].created_at -= 15.0
+    cache.cache[cached_key].accessed_at -= 15.0
 
     result = await cache.get(query, query_embedding=embedding)
     assert result is None

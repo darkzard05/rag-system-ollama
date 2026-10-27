@@ -1,10 +1,11 @@
 import os
 import sys
 import unittest
+import tempfile
 
 from streamlit.testing.v1 import AppTest
 
-from core.session import SessionManager
+from src.core.session import SessionManager  # type: ignore[import]
 
 # 프로젝트 루트를 경로에 추가
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
@@ -58,14 +59,15 @@ render_message(
     is_latest=True,
 )
 """
-        with open("temp_test_ui.py", "w", encoding="utf-8") as f:
-            f.write(script_content)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            script_path = os.path.join(tmpdir, "temp_test_ui.py")
+            with open(script_path, "w", encoding="utf-8") as f:
+                f.write(script_content)
 
-        try:
             # AppTest를 사용하여 스크립트 실행.
             # 기본 3s 타임아웃은 무거운 임포트 체인 + 팝오버 렌더 경로에
             # 비해 빠듯하여(이 환경에서 재현 확인) 명시적 타임아웃을 부여한다.
-            at = AppTest.from_file("temp_test_ui.py").run(timeout=60)
+            at = AppTest.from_file(script_path).run(timeout=60)
 
             # 1. Reference 見出 확인
             assert any("Reference" in m.value for m in at.markdown), (
@@ -88,8 +90,8 @@ render_message(
 
             # 4. 버튼 키 접두사 확인 (첫 행)
             first_btn = next(b for b in at.button if b.label.startswith("1. "))
-            assert first_btn.key, "첫 행 버튼 키가 없습니다."
-            assert first_btn.key.startswith("reflink_msg_0_1_"), (
+            assert first_btn.key is not None, "첫 행 버튼 키가 없습니다."
+            assert str(first_btn.key).startswith("reflink_msg_0_1_"), (
                 f"버튼 키 오류: {first_btn.key}"
             )
 
@@ -99,14 +101,10 @@ render_message(
             ]
             assert len(style_markdowns) == 0, "버튼 스타일 CSS가 여전히 존재합니다."
 
-        finally:
-            if os.path.exists("temp_test_ui.py"):
-                os.remove("temp_test_ui.py")
-
 
 def test_pdf_viewer_key_includes_page():
     """페이지가 키에 포함되어 페이지 변경 시 컴포넌트 재마운트가 보장된다."""
-    from ui.widget_keys import pdf_viewer_key
+    from src.ui.widget_keys import pdf_viewer_key  # type: ignore[import]
 
     assert pdf_viewer_key("abc", 1) == "pdf_v8_abc_1"
     assert pdf_viewer_key("abc", 1) != pdf_viewer_key("abc", 2)
@@ -171,26 +169,26 @@ if isinstance(_cp, int):
     st.session_state["__current_page"] = int(_cp)
 """
     SessionManager.reset()
-    with open("temp_test_jump_callback.py", "w", encoding="utf-8") as f:
-        f.write(script_content)
-    try:
-        at = AppTest.from_file("temp_test_jump_callback.py").run(timeout=60)
+    with tempfile.TemporaryDirectory() as tmpdir:
+        script_path = os.path.join(tmpdir, "temp_test_jump_callback.py")
+        with open(script_path, "w", encoding="utf-8") as f:
+            f.write(script_content)
+        at = AppTest.from_file(script_path).run(timeout=60)
         assert not at.exception, at.exception
         # 렌더 단계에서는 핸들러가 호출되지 않아야 한다 (P0 회귀 가드)
         assert "__jumped_page" not in at.session_state, (
             "렌더 단계에서 점프 토큰이 세팅됨 (인라인 호출 회귀 의심)"
         )
         jump_btn = next(b for b in at.button if b.label == "p.3")
-        assert jump_btn.key.startswith("pop_doc_m1_3_"), jump_btn.key
+        assert jump_btn.key is not None and str(jump_btn.key).startswith(
+            "pop_doc_m1_3_"
+        ), jump_btn.key
         at_after = jump_btn.click().run(timeout=60)
         assert not at_after.exception, at_after.exception
         assert "__jump_count" in at_after.session_state
         assert at_after.session_state["__jump_count"] == 1
         assert at_after.session_state["__jumped_page"] == 3
         assert at_after.session_state["__current_page"] == 3
-    finally:
-        if os.path.exists("temp_test_jump_callback.py"):
-            os.remove("temp_test_jump_callback.py")
 
 
 def test_doc_jump_click_invokes_handler_via_callback():
@@ -247,16 +245,17 @@ if isinstance(_cp, int):
     st.session_state["__current_page"] = int(_cp)
 """
     SessionManager.reset()
-    with open("temp_test_docjump.py", "w", encoding="utf-8") as f:
-        f.write(script_content)
-    try:
-        at = AppTest.from_file("temp_test_docjump.py").run(timeout=60)
+    with tempfile.TemporaryDirectory() as tmpdir:
+        script_path = os.path.join(tmpdir, "temp_test_docjump.py")
+        with open(script_path, "w", encoding="utf-8") as f:
+            f.write(script_content)
+        at = AppTest.from_file(script_path).run(timeout=60)
         assert not at.exception, at.exception
         assert "__jumped_page" not in at.session_state, (
             "렌더 단계에서 점프 토큰이 세팅됨 (인라인 호출 회귀 의심)"
         )
         btn = next(b for b in at.button if b.label == "Intro · p.7")
-        assert btn.key.startswith("pop_doc_m1_7_"), btn.key
+        assert btn.key is not None and str(btn.key).startswith("pop_doc_m1_7_"), btn.key
         at_after = btn.click().run(timeout=60)
         # P0 계약: 클릭이 on_click 콜백 페이즈에서 _handle_page_jump을 실행한다.
         assert not at_after.exception, at_after.exception
@@ -264,9 +263,6 @@ if isinstance(_cp, int):
         assert at_after.session_state["__jump_count"] == 1
         assert at_after.session_state["__jumped_page"] == 7
         assert at_after.session_state["__current_page"] == 7
-    finally:
-        if os.path.exists("temp_test_docjump.py"):
-            os.remove("temp_test_docjump.py")
 
 
 class TestGeneratingExpanderRerender(unittest.TestCase):
@@ -302,11 +298,9 @@ with st.container():
 with st.container():
     render_generation_expander(msg, expanded=False, generating=True)
 """
-        with open("temp_test_genexp_dupkey.py", "w", encoding="utf-8") as f:
-            f.write(script_content)
-        try:
-            at = AppTest.from_file("temp_test_genexp_dupkey.py").run(timeout=60)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            script_path = os.path.join(tmpdir, "temp_test_genexp_dupkey.py")
+            with open(script_path, "w", encoding="utf-8") as f:
+                f.write(script_content)
+            at = AppTest.from_file(script_path).run(timeout=60)
             assert not at.exception, at.exception
-        finally:
-            if os.path.exists("temp_test_genexp_dupkey.py"):
-                os.remove("temp_test_genexp_dupkey.py")

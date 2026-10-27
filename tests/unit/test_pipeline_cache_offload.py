@@ -15,7 +15,7 @@ import time
 
 import pytest
 
-import core.pipeline_builder as pb_mod
+import src.core.pipeline_builder as pb_mod  # type: ignore[import]
 
 
 def test_cache_load_save_offloaded_to_thread() -> None:
@@ -42,10 +42,10 @@ def test_cache_load_save_offloaded_to_thread() -> None:
 
 @pytest.mark.asyncio
 async def test_to_thread_keeps_loop_responsive() -> None:
-    """행위 가드: 0.5s 블로킹 작업을 offload하면 하트비트가 계속 틱한다."""
+    """행위 가드: 0.05s 블로킹 작업을 offload하면 하트비트가 계속 틱한다."""
 
     def _blocking_load() -> str:
-        time.sleep(0.5)
+        time.sleep(0.05)
         return "cache-hit"
 
     beats: list[float] = []
@@ -54,7 +54,7 @@ async def test_to_thread_keeps_loop_responsive() -> None:
     async def _heartbeat() -> None:
         while not stop:
             beats.append(time.monotonic())
-            await asyncio.sleep(0.02)
+            await asyncio.sleep(0.005)
 
     hb = asyncio.create_task(_heartbeat())
     try:
@@ -64,8 +64,8 @@ async def test_to_thread_keeps_loop_responsive() -> None:
         await hb
 
     assert result == "cache-hit"
-    assert len(beats) >= 5, f"heartbeat starved during offload: {len(beats)} beats"
+    assert len(beats) >= 4, f"heartbeat starved during offload: {len(beats)} beats"
     gaps = [b - a for a, b in zip(beats, beats[1:], strict=False)]
-    assert max(gaps) < 0.3, (
+    assert max(gaps) < 0.03, (
         f"event loop stalled during offload: max_gap={max(gaps):.3f}s"
     )
