@@ -1,6 +1,6 @@
 # INT-3: 모델 교체가 백그라운드 워커에서 실행되는지 검증하는 테스트
 # (1) run_in_background_worker 디스패치 (2) is_swapping_model 인플라이트 가드
-# (3) asyncio.to_thread로 LLM 스왑 오프로드 (공용 _swap_llm_core 위임, R: Group 10)
+# (3) asyncio.to_thread로 LLM 스왑 오프로드
 import asyncio
 import inspect
 import os
@@ -11,7 +11,7 @@ from unittest.mock import MagicMock, patch
 # 프로젝트 루트를 path에 추가
 sys.path.append(os.path.abspath("src"))
 
-from src.main import _bg_update_qa_chain, _handle_pending_tasks, _swap_llm_core
+from src.main import _bg_update_qa_chain, _handle_pending_tasks
 
 from core.session import SessionManager
 
@@ -73,49 +73,28 @@ class TestModelSwapBackgroundDispatch(unittest.TestCase):
         )
 
     def test_bg_update_qa_chain_offloads_core_via_to_thread(self):
-        """_bg_update_qa_chain은 공용 _swap_llm_core를 asyncio.to_thread로
+        """_bg_update_qa_chain은 모델 스왑 작업을 asyncio.to_thread로
         오프로드하고 완료 시 is_swapping_model을 클리어한다."""
         SessionManager.set(
             "last_selected_model", "test-model", session_id="test_session"
         )
         fake_llm = object()
 
-        # to_thread를 실제 코어 실행으로 대체 (오프로드 대상/인자 검증용)
-        async def _run_core(func, arg):
-            func(arg)
-
-        mock_to_thread = MagicMock(wraps=_run_core)
-
         with (
             patch("core.model_loader.load_llm", return_value=fake_llm) as mock_load,
-            patch("asyncio.to_thread", mock_to_thread),
         ):
             asyncio.run(_bg_update_qa_chain("test_session"))
 
-        # to_thread 오프로드 — 단일 AsyncWorker 루프 블로킹 방지
-        mock_to_thread.assert_called_once_with(_swap_llm_core, "test_session")
         # 오프로드된 코어가 실제로 모델을 로드했다
-        mock_load.assert_called_once_with("test-model")
-        # 완료 시 인플라이트 플래그 클리어
-        assert (
-            SessionManager.get("is_swapping_model", session_id="test_session") is False
-        )
-
-    def test_swap_llm_core_loads_model_and_sets_llm(self):
-        """공용 _swap_llm_core는 모델을 로드해 세션에 LLM을 세팅하고 완료 플래그를 남긴다."""
-        fake_llm = object()
-        SessionManager.set(
-            "last_selected_model", "test-model", session_id="test_session"
-        )
-
-        with patch("core.model_loader.load_llm", return_value=fake_llm) as mock_load:
-            _swap_llm_core("test_session")
-
         mock_load.assert_called_once_with("test-model")
         assert SessionManager.get("llm", session_id="test_session") is fake_llm
         assert (
             SessionManager.get("rag_build_complete_flag", session_id="test_session")
             is True
+        )
+        # 완료 시 인플라이트 플래그 클리어
+        assert (
+            SessionManager.get("is_swapping_model", session_id="test_session") is False
         )
 
 

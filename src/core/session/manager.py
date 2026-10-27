@@ -730,36 +730,39 @@ class SessionManager:
 
     @classmethod
     def reset_for_new_file(cls, session_id: str | None = None):
-        # 새 문서 업로드 시 이전 문서에 대한 대화 내용도 함께 초기화합니다.
+        """새 문서 업로드 시 이전 대화 및 파일 상태를 원자적 배치로 초기화합니다."""
         cls.reset_conversation(session_id)
-        cls.set("pdf_processed", False, session_id)
-        cls.set("rag_engine", None, session_id)
-        cls.set("active_faiss_retriever", None, session_id)
-        cls.set("active_bm25_retriever", None, session_id)
-        cls.set("file_hash", None, session_id)
-        cls.set("last_uploaded_file_name", None, session_id)
-        cls.set("pdf_file_path", None, session_id)
-        cls.set("total_pages", None, session_id)
-        cls.set("doc_stats", None, session_id)
-        cls.set("new_file_uploaded", False, session_id)
-        cls.set("is_building_rag", False, session_id)
-        cls.set("build_msg_id", None, session_id)
-        cls.set("active_stream_msg_id", "", session_id)
-        cls.set("generation_cancel", False, session_id)
-        cls.set("perf_turn_start", None, session_id)
-        cls.set("perf_rerun_start", None, session_id)
-        cls.set("stream_finalized_no_rerun", "", session_id)
-        cls.set("pdf_processing_error", None, session_id)
-        cls.set("rebuild_error", None, session_id)
-        cls.set("rebuild_cancelled", False, session_id)
-        cls.set("build_state", None, session_id)
-        cls.set("first_page_preview", None, session_id)
-        cls.set("needs_rag_rebuild", False, session_id)
-        cls.set("needs_qa_chain_update", False, session_id)
-        cls.set("rag_build_complete_flag", False, session_id)
-        cls.set("current_page", 1, session_id)
-        cls.set("pdf_annotations", [], session_id)
-        cls.set("manual_nav_ts", 0, session_id)
+        cls.set(
+            session_id=session_id,
+            pdf_processed=False,
+            rag_engine=None,
+            active_faiss_retriever=None,
+            active_bm25_retriever=None,
+            file_hash=None,
+            last_uploaded_file_name=None,
+            pdf_file_path=None,
+            total_pages=None,
+            doc_stats=None,
+            new_file_uploaded=False,
+            is_building_rag=False,
+            build_msg_id=None,
+            active_stream_msg_id="",
+            generation_cancel=False,
+            perf_turn_start=None,
+            perf_rerun_start=None,
+            stream_finalized_no_rerun="",
+            pdf_processing_error=None,
+            rebuild_error=None,
+            rebuild_cancelled=False,
+            build_state=None,
+            first_page_preview=None,
+            needs_rag_rebuild=False,
+            needs_qa_chain_update=False,
+            rag_build_complete_flag=False,
+            current_page=1,
+            pdf_annotations=[],
+            manual_nav_ts=0,
+        )
         cls.delete("pdf_target_page", session_id)
         cls.add_status_log("새 문서 분석 시작", session_id)
 

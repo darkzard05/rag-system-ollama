@@ -1238,60 +1238,43 @@ async def _bg_rebuild_task(
             _BUILD_RERUN_LAST.pop(session_id, None)
 
 
-def _swap_llm_core(session_id: str) -> None:
-    """LLM(QA Chain)만 교체하는 공통 코어. (R: Group 10 중복 통합)
-
-    ``_bg_update_qa_chain``(async) 와 ``_update_qa_chain``(sync) 가 중복하던
-    모델 로드 → 세션 상태 갱신 → 상태 로그 → 오류 처리 → 완료 플래그 로직을
-    단일 동기 함수로 통합한다.
-
-    - ``is_swapping_model`` 플래그 관리는 호출자(각 함수)가 담당한다
-      (async 는 True/False 를, sync 는 전혀 쓰지 않음 — 동작 보존).
-    - ``load_llm`` 은 동기 호출이다. async 진입점은 ``asyncio.to_thread`` 로
-      이 함수를 오프로드한다. 전역 세션 설정은 변경하지 않는다(명시적 session_id).
-    """
-    from core.model_loader import load_llm
-    from core.session import SessionManager
-
-    selected_model = SessionManager.get("last_selected_model", session_id=session_id)
-    try:
-        SessionManager.add_status_log(
-            "Switching inference model...", session_id=session_id
-        )
-        model_name = str(selected_model or DEFAULT_OLLAMA_MODEL)
-        llm = load_llm(model_name)
-        SessionManager.set("llm", llm, session_id=session_id)
-        SessionManager.add_status_log("Inference model switched", session_id=session_id)
-    except Exception as e:
-        error_msg = "답변 생성 모델을 변경하는 중 오류가 발생했습니다."
-        logger.error(f"QA 업데이트 실패: {e}", exc_info=True)
-        SessionManager.add_status_log(error_msg, session_id=session_id)
-        SessionManager.add_message(
-            "assistant",
-            error_msg,
-            msg_type="build_error",
-            session_id=session_id,
-        )
-    finally:
-        SessionManager.set("rag_build_complete_flag", True, session_id=session_id)
-
-
 async def _bg_update_qa_chain(session_id: str) -> None:
-    """
-    [Background Task] 문서 인덱싱은 유지한 채 LLM(QA Chain)만 백그라운드로 교체합니다.
-
-    `_bg_rebuild_task`와 동일하게 run_in_background_worker(common.utils)가 전용
-    AsyncWorker 이벤트 루프에서 실행한다. load_llm은 동기 호출이므로
-    `asyncio.to_thread`로 스레드 풀에 오프로드한다 — AsyncWorker는 단일 루프이며
-    스트림 소비자(ui/components/streaming.py)와 공유되므로 루프에서 직접 실행하면
-    UI 스트리밍까지 함께 블로킹된다. 실제 스왑은 공용 ``_swap_llm_core`` 위임 (R: Group 10).
-    """
+    """[Background Task] 문서 인덱싱은 유지한 채 LLM(QA Chain)만 비동기 작업 스레드에서 교체합니다."""
+    from core.model_loader import load_llm
     from core.session import SessionManager
 
     SessionManager.set_session_id(session_id)
     SessionManager.set("is_swapping_model", True, session_id=session_id)
+
+    def _swap_sync() -> None:
+        selected_model = SessionManager.get(
+            "last_selected_model", session_id=session_id
+        )
+        try:
+            SessionManager.add_status_log(
+                "Switching inference model...", session_id=session_id
+            )
+            model_name = str(selected_model or DEFAULT_OLLAMA_MODEL)
+            llm = load_llm(model_name)
+            SessionManager.set("llm", llm, session_id=session_id)
+            SessionManager.add_status_log(
+                "Inference model switched", session_id=session_id
+            )
+        except Exception as e:
+            error_msg = "답변 생성 모델을 변경하는 중 오류가 발생했습니다."
+            logger.error(f"QA 업데이트 실패: {e}", exc_info=True)
+            SessionManager.add_status_log(error_msg, session_id=session_id)
+            SessionManager.add_message(
+                "assistant",
+                error_msg,
+                msg_type="build_error",
+                session_id=session_id,
+            )
+        finally:
+            SessionManager.set("rag_build_complete_flag", True, session_id=session_id)
+
     try:
-        await asyncio.to_thread(_swap_llm_core, session_id)
+        await asyncio.to_thread(_swap_sync)
     finally:
         SessionManager.set("is_swapping_model", False, session_id=session_id)
 

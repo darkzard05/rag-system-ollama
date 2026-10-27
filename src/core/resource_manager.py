@@ -471,6 +471,12 @@ class ClientPool:
         return self._async_client
 
 
+def _build_flashranker(name: str) -> Any:
+    from flashrank import Ranker
+
+    return Ranker(model_name=name, cache_dir=MODEL_CACHE_DIR)
+
+
 class ResourceCoordinator:
     """
     리소스 관리 시스템의 최상위 파사드.
@@ -533,10 +539,6 @@ class ResourceCoordinator:
                 self._build_locks[key] = lock
                 self._evict_excess_build_locks_locked()
             return lock
-
-    def _evict_excess_build_locks(self) -> None:
-        with self._build_locks_guard:
-            self._evict_excess_build_locks_locked()
 
     def _evict_excess_build_locks_locked(self) -> None:
         excess = len(self._build_locks) - _BUILD_LOCK_MAX_ENTRIES
@@ -968,14 +970,8 @@ class ResourceCoordinator:
 
     async def get_flashranker(self, model_name: str | None = None) -> Any:
         target = model_name or RERANKER_MODEL_NAME
-
-        def _build(name):
-            from flashrank import Ranker
-
-            return Ranker(model_name=name, cache_dir=MODEL_CACHE_DIR)
-
         return await self.get_or_build(
-            self.models, f"flashrank_{target}", _build, target
+            self.models, f"flashrank_{target}", _build_flashranker, target
         )
 
     # --- 사용부 컨텍스트 매니저: get_or_pin 이 원자 획득+pin, CM 은 unpin 만. ---
@@ -1039,13 +1035,7 @@ class ResourceCoordinator:
                 self.models.pin(k2)
             rk = ranker
         else:
-
-            def _build(name):
-                from flashrank import Ranker
-
-                return Ranker(model_name=name, cache_dir=MODEL_CACHE_DIR)
-
-            rk, k2 = await self.get_or_pin(self.models, key, _build, target)
+            rk, k2 = await self.get_or_pin(self.models, key, _build_flashranker, target)
         try:
             yield rk
         finally:

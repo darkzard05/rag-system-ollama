@@ -687,12 +687,6 @@ async def load_pdf_docs(
 
         except Exception as e:
             logger.error(f"[RAG] [PDF] 추출 오류: {e}", exc_info=True)
-            # 정리 작업 수행
-            try:
-                if op:
-                    pass
-            except Exception as cleanup_e:
-                logger.error(f"[RAG] [PDF] 정리 작업 중 오류 발생: {cleanup_e}")
             raise PDFProcessingError(
                 message=str(e), details={"filename": file_name}
             ) from e

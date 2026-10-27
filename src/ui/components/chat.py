@@ -144,7 +144,6 @@ def render_message(
         # 인용 익스팬더 삭제: 완료 메시지는 상태 1줄 + 본문 + 점프 스트립만 렌더한다.
         # (thought/documents/citations 익스팬더, 툴팁 주입 모두 제거 — 하이라이트
         # 데이터(documents/citations 영속)는 유지하고 UI 계산만 끊는다.)
-        _ = (thought, is_latest, metrics, cancelled)
 
         # 답변 위 상태 1줄 (완료 후에도 유지): 스트리밍 때와 같은 위치.
         if role == "assistant" and not cancelled:
