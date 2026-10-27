@@ -71,6 +71,15 @@ filterwarnings = [
     # mock될 때 생성된 코루틴이 소비되지 않아 GC 시점에 발생하는 테스트 전용
     # 아티팩트(프로덕션에서는 전용 루프에서 await됨).
     "ignore:coroutine 'run_in_background_worker.<locals>._with_session' was never awaited:RuntimeWarning",
+    # [추가] 외부 의존성(NumPy 2.x, FAISS SWIG 바인딩, PyTorch) 레거시 경고 필터
+    "ignore:numpy.core._multiarray_umath is deprecated.*:DeprecationWarning",
+    "ignore:.*SwigPy.*:DeprecationWarning",
+    "ignore:builtin type SwigPy.*:DeprecationWarning",
+    "ignore:.*torch.distributed.reduce_op.*:FutureWarning",
+    "ignore::DeprecationWarning:faiss.*",
+    "ignore::ResourceWarning",
+    "ignore::pytest.PytestUnraisableExceptionWarning",
+    "ignore:.*Exception ignored in.*:pytest.PytestUnraisableExceptionWarning",
 ]
 
 [tool.ruff.lint.isort]

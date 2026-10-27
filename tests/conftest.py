@@ -6,15 +6,31 @@ import os
 import sys
 import tempfile
 import uuid
+import warnings
 from pathlib import Path
 
 import pytest
+
+warnings.filterwarnings("ignore", category=pytest.PytestUnraisableExceptionWarning)
+warnings.filterwarnings("ignore", category=pytest.PytestUnhandledThreadExceptionWarning)
 
 # per-process isolation: 모듈 레벨 auth_manager/기본 AuthenticationManager 가
 # 실제 .model_cache 파일을 건드리지 않도록 임시 디렉터리로 격리합니다.
 _AUTH_TEST_DIR = tempfile.mkdtemp(prefix="rag_ollama_auth_")
 os.environ["AUTH_STATE_FILE"] = os.path.join(_AUTH_TEST_DIR, "auth_state.json")
 os.environ["AUTH_SECRET_FILE"] = os.path.join(_AUTH_TEST_DIR, ".jwt_secret")
+
+# 테스트 환경에서 모든 외부 텔레메트리 스레드 기동 차단
+os.environ["ANONYMIZED_TELEMETRY"] = "False"
+os.environ["POSTHOG_DISABLED"] = "1"
+os.environ["CHROMA_TELEMETRY"] = "False"
+
+try:
+    import posthog
+
+    posthog.disabled = True
+except ImportError:
+    pass
 
 # Add src to sys.path
 BASE_DIR = Path(__file__).parent.parent.absolute()

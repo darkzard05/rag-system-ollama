@@ -535,7 +535,8 @@ def test_pre_chunk_timeout_allows_long_setup(monkeypatch):
 
     def _scripted_get(self: Any, *args: Any, **kwargs: Any) -> Any:
         nonlocal call_idx
-        poll_timeouts.append(kwargs.get("timeout"))
+        timeout = kwargs.get("timeout", args[1] if len(args) > 1 else None)
+        poll_timeouts.append(timeout)
         call_idx += 1
         if call_idx <= 2:
             raise _q.Empty
@@ -597,7 +598,7 @@ def test_inter_chunk_timeout_strikes_after_first_chunk(monkeypatch):
     call_idx = 0
     effective_timeouts: list[float] = []
 
-    def _scripted_get(self: Any, timeout: Any = None) -> Any:
+    def _scripted_get(self: Any, *args: Any, **kwargs: Any) -> Any:
         nonlocal call_idx
         call_idx += 1
         fake_now[0] += 0.5  # each poll consumes 0.5s of simulated time
@@ -649,7 +650,7 @@ def test_hard_cancel_no_tokens_to_lose(monkeypatch):
 
     call_idx = 0
 
-    def _scripted_get(self: Any, timeout: Any = None) -> Any:
+    def _scripted_get(self: Any, *args: Any, **kwargs: Any) -> Any:
         nonlocal call_idx
         call_idx += 1
         if call_idx == 1:

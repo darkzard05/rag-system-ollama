@@ -22,7 +22,7 @@ def test_streaming_persists_processed_content():
     sid = "test_processed_cache_sid"
     SessionManager.reset_all_state(sid)
 
-    raw_text = "이것은 [doc:dummy123] [page:1] 수식 \(x^2\) 테스트입니다 & <특수문자>"
+    raw_text = r"이것은 [doc:dummy123] [page:1] 수식 \(x^2\) 테스트입니다 & <특수문자>"
     fake_chunks = [_fake_chunk(content=raw_text)]
 
     with patch("ui.components.streaming.stream_chunks", return_value=iter(fake_chunks)):

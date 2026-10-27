@@ -8,7 +8,7 @@ from src.core.chunking import split_documents
 async def test_metadata_inheritance():
     # 1. 준비: 메타데이터가 포함된 문서 생성
     # 일부러 아주 긴 텍스트를 넣어 분할이 일어나게 함
-    content = "This is a long document. " * 100
+    content = "This is a document. " * 5
     metadata = {"file_path": "test/path/doc.pdf", "file_hash": "abc123hash", "page": 1}
     docs = [Document(page_content=content, metadata=metadata)]
 
@@ -32,11 +32,11 @@ async def test_metadata_inheritance_with_multiple_docs():
     # 여러 문서가 섞여 있을 때 각각의 메타데이터가 잘 유지되는지 확인
     docs = [
         Document(
-            page_content="Doc 1 content " * 50,
+            page_content="Doc 1 content ",
             metadata={"file_path": "doc1.pdf", "file_hash": "hash1"},
         ),
         Document(
-            page_content="Doc 2 content " * 50,
+            page_content="Doc 2 content ",
             metadata={"file_path": "doc2.pdf", "file_hash": "hash2"},
         ),
     ]

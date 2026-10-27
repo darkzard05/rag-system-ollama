@@ -76,16 +76,21 @@ def test_close_from_owner_loop_does_not_crash():
 
 def test_save_coords_no_block_when_queue_full():
     """큐가 가득 찬 상태에서 save_coords가 블로킹 없이 반환해야 합니다 (C3)."""
-    manager = CoordCacheManager()
-    try:
-        q = manager._queue
-        for i in range(_WRITE_BEHIND_QUEUE_MAX):
-            q.put_nowait((f"fill_{i}", 1, [{"word": "x"}]))
-        assert q.full()
+    import warnings
 
-        # 가득 찬 상태에서도 블로킹 없이 반환되어야 함
-        ok = asyncio.run(manager.save_coords(FILE_HASH, PAGE_NUM, COORDS))
-        assert ok is True
-        assert q.qsize() <= _WRITE_BEHIND_QUEUE_MAX
-    finally:
-        asyncio.run(manager.close())
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        manager = CoordCacheManager()
+        try:
+            asyncio.run(manager.clear_cache(FILE_HASH))
+            manager._queue = asyncio.Queue(maxsize=1)
+            manager._worker_task = None
+            asyncio.run(manager._queue.put(("fill", 1, [{"word": "x"}])))
+            assert manager._queue.full()
+
+            # 가득 찬 상태에서도 블로킹 없이 반환되어야 함
+            ok = asyncio.run(manager.save_coords(FILE_HASH, PAGE_NUM, COORDS))
+            assert ok is True
+        finally:
+            asyncio.run(manager.clear_cache(FILE_HASH))
+            asyncio.run(manager.close())

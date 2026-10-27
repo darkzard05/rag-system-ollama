@@ -353,6 +353,11 @@ SessionManager.set_ui_sync(StreamlitSessionSync())
 
 async def _warmup_models() -> None:
     """사용자 상호작용 발생 시 즉각 양보하는 안전한 백그라운드 프리워밍."""
+    from common.config import is_test_env
+
+    if is_test_env():
+        return
+
     from core.session import SessionManager
 
     # 2.5초 대기를 100ms 단위 폴링으로 분할하여 사용자 상호작용 즉시 감지
