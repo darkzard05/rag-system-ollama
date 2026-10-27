@@ -201,7 +201,7 @@ def _finite_astream_factory(probe: _SlotProbe) -> Callable[..., Any]:
                 yield ("custom", {"status": f"{idx}-1"})
                 # Hold the slot briefly (staggered so completions don't overlap),
                 # then finish naturally - no cancellation anywhere in this test.
-                await asyncio.sleep(0.8 + 0.4 * idx)
+                await asyncio.sleep(0.03 + 0.01 * idx)
                 yield ("custom", {"status": f"{idx}-2"})
             finally:
                 probe.record_closed(idx)
@@ -597,6 +597,7 @@ def test_inter_chunk_timeout_strikes_after_first_chunk(monkeypatch):
     monkeypatch.setattr(sm, "UI_STREAMING_SETUP_TIMEOUT", 300)
     monkeypatch.setattr(sm, "UI_STREAMING_TIMEOUT", 60)
     monkeypatch.setattr(sm, "UI_STREAMING_HARD_TIMEOUT", 0)
+    monkeypatch.setattr(sm, "_STOP_POLL_INTERVAL_SEC", 0.001)
 
     fake_now = [0.0]
     monkeypatch.setattr(sm, "_clock", lambda: fake_now[0])
@@ -607,7 +608,9 @@ def test_inter_chunk_timeout_strikes_after_first_chunk(monkeypatch):
     def _scripted_get(self: Any, *args: Any, **kwargs: Any) -> Any:
         nonlocal call_idx
         call_idx += 1
-        fake_now[0] += 0.5  # each poll consumes 0.5s of simulated time
+        fake_now[0] += (
+            50.0  # each poll consumes 50.0s of simulated time (instantaneous)
+        )
         if call_idx <= 2:
             raise _q.Empty
         if call_idx == 3:
@@ -737,9 +740,10 @@ def test_stop_during_slot_wait_exits_promptly(monkeypatch):
     from ui.components import streaming_core as sc
 
     monkeypatch.setattr(config, "UI_STREAM_WORKERS", 1, raising=False)
-    monkeypatch.setattr(sc, "UI_STREAMING_TIMEOUT", 2, raising=False)
-    monkeypatch.setattr(sc, "UI_STREAMING_SETUP_TIMEOUT", 2, raising=False)
-    assert stream_worker.acquire_stream_slot(timeout=1.0) is True
+    monkeypatch.setattr(sc, "UI_STREAMING_TIMEOUT", 0.05, raising=False)
+    monkeypatch.setattr(sc, "UI_STREAMING_SETUP_TIMEOUT", 0.05, raising=False)
+    monkeypatch.setattr(sc, "_STOP_POLL_INTERVAL_SEC", 0.01, raising=False)
+    assert stream_worker.acquire_stream_slot(timeout=0.1) is True
     assert stream_worker.active_stream_count() == 1
 
     try:
@@ -748,16 +752,13 @@ def test_stop_during_slot_wait_exits_promptly(monkeypatch):
         with pytest.raises(TimeoutError):
             next(it)
         main_elapsed = time.monotonic() - t0
-        assert main_elapsed < 10.0, f"main wait took {main_elapsed:.2f}s"
-        # 스트림은 이제 영속 AsyncWorker 태스크로 실행되므로 per-stream 스레드가
-        # 없다. 대신 stop 이후 워커 태스크가 슬롯 대기에서 즉시 빠져나와
-        # 30초 대기 + 슬롯 누수로 이어지지 않는지 검증한다.
+        assert main_elapsed < 0.8, f"main wait took {main_elapsed:.2f}s"
         _wait_until(
             lambda: stream_worker.waiting_stream_count() == 0,
-            5.0,
+            1.0,
             "worker task stuck in slot acquisition after stop",
         )
-        assert stream_worker.active_stream_count() == 1  # only our hold
+        assert stream_worker.active_stream_count() == 1
     finally:
         stream_worker.release_stream_slot()
     assert stream_worker.active_stream_count() == 0

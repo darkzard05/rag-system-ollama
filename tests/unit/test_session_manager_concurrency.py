@@ -30,6 +30,7 @@ The test asserts three things:
 from __future__ import annotations
 
 import threading
+import time
 
 import pytest
 
@@ -170,6 +171,7 @@ def test_concurrent_dirty_key_snapshot_is_atomic():
         try:
             while not stop.is_set():
                 SessionManager.sync_to_streamlit(session_id=SESSION_ID)
+                time.sleep(0.001)  # GIL 및 per-session Lock 양보 (Lock contention 방지)
         except Exception as exc:  # noqa: BLE001
             errors.append(exc)
 

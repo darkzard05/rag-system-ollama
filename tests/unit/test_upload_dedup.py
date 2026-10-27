@@ -178,6 +178,7 @@ def test_locked_old_file_delete_is_retried(tmp_path):
         patch("src.main.FilePathConstants.TEMP_DIR", str(tmp_path)),
         patch("src.main.st.session_state", _upload(new_bytes, "new.pdf")),
         patch("os.remove", side_effect=flaky_remove),
+        patch("time.sleep"),  # 재시도 백오프 지연 제거
         patch("services.monitoring.notification_system.SystemNotifier.success"),
     ):
         on_file_upload()
@@ -205,6 +206,7 @@ def test_unremovable_old_file_is_reported_not_leaked(tmp_path):
         patch("src.main.FilePathConstants.TEMP_DIR", str(tmp_path)),
         patch("src.main.st.session_state", _upload(new_bytes, "new.pdf")),
         patch("os.remove", side_effect=PermissionError("locked")),
+        patch("time.sleep"),  # 재시도 백오프 지연 제거
         patch("services.monitoring.notification_system.SystemNotifier.success"),
         patch(
             "services.monitoring.notification_system.SystemNotifier.warning"

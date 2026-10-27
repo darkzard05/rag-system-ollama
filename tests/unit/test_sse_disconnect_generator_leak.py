@@ -48,7 +48,9 @@ async def test_sse_disconnect_aclose_race_and_pin_leak() -> None:
             async def _consumer():
                 try:
                     yield ("custom", {"content": "start"})
-                    await asyncio.sleep(2.0)
+                    await asyncio.sleep(
+                        0.05
+                    )  # 2.0s 대기 불필요, 루프 전환 및 disconnect 감지에 0.05s면 충분
                     yield ("custom", {"content": "later"})
                 finally:
                     resource_manager.retrievers.unpin(file_hash)

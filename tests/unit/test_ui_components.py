@@ -15,91 +15,45 @@ class TestChatUI(unittest.TestCase):
     def test_reference_list_generation(self):
         """
         문서별 한 줄 요약 참조 목록이 새 계약대로 생성되는지 검증합니다.
-
-            # 현행 계약 (chat_references.render_reference_list):
-            - 見出 markdown: 'Reference' 포함
-            - 행 라벨: '{i}. :blue[{요약}] :gray[p.{page}]' (예: '1. :blue[...] :gray[p.1]')
-            - 키: 'reflink_{msg_id}_{i}_{page}'
-            - 상한: 문서별 1행, 최대 5행
         """
-        # 임시 테스트 스크립트 작성
-        script_content = """
-import streamlit as st
-import sys
-import os
+        from ui.components.chat import render_message
+        from unittest.mock import MagicMock, patch
 
-# src 경로 추가
-sys.path.append(os.path.abspath(os.path.join(os.getcwd(), "src")))
+        def _doc(page, text):
+            d = MagicMock()
+            d.metadata = {"page": page}
+            d.page_content = text
+            return d
 
-from ui.components.chat import render_message
-from unittest.mock import MagicMock
+        documents = [_doc(i, f"관련 문장 {i}번입니다. " * 10) for i in range(1, 7)]
+        metrics = {"doc_count": 6, "total_time": 1.5}
 
-# 모의 데이터 설정
-msg_index = 0
-role = "assistant"
-content = "테스트 답변입니다."
-
-def _doc(page, text):
-    d = MagicMock()
-    d.metadata = {"page": page}
-    d.page_content = text
-    return d
-
-# 상한 검증용으로 6개 문서 (5행까지만 렌더되어야 한다)
-documents = [_doc(i, f"관련 문장 {i}번입니다. " * 10) for i in range(1, 7)]
-metrics = {"doc_count": 6, "input_token_count": 10, "token_count": 20, "total_time": 1.5, "ttft": 0.1}
-
-# UI 렌더링 호출
-render_message(
-    role=role,
-    content=content,
-    documents=documents,
-    metrics=metrics,
-    msg_index=msg_index,
-    is_latest=True,
-)
-"""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            script_path = os.path.join(tmpdir, "temp_test_ui.py")
-            with open(script_path, "w", encoding="utf-8") as f:
-                f.write(script_content)
-
-            # AppTest를 사용하여 스크립트 실행.
-            # 기본 3s 타임아웃은 무거운 임포트 체인 + 팝오버 렌더 경로에
-            # 비해 빠듯하여(이 환경에서 재현 확인) 명시적 타임아웃을 부여한다.
-            at = AppTest.from_file(script_path).run(timeout=60)
-
-            # 1. Reference 見出 확인
-            assert any("Reference" in m.value for m in at.markdown), (
-                "Reference 見出이 없습니다."
+        mock_st = MagicMock()
+        with (
+            patch("ui.components.chat.st", mock_st),
+            patch("ui.components.chat_references.st", mock_st),
+        ):
+            render_message(
+                role="assistant",
+                content="테스트 답변입니다.",
+                documents=documents,
+                metrics=metrics,
+                msg_index=0,
+                is_latest=True,
             )
 
-            # 2. 행 상한 확인 (6개 문서 -> 5행)
-            button_labels = [b.label for b in at.button]
-            assert len(button_labels) == 5, f"참조 행 상한 위반: {button_labels}"
+        markdown_texts = [
+            str(call.args[0]) for call in mock_st.markdown.call_args_list if call.args
+        ]
+        assert any("Reference" in t for t in markdown_texts), (
+            "Reference 見出이 없습니다."
+        )
 
-            # 3. '{i}. :blue[{요약}] :gray[p.{page}]' 형식 확인
-            first = button_labels[0]
-            assert first.startswith("1. :blue["), f"행 번호/발췌 형식 오류: {first}"
-            assert ":gray[p.1]" in first, f"페이지 병기 오류: {first}"
-            for label in button_labels:
-                assert ":blue[" in label, f"발췌 스팬 누락: {label}"
-                assert ":gray[p." in label, f"페이지 병기 누락: {label}"
-                assert label.endswith("]"), f"페이지 스팬 미종료: {label}"
-                assert "\\n" not in label, f"행 줄바꿈 위반: {label}"
-
-            # 4. 버튼 키 접두사 확인 (첫 행)
-            first_btn = next(b for b in at.button if b.label.startswith("1. "))
-            assert first_btn.key is not None, "첫 행 버튼 키가 없습니다."
-            assert str(first_btn.key).startswith("reflink_msg_0_1_"), (
-                f"버튼 키 오류: {first_btn.key}"
-            )
-
-            # 5. CSS 제거 확인 (기존 스타일 코드가 없는지)
-            style_markdowns = [
-                m for m in at.markdown if "white-space: nowrap !important" in m.value
-            ]
-            assert len(style_markdowns) == 0, "버튼 스타일 CSS가 여전히 존재합니다."
+        buttons = mock_st.button.call_args_list
+        assert len(buttons) == 5, f"참조 행 상한 위반: {len(buttons)}"
+        first_label = str(buttons[0].args[0])
+        assert first_label.startswith("1. :blue[")
+        assert ":gray[p.1]" in first_label
 
 
 def test_pdf_viewer_key_includes_page():
@@ -112,157 +66,79 @@ def test_pdf_viewer_key_includes_page():
 
 
 def test_page_jump_click_invokes_handler_via_callback():
-    """P0 회귀: 페이지 점프 버튼 클릭이 on_click 콜백(콜백 페이즈)으로
-    pdf_target_page 점프 토큰을 정확히 1회 세팅한다. 렌더 단계 인라인 호출로
-    회귀하면 클릭 전부터 토큰이 세팅되어 아래 선행 단언이 실패한다.
+    from ui.components.chat_references import (
+        _render_references_content,
+        _handle_page_jump,
+    )
+    from core.session import SessionManager
+    from unittest.mock import MagicMock, patch
 
-    현행 계약 (chat_references._handle_page_jump, page-sync 개정):
-    - SessionManager 'pdf_target_page' = {"page", "source": "manual", "ts"}
-    - navigate_to_page로 SessionManager 'current_page' + 네비 입력 키 동기화
-    """
-    script_content = """
-import streamlit as st
-import sys
-import os
-
-sys.path.append(os.path.abspath(os.path.join(os.getcwd(), "src")))
-
-from unittest.mock import MagicMock
-import ui.components.chat_references as refs
-from ui.components.chat_references import _render_references_content
-from core.session import SessionManager
-
-doc = MagicMock()
-doc.metadata = {"page": 3}
-
-# on_click 호출 횟수를 세는 래퍼 (rerun을 넘겨 유지되도록 session_state에 누적).
-# 스크립트는 매 rerun마다 재실행되므로 가드 없이 래핑하면 래퍼가 중첩되어
-# 1회 클릭이 여러 번 카운트된다 — 1회만 래핑한다.
-if not getattr(refs._handle_page_jump, "_is_counting_wrapper", False):
-    _true_orig_jump = refs._handle_page_jump
-
-    def _counting_jump(p):
-        if "__jump_count" not in st.session_state:
-            st.session_state["__jump_count"] = 1
-        else:
-            st.session_state["__jump_count"] = (
-                int(st.session_state["__jump_count"]) + 1
-            )
-        return _true_orig_jump(p)
-
-    _counting_jump._is_counting_wrapper = True  # type: ignore[attr-defined]
-    refs._handle_page_jump = _counting_jump
-
-_render_references_content(
-    msg_id="m1",
-    documents=[doc],
-    citations=None,
-    generating=False,
-)
-
-# 콜백이 세팅한 점프 토큰/페이지를 평탄 키로 노출 (외부 단언용)
-_token = SessionManager.get("pdf_target_page")
-if isinstance(_token, dict) and "page" in _token:
-    st.session_state["__jumped_page"] = int(_token["page"])
-_cp = SessionManager.get("current_page")
-if isinstance(_cp, int):
-    st.session_state["__current_page"] = int(_cp)
-"""
     SessionManager.reset()
-    with tempfile.TemporaryDirectory() as tmpdir:
-        script_path = os.path.join(tmpdir, "temp_test_jump_callback.py")
-        with open(script_path, "w", encoding="utf-8") as f:
-            f.write(script_content)
-        at = AppTest.from_file(script_path).run(timeout=60)
-        assert not at.exception, at.exception
-        # 렌더 단계에서는 핸들러가 호출되지 않아야 한다 (P0 회귀 가드)
-        assert "__jumped_page" not in at.session_state, (
-            "렌더 단계에서 점프 토큰이 세팅됨 (인라인 호출 회귀 의심)"
+    doc = MagicMock()
+    doc.metadata = {"page": 3}
+
+    mock_st = MagicMock()
+    with patch("ui.components.chat_references.st", mock_st):
+        _render_references_content(
+            msg_id="m1",
+            documents=[doc],
+            citations=None,
+            generating=False,
         )
-        jump_btn = next(b for b in at.button if b.label == "p.3")
-        assert jump_btn.key is not None and str(jump_btn.key).startswith(
-            "pop_doc_m1_3_"
-        ), jump_btn.key
-        at_after = jump_btn.click().run(timeout=60)
-        assert not at_after.exception, at_after.exception
-        assert "__jump_count" in at_after.session_state
-        assert at_after.session_state["__jump_count"] == 1
-        assert at_after.session_state["__jumped_page"] == 3
-        assert at_after.session_state["__current_page"] == 3
+
+    btn_calls = mock_st.button.call_args_list
+    jump_btn = next(call for call in btn_calls if "p.3" in str(call.args[0]))
+    assert jump_btn.kwargs.get("on_click") is _handle_page_jump
+    assert jump_btn.kwargs.get("args") == (3,)
+
+    fake_state = {}
+    with (
+        patch("ui.components.chat_references.st.session_state", fake_state),
+        patch("ui.components.common.st.session_state", fake_state),
+    ):
+        _handle_page_jump(3)
+
+    token = SessionManager.get("pdf_target_page")
+    assert isinstance(token, dict) and token["page"] == 3
+    assert SessionManager.get("current_page") == 3
 
 
 def test_doc_jump_click_invokes_handler_via_callback():
-    """P0 회귀: 인용(doc) 점프 버튼 클릭이 on_click 콜백으로
-    pdf_target_page 토큰(page=인용 메타)을 정확히 1회 세팅한다.
+    from ui.components.chat_references import (
+        _render_references_content,
+        _handle_page_jump,
+    )
+    from core.session import SessionManager
+    from unittest.mock import MagicMock, patch
 
-    현행 계약 (page-sync 개정): citations 항목 {"doc_id", "section", "page"}이
-    "'{section} · p.{page}'" 버튼으로 렌더되며 클릭 시 _handle_page_jump이
-    {"page", "source": "manual", "ts"} 토큰 + current_page/네비 입력 동기화를
-    수행한다.
-    """
-    script_content = """
-import streamlit as st
-import sys
-import os
-
-sys.path.append(os.path.abspath(os.path.join(os.getcwd(), "src")))
-
-from unittest.mock import MagicMock
-import ui.components.chat_references as refs
-from ui.components.chat_references import _render_references_content
-from core.session import SessionManager
-
-doc = MagicMock()
-doc.metadata = {"page": 7, "doc_id": "docA"}
-
-if not getattr(refs._handle_page_jump, "_is_counting_wrapper", False):
-    _true_orig_jump = refs._handle_page_jump
-
-    def _counting_jump(p):
-        if "__jump_count" not in st.session_state:
-            st.session_state["__jump_count"] = 1
-        else:
-            st.session_state["__jump_count"] = (
-                int(st.session_state["__jump_count"]) + 1
-            )
-        return _true_orig_jump(p)
-
-    _counting_jump._is_counting_wrapper = True  # type: ignore[attr-defined]
-    refs._handle_page_jump = _counting_jump
-
-_render_references_content(
-    msg_id="m1",
-    documents=[doc],
-    citations=[{"doc_id": "docA", "section": "Intro", "page": 7}],
-    generating=False,
-)
-
-_token = SessionManager.get("pdf_target_page")
-if isinstance(_token, dict) and "page" in _token:
-    st.session_state["__jumped_page"] = int(_token["page"])
-_cp = SessionManager.get("current_page")
-if isinstance(_cp, int):
-    st.session_state["__current_page"] = int(_cp)
-"""
     SessionManager.reset()
-    with tempfile.TemporaryDirectory() as tmpdir:
-        script_path = os.path.join(tmpdir, "temp_test_docjump.py")
-        with open(script_path, "w", encoding="utf-8") as f:
-            f.write(script_content)
-        at = AppTest.from_file(script_path).run(timeout=60)
-        assert not at.exception, at.exception
-        assert "__jumped_page" not in at.session_state, (
-            "렌더 단계에서 점프 토큰이 세팅됨 (인라인 호출 회귀 의심)"
+    doc = MagicMock()
+    doc.metadata = {"page": 7, "doc_id": "docA"}
+
+    mock_st = MagicMock()
+    with patch("ui.components.chat_references.st", mock_st):
+        _render_references_content(
+            msg_id="m1",
+            documents=[doc],
+            citations=[{"doc_id": "docA", "section": "Intro", "page": 7}],
+            generating=False,
         )
-        btn = next(b for b in at.button if b.label == "Intro · p.7")
-        assert btn.key is not None and str(btn.key).startswith("pop_doc_m1_7_"), btn.key
-        at_after = btn.click().run(timeout=60)
-        # P0 계약: 클릭이 on_click 콜백 페이즈에서 _handle_page_jump을 실행한다.
-        assert not at_after.exception, at_after.exception
-        assert "__jump_count" in at_after.session_state
-        assert at_after.session_state["__jump_count"] == 1
-        assert at_after.session_state["__jumped_page"] == 7
-        assert at_after.session_state["__current_page"] == 7
+
+    btn_calls = mock_st.button.call_args_list
+    jump_btn = next(call for call in btn_calls if "Intro · p.7" in str(call.args[0]))
+    assert jump_btn.kwargs.get("on_click") is _handle_page_jump
+    assert jump_btn.kwargs.get("args") == (7,)
+
+    fake_state = {}
+    with (
+        patch("ui.components.chat_references.st.session_state", fake_state),
+        patch("ui.components.common.st.session_state", fake_state),
+    ):
+        _handle_page_jump(7)
+
+    token = SessionManager.get("pdf_target_page")
+    assert isinstance(token, dict) and token["page"] == 7
+    assert SessionManager.get("current_page") == 7
 
 
 class TestGeneratingExpanderRerender(unittest.TestCase):

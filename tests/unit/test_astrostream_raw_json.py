@@ -80,10 +80,22 @@ async def test_raw_json_live_5_tokens():
 
     docs = [Document(page_content="context doc")]
 
+    async def _null_aenter(*args, **kwargs):
+        return None
+
+    async def _null_aexit(*args, **kwargs):
+        return False
+
+    mock_rm = MagicMock()
+    mock_coord = mock_rm.return_value
+    mock_coord.use_llm.return_value.__aenter__ = _null_aenter
+    mock_coord.use_llm.return_value.__aexit__ = _null_aexit
+
     with (
         patch("core.graph._generate.PROMPT_TEMPLATES_CONFIG", prompt_config),
         patch("core.graph._glue.adispatch_custom_event", new=captured._append_async),
         patch.object(ModelManager, "inference_session", _NullAsyncCtx),
+        patch("core.graph._generate.get_resource_manager", mock_rm),
     ):
         result = await generate(
             {"input": "q", "relevant_docs": docs},
@@ -147,11 +159,23 @@ async def test_parse_failure_preserves_flag():
 
     docs = [Document(page_content="context doc")]
 
+    async def _null_aenter(*args, **kwargs):
+        return None
+
+    async def _null_aexit(*args, **kwargs):
+        return False
+
+    mock_rm = MagicMock()
+    mock_coord = mock_rm.return_value
+    mock_coord.use_llm.return_value.__aenter__ = _null_aenter
+    mock_coord.use_llm.return_value.__aexit__ = _null_aexit
+
     result = None
     with (
         patch("core.graph._generate.PROMPT_TEMPLATES_CONFIG", prompt_config),
         patch("core.graph._glue.adispatch_custom_event", new=captured._append_async),
         patch.object(ModelManager, "inference_session", _NullAsyncCtx),
+        patch("core.graph._generate.get_resource_manager", mock_rm),
     ):
         # 예외가 새어나오지 않아야 한다 (내부에서 폴백 처리).
         result = await generate(

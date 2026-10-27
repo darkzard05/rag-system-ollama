@@ -122,30 +122,25 @@ def test_raw_json_chain_builds_processed_content():
     msg = _target_message(sid, msg_id)
 
     assert msg["content"] == "Hello [p.5]"
-    # 단순안: 렌더 시점에 툴팁 주입을 하지 않으므로 본문이 그대로 출력된다.
-    from streamlit.testing.v1 import AppTest
 
-    with tempfile.NamedTemporaryFile(
-        "w", suffix=".py", delete=False, encoding="utf-8"
-    ) as script_content:
-        script_content.write(
-            "import sys\n"
-            "sys.path.append(r'" + os.path.abspath("src") + "')\n"
-            "from langchain_core.documents import Document\n"
-            "from ui.components.chat import render_message\n"
-            'render_message(role="assistant", content="Hello [p.5]", '
-            'msg_type="general", documents='
-            "[" + repr(doc) + "])\n"
+    # 경량 Mock을 통한 markdown 렌더링 검증 (AppTest 배제: 2.7s -> 0.002s)
+    from unittest.mock import MagicMock, patch
+    from ui.components.chat import render_message
+
+    mock_st = MagicMock()
+    with (
+        patch("ui.components.chat.st", mock_st),
+        patch("ui.components.chat_references.st", mock_st),
+    ):
+        render_message(
+            role="assistant", content="Hello [p.5]", msg_type="general", documents=[doc]
         )
-        script_path = script_content.name
-    try:
-        at = AppTest.from_file(script_path).run(timeout=60)
-        assert not at.exception
-        body = "".join(m.value for m in at.markdown)
-        assert "Hello [p.5]" in body
-        assert "citation-highlight" not in body
-    finally:
-        os.remove(script_path)
+
+    rendered = "".join(
+        str(call.args[0]) for call in mock_st.markdown.call_args_list if call.args
+    )
+    assert "Hello [p.5]" in rendered
+    assert "citation-highlight" not in rendered
     assert msg["msg_type"] == "general"
     assert SessionManager.get("is_generating_answer", True, sid) is False
 
@@ -186,30 +181,21 @@ def test_answer_xss_escaped_once():
 
     _drive_turn(sid, _stream)
 
-    # processed_content는 렌더 시점에 생성되므로 아래 render_message/AppTest로 검증
+    from unittest.mock import MagicMock, patch
+    from ui.components.chat import render_message
 
-    # render_message가 assistant content를 이스케이프하는지 직접 검증
-    with tempfile.NamedTemporaryFile(
-        "w", suffix=".py", delete=False, encoding="utf-8"
-    ) as script_content:
-        script_content.write(
-            "import sys\n"
-            "sys.path.append(r'" + os.path.abspath("src") + "')\n"
-            "from ui.components.chat import render_message\n"
-            'render_message(role="assistant", content="see <b>bold</b>", '
-            'msg_type="general")\n'
-        )
-        script_path = script_content.name
-    try:
-        from streamlit.testing.v1 import AppTest
+    mock_st = MagicMock()
+    with (
+        patch("ui.components.chat.st", mock_st),
+        patch("ui.components.chat_references.st", mock_st),
+    ):
+        render_message(role="assistant", content="see <b>bold</b>", msg_type="general")
 
-        at = AppTest.from_file(script_path).run(timeout=60)
-        assert not at.exception
-        body = "".join(m.value for m in at.markdown)
-        assert "&lt;b&gt;" in body
-        assert "<b>" not in body
-    finally:
-        os.remove(script_path)
+    rendered = "".join(
+        str(call.args[0]) for call in mock_st.markdown.call_args_list if call.args
+    )
+    assert "&lt;b&gt;" in rendered
+    assert "<b>" not in rendered
 
 
 def test_streaming_error_preserves_partial():
@@ -255,29 +241,25 @@ def test_thought_not_rendered_by_default():
     익스팬더에는 참조만 노출된다. 따라서 원시 thought(<script> 포함)가
     마크다운으로 방출되지 않아 XSS 노출 경로가 차단된다.
     """
-    with tempfile.NamedTemporaryFile(
-        "w", suffix=".py", delete=False, encoding="utf-8"
-    ) as script_content:
-        script_content.write(
-            "import sys\n"
-            "sys.path.append(r'" + os.path.abspath("src") + "')\n"
-            "from ui.components.chat import render_message\n"
-            'render_message(role="assistant", content="A", '
-            'thought="<script>alert(1)</script>", msg_type="general")\n'
-        )
-        script_path = script_content.name
-    try:
-        from streamlit.testing.v1 import AppTest
+    from unittest.mock import MagicMock, patch
+    from ui.components.chat import render_message
 
-        at = AppTest.from_file(script_path).run(timeout=60)
-        assert not at.exception
-        # thought는 익스팬더 밖으로 렌더되지 않는다 (참조 전용 — XSS 경로 차단).
-        thought_blocks = [
-            m for m in at.markdown if m.proto.body == "<script>alert(1)</script>"
-        ]
-        assert not thought_blocks, "thought 마크다운이 렌더되어서는 안 됨"
-    finally:
-        os.remove(script_path)
+    mock_st = MagicMock()
+    with (
+        patch("ui.components.chat.st", mock_st),
+        patch("ui.components.chat_references.st", mock_st),
+    ):
+        render_message(
+            role="assistant",
+            content="A",
+            thought="<script>alert(1)</script>",
+            msg_type="general",
+        )
+
+    rendered = "".join(
+        str(call.args[0]) for call in mock_st.markdown.call_args_list if call.args
+    )
+    assert "<script>alert(1)</script>" not in rendered
 
 
 # ---------------------------------------------------------------------------
