@@ -1,11 +1,35 @@
+from unittest.mock import patch
+
 import pytest
-import asyncio
 from langchain_core.documents import Document
 from src.core.chunking import split_documents
 
 
+class MockSplitter:
+    def __init__(self, *args, **kwargs):
+        pass
+
+    def split_documents(self, docs):
+        chunks = []
+        for doc in docs:
+            text = doc.page_content
+            mid = len(text) // 2
+            if mid > 0:
+                chunks.append(
+                    Document(page_content=text[:mid], metadata=dict(doc.metadata))
+                )
+                chunks.append(
+                    Document(page_content=text[mid:], metadata=dict(doc.metadata))
+                )
+            else:
+                chunks.append(Document(page_content=text, metadata=dict(doc.metadata)))
+        return chunks
+
+
 @pytest.mark.asyncio
-async def test_metadata_inheritance():
+@patch("src.core.chunking._recursive_splitter_cls")
+async def test_metadata_inheritance(mock_splitter_cls):
+    mock_splitter_cls.return_value = MockSplitter
     # 1. 준비: 메타데이터가 포함된 문서 생성
     # 일부러 아주 긴 텍스트를 넣어 분할이 일어나게 함
     content = "This is a document. " * 5
@@ -28,7 +52,9 @@ async def test_metadata_inheritance():
 
 
 @pytest.mark.asyncio
-async def test_metadata_inheritance_with_multiple_docs():
+@patch("src.core.chunking._recursive_splitter_cls")
+async def test_metadata_inheritance_with_multiple_docs(mock_splitter_cls):
+    mock_splitter_cls.return_value = MockSplitter
     # 여러 문서가 섞여 있을 때 각각의 메타데이터가 잘 유지되는지 확인
     docs = [
         Document(
