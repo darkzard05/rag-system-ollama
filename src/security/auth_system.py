@@ -19,6 +19,7 @@ from pathlib import Path
 from threading import RLock
 from typing import Any
 
+from common.config import is_test_env
 from security import crypto_utils
 
 logger = logging.getLogger(__name__)
@@ -119,7 +120,17 @@ class PasswordHasher:
     """비밀번호 해싱"""
 
     HASH_ALGORITHM = "sha256"
-    ITERATIONS = 100000
+    PROD_ITERATIONS = 100000
+    TEST_ITERATIONS = 10
+    # 하위 호환: 기존 코드가 참조하는 프로덕션 iteration 상수.
+    ITERATIONS = PROD_ITERATIONS
+
+    @classmethod
+    def get_iterations(cls) -> int:
+        """테스트 환경이거나 명시적 고속 플래그가 켜지면 경량 iteration 반환."""
+        if is_test_env() or os.getenv("FAST_HASH_FOR_TESTING") == "true":
+            return cls.TEST_ITERATIONS
+        return cls.PROD_ITERATIONS
 
     @staticmethod
     def hash_password(password: str, salt: str | None = None) -> tuple[str, str]:
@@ -129,10 +140,10 @@ class PasswordHasher:
 
         # PBKDF2 시뮬레이션 (실제로는 bcrypt 등 사용)
         hash_obj = hashlib.pbkdf2_hmac(
-            "sha256",
+            PasswordHasher.HASH_ALGORITHM,
             password.encode("utf-8"),
             salt.encode("utf-8"),
-            PasswordHasher.ITERATIONS,
+            PasswordHasher.get_iterations(),
         )
 
         password_hash = base64.b64encode(hash_obj).decode("utf-8")
@@ -141,11 +152,30 @@ class PasswordHasher:
 
     @staticmethod
     def verify_password(password: str, stored_hash: str, salt: str) -> bool:
-        """비밀번호 검증"""
+        """비밀번호 검증.
+
+        현재 환경의 iteration 으로 먼저 검증하고, 불일치 시 프로덕션
+        iteration 으로 한 번 더 검증한다. 테스트 환경에서 생성된 경량 해시와
+        프로덕션에서 생성된 해시(예: 모듈 import 시점 부트스트랩)가 서로
+        호환되도록 하기 위함이다.
+        """
         computed_hash, _ = PasswordHasher.hash_password(password, salt)
 
         # 시간 공격 방지 (constant-time comparison)
-        return hmac.compare_digest(computed_hash, stored_hash)
+        if hmac.compare_digest(computed_hash, stored_hash):
+            return True
+
+        if PasswordHasher.get_iterations() == PasswordHasher.PROD_ITERATIONS:
+            return False
+
+        prod_hash = hashlib.pbkdf2_hmac(
+            PasswordHasher.HASH_ALGORITHM,
+            password.encode("utf-8"),
+            salt.encode("utf-8"),
+            PasswordHasher.PROD_ITERATIONS,
+        )
+        prod_hash_b64 = base64.b64encode(prod_hash).decode("utf-8")
+        return hmac.compare_digest(prod_hash_b64, stored_hash)
 
 
 def _add_b64_padding(data: str) -> str:

@@ -30,8 +30,16 @@ def is_test_env() -> bool:
     프로덕션에서 실수로 env가 설정된 경우 가시적 경고를 남긴다.
     """
     global _TEST_MODE_WARNED  # noqa: PLW0603
-    test_mode = os.getenv("IS_CI_TEST") == "true" or os.getenv("IS_UNIT_TEST") == "true"
-    if test_mode and not _TEST_MODE_WARNED:
+    pytest_active = os.getenv("PYTEST_CURRENT_TEST") is not None
+    test_mode = (
+        os.getenv("IS_CI_TEST") == "true"
+        or os.getenv("IS_UNIT_TEST") == "true"
+        # [최적화] pytest 는 실행 중 PYTEST_CURRENT_TEST 를 자동 주입한다.
+        or pytest_active
+    )
+    # PYTEST_CURRENT_TEST 는 pytest 가 실행 중에만 주입하는 표준 신호이므로
+    # 경고 노이즈를 만들지 않는다. 명시 플래그(IS_CI_TEST/IS_UNIT_TEST)만 경고.
+    if test_mode and not pytest_active and not _TEST_MODE_WARNED:
         _TEST_MODE_WARNED = True
         logger.warning(
             "테스트 환경 플래그 감지 (IS_CI_TEST/IS_UNIT_TEST) "

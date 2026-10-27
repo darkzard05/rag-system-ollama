@@ -58,8 +58,10 @@ async def test_inference_session_times_out_when_slot_held():
 
 def test_load_llm_passes_timeout_to_chat_ollama(monkeypatch):
     """LLM 생성 경로가 DeepThinkingChatOllama 생성자에 timeout을 전달해야 한다."""
+    # 이 테스트는 실제(비-fake) LLM 생성 경로를 검증하므로 테스트 fast-path를 끈다.
     monkeypatch.delenv("IS_CI_TEST", raising=False)
     monkeypatch.delenv("IS_UNIT_TEST", raising=False)
+    monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
 
     from core import custom_ollama
     from core.model_loader import load_llm

@@ -145,4 +145,5 @@ def _ensure_cancel_processed(loop: asyncio.AbstractEventLoop, timeout: float) ->
         await asyncio.sleep(0)
 
     loop.call_soon_threadsafe(loop.create_task, _pause())
-    time.sleep(min(timeout, 0.05))
+    sleep_duration = 0.001 if _config.is_test_env() else min(timeout, 0.05)
+    time.sleep(sleep_duration)

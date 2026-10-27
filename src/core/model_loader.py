@@ -39,6 +39,7 @@ from core._loaders import (  # noqa: F401 — re-exports for backward compat
     _aembed_retry_loop,
     _build_offloop,
     _fetch_available_models_cached,
+    _get_embed_retry_backoff,
     _get_psutil,
     _get_torch,
     _is_embed_transient_failure,

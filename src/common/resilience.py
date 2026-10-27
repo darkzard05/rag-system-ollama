@@ -21,9 +21,14 @@ from typing import Any, TypeVar
 
 import httpx
 
+from common.config import is_test_env
+
 logger = logging.getLogger(__name__)
 
 T = TypeVar("T")
+
+_DEFAULT_BASE_DELAY_SECONDS = 1.0
+_TEST_BASE_DELAY_SECONDS = 0.001
 # 동기 콜러블이든 비동기 콜러블이든 수용하기 위한 폭넓은 시그니처 별칭.
 _Retryable = Callable[..., Any]
 
@@ -37,11 +42,25 @@ _STREAM_RETRY_ON: tuple[type[Exception], ...] = (
 )
 
 
+def _resolve_base_delay(configured_delay: float | None) -> float:
+    """재시도 백오프 지연을 해석합니다.
+
+    호출자가 ``base_delay`` 를 명시하면 그 값을 그대로 존중한다(계약 보존).
+    생략(None)한 경우에만 테스트 환경에서 1ms 로 축소해, 재시도/서킷브레이커
+    검증이 실제 수 초를 유휴 대기하지 않도록 한다.
+    """
+    if configured_delay is not None:
+        return configured_delay
+    if is_test_env():
+        return _TEST_BASE_DELAY_SECONDS
+    return _DEFAULT_BASE_DELAY_SECONDS
+
+
 def retry_with_backoff(
     fn: _Retryable,
     *,
     max_retries: int = 3,
-    base_delay: float = 1.0,
+    base_delay: float | None = None,
     backoff: float = 2.0,
     retry_on: tuple[type[Exception], ...] = (Exception,),
     use_async_sleep: bool = True,
@@ -64,11 +83,14 @@ def retry_with_backoff(
     Returns:
         동기 fn이면 반환값(T), 비동기 fn이면 awaitable(Awaitable[T]).
     """
+    effective_delay = _resolve_base_delay(base_delay)
     if asyncio.iscoroutinefunction(fn):
         return _retry_async(
-            fn, max_retries, base_delay, backoff, retry_on, use_async_sleep
+            fn, max_retries, effective_delay, backoff, retry_on, use_async_sleep
         )
-    return _retry_sync(fn, max_retries, base_delay, backoff, retry_on, use_async_sleep)
+    return _retry_sync(
+        fn, max_retries, effective_delay, backoff, retry_on, use_async_sleep
+    )
 
 
 def _retry_sync(
@@ -125,7 +147,7 @@ async def retry_stream(
     event_stream_factory: Callable[[], AsyncIterator[T]],
     *,
     max_retries: int = 3,
-    base_delay: float = 1.0,
+    base_delay: float | None = None,
 ) -> AsyncIterator[T]:
     """비동기 제너레이터에 지수 백오프 재시도를 적용합니다.
 
@@ -148,6 +170,7 @@ async def retry_stream(
     Yields:
         원본 스트림이 내보내는 항목 (T).
     """
+    effective_delay = _resolve_base_delay(base_delay)
     for attempt in range(max_retries):
         yielded_any = False
         try:
@@ -161,7 +184,7 @@ async def retry_stream(
                 raise
             if attempt == max_retries - 1:
                 raise
-            delay = base_delay * (2**attempt)
+            delay = effective_delay * (2**attempt)
             logger.warning(
                 f"[RETRY] Stream retry {attempt + 1}/{max_retries} "
                 f"after {delay:.1f}s: {exc}"

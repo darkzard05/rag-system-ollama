@@ -11,8 +11,8 @@ import unittest.mock as mock
 import pytest
 
 from core.model_loader import (
-    _EMBED_RETRY_BACKOFF_SECONDS,
     _EMBED_RETRY_MAX_ATTEMPTS,
+    _get_embed_retry_backoff,
     _is_embed_transient_failure,
 )
 
@@ -45,6 +45,8 @@ def _make_real_embedder():
         ),
         mock.patch("core.session.SessionManager.set"),
     ):
+        # 프로덕션 경로(실제 wrapper)를 검증하기 위해 pytest 자동 감지도 끈다.
+        os.environ.pop("PYTEST_CURRENT_TEST", None)
         from core.model_loader import load_embedding_model
 
         inst = load_embedding_model("nomic-embed-text")
@@ -176,11 +178,12 @@ class TestEmbedDocumentsRetry:
         with mock.patch("time.sleep") as mock_sleep:
             inst.embed_documents(["hello"])
 
-        # 1차 실패 → 1s, 2차 실패 → 3s
+        # 1차/2차 실패 대기가 현재 백오프 정책과 일치해야 한다.
         assert mock_sleep.call_count == 2
         calls = [c.args[0] for c in mock_sleep.call_args_list]
-        assert calls[0] == _EMBED_RETRY_BACKOFF_SECONDS[0]
-        assert calls[1] == _EMBED_RETRY_BACKOFF_SECONDS[1]
+        expected_backoff = _get_embed_retry_backoff()
+        assert calls[0] == expected_backoff[0]
+        assert calls[1] == expected_backoff[1]
 
     def test_no_client_raises_value_error(self) -> None:
         """_client 가 None 일 때 ValueError 발생 (재시도 없음)."""

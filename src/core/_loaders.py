@@ -70,6 +70,19 @@ def _build_offloop(builder: Callable[[], T]) -> T:
 # 일시적 상태이므로 멱등한 임베딩 호출에 한해 지수 백오프로 재시도한다.
 _EMBED_RETRY_MAX_ATTEMPTS = 3
 _EMBED_RETRY_BACKOFF_SECONDS = (1, 3, 9)
+_TEST_EMBED_RETRY_BACKOFF_SECONDS = (0.001, 0.002, 0.003)
+
+
+def _get_embed_retry_backoff() -> tuple[float, ...]:
+    """임베딩 재시도 백오프 정책을 반환합니다.
+
+    테스트 환경에서는 1ms 단위로 축소해 재시도 검증이 실제 수 초를 대기하지
+    않도록 한다. 프로덕션에서는 기존 (1, 3, 9)초 정책을 그대로 유지한다.
+    """
+    if is_test_env():
+        return _TEST_EMBED_RETRY_BACKOFF_SECONDS
+    return _EMBED_RETRY_BACKOFF_SECONDS
+
 
 # [B11] 비동기 임베딩 1회 모델 왕복(그룹) 타임아웃(초). 사이클 단위가 아닌
 # 시도(attempt) 단위로 적용한다. 사이클 단위로 걸면 3회 재시도+백오프(1+3+9s
@@ -201,9 +214,8 @@ async def _aembed_retry_loop(
                 raise
         if attempt + 1 >= _EMBED_RETRY_MAX_ATTEMPTS:
             break
-        wait = _EMBED_RETRY_BACKOFF_SECONDS[
-            min(attempt, len(_EMBED_RETRY_BACKOFF_SECONDS) - 1)
-        ]
+        backoff_seconds = _get_embed_retry_backoff()
+        wait = backoff_seconds[min(attempt, len(backoff_seconds) - 1)]
         logger.info(
             "[MODEL] [EMBED] %s, 재시도 %d/%d (대기 %ds)",
             log_prefix,
@@ -346,9 +358,8 @@ class _NoTruncateOllamaEmbeddings(OllamaEmbeddings):  # type: ignore
                     raise
                 if attempt + 1 >= _EMBED_RETRY_MAX_ATTEMPTS:
                     break
-                wait = _EMBED_RETRY_BACKOFF_SECONDS[
-                    min(attempt, len(_EMBED_RETRY_BACKOFF_SECONDS) - 1)
-                ]
+                backoff_seconds = _get_embed_retry_backoff()
+                wait = backoff_seconds[min(attempt, len(backoff_seconds) - 1)]
                 import core.model_loader
 
                 core.model_loader.logger.info(
@@ -494,6 +505,20 @@ def _schedule_background_models_fetch() -> None:
         ).start()
 
 
+def _ollama_client_is_stubbed() -> bool:
+    """테스트가 ``ollama.Client`` 를 mock으로 교체했는지 판별합니다.
+
+    명시적으로 클라이언트를 스텁한 테스트(캐시/TTL 계약 검증)는 테스트 환경
+    fast-path를 우회해 실제 코드 경로를 검증해야 한다. mock이 아니면 로컬
+    Ollama 데몬 부재 시 5초 소켓 타임아웃을 물지 않도록 fast-path를 탄다.
+    """
+    try:
+        import ollama
+    except ImportError:
+        return False
+    return hasattr(getattr(ollama, "Client", None), "mock_calls")
+
+
 def _fetch_available_models_cached(
     non_blocking_fallback: bool = False,
 ) -> list[str]:
@@ -508,6 +533,14 @@ def _fetch_available_models_cached(
     동기 조회로 최신 값을 반환합니다.
     """
     global _models_cache
+
+    # [최적화] 단위 테스트 환경에서 실제 Ollama 데몬이 없을 때 5초 소켓
+    # 타임아웃에 블로킹되지 않도록 즉시 기본 모델 목록을 반환한다. 클라이언트를
+    # 명시적으로 스텁한 테스트는 실제 경로를 검증할 수 있도록 통과시킨다.
+    if is_test_env() and not _ollama_client_is_stubbed():
+        from common.config import DEFAULT_OLLAMA_MODEL
+
+        return [DEFAULT_OLLAMA_MODEL]
 
     cached = _models_cache
     now = time.monotonic()

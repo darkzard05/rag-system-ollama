@@ -39,6 +39,8 @@ def _make_real_embedder():
         ),
         mock.patch("core.session.SessionManager.set"),
     ):
+        # 프로덕션 경로(실제 wrapper)를 검증하기 위해 pytest 자동 감지도 끈다.
+        os.environ.pop("PYTEST_CURRENT_TEST", None)
         from core.model_loader import load_embedding_model
 
         inst = load_embedding_model("nomic-embed-text")
