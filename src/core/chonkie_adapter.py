@@ -14,7 +14,6 @@ Embedding: project Ollama ``nomic-embed-text-v2-moe`` wrapped in chonkie's
 from __future__ import annotations
 
 import logging
-import re
 from pathlib import Path
 from typing import Any
 
@@ -22,29 +21,12 @@ import numpy as np
 import xxhash
 from langchain_core.documents import Document
 
-logger = logging.getLogger(__name__)
+from common.text_utils import split_by_headers
 
-_HEADER_RE = re.compile(r"^(#{1,6}\s+.+)$", re.MULTILINE)
+logger = logging.getLogger(__name__)
 
 # chonkie>=1.0.0 하한 (requirements/optional-chonkie.txt). 상한핀은 해당 파일 참조.
 _CHONKIE_MIN_VERSION = (1, 0, 0)
-
-
-def split_by_headers(markdown: str) -> list[tuple[str, str]]:
-    """Split markdown into (section_title, body) pairs (header-aware)."""
-    parts = _HEADER_RE.split(markdown)
-    # parts: [pre, h1, body1, h2, body2, ...]
-    if len(parts) == 1:
-        return [("", markdown)]
-    out: list[tuple[str, str]] = []
-    pre = parts[0].strip()
-    if pre:
-        out.append(("", pre))
-    it = iter(parts[1:])
-    for header, body in zip(it, it, strict=False):
-        title = header.lstrip("#").strip()
-        out.append((title, body))
-    return out
 
 
 def is_chonkie_available() -> bool:

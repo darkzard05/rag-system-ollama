@@ -41,18 +41,20 @@ from core._loaders import (  # noqa: F401 — re-exports for backward compat
     _fetch_available_models_cached,
     _get_psutil,
     _get_torch,
-    _host_pressure_exceeded,
     _is_embed_transient_failure,
     _keep_alive_seconds,
     _memo_wrap,
     _NoTruncateOllamaEmbeddings,
-    _ollama_backend_active,
     _PayloadCappedEmbeddings,
     _split_by_payload_size,
     _warmup_models,
     clear_available_models_cache,
     get_available_models,
     load_llm,
+)
+from core.resource_manager import (  # noqa: F401 — re-export for compat
+    _host_pressure_exceeded,
+    _ollama_backend_active,
 )
 
 logger = logging.getLogger(__name__)
@@ -655,3 +657,18 @@ def clear_memo_instances() -> None:
     """
     for instance in list(_memo_instances):
         instance.clear()
+
+
+def is_ollama_embedder(embedder: Embeddings) -> bool:
+    """Ollama 기반 임베더인지 판별합니다 (래퍼 체인 최대 16회 언래핑)."""
+    current: Any = embedder
+    for _ in range(16):
+        inner = getattr(current, "_inner", None)
+        if inner is None or inner is current:
+            break
+        current = inner
+    try:
+        from langchain_ollama import OllamaEmbeddings
+    except ImportError:
+        return False
+    return isinstance(current, OllamaEmbeddings)

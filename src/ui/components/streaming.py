@@ -11,7 +11,6 @@ the pure-logic core:
 - ``_finalize_pdf_side_effects``: post-turn PDF annotation hydration.
 """
 
-import html
 import logging
 import time
 import uuid
@@ -23,10 +22,9 @@ from common.config import MSG_ERROR_OLLAMA_NOT_RUNNING
 from common.utils import (
     doc_stable_id,
     extract_annotations_from_docs,
-    normalize_latex_delimiters,
-    strip_context_tokens,
 )
 from core.session import SessionManager
+from ui.components.common import format_chat_display_text
 from ui.components.reference_plan import (
     adopt_prewarmed_annotations,
     note_stream_references,
@@ -470,28 +468,11 @@ def consume_stream_into_message(
     SessionManager.set("is_generating_answer", False, session_id=sid)
     _t_persist = time.perf_counter()
 
-    from core.retriever_factory import strip_coord_metadata
-
-    lean_documents = []
-    for d in documents or []:
-        if hasattr(d, "metadata"):
-            lean_documents.append(
-                type(d)(
-                    page_content=d.page_content,
-                    metadata=strip_coord_metadata(d.metadata),
-                )
-            )
-        elif isinstance(d, dict):
-            lean_meta = strip_coord_metadata(d.get("metadata", {}))
-            lean_documents.append({**d, "metadata": lean_meta})
-        else:
-            lean_documents.append(d)
-
-    cached_processed = None
-    if accumulated:
-        escaped = html.escape(accumulated)
-        normalized = normalize_latex_delimiters(escaped)
-        cached_processed = strip_context_tokens(normalized)
+    cached_processed = (
+        format_chat_display_text(accumulated, is_assistant=True)
+        if accumulated
+        else None
+    )
 
     SessionManager.add_message(
         "assistant",
@@ -499,7 +480,7 @@ def consume_stream_into_message(
         msg_type="general",
         msg_id=resolved_id,
         thought=thought,
-        documents=lean_documents,
+        documents=documents,
         metrics=metrics,
         citations=citations,
         process_steps=process_steps[-10:],

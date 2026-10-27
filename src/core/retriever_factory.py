@@ -28,6 +28,28 @@ def strip_coord_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
     return {k: v for k, v in metadata.items() if k not in FAISS_COORD_KEYS}
 
 
+def to_lean_documents(documents: list[Any] | None) -> list[Any]:
+    """문서 목록(Document 객체 또는 dict)의 메타데이터에서 좌표 블롭을 일괄 제거한 린 복사본을 반환합니다."""
+    if not documents:
+        return []
+    lean_docs: list[Any] = []
+    for d in documents:
+        if hasattr(d, "metadata") and isinstance(d.metadata, dict):
+            lean_docs.append(
+                type(d)(
+                    page_content=d.page_content,
+                    metadata=strip_coord_metadata(d.metadata),
+                )
+            )
+        elif (
+            isinstance(d, dict) and "metadata" in d and isinstance(d["metadata"], dict)
+        ):
+            lean_docs.append({**d, "metadata": strip_coord_metadata(d["metadata"])})
+        else:
+            lean_docs.append(d)
+    return lean_docs
+
+
 def is_faiss_lean(metadata: dict[str, Any]) -> bool:
     """메타데이터 키가 린 허용 집합의 부분집합인지 판정합니다."""
     return set(metadata.keys()) <= FAISS_LEAN_METADATA_KEYS

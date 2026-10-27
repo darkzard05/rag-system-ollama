@@ -371,30 +371,6 @@ class _NoTruncateOllamaEmbeddings(OllamaEmbeddings):  # type: ignore
         )
 
 
-def _host_pressure_exceeded() -> bool:
-    """동적 참조로 호스트 RAM 압력을 확인합니다.
-
-    ``sys.modules`` 에서 모듈을 조회해 호출하므로, ``common.system_pressure`` 와
-    ``src.common.system_pressure`` 별칭이 다른 객체로 매핑된 환경(conftest)에서도
-    테스트 패치가 일관되게 적용됩니다 (로컬 import 는 패치 무효화).
-    """
-    import common.system_pressure as sp
-
-    return sp.host_pressure_exceeded()
-
-
-def _ollama_backend_active() -> bool:
-    """동적 참조로 Ollama 백엔드 여부를 확인합니다.
-
-    ``sys.modules`` 에서 모듈을 조회해 호출하므로, ``common.system_pressure`` 와
-    ``src.common.system_pressure`` 별칭이 다른 객체로 매핑된 환경(conftest)에서도
-    테스트 패치가 일관되게 적용됩니다 (로컬 import 는 패치 무효화).
-    """
-    import common.system_pressure as sp
-
-    return sp.ollama_backend_active()
-
-
 def _is_ollama_server_up() -> bool:
     """캐시의 실제 상태를 기반으로 Ollama 서버 연결 상태 판별."""
     global _models_cache

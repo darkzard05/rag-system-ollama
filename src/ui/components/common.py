@@ -14,11 +14,13 @@ drifting apart. Covers:
 from __future__ import annotations
 
 import contextlib
+import html
 import time
 
 import streamlit as st
 from streamlit.errors import StreamlitAPIException
 
+from common.utils import normalize_latex_delimiters, strip_context_tokens
 from core.session import SessionManager
 from ui.strings import t
 from ui.widget_keys import PDF_NAV_INPUT_KEY
@@ -123,3 +125,14 @@ def navigate_to_page(page: int) -> None:
     SessionManager.set("manual_nav_ts", time.time())
     with contextlib.suppress(AttributeError, RuntimeError, StreamlitAPIException):
         st.session_state[PDF_NAV_INPUT_KEY] = target
+
+
+def format_chat_display_text(content: str, is_assistant: bool = True) -> str:
+    """채팅 말풍선에 렌더링할 텍스트를 안전하고 일관된 형식으로 전처리합니다."""
+    if not content:
+        return ""
+    display_text = html.escape(content) if is_assistant else content
+    display_text = normalize_latex_delimiters(display_text)
+    if is_assistant:
+        display_text = strip_context_tokens(display_text)
+    return display_text

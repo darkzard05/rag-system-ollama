@@ -191,3 +191,22 @@ def count_tokens_rough(text: str) -> int:
 
     # 최소 1개 이상 반환 및 정수 올림 처리 효과
     return int(rough_count) + 1
+
+
+_HEADER_SPLIT_RE = re.compile(r"^(#{1,6}\s+.+)$", re.MULTILINE)
+
+
+def split_by_headers(markdown: str) -> list[tuple[str, str]]:
+    """마크다운을 (섹션 제목, 본문) 쌍으로 1차 분할합니다 (헤더 보존)."""
+    parts = _HEADER_SPLIT_RE.split(markdown)
+    if len(parts) == 1:
+        return [("", markdown)]
+    out: list[tuple[str, str]] = []
+    pre = parts[0].strip()
+    if pre:
+        out.append(("", pre))
+    it = iter(parts[1:])
+    for header, body in zip(it, it, strict=False):
+        title = header.lstrip("#").strip()
+        out.append((title, body))
+    return out

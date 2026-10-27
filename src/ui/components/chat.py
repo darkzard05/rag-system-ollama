@@ -22,11 +22,17 @@ from streamlit.runtime.scriptrunner_utils.exceptions import StopException
 
 from common.utils import (
     normalize_latex_delimiters,
-    strip_context_tokens,
+    strip_context_tokens,  # noqa: F401 — legacy test patch seam
 )
 from core.session import SessionManager
 from ui.components.chat_autoscroll import render_autoscroll_sentinel
-from ui.components.common import AVATARS, role_avatar, status_line, ui_error
+from ui.components.common import (
+    AVATARS,
+    format_chat_display_text,
+    role_avatar,
+    status_line,
+    ui_error,
+)
 from ui.components.streaming import (
     _AUX_STATE_KEY,
     _clear_aux_state,
@@ -127,12 +133,9 @@ def render_message(
                 if processed_content:
                     st.markdown(processed_content, unsafe_allow_html=True)
                 else:
-                    display_text = (
-                        html.escape(content) if role == "assistant" else content
+                    display_text = format_chat_display_text(
+                        content, is_assistant=(role == "assistant")
                     )
-                    display_text = normalize_latex_delimiters(display_text)
-                    if role == "assistant":
-                        display_text = strip_context_tokens(display_text)
                     st.markdown(display_text, unsafe_allow_html=(role == "assistant"))
             ui_error(f"{t('error_prefix')}{error}")
             # UX-4: 오류 턴 데드엔드 해소 — 재시도 가능 오류면 직전 질문 재전송
@@ -155,14 +158,9 @@ def render_message(
         if processed_content:
             st.markdown(processed_content, unsafe_allow_html=True)
         else:
-            display_text = content
-            if role == "assistant":
-                display_text = html.escape(display_text)
-
-            display_text = normalize_latex_delimiters(display_text)
-            # [F5] 본문에 컨텍스트 메타토큰([doc:..] [score:..] 등)이 노출되지 않도록 제거
-            if role == "assistant":
-                display_text = strip_context_tokens(display_text)
+            display_text = format_chat_display_text(
+                content, is_assistant=(role == "assistant")
+            )
             st.markdown(display_text, unsafe_allow_html=(role == "assistant"))
 
         # 문서별 한 줄 요약 참조 목록 (기존 [1][2] 배지 + 지표 캡션 대체).
@@ -978,9 +976,7 @@ def _render_streaming_with_write_stream(
     # 영속화 시점에 display HTML을 1회만 선계산하여 타임라인 Rerun 시 O(1) 마운트 지원
     cached_processed = None
     if final_text and not final_error:
-        escaped = html.escape(final_text)
-        normalized = normalize_latex_delimiters(escaped)
-        cached_processed = strip_context_tokens(normalized)
+        cached_processed = format_chat_display_text(final_text, is_assistant=True)
 
     _t_persist = time.perf_counter()
     SessionManager.add_message(

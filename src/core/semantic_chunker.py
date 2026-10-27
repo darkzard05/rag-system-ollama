@@ -26,32 +26,13 @@ from langchain_core.embeddings import Embeddings
 from common.config import MODEL_CACHE_DIR, is_test_env
 from common.constants import ChunkingConstants
 from common.similarity import cosine_similarity
+from core.model_loader import is_ollama_embedder
 from services.optimization.caching_optimizer import CacheManager
 
 logger = logging.getLogger(__name__)
 
-
-def _is_ollama_embedder(embedder: Embeddings) -> bool:
-    """Ollama 기반 임베더인지 판별합니다.
-
-    ``load_embedding_model`` 은 결과를 ``MemoizingEmbedding`` 으로 감싸서
-    반환하므로, ``_inner`` 체인을 따라 실제 위임 객체까지 언래핑한 뒤
-    판별합니다. 래퍼 체인은 깊이를 제한해 순환/무한 확장을 방어합니다.
-    model_loader가 이미 langchain_ollama를 로드한 뒤 호출되므로 추가 임포트
-    비용 없이 정확한 isinstance 판별이 가능합니다. langchain_ollama가
-    설치되지 않은 환경에서는 False를 반환합니다.
-    """
-    current: Any = embedder
-    for _ in range(16):
-        inner = getattr(current, "_inner", None)
-        if inner is None or inner is current:
-            break
-        current = inner
-    try:
-        from langchain_ollama import OllamaEmbeddings
-    except ImportError:
-        return False
-    return isinstance(current, OllamaEmbeddings)
+# Backward-compatible alias: older tests import this module-local name.
+_is_ollama_embedder = is_ollama_embedder
 
 
 # [상수] 표준 섹션 키워드 (정제 시 활용)
@@ -435,7 +416,7 @@ class EmbeddingBasedSemanticChunker:
             # 묶어 HTTP 왕복 횟수를 1로 고정한다. (배치 사이즈로 쪼개면 왕복만
             # 늘어나 성능이 떨어짐) 비-Ollama(HuggingFace 등)는 기존처럼
             # batch_size 단위로 분할하여 메모리/디바이스 제약을 존중한다.
-            if _is_ollama_embedder(self.embedder):
+            if is_ollama_embedder(self.embedder):
                 embed_batches: list[list[str]] = [missing_texts]
             else:
                 embed_batches = [

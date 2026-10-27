@@ -19,6 +19,8 @@ from common.config import (
     TEXT_SPLITTER_CONFIG,
 )
 from common.logging_config import silence_transformers_auto_docstring
+from common.text_utils import split_by_headers
+from core.model_loader import is_ollama_embedder
 from core.semantic_chunker import EmbeddingBasedSemanticChunker
 from core.session import SessionManager
 from services.monitoring.performance_monitor import (
@@ -48,25 +50,8 @@ def _recursive_splitter_cls() -> Any:
     return RecursiveCharacterTextSplitter
 
 
-def _is_ollama_embedder(embedder: Embeddings) -> bool:
-    """Ollama 기반 임베더인지 판별합니다.
-
-    ``load_embedding_model`` 은 결과를 ``MemoizingEmbedding`` 으로 감싸므로
-    ``_inner`` 체인을 따라 실제 위임 객체까지 언래핑한다. 래퍼 체인은 깊이를
-    제한해 순환/무한 확장을 방어한다. langchain_ollama가 설치되지 않은
-    환경(HuggingFace 전용)에서는 False를 반환합니다.
-    """
-    current: Any = embedder
-    for _ in range(16):
-        inner = getattr(current, "_inner", None)
-        if inner is None or inner is current:
-            break
-        current = inner
-    try:
-        from langchain_ollama import OllamaEmbeddings
-    except ImportError:
-        return False
-    return isinstance(current, OllamaEmbeddings)
+# Backward-compatible alias: older tests patch/import this module-local name.
+_is_ollama_embedder = is_ollama_embedder
 
 
 def _get_optimal_batch_size(embedder: Embeddings) -> int:
@@ -96,28 +81,6 @@ def _get_optimal_batch_size(embedder: Embeddings) -> int:
         except Exception:
             return 32
     return min(max(4, os.cpu_count() or 4), 16)
-
-
-_HEADER_SPLIT_RE = re.compile(r"^(#{1,6}\s+.+)$", re.MULTILINE)
-
-
-def split_by_headers(markdown: str) -> list[tuple[str, str]]:
-    """마크다운을 (섹션 제목, 본문) 쌍으로 1차 분할합니다 (헤더 보존).
-
-    헤더가 없으면 [("", 전문)]을 반환합니다. 제목은 `#`을 제거한 텍스트입니다.
-    """
-    parts = _HEADER_SPLIT_RE.split(markdown)
-    if len(parts) == 1:
-        return [("", markdown)]
-    out: list[tuple[str, str]] = []
-    pre = parts[0].strip()
-    if pre:
-        out.append(("", pre))
-    it = iter(parts[1:])
-    for header, body in zip(it, it, strict=False):
-        title = header.lstrip("#").strip()
-        out.append((title, body))
-    return out
 
 
 def _get_token_length_fn() -> Any:
