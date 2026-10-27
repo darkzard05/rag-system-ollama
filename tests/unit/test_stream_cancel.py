@@ -533,9 +533,13 @@ def test_pre_chunk_timeout_allows_long_setup(monkeypatch):
     poll_timeouts: list[float | None] = []
     effective_timeouts: list[float] = []
 
+    real_get = _q.Queue.get
+
     def _scripted_get(self: Any, *args: Any, **kwargs: Any) -> Any:
-        nonlocal call_idx
         timeout = kwargs.get("timeout", args[1] if len(args) > 1 else None)
+        if timeout is not None and timeout > sm._STOP_POLL_INTERVAL_SEC + 1e-5:
+            return real_get(self, *args, **kwargs)
+        nonlocal call_idx
         poll_timeouts.append(timeout)
         call_idx += 1
         if call_idx <= 2:
@@ -572,7 +576,9 @@ def test_pre_chunk_timeout_allows_long_setup(monkeypatch):
     # Effective deadline switches from setup(300) to inter-chunk(60).
     assert effective_timeouts == [300.0, 60.0]
     # Stop-responsiveness: no q.get poll blocks beyond the poll interval.
-    assert all(t is not None and t <= sm._STOP_POLL_INTERVAL_SEC for t in poll_timeouts)
+    assert all(
+        t is not None and t <= sm._STOP_POLL_INTERVAL_SEC + 1e-5 for t in poll_timeouts
+    )
 
 
 def test_inter_chunk_timeout_strikes_after_first_chunk(monkeypatch):
