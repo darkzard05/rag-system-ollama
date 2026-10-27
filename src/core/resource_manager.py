@@ -135,13 +135,18 @@ class CrossLoopAsyncLock:
     def __init__(self):
         self._lock = threading.Lock()
 
+    async def acquire(self) -> bool:
+        return await asyncio.to_thread(self._lock.acquire)
+
+    def release(self) -> None:
+        self._lock.release()
+
     async def __aenter__(self):
-        # OS 스레드 풀에서 락 획득을 수행하여 현재 이벤트 루프를 블로킹하지 않음
-        await asyncio.to_thread(self._lock.acquire)
+        await self.acquire()
         return self
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
-        self._lock.release()
+        self.release()
 
     def locked(self) -> bool:
         return self._lock.locked()
@@ -507,8 +512,8 @@ class ResourceCoordinator:
         self._build_call_counter = 0
         self._build_failures: dict[str, tuple[int, float]] = {}
         self._inference_sem_lock = threading.Lock()
-        self._inference_sem: threading.Semaphore | None = None
-        self._inference_sem_limit: int | None = 0
+        self._inference_semaphore: Any | None = None
+        self._inference_semaphore_bound: int | None = 0
         self._inference_active_count: int = 0
         self._inference_held: int = 0
 
@@ -526,8 +531,8 @@ class ResourceCoordinator:
         self._build_call_counter = 0
         self._build_failures.clear()
         with self._inference_sem_lock:
-            self._inference_sem = None
-            self._inference_sem_limit = 0
+            self._inference_semaphore = None
+            self._inference_semaphore_bound = 0
             self._inference_active_count = 0
             self._inference_held = 0
 
@@ -630,28 +635,48 @@ class ResourceCoordinator:
                 f"[RESOURCE] '{key}' 빌드 실패 ({count}/{_BUILD_FAILURE_LIMIT}) — 재시도 허용"
             )
 
+    # 하위 호환 별칭 프로퍼티
+    @property
+    def _inference_sem(self) -> Any:
+        return self._inference_semaphore
+
+    @_inference_sem.setter
+    def _inference_sem(self, val: Any) -> None:
+        self._inference_semaphore = val
+
+    @property
+    def _inference_sem_limit(self) -> int | None:
+        return self._inference_semaphore_bound
+
+    @_inference_sem_limit.setter
+    def _inference_sem_limit(self, val: int | None) -> None:
+        self._inference_semaphore_bound = val
+
     def _get_inference_semaphore(self) -> Any:
         bound = get_effective_inference_bound()
         with self._inference_sem_lock:
-            if self._inference_sem is None or (
-                self._inference_sem_limit is not None
-                and self._inference_sem_limit != bound
+            if self._inference_semaphore is None or (
+                self._inference_semaphore_bound is not None
+                and self._inference_semaphore_bound != bound
                 and self._inference_active_count == 0
-                and not isinstance(self._inference_sem, asyncio.Semaphore)
+                and not isinstance(self._inference_semaphore, asyncio.Semaphore)
+                and not asyncio.iscoroutinefunction(
+                    getattr(self._inference_semaphore, "acquire", None)
+                )
             ):
-                self._inference_sem = threading.Semaphore(bound)
-                self._inference_sem_limit = bound
-            return self._inference_sem
+                self._inference_semaphore = threading.Semaphore(bound)
+                self._inference_semaphore_bound = bound
+            return self._inference_semaphore
 
     @property
     def inference_semaphore(self) -> Any:
-        return self._inference_sem
+        return self._inference_semaphore
 
     @inference_semaphore.setter
     def inference_semaphore(self, sem: Any) -> None:
         with self._inference_sem_lock:
-            self._inference_sem = sem
-            self._inference_sem_limit = None
+            self._inference_semaphore = sem
+            self._inference_semaphore_bound = None
             self._inference_active_count = 0
             self._inference_held = 0
 
@@ -664,7 +689,13 @@ class ResourceCoordinator:
         sem = self._get_inference_semaphore()
         wait_seconds = timeout if timeout is not None else float(OLLAMA_TIMEOUT)
 
-        if isinstance(sem, asyncio.Semaphore):
+        is_async = (
+            isinstance(sem, asyncio.Semaphore)
+            or asyncio.iscoroutinefunction(getattr(sem, "acquire", None))
+            or hasattr(getattr(sem, "acquire", None), "assert_awaited")
+        )
+
+        if is_async:
             acquired = False
             try:
                 acquire_coro = sem.acquire()
@@ -747,8 +778,16 @@ class ResourceCoordinator:
 
     def release_inference_lock(self) -> None:
         """획득한 LLM 추론 락을 해제합니다."""
-        sem = self._inference_sem
-        if isinstance(sem, asyncio.Semaphore):
+        sem = self._inference_semaphore
+        if sem is None:
+            return
+
+        is_async = (
+            isinstance(sem, asyncio.Semaphore)
+            or asyncio.iscoroutinefunction(getattr(sem, "acquire", None))
+            or hasattr(getattr(sem, "acquire", None), "assert_awaited")
+        )
+        if is_async:
             with contextlib.suppress(ValueError):
                 sem.release()
             if self._inference_held > 0:
@@ -760,9 +799,9 @@ class ResourceCoordinator:
                 self._inference_active_count -= 1
             if self._inference_held > 0:
                 self._inference_held -= 1
-            if self._inference_sem is not None:
+            if self._inference_semaphore is not None:
                 with contextlib.suppress(ValueError):
-                    self._inference_sem.release()
+                    self._inference_semaphore.release()
 
     @asynccontextmanager
     async def inference_session(self, timeout: float | None = None):

@@ -163,6 +163,8 @@ class _GraphCache:
         self._lock = CrossLoopAsyncLock()
 
     def get_lock(self) -> CrossLoopAsyncLock:
+        if getattr(self, "_lock", None) is None:
+            self._lock = CrossLoopAsyncLock()
         return self._lock
 
     def _get_entry(self) -> _CompiledGraphEntry | None:

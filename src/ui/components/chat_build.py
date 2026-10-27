@@ -19,7 +19,9 @@ __all__ = [
     "get_build_error_actions",
 ]
 
-_render_build_progress_block = render_document_panel
+
+def _render_build_progress_block(sid: str) -> None:
+    render_document_panel(sid)
 
 
 def _render_build_card(sid: str, build: Any = None) -> None:

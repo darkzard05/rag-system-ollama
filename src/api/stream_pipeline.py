@@ -875,10 +875,21 @@ class StreamingResponseHandler:
         return self.metrics
 
 
+def _current_content_buffer_size() -> int:
+    for modname in ("api.streaming_handler", "src.api.streaming_handler"):
+        mod = sys.modules.get(modname)
+        if mod is not None and "UI_CONTENT_BUFFER_SIZE" in mod.__dict__:
+            try:
+                return int(mod.__dict__["UI_CONTENT_BUFFER_SIZE"])
+            except (TypeError, ValueError):
+                break
+    return UI_CONTENT_BUFFER_SIZE
+
+
 def get_streaming_handler() -> StreamingResponseHandler:
     """call-time 상수 읽기 seam: ``UI_CONTENT_BUFFER_SIZE`` 패치가 반영된다."""
     return StreamingResponseHandler(
-        content_buffer_size=UI_CONTENT_BUFFER_SIZE,
+        content_buffer_size=_current_content_buffer_size(),
         content_timeout_ms=UI_STREAMING_CONTENT_TIMEOUT_MS,
         thought_buffer_size=UI_STREAMING_THOUGHT_BUFFER_SIZE,
         thought_timeout_ms=UI_STREAMING_THOUGHT_TIMEOUT_MS,
