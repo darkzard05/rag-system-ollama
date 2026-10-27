@@ -70,10 +70,8 @@ def test_session_build_state_single_source_no_legacy_dual_write() -> None:
     build = SessionManager.init_build_state("doc.pdf", "hash1", session_id=sid)
     assert SessionManager.get_build_state(session_id=sid) is not None
     assert SessionManager.get("is_building_rag", False, session_id=sid) is True
-    # 3B: 레거시 키는 쓰지 않는다 (기본값 그대로).
-    assert SessionManager.get("rebuild_progress", 0, session_id=sid) == 0
-    assert SessionManager.get("rebuild_done", True, session_id=sid) is False
-    assert SessionManager.get("rebuild_status", None, session_id=sid) is None
+    # 3B: 사장된 레거시 플랫 키들은 제거됨.
+    assert SessionManager.get("rebuild_error", None, session_id=sid) is None
 
     SessionManager.update_build_state(
         BuildEvent(BuildPhase.INDEXING, 75, "build_phase_indexing", time.time()),
@@ -90,7 +88,7 @@ def test_session_build_state_single_source_no_legacy_dual_write() -> None:
 
     complete_build(build, cache_used=False)
     SessionManager.finalize_build_state(build, session_id=sid)
-    assert SessionManager.get("rebuild_done", True, session_id=sid) is False
+    assert SessionManager.get("rebuild_done", None, session_id=sid) is None
     assert SessionManager.get("is_building_rag", True, session_id=sid) is False
     assert SessionManager.get_build_state(session_id=sid) is not None
     assert SessionManager.get_build_state(session_id=sid).phase == BuildPhase.DONE

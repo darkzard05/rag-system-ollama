@@ -312,9 +312,6 @@ def _render_unified_timeline(current_sid: str) -> None:
 # NOTE: 라벨은 호출 시점의 활성 로케일로 해석해야 스트리밍 중 언어 전환이
 # 자막에 실시간 반영된다. import 시점에 바인딩하면 이전 언어로 고정되므로
 # 아래 함수들은 모듈 상수가 아닌 get_phase_labels()를 직접 호출한다.
-# _PHASE_LABELS는 하위 호환용 별칭으로만 유지한다.
-_PHASE_LABELS = get_phase_labels()
-
 # [최적화] 위상 판정용 정적 소문자 키워드 튜플 (언어팩 t() 호출 오버헤드 0화)
 _STATIC_PHASE_KEYWORDS: tuple[tuple[str, ...], ...] = tuple(
     tuple(k.lower() for k in keywords) for _, keywords in PHASE_KEYWORDS
@@ -1053,7 +1050,6 @@ def _render_streaming_with_write_stream(
 # isort: off
 from ui.components.chat_references import (  # noqa: E402
     _extract_reference_pages,
-    _handle_doc_jump,
     _handle_page_jump,
     _render_references_content,
     normalize_excerpt,
@@ -1075,7 +1071,6 @@ __all__ = [
     "_cancel_rebuild",
     "_extract_reference_pages",
     "_friendly_stream_error",
-    "_handle_doc_jump",
     "_handle_page_jump",
     "_render_build_progress_block",
     "_render_build_progress_fragment",

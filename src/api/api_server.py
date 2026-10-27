@@ -96,9 +96,8 @@ async def lifespan(app: FastAPI):
         try:
             while True:
                 await asyncio.sleep(600)  # 10분마다 실행
-                # 세션 정리 및 보안 감사 수행
+                # 세션 정리 수행
                 await asyncio.to_thread(SessionManager.cleanup_expired_sessions, 3600)
-                await asyncio.to_thread(SessionManager.perform_security_audit)
                 await asyncio.to_thread(_sweep_stale_owners)
                 await asyncio.to_thread(_sweep_expired_library_files)
         except asyncio.CancelledError:

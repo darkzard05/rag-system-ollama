@@ -109,10 +109,7 @@ class SessionManager:
         "needs_rag_rebuild": False,
         "needs_qa_chain_update": False,
         "new_file_uploaded": False,
-        "rebuild_done": False,
         "rebuild_error": None,
-        "rebuild_status": None,
-        "rebuild_progress": 0,
         "is_building_rag": False,
         "rebuild_cancelled": False,
         "build_state": None,
@@ -754,9 +751,6 @@ class SessionManager:
         cls.set("stream_finalized_no_rerun", "", session_id)
         cls.set("pdf_processing_error", None, session_id)
         cls.set("rebuild_error", None, session_id)
-        cls.set("rebuild_status", None, session_id)
-        cls.set("rebuild_progress", 0, session_id)
-        cls.set("rebuild_done", False, session_id)
         cls.set("rebuild_cancelled", False, session_id)
         cls.set("build_state", None, session_id)
         cls.set("first_page_preview", None, session_id)
@@ -1065,10 +1059,6 @@ class SessionManager:
             )
             for sid in expired_ids:
                 cls.delete_session(sid)
-
-    @classmethod
-    def perform_security_audit(cls):
-        pass
 
     @classmethod
     def get_stats(cls) -> dict[str, Any]:

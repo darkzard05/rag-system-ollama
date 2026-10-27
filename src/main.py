@@ -1296,18 +1296,6 @@ async def _bg_update_qa_chain(session_id: str) -> None:
         SessionManager.set("is_swapping_model", False, session_id=session_id)
 
 
-def _update_qa_chain(session_id: str | None = None) -> None:
-    """
-    문서 인덱싱은 유지한 채 LLM(QA Chain)만 교체합니다.
-
-    공용 ``_swap_llm_core`` 에 위임한다 (R: Group 10).
-    """
-    from core.session import SessionManager
-
-    sid = session_id or SessionManager.get_session_id()
-    _swap_llm_core(sid)
-
-
 def _post_upload_error(error_msg: str, session_id: str | None = None) -> None:
     """업로드 검증 실패를 타임라인 메시지로 전달합니다 (메인 레벨 요소 삽입 금지).
 

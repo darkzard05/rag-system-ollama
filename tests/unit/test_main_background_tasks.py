@@ -14,7 +14,7 @@ import pytest
 # 프로젝트 루트를 path에 추가
 sys.path.append(os.path.abspath("src"))
 
-from src.main import _bg_rebuild_task, _update_qa_chain, on_file_upload
+from src.main import _bg_rebuild_task, _bg_update_qa_chain, on_file_upload
 from src.ui.components.streaming import stream_chunks
 
 from core.document_processor import compute_file_hash
@@ -237,7 +237,6 @@ class TestMainBackgroundTasks(unittest.TestCase):
     def test_reset_for_new_file_clears_rebuild_state(self):
         SessionManager.set("pdf_processed", True, session_id="test_session")
         SessionManager.set("rag_engine", object(), session_id="test_session")
-        SessionManager.set("rebuild_done", True, session_id="test_session")
         SessionManager.set("rebuild_cancelled", True, session_id="test_session")
         SessionManager.set("needs_rag_rebuild", True, session_id="test_session")
         SessionManager.set("needs_qa_chain_update", True, session_id="test_session")
@@ -246,7 +245,6 @@ class TestMainBackgroundTasks(unittest.TestCase):
 
         assert not SessionManager.get("pdf_processed", session_id="test_session")
         assert SessionManager.get("rag_engine", session_id="test_session") is None
-        assert not SessionManager.get("rebuild_done", session_id="test_session")
         assert not SessionManager.get("rebuild_cancelled", session_id="test_session")
         assert not SessionManager.get("needs_rag_rebuild", session_id="test_session")
         assert not SessionManager.get(
@@ -331,7 +329,7 @@ class TestMainBackgroundTasks(unittest.TestCase):
         SessionManager.set("last_selected_model", "test-model")
 
         # 2. 실행
-        _update_qa_chain(session_id="test_session")
+        asyncio.run(_bg_update_qa_chain(session_id="test_session"))
 
         # 3. 검증
         messages = SessionManager.get_messages(session_id="test_session")

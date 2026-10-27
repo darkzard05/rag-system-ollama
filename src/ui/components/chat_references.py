@@ -29,7 +29,6 @@ logger = logging.getLogger(__name__)
 
 __all__ = [
     "_extract_reference_pages",
-    "_handle_doc_jump",
     "_handle_page_jump",
     "_render_references_content",
     "clear_reference_rows_cache",
@@ -135,10 +134,6 @@ def _handle_page_jump(page: int | str) -> None:
         )
         navigate_to_page(target_page)
         # 좌측 PDF 뷰어와 페이지 컨트롤이 즉시 갱신되므로 4초간 화면을 가리는 불필요한 토스트 제거
-
-
-# 하위 호환성 유지를 위한 alias (기존 참조 보호)
-_handle_doc_jump = _handle_page_jump
 
 
 def _coerce_page(value: object) -> int | None:

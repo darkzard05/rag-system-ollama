@@ -5,13 +5,9 @@
 계산하여 유사도가 낮은 지점을 경계로 선택합니다. 이를 통해 의미론적으로
 일관성 있는 청크를 생성합니다.
 
-[R2-10] 배치 3에서 5개 믹스인 하위 모듈을 본 단일 파일로 통합했습니다.
-본 모듈은 전체 청커(문장 분할, 임베딩/거리 계산, 브레이크포인트 탐색, 청크
-병합, 메타데이터 역매핑)를 모두 포함합니다.
-
+5개 믹스인 계층을 제거하고 EmbeddingBasedSemanticChunker 단일 클래스로 평탄화되었습니다.
 공개 API(``EmbeddingBasedSemanticChunker.split_documents``·``_split_sentences``·
-``__init__`` 시그니처)는 기존과 동일하게 유지되어 외부 import 경로가 그대로
-동작합니다.
+``__init__`` 시그니처)는 기존과 동일하게 유지되어 외부 import 경로가 그대로 동작합니다.
 """
 
 import asyncio
@@ -72,22 +68,94 @@ STANDARD_SECTION_KEYWORDS = [
 ]
 
 
-class SemanticChunkerSentencesMixin:
+class EmbeddingBasedSemanticChunker:
     """
-    문장 분할 관심사 믹스인.
+    임베딩 기반 의미론적 텍스트 분할기 (단일 클래스 평탄화 완료).
 
-    아래 속성들은 ``EmbeddingBasedSemanticChunker.__init__``에서 설정되며,
-    ``HEADER_PATTERN``은 breakpoints 모듈의 클래스 속성(MRO)을 사용합니다.
+    문장 단위로 분할 후, 임베딩 유사도 기반으로 의미 경계를 탐지하여
+    일관성 있는 청크를 생성합니다.
     """
-
-    max_chunk_size: int
-    _sentence_pattern: re.Pattern[str]
-    HEADER_PATTERN: re.Pattern[str]
 
     # 축약어 마침표 패턴 — 문장 분할 시 가짜 경계로 취급하지 않아야 함 (R2-03)
     ABBREVIATION_PATTERN = re.compile(r"(?i)\b(?:et al|e\.g|i\.e|Dr|Mr|vs)\.(?=\s)")
     # 축약어 마침표 임시 보호용 센티널 (길이 1:1 치환 → 오프셋 보존)
     ABBREV_SENTINEL = "\x00"
+
+    # 복합 헤더 패턴 (Markdown # + 대문자 섹션명)
+    HEADER_PATTERN = re.compile(
+        r"^(\s*#{1,6}\s+.+|\d+\s+[A-Z]{2,}.*|[A-Z]{3,}(\s+[A-Z]{3,})*)$",
+        re.MULTILINE,
+    )
+    # 간단 헤더 패턴 (breakpoint 탐지용)
+    HEADER_SIMPLE = re.compile(r"^\s*#{1,6}\s+.+", re.MULTILINE)
+
+    def __init__(
+        self,
+        embedder: Embeddings,
+        buffer_size: int = 1,  # [추가] 문맥 윈도우 크기
+        breakpoint_threshold_type: str = "percentile",
+        breakpoint_threshold_value: float = 95.0,
+        sentence_split_regex: str = r"(?<=[.?!])\s+",  # [개선] Lookbehind 적용
+        min_chunk_size: int = 100,
+        max_chunk_size: int = 800,
+        chunk_overlap: int = 1,  # [추가] 겹칠 문장 수 (Context preservation)
+        similarity_threshold: float = 0.6,
+        batch_size: int = 64,
+        cache_manager: CacheManager | None = None,
+    ):
+        """
+        의미론적 청킹 분할기를 초기화합니다.
+        """
+        self.embedder = embedder
+        self.buffer_size = buffer_size  # [추가]
+        self.breakpoint_threshold_type = breakpoint_threshold_type
+        self.breakpoint_threshold_value = breakpoint_threshold_value
+        self.sentence_split_regex = sentence_split_regex
+        self.min_chunk_size = min_chunk_size
+        self.max_chunk_size = max_chunk_size
+        self.chunk_overlap = chunk_overlap  # [추가]
+        self.similarity_threshold = similarity_threshold
+        self.batch_size = batch_size
+
+        # [최적화] 청킹 임베딩 전용 캐시 관리자 설정.
+        # 메모리 레이어(L1)로 동일 프로세스 내 동일 문장의 중복 임베딩을
+        # 방지한다. 디스크 레이어(L3)는 캐시 매니저에 구성해 두되, 청킹 hot
+        # path(``_get_embeddings``)는 [최적화-04]에 따라 persist_to_disk=False로
+        # 호출하여 문장마다 개별 파일을 쓰지 않는다 (청크 벡터는 VectorStoreCache가
+        # index.faiss/doc_splits.json으로 일괄 영속화). 희귀한 차원 불일치 복구
+        # 경로(``_reembed_single``)만 보정 벡터를 디스크에 남긴다.
+        # 디스크 경로는 전역 MODEL_CACHE_DIR 하위의 embedding_cache 로 격리해
+        # 기타 응답 캐시와 혼재되지 않게 한다.
+        #
+        # [안전장치] 테스트 환경(IS_UNIT_TEST/IS_CI_TEST)에서는 가짜 임베더
+        # (FakeEmbeddings 등)가 생성한 벡터가 프로덕션 캐시 공간을 오염하지
+        # 않도록 디스크 캐시 경로를 OS 임시 디렉토리로 분리한다. 가짜 임베더는
+        # 실제 모델과 출력 차원이 다를 수 있어(1536 vs 768), 프로덕션 경로에
+        # 기록되면 이후 chunker가 그 벡터를 히트해 FAISS 인덱스-쿼리 차원
+        # 불일치(assert d == self.d)를 유발했다.
+        _is_test_env = is_test_env()
+        _embedding_cache_dir = (
+            str(Path(tempfile.gettempdir()) / "embedding_cache_test")
+            if _is_test_env
+            else str(Path(MODEL_CACHE_DIR) / "embedding_cache")
+        )
+        self.cache_manager = cache_manager or CacheManager(
+            enable_memory_cache=True,
+            enable_semantic_cache=False,
+            enable_disk_cache=True,
+            disk_cache_dir=_embedding_cache_dir,
+        )
+
+        # [최적화] 모델 식별을 위한 이름 추출 (Ollama 및 HuggingFace 지원 강화)
+        # 모델명은 항상 문자열이어야 하므로 (emb:{model}:{hash} 캐시 키) cast로 보장.
+        self.model_name = cast(
+            str,
+            getattr(embedder, "model", None)
+            or getattr(embedder, "model_name", "default_model"),
+        )
+
+        # ✅ 정규식 사전 컴파일 (성능 최적화)
+        self._sentence_pattern = re.compile(self.sentence_split_regex)
 
     @staticmethod
     def _line_kind(line: str) -> Literal["blank", "structure", "list_marker", "text"]:
@@ -301,20 +369,6 @@ class SemanticChunkerSentencesMixin:
             i for i, s in enumerate(sentences) if s.get("is_header", False)
         }
         return sentences, header_indices
-
-
-class SemanticChunkerEmbeddingsMixin:
-    """
-    임베딩 생성/캐시 관심사 믹스인.
-
-    아래 속성들은 ``EmbeddingBasedSemanticChunker.__init__``에서 설정됩니다.
-    """
-
-    embedder: Embeddings
-    model_name: str
-    cache_manager: CacheManager
-    batch_size: int
-    buffer_size: int
 
     async def _get_embeddings(
         self, texts: list[str], normalize: bool = False
@@ -604,27 +658,6 @@ class SemanticChunkerEmbeddingsMixin:
         dots = np.einsum("ij,ij->i", arr[:-1], arr[1:])
         return (1.0 - dots).tolist()
 
-
-class SemanticChunkerBreakpointsMixin:
-    """
-    브레이크포인트 탐색 관심사 믹스인.
-
-    아래 속성들은 ``EmbeddingBasedSemanticChunker.__init__``에서 설정됩니다.
-    """
-
-    breakpoint_threshold_type: str
-    breakpoint_threshold_value: float
-    similarity_threshold: float
-    max_chunk_size: int
-
-    # 복합 헤더 패턴 (Markdown # + 대문자 섹션명)
-    HEADER_PATTERN = re.compile(
-        r"^(\s*#{1,6}\s+.+|\d+\s+[A-Z]{2,}.*|[A-Z]{3,}(\s+[A-Z]{3,})*)$",
-        re.MULTILINE,
-    )
-    # 간단 헤더 패턴 (breakpoint 탐지용)
-    HEADER_SIMPLE = re.compile(r"^\s*#{1,6}\s+.+", re.MULTILINE)
-
     def _find_breakpoints(
         self, distances: list[float], sentences: list[dict] | None = None
     ) -> list[int]:
@@ -648,7 +681,6 @@ class SemanticChunkerBreakpointsMixin:
                 + self.breakpoint_threshold_value * np.std(dist_array)
             )
         elif self.breakpoint_threshold_type == "interquartile":
-            # [수정] Mypy 타입 추론 지원을 위해 리스트 형태의 인덱스 전달 시 반환값을 명시적으로 처리
             percentiles = cast(np.ndarray, np.percentile(dist_array, [25, 75]))
             q1, q3 = float(percentiles[0]), float(percentiles[1])
             iqr = q3 - q1
@@ -656,15 +688,13 @@ class SemanticChunkerBreakpointsMixin:
                 np.mean(dist_array) + self.breakpoint_threshold_value * iqr
             )
         elif self.breakpoint_threshold_type == "gradient":
-            # 거리가 급격히 변하는 지점 감지
             threshold = float(
                 np.percentile(np.gradient(dist_array), self.breakpoint_threshold_value)
             )
         elif self.breakpoint_threshold_type == "similarity_threshold":
-            # [R2-01] config 기본 모드 — 명시 분기 (기존 else 암묵 폴백 제거)
             threshold = float(self.similarity_threshold)
         else:
-            threshold = float(self.similarity_threshold)  # 알 수 없는 유형 방어용
+            threshold = float(self.similarity_threshold)
             logger.warning(
                 f"[Chunker] 알 수 없는 breakpoint_threshold_type="
                 f"{self.breakpoint_threshold_type!r} — similarity_threshold 폴백 사용"
@@ -677,7 +707,6 @@ class SemanticChunkerBreakpointsMixin:
         if sentences:
             header_bps = []
             for i, s in enumerate(sentences):
-                # 문장의 시작이 헤더 패턴인 경우 (첫 문장 제외)
                 if i > 0 and self.HEADER_SIMPLE.match(s["text"].strip()):
                     header_bps.append(i)
 
@@ -691,14 +720,10 @@ class SemanticChunkerBreakpointsMixin:
         if sentences:
             current_len = 0
             safety_bps = []
-            # [최적화] any() 전수 스캔 O(b) → set 조회 O(1).
-            # abs(bp - (i+1)) <= 1 ⟺ bp ∈ {i, i+1, i+2} 이므로 동치.
-            # 루프 전 1회 변환으로 전체 O(n·b) → O(n+b).
             bp_set = set(breakpoints)
             for i, s in enumerate(sentences):
                 current_len += len(s["text"])
                 if current_len > (self.max_chunk_size * 0.9):
-                    # 이미 breakpoints에 이 근처 지점이 있는지 확인
                     if (
                         (i not in bp_set)
                         and ((i + 1) not in bp_set)
@@ -710,18 +735,6 @@ class SemanticChunkerBreakpointsMixin:
                 breakpoints = sorted(set(breakpoints + safety_bps))
 
         return breakpoints
-
-
-class SemanticChunkerMergeMixin:
-    """
-    병합/중복제거/그룹화 관심사 믹스인.
-
-    아래 속성들은 ``EmbeddingBasedSemanticChunker.__init__``에서 설정됩니다.
-    """
-
-    min_chunk_size: int
-    max_chunk_size: int
-    chunk_overlap: int
 
     def _optimize_chunk_sizes(self, chunks: list[dict]) -> list[dict]:
         """청크 크기를 검사해 병합하며, 벡터는 가중 평균으로 계산합니다.
@@ -738,36 +751,29 @@ class SemanticChunkerMergeMixin:
                 current_chunk = chunk
                 continue
 
-            # 예상 병합 크기 (공백 포함)
             merged_text = current_chunk["text"] + " " + chunk["text"]
             merged_len = len(merged_text)
 
-            # [핵심] 섹션이 다르면 병합 절대 금지
             is_different_section = current_chunk.get("current_section") != chunk.get(
                 "current_section"
             )
 
-            # 강제 분할 지점(오프셋 단절 또는 플래그) 확인
             is_at_hard_boundary = current_chunk.get("end") != chunk.get(
                 "start"
             ) or current_chunk.get("is_hard_split", False)
 
-            # [수정] 지능적 병합 조건 강화
             should_merge = False
 
             if not is_different_section and not is_at_hard_boundary:
-                # 1. 크기가 극도로 작을 때만 병합 시도
                 if len(current_chunk["text"]) < self.min_chunk_size:
                     should_merge = merged_len <= self.max_chunk_size
 
-                # 2. 유사도 기반 지능적 병합
                 if not should_merge and merged_len <= self.max_chunk_size:
                     sim = cosine_similarity(current_chunk["vector"], chunk["vector"])
                     if sim > (ChunkingConstants.SIMILARITY_MERGE_THRESHOLD / 100.0):
                         should_merge = True
 
             if should_merge:
-                # 벡터 병합: 각 청크의 길이를 고려한 가중 평균
                 len_a = len(current_chunk["text"])
                 len_b = len(chunk["text"])
                 total_len = len_a + len_b
@@ -797,24 +803,20 @@ class SemanticChunkerMergeMixin:
 
     def _clean_section_title(self, raw_title: str) -> str:
         """섹션 제목에서 마크다운 기호 및 불필요한 본문 텍스트를 제거합니다."""
-        # 1. 마크다운 헤더 기호 및 앞뒤 공백 제거
         clean_title = raw_title.lstrip("# ").strip()
 
-        # 2. 논문의 주요 섹션 키워드 체크 (상수 활용)
         upper_title = clean_title.upper()
         for kw in STANDARD_SECTION_KEYWORDS:
             if upper_title.startswith(kw):
                 return kw
 
-        # 3. 너무 긴 경우(100자 이상) 첫 번째 끊김 지점에서 자르기 (제목 보존을 위해 확장)
         if len(clean_title) > 100:
             parts = re.split(r"[\n\r\.\:]", clean_title)
             if parts:
                 clean_title = parts[0].strip()
 
-        # 4. 특수문자 제거 및 최종 길이 제한
         clean_title = re.sub(r"[#\*_]", "", clean_title)
-        return clean_title[:150]  # 제목 복원을 위해 길이 상향
+        return clean_title[:150]
 
     def _prune_duplicates(
         self, chunks: list[dict], threshold: float = 0.98
@@ -828,7 +830,6 @@ class SemanticChunkerMergeMixin:
             current_vec = chunks[i]["vector"]
             is_dup = False
 
-            # 최근 3개의 청크와 비교하여 중복 여부 확인 (대량 문서 내 반복 구간 처리)
             for prev in pruned[-3:]:
                 sim = cosine_similarity(current_vec, prev["vector"])
                 if sim > threshold:
@@ -854,9 +855,7 @@ class SemanticChunkerMergeMixin:
         start_idx = 0
         all_bps = breakpoints + [len(sentences)]
 
-        current_header = "Front Matter"  # [수정] 기본값
-
-        # [추가] 헤더 병합용 상태
+        current_header = "Front Matter"
         pending_header = ""
         is_first_header = True
 
@@ -866,23 +865,19 @@ class SemanticChunkerMergeMixin:
             if group_start >= group_end:
                 continue
 
-            # [고도화] 새로운 헤더로 시작하는지 확인 (오버랩 방지용)
             is_new_header_start = sentences[group_start].get("is_header", False)
 
-            # Overlap 적용: 헤더로 시작하는 경우 오버랩 생략 (Clean Section Start)
             actual_start = group_start
             if i > 0 and not is_new_header_start:
                 actual_start = max(0, group_start - self.chunk_overlap)
 
-            # [핵심] 현재 청크의 헤더 섹션 결정 (미리 캐싱된 header_indices 사용)
             for s_idx in range(start_idx, group_end):
-                if s_idx not in header_indices:  # O(1) set lookup
+                if s_idx not in header_indices:
                     continue
                 s = sentences[s_idx]
                 text_strip = s["text"].strip()
                 new_h = self._clean_section_title(text_strip)
 
-                # [지능형 병합] 전치사나 'OF' 등으로 끝나면 다음 헤더와 합침
                 incomplete_markers = ["OF", "AND", "WITH", "IN", "FOR", "THE", "A"]
                 if (
                     any(new_h.upper().endswith(w) for w in incomplete_markers)
@@ -895,7 +890,6 @@ class SemanticChunkerMergeMixin:
                     new_h = (pending_header + new_h).strip()
                     pending_header = ""
 
-                # 첫 번째 거대한 헤더는 제목으로 처리
                 if is_first_header and len(new_h) > 10:
                     current_header = f"TITLE: {new_h}"
                     is_first_header = False
@@ -906,14 +900,10 @@ class SemanticChunkerMergeMixin:
                 [s["text"] for s in sentences[actual_start:group_end]]
             )
             chunk_vector = np.mean(indiv_embeddings[actual_start:group_end], axis=0)
-            # [R2-02] 청크 벡터 단위노름 — 병합/중복제거의 dot product가 코사인 유사도
             chunk_norm = float(np.linalg.norm(chunk_vector))
             if chunk_norm > 1e-9:
                 chunk_vector = chunk_vector / chunk_norm
 
-            # [R2-05] start는 오버랩 포함 실제 텍스트 범위(actual_start) 기준으로 산출.
-            # merged_text·벡터가 이미 actual_start를 사용하므로, group_start 기준으로
-            # 산출하면 오버랩 문장 구간의 좌표·페이지 메타데이터가 청크 텍스트와 어긋납니다.
             chunks.append(
                 {
                     "text": merged_text,
@@ -930,24 +920,11 @@ class SemanticChunkerMergeMixin:
 
         return chunks
 
-
-class SemanticChunkerMetadataMixin:
-    """
-    메타데이터 역매핑 관심사 믹스인.
-
-    ``split_documents``의 ``split_text`` 결과 청크에 대해 원본 ``doc_ranges``
-    기반으로 페이지·섹션 정보를 병합합니다.
-    """
-
     def _extract_metadata_for_chunk(
         self, chunk: dict[str, Any], doc_ranges: list[dict[str, Any]]
     ) -> dict[str, Any]:
         """
         청크에 대한 메타데이터를 추출하고 병합합니다.
-
-        ``doc_ranges``는 ``split_documents``가 오프셋 오름차순·비중첩으로
-        생성하므로, 이분 탐색으로 첫 후보를 찾은 뒤 ``c_end`` 이후 범위에서
-        조기 종료한다 (전수 스캔 O(D) → O(log D + 겹침 구간)).
         """
         c_start = chunk["start"]
         c_end = chunk["end"]
@@ -956,132 +933,35 @@ class SemanticChunkerMetadataMixin:
         seen_pages: set[Any] = set()
         merged_metadata: dict[str, Any] = {}
 
-        # 첫 후보: end >= c_start 인 범위 (그 이전 범위는 겹칠 수 없다)
         idx = bisect.bisect_left(doc_ranges, c_start, key=lambda r: r["end"])
         while idx < len(doc_ranges):
             doc_range = doc_ranges[idx]
             if doc_range["start"] >= c_end:
-                # 정렬 가정: 이후 범위는 모두 이 청크보다 뒤에 있어 겹치지 않는다
                 break
-            # 범위 겹침 확인: [start1, end1] 과 [start2, end2]
             if max(c_start, doc_range["start"]) < min(c_end, doc_range["end"]):
-                # [수정] Mypy 타입 추론 강화를 위해 cast 사용
                 metadata = cast(dict[str, Any], doc_range["metadata"])
                 page = metadata.get("page")
                 if page and page not in seen_pages:
                     seen_pages.add(page)
                     overlapping_pages.append(page)
 
-                # 기본 메타데이터는 첫 번째 겹치는 문서에서 가져오되, 페이지 정보는 업데이트
                 if not merged_metadata:
                     merged_metadata = metadata.copy()
             idx += 1
 
         if overlapping_pages:
             merged_metadata["pages"] = sorted(overlapping_pages)
-            # 하위 호환성을 위해 단일 page 필드는 첫 페이지로 유지
             merged_metadata["page"] = overlapping_pages[0]
-            # 다중 페이지 여부 표시
             merged_metadata["is_cross_page"] = len(overlapping_pages) > 1
 
-        # [핵심 수정] 추출된 섹션 정보를 메타데이터에 주입
         merged_metadata["current_section"] = chunk.get("current_section", "일반 본문")
-
         merged_metadata["start_index"] = c_start
         merged_metadata["end_index"] = c_end
 
         return merged_metadata
 
-
-class EmbeddingBasedSemanticChunker(
-    SemanticChunkerSentencesMixin,
-    SemanticChunkerEmbeddingsMixin,
-    SemanticChunkerBreakpointsMixin,
-    SemanticChunkerMergeMixin,
-    SemanticChunkerMetadataMixin,
-):
-    """
-    임베딩 기반 의미론적 텍스트 분할기.
-
-    문장 단위로 분할 후, 임베딩 유사도 기반으로 의미 경계를 탐지하여
-    일관성 있는 청크를 생성합니다.
-    """
-
-    def __init__(
-        self,
-        embedder: Embeddings,
-        buffer_size: int = 1,  # [추가] 문맥 윈도우 크기
-        breakpoint_threshold_type: str = "percentile",
-        breakpoint_threshold_value: float = 95.0,
-        sentence_split_regex: str = r"(?<=[.?!])\s+",  # [개선] Lookbehind 적용
-        min_chunk_size: int = 100,
-        max_chunk_size: int = 800,
-        chunk_overlap: int = 1,  # [추가] 겹칠 문장 수 (Context preservation)
-        similarity_threshold: float = 0.6,
-        batch_size: int = 64,
-        cache_manager: CacheManager | None = None,
-    ):
-        """
-        의미론적 청킹 분할기를 초기화합니다.
-        """
-        self.embedder = embedder
-        self.buffer_size = buffer_size  # [추가]
-        self.breakpoint_threshold_type = breakpoint_threshold_type
-        self.breakpoint_threshold_value = breakpoint_threshold_value
-        self.sentence_split_regex = sentence_split_regex
-        self.min_chunk_size = min_chunk_size
-        self.max_chunk_size = max_chunk_size
-        self.chunk_overlap = chunk_overlap  # [추가]
-        self.similarity_threshold = similarity_threshold
-        self.batch_size = batch_size
-
-        # [최적화] 청킹 임베딩 전용 캐시 관리자 설정.
-        # 메모리 레이어(L1)로 동일 프로세스 내 동일 문장의 중복 임베딩을
-        # 방지한다. 디스크 레이어(L3)는 캐시 매니저에 구성해 두되, 청킹 hot
-        # path(``_get_embeddings``)는 [최적화-04]에 따라 persist_to_disk=False로
-        # 호출하여 문장마다 개별 파일을 쓰지 않는다 (청크 벡터는 VectorStoreCache가
-        # index.faiss/doc_splits.json으로 일괄 영속화). 희귀한 차원 불일치 복구
-        # 경로(``_reembed_single``)만 보정 벡터를 디스크에 남긴다.
-        # 디스크 경로는 전역 MODEL_CACHE_DIR 하위의 embedding_cache 로 격리해
-        # 기타 응답 캐시와 혼재되지 않게 한다.
-        #
-        # [안전장치] 테스트 환경(IS_UNIT_TEST/IS_CI_TEST)에서는 가짜 임베더
-        # (FakeEmbeddings 등)가 생성한 벡터가 프로덕션 캐시 공간을 오염하지
-        # 않도록 디스크 캐시 경로를 OS 임시 디렉토리로 분리한다. 가짜 임베더는
-        # 실제 모델과 출력 차원이 다를 수 있어(1536 vs 768), 프로덕션 경로에
-        # 기록되면 이후 chunker가 그 벡터를 히트해 FAISS 인덱스-쿼리 차원
-        # 불일치(assert d == self.d)를 유발했다.
-        _is_test_env = is_test_env()
-        _embedding_cache_dir = (
-            str(Path(tempfile.gettempdir()) / "embedding_cache_test")
-            if _is_test_env
-            else str(Path(MODEL_CACHE_DIR) / "embedding_cache")
-        )
-        self.cache_manager = cache_manager or CacheManager(
-            enable_memory_cache=True,
-            enable_semantic_cache=False,
-            enable_disk_cache=True,
-            disk_cache_dir=_embedding_cache_dir,
-        )
-
-        # [최적화] 모델 식별을 위한 이름 추출 (Ollama 및 HuggingFace 지원 강화)
-        # 모델명은 항상 문자열이어야 하므로 (emb:{model}:{hash} 캐시 키) cast로 보장.
-        self.model_name = cast(
-            str,
-            getattr(embedder, "model", None)
-            or getattr(embedder, "model_name", "default_model"),
-        )
-
-        # ✅ 정규식 사전 컴파일 (성능 최적화)
-        self._sentence_pattern = re.compile(self.sentence_split_regex)
-
     def extract_sentence_units(self, text: str) -> tuple[list[dict], set[int]]:
-        """문장 분할 + 짧은 문장 병합 (동기, 임베딩 없음).
-
-        ``split_text``의 전반부(1단계)를 분리한 것으로, 오버플로우 청킹이
-        문장 텍스트를 미리 모아 단일 임베딩 왕복으로 처리할 때 사용한다.
-        반환값은 ``(병합된 문장 리스트, 헤더 인덱스 집합)``이다.
-        """
+        """문장 분할 + 짧은 문장 병합 (동기, 임베딩 없음)."""
         raw_sentences = self._split_sentences(text)
         if not raw_sentences:
             return [], set()
@@ -1090,18 +970,10 @@ class EmbeddingBasedSemanticChunker(
     async def split_text(
         self, text: str, precomputed_embeddings: np.ndarray | None = None
     ) -> list[dict]:
-        """
-        텍스트를 의미론적으로 분할합니다 (Buffer-based context window 적용).
-        [고도화] 마크다운 헤더 뿐만 아니라 대문자 섹션명도 감지하여 구조를 파악합니다.
-
-        ``precomputed_embeddings``가 주어지면 ``_get_embeddings`` 호출 없이
-        해당 행렬(행 수 == 문장 수, ``l2_normalize``된 것)을 사용한다.
-        오버플로우 청킹의 단일 임베딩 왕복 경로에서 사용한다.
-        """
+        """텍스트를 의미론적으로 분할합니다."""
         if not text or not text.strip():
             return []
 
-        # 1. 문장 분할 (오프셋 포함) + 짧은 문장 병합 (오프셋 유지)
         sentences, header_indices = self.extract_sentence_units(text)
         if not sentences:
             return []
@@ -1118,10 +990,8 @@ class EmbeddingBasedSemanticChunker(
             if len(sentences) <= self.buffer_size:
                 return sentences
         elif len(sentences) <= self.buffer_size:
-            # 벡터가 없으므로 계산 필요
             if sentences:
                 sentence_texts = [s["text"] for s in sentences]
-                # [R2-02] 단위노름 배선 — 병합/중복제거의 dot product가 진짜 코사인 유사도
                 embeddings = await self._get_embeddings(sentence_texts, normalize=True)
                 if embeddings.shape[0] != len(sentence_texts):
                     raise ValueError(
@@ -1132,8 +1002,6 @@ class EmbeddingBasedSemanticChunker(
                     s["vector"] = v
             return sentences
         else:
-            # 2. 개별 문장 임베딩 생성 (캐싱 활용)
-            # [R2-02] 단위노름 배선 — 거리·병합·중복제거 일관성 확보
             indiv_embeddings = await self._get_embeddings(
                 [s["text"] for s in sentences], normalize=True
             )
@@ -1145,30 +1013,18 @@ class EmbeddingBasedSemanticChunker(
             for s, v in zip(sentences, indiv_embeddings, strict=True):
                 s["vector"] = v
 
-        # 3-4. Buffer 기반 Combined Embeddings + 인접 거리 계산
         combined_embeddings_arr = self._buffer_combined_embeddings(indiv_embeddings)
         distances = self._compute_distances(combined_embeddings_arr)
-
-        # 5. 분기점 탐색 (헤더 인식 로직 포함됨)
         breakpoints = self._find_breakpoints(distances, sentences=sentences)
-
-        # 6. 그룹화 및 헤더 컨텍스트(Section) 추적
         chunks = self._group_sentences_into_chunks(
             sentences, header_indices, indiv_embeddings, breakpoints
         )
-
-        # 7. 크기 최적화 및 중복 제거
         optimized_chunks = self._optimize_chunk_sizes(chunks)
         return self._prune_duplicates(optimized_chunks)
 
     @staticmethod
     def _join_docs_text(docs: list["Document"]) -> tuple[str, list[dict]]:
-        """문서들을 개행으로 결합하고 오프셋 매핑을 구축한다 (결합 텍스트, 범위).
-
-        [Phase2] 구분자를 공백 1칸에서 "\\n\\n"으로 변경 — 헤더 행(`# ...`)이
-        결합 경계에 묻히면 HEADER_SIMPLE이 매치되지 않아 섹션 추적이 붕괴한다.
-        오프셋 매핑은 구분자 길이를 반영하므로 좌표 무결성에 영향 없다.
-        """
+        """문서들을 개행으로 결합하고 오프셋 매핑을 구축한다."""
         text_parts = []
         doc_ranges = []
         current_offset = 0
@@ -1179,7 +1035,6 @@ class EmbeddingBasedSemanticChunker(
             if not content:
                 continue
 
-            # 문서 사이 개행 구분 (첫 문서 제외)
             if current_offset > 0:
                 text_parts.append(_sep)
                 current_offset += len(_sep)
@@ -1196,12 +1051,7 @@ class EmbeddingBasedSemanticChunker(
     def prepare_overflow_texts(
         self, docs: list["Document"]
     ) -> tuple[str, list[dict], list[str]]:
-        """오버플로우 문서 결합 + 문장 텍스트 추출 (임베딩 없음).
-
-        오버플로우 청킹이 문장 텍스트를 정상 청크 텍스트와 합쳐 단일 임베딩
-        왕복으로 처리하기 위한 전반부이다. 반환값은
-        ``(결합 텍스트, 오프셋 범위, 문장 텍스트 리스트)``이다.
-        """
+        """오버플로우 문서 결합 + 문장 텍스트 추출 (임베딩 없음)."""
         full_text, doc_ranges = self._join_docs_text(docs)
         if not full_text.strip():
             return "", [], []
@@ -1214,11 +1064,7 @@ class EmbeddingBasedSemanticChunker(
         doc_ranges: list[dict],
         sentence_vectors: np.ndarray,
     ) -> tuple[list["Document"], list[np.ndarray]]:
-        """사전 임베딩된 문장 벡터로 의미분할을 완성한다.
-
-        ``sentence_vectors``는 ``prepare_overflow_texts``가 반환한 문장 순서와
-        일치하는 ``l2_normalize``된 행렬이어야 한다 (행 수 불일치 시 ValueError).
-        """
+        """사전 임베딩된 문장 벡터로 의미분할을 완성한다."""
         chunk_dicts = await self.split_text(
             full_text, precomputed_embeddings=sentence_vectors
         )
@@ -1232,14 +1078,11 @@ class EmbeddingBasedSemanticChunker(
         def _extract_metadata_batch(
             chunk_dicts: list[dict], doc_ranges: list[dict]
         ) -> list[dict]:
-            # asyncio.to_thread는 이미 워커 스레드이므로 중첩 스레드풀을 만들지
-            # 않는다 (빌드마다 ThreadPoolExecutor 생성/파괴 오버헤드 제거).
             return [
                 self._extract_metadata_for_chunk(chunk, doc_ranges)
                 for chunk in chunk_dicts
             ]
 
-        # 3. 메타데이터 역매핑 및 문서 객체 생성 (다중 페이지 지원)
         final_docs: list[Document] = []
         final_vectors: list[np.ndarray] = []
 
@@ -1260,26 +1103,19 @@ class EmbeddingBasedSemanticChunker(
     ) -> tuple[list["Document"], list[np.ndarray]]:
         """
         LangChain Document 객체 리스트를 받아 의미론적 분할을 수행합니다.
-        문서들을 통합하여 문맥을 유지하되, 오프셋 매핑을 통해
-        각 청크의 원본 메타데이터(페이지 번호 등)를 정확히 보존합니다.
-        각 청크에 대해 이미 계산된 벡터를 함께 반환하여 재계산을 방지합니다.
         """
-
         if not docs:
             logger.warning("split_documents: 입력 문서 리스트가 비어있습니다.")
             return [], []
 
-        # 1. 문서 통합 및 오프셋 매핑 구축 (join()을 사용하여 효율성 개선)
         full_text, doc_ranges = self._join_docs_text(docs)
 
         if not full_text.strip():
             logger.warning("split_documents: 병합된 텍스트가 비어있습니다.")
             return [], []
 
-        # 2. 청킹 수행 (오프셋 및 벡터 정보 포함)
         chunk_dicts = await self.split_text(full_text)
 
-        # 3. 메타데이터 역매핑 및 문서 객체 생성 (다중 페이지 지원)
         final_docs, final_vectors = await self.build_output_documents(
             chunk_dicts, doc_ranges
         )
