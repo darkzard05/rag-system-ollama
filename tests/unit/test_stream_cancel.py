@@ -533,9 +533,9 @@ def test_pre_chunk_timeout_allows_long_setup(monkeypatch):
     poll_timeouts: list[float | None] = []
     effective_timeouts: list[float] = []
 
-    def _scripted_get(self: Any, timeout: Any = None) -> Any:
+    def _scripted_get(self: Any, *args: Any, **kwargs: Any) -> Any:
         nonlocal call_idx
-        poll_timeouts.append(timeout)
+        poll_timeouts.append(kwargs.get("timeout"))
         call_idx += 1
         if call_idx <= 2:
             raise _q.Empty
