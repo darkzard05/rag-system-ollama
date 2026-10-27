@@ -243,86 +243,37 @@ class SearchResultAggregator:
         k: int = 60,
         weights: dict[str, float] | None = None,
     ) -> list[AggregatedResult]:
+        """통합 RRF Fusion (2-node 및 다중 노드 공통 처리 단일화)"""
         node_ids = list(search_results.keys())
-        node_count = len(node_ids)
-
-        # Fast-path: 2-node RRF (BM25 + FAISS) — inline the arithmetic
-        if node_count == 2:
-            return self._rrf_fusion_2node(search_results, metrics, k, weights)
-
-        all_docs = {}
-        node_ranks: dict[str, dict[str, int]] = {}
-        for node_id, results in search_results.items():
-            metrics.total_input_results += len(results)
-            sorted_res = sorted(results, key=lambda x: x.score, reverse=True)
-            node_ranks[node_id] = {r.doc_id: i + 1 for i, r in enumerate(sorted_res)}
-            for r in results:
-                if r.doc_id not in all_docs:
-                    all_docs[r.doc_id] = self._create_agg_result(r, score=0.0)
-                    all_docs[r.doc_id].source_nodes = []
-                    all_docs[r.doc_id].original_scores = []
-                all_docs[r.doc_id].original_scores.append(r.score)
-                if node_id not in all_docs[r.doc_id].source_nodes:
-                    all_docs[r.doc_id].source_nodes.append(node_id)
-
-        if not all_docs:
+        if not node_ids:
             return []
 
-        weight_by_nid = {
-            nid: weights.get(nid, 1.0) if weights else 1.0 for nid in node_ids
-        }
-        for doc_id, agg in all_docs.items():
-            score = 0.0
-            for nid in node_ids:
-                rank = node_ranks.get(nid, {}).get(doc_id)
-                if rank is not None:
-                    score += weight_by_nid[nid] / (k + rank)
-            agg.aggregated_score = score
-
-        metrics.score_adjustments = len(all_docs)
-        return list(all_docs.values())
-
-    def _rrf_fusion_2node(
-        self,
-        search_results: dict[str, list[Any]],
-        metrics: AggregationMetrics,
-        k: int = 60,
-        weights: dict[str, float] | None = None,
-    ) -> list[AggregatedResult]:
-        """2-node RRF fast-path — avoids building per-node rank dicts."""
-        node_ids = list(search_results.keys())
-        n0, n1 = node_ids
-        r0 = search_results[n0]
-        r1 = search_results[n1]
-
-        metrics.total_input_results = len(r0) + len(r1)
-
-        w0 = weights.get(n0, 1.0) if weights else 1.0
-        w1 = weights.get(n1, 1.0) if weights else 1.0
-
+        weights = weights or {}
         kf = float(k)
         doc_map: dict[str, AggregatedResult] = {}
 
-        # 1. r0 순회 및 w0 점수 즉시 반영 (임시 rank0 딕셔너리 불필요)
-        for i, r in enumerate(r0):
-            agg = self._create_agg_result(r, score=w0 / (kf + float(i + 1)))
-            agg.source_nodes = [n0]
-            agg.original_scores = [r.score]
-            doc_map[r.doc_id] = agg
+        for node_id in node_ids:
+            results = search_results[node_id]
+            metrics.total_input_results += len(results)
+            weight = weights.get(node_id, 1.0)
 
-        # 2. r1 순회 및 w1 점수 즉시 누적 (추가 순회 제거)
-        for i, r in enumerate(r1):
-            score_delta = w1 / (kf + float(i + 1))
-            existing = doc_map.get(r.doc_id)
-            if existing:
-                existing.source_nodes.append(n1)
-                existing.original_scores.append(r.score)
-                existing.aggregated_score += score_delta
-            else:
-                agg = self._create_agg_result(r, score=score_delta)
-                agg.source_nodes = [n0, n1]
-                agg.original_scores = [r.score]
-                doc_map[r.doc_id] = agg
+            sorted_res = sorted(
+                results, key=lambda x: getattr(x, "score", 0.0), reverse=True
+            )
+
+            for rank_idx, r in enumerate(sorted_res):
+                score_delta = weight / (kf + float(rank_idx + 1))
+                existing = doc_map.get(r.doc_id)
+                if existing:
+                    if node_id not in existing.source_nodes:
+                        existing.source_nodes.append(node_id)
+                    existing.original_scores.append(getattr(r, "score", 0.0))
+                    existing.aggregated_score += score_delta
+                    existing.occurrence_count += 1
+                else:
+                    agg = self._create_agg_result(r, score=score_delta)
+                    agg.source_nodes = [node_id]
+                    doc_map[r.doc_id] = agg
 
         metrics.score_adjustments = len(doc_map)
         return list(doc_map.values())

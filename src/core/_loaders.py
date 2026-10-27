@@ -25,6 +25,12 @@ from typing import Any, TypeVar
 
 from langchain_core.embeddings import Embeddings
 
+try:
+    from langchain_ollama import OllamaEmbeddings
+except ImportError:
+    OllamaEmbeddings = object  # type: ignore
+
+
 from common.config import (
     DEFAULT_EMBEDDING_MODEL,
     MSG_ERROR_OLLAMA_NOT_RUNNING,
@@ -255,6 +261,114 @@ class _PayloadCappedEmbeddings(Embeddings):
                 )
             )
         return results
+
+
+class _NoTruncateOllamaEmbeddings(OllamaEmbeddings):  # type: ignore
+    """Ollama 임베딩 — `/api/embed` truncate=False 명시."""
+
+    truncate: bool = False
+
+    def embed_documents(self, texts: list[str]) -> list[list[float]]:
+        return self._embed_with_retry(texts)
+
+    async def aembed_documents(self, texts: list[str]) -> list[list[float]]:
+        return await self._aembed_with_retry(texts)
+
+    async def aembed_query(self, text: str) -> list[float]:
+        return (await self._aembed_with_retry([text]))[0]
+
+    @staticmethod
+    def _is_context_length_error(err: Any) -> bool:
+        if getattr(err, "status_code", None) != 400:
+            return False
+        return "context length" in str(err).lower()
+
+    def _embed_one_group(self, client: Any, group: list[str]) -> list[list[float]]:
+        try:
+            resp = client.embed(
+                self.model,
+                group,
+                truncate=self.truncate,
+                options=self._default_params,
+                keep_alive=self.keep_alive,
+            )
+            return list(resp["embeddings"])
+        except Exception as err:
+            import ollama
+
+            if isinstance(err, ollama.ResponseError):
+                if self.truncate or not self._is_context_length_error(err):
+                    raise
+                logger.warning(
+                    "[MODEL] [EMBED] 컨텍스트 초과로 truncate=True 폴백 적용"
+                )
+                resp = client.embed(
+                    self.model,
+                    group,
+                    truncate=True,
+                    options=self._default_params,
+                    keep_alive=self.keep_alive,
+                )
+                return list(resp["embeddings"])
+            raise
+
+    def _embed_once(self, texts: list[str]) -> list[list[float]]:
+        if not getattr(self, "_client", None):
+            raise ValueError("Ollama client is not initialized.")
+        import concurrent.futures
+
+        client = self._client
+        groups = _split_by_payload_size(texts)
+        if len(groups) <= 1:
+            results: list[list[float]] = []
+            for group in groups:
+                results.extend(self._embed_one_group(client, group))
+            return results
+
+        ordered: list[list[float]] = []
+        with concurrent.futures.ThreadPoolExecutor(
+            max_workers=min(4, len(groups))
+        ) as executor:
+            for embeddings in executor.map(
+                lambda g: self._embed_one_group(client, g), groups
+            ):
+                ordered.extend(embeddings)
+        return ordered
+
+    def _embed_with_retry(self, texts: list[str]) -> list[list[float]]:
+        last_exc: Exception | None = None
+        for attempt in range(_EMBED_RETRY_MAX_ATTEMPTS):
+            try:
+                return self._embed_once(texts)
+            except Exception as exc:
+                last_exc = exc
+                if not _is_embed_transient_failure(exc):
+                    raise
+                if attempt + 1 >= _EMBED_RETRY_MAX_ATTEMPTS:
+                    break
+                wait = _EMBED_RETRY_BACKOFF_SECONDS[
+                    min(attempt, len(_EMBED_RETRY_BACKOFF_SECONDS) - 1)
+                ]
+                import core.model_loader
+
+                core.model_loader.logger.info(
+                    "[MODEL] [EMBED] 임베딩 콜드스타트 감지, 재시도 %d/%d (대기 %ds)",
+                    attempt + 2,
+                    _EMBED_RETRY_MAX_ATTEMPTS,
+                    wait,
+                )
+                time.sleep(wait)
+        assert last_exc is not None
+        raise last_exc
+
+    async def _aembed_with_retry(self, texts: list[str]) -> list[list[float]]:
+        return await _aembed_retry_loop(
+            lambda: asyncio.wait_for(
+                asyncio.to_thread(self._embed_once, texts),
+                timeout=_EMBED_REQUEST_TIMEOUT_SECONDS,
+            ),
+            "임베딩 콜드스타트 감지",
+        )
 
 
 def _host_pressure_exceeded() -> bool:

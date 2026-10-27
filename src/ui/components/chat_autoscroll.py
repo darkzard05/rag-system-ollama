@@ -7,11 +7,7 @@ holds an ``IntersectionObserver`` on it, recording edge visibility in the
 
 The probe deliberately never scrolls. Auto-follow has exactly one writer — the
 ui.py smart scroller (``window.parent.__chatScrollState``), which this module
-never reads or assigns. An earlier revision also scrolled here, which made it a
-second writer racing the smart scroller: ``force`` re-fired a scroll on every
-streaming rerun, the browser coalesced it until it dispatched against a grown
-``scrollHeight``, and the smart scroller's self-heal read that phantom distance
-as user intent and latched auto-follow off mid-stream.
+never reads or assigns.
 """
 
 from __future__ import annotations
@@ -20,14 +16,48 @@ from typing import cast
 
 import streamlit as st
 
-from ui.components.autoscroll_edge import edge_latch
-from ui.components.autoscroll_flag import flag_read
-from ui.components.autoscroll_stick import stick_math
+BOTTOM_STICK_PX: int = 8
+
+
+def stick_math(
+    scroll_height: int,
+    scroll_top: int,
+    client_height: int,
+    threshold: int = BOTTOM_STICK_PX,
+) -> dict[str, bool | int]:
+    """Compute distance to bottom and whether stick-to-bottom is active."""
+    if scroll_height <= 0 or client_height <= 0:
+        return {"dist": -1, "stick_active": False}
+    dist: int = scroll_height - scroll_top - client_height
+    return {"dist": dist, "stick_active": dist <= threshold}
+
+
+def edge_latch(
+    user_scrolled_up: bool,
+    scroll_delta_y: int,
+    dist_to_bottom: int,
+    threshold: int = BOTTOM_STICK_PX,
+) -> bool:
+    """Return True when the user scroll latch stays engaged."""
+    return user_scrolled_up and (dist_to_bottom > threshold or scroll_delta_y != 0)
+
+
+def flag_read(
+    is_generating_answer: bool, active_stream_msg_id: str, msg_id: str
+) -> bool:
+    """Return True only while the given message is the active stream."""
+    return (
+        bool(is_generating_answer)
+        and bool(active_stream_msg_id)
+        and active_stream_msg_id == msg_id
+    )
+
 
 SENTINEL_ID: str = "chat-autoscroll-sentinel"
 CHAT_AUTOSCROLL_IFRAME_KEY: str = "chat_autoscroll_sentinel_v1"
 
 __all__ = [
+    "BOTTOM_STICK_PX",
     "CHAT_AUTOSCROLL_IFRAME_KEY",
     "SENTINEL_ID",
     "build_autoscroll_js",
@@ -39,32 +69,16 @@ __all__ = [
 
 
 def build_autoscroll_js(force: bool) -> str:
-    """Return the ``<script>``-only sentinel probe payload for ``st.iframe``.
-
-    The probe is observe-only: it plants ``#chat-autoscroll-sentinel`` and keeps
-    an ``IntersectionObserver`` liveness handle on it. It never scrolls.
-
-    ``force`` is still templated in for call-site compatibility but no longer
-    has an effect — scrolling during a stream is the ui.py smart scroller's job
-    (see :func:`render_autoscroll_sentinel`).
-    """
+    """Return the ``<script>``-only sentinel probe payload for ``st.iframe``."""
     force_literal = "true" if force else "false"
     js = """
         <script>
         try {
             const doc = window.parent.document;
-            // Intentionally unused: the probe does not scroll. Retained so the
-            // __FORCE__ substitution stays valid for existing callers.
             const FORCE = __FORCE__;
             void FORCE;
             const SENTINEL_ID = "__SENTINEL_ID__";
             const SCROLLER_SEL = '[data-testid="stMainBlockContainer"] [data-testid="stColumn"]:last-child > [data-testid="stVerticalBlock"]';
-            // Anchor on the chat input, NOT `:last-child`. With a real PDF
-            // loaded the main block holds 5 stColumn nodes (gutter/spacer
-            // columns included) and `:last-child` lands on a 211x40 sliver
-            // whose scrollHeight === clientHeight, so every scroll is a
-            // permanent no-op. stChatInput is always present in the chat
-            // column and lives inside the scroller itself.
             const getScroller = () => {
                 const input = doc.querySelector('[data-testid="stChatInput"]');
                 if (input) {
@@ -74,8 +88,6 @@ def build_autoscroll_js(force: bool) -> str:
                 }
                 return doc.querySelector(SCROLLER_SEL);
             };
-            // Singleton with disconnect guard. __chatScrollState is owned by
-            // the ui.py smart scroller — never read or assign it here.
             const prev = window.parent.__chatSentinel;
             if (prev && prev.observer) {
                 prev.observer.disconnect();
@@ -89,8 +101,6 @@ def build_autoscroll_js(force: bool) -> str:
             const sentinelState = window.parent.__chatSentinel;
             sentinelState.observer = null;
 
-            // Ensure the trailing marker exists as the last message-flow child
-            // (before the sticky input wrapper).
             let marker = doc.getElementById(SENTINEL_ID);
             if (!marker) {
                 marker = doc.createElement("div");
@@ -106,13 +116,6 @@ def build_autoscroll_js(force: bool) -> str:
                 }
             }
 
-            // PROBE ONLY — this observer never scrolls. The marker exists so
-            // bottom proximity is observable, but auto-follow has exactly one
-            // writer: the ui.py smart scroller. A second writer here raced it —
-            // `force` re-fired scrollNow() on every streaming rerun, and the
-            // browser coalesced that scroll until it dispatched against a grown
-            // scrollHeight, so the ui.py self-heal read a phantom dist and
-            // latched auto-follow off mid-stream (A4 dist=53).
             const scroller = getScroller();
             if (scroller && marker) {
                 sentinelState.observer = new IntersectionObserver((entries) => {
@@ -131,14 +134,7 @@ def build_autoscroll_js(force: bool) -> str:
 
 
 def render_autoscroll_sentinel(session_id: str, force: bool = False) -> None:
-    """Emit the auto-scroll sentinel probe after the chat timeline.
-
-    ``session_id`` scopes the call to the current session. ``st.iframe`` has
-    no ``key`` parameter (Streamlit 1.60 signature: src/width/height/tab_index
-    only), so replacement across reruns relies on the deterministic
-    post-timeline emission slot, not a widget key. ``force`` jumps straight
-    to the bottom while a stream is active.
-    """
+    """Emit the auto-scroll sentinel probe after the chat timeline."""
     _ = session_id
     _ = CHAT_AUTOSCROLL_IFRAME_KEY
     payload = build_autoscroll_js(force)
