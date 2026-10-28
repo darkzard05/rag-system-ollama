@@ -106,16 +106,32 @@ async def lifespan(app: FastAPI):
     cleaner_task = asyncio.create_task(session_cleaner())
     logger.info("[API] 세션 자동 정리 태스크 시작됨 (주기: 10분)")
 
-    # [WARMUP] 시작 시 LLM+임베더 1회 프리웜 — 첫 쿼리 TTFT 제거.
-    # Ollama 미연결 등 실패 시에도 서버 시작은 비차단/비치명적으로 계속된다.
+    # [WARMUP] 시작 시 LLM+임베더 1회 프리웜 — 첫 쿼리 TTFT 제거 (백그라운드 비차단).
+    warmup_task: asyncio.Task | None = None
     try:
         from core.model_loader import _warmup_models
 
-        await _warmup_models()
+        async def _safe_background_warmup():
+            try:
+                await _warmup_models()
+            except Exception as exc:
+                logger.warning(
+                    f"[WARMUP] 모델 프리웜 실패 (백그라운드) — 첫 쿼리에서 로드됨: {exc}"
+                )
+
+        warmup_task = asyncio.create_task(_safe_background_warmup())
     except Exception as e:
-        logger.warning(f"[WARMUP] 모델 프리웜 실패 — 첫 쿼리에서 로드됨: {e}")
+        logger.warning(f"[WARMUP] 프리웜 태스크 생성 실패: {e}")
 
     yield
+
+    # Shutdown: 진행 중인 웜업 태스크 취소
+    if warmup_task is not None and not warmup_task.done():
+        warmup_task.cancel()
+        import contextlib
+
+        with contextlib.suppress(asyncio.CancelledError):
+            await warmup_task
 
     # Shutdown: 태스크 정리
     cleaner_task.cancel()

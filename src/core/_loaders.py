@@ -18,10 +18,12 @@ import itertools
 import logging
 import os
 import re
+import socket
 import threading
 import time
 from collections.abc import Awaitable, Callable
 from typing import Any, TypeVar
+from urllib.parse import urlparse
 
 from langchain_core.embeddings import Embeddings
 
@@ -382,39 +384,56 @@ class _NoTruncateOllamaEmbeddings(OllamaEmbeddings):  # type: ignore
         )
 
 
+def _quick_probe_port(url_str: str, timeout_seconds: float = 0.05) -> bool:
+    """초고속 소켓 연결 검사로 Ollama 데몬 포트 개방 여부 확인."""
+    try:
+        parsed = urlparse(url_str)
+        host = parsed.hostname or "127.0.0.1"
+        port = parsed.port or (443 if parsed.scheme == "https" else 11434)
+        with socket.create_connection((host, port), timeout=timeout_seconds):
+            return True
+    except (OSError, TimeoutError):
+        return False
+
+
 def _is_ollama_server_up() -> bool:
-    """캐시의 실제 상태를 기반으로 Ollama 서버 연결 상태 판별."""
+    """캐시 상태 또는 고속 소켓 검사를 통해 Ollama 가용성을 판정 (Fail-Closed)."""
     global _models_cache
-    if _models_cache is None:
-        return True
-    models = _models_cache[1]
-    return bool(models) and (MSG_ERROR_OLLAMA_NOT_RUNNING not in models)
+    if _models_cache is not None:
+        models = _models_cache[1]
+        return bool(models) and (MSG_ERROR_OLLAMA_NOT_RUNNING not in models)
+    return _quick_probe_port(OLLAMA_BASE_URL, timeout_seconds=0.05)
 
 
 async def _warmup_models() -> None:
-    """시스템 추론 세마포어를 점유하지 않는 조건부 프리워밍."""
+    """시스템 추론 세마포어를 보호하며 자원 누수 없이 실행되는 안정적 프리워밍."""
     from common.config import DEFAULT_OLLAMA_MODEL
     from core.model_loader import ModelManager
     from core.resource_manager import get_resource_manager
     from core.session import SessionManager
 
-    # Ollama 서버가 오프라인이면 워밍업을 시도하지 않고 즉시 반환 (13초 백오프 방지)
     if not _is_ollama_server_up():
-        logger.debug("[WARMUP] Ollama 미연결 상태 — 프리워밍 스킵")
+        logger.debug("[WARMUP] Ollama 미연결 상태 — 프리워밍 건너뜀")
         return
 
     coordinator = get_resource_manager()
 
-    # 사용자 질문/업로드가 시작되었는지 락 획득 직전 체크
     if SessionManager.get("is_generating_answer") or SessionManager.get(
         "is_building_rag"
     ):
         logger.info("[WARMUP] 사용자 작업 우선 — 임베더 워밍업 양보")
         return
 
-    async with coordinator.use_embedder(model_name=DEFAULT_EMBEDDING_MODEL):
-        embedder = await ModelManager.get_embedder(None)
-        await embedder.aembed_query("warmup")
+    # 1. 임베더 웜업
+    try:
+        async with coordinator.use_embedder(model_name=DEFAULT_EMBEDDING_MODEL):
+            embedder = await ModelManager.get_embedder(None)
+            if hasattr(embedder, "aembed_query"):
+                await embedder.aembed_query("warmup")
+            else:
+                await asyncio.to_thread(embedder.embed_query, "warmup")
+    except Exception as e:
+        logger.debug(f"[WARMUP] 임베더 프리웜 실패 (무시): {e}")
 
     if SessionManager.get("is_generating_answer") or SessionManager.get(
         "is_building_rag"
@@ -422,20 +441,24 @@ async def _warmup_models() -> None:
         logger.info("[WARMUP] 사용자 작업 우선 — LLM 워밍업 양보")
         return
 
-    # 추론 락 획득 타임아웃을 2초로 제한하여 사용자 쿼리 진입 시 데드락 방지
+    # 2. LLM 웜업 (단일 1-토큰 invoke로 안전 완결)
     try:
         async with (
             coordinator.inference_session(timeout=2.0),
             coordinator.use_llm(model_name=DEFAULT_OLLAMA_MODEL),
         ):
             llm = await ModelManager.get_llm(DEFAULT_OLLAMA_MODEL)
-            async for _ in llm.astream("warmup"):
-                break
-        logger.info("[WARMUP] LLM+임베더 프리웜 완료")
+            warm_llm = (
+                llm.bind(options={"num_predict": 1, "think": False, "temperature": 0.0})
+                if hasattr(llm, "bind")
+                else llm
+            )
+            await warm_llm.ainvoke("warmup")
+        logger.info("[WARMUP] LLM+임베더 프리웜 정상 완료")
     except (asyncio.TimeoutError, TimeoutError) as e:
-        logger.debug(
-            f"[WARMUP] LLM 프리웜 건너뜀 (사용자 작업 진행 또는 타임아웃): {e}"
-        )
+        logger.debug(f"[WARMUP] LLM 프리웜 건너뜀 (타임아웃 또는 양보): {e}")
+    except Exception as e:
+        logger.debug(f"[WARMUP] LLM 프리웜 실패: {e}")
 
 
 def _fetch_available_models() -> list[str]:

@@ -519,6 +519,25 @@ class MemoizingEmbedding(Embeddings):
         """메모이제이션 없이 내부 임베더로 순수 위임한다."""
         return self._inner.embed_documents(texts)
 
+    async def aembed_query(self, text: str) -> list[float]:
+        """비동기 컨텍스트에서 단일-flight 메모이징 쿼리 임베딩 제공."""
+        norm_text = self._norm_key(text)
+        with self._lock:
+            entry = self._cache.get(norm_text)
+            if entry is not None:
+                timestamp, vec = entry
+                if time.monotonic() - timestamp <= self._ttl:
+                    self._cache.move_to_end(norm_text)
+                    self._stats["hits"] += 1
+                    return vec.tolist()
+        return await asyncio.to_thread(self.embed_query, text)
+
+    async def aembed_documents(self, texts: list[str]) -> list[list[float]]:
+        """비동기 문서 임베딩 위임."""
+        if hasattr(self._inner, "aembed_documents"):
+            return await self._inner.aembed_documents(texts)
+        return await asyncio.to_thread(self._inner.embed_documents, texts)
+
     @staticmethod
     def _norm_key(text: str) -> str:
         """CacheBackedEmbeddings 패턴: 공백 정규화 키로 경미한 변형을 합친다."""
