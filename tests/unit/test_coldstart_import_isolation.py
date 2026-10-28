@@ -50,3 +50,15 @@ def test_huggingface_loader_silences_before_transformers_import() -> None:
     hf_import = "from langchain_huggingface import HuggingFaceEmbeddings"
     assert silencer in source
     assert source.index(silencer) < source.index(hf_import)
+
+
+def test_sidebar_import_does_not_load_model_loader() -> None:
+    """Importing sidebar (P2) must not pull core.model_loader onto first paint."""
+    code = """
+import sys
+sys.path.insert(0, "src")
+import ui.components.sidebar
+assert "core.model_loader" not in sys.modules
+"""
+    result = _run_python(code)
+    assert result.returncode == 0, result.stderr

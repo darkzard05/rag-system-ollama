@@ -145,9 +145,9 @@ def _render_settings_internal(
             help=t("sidebar_language_help"),
         )
         # 모델 설정 그룹
-        from core.model_loader import ModelManager
+        from core.model_catalog import get_filtered_models
 
-        filtered = ModelManager.get_filtered_models(safe_models)
+        filtered = get_filtered_models(safe_models)
         actual_llms = filtered["llm"]
         actual_embeddings = filtered["embedding"]
 
