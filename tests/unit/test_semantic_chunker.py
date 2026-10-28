@@ -275,12 +275,10 @@ async def test_default_cache_manager_isolates_test_env_cache():
         max_chunk_size=500,
     )
 
-    # 메모리 캐시는 켜져 있어야 하고, 영구 디스크 캐시(L3)도 켜져야 함
+    # 메모리 캐시는 켜져 있어야 하고, 영구 디스크 캐시(L3)는 비활성화되어 I/O 병목 제거
     assert chunker.cache_manager.memory_cache is not None
-    assert chunker.cache_manager.disk_cache is not None
-    assert chunker.cache_manager.enable_disk_cache is True
-    # 테스트 환경: 디스크 캐시는 프로덕션 embedding_cache 가 아닌 임시 격리 경로 사용
-    assert chunker.cache_manager.disk_cache.cache_dir.name == "embedding_cache_test"
+    assert chunker.cache_manager.disk_cache is None
+    assert chunker.cache_manager.enable_disk_cache is False
 
 
 @pytest.mark.asyncio
@@ -352,5 +350,6 @@ async def test_memory_only_cache_still_roundtrips():
     fetched = await cm.get("emb:mock-model:abc")
     assert fetched == payload
 
-    # 영구 디스크 캐시(L3)가 활성화되어 동일 콘텐츠 재수집 시 Ollama 왕복을 건너뛴다
-    assert cm.disk_cache is not None
+    # 메모리 전용 캐시(L1)가 활성화되어 동일 콘텐츠 재수집 시 Ollama 왕복을 건너뛴다
+    assert cm.enable_disk_cache is False
+    assert cm.disk_cache is None

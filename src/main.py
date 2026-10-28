@@ -281,6 +281,14 @@ def _warm_heavy_imports() -> None:
         import pymupdf  # noqa: F401
     except Exception as exc:  # noqa: BLE001 - best-effort warmup
         logger.debug("[WARMUP] pymupdf import skipped: %s", exc)
+    try:
+        import faiss  # noqa: F401
+    except Exception as exc:
+        logger.debug("[WARMUP] faiss import skipped: %s", exc)
+    try:
+        import torch  # noqa: F401
+    except Exception as exc:
+        logger.debug("[WARMUP] torch import skipped: %s", exc)
 
 
 # 프로세스 시작 직후(import 직후) 백그라운드 웜업 — UI 첫 렌더 블로킹 제거.
@@ -352,25 +360,11 @@ SessionManager.set_ui_sync(StreamlitSessionSync())
 
 
 async def _warmup_models() -> None:
-    """사용자 상호작용 발생 시 즉각 양보하는 안전한 백그라운드 프리워밍."""
+    """백그라운드 프리워밍 (인위적 지연 제거)."""
     from common.config import is_test_env
 
     if is_test_env():
         return
-
-    from core.session import SessionManager
-
-    # 2.5초 대기를 100ms 단위 폴링으로 분할하여 사용자 상호작용 즉시 감지
-    for _ in range(25):
-        await asyncio.sleep(0.1)
-        if (
-            SessionManager.get("new_file_uploaded")
-            or SessionManager.get("is_building_rag")
-            or SessionManager.get("pdf_file_path")
-            or SessionManager.get("is_generating_answer")
-        ):
-            logger.info("[WARMUP] 사용자 상호작용 감지 — 프리워밍 즉시 중단")
-            return
 
     from core.model_loader import _warmup_models as _core_warmup
 
@@ -1161,6 +1155,7 @@ async def _bg_rebuild_task(
             on_progress=_report_progress,
             check_cancelled=_is_cancelled,
             on_event=_report_event,
+            file_hash=worker_file_hash,
         )
 
         if not _is_current_build():

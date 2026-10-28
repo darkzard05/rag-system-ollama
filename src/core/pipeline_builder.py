@@ -183,6 +183,7 @@ class PipelineBuilder:
         check_cancelled: Callable[[], bool] | None = None,
         on_event: Callable[[BuildEvent], Any] | None = None,
         cancel: asyncio.Event | None = None,
+        file_hash: str | None = None,
     ) -> tuple[str, bool]:
         """문서를 로드하고 RAG 파이프라인을 구축합니다.
 
@@ -194,11 +195,12 @@ class PipelineBuilder:
             check_cancelled: True 반환 시 asyncio.CancelledError 발생으로 중단.
             on_event: 타입 단계 이벤트 콜백 (신규 단일 계약).
             cancel: asyncio 취소 이벤트 (set 시 CancelledError로 중단).
+            file_hash: 사전 계산된 파일 해시 (선택 사항).
 
         Returns:
             (메시지, 캐시 사용 여부) 튜플.
         """
-        file_hash = compute_file_hash(file_path)
+        resolved_hash = file_hash or compute_file_hash(file_path)
         prev_file_hash = SessionManager.get("file_hash", session_id=self.session_id)
         # [R1b-03] 팬텀 상태 방지: PDF 로드/청킹/벡터 빌드 등 실패 가능 작업
         # 이전의 file_hash 조기 커밋을 롤백으로 감쌉니다. 빌드 실패·취소 시
@@ -214,7 +216,7 @@ class PipelineBuilder:
         prev_file_name = SessionManager.get(
             "last_uploaded_file_name", session_id=self.session_id
         )
-        SessionManager.set("file_hash", file_hash, session_id=self.session_id)
+        SessionManager.set("file_hash", resolved_hash, session_id=self.session_id)
         SessionManager.set("pdf_file_path", file_path, session_id=self.session_id)
         SessionManager.set(
             "last_uploaded_file_name", file_name, session_id=self.session_id
@@ -225,7 +227,7 @@ class PipelineBuilder:
                 file_path,
                 file_name,
                 embedder,
-                file_hash,
+                resolved_hash,
                 on_progress,
                 check_cancelled,
                 on_event,

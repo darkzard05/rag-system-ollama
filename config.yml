@@ -145,7 +145,7 @@ rag:
   # 추출 엔진 설정 (PyMuPDF4LLM 최적화)
   parsing:
     # --- 최적화된 추출 파라미터 (Adaptive Parsing 활성화) ---
-    table_strategy: "lines_strict" # [추가] 벤치마크 결과 최적 전략
+    table_strategy: "lines" # [추상] 벤치마크 결과 최적 전략 (지연 방지)
     graphics_limit: 5000           # [추가] 표 유실 방지를 위한 넉넉한 임계값
     fontsize_limit: 3        # 3pt 이하 텍스트 무시
     ignore_code: false       # 코드 블록 보존
@@ -436,7 +436,7 @@ global_cache:
   # 벡터 저장소(인덱싱 결과) 캐시 사용 여부
   # 테스트 기간: 문서 분석(인덱싱) 시 캐시 저장을 끄고 매번 새로 임베딩/검증하기 위해 false.
   # 테스트 종료 후 true 로 복구.
-  enable_vector_cache: false
+  enable_vector_cache: true
 
 # --- 채팅 UI 설정 ---
 ui:

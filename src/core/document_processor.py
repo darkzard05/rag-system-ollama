@@ -442,8 +442,9 @@ async def load_pdf_docs(
                 target_margins = PARSING_CONFIG.get("margins", [0, 72, 0, 72])
                 table_strategy = PARSING_CONFIG.get("table_strategy", "lines_strict")
 
-                # 하이드레이션 모드에 관계없이 정밀 하이라이트를 위해 단어 추출 활성화
-                do_extract_words = HYDRATION_MODE != "none"
+                # 인덱싱 속도 극대화: 단어 좌표 전수 추출 비활성화
+                # 단어 좌표는 검색 시점에 document_hydrator가 필요한 페이지만 Lazy로 추출하여 캐싱함
+                do_extract_words = False
 
                 try:
                     parallel_ok = _parallel_extract_enabled() and total_pages > 4

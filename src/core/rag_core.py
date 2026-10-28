@@ -212,6 +212,7 @@ class RAGSystem:
         check_cancelled: Callable[[], bool] | None = None,
         on_event: Callable[[BuildEvent], Any] | None = None,
         cancel: asyncio.Event | None = None,
+        file_hash: str | None = None,
     ) -> tuple[str, bool]:
         self._ensure_session_context()
         builder = PipelineBuilder(session_id=self.session_id)
@@ -223,6 +224,7 @@ class RAGSystem:
             check_cancelled=check_cancelled,
             on_event=on_event,
             cancel=cancel,
+            file_hash=file_hash,
         )
 
     async def _get_rag_engine(self) -> Any:

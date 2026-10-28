@@ -123,8 +123,7 @@ class EmbeddingBasedSemanticChunker:
         self.cache_manager = cache_manager or CacheManager(
             enable_memory_cache=True,
             enable_semantic_cache=False,
-            enable_disk_cache=True,
-            disk_cache_dir=_embedding_cache_dir,
+            enable_disk_cache=False,
         )
 
         # [최적화] 모델 식별을 위한 이름 추출 (Ollama 및 HuggingFace 지원 강화)
