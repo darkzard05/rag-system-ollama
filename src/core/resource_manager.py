@@ -202,6 +202,10 @@ class BaseResourcePool(Generic[T]):
                 "cannot derive pin key (it may have been evicted)."
             )
 
+    def _post_evict_cleanup(self) -> None:
+        """퇴출 후 하위 클래스별 추가 메모리 정리 훅 (기본 no-op)."""
+        pass
+
     def _evict_one_locked(self) -> bool:
         """가장 오래된 unpinned 리소스를 하나 퇴출합니다 (호출자가 _lock 보유 가정).
 
@@ -216,6 +220,7 @@ class BaseResourcePool(Generic[T]):
             self._current_bytes -= self._get_resource_size(res)
             logger.info(f"[{self.name}Pool] Evicting: {key}")
             del res
+            self._post_evict_cleanup()
             return True
         return False
 
@@ -362,11 +367,11 @@ class ModelPool(BaseResourcePool[Any]):
             return True
         return False
 
+    def _post_evict_cleanup(self) -> None:
+        self._cleanup_cuda()
+
     async def _evict_one(self) -> bool:
-        success = await super()._evict_one()
-        if success:
-            self._cleanup_cuda()
-        return success
+        return await super()._evict_one()
 
     def _cleanup_cuda(self):
         with contextlib.suppress(Exception):
@@ -380,8 +385,15 @@ class ModelPool(BaseResourcePool[Any]):
 class RetrieverPool(BaseResourcePool[Any]):
     """벡터 및 BM25 리트리버 전용 풀."""
 
+    async def _evict_one(self) -> bool:
+        """퇴출 후 가비지 컬렉션을 명시적으로 트리거하여 C++ 확장(FAISS) 메모리를 회수합니다."""
+        success = await super()._evict_one()
+        if success:
+            gc.collect()
+        return success
+
     async def check_memory_pressure(self) -> bool:
-        """시스템 RAM 사용량을 확인하고 임계값 초과 시 리소스를 퇴출합니다."""
+        """시스템 RAM 사용량을 확인하고 임계값 초과 시 가장 오래된 단일 리소스를 점진적으로 퇴출합니다."""
         # 단일 문서 풀에서는 퇴출할 다른 문서가 없다. 유일 문서를 퇴출하면
         # 즉시 재빌드(전체 재파싱) 루프로 이어지므로 퇴출하지 않는다.
         if len(self._pool) <= 1:
@@ -390,21 +402,17 @@ class RetrieverPool(BaseResourcePool[Any]):
             import psutil
 
             mem = psutil.virtual_memory()
-            # HOST_PRESSURE_THRESHOLD 사용(모델 풀과 정책 통일). 동일 mem 객체로
-            # 임계값·while 체크를 모두 수행해 불필요한 psutil 호출을 피한다.
             if mem.percent > HOST_PRESSURE_THRESHOLD:
                 if not eviction_allowed(self.name):
                     return False
                 logger.warning(
-                    f"[{self.name}Pool] Memory pressure detected ({mem.percent}%). Triggering eviction."
+                    f"[{self.name}Pool] Host RAM pressure detected ({mem.percent:.1f}% > {HOST_PRESSURE_THRESHOLD}%). "
+                    "Evicting oldest unpinned retriever."
                 )
-                # 메모리 압력이 높을 때 하나씩 퇴출하며 확인
-                evicted = False
-                while psutil.virtual_memory().percent > 80:
-                    if not await self._evict_one():
-                        break
-                    evicted = True
-                return evicted
+                # [DEFECT-FIX] 외부 프로세스(Ollama 등)로 인해 80% 이하 도달이 불가능한 환경에서
+                # 전체 캐시 풀이 전멸(Cascade Wipeout)하는 재앙을 방지하기 위해
+                # 파괴적인 while 루프를 제거하고 쿨다운(30초)당 가장 오래된 1개 항목만 점진적 퇴출(Single Eviction)함.
+                return await self._evict_one()
         except Exception as e:
             logger.debug(f"Memory pressure check failed: {e}")
         return False

@@ -10,6 +10,7 @@ MAX_PDF_SIZE_BYTES 는 ``_app_server_module()`` 으로 호출 시점에 읽습�
 (모듈 수준 import 시 순환 참조 + 패치 미적용 문제 회피).
 """
 
+import asyncio
 import logging
 import os
 import threading
@@ -163,7 +164,8 @@ async def upload_document(
         storage = Path(srv.PDF_STORAGE_DIR)
         storage.mkdir(parents=True, exist_ok=True)
         persisted_path = storage / f"{file_hash}.pdf"
-        persist_pdf_atomically(persisted_path, content)
+        # 이벤트 루프 블로킹 방지를 위해 worker 스레드로 오프로드
+        await asyncio.to_thread(persist_pdf_atomically, persisted_path, content)
 
         # [수정] 동적으로 결정된 임베딩 모델 사용 (모델 로딩은 무거우므로 스레드 유지)
         embedder = await get_resource_manager().get_embedder_for_session(
