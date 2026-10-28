@@ -338,6 +338,10 @@ def load_embedding_model(
             SessionManager.set("current_embedding_device", "Ollama Backend")
         else:
             # --- HuggingFace 로직 (지연 로딩) ---
+            from common.logging_config import silence_transformers_auto_docstring
+
+            silence_transformers_auto_docstring()
+
             from langchain_huggingface import HuggingFaceEmbeddings
 
             from core.session import SessionManager
