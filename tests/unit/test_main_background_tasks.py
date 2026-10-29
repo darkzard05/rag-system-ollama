@@ -14,7 +14,12 @@ import pytest
 # 프로젝트 루트를 path에 추가
 sys.path.append(os.path.abspath("src"))
 
-from src.main import _bg_rebuild_task, _bg_update_qa_chain, on_file_upload
+from src.main import (
+    _bg_rebuild_task,
+    _bg_update_qa_chain,
+    _flush_pending_upload,
+    on_file_upload,
+)
 from src.ui.components.streaming import stream_chunks
 
 from core.document_processor import compute_file_hash
@@ -124,6 +129,7 @@ class TestMainBackgroundTasks(unittest.TestCase):
                 ) as mock_success,
             ):
                 on_file_upload()
+                _flush_pending_upload("test_session")
 
             assert SessionManager.get("new_file_uploaded", session_id="test_session")
             assert SessionManager.get(

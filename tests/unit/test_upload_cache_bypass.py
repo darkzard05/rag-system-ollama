@@ -1,11 +1,13 @@
 """Upload cache bypass — keep the upload callback off the disk-hash meat grinder.
 
 ``_find_cached_upload`` used to glob every ``data/temp/upload_*.pdf`` and run a
-full SHA-256 pass over every size-matching candidate on the UI thread. These
-tests pin the two bounds that remove that I/O:
+full SHA-256 pass over every size-matching candidate on the UI thread. The
+legacy rescan is now gone entirely: only the content-addressed
+``upload_{hash}.pdf`` is probed (O(1) stat), and orphans are reclaimed by the
+background sweep. These tests pin that contract:
 
-* a content-addressed ``upload_{hash}.pdf`` hit must return before any glob;
-* a legacy miss must hash at most three size-matching candidates.
+* a content-addressed hit must return before any glob;
+* a miss must not glob and must not hash any candidate.
 """
 
 from pathlib import Path
@@ -30,12 +32,15 @@ def test_find_cached_upload_immediate_hit(tmp_path: Path):
         mock_glob.assert_not_called()
 
 
-def test_find_cached_upload_limits_hash_computations_on_miss(tmp_path: Path):
-    """크기가 일치하는 레거시 파일이 많아도 최대 3개까지만 해시를 검사하는지 검증."""
+def test_find_cached_upload_never_rescans_legacy_files(tmp_path: Path):
+    """동일 크기 legacy 파일이 많아도 재해시/재스캔하지 않는지 검증.
+
+    이 경로는 업로드 콜백에서 실행되므로 파일 크기에 비례하는 I/O(43MB 기준
+    실측 258ms)를 허용하지 않는다.
+    """
     content = b"%PDF-1.4 dummy content"
     fhash = "non_existent_hash_123456"
 
-    # 동일 크기의 더미 파일 10개 생성
     for i in range(10):
         (tmp_path / f"upload_legacy_{i}.pdf").write_bytes(b"%PDF-1.4 other content")
 
@@ -46,9 +51,13 @@ def test_find_cached_upload_limits_hash_computations_on_miss(tmp_path: Path):
         hash_calls.append(path_str)
         return real_compute_hash(path_str, **kwargs)
 
-    with patch(
-        "core.document_processor.compute_file_hash", side_effect=spy_compute_hash
+    with (
+        patch("pathlib.Path.glob") as mock_glob,
+        patch(
+            "core.document_processor.compute_file_hash", side_effect=spy_compute_hash
+        ),
     ):
         res = _find_cached_upload(str(tmp_path), content, fhash)
         assert res is None
-        assert len(hash_calls) <= 3, f"해시 검사가 3회를 초과함: {len(hash_calls)}회"
+        assert hash_calls == [], f"legacy 재해시가 발생함: {hash_calls}"
+        mock_glob.assert_not_called()

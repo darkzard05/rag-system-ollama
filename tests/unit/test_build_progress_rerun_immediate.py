@@ -70,7 +70,10 @@ def test_phase_transition_after_initial_window_reruns_immediately():
     with patch(
         "common.async_worker.request_session_rerun", return_value=True
     ) as mock_rerun:
-        with patch("time.monotonic", return_value=start_time + 1.0):
+        with patch(
+            "time.monotonic",
+            return_value=start_time + main_module._INITIAL_PAINT_WINDOW_S + 0.1,
+        ):
             main_module._request_build_progress_rerun(SID, "extracting")
 
         # 윈도우 경과 후 위상 전이이므로 즉시 리런 호출

@@ -173,6 +173,7 @@ def test_persist_failure_leaves_clean_no_document_state():
         patch("services.monitoring.notification_system.SystemNotifier.success"),
     ):
         main_module.on_file_upload()
+        main_module._flush_pending_upload(SID)
 
     mock_error.assert_called_once()
     assert SessionManager.get_build_state(session_id=SID) is None

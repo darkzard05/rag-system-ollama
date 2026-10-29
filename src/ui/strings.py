@@ -10,8 +10,6 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
-from common.config import MSG_ERROR_OLLAMA_NOT_RUNNING
-
 # ---------------------------------------------------------------------------
 # Language switch
 # ---------------------------------------------------------------------------
@@ -129,7 +127,6 @@ UI_STRINGS: dict[str, dict[str, str]] = {
         "sidebar_language": "Language",
         "sidebar_language_help": "Switch the UI language.",
         "nav_next": "Next ▶",  # Ollama error
-        "error_ollama_not_running": MSG_ERROR_OLLAMA_NOT_RUNNING,
         # Expanders
         "expander_sources_reasoning": "Sources & Reasoning",
         "expander_sources_only": "Cited Sources",
@@ -253,7 +250,6 @@ UI_STRINGS: dict[str, dict[str, str]] = {
         "sidebar_language": "언어",
         "sidebar_language_help": "UI 언어를 전환합니다.",
         "nav_next": "다음 ▶",
-        "error_ollama_not_running": MSG_ERROR_OLLAMA_NOT_RUNNING,
         # Expanders
         "expander_sources_reasoning": "출처 및 추론 과정",
         "expander_sources_only": "인용 출처",

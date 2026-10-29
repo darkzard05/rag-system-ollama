@@ -165,6 +165,47 @@ def _check_windows_integrity(uptime_seconds: float | None = None):
         logger.warning(f"[SYSTEM] [INTEGRITY] 점검 중 예외 발생: {e}")
 
 
+UPLOAD_ORPHAN_TTL_S = 24 * 3600
+
+
+def _cleanup_orphan_uploads() -> int:
+    """참조되지 않고 TTL을 넘긴 ``upload_*.pdf`` 고아 파일을 회수한다.
+
+    업로드 콜백의 legacy 재해시 스캔을 제거한 대가로, 크래시/강제 종료로
+    남은 파일은 이 백그라운드 sweep 이 정리한다. 세션 개시 직후(프로세스
+    부팅 60초 후) 한 번만 실행되므로, 그 시점에 살아 있는 세션의 경로는
+    건드리지 않는다.
+    """
+    from core.session import SessionManager
+
+    temp_dir = Path(FilePathConstants.TEMP_DIR)
+    try:
+        entries = list(temp_dir.glob("upload_*.pdf"))
+    except OSError as e:
+        logger.warning("[UPLOAD] 고아 파일 스캔 실패: %s", e)
+        return 0
+
+    referenced = {
+        os.path.normcase(os.path.abspath(str(p)))
+        for p in SessionManager.get_all_pdf_paths()
+    }
+    cutoff = time.time() - UPLOAD_ORPHAN_TTL_S
+    removed = 0
+    for entry in entries:
+        try:
+            if entry.stat().st_mtime > cutoff:
+                continue
+        except OSError:
+            continue
+        if os.path.normcase(os.path.abspath(str(entry))) in referenced:
+            continue
+        if SessionManager.safe_remove_file(str(entry)):
+            removed += 1
+    if removed:
+        logger.info("[UPLOAD] 고아 업로드 파일 %d개 정리 완료", removed)
+    return removed
+
+
 @st.cache_resource
 def _start_global_background_worker():
     """
@@ -179,6 +220,10 @@ def _start_global_background_worker():
         # 리셋되지 않게 한다.
         started_at = time.monotonic()
         time.sleep(60)
+        # [UPLOAD-GC] 업로드 콜백에서 legacy 재해시 스캔을 제거했으므로,
+        # 참조되지 않는 오래된 `upload_*.pdf` 는 여기서 한 번만 회수한다.
+        with contextlib.suppress(Exception):
+            _cleanup_orphan_uploads()
         while True:
             with contextlib.suppress(Exception):
                 _check_windows_integrity(uptime_seconds=time.monotonic() - started_at)
@@ -472,38 +517,110 @@ def on_file_upload() -> None:
 def _find_cached_upload(
     temp_dir: str, file_bytes: bytes, uploaded_hash: str
 ) -> str | None:
-    """해시 기반 결정론적 파일명(Content-Addressed)으로 O(1) 파일 존재 여부 확인."""
+    """해시 기반 결정론적 파일명(Content-Addressed)으로 O(1) 파일 존재 여부 확인.
+
+    Legacy ``upload_*.pdf`` 재스캔은 폐지했다. 동일 크기 후보를 SHA-256으로
+    다시 해시하는 비용이 업로드 콜백에서 파일 크기에 비례해 커졌기 때문이다
+    (실측: 5.5MB에서 67ms, 43MB에서 258ms). 고아 파일 회수는
+    ``_cleanup_orphan_uploads`` 가 백그라운드에서 담당한다.
+    """
     if not uploaded_hash:
         return None
-    # 1. Content-Addressed 타깃 파일 O(1) 우선 검사
     target_file = Path(temp_dir) / f"upload_{uploaded_hash}.pdf"
     try:
         if target_file.is_file() and target_file.stat().st_size == len(file_bytes):
             return str(target_file)
     except OSError:
         pass
+    return None
 
-    # 2. 레거시 파일 스캔은 크기가 완전히 일치하는 파일만 최대 3건으로 엄격히 제한
+
+_PENDING_UPLOAD_KEY = "pending_upload_persist"
+# 콜백과 `_handle_pending_tasks` 는 같은 스크립트 런에서 실행되므로 바이트는
+# 모듈 전역에 보관한다. 세션 저장소(및 그 UI 미러)에는 메타데이터만 싣는다.
+_PENDING_UPLOAD_BYTES: dict[str, bytes] = {}
+
+
+def _recover_upload_bytes(pending: dict) -> bytes | None:
+    """재실행으로 모듈 전역이 사라졌을 때 위젯에서 업로드 바이트를 복구한다."""
     try:
-        expected_size = len(file_bytes)
-        candidates = [
-            p
-            for p in Path(temp_dir).glob("upload_*.pdf")
-            if p.name != target_file.name
-            and p.is_file()
-            and p.stat().st_size == expected_size
-        ]
-    except OSError as e:
-        logger.warning(f"[UPLOAD] 재사용 스캔 실패: {e}")
+        uploaded_file = st.session_state.get("pdf_uploader")
+        if uploaded_file is None or not hasattr(uploaded_file, "read"):
+            return None
+        if getattr(uploaded_file, "name", None) != pending.get("file_name"):
+            return None
+        uploaded_file.seek(0)
+        data = uploaded_file.read()
+        uploaded_file.seek(0)
+        return data or None
+    except Exception:  # noqa: BLE001 - 복구 실패는 저장 실패로 처리한다
         return None
 
-    for entry in candidates[:3]:
+
+def _rollback_pending_upload(session_id: str) -> None:
+    """지연 저장 실패 시 세션을 '문서 없음' 상태로 되돌린다.
+
+    콜백 시점에는 아직 문서가 게시되지 않았으므로, 실패 후에도 PREPARING
+    패널이 반쯤 쓰인 파일을 가리키는 상태가 남지 않아야 한다.
+    """
+    from core.session import SessionManager
+
+    SessionManager.delete(_PENDING_UPLOAD_KEY, session_id)
+    SessionManager.set("pdf_file_path", None, session_id=session_id)
+    SessionManager.delete("first_page_preview", session_id)
+    SessionManager.delete("total_pages", session_id)
+    SessionManager.delete("file_hash", session_id)
+    SessionManager.delete("last_uploaded_file_name", session_id)
+    SessionManager.set("new_file_uploaded", False, session_id=session_id)
+    SessionManager.set("is_building_rag", False, session_id=session_id)
+    SessionManager.reset_build_state(session_id)
+    message = "Error while saving the uploaded file. Please try again."
+    SessionManager.set("pdf_processing_error", message, session_id=session_id)
+    _post_upload_error(message, session_id)
+
+
+def _flush_pending_upload(session_id: str) -> bool:
+    """첫 프레임 렌더 이후, 빌드 디스패치 이전에 지연된 업로드 쓰기를 수행한다.
+
+    Returns True when a pending upload existed (handled or rolled back).
+    """
+    from core.session import SessionManager
+    from services.monitoring.notification_system import SystemNotifier
+
+    pending = SessionManager.get(_PENDING_UPLOAD_KEY, None, session_id)
+    file_bytes = _PENDING_UPLOAD_BYTES.pop(session_id, None)
+    if not isinstance(pending, dict):
+        return False
+
+    SessionManager.delete(_PENDING_UPLOAD_KEY, session_id)
+    target = str(pending.get("target_path") or "")
+    if not target:
+        _rollback_pending_upload(session_id)
+        return True
+
+    if pending.get("needs_write"):
+        if file_bytes is None:
+            file_bytes = _recover_upload_bytes(pending)
+        if file_bytes is None:
+            logger.error("[UPLOAD] 지연 저장 실패: 업로드 바이트 유실")
+            _rollback_pending_upload(session_id)
+            return True
         try:
-            if compute_file_hash(str(entry)) == uploaded_hash:
-                return str(entry)
-        except OSError:
-            continue
-    return None
+            _persist_upload_atomically(target, file_bytes)
+        except OSError as e:
+            logger.error("[UPLOAD] 파일 저장 실패: %s", e, exc_info=True)
+            _rollback_pending_upload(session_id)
+            return True
+
+    old_path = pending.get("old_path")
+    if old_path and old_path != target:
+        # reset_for_new_file already removed this session's reference, so any
+        # remaining reference belongs to another session.
+        still_referenced = SessionManager.get_all_pdf_paths().count(old_path) > 0
+        if not still_referenced and not SessionManager.safe_remove_file(old_path):
+            logger.warning(f"이전 업로드 파일 삭제 실패 (잠금 가능): {old_path}")
+            SystemNotifier.warning(f"이전 파일 정리에 실패했습니다: {old_path}")
+    return True
 
 
 def _process_uploaded_file(uploaded_file) -> None:
@@ -564,22 +681,13 @@ def _process_uploaded_file(uploaded_file) -> None:
         # (reset_for_new_file이 current_page/pdf_annotations/pdf_target_page 초기화 포함)
         SessionManager.reset_for_new_file(session_id=sid)
 
-        # Persist before publishing viewer/build metadata. If this fails, the
-        # session stays in a clean "no document" state instead of a permanent
-        # PREPARING panel pointing at a half-written file.
-        try:
-            if cached_path is not None:
-                tmp_path = cached_path
-                logger.info(f"[UPLOAD] 동일 파일 재사용 (dedup): {tmp_path}")
-            else:
-                tmp_path = os.path.join(temp_dir, f"upload_{uploaded_hash}.pdf")
-                _persist_upload_atomically(tmp_path, file_bytes)
-        except OSError as e:
-            logger.error("[UPLOAD] 파일 저장 실패: %s", e, exc_info=True)
-            _post_upload_error(
-                "Error while saving the uploaded file. Please try again."
-            )
-            return
+        if cached_path is not None:
+            tmp_path = cached_path
+            needs_write = False
+            logger.info(f"[UPLOAD] 동일 파일 재사용 (dedup): {tmp_path}")
+        else:
+            tmp_path = os.path.join(temp_dir, f"upload_{uploaded_hash}.pdf")
+            needs_write = True
 
         SessionManager.set("total_pages", page_count, session_id=sid)
         # [FAST-PATH 동기화] file_hash와 last_uploaded_file_name을 미리보기 등록과 동시에
@@ -612,17 +720,26 @@ def _process_uploaded_file(uploaded_file) -> None:
         navigate_to_page(1)
         st.session_state.pop("pdf_target_page", None)
 
+        # [DEFER-PERSIST] 디스크 쓰기는 첫 프레임(뷰어 위젯 생성) 이후
+        # `_flush_pending_upload` 로 미룬다. 1페이지 뷰어는 아래에서 등록한
+        # `first_page_preview` 바이트만으로 렌더되므로, 파일이 아직 없어도
+        # 첫 프레임은 유효하다. 경로는 미리 게시하되, pending 레코드를 먼저
+        # 기록해 "게시된 경로 + 기록자 없음" 상태가 생기지 않게 한다.
+        SessionManager.set(
+            _PENDING_UPLOAD_KEY,
+            {
+                "target_path": tmp_path,
+                "needs_write": needs_write,
+                "old_path": old_path,
+                "file_name": uploaded_file.name,
+            },
+            session_id=sid,
+        )
+        if needs_write:
+            _PENDING_UPLOAD_BYTES[sid] = file_bytes
         SessionManager.set("pdf_file_path", tmp_path, session_id=sid)
         SessionManager.set("new_file_uploaded", True, session_id=sid)
         SystemNotifier.success(f"Document uploaded: {uploaded_file.name}")
-
-        if old_path and old_path != tmp_path:
-            # reset_for_new_file already removed this session's reference, so
-            # any remaining reference belongs to another session.
-            still_referenced = SessionManager.get_all_pdf_paths().count(old_path) > 0
-            if not still_referenced and not SessionManager.safe_remove_file(old_path):
-                logger.warning(f"이전 업로드 파일 삭제 실패 (잠금 가능): {old_path}")
-                SystemNotifier.warning(f"이전 파일 정리에 실패했습니다: {old_path}")
     else:
         SystemNotifier.success(f"'{uploaded_file.name}' was already uploaded.")
 
@@ -706,6 +823,10 @@ def _handle_pending_tasks() -> None:
     from core.session import SessionManager
 
     current_sid = SessionManager.get_session_id()
+    # [DEFER-PERSIST] 첫 프레임이 이미 위에서 생성됐다. 빌드가 파일을 읽기
+    # 전에 반드시 디스크에 기록되어 있어야 하므로, 디스패치 직전이 마지막
+    # 안전 지점이다.
+    _flush_pending_upload(current_sid)
     is_building = bool(SessionManager.get("is_building_rag", False, current_sid))
     is_generating = bool(SessionManager.get("is_generating_answer", False, current_sid))
     needs_rerun = False
@@ -789,6 +910,7 @@ def _handle_pending_tasks() -> None:
                 current_file_name,
                 current_embedding_model,
                 expected_file_hash=current_file_hash,
+                defer_seconds=_BUILD_START_DELAY_S,
             ),
         )
         # [UX-FIRST-PAGE] 신규 파일 업로드 직후 st.rerun()을 호출하지 않는다.
@@ -871,15 +993,15 @@ def main() -> None:
     # [최적화] 모델 목록 1회만 조회하여 available_models와 reachable 여부를 동시에 도출
     current_models = _load_available_models(non_blocking_fallback=True)
     st.session_state.available_models_list = current_models
-    ollama_reachable = bool(current_models) and (
-        MSG_ERROR_OLLAMA_NOT_RUNNING not in current_models
-    )
+    # `current_models` 는 오류 센티넬이 걸러진 목록이므로 도달 가능 여부를
+    # 판정할 수 없다(항상 True가 됨). 판정은 원본 캐시를 보는 헬퍼에 맡긴다.
+    ollama_reachable = _is_ollama_reachable()
 
     if SessionManager.get("pdf_file_path") and not SessionManager.get("pdf_processed"):
         SessionManager.set("is_generating_answer", False)
 
-    if not ollama_reachable:
-        st.error(t("error_ollama_not_running"))
+    # 도달 불가 안내는 사이드바(`sidebar_ollama_hint`)가 단일 지점에서 담당한다.
+    # 메인 블록에 st.error 를 삽입하면 두 컬럼 위에 끼어들어 뷰어를 밀어낸다.
 
     _t_layout = time.perf_counter()
     _render_app_layout(
@@ -915,8 +1037,14 @@ def main() -> None:
 
 # 빌드 진행 Rerun 제어: 메이저 위상(Phase) 전이 시에만 전역 Rerun을 허용한다.
 # 동일 위상 내의 세부 진행률(%) 변경은 전역 main() 리런을 유발하지 않는다.
-_INITIAL_PAINT_WINDOW_S = 0.8
+_INITIAL_PAINT_WINDOW_S = 1.5
 _BUILD_RERUN_LAST: dict[str, tuple[float, str]] = {}
+
+# [PAINT-GRACE] 신규 업로드 직후 빌드 워커의 CPU 작업(임베더 로드/파싱)이
+# 서버 스레드의 첫 렌더 및 델타 전송과 겹치지 않도록 짧게 유예한다.
+# E2E 실측: 파일 선택 → 첫 캔버스 페인트가 ~1.45s(그중 서버 콜백~0.12s,
+# 컴포넌트 부팅 ~0.92s)이므로, 빌드는 그 사이에 시작하지 않는 편이 낫다.
+_BUILD_START_DELAY_S = 0.4
 
 
 def _request_build_progress_rerun(session_id: str, phase_name: str) -> None:
@@ -973,10 +1101,20 @@ async def _bg_rebuild_task(
     embedder_name: str,
     *,
     expected_file_hash: str | None = None,
+    defer_seconds: float = 0.0,
 ):
     """
     [Background Task] 업로드된 파일과 선택된 모델을 사용하여 RAG 파이프라인을 비동기로 재구축합니다.
+
+    ``defer_seconds`` 는 첫 페이지 페인트와 CPU/GIL을 경합하지 않도록 워커
+    본체 시작을 늦추는 유예 시간이다. 유예 후에는 반드시 상태를 다시
+    확인하므로(아래 stale 체크) 그 사이 새 업로드가 와도 안전하다.
     """
+    import asyncio
+
+    if defer_seconds > 0:
+        await asyncio.sleep(defer_seconds)
+
     from core.build_state import (
         BuildEvent,
         BuildPhase,

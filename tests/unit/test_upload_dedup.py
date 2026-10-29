@@ -18,7 +18,7 @@ from unittest.mock import patch
 # 프로젝트 루트를 path에 추가 (test_main_background_tasks.py와 동일 관례).
 sys.path.append(os.path.abspath("src"))
 
-from src.main import on_file_upload
+from src.main import _flush_pending_upload, on_file_upload
 
 from core.document_processor import compute_file_hash
 from core.session import SessionManager
@@ -77,8 +77,8 @@ def test_reset_for_new_file_clears_both_guard_keys():
     assert SessionManager.get("last_uploaded_file_name", session_id=sid) is None
 
 
-def test_same_bytes_different_name_reuses_existing_file(tmp_path):
-    """동일 바이트 + 다른 파일명 재업로드 → 새 파일 없이 기존 파일 재사용."""
+def test_same_bytes_different_name_reuses_content_addressed_file(tmp_path):
+    """동일 바이트 + 다른 파일명 재업로드 → content-addressed 파일 1개만 유지."""
     sid = _bind_session()
     file_bytes = _make_test_pdf("dedup-same-bytes")
     content_hash = compute_file_hash("", data=file_bytes)
@@ -97,9 +97,13 @@ def test_same_bytes_different_name_reuses_existing_file(tmp_path):
         ) as mock_success,
     ):
         on_file_upload()
+        _flush_pending_upload(sid)
 
     assert len(_upload_files(str(tmp_path))) == 1
-    assert SessionManager.get("pdf_file_path", session_id=sid) == str(seed)
+    assert SessionManager.get("pdf_file_path", session_id=sid) == str(
+        tmp_path / f"upload_{content_hash}.pdf"
+    )
+    assert not seed.exists()
     mock_success.assert_called_once()
 
 
@@ -119,6 +123,7 @@ def test_repeated_same_bytes_uploads_keep_single_file(tmp_path):
                 _upload(file_bytes, f"r{i}.pdf"),
             ):
                 on_file_upload()
+                _flush_pending_upload(sid)
             paths.append(SessionManager.get("pdf_file_path", session_id=sid))
 
     assert len(_upload_files(str(tmp_path))) == 1
@@ -182,6 +187,7 @@ def test_locked_old_file_delete_is_retried(tmp_path):
         patch("services.monitoring.notification_system.SystemNotifier.success"),
     ):
         on_file_upload()
+        _flush_pending_upload(sid)
 
     assert len(calls) >= 2
     assert not old_path.exists()
@@ -213,6 +219,7 @@ def test_unremovable_old_file_is_reported_not_leaked(tmp_path):
         ) as mock_warning,
     ):
         on_file_upload()
+        _flush_pending_upload(sid)
 
     mock_warning.assert_called_once()
     assert SessionManager.get("new_file_uploaded", session_id=sid)

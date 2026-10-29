@@ -133,6 +133,8 @@ class SessionManager:
             "llm",
             "embedder",
             "doc_pool",
+            # Internal upload hand-off (callback -> _handle_pending_tasks).
+            "pending_upload_persist",
         }
     )
 

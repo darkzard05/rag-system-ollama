@@ -78,7 +78,7 @@ def test_embedding_rebuild_still_requests_rerun():
 
 
 def test_extracting_rerun_blocked_during_initial_paint_window():
-    """업로드 직후 initial_paint_window(0.8s) 내의 조기 EXTRACTING 리런은 억제되어야 함."""
+    """업로드 직후 initial_paint_window(initial paint window) 내의 조기 EXTRACTING 리런은 억제되어야 함."""
     from core.build_state import BuildPhase, initial_build_state
 
     SessionManager.set("is_building_rag", True, session_id=SID)
@@ -97,7 +97,7 @@ def test_extracting_rerun_blocked_during_initial_paint_window():
 
 
 def test_extracting_rerun_allowed_after_initial_paint_window():
-    """initial_paint_window(0.8s)가 경과한 후에는 EXTRACTING 리런이 정상 트리거되어야 함."""
+    """initial_paint_window(initial paint window)가 경과한 후에는 EXTRACTING 리런이 정상 트리거되어야 함."""
     from core.build_state import BuildPhase, initial_build_state
 
     SessionManager.set("is_building_rag", True, session_id=SID)
@@ -111,14 +111,17 @@ def test_extracting_rerun_allowed_after_initial_paint_window():
     with patch(
         "common.async_worker.request_session_rerun", return_value=True
     ) as mock_rerun:
-        with patch("time.monotonic", return_value=now + 1.0):
+        with patch(
+            "time.monotonic",
+            return_value=now + main_module._INITIAL_PAINT_WINDOW_S + 0.1,
+        ):
             main_module._request_build_progress_rerun(SID, "extracting")
 
         mock_rerun.assert_called_once_with(SID)
 
 
 def test_non_extracting_transition_also_blocked_during_initial_paint_window():
-    """0.8s 윈도우 동안에는 EXTRACTING뿐 아니라 모든 비-terminal 전이가 억제된다."""
+    """initial paint window 동안에는 EXTRACTING뿐 아니라 모든 비-terminal 전이가 억제된다."""
     from core.build_state import BuildPhase, initial_build_state
 
     SessionManager.set("is_building_rag", True, session_id=SID)
@@ -151,7 +154,10 @@ def test_non_extracting_transition_allowed_after_initial_paint_window():
     with patch(
         "common.async_worker.request_session_rerun", return_value=True
     ) as mock_rerun:
-        with patch("time.monotonic", return_value=now + 0.9):
+        with patch(
+            "time.monotonic",
+            return_value=now + main_module._INITIAL_PAINT_WINDOW_S + 0.1,
+        ):
             main_module._request_build_progress_rerun(SID, "chunking")
 
         mock_rerun.assert_called_once_with(SID)
@@ -159,7 +165,7 @@ def test_non_extracting_transition_allowed_after_initial_paint_window():
 
 def test_pending_tasks_registers_preparing_timestamp_for_paint_protection():
     """_handle_pending_tasks 실행 시 _BUILD_RERUN_LAST에 preparing 기준 시각이 등록되어
-    즉시 뒤따르는 extracting 이벤트가 0.8초 윈도우 내에서 차단되는지 검증."""
+    즉시 뒤따르는 extracting 이벤트가 initial paint window 내에서 차단되는지 검증."""
     SessionManager.set("new_file_uploaded", True, session_id=SID)
     SessionManager.set("last_uploaded_file_name", "preview_doc.pdf", session_id=SID)
     SessionManager.set("file_hash", "hash_preview_123", session_id=SID)
@@ -181,16 +187,19 @@ def test_pending_tasks_registers_preparing_timestamp_for_paint_protection():
     assert phase == "preparing"
     assert isinstance(registered_time, float)
 
-    # 2. 백그라운드 워커가 0.1초 후 즉시 extracting 이벤트를 전달해도 0.8초 윈도우 내이므로 Rerun이 억제됨
+    # 2. 백그라운드 워커가 0.1초 후 즉시 extracting 이벤트를 전달해도 initial paint window 내이므로 Rerun이 억제됨
     with patch("common.async_worker.request_session_rerun") as mock_rerun:
         with patch("time.monotonic", return_value=registered_time + 0.1):
             main_module._request_build_progress_rerun(SID, "extracting")
         mock_rerun.assert_not_called()
 
-    # 3. 0.8초 윈도우 경과 후에는 extracting 위상 전이 Rerun이 정상 허용됨
+    # 3. initial paint window 경과 후에는 extracting 위상 전이 Rerun이 정상 허용됨
     with patch(
         "common.async_worker.request_session_rerun", return_value=True
     ) as mock_rerun:
-        with patch("time.monotonic", return_value=registered_time + 0.9):
+        with patch(
+            "time.monotonic",
+            return_value=registered_time + main_module._INITIAL_PAINT_WINDOW_S + 0.1,
+        ):
             main_module._request_build_progress_rerun(SID, "extracting")
         mock_rerun.assert_called_once_with(SID)
