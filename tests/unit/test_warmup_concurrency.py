@@ -48,6 +48,7 @@ class _FakeLLM:
             yield "warmup-token"
 
         self.astream = MagicMock(side_effect=lambda _text: _gen())
+        self.ainvoke = AsyncMock(return_value="warmup-token")
 
 
 @pytest.mark.asyncio
@@ -55,6 +56,7 @@ async def test_warmup_runs_without_raising(monkeypatch: pytest.MonkeyPatch) -> N
     """Ollama 없이 get_llm/get_embedder 를 페이크로 대체해도 프리웜이
     (LLM 로드 → 임베더 로드 → throwaway aembed_query → minimal astream) 경로를
     예외 없이 통과한다."""
+    monkeypatch.setattr("core._loaders._is_ollama_server_up", lambda: True)
     fake_embedder = _FakeEmbedder()
     fake_llm = _FakeLLM()
 
@@ -77,6 +79,7 @@ async def test_warmup_invokes_throwaway_token_path(
 ) -> None:
     """프리웜이 임베더 aembed_query 와 LLM astream(break) throwaway 경로를
     실제로 탐 — 모의 객체가 호출되었음을 assert."""
+    monkeypatch.setattr("core._loaders._is_ollama_server_up", lambda: True)
     fake_embedder = _FakeEmbedder()
     fake_llm = _FakeLLM()
 
@@ -88,7 +91,7 @@ async def test_warmup_invokes_throwaway_token_path(
     await _warmup_models()
 
     fake_embedder.aembed_query.assert_awaited_once_with("warmup")
-    fake_llm.astream.assert_called_once_with("warmup")
+    fake_llm.ainvoke.assert_awaited_once_with("warmup")
 
 
 # ---------------------------------------------------------------------------
@@ -204,6 +207,7 @@ async def test_warmup_propagates_llm_load_failure(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """get_llm() 이 실패하면 _warmup_models 가 예외를 잡지 않고 그대로 전파."""
+    monkeypatch.setattr("core._loaders._is_ollama_server_up", lambda: True)
     get_embedder_mock = AsyncMock(return_value=_FakeEmbedder())
     get_llm_mock = AsyncMock(side_effect=RuntimeError("llm load boom"))
     monkeypatch.setattr(ModelManager, "get_embedder", get_embedder_mock)

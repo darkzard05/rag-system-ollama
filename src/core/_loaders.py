@@ -459,6 +459,7 @@ async def _warmup_models() -> None:
         logger.debug(f"[WARMUP] LLM 프리웜 건너뜀 (타임아웃 또는 양보): {e}")
     except Exception as e:
         logger.debug(f"[WARMUP] LLM 프리웜 실패: {e}")
+        raise
 
 
 def _fetch_available_models() -> list[str]:

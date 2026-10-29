@@ -512,10 +512,8 @@ async def load_pdf_docs(
                         session_id=session_id,
                     )
 
-                    # 스레드 풀 기반 병렬 페이지 추출.
-                    # PyMuPDF Document는 스레드 간 공유가 안전하지 않으므로 각 워커가
-                    # 자체 PDF 핸들(``open_pdf_document``)을 열고 닫는다. 메인 스레드의
-                    # ``doc``는 절대 공유하지 않는다. 페이지 순서는 인덱스 순으로 보장.
+                    # C-Engine 폴백 시 하이드레이션 모드에 따라 단어 좌표 추출 여부 결정
+                    do_extract_words = HYDRATION_MODE != "none"
                     max_workers = min(total_pages, os.cpu_count() or 4) or 1
                     # C-Engine 폴백은 자체 리스트를 채운 뒤 accumulator에 넘긴다.
                     c_engine_chunks: list[Any] = [None] * total_pages
