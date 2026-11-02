@@ -474,8 +474,10 @@ def _apply_ctx_guard(docs: list, query: str) -> tuple[list, str, int]:
     Returns ``(trimmed_docs, context_str, removed_count)``. Identical
     normalized-text chunks are dropped first (pre-prompt), then documents are
     dropped from the lowest ``rerank_score`` end of a descending-ranked copy
-    until the estimated token cost fits the budget, while always preserving a
-    minimum of 2 documents.
+    until the estimated token cost fits the budget, while preserving a
+    configurable ``min_docs_keep`` (default 3, hard floor 2). If even the
+    minimum-keep set exceeds the Ollama hard input limit, trimming continues
+    below the preference so the prompt cannot overflow.
 
     Efficiency contract: per-doc blocks are rendered once (stable_id hash +
     metadata format computed once per doc). The trim search reuses those blocks
@@ -501,12 +503,16 @@ def _apply_ctx_guard(docs: list, query: str) -> tuple[list, str, int]:
     if not docs:
         return docs, "일상적인 대화입니다.", dedup_removed
 
-    # 실질적인 답변 생성에 최적인 토큰 한도로 타이트하게 압축 (기본 2,200 토큰 상한)
+    # 실질적인 답변 생성에 최적인 토큰 한도로 타이트하게 압축 (기본 3,200 토큰 상한)
     # 8192 토큰 중 prefill 연산 부하를 줄이기 위해 최대 컨텍스트 길이를 동적 제한
-    max_allowed_ctx_tokens = int(GENERATE_PROMPT_CONFIG.get("max_context_tokens", 2200))
+    max_allowed_ctx_tokens = int(GENERATE_PROMPT_CONFIG.get("max_context_tokens", 3200))
     token_budget = min(
         int((OLLAMA_NUM_CTX - OLLAMA_NUM_PREDICT) * 0.85), max_allowed_ctx_tokens
     )
+    # min_docs_keep은 품질 선호값이다. 이 값을 지켜도 Ollama 하드 입력 한도를
+    # 넘으면 프롬프트 오버플로를 막기 위해 추가 제거를 허용한다.
+    min_docs_keep = max(2, int(GENERATE_PROMPT_CONFIG.get("min_docs_keep", 3)))
+    hard_token_budget = int((OLLAMA_NUM_CTX - OLLAMA_NUM_PREDICT) * 0.95)
     # 문서 조각을 1회 렌더해 초기 추정과 트림 루프에서 공유한다.
     blocks = {id(d): _render_doc_block(d) for d in docs}
     context = "".join(blocks[id(d)] for d in docs)
@@ -543,7 +549,9 @@ def _apply_ctx_guard(docs: list, query: str) -> tuple[list, str, int]:
             _strip_fallback = bool(_TSCFG.get("strip_headers_fallback", False))
         except Exception:
             _strip_fallback = False
-        if _strip_fallback:
+        # 하드 한도의 2배를 넘는 초과분은 헤더 제거로 회수 불가능한 수준이다.
+        # 이 경우 스트립 프롬프트를 추가로 렌더/카운트하지 않고 제거로 직행한다.
+        if _strip_fallback and est <= hard_token_budget * 2:
             stripped_blocks = {
                 k: re.sub(r"^#{1,6}\s+", "", v, flags=re.MULTILINE)
                 for k, v in blocks.items()
@@ -569,7 +577,7 @@ def _apply_ctx_guard(docs: list, query: str) -> tuple[list, str, int]:
             key=lambda d: float(d.metadata.get("rerank_score", 0.0)),
             reverse=True,
         )
-        max_removable = len(ranked) - 2
+        max_removable = max(0, len(ranked) - min_docs_keep)
 
         def _est_after_removing(k: int) -> int:
             survivors = ranked[: len(ranked) - k] if k else ranked
@@ -577,23 +585,57 @@ def _apply_ctx_guard(docs: list, query: str) -> tuple[list, str, int]:
                 _ctx_prompt("".join(blocks[id(d)] for d in survivors), query)
             )
 
-        best = max_removable
-        best_est = _est_after_removing(best)
-        lo, hi = 0, max_removable
-        while lo <= hi:
-            mid = (lo + hi) // 2
-            mid_est = _est_after_removing(mid)
-            if mid_est <= token_budget:
-                best = mid
-                best_est = mid_est
-                hi = mid - 1
-            else:
-                lo = mid + 1
+        def _min_removals_for_budget(
+            upper: int, target: int, upper_est: int | None = None
+        ) -> tuple[int, int]:
+            """target 이하가 되는 최소 제거 수를 이진 탐색한다."""
+            best_k = upper
+            best_tokens = (
+                upper_est if upper_est is not None else _est_after_removing(upper)
+            )
+            lo, hi = 0, upper
+            while lo <= hi:
+                mid = (lo + hi) // 2
+                mid_est = _est_after_removing(mid)
+                if mid_est <= target:
+                    best_k = mid
+                    best_tokens = mid_est
+                    hi = mid - 1
+                else:
+                    lo = mid + 1
+            return best_k, best_tokens
+
+        # min_docs_keep를 지켰을 때조차 하드 한도를 넘으면, 선호 예산 탐색을
+        # 건너뛰고 하드 한도 기준으로 한 번만 탐색한다(불필요한 O(log R) 절약).
+        min_keep_est = _est_after_removing(max_removable)
+        hard_max_removable = len(ranked) - 2
+        if min_keep_est > hard_token_budget and max_removable < hard_max_removable:
+            logger.warning(
+                "[RAG] [CTX] min_docs_keep=%d 유지 시 하드 한도 초과 "
+                "(est=%d > hard=%d) — 최소 2문서까지 추가 제거",
+                min_docs_keep,
+                min_keep_est,
+                hard_token_budget,
+            )
+            best, best_est = _min_removals_for_budget(
+                hard_max_removable, hard_token_budget
+            )
+        else:
+            best, best_est = _min_removals_for_budget(
+                max_removable, token_budget, min_keep_est
+            )
         removed += best
         docs = ranked[: len(ranked) - best] if best else ranked
         context = "".join(blocks[id(d)] for d in docs)
         est = best_est
-        logger.info(f"[RAG] [CTX] trimmed {removed} docs, est tokens={est}")
+        logger.info(
+            "[RAG] [CTX] trimmed %d docs, kept %d/%d, est tokens=%d, budget=%d",
+            removed,
+            len(docs),
+            len(ranked),
+            est,
+            token_budget,
+        )
     return docs, context, removed
 
 

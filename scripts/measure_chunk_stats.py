@@ -17,6 +17,9 @@ from pathlib import Path
 
 sys.path.insert(0, "src")
 
+from common.config import TEXT_SPLITTER_CONFIG  # noqa: E402
+from common.text_utils import count_tokens_rough  # noqa: E402
+
 FIXED_QUERIES: list[tuple[str, list[str]]] = [
     ("Q1 causally masked objective", ["causally masked", "masked spans"]),
     ("Q2 Table FID result", ["FID", "Table"]),
@@ -59,8 +62,10 @@ async def main() -> None:
 
     pdf = "tests/data/2201.07520v1.pdf"
     docs = await load_pdf_docs(pdf, Path(pdf).name)
-    overflow_thr = 500 * 1.5
-    n_overflow = sum(1 for d in docs if len(d.page_content) > overflow_thr)
+    embedding_limit = int(TEXT_SPLITTER_CONFIG.get("embedding_token_limit", 448))
+    n_overflow = sum(
+        1 for d in docs if count_tokens_rough(d.page_content) > embedding_limit
+    )
 
     t0 = time.perf_counter()
     try:
@@ -79,6 +84,7 @@ async def main() -> None:
 
     texts = [d.page_content for d in split_docs]
     toks, tok_mode = count_tokens(texts)
+    oversized_count = sum(1 for t in toks if t > embedding_limit)
     mixed = sum(1 for t in texts if len(_MD_HDR.findall(t)) > 1)
     table_chunks = sum(1 for t in texts if "|" in t and "Table" in t)
     ref_chunks = sum(1 for d in split_docs if d.metadata.get("is_reference"))
@@ -94,9 +100,12 @@ async def main() -> None:
         "pdf": pdf,
         "pages": len(docs),
         "overflow_pages": n_overflow,
+        "embedding_token_limit": embedding_limit,
         "mode": mode,
         "n_chunks": len(split_docs),
         "tok_mode": tok_mode,
+        "oversized_count": oversized_count,
+        "truncate_risk": bool(toks and max(toks) > 512),
         "tok_p50": pct(toks, 0.5),
         "tok_p95": pct(toks, 0.95),
         "tok_max": max(toks) if toks else 0,

@@ -35,6 +35,18 @@ class _RecordingLLM:
         return "warmup ok"
 
 
+class _BindRecordingLLM(_RecordingLLM):
+    """bind(options=...)를 기록하고 워밍 invoke를 1회 수행하는 fake."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.bound_options: dict | None = None
+
+    def bind(self, **kwargs):
+        self.bound_options = kwargs
+        return self
+
+
 class _FakeEmbedder:
     """embed_query가 즉시 리스트를 반환하는 동기 fake (to_thread로 실행)."""
 
@@ -95,6 +107,35 @@ async def test_preload_warmup_invokes_llm_exactly_once_with_warmup(monkeypatch):
     assert len(recording_llm.invoke_calls) == 1
     prompt, _kwargs = recording_llm.invoke_calls[0]
     assert prompt == "warmup"
+
+
+@pytest.mark.asyncio
+async def test_preload_llm_warmup_caps_generation(monkeypatch):
+    """워밍 추론이 실제 답변 생성을 점유하지 않도록 1토큰/무추론으로 제한한다."""
+    recording_llm = _BindRecordingLLM()
+    _patch_model_manager(monkeypatch, recording_llm)
+
+    await pb._preload_model()
+
+    assert recording_llm.bound_options == {
+        "options": {"num_predict": 1, "think": False, "temperature": 0.0}
+    }
+    assert len(recording_llm.invoke_calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_preload_yields_when_user_is_generating(monkeypatch):
+    """사용자 생성/빌드가 시작되면 프리로드는 모델 로드 전에 중단한다."""
+    _patch_model_manager(monkeypatch, llm_fake=MagicMock())
+    monkeypatch.setattr(
+        pb.SessionManager,
+        "get",
+        lambda key, *args, **kwargs: key == "is_generating_answer",
+    )
+
+    await pb._preload_model()
+
+    ModelManager.get_embedder.assert_not_awaited()
 
 
 @pytest.mark.asyncio

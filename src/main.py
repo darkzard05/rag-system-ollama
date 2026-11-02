@@ -385,11 +385,24 @@ SessionManager.set_ui_sync(StreamlitSessionSync())
 
 
 async def _warmup_models() -> None:
-    """백그라운드 프리워밍 (인위적 지연 제거)."""
+    """사용자 상호작용 발생 시 즉각 양보하는 안전한 백그라운드 프리워밍."""
     from common.config import is_test_env
 
     if is_test_env():
         return
+
+    # 2.5초 대기를 100ms 단위 폴링으로 분할해 사용자 상호작용을 즉시 감지한다.
+    # 프리로드/모델 로드가 첫 질의를 막지 않도록 업로드·빌드·생성 시작 시 중단.
+    for _ in range(25):
+        await asyncio.sleep(0.1)
+        if (
+            SessionManager.get("new_file_uploaded")
+            or SessionManager.get("is_building_rag")
+            or SessionManager.get("pdf_file_path")
+            or SessionManager.get("is_generating_answer")
+        ):
+            logger.info("[WARMUP] 사용자 상호작용 감지 — 프리워밍 즉시 중단")
+            return
 
     from core.model_loader import _warmup_models as _core_warmup
 

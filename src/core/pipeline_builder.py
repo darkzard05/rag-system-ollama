@@ -87,6 +87,23 @@ async def _preload_model() -> None:
 
         coordinator = get_resource_manager()
 
+        def _user_busy() -> bool:
+            return bool(
+                SessionManager.get("is_generating_answer")
+                or SessionManager.get("is_building_rag")
+            )
+
+        def _yield_to_user(stage: str) -> bool:
+            if not _user_busy():
+                return False
+            logger.info(
+                "[RAG] [PRELOAD] 사용자 작업 우선 — %s 단계 전 프리로드 중단", stage
+            )
+            return True
+
+        if _yield_to_user("임베딩"):
+            return
+
         # 1) 임베더 워밍 — 첫 쿼리 시 임베딩 모델 콜드 스타트(~10s) 방지.
         # embed_query는 블로킹 HTTP 호출이므로 to_thread로 실행해 이벤트 루프를 막지 않습니다.
         # 사용 기간 동안 use_embedder CM 으로 pin 하여 퇴출에 의한 use-after-free 방지.
@@ -94,6 +111,9 @@ async def _preload_model() -> None:
             embedder = await ModelManager.get_embedder(DEFAULT_EMBEDDING_MODEL)
             await asyncio.to_thread(embedder.embed_query, "warmup")
         logger.info("[RAG] [PRELOAD] 임베딩 워밍 완료")
+
+        if _yield_to_user("FlashRank"):
+            return
 
         # 2) FlashRank 워밍 — 첫 쿼리 시 리랭커 lazy 로드(~10s) 방지.
         # acquire만으로는 ONNX InferenceSession이 뜨지 않으므로 실제 스코어링 1회가
@@ -111,13 +131,21 @@ async def _preload_model() -> None:
                 exc_info=True,
             )
 
+        if _yield_to_user("LLM"):
+            return
+
         # 3) LLM 프리로드 — 클라이언트 생성만으로는 Ollama 콜드 모델 로드가 첫 쿼리
         # 시점까지 지연되므로, 실질 워밍 추론을 1회 실행해 콜드 스타트를 선행합니다.
+        # num_predict=1로 제한해 워밍이 실제 답변 생성을 점유하지 않게 합니다.
         # invoke는 블로킹 HTTP 호출이므로 to_thread로 실행해 이벤트 루프를 막지 않습니다.
-        # 사용 기간 동안 use_llm CM 으로 pin 하여 퇴출에 의한 use-after-free 방지.
         async with coordinator.use_llm(model_name=DEFAULT_OLLAMA_MODEL):
             llm = await ModelManager.get_llm(DEFAULT_OLLAMA_MODEL)
-            await asyncio.to_thread(llm.invoke, "warmup")
+            warm_llm = (
+                llm.bind(options={"num_predict": 1, "think": False, "temperature": 0.0})
+                if hasattr(llm, "bind")
+                else llm
+            )
+            await asyncio.to_thread(warm_llm.invoke, "warmup")
         logger.info("[RAG] [PRELOAD] LLM 워밍 추론 완료")
         logger.info(f"[RAG] [PRELOAD] 모델 프리로드 완료: {DEFAULT_OLLAMA_MODEL}")
     except Exception:
@@ -323,6 +351,8 @@ class PipelineBuilder:
         cache = VectorStoreCache(file_path, emb_model_name, file_hash=file_hash)
 
         # 1. 캐시 시도 (동기 파일/FAISS/BM25 I/O이므로 이벤트 루프 offload)
+        if not ENABLE_VECTOR_CACHE:
+            logger.info("[RAG] [INDEX] 벡터 캐시 비활성화 — 신규 인덱싱 강제")
         if ENABLE_VECTOR_CACHE:
             cache_data = await asyncio.to_thread(cache.load, embedder)
             if cache_data and all(x is not None for x in cache_data):

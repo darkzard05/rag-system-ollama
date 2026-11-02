@@ -21,6 +21,15 @@ import core.chunking as chunking_mod
 from core.chunking import split_documents
 
 
+async def _identity_enforce(
+    docs: list[Document],
+    vectors: list[np.ndarray] | None,
+    embedder: object | None = None,
+) -> tuple[list[Document], list[np.ndarray] | None]:
+    """최종 토큰 상한 재분할을 끄고 기존 단일-임베딩 경로만 검증한다."""
+    return docs, vectors
+
+
 class CountingEmbedder:
     """embed_documents 호출 횟수를 세는 결정론적 내용-감응 임베더 (dim=8)."""
 
@@ -99,6 +108,9 @@ async def test_overflow_path_embeds_once(monkeypatch) -> None:
     # 배치 분할 효과를 제거해 호출 횟수 = 임베딩 라운드트립 횟수가 되게 한다.
     monkeypatch.setattr(chunking_mod, "_get_optimal_batch_size", lambda e: 1024)
     monkeypatch.setattr(
+        chunking_mod, "_enforce_embedding_token_limit", _identity_enforce
+    )
+    monkeypatch.setattr(
         chunking_mod.SessionManager, "add_status_log", lambda *a, **k: None
     )
 
@@ -143,6 +155,9 @@ async def test_overflow_splits_match_direct_semantic_path(monkeypatch) -> None:
         {"chunk_size": 500, "chunk_overlap": 50},
     )
     monkeypatch.setattr(chunking_mod, "_get_optimal_batch_size", lambda e: 1024)
+    monkeypatch.setattr(
+        chunking_mod, "_enforce_embedding_token_limit", _identity_enforce
+    )
     monkeypatch.setattr(
         chunking_mod.SessionManager, "add_status_log", lambda *a, **k: None
     )

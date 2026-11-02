@@ -250,7 +250,8 @@ TEXT_SPLITTER_CONFIG: dict = _rag_config.get(
     {
         "chunk_size": 500,
         "chunk_overlap": 100,
-        "page_overflow_threshold_chars": 2000,
+        "chunk_size_tokens": 512,
+        "embedding_token_limit": 448,
     },
 )
 SEMANTIC_CHUNKER_CONFIG: dict = _rag_config.get("semantic_chunker", {"enabled": False})

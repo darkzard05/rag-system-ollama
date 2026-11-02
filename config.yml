@@ -59,10 +59,10 @@ models:
   timeout: 120
 
   # Ollama 모델 상주 시간 — 유휴 시 VRAM 자동 반납까지의 대기.
-  # 30m은 5개 모델을 최대 30분 상주시켜 로컬 VRAM을 압박하므로 5m로 단축.
+  # 5m은 유휴 후 첫 질의마다 12~22s 콜드 로드를 유발하므로 10m로 완화한다.
   # 세션 0개인 시간당 sweep에서도 keep_alive=0 명시 언로드를 수행한다.
   # 환경변수 OLLAMA_KEEP_ALIVE 로 재정의 가능.
-  keep_alive: "5m"
+  keep_alive: "10m"
 
   # Ollama는 별도 프로세스라 torch.cuda 미사용 시 VRAM 퇴출이 영원히 안 떠짐.
   # 호스트 RAM 압력 폴백으로 퇴출을 유도할지 (기본 배포= Ollama).
@@ -132,20 +132,19 @@ rag:
   text_splitter:
     chunk_size: 500
     chunk_overlap: 100
-    # [Phase2] 토큰 단위 상한 (v2-moe ctx 512 일치). length_function이
-    # HF 토크나이저 우선·rough 폴백으로 측정한다. selected_for: CM3-paper-single.
+    # [Phase2] 임베딩 모델 컨텍스트 기준값 (v2-moe ctx 512).
     chunk_size_tokens: 512
     # [Phase2] CTX 초과 시 strip_headers=True 자동 폴백 허용 (상태 로그 기록).
     strip_headers_fallback: true
-    # 페이지 단위 분할 시 오버플로우로 판정할 문자 수 임계치 (기본 2000자).
-    # A4 1페이지 텍스트(평균 1200~1800자)가 불필요하게 시맨틱 청커로
-    # 빠지는 것을 방지한다. 이 값을 넘는 페이지만 하위 분할한다.
-    page_overflow_threshold_chars: 2000
+    # 임베딩 입력 하드 상한(토큰). v2-moe ctx 512에서 안전 마진 64를 뺀 값.
+    # 페이지 오버플로우 판정과 최종 청크 분할 모두 이 값을 사용한다.
+    # rough 추정(한글 1.4 tok/char) 기준이므로 실제 HF 토큰은 이보다 작다.
+    embedding_token_limit: 448
   
   # 추출 엔진 설정 (PyMuPDF4LLM 최적화)
   parsing:
     # --- 최적화된 추출 파라미터 (Adaptive Parsing 활성화) ---
-    table_strategy: "lines" # [추상] 벤치마크 결과 최적 전략 (지연 방지)
+    table_strategy: "lines_strict" # 표 오탐/청크 비대화 방지 (기존 벤치마크 우승)
     graphics_limit: 5000           # [추가] 표 유실 방지를 위한 넉넉한 임계값
     fontsize_limit: 3        # 3pt 이하 텍스트 무시
     ignore_code: false       # 코드 블록 보존
@@ -249,7 +248,9 @@ rag:
     # 4. 최종 답변 보조 메시지
     generate:
       human_message: "Think step by step, then output ONLY the JSON object."
-      max_context_tokens: 2200
+      max_context_tokens: 3200
+      # 컨텍스트 트림 시에도 최소 3개 문서는 유지 시도 (하드 리밋 초과 시 예외).
+      min_docs_keep: 3
 
     # 4b. 생성 출력 검증 플래그 (S1 관측용 — 동작 변경 없음, 재생성 OFF)
     generation_validation:
@@ -436,7 +437,7 @@ global_cache:
   # 벡터 저장소(인덱싱 결과) 캐시 사용 여부
   # 테스트 기간: 문서 분석(인덱싱) 시 캐시 저장을 끄고 매번 새로 임베딩/검증하기 위해 false.
   # 테스트 종료 후 true 로 복구.
-  enable_vector_cache: true
+  enable_vector_cache: false
 
 # --- 채팅 UI 설정 ---
 ui:

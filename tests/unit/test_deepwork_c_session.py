@@ -50,20 +50,20 @@ def test_get_build_state_none_when_absent() -> None:
     SessionManager.delete_session(sid)
 
 
-def test_keep_alive_seconds_default_is_five_minutes(monkeypatch) -> None:
-    """C2: '5m' → 300초."""
+def test_keep_alive_seconds_parses_five_minutes(monkeypatch) -> None:
+    """'5m' → 300초 (명시적 환경변수 재정의)."""
     import core._loaders as loaders
 
     monkeypatch.setattr(loaders, "OLLAMA_KEEP_ALIVE", "5m")
     assert loaders._keep_alive_seconds() == 300
 
 
-def test_keep_alive_seconds_fallback_is_five_minutes(monkeypatch) -> None:
-    """C2: 파싱 불가 값은 30분이 아니라 5분으로 폴백."""
+def test_keep_alive_seconds_fallback_is_ten_minutes(monkeypatch) -> None:
+    """파싱 불가 값은 600초(10분)로 폴백."""
     import core._loaders as loaders
 
     monkeypatch.setattr(loaders, "OLLAMA_KEEP_ALIVE", "not-a-duration")
-    assert loaders._keep_alive_seconds() == 300
+    assert loaders._keep_alive_seconds() == 600
 
 
 def test_keep_alive_seconds_honours_env_minutes(monkeypatch) -> None:
@@ -74,15 +74,15 @@ def test_keep_alive_seconds_honours_env_minutes(monkeypatch) -> None:
     assert loaders._keep_alive_seconds() == 1800
 
 
-def test_config_yml_keep_alive_is_five_minutes() -> None:
-    """C2: 배포 config.yml의 keep_alive가 5m로 단축됐는지 확인."""
+def test_config_yml_keep_alive_is_ten_minutes() -> None:
+    """배포 config.yml의 keep_alive가 10m인지 확인."""
     from pathlib import Path
 
     import yaml
 
     root = Path(__file__).resolve().parents[2]
     data = yaml.safe_load((root / "config.yml").read_text(encoding="utf-8"))
-    assert data["models"]["keep_alive"] == "5m"
+    assert data["models"]["keep_alive"] == "10m"
 
 
 @pytest.mark.asyncio

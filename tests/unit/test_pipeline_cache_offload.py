@@ -39,6 +39,13 @@ def test_cache_load_save_offloaded_to_thread() -> None:
     assert direct_calls == [], f"blocking direct cache I/O remains: {direct_calls}"
 
 
+def test_vector_cache_disabled_guard_is_explicit() -> None:
+    """캐시 비활성 설정이 load/save 경로를 타지 않도록 명시 분기가 있어야 한다."""
+    src = inspect.getsource(pb_mod)
+    assert "if not ENABLE_VECTOR_CACHE:" in src
+    assert "벡터 캐시 비활성화" in src
+
+
 @pytest.mark.asyncio
 async def test_to_thread_keeps_loop_responsive() -> None:
     """행위 가드: 0.05s 블로킹 작업을 offload하면 하트비트가 계속 틱한다."""
