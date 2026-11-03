@@ -277,10 +277,31 @@ class _PayloadCappedEmbeddings(Embeddings):
         return results
 
 
+_UNSUPPORTED_EMBED_OPTIONS = frozenset(
+    {"mirostat", "mirostat_eta", "mirostat_tau", "tfs_z"}
+)
+
+
 class _NoTruncateOllamaEmbeddings(OllamaEmbeddings):  # type: ignore
     """Ollama 임베딩 — `/api/embed` truncate=False 명시."""
 
     truncate: bool = False
+
+    @property
+    def _default_params(self) -> dict[str, Any]:
+        """임베딩 요청에 의미 없는 샘플러 옵션과 None 값을 제거한다.
+
+        langchain-ollama 1.x의 ``OllamaEmbeddings._default_params``는
+        ``mirostat``/``mirostat_eta``/``mirostat_tau``/``tfs_z``를 값이 None이어도
+        그대로 ``options``에 담아 보낸다. Ollama 0.40+는 이를 지원하지 않아
+        매 임베딩 요청마다 ``invalid option provided`` 경고를 출력한다.
+        """
+        params = dict(super()._default_params)
+        return {
+            key: value
+            for key, value in params.items()
+            if value is not None and key not in _UNSUPPORTED_EMBED_OPTIONS
+        }
 
     def embed_documents(self, texts: list[str]) -> list[list[float]]:
         return self._embed_with_retry(texts)
@@ -405,6 +426,29 @@ def _is_ollama_server_up() -> bool:
     return _quick_probe_port(OLLAMA_BASE_URL, timeout_seconds=0.05)
 
 
+def bind_warmup_llm(llm: Any, *, num_predict: int = 1) -> Any:
+    """실제 생성 경로와 동일한 ``num_ctx``로 워밍업 추론을 바인딩한다.
+
+    ``ChatOllama._chat_params``는 ``options``가 주어지면 인스턴스 필드를 병합하지
+    않고 그 dict만 사용한다. 따라서 워밍업에서 ``num_ctx``를 생략하면 Ollama가
+    기본 컨텍스트(4096)로 모델을 로드하고, 첫 실제 질의가 ``num_ctx=8192``를
+    요구하는 순간 모델을 다시 로드해 ~10s 콜드 스타트를 지불한다.
+
+    ``think``는 Ollama 샘플러 option이 아니라 최상위 요청 필드이므로 여기에
+    넣지 않는다(넣으면 ``invalid option provided`` 경고만 발생한다).
+    """
+    if not hasattr(llm, "bind"):
+        return llm
+    return llm.bind(
+        options={
+            "num_ctx": OLLAMA_NUM_CTX,
+            "num_predict": num_predict,
+            "temperature": 0.0,
+            "top_p": OLLAMA_TOP_P,
+        }
+    )
+
+
 async def _warmup_models() -> None:
     """시스템 추론 세마포어를 보호하며 자원 누수 없이 실행되는 안정적 프리워밍."""
     from common.config import DEFAULT_OLLAMA_MODEL
@@ -448,11 +492,7 @@ async def _warmup_models() -> None:
             coordinator.use_llm(model_name=DEFAULT_OLLAMA_MODEL),
         ):
             llm = await ModelManager.get_llm(DEFAULT_OLLAMA_MODEL)
-            warm_llm = (
-                llm.bind(options={"num_predict": 1, "think": False, "temperature": 0.0})
-                if hasattr(llm, "bind")
-                else llm
-            )
+            warm_llm = bind_warmup_llm(llm)
             await warm_llm.ainvoke("warmup")
         logger.info("[WARMUP] LLM+임베더 프리웜 정상 완료")
     except (asyncio.TimeoutError, TimeoutError) as e:

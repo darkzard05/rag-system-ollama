@@ -83,7 +83,7 @@ async def _warmup_flashranker(ranker: Any) -> None:
 async def _preload_model() -> None:
     """임베딩·FlashRank·LLM을 프리로드합니다. 실패해도 앱을 중단하지 않으며 태스크 예외를 누출하지 않습니다."""
     try:
-        from core.model_loader import ModelManager
+        from core.model_loader import ModelManager, bind_warmup_llm
 
         coordinator = get_resource_manager()
 
@@ -137,14 +137,12 @@ async def _preload_model() -> None:
         # 3) LLM 프리로드 — 클라이언트 생성만으로는 Ollama 콜드 모델 로드가 첫 쿼리
         # 시점까지 지연되므로, 실질 워밍 추론을 1회 실행해 콜드 스타트를 선행합니다.
         # num_predict=1로 제한해 워밍이 실제 답변 생성을 점유하지 않게 합니다.
+        # bind_warmup_llm은 실제 생성과 같은 num_ctx를 포함해야 합니다. 옵션이
+        # 다르면 Ollama가 첫 질의에서 모델을 재로드해 TTFT가 다시 ~10s 늘어납니다.
         # invoke는 블로킹 HTTP 호출이므로 to_thread로 실행해 이벤트 루프를 막지 않습니다.
         async with coordinator.use_llm(model_name=DEFAULT_OLLAMA_MODEL):
             llm = await ModelManager.get_llm(DEFAULT_OLLAMA_MODEL)
-            warm_llm = (
-                llm.bind(options={"num_predict": 1, "think": False, "temperature": 0.0})
-                if hasattr(llm, "bind")
-                else llm
-            )
+            warm_llm = bind_warmup_llm(llm)
             await asyncio.to_thread(warm_llm.invoke, "warmup")
         logger.info("[RAG] [PRELOAD] LLM 워밍 추론 완료")
         logger.info(f"[RAG] [PRELOAD] 모델 프리로드 완료: {DEFAULT_OLLAMA_MODEL}")

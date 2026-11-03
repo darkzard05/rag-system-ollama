@@ -21,6 +21,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 import core.pipeline_builder as pb
+from common.config import OLLAMA_NUM_CTX, OLLAMA_TOP_P
 from core.model_loader import ModelManager
 
 
@@ -118,9 +119,32 @@ async def test_preload_llm_warmup_caps_generation(monkeypatch):
     await pb._preload_model()
 
     assert recording_llm.bound_options == {
-        "options": {"num_predict": 1, "think": False, "temperature": 0.0}
+        "options": {
+            "num_ctx": OLLAMA_NUM_CTX,
+            "num_predict": 1,
+            "temperature": 0.0,
+            "top_p": OLLAMA_TOP_P,
+        }
     }
     assert len(recording_llm.invoke_calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_preload_warmup_matches_generation_num_ctx(monkeypatch):
+    """워밍업이 실제 생성과 같은 num_ctx로 로드해야 Ollama 재로드를 피한다.
+
+    회귀 배경: 워밍업이 num_ctx를 생략해 4096으로 로드되고, 첫 실제 질의가
+    8192를 요구하면서 모델을 재로드해 TTFT가 17.5s까지 늘어났다.
+    """
+    recording_llm = _BindRecordingLLM()
+    _patch_model_manager(monkeypatch, recording_llm)
+
+    await pb._preload_model()
+
+    assert recording_llm.bound_options is not None
+    options = recording_llm.bound_options["options"]
+    assert options["num_ctx"] == OLLAMA_NUM_CTX
+    assert "think" not in options
 
 
 @pytest.mark.asyncio

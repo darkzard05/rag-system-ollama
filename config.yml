@@ -357,12 +357,6 @@ rag:
         12. [Anchor Brevity]: `anchor`는 해당 인용의 근거가 되는 핵심 키워드나 짧은 구(5단어 이내)만 작성하십시오. 원문 문장을 그대로 옮기거나 길게 복제하지 마십시오.
         </Core_Guidelines>
 
-        [Context]
-        {context}
-
-        [Question]
-        {query}
-
         <JSON_Schema>
         # [Citation Source of Truth]: `citations[]` 배열이 유일한(Single Source of Truth) 인용 출처입니다. final_answer 본문에 인라인 `[doc:<id>]` 태그를 넣지 마십시오. UI는 오직 citations[] 배열을 기준으로 인용을 렌더링합니다.
         # [Lightweight Payload]: 각 인용 항목은 doc_id와 anchor만 포함합니다. text_span/section/page/score 는 시스템이 검색 원문 메타데이터로 자동 채우므로 절대 출력하지 마십시오 (출력 토큰 낭비 방지).
@@ -406,6 +400,12 @@ rag:
         Output:
         {"final_answer": "DeepSeek-R1(671B)과 GPT-4(1.76T) 간 약 1.09T 파라미터 차이가 있습니다.", "citations": [{"doc_id": "8f3a1c2d7b4e5a60", "anchor": "671B 파라미터"}, {"doc_id": "2c9e4b1a6d8f3a57", "anchor": "1.76T 파라미터"}], "confidence": 0.9}
         </Few_Shot_Examples>
+
+        [Context]
+        {context}
+
+        [Question]
+        {query}
 
 
 

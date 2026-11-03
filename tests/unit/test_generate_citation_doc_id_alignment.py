@@ -28,6 +28,21 @@ def test_schema_declares_doc_id_as_context_token_string():
     assert "그대로 복사" in prompt
 
 
+def test_static_prompt_blocks_precede_dynamic_context():
+    """정적 블록은 [Context] 앞에 있어야 Ollama prefix 캐시가 재사용한다.
+
+    회귀 배경: 스키마/예시가 [Context] 뒤에 있으면 매 질의마다 동적 컨텍스트
+    이후 토큰을 다시 평가해 prompt eval이 ~6.5s까지 늘어났다.
+    """
+    prompt = _prompt()
+    last_context = prompt.rindex("[Context]")
+    last_question = prompt.rindex("[Question]")
+
+    assert prompt.rindex("</JSON_Schema>") < last_context
+    assert prompt.rindex("</Few_Shot_Examples>") < last_context
+    assert last_context < last_question
+
+
 def test_few_shot_ids_match_stable_id_token_shape():
     prompt = _prompt()
     example_ids = re.findall(r"\[doc:([0-9a-f]{8,})\]", prompt)
