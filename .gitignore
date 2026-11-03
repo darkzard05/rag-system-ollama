@@ -43,6 +43,7 @@ Thumbs.db
 
 # Test and coverage
 .coverage
+.coverage.*
 .pytest_cache/
 htmlcov/
 tests/.pytest_cache/
@@ -148,6 +149,9 @@ scripts/benchmarks/_diag5.py
 node_modules/
 bun.lock
 repomix-output.xml
+.repomix/
+repomix-*.md
+repomix-*.xml
 # `bun init` boilerplate (index.ts is a bare console.log, no TS sources in this repo)
 index.ts
 package.json
