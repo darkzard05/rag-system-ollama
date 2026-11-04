@@ -6,17 +6,19 @@ GraphRAG-Ollama 시스템의 답변 품질 측정 스크립트. baseline(Wave 0)
 측정 항목:
   (a) retrieval P@1/MRR@5 - tests/data/golden_set.json (퇴화 질문 제외 규칙 적용)
       + context_recall: golden_set.json required_chunks 근거 청크 포함 비율 (R4-06)
-  (b) TTFT/TPS            - RAGSystem.astream 직접 소비 + stream_graph_events
-  (c) 답변 길이           - 응답 문자열 길이(문자) + Ollama 실측 eval_count
+  (b) TTFT/TPS            - QueryMeasurement 계약 (표시 답변 기준 + 원시 타이밍)
+  (c) 답변 길이           - UI 표시 문자열(final_answer) 길이 + Ollama 실측 eval_count
   (d) 잘림 감지           - eval_count >= OLLAMA_NUM_PREDICT * 0.9
   (e) 1-5점 judge         - tests/data/testset_2201.csv 상위 N행
       + faithfulness: SCORE_PROMPT [Context] 근거성 판정 (R4-06 최소 구현)
   (f) prompt 토큰 초과    - count_tokens_rough(protocol+context+질문) > OLLAMA_NUM_CTX
 
-측정 정의 (Todo 1 사양):
-  t_start=t_stream_start, t_first=첫 비어있지 않은 content 청크 도착 시각
-  (thought/status는 content="" 이라 자연 배제), TTFT=t_first-t_start,
-  t_end=마지막 content 청크 도착, TPS=eval_count/(t_end-t_first).
+측정 정의 (QueryMeasurement v1):
+  t_setup=astream() 반환까지, t_first=첫 비어있지 않은 content 청크 도착,
+  ttft=t_first-t_setup (legacy), ttft_e2e=t_first-t_start,
+  ttft_display=첫 final_answer 표시 delta 도착, t_end=마지막 content 청크.
+  answer/answer_chars/judge는 UI와 동일한 final_answer 표시 텍스트를 사용하고,
+  raw_answer는 structured JSON 원문을 별도 보존한다. TPS=eval_count/(t_end-t_first).
   StreamingMetrics.first_token_latency는 messages 분기 전용이고(streaming_handler.py:247-249)
   답변은 custom response_chunk로 흐르며 rag_core.py:181-182가 generate의
   on_chat_model_stream을 스킵하므로 사용 금지. eval_count 누락 시 TPS만 N/A.
@@ -40,7 +42,6 @@ import json
 import os
 import re
 import sys
-import time
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -57,7 +58,6 @@ from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
 
 # isort: off
-from src.api.streaming_handler import StreamingResponseHandler
 from src.common.config import (
     DEFAULT_EMBEDDING_MODEL,
     DEFAULT_OLLAMA_MODEL,
@@ -71,6 +71,11 @@ from src.common.utils import count_tokens_rough
 from src.core.graph.graph_builder import format_context
 from src.core.model_loader import ModelManager
 from src.core.rag_core import RAGSystem
+from src.services.query_measurement import (
+    QUERY_CONTRACT_VERSION,
+    QueryMeasurement,
+    run_query_measurement,
+)
 # isort: on
 
 # --- 상수 ---
@@ -188,54 +193,25 @@ def _out_of_doc_note(q: QuestionSpec) -> str | None:
 
 
 # --- 스트리밍 측정 ---
-async def _consume_stream(rag: RAGSystem, query: str, no_llm: bool) -> dict[str, Any]:
-    """astream을 stream_graph_events로 소비하며 측정.
+async def _consume_stream(rag: RAGSystem, query: str, no_llm: bool) -> QueryMeasurement:
+    """Run one query through the stable measurement contract.
 
-    documents=updates/retrieve의 metadata["documents"], performance=generate 성능
-    청크의 eval_count. no_llm 시 첫 documents 수신 직후 중단 (generation 미실행).
+    The eval harness deliberately does not parse ``StreamChunk`` or raw JSON
+    itself; ``run_query_measurement`` owns that normalization for both the UI
+    and this script.
     """
-    handler = StreamingResponseHandler()
-    event_stream = await rag.astream(query, model_name=DEFAULT_OLLAMA_MODEL)
-    t_start = time.time()
-    content_parts: list[str] = []
-    t_first_content: float | None = None
-    t_last_content: float | None = None
-    documents: list[Any] | None = None
-    performance: dict[str, Any] = {}
-    async for chunk in handler.stream_graph_events(event_stream):
-        if chunk.content:
-            content_parts.append(chunk.content)
-            if t_first_content is None:
-                t_first_content = chunk.timestamp
-            t_last_content = chunk.timestamp
-        if chunk.metadata and "documents" in chunk.metadata:
-            documents = chunk.metadata["documents"]
-            if no_llm:
-                break
-        if chunk.performance:
-            performance.update(chunk.performance)
-    answer = "".join(content_parts)
-    eval_count = performance.get("eval_count")
-    ttft = t_first_content - t_start if t_first_content is not None else None
-    tps: float | None = None
-    if (
-        eval_count is not None
-        and t_first_content is not None
-        and t_last_content is not None
-    ):
-        elapsed = t_last_content - t_first_content
-        if elapsed > 0:
-            tps = eval_count / elapsed
-    return {
-        "answer": answer,
-        "answer_chars": len(answer),
-        "eval_count": eval_count,
-        "eval_count_missing": eval_count is None,
-        "ttft": ttft,
-        "tps": tps,
-        "documents": documents or [],
-        "performance": performance,
-    }
+    measured = await run_query_measurement(
+        rag,
+        query,
+        DEFAULT_OLLAMA_MODEL,
+        retrieval_only=no_llm,
+    )
+    if measured.contract_version != QUERY_CONTRACT_VERSION:
+        raise RuntimeError(
+            "QueryMeasurement contract mismatch: "
+            f"expected {QUERY_CONTRACT_VERSION}, got {measured.contract_version}"
+        )
+    return measured
 
 
 # 한국어 엔티티 -> 영문 동의어/어간 맵 (R4-01 수정).
@@ -357,10 +333,17 @@ def _empty_record(
         "skipped_no_llm": skipped,
         "retrieval": None,
         "answer": "",
+        "raw_answer": "",
         "answer_chars": 0,
+        "raw_answer_chars": 0,
+        "display_extraction_failed": 0,
         "eval_count": None,
         "eval_count_missing": True,
         "ttft": None,
+        "ttft_setup": None,
+        "ttft_e2e": None,
+        "ttft_display": None,
+        "ttft_display_e2e": None,
         "tps": None,
         "truncated": 0,
         "prompt_tokens_est": 0,
@@ -378,10 +361,10 @@ def _empty_record(
 
 
 def _assemble_measurement(
-    rec: dict[str, Any], q: QuestionSpec, measured: dict[str, Any]
+    rec: dict[str, Any], q: QuestionSpec, measured: QueryMeasurement
 ) -> None:
     """스트리밍 측정 결과를 레코드에 반영 (retrieval 판정 + 길이/잘림/overflow)."""
-    docs = list(measured["documents"])[:5]
+    docs = list(measured.documents)[:5]
     doc_details: list[dict[str, Any]] = []
     for doc in docs:
         meta = doc.metadata or {}
@@ -422,20 +405,27 @@ def _assemble_measurement(
         retrieval["mrr_at_5"] = None
         retrieval["context_recall"] = None
 
-    eval_count = measured["eval_count"]
+    eval_count = measured.eval_count
     prompt_est = _estimate_prompt_tokens(q.query, docs)
     rec.update(
         {
             "retrieval": retrieval,
-            "answer": measured["answer"],
-            "answer_chars": measured["answer_chars"],
+            "answer": measured.display_answer,
+            "raw_answer": measured.raw_answer,
+            "answer_chars": measured.answer_chars,
+            "raw_answer_chars": measured.raw_answer_chars,
+            "display_extraction_failed": int(measured.flags.display_extraction_failed),
             "eval_count": eval_count,
-            "eval_count_missing": measured["eval_count_missing"],
-            "ttft": _fmt(measured["ttft"]),
-            "tps": _fmt(measured["tps"]),
-            "parse_failed": 1 if measured["performance"].get("parse_failed") else 0,
-            "echo_detected": 1 if measured["performance"].get("echo_detected") else 0,
-            "over_budget": 1 if measured["performance"].get("over_budget") else 0,
+            "eval_count_missing": measured.flags.eval_count_missing,
+            "ttft": _fmt(measured.timing.ttft_s),
+            "ttft_setup": _fmt(measured.timing.setup_s),
+            "ttft_e2e": _fmt(measured.timing.ttft_e2e_s),
+            "ttft_display": _fmt(measured.timing.ttft_display_s),
+            "ttft_display_e2e": _fmt(measured.timing.ttft_display_e2e_s),
+            "tps": _fmt(measured.tps),
+            "parse_failed": 1 if measured.parse_failed else 0,
+            "echo_detected": 1 if measured.echo_detected else 0,
+            "over_budget": 1 if measured.over_budget else 0,
             "truncated": (
                 1
                 if eval_count is not None
@@ -504,8 +494,13 @@ async def _run_question(
     if no_llm:
         rec["judge_excluded"] = True
         rec["judge_error"] = "--no-llm 모드 (generation/judge 생략)"
+    elif measured.flags.display_extraction_failed:
+        rec["judge_excluded"] = True
+        rec["judge_error"] = (
+            "표시 답변 추출 실패 (raw JSON에 final_answer 없음 — judge 제외)"
+        )
     elif q.source == "testset" and q.ground_truth and score_chain is not None:
-        judge_docs = list(measured["documents"])[:5]
+        judge_docs = list(measured.documents)[:5]
         context = format_context(judge_docs) if judge_docs else "일상적인 대화입니다."
         try:
             score, raw = await _judge(
@@ -553,6 +548,16 @@ def _aggregate(results: list[dict[str, Any]]) -> dict[str, Any]:
         if r["retrieval"].get("context_recall") is not None
     ]
     ttft_values = [r["ttft"] for r in executed if r["ttft"] is not None]
+    ttft_e2e_values = [r["ttft_e2e"] for r in executed if r["ttft_e2e"] is not None]
+    ttft_setup_values = [
+        r["ttft_setup"] for r in executed if r["ttft_setup"] is not None
+    ]
+    ttft_display_values = [
+        r["ttft_display"] for r in executed if r["ttft_display"] is not None
+    ]
+    ttft_display_e2e_values = [
+        r["ttft_display_e2e"] for r in executed if r["ttft_display_e2e"] is not None
+    ]
     tps_values = [r["tps"] for r in executed if r["tps"] is not None]
     eval_counts = [r["eval_count"] for r in executed if r["eval_count"] is not None]
     eval_count_denom = sum(1 for r in executed if r["eval_count"] is not None)
@@ -581,8 +586,13 @@ def _aggregate(results: list[dict[str, Any]]) -> dict[str, Any]:
         "context_recall_count": len(context_recall_values),
         "latency_question_count": len(executed),
         "avg_ttft": _mean(ttft_values),
+        "avg_ttft_e2e": _mean(ttft_e2e_values),
+        "avg_ttft_setup": _mean(ttft_setup_values),
+        "avg_ttft_display": _mean(ttft_display_values),
+        "avg_ttft_display_e2e": _mean(ttft_display_e2e_values),
         "avg_tps": _mean(tps_values),
         "avg_answer_chars": _mean([float(r["answer_chars"]) for r in executed]),
+        "avg_raw_answer_chars": _mean([float(r["raw_answer_chars"]) for r in executed]),
         "avg_eval_count": _mean([float(v) for v in eval_counts]),
         "truncated_ratio": (
             round(truncated_count / eval_count_denom, 4) if eval_count_denom else None
@@ -598,6 +608,9 @@ def _aggregate(results: list[dict[str, Any]]) -> dict[str, Any]:
         "faithfulness_avg": _mean([float(v) for v in faithfulness_values]),
         "faithfulness_count": len(faithfulness_values),
         "eval_count_missing_count": sum(1 for r in executed if r["eval_count_missing"]),
+        "display_extraction_failed_count": sum(
+            1 for r in executed if r["display_extraction_failed"]
+        ),
         "degenerate": degenerate,
     }
 
@@ -626,8 +639,13 @@ def _render_markdown(report: dict[str, Any]) -> str:
         f"| context_recall (golden) | {agg['context_recall']} ({agg['context_recall_count']}건) |",
         f"| latency_question_count | {agg['latency_question_count']} |",
         f"| avg TTFT (s) | {agg['avg_ttft']} |",
+        f"| avg TTFT e2e (s) | {agg['avg_ttft_e2e']} |",
+        f"| avg TTFT setup (s) | {agg['avg_ttft_setup']} |",
+        f"| avg TTFT display (s) | {agg['avg_ttft_display']} |",
+        f"| avg TTFT display e2e (s) | {agg['avg_ttft_display_e2e']} |",
         f"| avg TPS | {agg['avg_tps']} |",
-        f"| avg answer chars | {agg['avg_answer_chars']} |",
+        f"| avg answer chars (display) | {agg['avg_answer_chars']} |",
+        f"| avg answer chars (raw) | {agg['avg_raw_answer_chars']} |",
         f"| avg eval_count | {agg['avg_eval_count']} |",
         f"| truncated ratio | {agg['truncated_ratio']} ({agg['truncated_count']}건) |",
         f"| parse_failed / echo / over_budget | {agg['parse_failed_count']} / {agg['echo_detected_count']} / {agg['over_budget_count']}건 |",
@@ -635,6 +653,7 @@ def _render_markdown(report: dict[str, Any]) -> str:
         f"| judge avg (1-5) | {agg['judge_avg']} ({agg['judge_count']}건) |",
         f"| faithfulness avg (1-5) | {agg['faithfulness_avg']} ({agg['faithfulness_count']}건) |",
         f"| eval_count missing | {agg['eval_count_missing_count']}건 |",
+        f"| display extraction failed | {agg['display_extraction_failed_count']}건 |",
         "",
         "## Per-Question",
         "",
@@ -749,9 +768,11 @@ async def _run_eval(args: argparse.Namespace) -> dict[str, Any]:
 
     report: dict[str, Any] = {
         "meta": {
-            "script": "scripts/eval_quality.py",
+            "script": "scripts/evaluation/eval_quality.py",
             "tag": args.tag,
             "timestamp": datetime.now().isoformat(timespec="seconds"),
+            "contract_version": QUERY_CONTRACT_VERSION,
+            "answer_mode": "display",
             "pdf": str(args.pdf),
             "testset_n": args.testset_n,
             "no_llm": args.no_llm,

@@ -100,4 +100,5 @@ def test_citation_phase_reports_progress() -> None:
         assert "인용 정리 중" in t("status_citation_cleanup")
     finally:
         set_lang("en")
-    assert "def closed" in text
+    assert "def closed" in _src("src/common/final_answer.py")
+    assert "raw_json_extractor.closed" in text
