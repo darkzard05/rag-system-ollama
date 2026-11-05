@@ -994,6 +994,22 @@ def _ensure_ui_globals() -> None:
     UIBridge.sync_session()
 
 
+@safe_cache_resource(show_spinner=False)
+def _start_tokenizer_warmup() -> bool:
+    """서버당 1회, 첫 렌더 이후 백그라운드에서 임베딩 토크나이저를 예열한다."""
+
+    def _run() -> None:
+        try:
+            from core.chunking import warm_embedding_tokenizer
+
+            warm_embedding_tokenizer()
+        except Exception as e:
+            logger.debug("[MAIN] startup tokenizer warmup failed: %s", e)
+
+    threading.Thread(target=_run, name="tokenizer-warmup", daemon=True).start()
+    return True
+
+
 def main() -> None:
     from core.session import SessionManager
     from ui.ui import inject_custom_css
@@ -1046,6 +1062,7 @@ def main() -> None:
     # 완전히 그려진 뒤에 시작한다. 모듈 임포트 시점에 띄우면 메인 렌더
     # 스레드와 GIL을 경합해 첫 페인트가 지연된다.
     _start_model_list_warmup()
+    _start_tokenizer_warmup()
 
 
 # 빌드 진행 Rerun 제어: 메이저 위상(Phase) 전이 시에만 전역 Rerun을 허용한다.
@@ -1257,7 +1274,23 @@ async def _bg_rebuild_task(
             session_id=session_id,
         )
 
+    warm_task: asyncio.Task[bool] | None = None
     try:
+        # [P0] HF 토크나이저 로드를 PDF 추출과 병렬로 예열한다. 청킹 스레드는
+        # 동일 lock을 기다리므로 중복 로드 없이 워밍업 결과를 재사용한다.
+        from core.chunking import warm_embedding_tokenizer_async
+
+        def _consume_warm_result(task: asyncio.Task[bool]) -> None:
+            try:
+                task.result()
+            except asyncio.CancelledError:
+                logger.debug("[MAIN] tokenizer warmup cancelled")
+            except Exception as e:
+                logger.debug("[MAIN] tokenizer warmup failed: %s", e)
+
+        warm_task = asyncio.create_task(warm_embedding_tokenizer_async())
+        warm_task.add_done_callback(_consume_warm_result)
+
         embedder = await ModelManager.get_embedder(embedder_name)
 
         # Check cancellation before starting build
@@ -1361,6 +1394,11 @@ async def _bg_rebuild_task(
             session_id=session_id,
         )
     finally:
+        if warm_task is not None and not warm_task.done():
+            warm_task.cancel()
+        if warm_task is not None:
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await warm_task
         # Only the worker that still owns the current BuildState may clear the
         # shared build flag / throttle marker. A stale worker must not unfreeze
         # or re-render the newer build.

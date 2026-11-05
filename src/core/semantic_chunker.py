@@ -15,6 +15,7 @@ import bisect
 import logging
 import re
 import tempfile
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any, Literal, cast
 
@@ -57,6 +58,9 @@ class EmbeddingBasedSemanticChunker:
     일관성 있는 청크를 생성합니다.
     """
 
+    # 토큰 예산 그룹핑 시 문장 결합/구두점 병합으로 인한 미세 오차 여유.
+    TOKEN_GROUP_MARGIN = 8
+
     # 축약어 마침표 패턴 — 문장 분할 시 가짜 경계로 취급하지 않아야 함 (R2-03)
     ABBREVIATION_PATTERN = re.compile(r"(?i)\b(?:et al|e\.g|i\.e|Dr|Mr|vs)\.(?=\s)")
     # 축약어 마침표 임시 보호용 센티널 (길이 1:1 치환 → 오프셋 보존)
@@ -83,6 +87,8 @@ class EmbeddingBasedSemanticChunker:
         similarity_threshold: float = 0.6,
         batch_size: int = 64,
         cache_manager: CacheManager | None = None,
+        max_chunk_tokens: int | None = None,
+        token_count_fn: Callable[[list[str]], list[int]] | None = None,
     ):
         """
         의미론적 청킹 분할기를 초기화합니다.
@@ -97,6 +103,11 @@ class EmbeddingBasedSemanticChunker:
         self.chunk_overlap = chunk_overlap  # [추가]
         self.similarity_threshold = similarity_threshold
         self.batch_size = batch_size
+        # [P0] 임베딩 모델의 실제 토큰 상한. 문자 수(max_chunk_size)만으로는
+        # 한국어에서 448토큰을 크게 넘기므로, 문장 벡터를 유지한 채 토큰
+        # 예산으로 그룹핑/병합을 제한한다.
+        self.max_chunk_tokens = max_chunk_tokens
+        self._token_count_fn = token_count_fn
 
         # [최적화] 청킹 임베딩 전용 캐시 관리자 설정.
         # 메모리 레이어(L1)로 동일 프로세스 내 동일 문장의 중복 임베딩을
@@ -742,9 +753,21 @@ class EmbeddingBasedSemanticChunker:
                 "start"
             ) or current_chunk.get("is_hard_split", False)
 
+            token_fits = True
+            merged_tokens = None
+            current_tokens = current_chunk.get("_token_count")
+            chunk_tokens = chunk.get("_token_count")
+            if (
+                self.max_chunk_tokens is not None
+                and current_tokens is not None
+                and chunk_tokens is not None
+            ):
+                merged_tokens = int(current_tokens) + int(chunk_tokens) + 1
+                token_fits = merged_tokens <= self.max_chunk_tokens
+
             should_merge = False
 
-            if not is_different_section and not is_at_hard_boundary:
+            if not is_different_section and not is_at_hard_boundary and token_fits:
                 if len(current_chunk["text"]) < self.min_chunk_size:
                     should_merge = merged_len <= self.max_chunk_size
 
@@ -772,6 +795,10 @@ class EmbeddingBasedSemanticChunker:
                 current_chunk["end"] = chunk["end"]
                 current_chunk["vector"] = merged_vector
                 current_chunk["is_hard_split"] = chunk.get("is_hard_split", False)
+                if "_sentence_end" in chunk:
+                    current_chunk["_sentence_end"] = chunk["_sentence_end"]
+                if merged_tokens is not None:
+                    current_chunk["_token_count"] = merged_tokens
             else:
                 optimized.append(current_chunk)
                 current_chunk = chunk
@@ -823,12 +850,150 @@ class EmbeddingBasedSemanticChunker:
 
         return pruned
 
+    async def _token_counts_for_texts(self, texts: list[str]) -> list[int] | None:
+        """토큰 카운터가 설정된 경우에만 배치 토큰 수를 워커 스레드에서 계산한다."""
+        if not texts or self._token_count_fn is None:
+            return None
+        return await asyncio.to_thread(self._token_count_fn, texts)
+
+    def _make_chunk(
+        self,
+        sentences: list[dict],
+        indiv_embeddings: np.ndarray,
+        start: int,
+        end: int,
+        current_section: str,
+        sentence_token_counts: list[int] | None = None,
+    ) -> dict:
+        """문장 인덱스 범위 [start, end)로 청크 dict를 조립한다."""
+        merged_text = " ".join(s["text"] for s in sentences[start:end])
+        chunk_vector = np.mean(indiv_embeddings[start:end], axis=0)
+        chunk_norm = float(np.linalg.norm(chunk_vector))
+        if chunk_norm > 1e-9:
+            chunk_vector = chunk_vector / chunk_norm
+        token_count = None
+        if sentence_token_counts is not None:
+            token_count = sum(sentence_token_counts[start:end]) + max(
+                0, end - start - 1
+            )
+        return {
+            "text": merged_text,
+            "start": sentences[start]["start"],
+            "end": sentences[end - 1]["end"],
+            "vector": chunk_vector,
+            "is_hard_split": sentences[end - 1].get("is_hard_split", False),
+            "current_section": current_section,
+            "_sentence_start": start,
+            "_sentence_end": end,
+            "_token_count": token_count,
+        }
+
+    def _split_chunk_by_tokens(
+        self,
+        chunk: dict,
+        sentences: list[dict],
+        indiv_embeddings: np.ndarray,
+        sentence_token_counts: list[int],
+        budget: int,
+    ) -> list[dict]:
+        """문장 경계를 유지한 채 토큰 예산 이하로 청크를 재분할한다."""
+        start_idx = cast(int | None, chunk.get("_sentence_start"))
+        end_idx = cast(int | None, chunk.get("_sentence_end"))
+        if start_idx is None or end_idx is None or end_idx - start_idx <= 1:
+            return [chunk]
+
+        section = str(chunk.get("current_section", "일반 본문"))
+        parts: list[dict] = []
+        part_start = start_idx
+        used = 0
+        for idx in range(start_idx, end_idx):
+            token_count = sentence_token_counts[idx] + (1 if idx > part_start else 0)
+            if idx > part_start and used + token_count > budget:
+                parts.append(
+                    self._make_chunk(
+                        sentences,
+                        indiv_embeddings,
+                        part_start,
+                        idx,
+                        section,
+                        sentence_token_counts,
+                    )
+                )
+                part_start = idx
+                used = sentence_token_counts[idx]
+            else:
+                used += token_count
+        if part_start < end_idx:
+            parts.append(
+                self._make_chunk(
+                    sentences,
+                    indiv_embeddings,
+                    part_start,
+                    end_idx,
+                    section,
+                    sentence_token_counts,
+                )
+            )
+        return parts
+
+    async def _enforce_chunk_token_limit(
+        self,
+        chunks: list[dict],
+        sentences: list[dict],
+        indiv_embeddings: np.ndarray,
+        sentence_token_counts: list[int] | None,
+    ) -> list[dict]:
+        """최종 청크가 max_chunk_tokens를 넘지 않도록 문장 경계에서 재분할한다."""
+        if not chunks or self.max_chunk_tokens is None or self._token_count_fn is None:
+            return chunks
+
+        limit = max(1, self.max_chunk_tokens)
+        exact_counts = await self._token_counts_for_texts([c["text"] for c in chunks])
+        if exact_counts is None:
+            return chunks
+
+        budget = max(1, limit - self.TOKEN_GROUP_MARGIN)
+        out: list[dict] = []
+        did_split = False
+        for chunk, count in zip(chunks, exact_counts, strict=True):
+            if count <= limit or sentence_token_counts is None:
+                chunk["_token_count"] = count
+                out.append(chunk)
+                continue
+            did_split = True
+            out.extend(
+                self._split_chunk_by_tokens(
+                    chunk,
+                    sentences,
+                    indiv_embeddings,
+                    sentence_token_counts,
+                    budget,
+                )
+            )
+
+        if did_split:
+            final_counts = await self._token_counts_for_texts([c["text"] for c in out])
+            if final_counts:
+                for chunk, count in zip(out, final_counts, strict=True):
+                    chunk["_token_count"] = count
+            logger.info(
+                "[Chunker] 토큰 예산 적용 | limit=%d | chunks=%d→%d | "
+                "max_before=%d | max_after=%d",
+                limit,
+                len(chunks),
+                len(out),
+                max(exact_counts) if exact_counts else 0,
+                max(final_counts) if final_counts else 0,
+            )
+        return out
+
     def _group_sentences_into_chunks(
         self,
         sentences: list[dict],
         header_indices: set[int],
         indiv_embeddings: np.ndarray,
         breakpoints: list[int],
+        sentence_token_counts: list[int] | None = None,
     ) -> list[dict]:
         """분기점 기준으로 문장을 그룹화하고 헤더 컨텍스트(Section)를 추적해 청크를 조립합니다."""
         chunks = []
@@ -876,26 +1041,50 @@ class EmbeddingBasedSemanticChunker:
                 else:
                     current_header = new_h
 
-            merged_text = " ".join(
-                [s["text"] for s in sentences[actual_start:group_end]]
-            )
-            chunk_vector = np.mean(indiv_embeddings[actual_start:group_end], axis=0)
-            chunk_norm = float(np.linalg.norm(chunk_vector))
-            if chunk_norm > 1e-9:
-                chunk_vector = chunk_vector / chunk_norm
-
-            chunks.append(
-                {
-                    "text": merged_text,
-                    "start": sentences[actual_start]["start"],
-                    "end": sentences[group_end - 1]["end"],
-                    "vector": chunk_vector,
-                    "is_hard_split": sentences[group_end - 1].get(
-                        "is_hard_split", False
-                    ),
-                    "current_section": current_header,
-                }
-            )
+            if sentence_token_counts is not None and self.max_chunk_tokens is not None:
+                budget = max(1, self.max_chunk_tokens - self.TOKEN_GROUP_MARGIN)
+                range_start = actual_start
+                used = 0
+                for idx in range(actual_start, group_end):
+                    token_count = sentence_token_counts[idx] + (
+                        1 if idx > range_start else 0
+                    )
+                    if idx > range_start and used + token_count > budget:
+                        chunks.append(
+                            self._make_chunk(
+                                sentences,
+                                indiv_embeddings,
+                                range_start,
+                                idx,
+                                current_header,
+                                sentence_token_counts,
+                            )
+                        )
+                        range_start = idx
+                        used = sentence_token_counts[idx]
+                    else:
+                        used += token_count
+                if range_start < group_end:
+                    chunks.append(
+                        self._make_chunk(
+                            sentences,
+                            indiv_embeddings,
+                            range_start,
+                            group_end,
+                            current_header,
+                            sentence_token_counts,
+                        )
+                    )
+            else:
+                chunks.append(
+                    self._make_chunk(
+                        sentences,
+                        indiv_embeddings,
+                        actual_start,
+                        group_end,
+                        current_header,
+                    )
+                )
             start_idx = bp
 
         return chunks
@@ -958,6 +1147,10 @@ class EmbeddingBasedSemanticChunker:
         if not sentences:
             return []
 
+        sentence_token_counts = await self._token_counts_for_texts(
+            [s["text"] for s in sentences]
+        )
+
         if precomputed_embeddings is not None:
             if precomputed_embeddings.shape[0] != len(sentences):
                 raise ValueError(
@@ -997,9 +1190,19 @@ class EmbeddingBasedSemanticChunker:
         distances = self._compute_distances(combined_embeddings_arr)
         breakpoints = self._find_breakpoints(distances, sentences=sentences)
         chunks = self._group_sentences_into_chunks(
-            sentences, header_indices, indiv_embeddings, breakpoints
+            sentences,
+            header_indices,
+            indiv_embeddings,
+            breakpoints,
+            sentence_token_counts,
         )
         optimized_chunks = self._optimize_chunk_sizes(chunks)
+        optimized_chunks = await self._enforce_chunk_token_limit(
+            optimized_chunks,
+            sentences,
+            indiv_embeddings,
+            sentence_token_counts,
+        )
         return self._prune_duplicates(optimized_chunks)
 
     @staticmethod

@@ -12,6 +12,7 @@ from unittest.mock import MagicMock
 
 from langchain_core.documents import Document
 
+from core.chunking import _enforce_embedding_token_limit
 from core.document_processor import load_pdf_docs
 from core.resource_manager import ResourceCoordinator
 from core.semantic_chunker import EmbeddingBasedSemanticChunker
@@ -106,6 +107,29 @@ async def test_split_documents_does_not_block_loop(monkeypatch):
 
     assert len(ticks) >= _MIN_TICKS, (
         f"split_documents가 이벤트 루프를 차단했습니다 (heartbeat {len(ticks)}회)"
+    )
+
+
+async def test_enforce_embedding_token_limit_does_not_block_loop(monkeypatch):
+    """토큰 상한 검사의 HF 토큰 계산이 이벤트 루프를 차단하지 않아야 합니다."""
+    long_text = "word " * 800
+
+    def slow_counts(texts):
+        time.sleep(_SLOW_WORK_SLEEP)
+        return [max(1, len(text) // 4) for text in texts]
+
+    monkeypatch.setattr("core.chunking._embedding_token_counts", slow_counts)
+    monkeypatch.setattr(
+        "core.chunking._embedding_token_count", lambda text: max(1, len(text) // 4)
+    )
+
+    ticks = await _collect_ticks(
+        _enforce_embedding_token_limit([Document(page_content=long_text)], None, None)
+    )
+
+    assert len(ticks) >= _MIN_TICKS, (
+        "_enforce_embedding_token_limit이 이벤트 루프를 차단했습니다 "
+        f"(heartbeat {len(ticks)}회)"
     )
 
 

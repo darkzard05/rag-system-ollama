@@ -6,6 +6,8 @@ import asyncio
 import logging
 import os
 import re
+import threading
+import time
 from functools import lru_cache
 from typing import Any
 
@@ -38,8 +40,11 @@ _TOKEN_OVERLAP = 64
 _HF_TOKENIZER_REPO = "nomic-ai/nomic-embed-text-v2-moe"
 
 
+_TOKENIZER_LOAD_LOCK = threading.Lock()
+
+
 @lru_cache(maxsize=1)
-def _hf_embedding_tokenizer() -> Any | None:
+def _load_hf_embedding_tokenizer() -> Any | None:
     """v2-moe 실제 토크나이저를 지연 로드한다 (오프라인/미설치 시 None).
 
     ``count_tokens_rough`` 는 한국어/표/수식에서 실제 HF 토큰을 1.5배 이상
@@ -61,6 +66,33 @@ def _hf_embedding_tokenizer() -> Any | None:
                 continue
     logger.warning("[RAG] [CHUNKING] HF 토크나이저 로드 실패 — rough×1.6 폴백")
     return None
+
+
+def _hf_embedding_tokenizer() -> Any | None:
+    """단일 스레드 로드 보장 래퍼.
+
+    백그라운드 워밍업과 청킹 스레드가 동시에 호출해도 HF Hub 로드가
+    중복되지 않도록 직렬화한다. 로드 완료 후에는 lru_cache 히트만 남는다.
+    """
+    with _TOKENIZER_LOAD_LOCK:
+        return _load_hf_embedding_tokenizer()
+
+
+def warm_embedding_tokenizer() -> bool:
+    """임베딩 토크나이저를 미리 로드한다. 성공 여부를 반환한다."""
+    started = time.perf_counter()
+    tokenizer = _hf_embedding_tokenizer()
+    logger.info(
+        "[RAG] [CHUNKING] 토크나이저 워밍업 | loaded=%s | elapsed_ms=%.1f",
+        tokenizer is not None,
+        (time.perf_counter() - started) * 1000,
+    )
+    return tokenizer is not None
+
+
+async def warm_embedding_tokenizer_async() -> bool:
+    """이벤트 루프를 막지 않고 토크나이저를 예열한다."""
+    return await asyncio.to_thread(warm_embedding_tokenizer)
 
 
 def _embedding_token_counts(texts: list[str]) -> list[int]:
@@ -175,38 +207,49 @@ async def _enforce_embedding_token_limit(
     쉽게 넘는다. 최종 산출물을 토큰 기준으로 다시 쪼개고, 쪼갠 조각만 재임베딩해
     벡터 정합성을 유지한다. 상한 이하 청크의 기존 벡터는 그대로 재사용한다.
     """
+    started_at = time.perf_counter()
     limit = _embedding_token_limit()
     rough_counts = [count_tokens_rough(d.page_content) for d in docs]
     # rough가 최악 관측 배수(1.6)를 곱해도 상한 이하이면 HF 토크나이저를
     # 로드하지 않고 즉시 반환한다 (소형 청크/테스트 경로의 지연 방지).
     if not rough_counts or max(rough_counts) * 1.6 <= limit:
         logger.info(
-            "[RAG] [CHUNKING] 토큰 통계 | chunks=%d | p50=%d | p95=%d | max=%d | limit=%d",
+            "[RAG] [CHUNKING] 토큰 통계 | chunks=%d | p50=%d | p95=%d | max=%d | limit=%d | total_ms=%.1f",
             len(docs),
             _token_percentile(rough_counts, 0.5),
             _token_percentile(rough_counts, 0.95),
             max(rough_counts) if rough_counts else 0,
             limit,
+            (time.perf_counter() - started_at) * 1000,
         )
         return docs, vectors
 
-    token_counts = _embedding_token_counts([d.page_content for d in docs])
+    count_started = time.perf_counter()
+    token_counts = await asyncio.to_thread(
+        _embedding_token_counts, [d.page_content for d in docs]
+    )
+    count_ms = (time.perf_counter() - count_started) * 1000
     oversized = [count for count in token_counts if count > limit]
     if not oversized:
         logger.info(
-            "[RAG] [CHUNKING] 토큰 통계 | chunks=%d | p50=%d | p95=%d | max=%d | limit=%d",
+            "[RAG] [CHUNKING] 토큰 통계 | chunks=%d | p50=%d | p95=%d | max=%d | limit=%d "
+            "| count_ms=%.1f | total_ms=%.1f",
             len(docs),
             _token_percentile(token_counts, 0.5),
             _token_percentile(token_counts, 0.95),
             max(token_counts) if token_counts else 0,
             limit,
+            count_ms,
+            (time.perf_counter() - started_at) * 1000,
         )
         return docs, vectors
 
     if embedder is None and vectors is not None:
         raise ValueError("embedder is required to re-embed split chunks")
 
-    splitter = _recursive_splitter_cls()(
+    split_started = time.perf_counter()
+    splitter_cls = await asyncio.to_thread(_recursive_splitter_cls)
+    splitter = splitter_cls(
         chunk_size=limit,
         chunk_overlap=min(_TOKEN_OVERLAP, max(0, limit // 5)),
         length_function=_embedding_token_count,
@@ -237,9 +280,12 @@ async def _enforce_embedding_token_limit(
         if vector_iter is not None:
             next(vector_iter, None)
 
+    split_ms = (time.perf_counter() - split_started) * 1000
+
     # 모든 재분할 조각을 한 번의 임베딩 라운드로 처리한다. 조각별로 호출하면
     # 오버플로우 페이지 수만큼 Ollama 왕복이 늘어 인덱싱이 선형으로 느려진다.
     out_vectors: list[np.ndarray] | None = None
+    reembed_started = time.perf_counter()
     if vector_slots is not None:
         if pending_parts:
             if embedder is None:
@@ -250,17 +296,28 @@ async def _enforce_embedding_token_limit(
             ]
         else:
             out_vectors = [vec for vec in vector_slots if vec is not None]
+    reembed_ms = (time.perf_counter() - reembed_started) * 1000
 
-    final_counts = _embedding_token_counts([d.page_content for d in out_docs])
+    final_count_started = time.perf_counter()
+    final_counts = await asyncio.to_thread(
+        _embedding_token_counts, [d.page_content for d in out_docs]
+    )
+    final_count_ms = (time.perf_counter() - final_count_started) * 1000
     logger.warning(
         "[RAG] [CHUNKING] 임베딩 토큰 상한 강제 | limit=%d | oversized=%d | "
-        "chunks=%d→%d | max_before=%d | max_after=%d",
+        "chunks=%d→%d | max_before=%d | max_after=%d | count_ms=%.1f | "
+        "split_ms=%.1f | reembed_ms=%.1f | final_count_ms=%.1f | total_ms=%.1f",
         limit,
         len(oversized),
         len(docs),
         len(out_docs),
         max(token_counts) if token_counts else 0,
         max(final_counts) if final_counts else 0,
+        count_ms,
+        split_ms,
+        reembed_ms,
+        final_count_ms,
+        (time.perf_counter() - started_at) * 1000,
     )
     return out_docs, out_vectors
 
@@ -277,6 +334,8 @@ def _init_semantic_chunker(embedder: Embeddings) -> EmbeddingBasedSemanticChunke
         max_chunk_size=int(cfg.get("max_chunk_size", 800)),
         similarity_threshold=float(cfg.get("similarity_threshold", 0.5)),
         batch_size=_get_optimal_batch_size(embedder),
+        max_chunk_tokens=_embedding_token_limit(),
+        token_count_fn=_embedding_token_counts,
     )
 
 

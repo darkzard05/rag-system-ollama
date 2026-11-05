@@ -353,3 +353,25 @@ async def test_memory_only_cache_still_roundtrips():
     # 메모리 전용 캐시(L1)가 활성화되어 동일 콘텐츠 재수집 시 Ollama 왕복을 건너뛴다
     assert cm.enable_disk_cache is False
     assert cm.disk_cache is None
+
+
+@pytest.mark.asyncio
+async def test_split_text_respects_max_chunk_tokens():
+    """문자 수 상한이 커도 토큰 예산으로 청크를 추가 분할해야 한다."""
+    chunker = EmbeddingBasedSemanticChunker(
+        embedder=MockEmbeddings(dimension=32),
+        min_chunk_size=0,
+        max_chunk_size=10000,
+        chunk_overlap=0,
+        breakpoint_threshold_type="percentile",
+        breakpoint_threshold_value=99.9,
+        max_chunk_tokens=20,
+        token_count_fn=lambda texts: [len(text.split()) for text in texts],
+    )
+
+    text = " ".join(f"sentence number {idx} has five words." for idx in range(40))
+    chunks = await chunker.split_text(text)
+
+    assert len(chunks) > 1
+    assert all(len(chunk["text"].split()) <= 20 for chunk in chunks)
+    assert all(chunk["_sentence_start"] <= chunk["_sentence_end"] for chunk in chunks)
