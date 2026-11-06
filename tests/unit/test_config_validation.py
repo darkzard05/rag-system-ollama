@@ -26,3 +26,12 @@ def test_load_config_has_expected_top_level_keys() -> None:
     assert isinstance(config["models"], dict)
     assert "rag" in config, "config must define the top-level `rag` key"
     assert isinstance(config["rag"], dict)
+
+
+def test_reranker_max_length_matches_config() -> None:
+    from common.config import RERANKER_MAX_LENGTH
+
+    config = _load_config()
+    expected = int(config["rag"]["reranker"]["max_length"])
+
+    assert expected == RERANKER_MAX_LENGTH

@@ -356,13 +356,18 @@ def _enrich_citations(
     return enriched
 
 
-def _render_doc_block(d: Document) -> str:
+def _render_doc_block(d: Document, *, content: str | None = None) -> str:
     """단일 문서의 컨텍스트 렌더 조각 — format_context/CTX 가드의 공유 단위.
 
     stable_id 해시와 메타 포맷을 문서당 1회만 계산해, 가드 트림 루프가
     제거할 때마다 전체를 재렌더·재해시하지 않도록 한다.
+
+    ``content`` override는 CTX 가드의 tail 압축 전용이다. 원본 ``Document``를
+    변형하지 않고 렌더 조각만 줄이며, stable_id는 원본 content에서 계산해
+    인용 정규화가 쓰는 식별자를 그대로 보존한다.
     """
     stable_id = _doc_stable_id(d)
+    rendered_content = d.page_content if content is None else content
     section = d.metadata.get("section_path") or d.metadata.get(
         "current_section", "일반 본문"
     )
@@ -370,7 +375,7 @@ def _render_doc_block(d: Document) -> str:
     score = d.metadata.get("rerank_score", d.metadata.get("score", 0.0))
     return (
         f"[doc:{stable_id}] [section:{section}] [page:{page}] [score:{score:.3f}]\n"
-        f"{d.page_content}\n\n"
+        f"{rendered_content}\n\n"
     )
 
 
@@ -528,10 +533,16 @@ def _apply_ctx_guard(docs: list, query: str) -> tuple[list, str, int]:
         over_tokens = est - token_budget
         if 0 < over_tokens <= 150 and len(ranked) > 2:
             last_doc = ranked[-1]
+            original_content = last_doc.page_content
             trim_chars = int(over_tokens * 3.5)
-            if len(last_doc.page_content) > trim_chars + 100:
-                last_doc.page_content = last_doc.page_content[:-trim_chars] + "..."
-                blocks[id(last_doc)] = _render_doc_block(last_doc)
+            if len(original_content) > trim_chars + 100:
+                # 원본 Document는 그대로 두고 렌더 블록만 압축한다. 원본을
+                # 변형하면 content-hash 기반 stable_id가 바뀌어 인용/좌표
+                # 조회가 어긋날 수 있다.
+                trimmed_content = original_content[:-trim_chars] + "..."
+                blocks[id(last_doc)] = _render_doc_block(
+                    last_doc, content=trimmed_content
+                )
                 context = "".join(blocks[id(d)] for d in docs)
                 est = count_tokens_rough(_ctx_prompt(context, query))
                 if est <= token_budget:

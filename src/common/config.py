@@ -243,7 +243,24 @@ DYNAMIC_TOP_K_CONFIG: dict = RETRIEVER_CONFIG.get(
 
 _reranker_config = _rag_config.get("reranker", {})
 RERANKER_MODEL_NAME: str = _reranker_config.get("model_name", "ms-marco-MultiBERT-L-12")
-RERANKER_ENGINE: str = _reranker_config.get("engine", "auto")
+# RERANKER_ENGINE lets benchmarks sweep auto/flashrank/semantic without editing
+# config.yml. Unknown values keep the config.yml path so a typo cannot silently
+# disable reranking.
+RERANKER_ENGINE: str = _get_env(
+    "RERANKER_ENGINE", _reranker_config.get("engine", "auto"), str
+).lower()
+# Final document order. "score" keeps the reranker's ordering; "rrf" keeps the
+# hybrid RRF ordering and uses reranker scores only for grade gating.
+RERANKER_ORDER: str = _get_env(
+    "RERANKER_ORDER", _reranker_config.get("order", "score"), str
+).lower()
+# FlashRank cross-encoder max sequence length. 512 is the library default; shorter
+# values cut CPU inference time roughly linearly at the cost of truncating long
+# chunks. 384 won the golden-set A/B (same context recall, lower rerank latency).
+# RERANKER_MAX_LENGTH lets benchmarks sweep it without editing config.yml.
+RERANKER_MAX_LENGTH: int = _get_env(
+    "RERANKER_MAX_LENGTH", _reranker_config.get("max_length", 384), int
+)
 
 TEXT_SPLITTER_CONFIG: dict = _rag_config.get(
     "text_splitter",

@@ -81,7 +81,11 @@ def _hf_embedding_tokenizer() -> Any | None:
 def warm_embedding_tokenizer() -> bool:
     """임베딩 토크나이저를 미리 로드한다. 성공 여부를 반환한다."""
     started = time.perf_counter()
-    tokenizer = _hf_embedding_tokenizer()
+    try:
+        tokenizer = _hf_embedding_tokenizer()
+    except Exception as e:
+        logger.warning("[RAG] [CHUNKING] 토크나이저 워밍업 실패 — 폴백: %s", e)
+        return False
     logger.info(
         "[RAG] [CHUNKING] 토크나이저 워밍업 | loaded=%s | elapsed_ms=%.1f",
         tokenizer is not None,

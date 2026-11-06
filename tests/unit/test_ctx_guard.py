@@ -16,6 +16,7 @@ from langchain_core.messages import AIMessageChunk
 
 import common.config as config_module
 import core.pipeline_builder as pb
+from common.utils import doc_stable_id
 from core.graph.graph_builder import generate
 from core.model_loader import ModelManager
 from core.pipeline_builder import PipelineBuilder
@@ -284,6 +285,9 @@ async def test_generate_tail_truncates_when_minor_over_budget():
             return _BUDGET - 100
         return _BUDGET + 100
 
+    original_contents = [d.page_content for d in docs]
+    low_doc_stable_id = doc_stable_id(docs[0])
+
     mock_llm = MagicMock()
     with patch(
         "core.graph._generate.GENERATE_PROMPT_CONFIG", {"max_context_tokens": 6000}
@@ -292,6 +296,10 @@ async def test_generate_tail_truncates_when_minor_over_budget():
 
     assert result["performance"]["relevant_docs_count"] == 3
     assert len(docs) == 3
+    # tail 압축은 렌더 블록에만 적용되어야 하며 원본 Document를 변형하면 안 된다.
+    assert [d.page_content for d in docs] == original_contents
     human_content = sent_messages[0][0].content
     assert "doc_A_low" in human_content
     assert "..." in human_content
+    # 압축된 문서도 원본 content-hash stable_id를 유지해 인용/좌표 매핑이 깨지지 않는다.
+    assert f"[doc:{low_doc_stable_id}]" in human_content

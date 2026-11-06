@@ -15,6 +15,7 @@ import asyncio
 import logging
 import os
 import secrets
+import threading
 import time
 from contextlib import asynccontextmanager
 
@@ -55,6 +56,7 @@ from common.config import (
     CORS_ALLOW_ORIGINS,
     DEFAULT_EMBEDDING_MODEL,
     DEFAULT_OLLAMA_MODEL,
+    is_test_env,
 )
 from common.constants import FilePathConstants
 from core.rag_core import RAGSystem
@@ -105,6 +107,22 @@ async def lifespan(app: FastAPI):
 
     cleaner_task = asyncio.create_task(session_cleaner())
     logger.info("[API] 세션 자동 정리 태스크 시작됨 (주기: 10분)")
+
+    # [P1] HF 토크나이저 콜드 로드(측정 14~37s)를 첫 업로드 경로에서 제거한다.
+    # Ollama 가용성과 무관하게 동작하도록 별도 daemon 스레드로 예열한다.
+    if not is_test_env():
+
+        def _warm_tokenizer() -> None:
+            try:
+                from core.chunking import warm_embedding_tokenizer
+
+                warm_embedding_tokenizer()
+            except Exception as exc:
+                logger.debug(f"[WARMUP] 토크나이저 프리웜 실패 (무시): {exc}")
+
+        threading.Thread(
+            target=_warm_tokenizer, name="tokenizer-warmup", daemon=True
+        ).start()
 
     # [WARMUP] 시작 시 LLM+임베더 1회 프리웜 — 첫 쿼리 TTFT 제거 (백그라운드 비차단).
     warmup_task: asyncio.Task | None = None

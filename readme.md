@@ -158,6 +158,7 @@ Each run writes `reports/eval_quality_<tag>_<ts>.json` and `.md` with per-questi
 | `rag.parsing.hydration_mode` | precision_clip | PDF coordinate extraction mode for highlighting |
 | `rag.parsing.hydration_drain_timeout_seconds` | 30.0 | Bounded hydration drain upper bound (fail-loud timeout + metric) |
 | `rag.reranker.engine` | auto | Reranker engine: `auto` / `flashrank` / `semantic` |
+| `rag.reranker.max_length` | 384 | FlashRank max sequence length (512 default; 384 cuts CPU rerank latency at equal golden-set context recall) |
 | `rag.prompts.grading.min_score_to_skip` | 0.70 (FlashRank) / 0.45 (semantic) | Skip the LLM grade when the max rerank score reaches this (per-engine thresholds) |
 | `rag.prompt_templates.citations.text_span` | ≤200 chars (advisory) | Keep `text_span` under 200 chars; `maxLength: 200` is advisory only in `json_object` mode (not enforced by a validator) |
 | `rag.prompts.generate.generation_validation` | observe-only | S1 telemetry flags (`over_budget_chars: 600`, `regen_floor_chars: 450`, regen OFF) |

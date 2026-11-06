@@ -1,6 +1,6 @@
-import pytest
 import contextlib
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
+
 from core.session import SessionManager
 
 
@@ -19,8 +19,8 @@ def test_session_reset_for_new_file_batch_lock_and_state_parity():
     def counting_acquire_lock(session_id):
         nonlocal acquire_count
         acquire_count += 1
-        with orig_acquire_lock(session_id) as l:
-            yield l
+        with orig_acquire_lock(session_id) as lock:
+            yield lock
 
     with patch.object(
         SessionManager, "_acquire_lock", side_effect=counting_acquire_lock
@@ -61,3 +61,23 @@ def test_resource_manager_build_flashranker_deduplication():
     assert not hasattr(ResourceCoordinator, "_evict_excess_build_locks"), (
         "데드코드 _evict_excess_build_locks는 제거되어야 함"
     )
+
+
+def test_build_flashranker_passes_configured_max_length(monkeypatch):
+    """RERANKER_MAX_LENGTH가 FlashRank Ranker 생성에 전달되어야 한다."""
+    import core.resource_manager as rm_module
+
+    calls: dict[str, object] = {}
+
+    class _FakeRanker:
+        def __init__(self, **kwargs):
+            calls.update(kwargs)
+
+    monkeypatch.setattr("flashrank.Ranker", _FakeRanker)
+    monkeypatch.setattr(rm_module, "RERANKER_MAX_LENGTH", 384)
+
+    ranker = rm_module._build_flashranker("test-model")
+
+    assert isinstance(ranker, _FakeRanker)
+    assert calls["model_name"] == "test-model"
+    assert calls["max_length"] == 384

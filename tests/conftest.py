@@ -20,6 +20,12 @@ _AUTH_TEST_DIR = tempfile.mkdtemp(prefix="rag_ollama_auth_")
 os.environ["AUTH_STATE_FILE"] = os.path.join(_AUTH_TEST_DIR, "auth_state.json")
 os.environ["AUTH_SECRET_FILE"] = os.path.join(_AUTH_TEST_DIR, ".jwt_secret")
 
+# pytest 로그 격리: src.main import 시 운영 logs/app.log 에 테스트 예외가
+# 기록되는 것을 막습니다. 이 값은 어떤 테스트 모듈보다 먼저 평가되어야 합니다.
+_TEST_LOG_DIR = tempfile.mkdtemp(prefix="rag_ollama_logs_")
+os.environ["RAG_LOG_FILE"] = os.path.join(_TEST_LOG_DIR, f"pytest-{os.getpid()}.log")
+os.environ.pop("RAG_LOG_DISABLE_FILE", None)
+
 # 테스트 환경에서 모든 외부 텔레메트리 스레드 기동 차단
 os.environ["ANONYMIZED_TELEMETRY"] = "False"
 os.environ["POSTHOG_DISABLED"] = "1"

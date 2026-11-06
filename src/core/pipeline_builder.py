@@ -27,7 +27,7 @@ from common.config import (
 from common.constants import GRADE_MEMO_KEY
 from common.exceptions import EmptyPDFError, InsufficientChunksError, VectorStoreError
 from core.build_state import PHASE_DETAIL_KEY, BuildEvent, BuildPhase
-from core.chunking import split_documents
+from core.chunking import split_documents, warm_embedding_tokenizer_async
 from core.document_processor import compute_file_hash, emit_progress, load_pdf_docs
 from core.graph.graph_builder import build_graph, invalidate_graph_cache
 from core.resource_manager import get_resource_manager
@@ -391,6 +391,17 @@ class PipelineBuilder:
             _faiss_warmup = asyncio.create_task(asyncio.to_thread(_warmup_faiss_import))
         except RuntimeError:
             _faiss_warmup = None
+        # [P1] HF 토크나이저 콜드 로드(측정 14~37s)를 추출과 중첩한다. UI뿐 아니라
+        # API/스크립트가 PipelineBuilder를 직접 호출해도 동일하게 적용된다.
+        # 테스트에서는 실제 HF 다운로드를 피하고, split 직전에 반드시 완료를 기다린다.
+        _tokenizer_warmup: asyncio.Task[bool] | None = None
+        if not is_test_env():
+            try:
+                _tokenizer_warmup = asyncio.create_task(
+                    warm_embedding_tokenizer_async()
+                )
+            except RuntimeError:
+                _tokenizer_warmup = None
         documents = await load_pdf_docs(
             file_path,
             file_name,
@@ -406,6 +417,12 @@ class PipelineBuilder:
 
         # [추가] 텍스트 추출 직후 및 고비용 청킹/임베딩 진입 전 취소 확인
         _check()
+
+        # 토크나이저 워밍업이 끝난 뒤 청킹에 진입한다. 실패해도 청킹 내부의
+        # 폴백 경로가 있으므로 빌드를 중단하지 않는다.
+        if _tokenizer_warmup is not None:
+            with contextlib.suppress(Exception):
+                await _tokenizer_warmup
 
         # 3. 청크 분할 (Async)
         SessionManager.add_status_log(

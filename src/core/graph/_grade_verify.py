@@ -10,6 +10,7 @@ Fast-Path를 short-circuit 하단에 결합해 불필요한 직렬 LLM 채점을
 """
 
 import hashlib
+import json
 import logging
 import re
 import sys
@@ -40,6 +41,7 @@ from core.graph._graph_core import (
     _doc_stable_id,
     _enter_stage,
     _get_session_id,
+    _repair_json,
     _safe_invoke,
     _start_speculative_generate,
     _strip_json_fence,
@@ -117,6 +119,58 @@ class UnifiedGradeRewriteResponse(BaseModel):
         default=None,
         description="rewrite 시에만 채울 최적화된 검색어",
     )
+
+
+def _recover_truncated_grade(blob: str) -> dict[str, Any] | None:
+    """Recover routing fields from a JSON response truncated by ``num_predict``.
+
+    The grade call caps output at 256 tokens. A verbose ``reason`` can truncate
+    the JSON mid-string; the routing decision usually appears before that. Use
+    only explicitly emitted fields so relevance is never fabricated.
+    """
+    action_m = re.search(r'"action"\s*:\s*"([^"]+)"', blob)
+    relevant_m = re.search(r'"is_relevant"\s*:\s*(true|false)', blob, re.IGNORECASE)
+    if action_m is None and relevant_m is None:
+        return None
+
+    is_relevant = bool(relevant_m is not None and relevant_m.group(1).lower() == "true")
+    action = (
+        action_m.group(1)
+        if action_m is not None
+        else ("generate" if is_relevant else "rewrite")
+    )
+    if action not in ("generate", "rewrite", "transform"):
+        action = "generate" if is_relevant else "rewrite"
+
+    reason_m = re.search(r'"reason"\s*:\s*"([^"]*)', blob)
+    optimized_m = re.search(r'"optimized_query"\s*:\s*"([^"]*)', blob)
+    logger.warning("[RAG] [GRADE] 잘린 JSON 응답에서 핵심 필드 복구: action=%s", action)
+    return {
+        "action": action,
+        "is_relevant": is_relevant,
+        "relevant_entities": [],
+        "reason": reason_m.group(1) if reason_m is not None else "응답 잘림 복구",
+        "optimized_query": (optimized_m.group(1) if optimized_m is not None else None),
+    }
+
+
+def _parse_grade_response(content: str) -> dict[str, Any]:
+    """Parse grade JSON, repairing raw quotes and truncated responses."""
+    json_str = _strip_json_fence(content)
+    match = re.search(r"\{.*\}", json_str, re.DOTALL)
+    if match:
+        json_str = match.group()
+
+    try:
+        return json.loads(json_str)
+    except json.JSONDecodeError:
+        repaired = _repair_json(json_str)
+        if repaired is not None:
+            return json.loads(repaired)
+        recovered = _recover_truncated_grade(json_str)
+        if recovered is not None:
+            return recovered
+        raise
 
 
 def _safe_rerank_score(doc: Document) -> float:
@@ -391,15 +445,7 @@ async def grade_documents(
             )
         content = result.content if hasattr(result, "content") else str(result)
 
-        # 1. 코드 펜스(```json) 제거
-        json_str = _strip_json_fence(content)
-
-        # 2. 정규식을 통해 순수 JSON 객체 블록({ ... })만 안전하게 추출
-        match = re.search(r"\{.*\}", json_str, re.DOTALL)
-        if match:
-            json_str = match.group()
-
-        data = json.loads(json_str)
+        data = _parse_grade_response(content)
         parsed = UnifiedGradeRewriteResponse(**data)
 
         if parsed.action == "generate" or parsed.is_relevant:

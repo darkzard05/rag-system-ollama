@@ -36,6 +36,7 @@ from common.config import (
     MODEL_CACHE_DIR,
     OLLAMA_BASE_URL,
     OLLAMA_TIMEOUT,
+    RERANKER_MAX_LENGTH,
     RERANKER_MODEL_NAME,
 )
 from common.exceptions import LLMInferenceError, ResourceBuildError
@@ -487,7 +488,11 @@ class ClientPool:
 def _build_flashranker(name: str) -> Any:
     from flashrank import Ranker
 
-    return Ranker(model_name=name, cache_dir=MODEL_CACHE_DIR)
+    return Ranker(
+        model_name=name,
+        cache_dir=MODEL_CACHE_DIR,
+        max_length=RERANKER_MAX_LENGTH,
+    )
 
 
 class ResourceCoordinator:

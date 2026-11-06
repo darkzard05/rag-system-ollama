@@ -335,7 +335,12 @@ async def retrieve_and_rerank(
     bm25 = cfg.get("bm25_retriever")
     faiss = cfg.get("faiss_retriever")
 
-    from common.config import DYNAMIC_TOP_K_CONFIG, ENSEMBLE_WEIGHTS, RETRIEVER_CONFIG
+    from common.config import (
+        DYNAMIC_TOP_K_CONFIG,
+        ENSEMBLE_WEIGHTS,
+        RERANKER_ORDER,
+        RETRIEVER_CONFIG,
+    )
     from core.retriever_factory import search_bm25_with_scores
 
     # [수정] R3a-01: 리트리버가 실제 반환한 점수를 메타데이터에서 캡처하도록
@@ -585,11 +590,21 @@ async def retrieve_and_rerank(
             doc.metadata["rerank_score"] = rrf_scores.get(doc_key, 0.0)
             doc.metadata["rerank_engine"] = "rrf"
     else:
+        preserve_rrf_order = RERANKER_ORDER == "rrf"
         ranked_docs, _ = await reranker.rerank(
             final_docs,
             query=query,
-            top_k=rerank_top_k,
+            top_k=len(final_docs) if preserve_rrf_order else rerank_top_k,
         )
+        if preserve_rrf_order:
+            # Score-only rerank: keep the hybrid RRF order for the context while
+            # retaining the reranker score for grade threshold gating.
+            scored = {doc_stable_id(doc): doc for doc in ranked_docs}
+            ranked_docs = [
+                scored[doc_stable_id(doc)]
+                for doc in final_docs
+                if doc_stable_id(doc) in scored
+            ][:rerank_top_k]
         from core.async_reranker import get_active_rerank_engine
 
         _engine = get_active_rerank_engine()

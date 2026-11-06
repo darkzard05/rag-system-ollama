@@ -124,9 +124,16 @@ rag:
   reranker:
     # [수정] 다국어 지원을 위해 모델 교체 (기존 TinyBERT는 영어 전용)
     model_name: "ms-marco-MultiBERT-L-12"
+    # FlashRank cross-encoder 최대 시퀀스 길이. CPU 추론 시간이 대략 선형으로
+    # 줄어들지만 긴 청크는 잘린다. 512(라이브러리 기본) 대비 384는 golden 3건
+    # context_recall 동일(0.6389), 리랭크 중앙값 3.99s→3.45s로 측정되어 384 채택.
+    max_length: 384
     # 리랭커 엔진 선택: auto(FlashRank 크로스-인코더 시도 → 실패 시 bi-encoder 폴백) /
     # flashrank(FlashRank 강제) / semantic(bi-encoder 강제, 기존 동작)
     engine: "auto"
+    # 최종 문서 순서: score(리랭커 점수 정렬, 기존 동작) / rrf(하이브리드 RRF 순서 유지).
+    # rrf는 리랭커 점수를 grade 임계값 판정에만 쓰고 컨텍스트 순서는 보존한다.
+    order: "score"
 
   # 텍스트 분할 설정
   text_splitter:

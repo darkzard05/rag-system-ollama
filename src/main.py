@@ -71,10 +71,20 @@ st.set_page_config(
 # 2. 로깅 설정 (최상단, 서버당 1회만 초기화)
 # LOG_LEVEL 환경변수로 DEBUG 전환 가능 (기본 INFO). JSON 파싱 실패 등 원시
 # 출력 추적이 필요할 때 LOG_LEVEL=DEBUG 로 서버를 기동한다.
+# RAG_LOG_FILE 로 파일 경로를 재지정할 수 있고, RAG_LOG_DISABLE_FILE=1 이면
+# 파일 로깅을 끈다. 테스트(pytest)는 반드시 임시 경로를 사용해 운영
+# logs/app.log 오염을 막는다.
+def _resolve_log_file() -> Path | None:
+    if os.getenv("RAG_LOG_DISABLE_FILE", "").lower() in {"1", "true", "yes", "on"}:
+        return None
+    override = os.getenv("RAG_LOG_FILE", "").strip()
+    return Path(override) if override else FilePathConstants.LOG_FILE
+
+
 @st.cache_resource
 def _init_logging() -> logging.Logger:
     log_level = os.getenv("LOG_LEVEL", "INFO").upper()
-    return setup_logging(log_level=log_level, log_file=FilePathConstants.LOG_FILE)
+    return setup_logging(log_level=log_level, log_file=_resolve_log_file())
 
 
 logger = _init_logging()
