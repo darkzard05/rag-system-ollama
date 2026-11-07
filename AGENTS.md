@@ -112,8 +112,8 @@ ruff format .
 mypy src
 pytest tests/unit
 python -m pytest tests/integration/test_pipeline_build_once.py
-# Archived (live Ollama/PDF dependent, not pytest-collected):
-#   python scripts/archive/test_full_pipeline.py
+# Live E2E (real PDF + Ollama; not pytest-collected):
+#   python scripts/verification/verify_full_pipeline.py
 # Stream tail / citation gates:
 #   python scripts/measure_tail.py && python scripts/verify_citation_tail.py && python scripts/gate_tail.py
 

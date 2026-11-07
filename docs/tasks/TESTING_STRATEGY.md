@@ -16,11 +16,11 @@ We implement a deep unit testing strategy to ensure each core component function
 *   **E2E Integration (`tests/integration/`)**: Subsystem interaction tests using local model mocks.
 *   **Async API Tests (`tests/test_api_modern.py`)**: FastAPI endpoint verification using `httpx`.
 
-### 1.3 Performance Benchmarks
-Dedicated scripts to measure optimization effectiveness:
-*   `scripts/test_full_pipeline.py`: **Core E2E validation** using a real PDF (`2201.07520v1.pdf`).
-*   `scripts/verify_section_metadata.py`: Validates accuracy of section name extraction and cleaning.
-*   `scripts/verify_metadata_opt.py`: Measures **99.8% RAM savings** from reference-based offloading.
+### 1.3 Live E2E & Benchmarks
+Dedicated scripts to validate the real pipeline and measure optimization effectiveness:
+*   `scripts/verification/verify_full_pipeline.py`: **Core E2E validation** using a real PDF (`2201.07520v1.pdf`), live Ollama, build-stage events, golden queries, and streaming citations.
+*   `scripts/benchmarks/compare_chunking_methods.py`: Recursive vs config-driven (semantic/chonkie) chunking on the real PDF.
+*   `scripts/evaluation/quick_eval.py`: LLM-judged answer quality on `testset_2201.csv`.
 
 ## 2. Execution Guide
 
@@ -35,22 +35,20 @@ pytest --cov=src tests/unit
 ```
 
 ### Full Pipeline Validation (Real PDF)
-Run this after making changes to the LLM prompts or the chunking engine.
+Run this after making changes to the LLM prompts, chunking engine, or citation stream.
 ```powershell
-python scripts/test_full_pipeline.py
-```
+# full: build + golden set + streaming citations (default)
+python scripts/verification/verify_full_pipeline.py
 
-### Verifying Section Cleaning
-Ensure that section titles are clean and not contaminated by body text.
-```powershell
-python scripts/verify_section_metadata.py
+# fast: build + two in-document queries
+python scripts/verification/verify_full_pipeline.py --mode smoke
 ```
 
 ## 3. CI/CD & Stability Pass
 The system undergoes a **Full Stability Pass** before any release. This involves:
 1. `pytest tests/unit`
 2. `python scripts/maintenance/verify_integrity.py`
-3. `python scripts/test_full_pipeline.py`
+3. `python scripts/verification/verify_full_pipeline.py`
 
 ## 4. Best Practices
 1.  **Mocking (Astream Support)**: When testing LangGraph nodes, ensure you mock both `ainvoke` and `astream` (using asynchronous generators) to match the real application behavior.

@@ -37,8 +37,8 @@ python scripts/benchmarks/total_rag_perf.py
 | **`benchmark_reranker.py`** | 리랭커 성능 프로파일링 | 리랭킹 지연 시간 및 메모리 |
 | **`benchmark_aggregator.py`** | 벤치마크 결과 취합 | 보고서 집계 자료 |
 | **`compare_qwen_models.py`** | Qwen 모델 간 지연/품질 비교 | 모델별 벤치마크 비교표 |
+| **`compare_chunking_methods.py`** | Recursive vs 현재 설정(시맨틱/chonkie) 청킹 비교 | 청크 수·길이·토큰 p95 비교표 |
 | **`bench_params.py`** | 공용 벤치마크 상수 | (모듈, 직접 실행 아님) |
-| **`e2e_performance_benchmark.py`** | E2E 성능 벤치마크 | 전체 응답 지연 및 처리량 |
 
 > 과거 일회성 벤치마크(`benchmark_parallel_retrieval`, `benchmark_serialization`, `benchmark_streaming_sim`, `benchmark_ttft`, `test_retriever_leak` 등)는 `scripts/benchmarks/archive/`에 보관되어 있습니다.
 
@@ -88,6 +88,7 @@ CI·코드 품질·환경 관리를 위한 유틸리티입니다.
 
 | 도구명 | 용도 |
 | :--- | :--- |
+| **`verify_full_pipeline.py`** | 실PDF+Ollama 풀 파이프라인 E2E (빌드 단계·aquery·스트리밍 인용). `--mode smoke`로 단축 |
 | **`probe_qwen3_thinking.py`** | Qwen3 모델 사고(reasoning) 동작 검증 |
 
 ---
@@ -107,7 +108,6 @@ CI·코드 품질·환경 관리를 위한 유틸리티입니다.
 
 일회성/라이브 의존 검증 스크립트가 여기 보관됩니다. 직접 실행을 전제로 하지 않으며, 재사용 시 참고용으로만 보존합니다.
 
-- `test_full_pipeline.py` (E2E 라이브 Ollama — `python scripts/archive/test_full_pipeline.py`로 수동 QA 가능)
 - `test_embedding_v2.py`, `test_section_filtering.py`, `verify_chunking_efficiency.py` (라이브 Ollama/PDF 의존)
 - `test_retriever_leak.py` (실제 RSS 메모리 검증 — `test_resource_eviction`이 mock으로 대체)
 - 그 외 일회성 verify/평가 스크립트 13개

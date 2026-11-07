@@ -156,7 +156,7 @@ def check_ollama() -> bool:
     """Ollama 서버 상태를 점검합니다."""
     import requests
 
-    from common.config import OLLAMA_BASE_URL
+    from common.config import OLLAMA_BASE_URL  # type: ignore[import-not-found]
 
     print(
         f"{Colors.CYAN}[CHECK]{Colors.ENDC} Ollama Server Status ({OLLAMA_BASE_URL})..."
@@ -223,18 +223,18 @@ def main():
     )
 
     # 3. 실전 파이프라인 테스트 (E2E)
-    # TODO(pruning): restore quick_verify E2E step — scripts/quick_verify_rag.py was moved to scripts/archive/
-    # and requires live Ollama to import; skipping to avoid FileNotFoundError.
-    # print_header("Step 3: End-to-End Verification")
-    # if results.get("Environment: Ollama"):
-    #     results["E2E: Quick Verify"] = run_command(
-    #         ["python", "scripts/quick_verify_rag.py"], "RAG Pipeline E2E", timeout=600
-    #     )
-    # else:
-    #     print(
-    #         f"{Colors.WARNING}[SKIPPED]{Colors.ENDC} Quick Verify skipped due to Ollama status"
-    #     )
-    #     results["E2E: Quick Verify"] = False
+    print_header("Step 3: End-to-End Verification")
+    if results.get("Environment: Ollama"):
+        results["E2E: Full Pipeline"] = run_command(
+            ["python", "scripts/verification/verify_full_pipeline.py"],
+            "Full Pipeline E2E",
+            timeout=900,
+        )
+    else:
+        print(
+            f"{Colors.WARNING}[SKIPPED]{Colors.ENDC} Full pipeline E2E skipped due to Ollama status"
+        )
+        results["E2E: Full Pipeline"] = False
 
     # 3b. 쿼리 레이턴시 회귀 가드 (선택적 / 비치명적)
     print_header("Step 3b: Query Latency Regression Guard (optional)")

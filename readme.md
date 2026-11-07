@@ -107,8 +107,8 @@ We maintain a strict **Zero-Error Policy**. Run the automated verification suite
 # Run all unit tests
 pytest tests/unit
 
-# Full pipeline integration test (archived, live Ollama/PDF dependent, not pytest-collected)
-python scripts/archive/test_full_pipeline.py
+# Live full pipeline test (real PDF + Ollama, not pytest-collected)
+python scripts/verification/verify_full_pipeline.py
 
 # Stream tail / citation gates
 python scripts/measure_tail.py
