@@ -51,6 +51,9 @@ class FilePathConstants:
     # 로그 디렉터리 — CWD와 무관하게 항상 <루트>/logs/로 수렴
     LOG_FILE = _PROJECT_ROOT / "logs" / "app.log"
 
+    # 평가용 Q&A JSONL 추적 로그 (운영 로그와 분리)
+    QA_TRACE_FILE = _PROJECT_ROOT / "logs" / "qa_trace.jsonl"
+
     # 캐시 디렉터리는 config.yml에서 로드하므로 여기서는 정의하지 않음
 
     # [추가] 전용 임시 디렉터리

@@ -26,6 +26,9 @@ _TEST_LOG_DIR = tempfile.mkdtemp(prefix="rag_ollama_logs_")
 os.environ["RAG_LOG_FILE"] = os.path.join(_TEST_LOG_DIR, f"pytest-{os.getpid()}.log")
 os.environ.pop("RAG_LOG_DISABLE_FILE", None)
 
+# QA trace 로그는 기본 비활성 (테스트가 운영 logs/qa_trace.jsonl 을 오염시키지 않도록).
+os.environ["QA_LOG_ENABLED"] = "false"
+
 # 테스트 환경에서 모든 외부 텔레메트리 스레드 기동 차단
 os.environ["ANONYMIZED_TELEMETRY"] = "False"
 os.environ["POSTHOG_DISABLED"] = "1"

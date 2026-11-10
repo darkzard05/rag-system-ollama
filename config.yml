@@ -421,6 +421,13 @@ evaluation:
   # 평가에 사용할 Ollama 모델 (Judge)
   judge_model: "qwen3:4b-instruct-2507-q4_K_M"
 
+  # 실사용 질의/답변을 평가용 JSONL 로그로 수집합니다 (운영 app.log와 분리).
+  qa_log:
+    enabled: true                  # env QA_LOG_ENABLED 로 재정의 가능
+    path: "logs/qa_trace.jsonl"    # env QA_LOG_PATH 로 재정의 가능
+    max_answer_chars: 0            # 0 = 무제한 (원문 그대로)
+    rotate_max_bytes: 209715200    # 200MB 초과 시 로테이션
+    rotate_backups: 5              # qa_trace.jsonl.1..5 보관
 
 # --- 캐시 보안 설정 ---
 

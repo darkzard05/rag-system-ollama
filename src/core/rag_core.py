@@ -21,6 +21,7 @@ from common.config import (
     HYDRATION_TAIL_DRAIN_TIMEOUT_SECONDS,
 )
 from common.exceptions import VectorStoreError
+from common.qa_trace import record_qa_turn
 from common.resilience import get_circuit_breaker_registry, retry_stream
 from common.utils import doc_stable_id
 from core.build_state import BuildEvent
@@ -274,6 +275,27 @@ class RAGSystem:
             # perf_report = monitor.get_report() # 이전 코드
             perf_report = _lazy_perf_report()
             combined_perf = {**result.get("performance", {}), "metrics": perf_report}
+            record_qa_turn(
+                source="aquery",
+                session_id=self.session_id,
+                query=query,
+                answer=result.get("response", "") or "",
+                model=model_name,
+                citations=result.get("citations", []),
+                confidence=float(result.get("confidence", 0.0) or 0.0),
+                prompt_version=str(result.get("prompt_version", "") or ""),
+                is_cached=bool(result.get("is_cached", False)),
+                regenerated=str(result.get("regenerated", "") or ""),
+                parse_failed=bool(result.get("parse_failed", False)),
+                echo_detected=bool(result.get("echo_detected", False)),
+                over_budget=bool(result.get("over_budget", False)),
+                intent=str(result.get("intent", "") or ""),
+                relevant_docs=result.get("relevant_docs", []),
+                performance=result.get("performance", {}),
+                file_name=SessionManager.get(
+                    "last_uploaded_file_name", session_id=self.session_id
+                ),
+            )
             return {
                 "response": result.get("response", ""),
                 "thought": result.get("thought", ""),
@@ -328,6 +350,10 @@ class RAGSystem:
             # 드롭 수와 custom 수신을 세어 침묵 실패를 로그로 가시화한다.
             dropped_generate_msgs = 0
             custom_events = 0
+            # 최종 턴 1회만 QA trace로 남기기 위한 캡처 (재생성 시 마지막 값 우선).
+            qa_generate: dict[str, Any] | None = None
+            qa_preprocess: dict[str, Any] = {}
+            qa_docs: list[Any] = []
             SessionManager.add_status_log(
                 "답변 생성 시작...",
                 session_id=self.session_id,
@@ -366,8 +392,14 @@ class RAGSystem:
                         data = event["data"]
                         chunk = data.get("chunk")
                         if chunk:
+                            if isinstance(chunk, dict):
+                                if "preprocess" in chunk:
+                                    qa_preprocess = chunk["preprocess"] or {}
+                                if "generate" in chunk:
+                                    qa_generate = chunk["generate"]
                             if isinstance(chunk, dict) and "retrieve" in chunk:
                                 docs = chunk["retrieve"].get("relevant_docs", [])
+                                qa_docs = docs or qa_docs
                                 if docs:
                                     new_docs = _dedup_docs(docs, seen_doc_keys)
                                     if new_docs:
@@ -383,6 +415,37 @@ class RAGSystem:
                                         )
                                         hydration_tasks.append(task)
                             yield ("updates", chunk)
+                    elif kind == "on_chain_end" and langgraph_node == "generate":
+                        # on_chain_stream 미수신 환경 폴백: 노드 종료 출력 캡처.
+                        output = event.get("data", {}).get("output")
+                        if isinstance(output, dict):
+                            qa_generate = output
+
+                if qa_generate is not None and not _aborted:
+                    record_qa_turn(
+                        source="astream",
+                        session_id=self.session_id,
+                        query=query,
+                        answer=qa_generate.get("response", "") or "",
+                        model=model_name,
+                        citations=qa_generate.get("citations", []),
+                        confidence=float(qa_generate.get("confidence", 0.0) or 0.0),
+                        prompt_version=str(qa_generate.get("prompt_version", "") or ""),
+                        is_cached=bool(
+                            qa_preprocess.get("is_cached", False)
+                            or qa_generate.get("is_cached", False)
+                        ),
+                        regenerated=str(qa_generate.get("regenerated", "") or ""),
+                        parse_failed=bool(qa_generate.get("parse_failed", False)),
+                        echo_detected=bool(qa_generate.get("echo_detected", False)),
+                        over_budget=bool(qa_generate.get("over_budget", False)),
+                        intent=str(qa_preprocess.get("intent", "") or ""),
+                        relevant_docs=qa_docs,
+                        performance=qa_generate.get("performance", {}),
+                        file_name=SessionManager.get(
+                            "last_uploaded_file_name", session_id=self.session_id
+                        ),
+                    )
             except (asyncio.CancelledError, GeneratorExit):
                 # 중단(클라이언트 절단·waiter 취소·aclose) — finally에서
                 # 하이드레이션을 즉시 취소하고 짧게 드레인한다.

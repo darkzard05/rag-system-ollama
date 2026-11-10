@@ -374,6 +374,20 @@ EVAL_JUDGE_MODEL: str = _get_env(
     _evaluation_config.get("judge_model", "qwen3:4b-instruct-2507-q4_K_M"),
 )
 
+# --- 6.5.1 QA trace (답변 평가용 JSONL 로그) ---
+_qa_log_config = _evaluation_config.get("qa_log", {})
+QA_LOG_ENABLED: bool = _get_env(
+    "QA_LOG_ENABLED",
+    _qa_log_config.get("enabled", True),
+    lambda x: str(x).lower() in {"1", "true", "yes", "on"},
+)
+QA_LOG_PATH: str = _get_env(
+    "QA_LOG_PATH", _qa_log_config.get("path", "logs/qa_trace.jsonl")
+)
+QA_LOG_MAX_ANSWER_CHARS: int = int(_qa_log_config.get("max_answer_chars", 0))
+QA_LOG_ROTATE_MAX_BYTES: int = int(_qa_log_config.get("rotate_max_bytes", 209715200))
+QA_LOG_ROTATE_BACKUPS: int = int(_qa_log_config.get("rotate_backups", 5))
+
 # --- 6.6 CORS 설정 (CORS) ---
 _cors_config = _config.get("cors", {})
 
