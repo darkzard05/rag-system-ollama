@@ -13,6 +13,7 @@ import pytest
 from langchain_core.documents import Document
 from langchain_core.messages import AIMessageChunk
 
+from core.graph._graph_core import _extract_json_string, _extract_partial_answer
 from core.graph.graph_builder import generate
 from core.model_loader import ModelManager
 
@@ -60,7 +61,11 @@ def _payload(answer: str) -> str:
 
 
 async def _run_generate(
-    answers: list[str], query: str = "문서의 핵심 기여를 설명해줘."
+    answers: list[str],
+    query: str = "문서의 핵심 기여를 설명해줘.",
+    metadatas: list[dict] | None = None,
+    *,
+    raw_payloads: bool = False,
 ) -> tuple[dict, list[list], AsyncMock]:
     sent_messages: list[list] = []
     calls = {"n": 0}
@@ -70,10 +75,11 @@ async def _run_generate(
         sent_messages.append(messages)
         index = min(calls["n"], len(answers) - 1)
         calls["n"] += 1
-        yield AIMessageChunk(
-            content=_payload(answers[index]),
-            response_metadata={"prompt_eval_count": 5},
-        )
+        metadata: dict = {"prompt_eval_count": 5}
+        if metadatas:
+            metadata.update(metadatas[index])
+        content = answers[index] if raw_payloads else _payload(answers[index])
+        yield AIMessageChunk(content=content, response_metadata=metadata)
 
     mock_llm = MagicMock()
     mock_llm.bind.return_value = mock_llm
@@ -147,3 +153,73 @@ async def test_generate_skips_short_regen_for_refusal():
     assert not any(
         call.args[0] == "answer_replace" for call in dispatch.await_args_list
     )
+
+
+def test_extract_partial_answer_recovers_truncated_value():
+    """num_predict 절단으로 닫는 따옴표가 없어도 본문을 복구한다."""
+    truncated = '{"final_answer": "잘린 답변 본문입니다. citations는 뒤에'
+    assert (
+        _extract_partial_answer(truncated, allow_eof=True)
+        == "잘린 답변 본문입니다. citations는 뒤에"
+    )
+    # 절단이 확인되지 않은 깨진 JSON 은 fail-closed 로 복구하지 않는다.
+    assert _extract_partial_answer(truncated) is None
+
+
+def test_extract_json_string_requires_closing_quote_by_default():
+    """기본 동작(닫는 따옴표 필수)은 유지해 잘린 anchor 채택을 막는다."""
+    truncated = '{"anchor": "잘린 anchor'
+    start = truncated.index(":", truncated.index('"anchor"')) + 1
+    assert _extract_json_string(truncated, start) == (None, start)
+    assert _extract_json_string(truncated, start, allow_eof=True)[0] == "잘린 anchor"
+
+
+@pytest.mark.asyncio
+async def test_generate_marks_truncated_single_pass():
+    """1차 패스가 num_predict에서 절단되면 부분 복구 + truncated 플래그를 남긴다."""
+    body = "절단된 긴 답변 본문입니다. " * 59 + "끝까지"
+    result, sent_messages, _ = await _run_generate(
+        [f'{{"final_answer": "{body}'],
+        metadatas=[{"done_reason": "length", "eval_count": _NUM_PREDICT}],
+        raw_payloads=True,
+    )
+
+    assert len(sent_messages) == 1
+    assert result["response"] == body
+    assert result["parse_failed"] is True
+    assert result["performance"]["truncated"] is True
+    assert result["regenerated"] == ""
+
+
+@pytest.mark.asyncio
+async def test_generate_keeps_first_pass_when_regen_truncated():
+    """재생성 패스가 절단되면 정상 1차 패스를 유지한다 (답변 유실 방지)."""
+    first = "정상적인 1차 답변입니다. " * 20
+    truncated_second = '{"final_answer": "재생성 답변이 길어지다가 절단'
+    result, sent_messages, dispatch = await _run_generate(
+        [_payload(first), truncated_second],
+        metadatas=[{}, {"done_reason": "length", "eval_count": _NUM_PREDICT}],
+        raw_payloads=True,
+    )
+
+    assert len(sent_messages) == 2
+    assert result["response"] == first
+    assert result["parse_failed"] is False
+    assert result["regenerated"] == ""
+    replace_calls = [
+        call for call in dispatch.await_args_list if call.args[0] == "answer_replace"
+    ]
+    assert len(replace_calls) == 1
+    assert replace_calls[0].args[1]["content"] == first
+
+
+@pytest.mark.asyncio
+async def test_generate_keeps_first_pass_when_regen_is_refusal():
+    """재생성 결과가 거절 폴백이면 정상 1차 패스를 유지한다."""
+    first = "정상적인 1차 답변입니다. " * 20
+    refusal = "제공된 문서에서 확인할 수 없습니다."
+    result, sent_messages, _ = await _run_generate([first, refusal])
+
+    assert len(sent_messages) == 2
+    assert result["response"] == first
+    assert result["regenerated"] == ""

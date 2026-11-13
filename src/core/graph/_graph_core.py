@@ -405,11 +405,18 @@ def _doc_stable_id(doc: Document) -> str:
 # 수행해 D1(메타데이터 손실)/D2(text_span 절단)/D3(final_answer 절단) 를 방지.
 
 
-def _extract_json_string(blob: str, start: int) -> tuple[str | None, int]:
+def _extract_json_string(
+    blob: str, start: int, *, allow_eof: bool = False
+) -> tuple[str | None, int]:
     """시작 위치 ``start``(큰따옴표 직후)부터 닫는 큰따옴표까지 값을 읽는다.
 
     이스케이프된 ``\\"`` 는 건너뛴다. 스캔 종료 시 다음 읽기 시작 위치(닫는
     따옴표 바로 뒤)를 반환한다. 값을 찾지 못하면 (None, start) 를 반환한다.
+
+    ``allow_eof=True`` 면 닫는 따옴표 없이 입력이 끝난 경우(모델 출력이
+    ``num_predict`` 상한에서 절단된 경우) 누적된 부분 문자열을 반환한다.
+    기본값 False 는 기존 동작(닫는 따옴표 필수)을 유지해, 잘린 anchor 같은
+    불완전한 값이 조용히 채택되는 것을 막는다.
     """
     i = start
     n = len(blob)
@@ -450,6 +457,9 @@ def _extract_json_string(blob: str, start: int) -> tuple[str | None, int]:
             continue
         chars.append(ch)
         i += 1
+    if allow_eof and chars:
+        # 절단(EOF 도달) — 닫는 따옴표가 없어도 지금까지 읽은 본문을 복구한다.
+        return "".join(chars), n
     return None, start
 
 
@@ -497,8 +507,13 @@ def _recover_citations(blob: str) -> list[dict[str, Any]]:
     return citations
 
 
-def _extract_partial_answer(blob: str) -> str | None:
-    """깨진 JSON 에서 final_answer 값을 escape 인식 스캐너로 추출한다 (D3 해소)."""
+def _extract_partial_answer(blob: str, *, allow_eof: bool = False) -> str | None:
+    """깨진 JSON 에서 final_answer 값을 escape 인식 스캐너로 추출한다 (D3 해소).
+
+    ``allow_eof=True`` 는 모델 출력이 ``num_predict`` 상한에서 절단된 경우처럼
+    닫는 따옴표가 유실된 본문 복구에만 사용한다. 기본값 False 는 닫는 따옴표가
+    없는 값을 복구하지 않는다 (구문 오류 JSON 을 사용자 답변으로 승격하지 않음).
+    """
     key_m = re.search(r'"final_answer"\s*:', blob)
     if not key_m:
         return None
@@ -509,7 +524,7 @@ def _extract_partial_answer(blob: str) -> str | None:
     # +1 하면 큰따옴표 바로 다음 문자가 되어 _extract_json_string 이 값을
     # 건너뛰므로, 값 시작 큰따옴표 위치 그대로 전달한다.
     val_start = key_m.end() + val_m.start()
-    value, _ = _extract_json_string(blob, val_start)
+    value, _ = _extract_json_string(blob, val_start, allow_eof=allow_eof)
     return value
 
 

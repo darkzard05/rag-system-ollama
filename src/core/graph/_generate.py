@@ -1042,6 +1042,24 @@ async def _generate_pass(
         f"tail_content_ms={tail_content_ms:.1f}"
     )
 
+    # 절단 감지: Ollama 는 num_predict 상한에서 생성을 끊으면 done_reason="length"를
+    # 반환한다. 메타데이터가 누락된 경우를 대비해 eval_count 도 보조 지표로 쓴다.
+    # (절단된 JSON 은 구조화 파싱이 실패하므로 재생성 채택 판정에 필요하다.)
+    eval_count = int(last_metadata.get("eval_count") or 0)
+    done_reason = str(last_metadata.get("done_reason") or "")
+    truncated = done_reason == "length" or (
+        eval_count > 0 and eval_count >= int(OLLAMA_NUM_PREDICT)
+    )
+    if truncated:
+        logger.warning(
+            "[RAG] [GENERATE] 출력 절단 감지 (done_reason=%s, eval_count=%d, "
+            "num_predict=%d, output_chars=%d)",
+            done_reason or "unknown",
+            eval_count,
+            int(OLLAMA_NUM_PREDICT),
+            len(full_response),
+        )
+
     # Phase 1.2: 구조화된 답변 파싱 (JSON 출력 기대)
     parsed_answer = None
     parse_failed = False
@@ -1053,9 +1071,12 @@ async def _generate_pass(
 
         모듈 레벨 escape 인식 헬퍼로 값을 추출해 메타데이터 손실(D1)·본문 절단
         (D2)·답변 절단(D3)·교차 매칭(D4)을 방지한다. 복구 불가능하면 빈 dict 반환.
+
+        ``truncated``(num_predict 상한 도달)일 때만 닫는 따옴표 없는 본문을
+        허용한다. 그 외 깨진 JSON(구문 오류)은 fail-closed 로 승격하지 않는다.
         """
         recovered: dict[str, Any] = {}
-        final_answer = _extract_partial_answer(json_blob)
+        final_answer = _extract_partial_answer(json_blob, allow_eof=truncated)
         if final_answer is not None:
             recovered["final_answer"] = final_answer
         citations = _recover_citations(json_blob)
@@ -1189,6 +1210,7 @@ async def _generate_pass(
         "generate_ms": generate_ms,
         "parsed_answer": parsed_answer,
         "parse_failed": parse_failed,
+        "truncated": truncated,
     }
 
 
@@ -1472,12 +1494,48 @@ async def generate(
         pass_writer = None
     _generate_op.__exit__(None, None, None)
 
-    last = passes[-1]
+    def _pass_text(pass_result: dict[str, Any]) -> str:
+        answer = pass_result.get("parsed_answer")
+        return ((answer.final_answer if answer else "") or "").strip()
+
+    def _pass_failed(pass_result: dict[str, Any]) -> bool:
+        """패스가 구조적으로 실패했는지 (파싱 실패·절단·빈 본문)."""
+        return (
+            bool(pass_result.get("parse_failed"))
+            or bool(pass_result.get("truncated"))
+            or not _pass_text(pass_result)
+        )
+
+    def _pass_degraded(pass_result: dict[str, Any]) -> bool:
+        """사용자에게 그대로 내보내기 어려운 출력인지 (실패 + 거절 폴백)."""
+        return _pass_failed(pass_result) or bool(
+            _ANSWER_REFUSAL_RE.search(_pass_text(pass_result))
+        )
+
+    # 재생성 패스가 실패/절단/거절 폴백이면 1차 패스를 유지한다. 2차 패스가
+    # 망가졌을 때 정상 1차 답변(및 그 인용)을 버리던 회귀를 막는다.
+    selected = passes[-1]
+    regen_rejected = False
+    if len(passes) > 1 and _pass_degraded(selected):
+        first_pass = passes[0]
+        if not _pass_degraded(first_pass):
+            logger.warning(
+                "[RAG] [GENERATE] 재생성 결과 폐기 — 1차 패스 유지 "
+                "(parse_failed=%s, truncated=%s, chars=%d)",
+                bool(selected.get("parse_failed")),
+                bool(selected.get("truncated")),
+                len(_pass_text(selected)),
+            )
+            selected = first_pass
+            regen_rejected = True
+
+    last = selected
     full_response = str(last["full_response"])
     full_thought = str(last["full_thought"])
     last_metadata = dict(last["last_metadata"])
     parsed_answer = last["parsed_answer"]
     parse_failed = bool(last["parse_failed"])
+    truncated = bool(last.get("truncated"))
     # 인용 fail-closed 정규화: int 인덱스→stable_id 매핑, 알 수 없는 id 드롭.
     if parsed_answer is not None and getattr(parsed_answer, "citations", None):
         try:
@@ -1517,7 +1575,7 @@ async def generate(
         "parse_failed": parse_failed,
         "echo_detected": echo_detected,
         "over_budget": over_budget,
-        "regenerated": regen_reason if len(passes) > 1 else "",
+        "regenerated": regen_reason if len(passes) > 1 and not regen_rejected else "",
         # R1a-05: response_metadata 등 임의 객체가 섞이면 체크포인트 전체가 pickle로
         # 강등되는 경로를 차단하기 위해 순수 타입만 저장한다.
         "performance": _sanitize_channel_value(
@@ -1530,9 +1588,12 @@ async def generate(
                 "first_token_ms": first_token_ms or 0.0,
                 "generate_ms": generate_ms,
                 "parse_failed": parse_failed,
+                "truncated": truncated,
                 "echo_detected": echo_detected,
                 "over_budget": over_budget,
-                "regenerated": regen_reason if len(passes) > 1 else "",
+                "regenerated": regen_reason
+                if len(passes) > 1 and not regen_rejected
+                else "",
             }
         ),
     }
@@ -1560,7 +1621,14 @@ async def generate(
 
     # 쿼리 응답 캐시 저장 (선택적 opt-in). 캐시 히트 경로가 아니라 이번에 새로
     # 생성한 경우에만 저장한다. 쓰기는 크리티컬 패스 밖으로 예약한다.
-    if not get_state_attr(state, "is_cached"):
+    # 재생성 결과가 폐기됐거나 출력이 절단된 경우는 캐시에 남기지 않는다
+    # (이후 동일 질의에 오염된 답변이 재사용되는 것을 막는다).
+    if (
+        not get_state_attr(state, "is_cached")
+        and not regen_rejected
+        and not truncated
+        and bool(str(result["response"]).strip())
+    ):
         sid = _get_session_id(config)
         file_hash = SessionManager.get("file_hash", session_id=sid, default=None)
         _schedule_query_cache_set(
