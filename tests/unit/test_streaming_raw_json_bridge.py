@@ -53,25 +53,30 @@ _PLAIN_CHUNK = StreamChunk(content=" (추가)")
 _JSON_SCAFFOLD_TOKENS = ("{", "}", ":", '"reasoning"', '"final_answer"')
 
 
+# Module-level store: MagicMock subclasses each instance into a dynamic
+# subclass, so storing on ``cls._store`` makes ``reset``/``set`` and a
+# class-bound ``get`` reference different dicts. A module-level dict keeps
+# every access path consistent.
+_FAKE_STORE: dict[str, Any] = {}
+_FAKE_MESSAGES: list[dict[str, Any]] = []
+
+
 class _FakeSessionManager(MagicMock):
     """``SessionManager``의 최소 인메모리 레플리카 (테스트 전용).
 
     ``MagicMock`` 상속으로 미구현 정적 메서드 호출을 안전하게 허용하면서,
     ``get``/``set``/``add_message``/``get_messages``/``reset`` 은 실제 은닉
-    저장소(클래스 레벨 ``_store``) 위에서 동작시킨다. ``add_message`` 는 실제
+    저장소(모듈 레벨 ``_FAKE_STORE``) 위에서 동작시킨다. ``add_message`` 는 실제
     구현과 동일하게 ``msg_id`` 기준 업서트를 수행하며 영속 메시지는
-    ``_store["messages"]`` 에 순서대로 쌓인다. 실제와 같은 세션 단위
+    ``_FAKE_STORE["messages"]`` 에 순서대로 쌓인다. 실제와 같은 세션 단위
     락/분리는 없고, ``get`` 은 3번째 위치 인자(``session_id``)를 그대로 받는다
     (``get("generation_cancel", False, sid)`` 호출 형태 대응).
     """
 
-    _store: dict[str, Any] = {}
-    _messages: list[dict[str, Any]] = []
-
     @classmethod
     def reset(cls) -> None:
-        cls._store = {}
-        cls._messages = []
+        _FAKE_STORE.clear()
+        _FAKE_MESSAGES.clear()
 
     @classmethod
     def get(
@@ -81,13 +86,13 @@ class _FakeSessionManager(MagicMock):
         session_id: str | None = None,
         **kwargs: Any,
     ) -> Any:
-        return cls._store.get(key, default)
+        return _FAKE_STORE.get(key, default)
 
     @classmethod
     def set(
         cls, key: str, value: Any, session_id: str | None = None, **kwargs: Any
     ) -> None:
-        cls._store[key] = value
+        _FAKE_STORE[key] = value
 
     @classmethod
     def add_message(
@@ -105,18 +110,18 @@ class _FakeSessionManager(MagicMock):
             "msg_type": msg_type,
             **kwargs,
         }
-        current = cls._store.setdefault("messages", [])
+        current = _FAKE_STORE.setdefault("messages", [])
         for index, existing in enumerate(current):
             if existing.get("msg_id") == message["msg_id"]:
                 current[index].update(message)
                 break
         else:
             current.append(message)
-        cls._messages = current
+        _FAKE_MESSAGES[:] = current
 
     @classmethod
     def get_messages(cls, session_id: str | None = None) -> list[dict[str, Any]]:
-        return list(cls._messages)
+        return list(_FAKE_MESSAGES)
 
 
 def _assert_no_json_scaffold(text: str) -> None:

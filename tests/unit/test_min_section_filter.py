@@ -1,14 +1,11 @@
 """T11 — `_filter_min_section_len` 초단문 섹션 필터 단위 테스트.
 
-대상: `src/core/graph_builder.py`의 `retrieve_and_rerank`가 `_merge_adjacent_chunks`
-이후 50자 미만 섹션을 최종 컨텍스트에서 제거하는 동작.
-
-케이스:
-- 43자 문서 드롭 (실측: `[GENERATE] 문서 0 길이: 43`)
-- 경계: 49자 드롭 / 50자 유지
-- 정상(50자 이상) 문서 유지
-- 빈 리스트 안전
-- 전체가 50자 미만인 극단 케이스: 정확히 1개 유지 (가드)
+정책:
+- 50자 이상 문서는 항상 유지한다.
+- 50자 미만이라도 숫자/단답("671B", 표 셀)이나 의미 있는 단어("CM3")를
+  포함하면 유지한다 (정답 단편 보존).
+- 헤더("# ..."), 번호("3.1"), 기호만 있는 저정보 파편은 드롭한다.
+- 전부 저정보 파편이면 최고 rerank_score 1건을 유지한다.
 """
 
 from langchain_core.documents import Document
@@ -16,24 +13,62 @@ from langchain_core.documents import Document
 from core.graph.graph_builder import _filter_min_section_len
 
 
-def _doc(text: str) -> Document:
-    return Document(page_content=text, metadata={"source": "s.pdf", "page": 1})
+def _doc(text: str, score: float = 0.0) -> Document:
+    return Document(
+        page_content=text,
+        metadata={"source": "s.pdf", "page": 1, "rerank_score": score},
+    )
 
 
-def test_drops_43_char_section():
-    """43자 문서는 제거된다 (실측 사례: [GENERATE] 문서 0 길이: 43)."""
+def test_drops_low_info_header_fragment():
+    """마크다운 헤더 파편은 컨텍스트에서 제거된다."""
     long_doc = _doc("x" * 50)
-    short_doc = _doc("x" * 43)
+    header_doc = _doc("## 3. 실험")
 
-    result = _filter_min_section_len([long_doc, short_doc])
+    result = _filter_min_section_len([long_doc, header_doc])
 
-    assert len(result) == 1
-    assert result[0] is long_doc
+    assert result == [long_doc]
 
 
-def test_boundary_49_dropped_50_kept():
-    """경계: 49자는 드롭, 50자는 유지된다."""
-    result = _filter_min_section_len([_doc("x" * 49), _doc("y" * 50)])
+def test_drops_numbering_only_fragment():
+    """번호/불릿만 있는 파편은 제거된다."""
+    result = _filter_min_section_len([_doc("3.1"), _doc("---"), _doc("B" * 50)])
+
+    assert [d.page_content for d in result] == ["B" * 50]
+
+
+def test_keeps_short_numeric_answer():
+    """수치 단답("671B")은 50자 미만이어도 유지된다 (정답 소실 방지)."""
+    numeric = _doc("671B")
+    long_doc = _doc("x" * 60)
+
+    result = _filter_min_section_len([long_doc, numeric])
+
+    assert numeric in result
+    assert long_doc in result
+
+
+def test_keeps_short_table_cell():
+    """표 셀처럼 수치가 든 짧은 청크는 유지된다."""
+    cell = _doc("| 671B | 1.76T |")
+
+    result = _filter_min_section_len([cell, _doc("y" * 50)])
+
+    assert cell in result
+
+
+def test_keeps_short_model_name():
+    """숫자가 없어도 의미 있는 단어(CM3, MoE)는 유지된다."""
+    name = _doc("CM3 모델")
+
+    result = _filter_min_section_len([name, _doc("z" * 50)])
+
+    assert name in result
+
+
+def test_boundary_49_low_info_dropped_50_kept():
+    """경계: 저정보 49자는 드롭, 50자는 유지된다."""
+    result = _filter_min_section_len([_doc("-" * 49), _doc("y" * 50)])
 
     assert [d.page_content for d in result] == ["y" * 50]
 
@@ -52,11 +87,10 @@ def test_empty_list_is_safe():
     assert _filter_min_section_len([]) == []
 
 
-def test_all_short_keeps_exactly_one():
-    """전체가 50자 미만이면 가드가 정확히 1개만 유지한다."""
-    docs = [_doc("s" * 10), _doc("t" * 20), _doc("u" * 30)]
+def test_all_low_info_keeps_highest_score_one():
+    """전부 저정보 파편이면 최고 rerank_score 1건만 유지한다."""
+    docs = [_doc("## 1", score=0.2), _doc("---", score=0.9), _doc("2.", score=0.5)]
 
     result = _filter_min_section_len(docs)
 
-    assert len(result) == 1
-    assert result[0] is docs[0]
+    assert result == [docs[1]]

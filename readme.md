@@ -44,7 +44,7 @@
 
 ### 🆕 Recent Improvements (2026-06 → 10)
 - **Reasoning extraction:** `models.thinking` (default `true`) enables Ollama native reasoning streams, surfaced in the UI as a native "reasoning expander" with a condensed pipeline summary per answer.
-- **Faster first query:** embedding model, FlashRank ONNX, and the default LLM are preloaded at build time (silently skipped on failure); `num_ctx` raised to 8192.
+- **Faster first query:** embedding model, FlashRank ONNX, and the default LLM are preloaded at build time (silently skipped on failure); `num_ctx` raised to 10240.
 - **GPU batch embedding:** the Ollama embedder now picks batch size from available VRAM (`embedding_batch_size: auto`), cutting embedding HTTP round-trips.
 - **Non-blocking cache I/O:** DiskCache operations run on a worker thread (`asyncio.to_thread`) with an incremental size counter and an optional `persist_to_disk=False` fast path.
 - **Streamlit 1.60:** upgrade fixes a pdf-viewer scroll regression; hash-based PDF serving (`/api/v1/pdf/{hash}`) is path-injection-safe with multi-page highlight coordinates.
@@ -147,7 +147,7 @@ Each run writes `reports/eval_quality_<tag>_<ts>.json` and `.md` with per-questi
 | Key | Default | Purpose |
 |-----|---------|---------|
 | `models.ollama_num_predict` | 2048 | Max generated tokens per answer |
-| `models.num_ctx` | 8192 | Model context window (tokens) |
+| `models.num_ctx` | 10240 | Model context window (tokens) |
 | `models.thinking` | true | Enable Ollama native reasoning extraction |
 | `models.embedding_batch_size` | auto | Embedding batch size (auto = GPU VRAM-based) |
 | `models.allow_concurrent_inference` | false | T2 load-test gate: effective inference bound stays 1 until load gate passes |

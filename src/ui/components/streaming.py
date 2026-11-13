@@ -357,7 +357,10 @@ def consume_stream_into_message(
                 # content는 raw_json/final_answer 처리 때문에
                 # chunk.content로 직접 누적한다 (message 이벤트는 SSE 경로
                 # 전용; 여기선 누적 목적으로만 사용).
-                if getattr(chunk, "raw_json", False):
+                if getattr(chunk, "is_replace", False):
+                    # 재생성 확정 본문은 누적분을 대체한다 (중복 방지).
+                    accumulated = chunk.content
+                elif getattr(chunk, "raw_json", False):
                     delta = raw_json_extractor.feed(chunk.content)
                     accumulated += delta
                 else:

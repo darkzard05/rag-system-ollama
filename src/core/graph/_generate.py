@@ -379,9 +379,18 @@ def _render_doc_block(d: Document, *, content: str | None = None) -> str:
     )
 
 
-def _ctx_prompt(context: str, query: str) -> str:
-    """토큰 추정 대상 프롬프트 전체 문자열 (조립 형식의 단일 진원)."""
-    return f"{TOKEN_ESTIMATION_PROXY}\n\n[Context]\n{context}\n\n[Question]\n{query}"
+def _ctx_prompt(context: str, query: str, system_prompt: str | None = None) -> str:
+    """토큰 추정 대상 프롬프트 전체 문자열 (조립 형식의 단일 진원).
+
+    ``system_prompt`` 가 주어지면 실제 system 템플릿(예: structured_output)으로
+    추정한다. 생략 시 레거시 ``TOKEN_ESTIMATION_PROXY`` 로 폴백한다.
+
+    실제 템플릿과 proxy의 크기가 크게 다르면(현 config: proxy 1,046자 vs
+    structured_output 4,088자) 예산을 과소 추정해 프롬프트가 num_ctx를
+    넘치므로, 운영 경로는 반드시 실제 템플릿을 전달해야 한다.
+    """
+    prompt_prefix = TOKEN_ESTIMATION_PROXY if system_prompt is None else system_prompt
+    return f"{prompt_prefix}\n\n[Context]\n{context}\n\n[Question]\n{query}"
 
 
 def format_context(docs: list[Document]) -> str:
@@ -458,7 +467,9 @@ def resolve_cached_context(
     return cached
 
 
-def _estimate_ctx_tokens(docs: list, query: str) -> int:
+def _estimate_ctx_tokens(
+    docs: list, query: str, system_prompt: str | None = None
+) -> int:
     """Estimate prompt tokens for the analysis-context template (standalone).
 
     Single assembly + single count, byte-compatible with the historical
@@ -467,13 +478,60 @@ def _estimate_ctx_tokens(docs: list, query: str) -> int:
     re-hashes documents (O(R×D) -> O(D) renders).
     """
     if not docs:
-        return count_tokens_rough(_ctx_prompt("", query))
+        return count_tokens_rough(_ctx_prompt("", query, system_prompt))
     return count_tokens_rough(
-        _ctx_prompt("".join(_render_doc_block(d) for d in docs), query)
+        _ctx_prompt("".join(_render_doc_block(d) for d in docs), query, system_prompt)
     )
 
 
-def _apply_ctx_guard(docs: list, query: str) -> tuple[list, str, int]:
+def _resolve_ctx_budgets(system_tokens: int = 0) -> tuple[int, int]:
+    """num_ctx/num_predict에서 입력 토큰 예산과 하드 한도를 계산한다.
+
+    ``max_context_tokens``는 **문서 컨텍스트 몫**의 상한이다. 실제 프롬프트에는
+    system 템플릿(구조화 JSON 지시 + few-shot)도 포함되므로, 예산은
+    ``system_tokens + max_context_tokens``로 계산하고 전체 입력 예산
+    (``usable * 0.85``)으로 다시 한 번 상한을 건다. 이렇게 해야 system
+    템플릿이 커져도 문서가 과도하게 3개로 트림되는 회귀를 막을 수 있다.
+
+    ``OLLAMA_NUM_PREDICT >= OLLAMA_NUM_CTX`` (예: .env.example 의 4096/4096)
+    이면 기존 계산식은 예산이 0/음수가 되어 모든 문서를 제거하고도 프롬프트가
+    넘친다. 출력 예약을 num_ctx 절반으로 clamp해 입력 예산을 항상 양수로
+    보장한다. 실제 출력 상한 정합은 별도로 .env/config 검증에서 다룬다.
+    """
+    num_ctx = int(OLLAMA_NUM_CTX)
+    if num_ctx <= 0:
+        num_ctx = 10240
+    num_predict = int(OLLAMA_NUM_PREDICT)
+    effective_predict = min(num_predict, max(int(num_ctx * 0.5), 1))
+    if num_predict >= num_ctx:
+        logger.warning(
+            "[RAG] [CTX] num_predict(%d) >= num_ctx(%d) — 입력 예산 확보를 위해 "
+            "출력 예약을 %d 토큰으로 clamp합니다",
+            num_predict,
+            num_ctx,
+            effective_predict,
+        )
+    usable = max(num_ctx - effective_predict, 1)
+    max_allowed_ctx_tokens = int(GENERATE_PROMPT_CONFIG.get("max_context_tokens", 3500))
+    total_input_cap = int(usable * 0.85)
+    token_budget = min(total_input_cap, max(system_tokens, 0) + max_allowed_ctx_tokens)
+    hard_token_budget = int(usable * 0.95)
+    token_budget = max(1, min(token_budget, hard_token_budget))
+    if max(system_tokens, 0) + max_allowed_ctx_tokens > hard_token_budget:
+        logger.warning(
+            "[RAG] [CTX] system(%d) + max_context_tokens(%d) > 하드 한도(%d) — "
+            "문서 몫이 %d 토큰으로 축소됩니다",
+            system_tokens,
+            max_allowed_ctx_tokens,
+            hard_token_budget,
+            max(1, hard_token_budget - max(system_tokens, 0)),
+        )
+    return token_budget, hard_token_budget
+
+
+def _apply_ctx_guard(
+    docs: list, query: str, system_prompt: str | None = None
+) -> tuple[list, str, int]:
     """Enforce content-dedup + the num_ctx token budget on the retrieval context.
 
     Returns ``(trimmed_docs, context_str, removed_count)``. Identical
@@ -509,19 +567,17 @@ def _apply_ctx_guard(docs: list, query: str) -> tuple[list, str, int]:
         return docs, "일상적인 대화입니다.", dedup_removed
 
     # 실질적인 답변 생성에 최적인 토큰 한도로 타이트하게 압축 (기본 3,200 토큰 상한)
-    # 8192 토큰 중 prefill 연산 부하를 줄이기 위해 최대 컨텍스트 길이를 동적 제한
-    max_allowed_ctx_tokens = int(GENERATE_PROMPT_CONFIG.get("max_context_tokens", 3200))
-    token_budget = min(
-        int((OLLAMA_NUM_CTX - OLLAMA_NUM_PREDICT) * 0.85), max_allowed_ctx_tokens
-    )
+    # 10240 토큰 중 prefill 연산 부하를 줄이기 위해 최대 컨텍스트 길이를 동적 제한.
+    # 실제 system 템플릿까지 포함해 추정해야 프롬프트 오버플로를 막을 수 있다.
+    system_tokens = count_tokens_rough(system_prompt) if system_prompt else 0
+    token_budget, hard_token_budget = _resolve_ctx_budgets(system_tokens)
     # min_docs_keep은 품질 선호값이다. 이 값을 지켜도 Ollama 하드 입력 한도를
     # 넘으면 프롬프트 오버플로를 막기 위해 추가 제거를 허용한다.
     min_docs_keep = max(2, int(GENERATE_PROMPT_CONFIG.get("min_docs_keep", 3)))
-    hard_token_budget = int((OLLAMA_NUM_CTX - OLLAMA_NUM_PREDICT) * 0.95)
     # 문서 조각을 1회 렌더해 초기 추정과 트림 루프에서 공유한다.
     blocks = {id(d): _render_doc_block(d) for d in docs}
     context = "".join(blocks[id(d)] for d in docs)
-    est = count_tokens_rough(_ctx_prompt(context, query))
+    est = count_tokens_rough(_ctx_prompt(context, query, system_prompt))
 
     removed = dedup_removed
     if est > token_budget:
@@ -544,7 +600,7 @@ def _apply_ctx_guard(docs: list, query: str) -> tuple[list, str, int]:
                     last_doc, content=trimmed_content
                 )
                 context = "".join(blocks[id(d)] for d in docs)
-                est = count_tokens_rough(_ctx_prompt(context, query))
+                est = count_tokens_rough(_ctx_prompt(context, query, system_prompt))
                 if est <= token_budget:
                     logger.info(
                         f"[RAG] [CTX] 미세 초과({over_tokens} tok) 하위 문서 꼬리 압축으로 전체 문서 유지 성공"
@@ -568,7 +624,9 @@ def _apply_ctx_guard(docs: list, query: str) -> tuple[list, str, int]:
                 for k, v in blocks.items()
             }
             stripped_context = "".join(stripped_blocks[id(d)] for d in docs)
-            stripped_est = count_tokens_rough(_ctx_prompt(stripped_context, query))
+            stripped_est = count_tokens_rough(
+                _ctx_prompt(stripped_context, query, system_prompt)
+            )
             if stripped_est <= token_budget:
                 logger.info(
                     "[RAG] [CTX] strip_headers 폴백 적용 "
@@ -593,7 +651,11 @@ def _apply_ctx_guard(docs: list, query: str) -> tuple[list, str, int]:
         def _est_after_removing(k: int) -> int:
             survivors = ranked[: len(ranked) - k] if k else ranked
             return count_tokens_rough(
-                _ctx_prompt("".join(blocks[id(d)] for d in survivors), query)
+                _ctx_prompt(
+                    "".join(blocks[id(d)] for d in survivors),
+                    query,
+                    system_prompt,
+                )
             )
 
         def _min_removals_for_budget(
@@ -1130,6 +1192,19 @@ async def _generate_pass(
     }
 
 
+# 최소 길이 재생성 판정용 패턴. 거절 답변과 인사/잡담은 짧아도 정상이므로
+# 확장 재생성 대상에서 제외한다.
+_ANSWER_REFUSAL_RE = re.compile(
+    r"(?:확인할\s*수\s*없|관련\s*정보가\s*없|찾을\s*수\s*없|문서에\s*없|"
+    r"직접적인\s*(?:설명|내용)은\s*없|cannot\s+find|not\s+mentioned|no\s+information)",
+    re.IGNORECASE,
+)
+_SMALL_TALK_RE = re.compile(
+    r"^\s*(?:안녕|반가|고마|감사|누구(?:니|세요)|너는|넌|hello|hi|hey|thanks|thank\s+you)",
+    re.IGNORECASE,
+)
+
+
 async def generate(
     state: GraphState, config: RunnableConfig, *, writer: StreamWriter
 ) -> dict[str, Any]:
@@ -1259,23 +1334,28 @@ async def generate(
     # [CTX 가드] num_ctx 대비 prompt 추정 토큰이 예산을 초과하면 rerank_score가 낮은
     # 문서부터 제거하여 컨텍스트 초과(overflow)를 방지합니다. (최소 2문서 유지)
     # R4-02: num_predict(출력 예산)를 예약한 후 85%만 입력에 허용한다.
-    # 입력+출력 합계가 num_ctx를 넘지 않도록 상한 = (num_ctx - num_predict) * 0.85.
+    # 입력+출력 합계가 num_ctx를 넘지 않도록 상한을 계산하되, num_predict가
+    # num_ctx 이상이면 출력 예약을 clamp해 입력 예산이 0이 되지 않게 한다.
     # O(n^2) 재포맷 방지를 위해 추출한 _apply_ctx_guard에서 문서 조각을 1회 렌더
     # 후 제거분만 재조립·재카운트하고, format_context는 사후 1회만 호출한다.
     # (R1a-03 원칙에 따라 트림 결과는 반환 dict로 전달)
     query = get_state_attr(state, "input") or ""
-    docs, context, removed = _apply_ctx_guard(docs, query)
-    if removed:
-        state_docs = docs
 
-    # Phase 1.3: 구조화된 답변 출력을 위한 프롬프트 템플릿 사용
+    # Phase 1.3: 구조화된 답변 출력을 위한 프롬프트 템플릿 사용.
+    # CTX 가드는 실제 system 템플릿(structured_output)을 포함해 토큰을
+    # 추정해야 하므로, 가드 호출 전에 템플릿을 먼저 확정한다.
     structured_prompt = PROMPT_TEMPLATES_CONFIG.get(
         "structured_output", ANALYSIS_PROTOCOL
     )
     prompt_version = PROMPT_TEMPLATES_CONFIG.get("version", "1.0")
 
+    docs, context, removed = _apply_ctx_guard(
+        docs, query, system_prompt=structured_prompt
+    )
+    if removed:
+        state_docs = docs
+
     # 컨텍스트와 질문을 템플릿에 주입
-    query = get_state_attr(state, "input")
     # JSON 스키마의 중호({})가 format() 플레이스홀더로 해석되지 않게 보호
     # {context}와 {query}만 남기고 나머지는 이스케이프
     safe_prompt = structured_prompt.replace("{context}", "{{context}}").replace(
@@ -1310,6 +1390,7 @@ async def generate(
     regen_cfg = GENERATION_VALIDATION_CONFIG
     budget_chars = int(regen_cfg.get("over_budget_chars", 600))
     regen_floor = int(regen_cfg.get("regen_floor_chars", 450))
+    min_answer_chars = int(regen_cfg.get("min_answer_chars", 0))
     _generate_op = _enter_stage(OperationType.LLM_INFERENCE)
     _generate_op.__enter__()
 
@@ -1362,6 +1443,22 @@ async def generate(
                 f"이전 답변은 {len(pass_text)}자로 예산({budget_chars}자)을 초과했습니다. "
                 f"핵심 수치와 인용을 유지하며 {budget_chars}자 이내로 압축하십시오. "
                 f"{regen_floor}자 미만으로는 줄이지 마십시오."
+            )
+        elif (
+            bool(regen_cfg.get("regen_on_short", False))
+            and min_answer_chars > 0
+            and 100 <= len(pass_text) < min_answer_chars
+            and docs
+            and not _ANSWER_REFUSAL_RE.search(pass_text)
+            and not _SMALL_TALK_RE.search(query)
+        ):
+            regen_reason = "under_budget"
+            corrective = (
+                f"이전 답변은 {len(pass_text)}자로 목표 최소({min_answer_chars}자)에 "
+                "미달했습니다. 제공된 [Context]의 근거를 더 구체적으로 설명하십시오. "
+                "각 근거의 의미, 수치, 비교, 한계를 2~4개 문단으로 나누어 "
+                f"{min_answer_chars}~{budget_chars}자로 작성하고 citations[]를 "
+                "유지하십시오. 새로운 사실을 지어내지 마십시오."
             )
         if not corrective:
             break
@@ -1444,6 +1541,22 @@ async def generate(
     # 않아 retrieve가 전달한 기존 상태를 보존한다.
     if state_docs is not None:
         result["relevant_docs"] = state_docs
+
+    # 재생성 2차 패스는 pass_writer=None이라 토큰이 스트리밍되지 않는다. 1차
+    # 패스 본문이 이미 UI에 그려졌으므로, 확정 본문을 replace 이벤트로 보내
+    # 소비자가 라이브 텍스트를 최종 답변으로 교체하게 한다. (aquery는 writer가
+    # 없어 상태의 response를 그대로 사용한다.)
+    if len(passes) > 1 and writer is not None and result["response"]:
+        await _dispatch_event(
+            "answer_replace",
+            {
+                "content": result["response"],
+                "citations": result["citations"],
+                "regenerated": result["regenerated"],
+            },
+            writer=writer,
+            config=config,
+        )
 
     # 쿼리 응답 캐시 저장 (선택적 opt-in). 캐시 히트 경로가 아니라 이번에 새로
     # 생성한 경우에만 저장한다. 쓰기는 크리티컬 패스 밖으로 예약한다.

@@ -830,6 +830,24 @@ def _should_skip_final_rerun(*, cancelled: bool, error_text: str | None) -> bool
     return not cancelled and not error_text
 
 
+def _resolve_final_text(
+    persisted_text: str, streamed_text: str, error_text: str | None
+) -> tuple[str, bool]:
+    """Select the body to persist and whether it replaced the streamed text.
+
+    ``st.write_stream`` returns only what the live generator yielded. When a
+    regeneration pass runs, the 1st-pass body was streamed but the 2nd-pass
+    body (authoritative) arrives via aux state, so it must win. On error turns
+    the friendly error string stays authoritative instead.
+    """
+    if error_text:
+        return (streamed_text or persisted_text), False
+    replaced = bool(
+        persisted_text and streamed_text and persisted_text != streamed_text
+    )
+    return (persisted_text or streamed_text), replaced
+
+
 def _render_streaming_with_write_stream(
     msg: dict[str, Any], current_sid: str, query: str
 ) -> None:
@@ -972,7 +990,11 @@ def _render_streaming_with_write_stream(
     else:
         final_error = stream_error
 
-    final_text = str(response) if response else (aux_state.get("content") or "")
+    final_text, content_replaced = _resolve_final_text(
+        aux_state.get("content") or "",
+        str(response) if response else "",
+        final_error,
+    )
     # 영속화 시점에 display HTML을 1회만 선계산하여 타임라인 Rerun 시 O(1) 마운트 지원
     cached_processed = None
     if final_text and not final_error:
@@ -1014,7 +1036,10 @@ def _render_streaming_with_write_stream(
     # + reference list in-run, so skip st.rerun() when the only pending change is
     # msg_type streaming->general for this msg_id. The finalized flag lets the
     # next run know no rerun wall is pending.
-    if _should_skip_final_rerun(cancelled=cancelled, error_text=final_error):
+    if (
+        _should_skip_final_rerun(cancelled=cancelled, error_text=final_error)
+        and not content_replaced
+    ):
         SessionManager.set("stream_finalized_no_rerun", msg_id, session_id=current_sid)
         logger.info(
             "[PERF] rerun skipped msg_id=%s (in-run completed)",

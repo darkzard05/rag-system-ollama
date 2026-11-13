@@ -9,6 +9,7 @@
 import asyncio
 import copy
 import logging
+import re
 import time
 from collections.abc import Awaitable
 from typing import Any, cast
@@ -212,37 +213,71 @@ async def preprocess(
 # ============================================================================
 
 # 최종 컨텍스트에서 유지할 섹션의 최소 길이 임계값(문자 수).
-# 이 값보다 짧은 섹션은 단편 청크로 판단되어 컨텍스트에서 제외된다.
-# 50자 미만이면 대부분 "단락의 부제목만 추출된" 의미 없는 조각이므로
-# generate 컨텍스트 오염을 막기 위해 드롭한다 (실측: `[GENERATE] 문서 0 길이: 43`).
+# 이 값보다 짧은 섹션은 "저정보 파편"일 때만 제외한다. 길이만으로 무조건
+# 제거하면 "671B", "1.76T", 표 셀처럼 질문의 정답인 단답까지 사라져
+# "문서에 없습니다" 오답을 유발하므로, 내용 인지 판정을 함께 사용한다.
 _MIN_CONTEXT_SECTION_LEN = 50
+
+# 저정보 파편 판정용 패턴.
+# - 마크다운 헤더 라인("# 제목")만 있는 조각
+# - "3.", "3.1", "-" 처럼 번호/불릿만 있는 조각
+# - 공백/구두점/기호만 있는 조각
+_RE_SHORT_HEADER = re.compile(r"^\s*#{1,6}\s+")
+_RE_ONLY_NUMBERING = re.compile(r"^\s*(?:\d+(?:\.\d+)*\.?|[-*+])\s*$")
+_RE_LOW_INFO = re.compile(r"^[\W_]+$", re.UNICODE)
+_RE_MEANINGFUL_WORD = re.compile(r"[A-Za-z]{2,}|[\uac00-\ud7a3]{2,}|[\u4e00-\u9fff]")
+
+
+def _is_informative_short(content: str) -> bool:
+    """50자 미만 청크가 보존할 가치가 있는지 내용 기반으로 판정한다.
+
+    숫자를 포함하면("671B", "1.76T", 표 수치) 정답일 가능성이 높으므로
+    보존한다. 숫자가 없어도 2자 이상의 영문/한글/한자 단어가 있으면
+    ("CM3", "MoE" 등) 보존한다. 헤더/번호/기호만 있는 파편만 드롭한다.
+    """
+    text = (content or "").strip()
+    if not text:
+        return False
+    if _RE_SHORT_HEADER.match(text):
+        return False
+    if _RE_ONLY_NUMBERING.match(text):
+        return False
+    if _RE_LOW_INFO.match(text):
+        return False
+    if re.search(r"[0-9]", text):
+        return True
+    return bool(_RE_MEANINGFUL_WORD.search(text))
 
 
 def _filter_min_section_len(docs: list[Document]) -> list[Document]:
-    """50자 미만 초단문 섹션을 최종 컨텍스트에서 제거합니다.
+    """최종 컨텍스트에서 저정보 초단문 섹션만 제거합니다.
 
-    임계값: ``_MIN_CONTEXT_SECTION_LEN`` (50자). 해당 길이 이상인 섹션만
-    ``kept`` 로 보관된다.
+    정책:
+    - 길이 >= ``_MIN_CONTEXT_SECTION_LEN``(50자): 항상 유지.
+    - 길이 < 50자: ``_is_informative_short`` 가 참이면 유지
+      (숫자/단답/표 셀 보존), 거짓(헤더·번호·기호 파편)이면 드롭.
 
-    단답형 fallback 가드 (line 276 ``return kept if kept else docs[:1]``):
-    모든 입력 문서가 50자 미만이라 ``kept`` 가 비어 있는 극단 케이스에서는
-    컨텍스트가 완전히 비는 것을 막기 위해 원본에서 정확히 1개 문서만 유지한다.
-    이 가드는 "무조건 1개 유지"가 아니라 "kept가 비었을 때만" 동작하므로,
-    하나라도 50자 이상 문서가 있으면 그 문서들만 반환된다.
+    모든 문서가 저정보 파편이라 ``kept`` 가 비는 극단 케이스에서는
+    컨텍스트가 완전히 비지 않도록 rerank_score가 가장 높은 1건을 유지한다.
     """
     if not docs:
         return []
-    kept = [d for d in docs if len(d.page_content) >= _MIN_CONTEXT_SECTION_LEN]
+    kept = [
+        d
+        for d in docs
+        if len(d.page_content) >= _MIN_CONTEXT_SECTION_LEN
+        or _is_informative_short(d.page_content)
+    ]
     if kept:
         return kept
-    # Tier1 P0-5: 전부 50자 미만이면 첫 1건만 유지하던 폴백. 형제 단답
-    # ("671B", "CM3" 등) 손실을 가시화한다 — 동작은 유지, 경고로 기록.
+    # 모든 문서가 저정보 파편인 경우: 최고 점수 1건으로 컨텍스트 공백 방지.
+    best = max(docs, key=lambda d: float(d.metadata.get("rerank_score", 0.0)))
     logger.warning(
-        "[RAG] [RETRIEVE] 전 문서 50자 미만 — 첫 1건만 유지 (%d건 중, 대표 %d자)",
+        "[RAG] [RETRIEVE] 전 문서가 저정보 파편 — 최고 점수 1건만 유지 (%d건 중, 대표 %d자)",
         len(docs),
-        len(docs[0].page_content) if docs else 0,
+        len(best.page_content) if best else 0,
     )
-    return docs[:1]
+    return [best]
 
 
 def _embed_and_search_faiss_sync(

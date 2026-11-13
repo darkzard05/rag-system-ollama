@@ -354,6 +354,9 @@ class RAGSystem:
             qa_generate: dict[str, Any] | None = None
             qa_preprocess: dict[str, Any] = {}
             qa_docs: list[Any] = []
+            # 재생성 확정 본문은 그래프 상태 채널에 실리지 않으므로(미선언 키
+            # 드롭) generate가 보내는 answer_replace 이벤트에서 캡처한다.
+            replace_data: dict[str, Any] | None = None
             SessionManager.add_status_log(
                 "답변 생성 시작...",
                 session_id=self.session_id,
@@ -381,8 +384,15 @@ class RAGSystem:
                     metadata = event.get("metadata", {})
                     langgraph_node = metadata.get("langgraph_node")
                     if kind == "on_custom_event":
-                        custom_events += 1
-                        yield ("custom", event["data"])
+                        data = event["data"]
+                        if event.get("name") == "answer_replace" and isinstance(
+                            data, dict
+                        ):
+                            replace_data = data
+                            yield ("replace", data)
+                        else:
+                            custom_events += 1
+                            yield ("custom", data)
                     elif kind == "on_chat_model_stream":
                         if langgraph_node == "generate":
                             dropped_generate_msgs += 1
@@ -428,14 +438,19 @@ class RAGSystem:
                         query=query,
                         answer=qa_generate.get("response", "") or "",
                         model=model_name,
-                        citations=qa_generate.get("citations", []),
+                        citations=(replace_data or {}).get("citations")
+                        or qa_generate.get("citations", []),
                         confidence=float(qa_generate.get("confidence", 0.0) or 0.0),
                         prompt_version=str(qa_generate.get("prompt_version", "") or ""),
                         is_cached=bool(
                             qa_preprocess.get("is_cached", False)
                             or qa_generate.get("is_cached", False)
                         ),
-                        regenerated=str(qa_generate.get("regenerated", "") or ""),
+                        regenerated=str(
+                            (replace_data or {}).get("regenerated")
+                            or qa_generate.get("regenerated", "")
+                            or ""
+                        ),
                         parse_failed=bool(qa_generate.get("parse_failed", False)),
                         echo_detected=bool(qa_generate.get("echo_detected", False)),
                         over_budget=bool(qa_generate.get("over_budget", False)),

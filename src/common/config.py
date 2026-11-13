@@ -133,7 +133,7 @@ OLLAMA_TEMPERATURE: float = _get_env(
     "OLLAMA_TEMPERATURE", _models_config.get("temperature", 0.1), float
 )
 OLLAMA_NUM_CTX: int = _get_env(
-    "OLLAMA_NUM_CTX", _models_config.get("num_ctx", 8192), int
+    "OLLAMA_NUM_CTX", _models_config.get("num_ctx", 10240), int
 )
 OLLAMA_TOP_P: float = _get_env("OLLAMA_TOP_P", _models_config.get("top_p", 0.8), float)
 OLLAMA_THINKING: bool = _get_env(

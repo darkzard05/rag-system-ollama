@@ -774,7 +774,16 @@ def _content_generator(
                         _report_status(_STATUS_PLACEHOLDER)
                         if not _real_yielded:
                             _placeholder_live = True
-                if getattr(chunk, "raw_json", False):
+                if getattr(chunk, "is_replace", False):
+                    # 재생성 확정 본문: 1차 패스 누적분을 교체한다. 이미
+                    # write_stream으로 그려진 1차 본문은 지울 수 없으므로
+                    # 다시 yield하지 않고, aux content로 영속화한 뒤 chat.py가
+                    # 필요 시 rerun으로 화면을 확정한다.
+                    accumulated_parts = [chunk.content]
+                    _real_yielded = True
+                    _placeholder_live = False
+                    _yielded_this_chunk = True
+                elif getattr(chunk, "raw_json", False):
                     delta = raw_json_extractor.feed(chunk.content)
                     if delta:
                         accumulated_parts.append(delta)

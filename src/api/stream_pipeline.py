@@ -83,6 +83,8 @@ class StreamChunk:
     raw_json: bool = False  # 구조화 모드 원시 JSON 스트리밍 플래그
     citations: list[dict[str, Any]] | None = None  # P3: 구조화 인용 배열
     citations_add: dict[str, Any] | None = None  # Phase 1: 증분 인용 페이로드
+    # 재생성 패스에서 확정된 최종 본문. True이면 누적분을 대체해야 한다.
+    is_replace: bool = False
 
 
 @dataclass
@@ -684,6 +686,26 @@ class StreamingResponseHandler:
                                     )
                                     self.chunk_index += 1
 
+                    elif mode == "replace":
+                        # 재생성 패스의 확정 본문: 직전 패스의 미플러시 잔여분은
+                        # 폐기하고 최종 답변으로 교체한다 (중복 누적 방지).
+                        self.buffer.flush_all()
+                        replace_content = str(data.get("content") or "")
+                        replace_citations = data.get("citations")
+                        if replace_content:
+                            yield StreamChunk(
+                                content=replace_content,
+                                timestamp=current_time,
+                                token_count=_estimate_tokens(replace_content),
+                                chunk_index=self.chunk_index,
+                                is_replace=True,
+                                is_final=True,
+                                citations=replace_citations
+                                if isinstance(replace_citations, list)
+                                else None,
+                            )
+                            self.chunk_index += 1
+
         except (RuntimeError, ValueError, TypeError) as e:
             logger.error(f"[Streaming] 스트림 처리 중 오류: {e}", exc_info=True)
             raise
@@ -955,14 +977,18 @@ def chunk_to_stream_events(chunk: StreamChunk) -> list[StreamEvent]:
     citations = getattr(chunk, "citations", None)
     citations_add = getattr(chunk, "citations_add", None)
     performance = getattr(chunk, "performance", None)
+    is_replace = bool(getattr(chunk, "is_replace", False))
 
     # 1. status — 노드 상태 메시지
     if status:
         events.append(StreamEvent("status", {"message": status, "node": node_name}))
 
-    # 2. message — LLM 응답 콘텐츠
+    # 2. message — LLM 응답 콘텐츠 (재생성 확정분은 replace 플래그로 구분)
     if content:
-        events.append(StreamEvent("message", {"content": content}))
+        message_payload: dict[str, Any] = {"content": content}
+        if is_replace:
+            message_payload["replace"] = True
+        events.append(StreamEvent("message", message_payload))
 
     # 3. thought — 모델 사고 과정
     if thought:

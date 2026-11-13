@@ -431,7 +431,7 @@ def bind_warmup_llm(llm: Any, *, num_predict: int = 1) -> Any:
 
     ``ChatOllama._chat_params``는 ``options``가 주어지면 인스턴스 필드를 병합하지
     않고 그 dict만 사용한다. 따라서 워밍업에서 ``num_ctx``를 생략하면 Ollama가
-    기본 컨텍스트(4096)로 모델을 로드하고, 첫 실제 질의가 ``num_ctx=8192``를
+    기본 컨텍스트(4096)로 모델을 로드하고, 첫 실제 질의가 ``num_ctx=10240``를
     요구하는 순간 모델을 다시 로드해 ~10s 콜드 스타트를 지불한다.
 
     ``think``는 Ollama 샘플러 option이 아니라 최상위 요청 필드이므로 여기에

@@ -3,7 +3,7 @@ Todo 5 검증: 컨텍스트 토큰 가드 + 모델 프리로드 + config 파서.
 
 - (a) generate 노드: num_ctx 85% 초과 시 rerank_score 낮은 문서부터 제거, 최소 2문서 유지
 - (b) 모델 프리로드: get_llm 예외 삼킴 + 1회성 스케줄링
-- (c) config.yml: num_ctx=8192 / ollama_num_predict=2048 로드 검증
+- (c) config.yml: num_ctx=10240 / ollama_num_predict=2048 로드 검증
 """
 
 import asyncio
@@ -21,6 +21,7 @@ from core.graph.graph_builder import generate
 from core.model_loader import ModelManager
 from core.pipeline_builder import PipelineBuilder
 
+# 테스트 픽스처용 값 (실제 config.yml은 10240). 예산 경계 검증을 위해 고정한다.
 _NUM_CTX = 8192
 _NUM_PREDICT = 2048
 _BUDGET = int((_NUM_CTX - _NUM_PREDICT) * 0.85)
@@ -254,11 +255,11 @@ async def test_preload_scheduled_only_once_per_process(monkeypatch):
 
 
 def test_config_loads_updated_num_ctx_and_num_predict(monkeypatch):
-    """config.yml의 num_ctx=8192 / ollama_num_predict=2048이 로드되는지 검증합니다."""
+    """config.yml의 num_ctx=10240 / ollama_num_predict=2048이 로드되는지 검증합니다."""
     monkeypatch.delenv("OLLAMA_NUM_CTX", raising=False)
     monkeypatch.delenv("OLLAMA_NUM_PREDICT", raising=False)
     reloaded = importlib.reload(config_module)
-    assert reloaded.OLLAMA_NUM_CTX == 8192
+    assert reloaded.OLLAMA_NUM_CTX == 10240
     assert reloaded.OLLAMA_NUM_PREDICT == 2048
 
 
@@ -303,3 +304,121 @@ async def test_generate_tail_truncates_when_minor_over_budget():
     assert "..." in human_content
     # 압축된 문서도 원본 content-hash stable_id를 유지해 인용/좌표 매핑이 깨지지 않는다.
     assert f"[doc:{low_doc_stable_id}]" in human_content
+
+
+def test_ctx_prompt_includes_real_system_prompt():
+    """추정 프롬프트가 proxy가 아니라 전달된 실제 system 템플릿을 포함한다."""
+    import core.graph._generate as ggen
+
+    system = "SYSTEM_GUIDELINE " * 200
+    with_proxy = ggen._ctx_prompt("ctx", "q")
+    with_real = ggen._ctx_prompt("ctx", "q", system)
+
+    assert "SYSTEM_GUIDELINE" not in with_proxy
+    assert with_real.startswith(system)
+    assert len(with_real) > len(with_proxy)
+
+
+def test_resolve_ctx_budgets_clamps_when_predict_exceeds_ctx(monkeypatch):
+    """num_predict >= num_ctx 여도 입력 예산이 0/음수가 되지 않는다."""
+    import core.graph._generate as ggen
+
+    monkeypatch.setattr(ggen, "OLLAMA_NUM_CTX", 4096)
+    monkeypatch.setattr(ggen, "OLLAMA_NUM_PREDICT", 4096)
+
+    token_budget, hard_budget = ggen._resolve_ctx_budgets()
+
+    assert token_budget > 0
+    assert hard_budget > 0
+    assert token_budget <= hard_budget
+
+
+def test_apply_ctx_guard_counts_system_prompt_in_budget(monkeypatch):
+    """실제 system 템플릿이 클수록 더 많은 문서를 트림한다."""
+    import core.graph._generate as ggen
+
+    monkeypatch.setattr(ggen, "count_tokens_rough", lambda text: max(1, len(text) // 4))
+
+    docs = _make_docs() + [
+        Document(
+            page_content=f"extra_{i} " + ("x" * 2000),
+            metadata={"rerank_score": 0.05 - i * 0.01, "page": i + 10},
+        )
+        for i in range(7)
+    ]
+    query = "질문입니다"
+    big_system = "SYSTEM_TEMPLATE " * 4000
+
+    without_system, _, _ = ggen._apply_ctx_guard(docs, query)
+    with_system, _, _ = ggen._apply_ctx_guard(docs, query, system_prompt=big_system)
+
+    assert len(with_system) < len(without_system)
+    assert len(with_system) >= 2
+
+
+def test_apply_ctx_guard_keeps_docs_when_predict_equals_ctx(monkeypatch):
+    """예산이 0이 되는 설정에서도 문서를 전부 날리지 않는다."""
+    import core.graph._generate as ggen
+
+    monkeypatch.setattr(ggen, "OLLAMA_NUM_CTX", 4096)
+    monkeypatch.setattr(ggen, "OLLAMA_NUM_PREDICT", 4096)
+    monkeypatch.setattr(ggen, "count_tokens_rough", lambda text: max(1, len(text) // 4))
+
+    docs = _make_docs()
+    trimmed, context, _ = ggen._apply_ctx_guard(docs, "질문입니다")
+
+    assert len(trimmed) >= 1
+    assert context
+
+
+def test_resolve_ctx_budgets_adds_system_overhead(monkeypatch):
+    """max_context_tokens는 문서 몫이며 system 프롬프트 몫이 예산에 더해진다."""
+    import core.graph._generate as ggen
+
+    monkeypatch.setattr(ggen, "OLLAMA_NUM_CTX", 10240)
+    monkeypatch.setattr(ggen, "OLLAMA_NUM_PREDICT", 2048)
+    monkeypatch.setattr(
+        ggen,
+        "GENERATE_PROMPT_CONFIG",
+        {"max_context_tokens": 3500, "min_docs_keep": 4},
+    )
+
+    token_budget, hard_budget = ggen._resolve_ctx_budgets(system_tokens=3000)
+
+    assert token_budget == min(int((10240 - 2048) * 0.85), 3000 + 3500)
+    assert token_budget <= hard_budget
+
+
+def test_apply_ctx_guard_does_not_overtrim_with_real_system_prompt(monkeypatch):
+    """system 프롬프트가 커도 문서를 3개로 과도하게 줄이지 않는다.
+
+    회귀 방지: system 토큰을 max_context_tokens 예산에서 그대로 빼면 문서 몫이
+    수백 토큰으로 줄어 3개 트림이 발생했다. 예산식은 system + context로
+    분리되어야 한다.
+    """
+    import core.graph._generate as ggen
+
+    monkeypatch.setattr(ggen, "OLLAMA_NUM_CTX", 10240)
+    monkeypatch.setattr(ggen, "OLLAMA_NUM_PREDICT", 2048)
+    monkeypatch.setattr(
+        ggen,
+        "GENERATE_PROMPT_CONFIG",
+        {"max_context_tokens": 3500, "min_docs_keep": 4},
+    )
+
+    system_prompt = ggen.PROMPT_TEMPLATES_CONFIG["structured_output"]
+    docs = [
+        Document(
+            page_content=("가나다라마바사 " * 30)[:250] + str(i),
+            metadata={"rerank_score": float(10 - i), "page": i + 1},
+        )
+        for i in range(10)
+    ]
+
+    trimmed, context, removed = ggen._apply_ctx_guard(
+        docs, "질문입니다", system_prompt=system_prompt
+    )
+
+    assert len(trimmed) >= 7
+    assert removed <= 3
+    assert context

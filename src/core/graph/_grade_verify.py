@@ -573,6 +573,27 @@ def _validate_cited_doc_ids(answer: str, docs: list[Document]) -> list[str]:
     return invalid
 
 
+def _verification_retry(state: GraphState, issues: list[str]) -> dict[str, Any]:
+    """검증 실패 시 재생성/종료를 일관되게 결정한다.
+
+    ``regeneration_count`` 는 ``reset_or_add`` 리듀서(``new == 0`` 이면 0으로
+    리셋)를 사용하므로 재생성 시 반드시 **상수 델타 1**을 반환해야 한다.
+    키를 생략하거나 0을 반환하면 카운터가 리셋되어 generate↔verify 무한
+    루프(결국 GraphRecursionError)가 발생한다.
+    """
+    regen_count = get_state_attr(state, "regeneration_count", 0)
+    if regen_count >= 1:
+        logger.warning(
+            "[RAG] [VERIFY] 최대 재생성 횟수(1회) 초과, 검증 실패 상태로 종료"
+        )
+        return {"verification_route": "end", "verification_issues": issues}
+    return {
+        "verification_route": "regenerate",
+        "verification_issues": issues,
+        "regeneration_count": 1,
+    }
+
+
 def _should_verify(query: str, doc_ids: list[str]) -> bool:
     """결정적 해시 기반 검증 샘플링 결정 (D19).
 
@@ -623,10 +644,7 @@ async def verify_answer(
 
     if invalid_citations:
         logger.warning(f"[RAG] [VERIFY] 유효하지 않은 인용 감지: {invalid_citations}")
-        return {
-            "verification_route": "regenerate",
-            "verification_issues": [f"유효하지 않은 인용: {invalid_citations}"],
-        }
+        return _verification_retry(state, [f"유효하지 않은 인용: {invalid_citations}"])
     verify_sys_text = VERIFY_PROMPT_CONFIG.get(
         "system_message",
         "답변의 충실도를 엄격하게 평가하십시오. 컨텍스트에 없는 내용이 있으면 faithful: false로 판단하십시오.",
@@ -682,18 +700,8 @@ async def verify_answer(
                 else []
             )
             logger.warning(f"[RAG] [VERIFY] 검증 실패: {all_issues}")
-            # 재시도 횟수 체크 (최대 1회)
-            regen_count = get_state_attr(state, "regeneration_count", 0)
-            if regen_count >= 1:
-                logger.warning(
-                    "[RAG] [VERIFY] 최대 재생성 횟수(1회) 초과, 검증 실패 상태로 종료"
-                )
-                return {"verification_route": "end", "verification_issues": all_issues}
-            return {
-                "verification_route": "regenerate",
-                "verification_issues": all_issues,
-                "regeneration_count": regen_count + 1,
-            }
+            # 재시도 횟수 체크 (최대 1회) — 델타는 항상 상수 1.
+            return _verification_retry(state, all_issues)
 
         logger.info("[RAG] [VERIFY] 검증 통과")
         return {"verification_route": "end"}
@@ -702,11 +710,4 @@ async def verify_answer(
         logger.error(f"[RAG] [VERIFY] 검증 중 오류(재생성 시도): {e}", exc_info=True)
         # fail-closed: 검증 실패=신뢰 불가 → 통과("end")로 오인하지 않고 재생성.
         # 무한루프 방지: 재생성 1회(최대) 소진 시에만 end 폴백.
-        regen_count = get_state_attr(state, "regeneration_count", 0)
-        if regen_count >= 1:
-            logger.warning("[RAG] [VERIFY] 재생성 소진 후 검증 실패 → end 폴백")
-            return {"verification_route": "end"}
-        return {
-            "verification_route": "regenerate",
-            "verification_issues": [f"검증 실행 오류: {e}"],
-        }
+        return _verification_retry(state, [f"검증 실행 오류: {e}"])

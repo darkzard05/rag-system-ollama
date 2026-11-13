@@ -314,7 +314,16 @@ async def consume_stream(
         final_cites = 0
         try:
             async for kind, data in stream:
-                if kind != "custom" or not isinstance(data, dict):
+                if not isinstance(data, dict):
+                    continue
+                if kind == "replace":
+                    # 재생성 확정 본문은 1차 패스 스트림을 대체한다.
+                    replace_content = data.get("content")
+                    if replace_content:
+                        chars = len(replace_content)
+                        chunks += 1
+                    continue
+                if kind != "custom":
                     continue
                 content = data.get("content")
                 if isinstance(content, str) and content:
@@ -448,9 +457,11 @@ async def run(args: argparse.Namespace) -> int:
         )
 
         if args.check_cache:
+            # 세션은 pdf_file_path를 정리 시 삭제한다. 원본 자산을 넘기면
+            # delete_session이 저장소의 PDF를 지우므로 반드시 임시 사본을 쓴다.
             _, second_cache_used = await asyncio.wait_for(
                 rag.build_pipeline(
-                    str(PDF_PATH),
+                    temp_pdf_path,
                     PDF_PATH.name,
                     embedder,
                     on_event=events.append,
