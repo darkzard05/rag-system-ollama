@@ -27,6 +27,10 @@ _VALIDATION = {
     "over_budget_chars": 1400,
     "regen_floor_chars": 700,
     "min_answer_chars": 800,
+    "regen_short_ratio": 0.5,
+    "regen_skip_keyword": True,
+    "regen_num_predict": 1536,
+    "emit_regen_status": True,
     "regen_on_invalid": False,
     "regen_on_over_budget": False,
     "regen_on_short": True,
@@ -66,6 +70,7 @@ async def _run_generate(
     metadatas: list[dict] | None = None,
     *,
     raw_payloads: bool = False,
+    capture: dict | None = None,
 ) -> tuple[dict, list[list], AsyncMock]:
     sent_messages: list[list] = []
     calls = {"n": 0}
@@ -85,6 +90,8 @@ async def _run_generate(
     mock_llm.bind.return_value = mock_llm
     mock_llm.astream = mock_astream
     mock_llm._convert_chunk_to_thought_and_content = lambda chunk: (chunk.content, "")
+    if capture is not None:
+        capture["llm"] = mock_llm
 
     state = {"input": query, "relevant_docs": _make_docs(), "is_cached": False}
     config = {"configurable": {"llm": mock_llm}}
@@ -223,3 +230,66 @@ async def test_generate_keeps_first_pass_when_regen_is_refusal():
     assert len(sent_messages) == 2
     assert result["response"] == first
     assert result["regenerated"] == ""
+
+
+@pytest.mark.asyncio
+async def test_generate_skips_regen_when_answer_near_target():
+    """비율 게이트: 목표(800자)의 50%(400자) 이상이면 재생성하지 않는다."""
+    near_target = "충분히 긴 답변입니다. " * 40
+    result, sent_messages, dispatch = await _run_generate([near_target])
+
+    assert len(sent_messages) == 1
+    assert result["regenerated"] == ""
+    assert not any(
+        call.args[0] == "answer_replace" for call in dispatch.await_args_list
+    )
+
+
+@pytest.mark.asyncio
+async def test_generate_regenerates_when_answer_far_below_target():
+    """비율 게이트: 400자 미만이면 확장 재생성한다."""
+    far_below = "짧은 답변입니다. " * 25
+    result, sent_messages, _ = await _run_generate([far_below, _LONG_ANSWER])
+
+    assert len(sent_messages) == 2
+    assert result["regenerated"] == "under_budget"
+
+
+@pytest.mark.asyncio
+async def test_generate_skips_regen_for_term_lookup_query():
+    """keyword-heavy 용어 조회(cm3)는 짧은 답변이 정상이므로 재생성하지 않는다."""
+    short = "짧은 답변입니다. " * 25
+    result, sent_messages, dispatch = await _run_generate([short], query="cm3")
+
+    assert len(sent_messages) == 1
+    assert result["regenerated"] == ""
+    assert not any(
+        call.args[0] == "answer_replace" for call in dispatch.await_args_list
+    )
+
+
+@pytest.mark.asyncio
+async def test_generate_emits_regen_status_before_second_pass():
+    """재생성 전에 사용자에게 보강 중 상태를 알린다."""
+    _result, sent_messages, dispatch = await _run_generate(
+        [_SHORT_ANSWER, _LONG_ANSWER]
+    )
+
+    assert len(sent_messages) == 2
+    status_calls = [
+        call for call in dispatch.await_args_list if call.args[0] == "graph_status"
+    ]
+    assert any("보강" in str(call.args[1].get("status", "")) for call in status_calls)
+
+
+@pytest.mark.asyncio
+async def test_generate_caps_regen_output_tokens():
+    """2차 패스는 regen_num_predict 상한으로 바인딩된다."""
+    capture: dict = {}
+    await _run_generate([_SHORT_ANSWER, _LONG_ANSWER], capture=capture)
+
+    regen_binds = [
+        call for call in capture["llm"].bind.call_args_list if "options" in call.kwargs
+    ]
+    assert len(regen_binds) == 1
+    assert regen_binds[0].kwargs["options"]["num_predict"] == 1536

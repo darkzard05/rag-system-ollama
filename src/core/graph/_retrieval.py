@@ -21,6 +21,7 @@ from langgraph.types import StreamWriter
 
 from api.schemas import AggregatedSearchResult, GraphState
 from common.config import GRADING_CONFIG, QUERY_CACHE_ENABLED, QUERY_CACHE_MIN_CONF
+from common.query_signals import is_keyword_heavy_query, is_semantic_heavy_query
 from common.utils import doc_stable_id
 from core.graph._graph_core import (
     _add_stage_ms,
@@ -85,8 +86,6 @@ async def preprocess(
     query = get_state_attr(state, "input", "").strip()
     logger.info(f"[RAG] [PREPROCESS] 입력 질의: '{query}'")
 
-    import re
-
     from common.config import DYNAMIC_WEIGHTING_CONFIG, ENSEMBLE_WEIGHTS
 
     # 1. 의도 분류 및 동적 가중치 결정
@@ -100,11 +99,8 @@ async def preprocess(
         logger.info("[RAG] [PREPROCESS] 일상 대화(General) 의도 감지")
 
     if DYNAMIC_WEIGHTING_CONFIG.get("enabled", True):
-        keyword_patterns = DYNAMIC_WEIGHTING_CONFIG.get("keyword_patterns", [])
-        is_keyword_heavy = any(re.search(p, query) for p in keyword_patterns)
-
-        semantic_keywords = DYNAMIC_WEIGHTING_CONFIG.get("semantic_keywords", [])
-        is_semantic_heavy = any(k in query for k in semantic_keywords)
+        is_keyword_heavy = is_keyword_heavy_query(query)
+        is_semantic_heavy = is_semantic_heavy_query(query)
 
         # BLEND_DECISION (F1 Task 4, strict 3-way — minimal path): no [0.6, 0.4]
         # blend branch exists here on purpose. Dual-match (both signals) falls

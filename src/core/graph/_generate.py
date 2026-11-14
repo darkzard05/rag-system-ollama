@@ -27,12 +27,15 @@ from common.config import (
     GENERATION_VALIDATION_CONFIG,
     OLLAMA_NUM_CTX,
     OLLAMA_NUM_PREDICT,
+    OLLAMA_TEMPERATURE,
+    OLLAMA_TOP_P,
     PROMPT_TEMPLATES_CONFIG,
     QUERY_CACHE_ENABLED,
     QUERY_CACHE_MIN_CONF,
     QUERY_CACHE_TTL,
     TOKEN_ESTIMATION_PROXY,
 )
+from common.query_signals import is_term_lookup_query
 from common.utils import coerce_citation_mapping, count_tokens_rough
 from core.graph._graph_core import (
     _QUERY_CACHE_VALUE_VERSION,
@@ -851,6 +854,7 @@ async def _generate_pass(
     writer: StreamWriter | None,
     attempt: int,
     docs: list[Document] | None = None,
+    num_predict: int | None = None,
 ) -> dict[str, Any]:
     """단일 생성 패스: JSON 모드 스트리밍 + 구조화 파싱. 재시도 루프에서 호출된다.
 
@@ -872,7 +876,17 @@ async def _generate_pass(
         # JSON 모드 강제 바인딩(grade 노드 1053행과 동일) — qwen3:4b가 값 내부에
         # 이스케이프 없는 큰따옴표를 넣어 json.loads가 실패(Expecting ',' delimiter)하는
         # 깨진 JSON 출력을 막는다.
-        json_llm = llm.bind(response_format={"type": "json_object"})
+        bind_kwargs: dict[str, Any] = {"response_format": {"type": "json_object"}}
+        if num_predict is not None:
+            # ChatOllama._chat_params는 options가 주어지면 인스턴스 필드를 병합하지
+            # 않으므로, num_ctx/temperature/top_p를 함께 넘겨 모델 재로드를 막는다.
+            bind_kwargs["options"] = {
+                "num_ctx": OLLAMA_NUM_CTX,
+                "num_predict": int(num_predict),
+                "temperature": OLLAMA_TEMPERATURE,
+                "top_p": OLLAMA_TOP_P,
+            }
+        json_llm = llm.bind(**bind_kwargs)
         coordinator = get_resource_manager()
         active_model = (
             getattr(json_llm, "model", None)
@@ -1047,8 +1061,13 @@ async def _generate_pass(
     # (절단된 JSON 은 구조화 파싱이 실패하므로 재생성 채택 판정에 필요하다.)
     eval_count = int(last_metadata.get("eval_count") or 0)
     done_reason = str(last_metadata.get("done_reason") or "")
+    # 패스별 num_predict override가 있으면 그 값으로 절단을 판정한다. 전역
+    # OLLAMA_NUM_PREDICT와 비교하면 2차 패스 상한 절단을 놓친다.
+    effective_predict = (
+        int(num_predict) if num_predict is not None else int(OLLAMA_NUM_PREDICT)
+    )
     truncated = done_reason == "length" or (
-        eval_count > 0 and eval_count >= int(OLLAMA_NUM_PREDICT)
+        eval_count > 0 and eval_count >= effective_predict
     )
     if truncated:
         logger.warning(
@@ -1413,6 +1432,13 @@ async def generate(
     budget_chars = int(regen_cfg.get("over_budget_chars", 600))
     regen_floor = int(regen_cfg.get("regen_floor_chars", 450))
     min_answer_chars = int(regen_cfg.get("min_answer_chars", 0))
+    # 목표치에 근접한 답변(예: 700/800자)까지 재생성하면 20~50초를 낭비한다.
+    # ratio 게이트로 "명백히 짧은" 답변만 확장 재생성한다.
+    short_regen_threshold = int(
+        min_answer_chars * float(regen_cfg.get("regen_short_ratio", 1.0))
+    )
+    regen_num_predict_raw = regen_cfg.get("regen_num_predict")
+    regen_num_predict = int(regen_num_predict_raw) if regen_num_predict_raw else None
     _generate_op = _enter_stage(OperationType.LLM_INFERENCE)
     _generate_op.__enter__()
 
@@ -1431,6 +1457,7 @@ async def generate(
             writer=pass_writer,
             attempt=attempt,
             docs=docs,
+            num_predict=regen_num_predict if attempt == 2 else None,
         )
         passes.append(result_pass)
         # [TIMING 구간 정의 — 단일 정본] generate_total_ms는 전 패스 합산,
@@ -1469,10 +1496,14 @@ async def generate(
         elif (
             bool(regen_cfg.get("regen_on_short", False))
             and min_answer_chars > 0
-            and 100 <= len(pass_text) < min_answer_chars
+            and 100 <= len(pass_text) < short_regen_threshold
             and docs
             and not _ANSWER_REFUSAL_RE.search(pass_text)
             and not _SMALL_TALK_RE.search(query)
+            and not (
+                bool(regen_cfg.get("regen_skip_keyword", False))
+                and is_term_lookup_query(query)
+            )
         ):
             regen_reason = "under_budget"
             corrective = (
@@ -1488,6 +1519,13 @@ async def generate(
             f"[RAG] [GENERATE] 재생성 패스: 사유={regen_reason} "
             f"(chars={len(pass_text)} budget={budget_chars})"
         )
+        if writer is not None and bool(regen_cfg.get("emit_regen_status", True)):
+            await _dispatch_event(
+                "graph_status",
+                {"status": "답변을 보강하는 중..."},
+                writer=writer,
+                config=config,
+            )
         current_human_msg = HumanMessage(
             content=f"{current_human_msg.content}\n\n[{corrective}]"
         )

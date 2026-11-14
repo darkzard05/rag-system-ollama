@@ -266,6 +266,17 @@ rag:
       # 문서 근거가 있는 실질 답변이 이 값 미만이면 1회 확장 재생성한다.
       # 인사/잡담과 거절 답변(근거 없음)은 짧아도 정상이므로 제외된다.
       min_answer_chars: 800
+      # 목표치에 근접한 답변까지 재생성하면 20~50초를 낭비하므로, min_answer_chars의
+      # 이 비율 미만(=400자)으로 "명백히 짧은" 답변만 확장 재생성한다.
+      regen_short_ratio: 0.5
+      # keyword-heavy(용어 조회, 예: cm3)이면서 semantic 키워드가 없는 질의는
+      # 짧은 답변이 정상이므로 확장 재생성을 건너뛴다.
+      regen_skip_keyword: true
+      # 2차(재생성) 패스의 출력 토큰 상한. 전역 ollama_num_predict(2048)보다 낮춰
+      # 장문 폭주(50초+)를 막는다. 너무 낮으면 JSON이 절단되어 1차 답변이 유지된다.
+      regen_num_predict: 1536
+      # 2차 패스 시작 전 UI에 "답변을 보강하는 중..." 상태를 표시한다.
+      emit_regen_status: true
       regen_on_invalid: false
       regen_on_over_budget: false
       regen_on_short: true
