@@ -137,7 +137,31 @@ class CrossLoopAsyncLock:
         self._lock = threading.Lock()
 
     async def acquire(self) -> bool:
-        return await asyncio.to_thread(self._lock.acquire)
+        state = {"acquired": False, "aborted": False}
+        state_lock = threading.Lock()
+
+        def _blocking_acquire() -> bool:
+            with state_lock:
+                if state["aborted"]:
+                    return False
+            self._lock.acquire()
+            with state_lock:
+                if state["aborted"]:
+                    self._lock.release()
+                    return False
+                state["acquired"] = True
+                return True
+
+        acquire_task = asyncio.create_task(asyncio.to_thread(_blocking_acquire))
+        try:
+            return await asyncio.shield(acquire_task)
+        except asyncio.CancelledError:
+            with state_lock:
+                state["aborted"] = True
+                if state["acquired"]:
+                    self._lock.release()
+                    state["acquired"] = False
+            raise
 
     def release(self) -> None:
         self._lock.release()
