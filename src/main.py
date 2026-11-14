@@ -1284,23 +1284,11 @@ async def _bg_rebuild_task(
             session_id=session_id,
         )
 
-    warm_task: asyncio.Task[bool] | None = None
     try:
-        # [P0] HF 토크나이저 로드를 PDF 추출과 병렬로 예열한다. 청킹 스레드는
-        # 동일 lock을 기다리므로 중복 로드 없이 워밍업 결과를 재사용한다.
-        from core.chunking import warm_embedding_tokenizer_async
-
-        def _consume_warm_result(task: asyncio.Task[bool]) -> None:
-            try:
-                task.result()
-            except asyncio.CancelledError:
-                logger.debug("[MAIN] tokenizer warmup cancelled")
-            except Exception as e:
-                logger.debug("[MAIN] tokenizer warmup failed: %s", e)
-
-        warm_task = asyncio.create_task(warm_embedding_tokenizer_async())
-        warm_task.add_done_callback(_consume_warm_result)
-
+        # 토크나이저 워밍업은 부팅 시 _start_tokenizer_warmup()과
+        # PipelineBuilder(캐시 미스 경로)가 각각 담당한다. 여기서 중복 생성하면
+        # lock 직렬화로 워밍업 스레드가 이중 실행되어, 캐시 히트 부팅에서도
+        # 수십 초 대기 로그가 남는다.
         embedder = await ModelManager.get_embedder(embedder_name)
 
         # Check cancellation before starting build
@@ -1404,11 +1392,6 @@ async def _bg_rebuild_task(
             session_id=session_id,
         )
     finally:
-        if warm_task is not None and not warm_task.done():
-            warm_task.cancel()
-        if warm_task is not None:
-            with contextlib.suppress(asyncio.CancelledError, Exception):
-                await warm_task
         # Only the worker that still owns the current BuildState may clear the
         # shared build flag / throttle marker. A stale worker must not unfreeze
         # or re-render the newer build.

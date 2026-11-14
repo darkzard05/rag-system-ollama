@@ -59,10 +59,11 @@ models:
   timeout: 120
 
   # Ollama 모델 상주 시간 — 유휴 시 VRAM 자동 반납까지의 대기.
-  # 5m은 유휴 후 첫 질의마다 12~22s 콜드 로드를 유발하므로 10m로 완화한다.
+  # 5m은 유휴 후 첫 질의마다 12~22s 콜드 로드를 유발하므로 30m로 완화한다.
+  # (측정: 13분 유휴 후 첫 질의 TTFT 12.6s — 10m 만료로 재로드됨.)
   # 세션 0개인 시간당 sweep에서도 keep_alive=0 명시 언로드를 수행한다.
   # 환경변수 OLLAMA_KEEP_ALIVE 로 재정의 가능.
-  keep_alive: "10m"
+  keep_alive: "30m"
 
   # Ollama는 별도 프로세스라 torch.cuda 미사용 시 VRAM 퇴출이 영원히 안 떠짐.
   # 호스트 RAM 압력 폴백으로 퇴출을 유도할지 (기본 배포= Ollama).
@@ -272,9 +273,10 @@ rag:
       # keyword-heavy(용어 조회, 예: cm3)이면서 semantic 키워드가 없는 질의는
       # 짧은 답변이 정상이므로 확장 재생성을 건너뛴다.
       regen_skip_keyword: true
-      # 2차(재생성) 패스의 출력 토큰 상한. 전역 ollama_num_predict(2048)보다 낮춰
-      # 장문 폭주(50초+)를 막는다. 너무 낮으면 JSON이 절단되어 1차 답변이 유지된다.
-      regen_num_predict: 1536
+      # 2차(재생성) 패스의 출력 토큰 상한. 전역 ollama_num_predict(2048)와
+      # 동일하게 두어 800~1400자(한국어) 응답이 절단되지 않도록 한다.
+      # (측정: 1536에서 3917자 출력이 num_predict 상한에 걸려 JSON이 잘림.)
+      regen_num_predict: 2048
       # 2차 패스 시작 전 UI에 "답변을 보강하는 중..." 상태를 표시한다.
       emit_regen_status: true
       regen_on_invalid: false
@@ -465,9 +467,9 @@ cors:
 # --- 전역 캐시 활성화 설정 ---
 global_cache:
   # 벡터 저장소(인덱싱 결과) 캐시 사용 여부
-  # 테스트 기간: 문서 분석(인덱싱) 시 캐시 저장을 끄고 매번 새로 임베딩/검증하기 위해 false.
-  # 테스트 종료 후 true 로 복구.
-  enable_vector_cache: false
+  # 동일 파일 재업로드 시 재인덱싱(측정 27.8s)을 건너뛰고 캐시를 재사용한다.
+  # 테스트 기간에는 false 로 두어 강제 재인덱싱을 수행했으나, 기본값은 true.
+  enable_vector_cache: true
 
 # --- 채팅 UI 설정 ---
 ui:

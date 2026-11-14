@@ -502,8 +502,32 @@ async def _warmup_models() -> None:
         raise
 
 
+_endpoint_logged = False
+
+
+def _log_ollama_endpoint_once() -> None:
+    """실제 적용 중인 Ollama 엔드포인트를 프로세스당 1회 기록한다.
+
+    ``OLLAMA_BASE_URL`` 이 잘못된 포트로 오버라이드되면(예: 과거 127.0.0.1:3837)
+    모든 임베딩/LLM 호출이 connection refused 로 실패한다. 기동 시 실제 값을
+    남겨 설정 불일치를 즉시 식별할 수 있게 한다.
+    """
+    global _endpoint_logged
+    if _endpoint_logged:
+        return
+    _endpoint_logged = True
+    logger.info("[OLLAMA] 적용 엔드포인트: %s", OLLAMA_BASE_URL)
+    if not _quick_probe_port(OLLAMA_BASE_URL, timeout_seconds=0.5):
+        logger.warning(
+            "[OLLAMA] 엔드포인트 연결 실패: %s — OLLAMA_BASE_URL 환경변수/설정을 "
+            "확인하십시오 (데몬 미기동 또는 포트 불일치 가능).",
+            OLLAMA_BASE_URL,
+        )
+
+
 def _fetch_available_models() -> list[str]:
     """Ollama 모델 목록을 실제로 조회합니다. (캐시 없음)"""
+    _log_ollama_endpoint_once()
     try:
         import ollama
 
@@ -525,7 +549,12 @@ def _fetch_available_models() -> list[str]:
         models.sort()
         return models
     except Exception as e:
-        logger.warning(f"Ollama 모델 목록 조회 실패: {e}")
+        logger.warning(
+            "[OLLAMA] 모델 목록 조회 실패 (endpoint=%s): %s — OLLAMA_BASE_URL "
+            "환경변수/설정을 확인하십시오.",
+            OLLAMA_BASE_URL,
+            e,
+        )
         return []
 
 
