@@ -520,6 +520,7 @@ class ResourceCoordinator:
         )
         self.clients = ClientPool()
         self._build_locks: dict[str, CrossLoopAsyncLock] = {}
+        self._build_lock_refs: dict[str, int] = {}
         self._build_locks_guard = threading.Lock()
         self._in_flight: set[str] = set()
         self._build_call_counter = 0
@@ -540,23 +541,40 @@ class ResourceCoordinator:
         self.clients = ClientPool()
         with self._build_locks_guard:
             self._build_locks.clear()
+            self._build_lock_refs.clear()
             self._in_flight.clear()
-        self._build_call_counter = 0
-        self._build_failures.clear()
+            self._build_call_counter = 0
+            self._build_failures.clear()
         with self._inference_sem_lock:
             self._inference_semaphore = None
             self._inference_semaphore_bound = 0
             self._inference_active_count = 0
             self._inference_held = 0
 
+    def _get_or_create_build_lock_locked(self, key: str) -> CrossLoopAsyncLock:
+        lock = self._build_locks.get(key)
+        if lock is None:
+            lock = CrossLoopAsyncLock()
+            self._build_locks[key] = lock
+            self._evict_excess_build_locks_locked()
+        return lock
+
     def _get_build_lock(self, key: str) -> CrossLoopAsyncLock:
         with self._build_locks_guard:
-            lock = self._build_locks.get(key)
-            if lock is None:
-                lock = CrossLoopAsyncLock()
-                self._build_locks[key] = lock
-                self._evict_excess_build_locks_locked()
-            return lock
+            return self._get_or_create_build_lock_locked(key)
+
+    def _acquire_build_lock_ref(self, key: str) -> CrossLoopAsyncLock:
+        with self._build_locks_guard:
+            self._build_lock_refs[key] = self._build_lock_refs.get(key, 0) + 1
+            return self._get_or_create_build_lock_locked(key)
+
+    def _release_build_lock_ref(self, key: str) -> None:
+        with self._build_locks_guard:
+            refs = self._build_lock_refs.get(key, 0) - 1
+            if refs <= 0:
+                self._build_lock_refs.pop(key, None)
+            else:
+                self._build_lock_refs[key] = refs
 
     def _evict_excess_build_locks_locked(self) -> None:
         excess = len(self._build_locks) - _BUILD_LOCK_MAX_ENTRIES
@@ -565,7 +583,9 @@ class ResourceCoordinator:
         to_evict = [
             candidate
             for candidate, candidate_lock in self._build_locks.items()
-            if candidate not in self._in_flight and not candidate_lock.locked()
+            if candidate not in self._in_flight
+            and candidate not in self._build_lock_refs
+            and not candidate_lock.locked()
         ][:excess]
         for candidate in to_evict:
             self._build_locks.pop(candidate, None)
@@ -573,22 +593,32 @@ class ResourceCoordinator:
     def _cleanup_build_locks(self) -> None:
         """Remove build locks for keys no longer tracked in any pool.
 
-        Keys currently being built (in-flight) are NEVER deleted: deleting an
-        in-flight lock would let a concurrent caller acquire a fresh lock and
-        double-build the same key.
+        Keys currently being built (in-flight) or awaiting acquisition
+        (_build_lock_refs) are NEVER deleted: deleting an active lock would
+        let a concurrent caller acquire a fresh lock and double-build the same
+        key.
         """
         active_keys: set[str] = set()
         for pool in [self.models, self.retrievers]:
             if hasattr(pool, "_pool"):
-                active_keys.update(pool._pool.keys())
+                pool_lock = getattr(pool, "_lock", None)
+                if pool_lock is not None:
+                    with pool_lock:
+                        active_keys.update(pool._pool.keys())
+                else:
+                    active_keys.update(pool._pool.keys())
 
-        stale_keys = [
-            k
-            for k in self._build_locks
-            if k not in active_keys and k not in self._in_flight
-        ]
-        for k in stale_keys:
-            del self._build_locks[k]
+        with self._build_locks_guard:
+            stale_keys = [
+                k
+                for k, lock in self._build_locks.items()
+                if k not in active_keys
+                and k not in self._in_flight
+                and k not in self._build_lock_refs
+                and not lock.locked()
+            ]
+            for k in stale_keys:
+                del self._build_locks[k]
 
         if stale_keys:
             logger.debug(f"[RESOURCE] Cleaned up {len(stale_keys)} stale build locks")
@@ -596,29 +626,29 @@ class ResourceCoordinator:
     def _check_build_circuit(self, key: str) -> None:
         """[R3b-03] 실패 네거티브 캐시 판정 — 연속 실패 N회 && TTL 미경과면 즉시 차단."""
         now = time.monotonic()
-        fail_info = self._build_failures.get(key)
-        if fail_info is None:
-            return
-        count, last_fail = fail_info
-        if count >= _BUILD_FAILURE_LIMIT:
-            elapsed = now - last_fail
-            if elapsed < _BUILD_CIRCUIT_TTL_SECONDS:
-                raise ResourceBuildError(
-                    key=key,
-                    reason="circuit_open",
-                    details={
-                        "failures": count,
-                        "ttl_seconds": _BUILD_CIRCUIT_TTL_SECONDS,
-                        "remaining_seconds": round(
-                            _BUILD_CIRCUIT_TTL_SECONDS - elapsed, 1
-                        ),
-                    },
-                )
-            # TTL 경과 → 재시도 허용 (카운터 리셋)
-            self._build_failures.pop(key, None)
+        with self._build_locks_guard:
+            fail_info = self._build_failures.get(key)
+            if fail_info is None:
+                return
+            count, last_fail = fail_info
+            if count >= _BUILD_FAILURE_LIMIT:
+                elapsed = now - last_fail
+                if elapsed < _BUILD_CIRCUIT_TTL_SECONDS:
+                    raise ResourceBuildError(
+                        key=key,
+                        reason="circuit_open",
+                        details={
+                            "failures": count,
+                            "ttl_seconds": _BUILD_CIRCUIT_TTL_SECONDS,
+                            "remaining_seconds": round(
+                                _BUILD_CIRCUIT_TTL_SECONDS - elapsed, 1
+                            ),
+                        },
+                    )
+                # TTL 경과 → 재시도 허용 (카운터 리셋)
+                self._build_failures.pop(key, None)
 
-    def _purge_expired_build_failures(self, now: float) -> int:
-        """Drop failure records past the circuit TTL. Returns reaped count."""
+    def _purge_expired_build_failures_locked(self, now: float) -> int:
         expired = [
             key
             for key, (_, failed_at) in self._build_failures.items()
@@ -628,16 +658,22 @@ class ResourceCoordinator:
             del self._build_failures[key]
         return len(expired)
 
+    def _purge_expired_build_failures(self, now: float) -> int:
+        """Drop failure records past the circuit TTL. Returns reaped count."""
+        with self._build_locks_guard:
+            return self._purge_expired_build_failures_locked(now)
+
     def _record_build_failure(self, key: str) -> None:
         """[R3b-03] 빌드 실패를 네거티브 캐시에 기록하고 회로 차단 전환을 로그로 노출."""
         now = time.monotonic()
-        self._purge_expired_build_failures(now)
-        count, _ = self._build_failures.get(key, (0, 0.0))
-        count += 1
-        self._build_failures.pop(key, None)
-        self._build_failures[key] = (count, now)
-        while len(self._build_failures) > _BUILD_FAILURE_MAX_ENTRIES:
-            self._build_failures.pop(next(iter(self._build_failures)))
+        with self._build_locks_guard:
+            self._purge_expired_build_failures_locked(now)
+            count, _ = self._build_failures.get(key, (0, 0.0))
+            count += 1
+            self._build_failures.pop(key, None)
+            self._build_failures[key] = (count, now)
+            while len(self._build_failures) > _BUILD_FAILURE_MAX_ENTRIES:
+                self._build_failures.pop(next(iter(self._build_failures)))
         if count >= _BUILD_FAILURE_LIMIT:
             logger.error(
                 f"[RESOURCE] '{key}' 빌드 {count}회 연속 실패 — "
@@ -869,55 +905,63 @@ class ResourceCoordinator:
         # 허용한다(단위 테스트 호환). pin이 없으면 핀 없이 그대로 진행한다.
         can_pin = pin and hasattr(pool, "pin")
 
-        lock = self._get_build_lock(key)
-        async with lock:
-            self._in_flight.add(key)
-            try:
-                self._build_call_counter += 1
-                if self._build_call_counter >= 50:
-                    self._build_call_counter = 0
-                    self._cleanup_build_locks()
+        lock = self._acquire_build_lock_ref(key)
+        try:
+            async with lock:
+                with self._build_locks_guard:
+                    self._in_flight.add(key)
+                    self._build_call_counter += 1
+                    should_cleanup = self._build_call_counter >= 50
+                    if should_cleanup:
+                        self._build_call_counter = 0
+                try:
+                    if should_cleanup:
+                        self._cleanup_build_locks()
 
-                # [R3b-03] 실패 네거티브 캐시 — 회로 차단 상태면 재빌드를 시도하지 않고 즉시 실패.
-                self._check_build_circuit(key)
+                    # [R3b-03] 실패 네거티브 캐시 — 회로 차단 상태면 재빌드를 시도하지 않고 즉시 실패.
+                    self._check_build_circuit(key)
 
-                res = pool.get(key)
-                if res is not None:
+                    res = pool.get(key)
+                    if res is not None:
+                        if can_pin:
+                            pool.pin(key)
+                        return res, key
+
+                    # [Proactive Eviction] Only trigger retriever eviction when the
+                    # resource is actually missing and must be rebuilt. A present doc
+                    # is never evicted just to be immediately rebuilt (churn loop).
+                    if pool is self.retrievers:
+                        await self.retrievers.check_memory_pressure()
+
+                    if build_fn is None:
+                        raise ValueError(
+                            f"Resource '{key}' not found in {pool.name} and no build_fn provided."
+                        )
+
+                    try:
+                        if asyncio.iscoroutinefunction(build_fn):
+                            res = await build_fn(*args, **kwargs)
+                        else:
+                            # [이벤트 루프 차단 방지] 무거운 sync 모델 로드는 워커 스레드에서 실행
+                            res = await asyncio.to_thread(build_fn, *args, **kwargs)
+                    except Exception:
+                        self._record_build_failure(key)
+                        raise
+                    with self._build_locks_guard:
+                        self._build_failures.pop(key, None)
+                    # put() already holds _lock internally; pin() also acquires it,
+                    # so do NOT wrap pin in a second `with pool._lock` (non-reentrant
+                    # threading.Lock would deadlock). Atomicity is preserved: this
+                    # coroutine runs put() then pin() with no await in between.
+                    await pool.put(key, res)
                     if can_pin:
                         pool.pin(key)
                     return res, key
-
-                # [Proactive Eviction] Only trigger retriever eviction when the
-                # resource is actually missing and must be rebuilt. A present doc
-                # is never evicted just to be immediately rebuilt (churn loop).
-                if pool is self.retrievers:
-                    await self.retrievers.check_memory_pressure()
-
-                if build_fn is None:
-                    raise ValueError(
-                        f"Resource '{key}' not found in {pool.name} and no build_fn provided."
-                    )
-
-                try:
-                    if asyncio.iscoroutinefunction(build_fn):
-                        res = await build_fn(*args, **kwargs)
-                    else:
-                        # [이벤트 루프 차단 방지] 무거운 sync 모델 로드는 워커 스레드에서 실행
-                        res = await asyncio.to_thread(build_fn, *args, **kwargs)
-                except Exception:
-                    self._record_build_failure(key)
-                    raise
-                self._build_failures.pop(key, None)
-                # put() already holds _lock internally; pin() also acquires it,
-                # so do NOT wrap pin in a second `with pool._lock` (non-reentrant
-                # threading.Lock would deadlock). Atomicity is preserved: this
-                # coroutine runs put() then pin() with no await in between.
-                await pool.put(key, res)
-                if can_pin:
-                    pool.pin(key)
-                return res, key
-            finally:
-                self._in_flight.discard(key)
+                finally:
+                    with self._build_locks_guard:
+                        self._in_flight.discard(key)
+        finally:
+            self._release_build_lock_ref(key)
 
     async def get_or_build(
         self,
@@ -1132,7 +1176,9 @@ class ResourceCoordinator:
         import ollama
 
         client = ollama.Client(host=OLLAMA_BASE_URL)
-        for key in list(self.models._pool.keys()):
+        with self.models._lock:
+            model_keys = list(self.models._pool.keys())
+        for key in model_keys:
             if key.startswith("llm_"):
                 model_name = key.replace("llm_", "")
                 with contextlib.suppress(Exception):
