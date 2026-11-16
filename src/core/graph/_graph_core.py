@@ -447,10 +447,12 @@ def _extract_json_string(
             i += 1
             continue
         if ch == '"':
-            # 값 내부 큰따옴표(다음 문자가 공백/문자)와 닫는 따옴표(다음이
-            # 구분자)를 구분: 구분자 직전만 값 종료로 본다.
-            nxt = blob[i + 1] if i + 1 < n else ""
-            if nxt in (":", ",", "}", "]"):
+            # 공백/개행을 건너뛴 첫 비공백 문자가 구분자이거나 EOF이면
+            # 값 종료로 본다.
+            k = i + 1
+            while k < n and blob[k] in (" ", "\t", "\n", "\r"):
+                k += 1
+            if k == n or blob[k] in (":", ",", "}", "]"):
                 return "".join(chars), i + 1
             chars.append('"')
             i += 1
@@ -585,10 +587,12 @@ def _repair_json(blob: str) -> str | None:
                         i += 1
                     continue
                 if c == '"':
-                    # 닫는 따옴표 추정: 키명 뒤(":" 직전) 또는 값 끝("," / "}" / "]" 직전).
-                    # 그 외(공백/문자 뒤)는 값 내부 큰따옴표로 보고 이스케이프한다.
-                    nxt = blob[i + 1] if i + 1 < n else ""
-                    if nxt in (":", ",", "}", "]"):
+                    # 공백/개행을 건너뛴 첫 비공백 문자가 구분자이거나 EOF이면
+                    # 닫는 따옴표다.
+                    k = i + 1
+                    while k < n and blob[k] in (" ", "\t", "\n", "\r"):
+                        k += 1
+                    if k == n or blob[k] in (":", ",", "}", "]"):
                         out.append(c)
                         i += 1
                         break

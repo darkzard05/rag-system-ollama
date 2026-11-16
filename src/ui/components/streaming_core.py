@@ -540,6 +540,11 @@ def stream_content(query: str, model_name: str, session_id: str) -> Iterator[str
                 _real_yielded = True
                 _placeholder_live = False
                 yield chunk.content
+    tail_delta = raw_json_extractor.finalize()
+    if tail_delta:
+        _real_yielded = True
+        _placeholder_live = False
+        yield tail_delta
     if _placeholder_live:
         yield _STATUS_PLACEHOLDER
 
@@ -907,6 +912,12 @@ def _content_generator(
                     }
                     _write_aux_state(sid, _aux_state)
                     on_aux(_aux_state)
+        tail_delta = raw_json_extractor.finalize()
+        if tail_delta:
+            accumulated_parts.append(tail_delta)
+            _real_yielded = True
+            _placeholder_live = False
+            yield tail_delta
         if _placeholder_live:
             yield _STATUS_PLACEHOLDER
     except Exception as exc:

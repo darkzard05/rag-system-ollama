@@ -176,6 +176,11 @@ async def run_query_measurement(
             if chunk.performance:
                 performance.update(chunk.performance)
 
+    if raw_json_seen:
+        tail_delta = extractor.finalize()
+        if tail_delta:
+            display_parts.append(tail_delta)
+
     total_s = time.perf_counter() - started
     raw_answer = "".join(raw_parts)
     display_answer = "".join(display_parts)

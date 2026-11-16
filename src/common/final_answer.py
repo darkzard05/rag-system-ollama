@@ -26,6 +26,10 @@ _ESCAPE_DECODE: dict[str, str] = {
 
 _DELIMITERS = (":", ",", "}", "]")
 
+# ``final_answer`` 는 JSON 문자열 **값**이므로 ``:`` 는 닫는 구분자가 될 수 없다.
+_VALUE_DELIMITERS = (",", "}", "]")
+_JSON_WHITESPACE = " \t\n\r"
+
 _FA_RE = re.compile(r'"final_answer"\s*:\s*"(.*)', re.DOTALL)
 
 
@@ -174,20 +178,33 @@ def extract_final_answer_delta(
             continue
 
         if ch == '"':
-            nxt = buffer[i + 1] if i + 1 < n else ""
-            if nxt in _DELIMITERS or nxt == "":
-                if is_incremental:
-                    assert key_pos is not None  # is_incremental이 None 아님을 보장
-                    key_pos[4] = 1  # closed = True
-                if is_incremental:
-                    new_delta = "".join(delta_chars)
-                    return new_delta, start + len(new_delta)
-                else:
+            # 공백/개행을 건너뛴 첫 비공백 문자로 닫는 따옴표 여부를 판별한다.
+            k = i + 1
+            while k < n and buffer[k] in _JSON_WHITESPACE:
+                k += 1
+            if k < n:
+                if buffer[k] in _VALUE_DELIMITERS:
+                    if is_incremental:
+                        assert key_pos is not None  # is_incremental이 None 아님을 보장
+                        key_pos[4] = 1  # closed = True
+                        new_delta = "".join(delta_chars)
+                        return new_delta, start + len(new_delta)
                     new_delta = "".join(delta_chars)[start:]
                     return new_delta, len(delta_chars)
-            delta_chars.append(ch)
-            i += 1
-            continue
+                # 뒤에 일반 문자가 이어지면 값 내부의 이스케이프 누락 따옴표다.
+                delta_chars.append(ch)
+                i += 1
+                continue
+
+            # k == n: '"' 또는 '"' + 공백만 남고 현재 버퍼 끝에 도달한 경우
+            if is_incremental:
+                # 증분 모드에서는 다음 청크를 보기 전까지 닫힘 여부를 확정할 수
+                # 없으므로 '"'를 소비하지 않고 현재 인덱스 i에서 정지한다.
+                # (key_pos[1] = i로 보존됨)
+                break
+            # 비증분 단발 스캔(key_pos is None)에서는 k == n이 실제 입력 끝(EOF)이다.
+            new_delta = "".join(delta_chars)[start:]
+            return new_delta, len(delta_chars)
 
         delta_chars.append(ch)
         i += 1
@@ -254,6 +271,24 @@ class FinalAnswerExtractor:
             self._blob, self._scan_pos, self._key_pos
         )
         return delta
+
+    def finalize(self) -> str:
+        """스트림 종료(EOF) 시 보류 중인 꼬리 따옴표/잔여 문자를 정산한다."""
+        if self._key_pos[4]:
+            return ""
+        if not self._key_pos[5]:
+            return ""
+        tail = self._blob[self._key_pos[1] :]
+        if not tail:
+            return ""
+        if tail.startswith('"') and tail[1:].strip(_JSON_WHITESPACE) == "":
+            self._key_pos[4] = 1
+            self._key_pos[1] = len(self._blob)
+            return ""
+        # 그 외 예외적으로 남은 일반 텍스트가 있으면 그대로 방출
+        self._key_pos[1] = len(self._blob)
+        self._scan_pos += len(tail)
+        return tail
 
     @property
     def closed(self) -> bool:
