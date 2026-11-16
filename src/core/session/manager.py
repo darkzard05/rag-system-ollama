@@ -133,6 +133,9 @@ class SessionManager:
             "llm",
             "embedder",
             "doc_pool",
+            # Large 1-page preview bytes are read from the SSoT on demand by
+            # viewer.py; mirroring them into st.session_state doubles memory.
+            "first_page_preview",
             # Internal upload hand-off (callback -> _handle_pending_tasks).
             "pending_upload_persist",
         }

@@ -316,14 +316,61 @@ def _warm_available_models() -> None:
         logger.debug("[SYSTEM] model-list warmup skipped (Ollama not ready)")
 
 
+_UI_IMPORT_WARMUP_DELAY_S = 0.2
+_ML_IMPORT_WARMUP_DELAY_S = 3.0
+_TOKENIZER_WARMUP_DELAY_S = 3.0
+
+
 def _warm_heavy_imports() -> None:
-    """메인 렌더 프레임과 경합하지 않도록 미세 지연 후 무거운 모듈을 선행 임포트."""
-    time.sleep(0.5)  # 첫 프레임 페인트에 GIL을 온전히 양보
-    for mod_name in ("pymupdf", "faiss", "torch"):
+    """메인 렌더 프레임과 경합하지 않도록 무거운 모듈을 두 단계로 선행 임포트.
+
+    업로드 콜백과 1페이지 뷰어가 즉시 캐시된 모듈을 쓰도록 pymupdf 를 가장
+    먼저 예열하고, faiss / torch 는 유휴 시간까지 미룬다. 지연 ML 임포트 도중
+    업로드·빌드가 시작되면 각 항목 직전에 양보해 Import Lock/GIL 경합을 막는다.
+
+    ``streamlit_pdf_viewer`` 는 백그라운드 스레드에서 임포트하면
+    ``declare_component`` 가 ScriptRunContext 부재로 등록을 건너뛰어 뷰어가
+    404 가 되므로, ``_warm_ui_component_imports`` 가 스크립트 스레드에서
+    담당한다.
+    """
+    from core.session import SessionManager
+
+    time.sleep(_UI_IMPORT_WARMUP_DELAY_S)
+    for mod_name in ("pymupdf",):
         try:
             __import__(mod_name)
         except Exception as exc:
             logger.debug(f"[WARMUP] {mod_name} import skipped: {exc}")
+
+    remaining = _ML_IMPORT_WARMUP_DELAY_S - _UI_IMPORT_WARMUP_DELAY_S
+    if remaining > 0:
+        time.sleep(remaining)
+    for mod_name in ("faiss", "torch"):
+        if SessionManager.get("new_file_uploaded") or SessionManager.get(
+            "is_building_rag"
+        ):
+            logger.debug(
+                "[WARMUP] active upload/build detected — %s import yielded",
+                mod_name,
+            )
+            return
+        try:
+            __import__(mod_name)
+        except Exception as exc:
+            logger.debug(f"[WARMUP] {mod_name} import skipped: {exc}")
+
+
+def _warm_ui_component_imports() -> None:
+    """ScriptRunContext 가 살아 있는 스크립트 스레드에서 PDF 뷰어 컴포넌트를 예열.
+
+    백그라운드 스레드 임포트는 컴포넌트 등록을 건너뛰어(404) 회귀를 만든다.
+    첫 화면 렌더 직후 스크립트 스레드에서 한 번 임포트해 두면, 이후 업로드
+    콜백/뷰어 렌더는 캐시된 모듈을 즉시 사용한다.
+    """
+    try:
+        __import__("streamlit_pdf_viewer")
+    except Exception as exc:
+        logger.debug(f"[WARMUP] streamlit_pdf_viewer import skipped: {exc}")
 
 
 # 프로세스 시작 직후(import 직후) 백그라운드 웜업 — UI 첫 렌더 블로킹 제거.
@@ -580,6 +627,15 @@ def _recover_upload_bytes(pending: dict) -> bytes | None:
         return None
 
 
+def get_pending_upload_bytes(session_id: str) -> bytes | None:
+    """지연 저장 대기 중인 업로드 바이트를 반환한다 (읽기 전용).
+
+    ``_flush_pending_upload`` 가 디스크 쓰기를 성공할 때까지 값을 유지하므로,
+    뷰어는 파일이 아직 없을 때 메모리 바이트로 페이지를 추출할 수 있다.
+    """
+    return _PENDING_UPLOAD_BYTES.get(session_id)
+
+
 def _rollback_pending_upload(session_id: str) -> None:
     """지연 저장 실패 시 세션을 '문서 없음' 상태로 되돌린다.
 
@@ -600,49 +656,86 @@ def _rollback_pending_upload(session_id: str) -> None:
     message = "Error while saving the uploaded file. Please try again."
     SessionManager.set("pdf_processing_error", message, session_id=session_id)
     _post_upload_error(message, session_id)
+    # 쓰기 실패는 백그라운드 스레드에서 발견될 수 있으므로, UI가 롤백 상태를
+    # 즉시 반영하도록 best-effort 리런을 요청한다.
+    try:
+        from common.async_worker import request_session_rerun
+
+        request_session_rerun(session_id)
+    except Exception:  # noqa: BLE001 - best-effort UI refresh only
+        logger.debug("[UPLOAD] rollback rerun request skipped", exc_info=True)
 
 
-def _flush_pending_upload(session_id: str) -> bool:
-    """첫 프레임 렌더 이후, 빌드 디스패치 이전에 지연된 업로드 쓰기를 수행한다.
-
-    Returns True when a pending upload existed (handled or rolled back).
-    """
+def _cleanup_previous_upload(old_path: str, target: str) -> None:
+    """새 파일 기록 후 이전 업로드 파일을 정리한다 (백그라운드 호출 전용)."""
     from core.session import SessionManager
     from services.monitoring.notification_system import SystemNotifier
 
+    if not old_path or old_path == target:
+        return
+    # reset_for_new_file already removed this session's reference, so any
+    # remaining reference belongs to another session.
+    still_referenced = SessionManager.get_all_pdf_paths().count(old_path) > 0
+    if not still_referenced and not SessionManager.safe_remove_file(old_path):
+        logger.warning(f"이전 업로드 파일 삭제 실패 (잠금 가능): {old_path}")
+        SystemNotifier.warning(f"이전 파일 정리에 실패했습니다: {old_path}")
+
+
+def _flush_pending_upload(session_id: str, *, defer_old_cleanup: bool = False) -> bool:
+    """첫 프레임 렌더 이후, 빌드 디스패치 이전에 지연된 업로드 쓰기를 수행한다.
+
+    Returns True when a pending upload existed (handled or rolled back).
+
+    ``defer_old_cleanup=True`` 는 동기 메인 스레드(예: needs_rag_rebuild 분기)
+    에서 호출될 때 이전 파일 삭제의 Windows 잠금 백오프가 UI를 막지 않도록
+    별도 데몬 스레드로 넘긴다. 새 업로드 경로는 ``_bg_rebuild_task`` 내부의
+    ``asyncio.to_thread`` 에서 실행되므로 인라인 정리가 안전하다.
+    """
+    from core.session import SessionManager
+
     pending = SessionManager.get(_PENDING_UPLOAD_KEY, None, session_id)
-    file_bytes = _PENDING_UPLOAD_BYTES.pop(session_id, None)
     if not isinstance(pending, dict):
+        _PENDING_UPLOAD_BYTES.pop(session_id, None)
         return False
 
     SessionManager.delete(_PENDING_UPLOAD_KEY, session_id)
     target = str(pending.get("target_path") or "")
     if not target:
+        _PENDING_UPLOAD_BYTES.pop(session_id, None)
         _rollback_pending_upload(session_id)
         return True
 
     if pending.get("needs_write"):
+        file_bytes = _PENDING_UPLOAD_BYTES.get(session_id)
         if file_bytes is None:
             file_bytes = _recover_upload_bytes(pending)
         if file_bytes is None:
             logger.error("[UPLOAD] 지연 저장 실패: 업로드 바이트 유실")
+            _PENDING_UPLOAD_BYTES.pop(session_id, None)
             _rollback_pending_upload(session_id)
             return True
         try:
             _persist_upload_atomically(target, file_bytes)
         except OSError as e:
             logger.error("[UPLOAD] 파일 저장 실패: %s", e, exc_info=True)
+            _PENDING_UPLOAD_BYTES.pop(session_id, None)
             _rollback_pending_upload(session_id)
             return True
 
+    # 디스크 기록 성공 후에만 메모리 폴백을 해제한다 (뷰어의 디스크 전환 보장).
+    _PENDING_UPLOAD_BYTES.pop(session_id, None)
+
     old_path = pending.get("old_path")
     if old_path and old_path != target:
-        # reset_for_new_file already removed this session's reference, so any
-        # remaining reference belongs to another session.
-        still_referenced = SessionManager.get_all_pdf_paths().count(old_path) > 0
-        if not still_referenced and not SessionManager.safe_remove_file(old_path):
-            logger.warning(f"이전 업로드 파일 삭제 실패 (잠금 가능): {old_path}")
-            SystemNotifier.warning(f"이전 파일 정리에 실패했습니다: {old_path}")
+        if defer_old_cleanup:
+            threading.Thread(
+                target=_cleanup_previous_upload,
+                args=(str(old_path), target),
+                name="upload-old-cleanup",
+                daemon=True,
+            ).start()
+        else:
+            _cleanup_previous_upload(str(old_path), target)
     return True
 
 
@@ -685,8 +778,9 @@ def _process_uploaded_file(uploaded_file) -> None:
             first_doc = fitz.open()
             try:
                 first_doc.insert_pdf(upload_doc, from_page=0, to_page=0)
-                # garbage=0 및 deflate=False로 불필요한 객체 테이블 스캔과 압축 CPU 소모를 모두 제거하여 즉각 생성
-                first_page_bytes = first_doc.tobytes(garbage=0, deflate=False)
+                # garbage=0으로 객체 테이블 전수 스캔은 피하되, deflate=True로
+                # 비압축 스트림/폰트가 큰 PDF의 WebSocket 전송 payload를 줄인다.
+                first_page_bytes = first_doc.tobytes(garbage=0, deflate=True)
             finally:
                 first_doc.close()
     except Exception as e:
@@ -712,27 +806,28 @@ def _process_uploaded_file(uploaded_file) -> None:
             tmp_path = os.path.join(temp_dir, f"upload_{uploaded_hash}.pdf")
             needs_write = True
 
-        SessionManager.set("total_pages", page_count, session_id=sid)
-        # [FAST-PATH 동기화] file_hash와 last_uploaded_file_name을 미리보기 등록과 동시에
-        # 즉시 설정하여, 뷰어가 first_page_preview의 해시 일치 검사를 즉시 통과할 수 있도록 보장한다.
-        SessionManager.set("file_hash", uploaded_hash, session_id=sid)
-        SessionManager.set(
-            "last_uploaded_file_name", uploaded_file.name, session_id=sid
-        )
+        # [FAST-PATH 동기화] file_hash와 last_uploaded_file_name을 미리보기 등록과
+        # 동시에 배치 기록한다. 뷰어가 first_page_preview의 해시 일치 검사를 즉시
+        # 통과하도록 보장하며, 세션 락 획득/해제를 1회로 묶는다.
+        fast_path_updates: dict[str, Any] = {
+            "total_pages": page_count,
+            "file_hash": uploaded_hash,
+            "last_uploaded_file_name": uploaded_file.name,
+        }
         if first_page_bytes:
-            SessionManager.set(
-                "first_page_preview",
-                {"file_hash": uploaded_hash, "bytes": first_page_bytes},
-                session_id=sid,
-            )
+            fast_path_updates["first_page_preview"] = {
+                "file_hash": uploaded_hash,
+                "bytes": first_page_bytes,
+            }
+        SessionManager.set(session_id=sid, **fast_path_updates)
 
         # === [추가 시작] Frame 1에서 우측 분석 패널이 1페이지 뷰어와 동시 출력되도록 즉시 초기화 ===
+        # init_build_state 는 is_building_rag 까지 단일 락에서 함께 게시한다.
         SessionManager.init_build_state(
             file_name=uploaded_file.name,
             file_hash=uploaded_hash,
             session_id=sid,
         )
-        SessionManager.set("is_building_rag", True, session_id=sid)
         # === [추가 끝] ===
 
         # 새 문서는 항상 1페이지부터: 단일 navigate_to_page(1) 경로로
@@ -748,20 +843,19 @@ def _process_uploaded_file(uploaded_file) -> None:
         # `first_page_preview` 바이트만으로 렌더되므로, 파일이 아직 없어도
         # 첫 프레임은 유효하다. 경로는 미리 게시하되, pending 레코드를 먼저
         # 기록해 "게시된 경로 + 기록자 없음" 상태가 생기지 않게 한다.
-        SessionManager.set(
-            _PENDING_UPLOAD_KEY,
-            {
+        if needs_write:
+            _PENDING_UPLOAD_BYTES[sid] = file_bytes
+        publish_updates: dict[str, Any] = {
+            _PENDING_UPLOAD_KEY: {
                 "target_path": tmp_path,
                 "needs_write": needs_write,
                 "old_path": old_path,
                 "file_name": uploaded_file.name,
             },
-            session_id=sid,
-        )
-        if needs_write:
-            _PENDING_UPLOAD_BYTES[sid] = file_bytes
-        SessionManager.set("pdf_file_path", tmp_path, session_id=sid)
-        SessionManager.set("new_file_uploaded", True, session_id=sid)
+            "pdf_file_path": tmp_path,
+            "new_file_uploaded": True,
+        }
+        SessionManager.set(session_id=sid, **publish_updates)
         SystemNotifier.success(f"Document uploaded: {uploaded_file.name}")
     else:
         SystemNotifier.success(f"'{uploaded_file.name}' was already uploaded.")
@@ -846,10 +940,10 @@ def _handle_pending_tasks() -> None:
     from core.session import SessionManager
 
     current_sid = SessionManager.get_session_id()
-    # [DEFER-PERSIST] 첫 프레임이 이미 위에서 생성됐다. 빌드가 파일을 읽기
-    # 전에 반드시 디스크에 기록되어 있어야 하므로, 디스패치 직전이 마지막
-    # 안전 지점이다.
-    _flush_pending_upload(current_sid)
+    # [DEFER-PERSIST] 신규 업로드의 디스크 쓰기는 메인 스크립트 스레드가 아니라
+    # _bg_rebuild_task 의 asyncio.to_thread 에서 수행된다 (Run #1 종료 지연 제거).
+    # needs_rag_rebuild 는 업로드 콜백을 거치지 않을 수 있으므로 아래 분기에서
+    # 별도로 flush 를 보장한다.
     is_building = bool(SessionManager.get("is_building_rag", False, current_sid))
     is_generating = bool(SessionManager.get("is_generating_answer", False, current_sid))
     needs_rerun = False
@@ -952,6 +1046,8 @@ def _handle_pending_tasks() -> None:
         SessionManager.set("active_faiss_retriever", None, current_sid)
         SessionManager.set("active_bm25_retriever", None, current_sid)
         SessionManager.delete("active_retriever_hash", current_sid)
+        # 이전 파일 정리의 잠금 백오프가 UI 스레드를 막지 않도록 위임한다.
+        _flush_pending_upload(current_sid, defer_old_cleanup=True)
 
         current_file_path = SessionManager.get("pdf_file_path", None, current_sid)
         current_file_name = SessionManager.get(
@@ -1009,6 +1105,14 @@ def _start_tokenizer_warmup() -> bool:
     """서버당 1회, 첫 렌더 이후 백그라운드에서 임베딩 토크나이저를 예열한다."""
 
     def _run() -> None:
+        from core.session import SessionManager
+
+        time.sleep(_TOKENIZER_WARMUP_DELAY_S)
+        if SessionManager.get("new_file_uploaded") or SessionManager.get(
+            "is_building_rag"
+        ):
+            logger.debug("[MAIN] startup tokenizer warmup yielded to active build")
+            return
         try:
             from core.chunking import warm_embedding_tokenizer
 
@@ -1073,18 +1177,22 @@ def main() -> None:
     # 스레드와 GIL을 경합해 첫 페인트가 지연된다.
     _start_model_list_warmup()
     _start_tokenizer_warmup()
+    # 컴포넌트 등록은 ScriptRunContext 가 있는 스크립트 스레드에서만 유효하다.
+    _warm_ui_component_imports()
 
 
 # 빌드 진행 Rerun 제어: 메이저 위상(Phase) 전이 시에만 전역 Rerun을 허용한다.
 # 동일 위상 내의 세부 진행률(%) 변경은 전역 main() 리런을 유발하지 않는다.
-_INITIAL_PAINT_WINDOW_S = 1.5
+_INITIAL_PAINT_WINDOW_S = 2.5
+_MIN_BUILD_RERUN_INTERVAL_S = 2.0
 _BUILD_RERUN_LAST: dict[str, tuple[float, str]] = {}
 
 # [PAINT-GRACE] 신규 업로드 직후 빌드 워커의 CPU 작업(임베더 로드/파싱)이
-# 서버 스레드의 첫 렌더 및 델타 전송과 겹치지 않도록 짧게 유예한다.
+# 서버 스레드의 첫 렌더 및 델타 전송과 겹치지 않도록 유예한다.
 # E2E 실측: 파일 선택 → 첫 캔버스 페인트가 ~1.45s(그중 서버 콜백~0.12s,
-# 컴포넌트 부팅 ~0.92s)이므로, 빌드는 그 사이에 시작하지 않는 편이 낫다.
-_BUILD_START_DELAY_S = 0.4
+# 컴포넌트 부팅 ~0.92s)이므로, 브라우저가 1페이지 캔버스를 그리는 동안
+# 빌드 파싱/임베더 로드가 CPU/GIL을 점유하지 않도록 1.2s 를 준다.
+_BUILD_START_DELAY_S = 1.2
 
 
 def _request_build_progress_rerun(session_id: str, phase_name: str) -> None:
@@ -1092,8 +1200,10 @@ def _request_build_progress_rerun(session_id: str, phase_name: str) -> None:
 
     동일 위상 내의 세부 진행률(%) 갱신은 무시하여 CSS 주입·사이드바·메인
     레이아웃 전체를 다시 평가하는 Full Rerun 폭사를 차단합니다. 단, 업로드
-    직후 첫 페인트 보호 윈도우(0.8s) 동안에는 모든 비-terminal 위상 전이를
-    억제하여 브라우저가 좌측 1페이지를 먼저 그릴 시간을 보장합니다.
+    직후 첫 페인트 보호 윈도우(_INITIAL_PAINT_WINDOW_S) 동안에는 모든
+    비-terminal 위상 전이를 억제하고, 이후에도 _MIN_BUILD_RERUN_INTERVAL_S
+    미만 간격의 전이는 건너뛰어 브라우저가 좌측 1페이지를 그릴 시간을
+    보장합니다.
     """
     from core.build_state import BuildPhase, is_terminal
     from core.session import SessionManager
@@ -1119,6 +1229,12 @@ def _request_build_progress_rerun(session_id: str, phase_name: str) -> None:
         and last[1] == "preparing"
         and (now - last[0] < _INITIAL_PAINT_WINDOW_S)
     ):
+        return
+
+    # [RERUN-THROTTLE] 위상이 바뀌더라도 최소 간격 이내면 풀 리런을 건너뛴다.
+    # pdf_viewer 재전송까지 포함하는 전역 리런 폭주를 막아 첫 페이지 렌더를
+    # 보호한다. 터미널 상태는 _on_complete/완료 로직이 즉시 반영한다.
+    if last is not None and (now - last[0] < _MIN_BUILD_RERUN_INTERVAL_S):
         return
 
     # 동일 위상 내 세부 진행률(%) 갱신은 전역 Rerun을 유발하지 않는다.
@@ -1154,6 +1270,11 @@ async def _bg_rebuild_task(
 
     if defer_seconds > 0:
         await asyncio.sleep(defer_seconds)
+
+    # [DEFER-PERSIST] 지연된 업로드 쓰기를 메인 스크립트 스레드 밖에서 완료한
+    # 뒤에만 build_pipeline 으로 진입한다. 쓰기 실패 시 rollback 이 build_state
+    # 를 지우므로 아래 stale 체크가 이 워커를 안전하게 종료한다.
+    await asyncio.to_thread(_flush_pending_upload, session_id)
 
     from core.build_state import (
         BuildEvent,

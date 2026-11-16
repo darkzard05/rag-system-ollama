@@ -16,6 +16,7 @@ Contract pinned here:
 
 from __future__ import annotations
 
+import asyncio
 import io
 import os
 import sys
@@ -148,7 +149,7 @@ def test_failed_write_rolls_back_to_the_no_document_state():
         )
 
 
-def test_pending_tasks_flushes_before_dispatch_and_delays_the_build():
+def test_pending_tasks_dispatches_without_blocking_on_disk_write():
     data = _make_pdf()
     with tempfile.TemporaryDirectory() as tmp_dir:
         _upload_into(tmp_dir, data)
@@ -169,12 +170,47 @@ def test_pending_tasks_flushes_before_dispatch_and_delays_the_build():
 
         mock_task.assert_called_once()
         assert observed["session_id"] == SID
-        assert observed["target_exists"] is True, "빌드 디스패치 전에 파일이 있어야 함"
+        assert observed["target_exists"] is False, (
+            "메인 스크립트 스레드는 디스크 쓰기를 기다리지 않아야 함"
+        )
         assert (
             mock_task.call_args.kwargs["defer_seconds"]
             == main_module._BUILD_START_DELAY_S
         )
         assert mock_task.call_args.kwargs["defer_seconds"] > 0
+
+
+def test_bg_rebuild_flushes_pending_upload_before_build():
+    data = _make_pdf("bg-flush")
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        _upload_into(tmp_dir, data)
+        content_hash = compute_file_hash("", data=data)
+        target = Path(tmp_dir) / f"upload_{content_hash}.pdf"
+        observed: dict[str, object] = {}
+
+        async def fake_build_pipeline(*args, **kwargs):
+            observed["exists"] = Path(kwargs["file_path"]).exists()
+            return ("ok", False)
+
+        async def fake_embedder(model_name=None):
+            return object()
+
+        with (
+            patch("core.model_loader.ModelManager.get_embedder", new=fake_embedder),
+            patch("core.rag_core.RAGSystem.build_pipeline", new=fake_build_pipeline),
+        ):
+            asyncio.run(
+                main_module._bg_rebuild_task(
+                    SID,
+                    str(target),
+                    "doc.pdf",
+                    "test-embedder",
+                    expected_file_hash=content_hash,
+                )
+            )
+
+        assert observed["exists"] is True, "build_pipeline 진입 시 파일이 있어야 함"
+        assert target.exists()
 
 
 def test_cleanup_orphan_uploads_respects_ttl_and_references():

@@ -48,8 +48,8 @@ class TestUploadPreviewNoDeflate(unittest.TestCase):
     def tearDown(self):
         SessionManager.reset()
 
-    def test_upload_extracts_preview_without_deflate_and_garbage(self):
-        """업로드 시 1페이지 추출에서 tobytes가 garbage=0, deflate=False로 고속 호출되는지 검증."""
+    def test_upload_extracts_preview_with_deflate_and_no_garbage(self):
+        """업로드 시 1페이지 추출에서 tobytes가 garbage=0, deflate=True로 호출되는지 검증."""
         pdf_bytes = _create_sample_pdf_bytes("First Page Fast Preview")
         uploaded = io.BytesIO(pdf_bytes)
         uploaded.name = "test_no_deflate.pdf"
@@ -76,9 +76,9 @@ class TestUploadPreviewNoDeflate(unittest.TestCase):
         ):
             main_module.on_file_upload()
 
-        # 1. tobytes 인자 검증: garbage=0, deflate=False
+        # 1. tobytes 인자 검증: garbage=0, deflate=True
         assert len(tobytes_calls) >= 1
-        assert tobytes_calls[0].get("deflate") is False
+        assert tobytes_calls[0].get("deflate") is True
         assert tobytes_calls[0].get("garbage") == 0
 
         # 2. 세션에 저장된 1페이지 바이트의 무결성 검증

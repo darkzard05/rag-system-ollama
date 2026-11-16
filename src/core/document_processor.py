@@ -243,7 +243,9 @@ def _extract_markdown_parallel(
     """
     import time as _time
 
-    max_workers = min(total_pages, os.cpu_count() or 4) or 1
+    # UI 스레드와 CPU/GIL을 나눠 쓰도록 코어 절반(최대 4개)으로 제한한다.
+    worker_cap = max(1, (os.cpu_count() or 4) // 2)
+    max_workers = min(total_pages, worker_cap, 4) or 1
     ranges = _split_page_ranges(total_pages, max_workers)
     ordered: list[Any] = [None] * len(ranges)
     range_ms: dict[int, float] = {}

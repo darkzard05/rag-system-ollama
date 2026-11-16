@@ -55,61 +55,152 @@ def _render_coord_cache_warnings() -> None:
         st.warning(t("pdf_highlight_load_failed"))
 
 
-@safe_cache_data(ttl=300, show_spinner=False)
-def _get_pdf_bytes(pdf_path: str) -> bytes:
-    """PDF 바이트를 반환한다 — B13: pdf_path 단위 세션 캐시 (NB4).
+def _get_pending_upload_bytes(session_id: str) -> bytes | None:
+    """``src/main.get_pending_upload_bytes`` 를 재임포트 없이 조회한다.
 
-    st.cache_data 기반 캐시로 동일 pdf_path 는 300s 동안 디스크를 재읽지 않고
-    서빙된다 (fragment 폴링/리런 시 반복 재전송 완화). 파일 없음/읽기 실패는
-    b"" 로 소화되며, 빈 값도 300s 캐시되는 것은 B13의 최소 완화로 허용한다
-    (전체 해상도는 컴포넌트 업그레이드 항목으로 이연).
+    Streamlit 은 ``src/main.py`` 를 ``__main__`` 으로 실행하므로, 뷰어가
+    ``import main`` 을 수행하면 모듈이 중복 실행될 수 있다. 이미 로드된
+    모듈 네임스페이스에서만 접근자(accessor)를 찾는다.
     """
-    if not os.path.exists(pdf_path):
+    import sys
+
+    for mod_name in ("__main__", "src.main", "main"):
+        module = sys.modules.get(mod_name)
+        getter = getattr(module, "get_pending_upload_bytes", None)
+        if callable(getter):
+            try:
+                value = getter(session_id)
+            except Exception:  # noqa: BLE001 - fallback accessor must be safe
+                return None
+            return value if isinstance(value, bytes) and value else None
+    return None
+
+
+def _extract_page_bytes(doc, page: int) -> bytes:
+    """열려 있는 문서에서 단일 페이지를 고속 직렬화한다 (1-based page)."""
+    import pymupdf as fitz
+
+    if doc.page_count == 0 or page > doc.page_count:
+        return b""
+    new_doc = fitz.open()
+    try:
+        new_doc.insert_pdf(doc, from_page=page - 1, to_page=page - 1)
+        # deflate=False로 불필요한 zlib 압축 CPU 소모 제거 (단일 페이지 고속 직렬화)
+        return new_doc.tobytes(garbage=1, deflate=False)
+    finally:
+        new_doc.close()
+
+
+@safe_cache_data(ttl=300, show_spinner=False)
+def _read_pdf_bytes_cached(pdf_path: str, mtime_ns: int) -> bytes:
+    """실제 파일이 존재하고 비어 있지 않을 때만 캐시되는 PDF 전체 바이트 리더.
+
+    mtime_ns 를 키에 포함해 파일이 원자적으로 교체되면 새 엔트리로 읽는다.
+    빈 결과는 예외로 승격해 ``st.cache_data`` 에 b"" 가 고정되지 않게 한다.
+    """
+    with open(pdf_path, "rb") as f:
+        data = f.read()
+    if not data:
+        raise OSError(f"empty PDF file: {pdf_path}")
+    return data
+
+
+@safe_cache_data(ttl=300, show_spinner=False)
+def _read_pdf_total_pages_cached(pdf_path: str, mtime_ns: int) -> int | None:
+    """유효한 페이지 수만 캐시한다 (None/0 은 예외로 승격)."""
+    pages = get_pdf_page_count(pdf_path)
+    if not pages:
+        raise ValueError(f"unreadable PDF: {pdf_path}")
+    return pages
+
+
+@safe_cache_data(ttl=300, show_spinner=False)
+def _read_pdf_page_bytes_cached(
+    pdf_path: str, file_hash: str, page: int, mtime_ns: int
+) -> bytes:
+    """단일 페이지 추출 결과 중 비어 있지 않은 값만 캐시한다."""
+    _ = file_hash  # 캐시 키 일부(파일 교체/해시별 분리)로만 사용
+    with open_pdf_document(pdf_path) as doc:
+        data = _extract_page_bytes(doc, page)
+    if not data:
+        raise ValueError(f"page {page} extraction returned empty: {pdf_path}")
+    return data
+
+
+def _get_pdf_bytes(pdf_path: str) -> bytes:
+    """PDF 전체 바이트를 반환한다 (파일 미존재/읽기 실패 시 b"").
+
+    파일 존재와 mtime 을 먼저 확인한 뒤에만 캐시 함수를 호출한다. 따라서
+    지연 저장 중(파일 없음)의 b"" 가 300초 캐시에 고정되지 않는다.
+    """
+    if not pdf_path:
         return b""
     try:
-        with open(pdf_path, "rb") as f:
-            return f.read()
-    except OSError as e:
+        stat = os.stat(pdf_path)
+    except OSError:
+        return b""
+    if stat.st_size <= 0:
+        return b""
+    try:
+        return _read_pdf_bytes_cached(pdf_path, stat.st_mtime_ns)
+    except (OSError, PDFProcessingError) as e:
         logger.error(f"PDF 파일 읽기 실패 ({pdf_path}): {e}")
         return b""
-    except PDFProcessingError as e:
-        logger.error(f"PDF 처리 실패 ({pdf_path}): {e}")
-        return b""
 
 
-@safe_cache_data(ttl=300, show_spinner=False)
 def _get_pdf_total_pages(pdf_path: str) -> int | None:
     """PDF 총 페이지 수 반환. 열 수 없으면 None (절대 raise하지 않음).
 
-    st.cache_data 캐시 계층은 캐시 함수가 raise한 예외를 재전파하므로
-    손상된 PDF가 스크립트를 죽이지 않도록 반드시 여기서 소화한다.
-    실제 열기/페이지 수 계산은 공용 ``get_pdf_page_count`` 에 위임한다 (R: Group 7).
+    파일이 없으면 캐시 함수를 호출하지 않아 None 캐시 오염을 막는다.
+    실제 열기/페이지 수 계산은 공용 ``get_pdf_page_count`` 에 위임한다.
     """
-    if not os.path.exists(pdf_path):
+    if not pdf_path:
         return None
-    return get_pdf_page_count(pdf_path)
+    try:
+        stat = os.stat(pdf_path)
+    except OSError:
+        return None
+    if stat.st_size <= 0:
+        return None
+    try:
+        return _read_pdf_total_pages_cached(pdf_path, stat.st_mtime_ns)
+    except (OSError, ValueError) as e:
+        logger.error(f"PDF 페이지 수 조회 실패 ({pdf_path}): {e}")
+        return None
 
 
-@safe_cache_data(ttl=300, show_spinner=False)
-def _get_pdf_page_bytes(pdf_path: str, file_hash: str, page: int) -> bytes:
-    """1페이지 추출: 원본 doc.select 대신 insert_pdf 클로닝으로 타 페이지 객체 검사 오버헤드 제거."""
-    if not pdf_path or page < 1:
-        return b""
-    if not os.path.exists(pdf_path):
+def _get_pending_page_bytes(page: int) -> bytes:
+    """디스크 기록 전 메모리 업로드 바이트에서 단일 페이지를 추출한다."""
+    session_id = SessionManager.get_session_id()
+    pending = _get_pending_upload_bytes(session_id)
+    if not pending:
         return b""
     try:
         import pymupdf as fitz
 
-        with open_pdf_document(pdf_path) as doc:
-            if doc.page_count == 0 or page > doc.page_count:
-                return b""
-            new_doc = fitz.open()
-            try:
-                new_doc.insert_pdf(doc, from_page=page - 1, to_page=page - 1)
-                # deflate=False로 불필요한 zlib 압축 CPU 소모 제거 (단일 페이지 고속 직렬화)
-                return new_doc.tobytes(garbage=1, deflate=False)
-            finally:
-                new_doc.close()
+        with fitz.open(stream=pending, filetype="pdf") as doc:
+            return _extract_page_bytes(doc, page)
+    except Exception as e:
+        logger.warning(f"[PDF] 메모리 폴백 {page}페이지 추출 실패: {e}")
+        return b""
+
+
+def _get_pdf_page_bytes(pdf_path: str, file_hash: str, page: int) -> bytes:
+    """1페이지 추출: 원본 doc.select 대신 insert_pdf 클로닝으로 타 페이지 객체 검사 오버헤드 제거.
+
+    디스크 파일이 아직 없으면(지연 저장 중) 메모리 업로드 바이트로 폴백해
+    저장 완료 전 페이지 이동도 정상 동작하게 한다.
+    """
+    if not pdf_path or page < 1:
+        return b""
+    try:
+        stat = os.stat(pdf_path)
+    except OSError:
+        return _get_pending_page_bytes(page)
+    if stat.st_size <= 0:
+        return _get_pending_page_bytes(page)
+    try:
+        return _read_pdf_page_bytes_cached(pdf_path, file_hash, page, stat.st_mtime_ns)
     except Exception as e:
         logger.warning(f"[PDF] {page}페이지 추출 실패 ({pdf_path}): {e}")
         return b""
