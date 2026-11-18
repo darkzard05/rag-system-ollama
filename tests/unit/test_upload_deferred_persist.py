@@ -10,8 +10,9 @@ Contract pinned here:
 * the callback publishes viewer state while the target file may not exist yet;
 * the flush writes it and only then reclaims the previous file;
 * a failed write rolls back to the clean "no document" state;
-* ``_handle_pending_tasks`` flushes before dispatching the build;
-* the build dispatch is delayed by the paint-grace window.
+* pending bytes/hash live in the session SSoT so reruns can still read them;
+* ``_handle_pending_tasks`` preflights before dispatching the build;
+* the worker flushes before entering ``build_pipeline``.
 """
 
 from __future__ import annotations
@@ -72,7 +73,6 @@ def setup_session():
     SessionManager.reset_all_state(SID)
     SessionManager.set_session_id(SID)
     yield
-    main_module._PENDING_UPLOAD_BYTES.clear()
     SessionManager.reset()
 
 
@@ -100,7 +100,9 @@ def test_callback_publishes_viewer_state_before_the_file_exists():
         assert preview["bytes"]
         assert SessionManager.get("pending_upload_persist", session_id=SID)
 
-        assert main_module._flush_pending_upload(SID) is True
+        assert (
+            main_module._flush_pending_upload(SID) is main_module.FlushOutcome.PERSISTED
+        )
         assert target.exists()
         assert SessionManager.get("pending_upload_persist", session_id=SID) is None
 
@@ -135,7 +137,10 @@ def test_failed_write_rolls_back_to_the_no_document_state():
         with patch(
             "src.main._persist_upload_atomically", side_effect=OSError("disk full")
         ):
-            assert main_module._flush_pending_upload(SID) is True
+            assert (
+                main_module._flush_pending_upload(SID)
+                is main_module.FlushOutcome.IO_ERROR
+            )
 
         assert SessionManager.get("pdf_file_path", session_id=SID) is None
         assert SessionManager.get("new_file_uploaded", session_id=SID) is False
@@ -147,6 +152,76 @@ def test_failed_write_rolls_back_to_the_no_document_state():
         assert any(m.get("msg_type") == "build_error" for m in messages), (
             "저장 실패가 타임라인 메시지로 보고되어야 함"
         )
+
+
+def test_missing_pending_bytes_rolls_back_and_does_not_dispatch():
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        target = Path(tmp_dir) / "upload_missing.pdf"
+        SessionManager.set("pdf_file_path", str(target), session_id=SID)
+        SessionManager.set("last_uploaded_file_name", "doc.pdf", session_id=SID)
+        SessionManager.set("file_hash", "missing-hash", session_id=SID)
+        SessionManager.set("is_building_rag", True, session_id=SID)
+        SessionManager.init_build_state("doc.pdf", "missing-hash", session_id=SID)
+        SessionManager.set(
+            "pending_upload_persist",
+            {
+                "target_path": str(target),
+                "needs_write": True,
+                "old_path": None,
+                "file_name": "doc.pdf",
+                "file_hash": "missing-hash",
+                "file_bytes": None,
+            },
+            session_id=SID,
+        )
+        SessionManager.set("new_file_uploaded", True, session_id=SID)
+
+        built = MagicMock()
+        with (
+            patch("src.main._bg_rebuild_task", return_value=built) as mock_task,
+            patch("src.main.st.rerun"),
+        ):
+            main_module._handle_pending_tasks()
+
+        mock_task.assert_not_called()
+        assert not target.exists()
+        assert SessionManager.get("new_file_uploaded", session_id=SID) is False
+        assert SessionManager.get("is_building_rag", session_id=SID) is False
+        assert SessionManager.get_build_state(session_id=SID) is None
+
+
+def test_stale_pending_upload_is_not_written_or_deleted():
+    data = _make_pdf("stale")
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        target = Path(tmp_dir) / "upload_stale.pdf"
+        pending = {
+            "target_path": str(target),
+            "needs_write": True,
+            "old_path": None,
+            "file_name": "old.pdf",
+            "file_hash": "old-hash",
+            "file_bytes": data,
+        }
+        SessionManager.set("pending_upload_persist", pending, session_id=SID)
+        SessionManager.set("file_hash", "new-hash", session_id=SID)
+
+        outcome = main_module._flush_pending_upload(SID, expected_file_hash="new-hash")
+
+        assert outcome is main_module.FlushOutcome.STALE
+        assert not target.exists()
+        assert SessionManager.get("pending_upload_persist", session_id=SID) == pending
+
+
+def test_reset_for_new_file_clears_pending_upload():
+    SessionManager.set(
+        "pending_upload_persist",
+        {"target_path": "x", "needs_write": True},
+        session_id=SID,
+    )
+
+    SessionManager.reset_for_new_file(SID)
+
+    assert SessionManager.get("pending_upload_persist", session_id=SID) is None
 
 
 def test_pending_tasks_dispatches_without_blocking_on_disk_write():

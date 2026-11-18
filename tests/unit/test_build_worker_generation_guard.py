@@ -173,7 +173,9 @@ def test_persist_failure_leaves_clean_no_document_state():
         patch("services.monitoring.notification_system.SystemNotifier.success"),
     ):
         main_module.on_file_upload()
-        main_module._flush_pending_upload(SID)
+        assert (
+            main_module._flush_pending_upload(SID) is main_module.FlushOutcome.IO_ERROR
+        )
 
     mock_error.assert_called_once()
     assert SessionManager.get_build_state(session_id=SID) is None
@@ -219,6 +221,11 @@ def test_reset_for_new_file_clears_stale_viewer_and_stream_keys():
     SessionManager.set("active_stream_msg_id", "old-msg", session_id=SID)
     SessionManager.set("perf_turn_start", 123.0, session_id=SID)
     SessionManager.set("new_file_uploaded", True, session_id=SID)
+    SessionManager.set(
+        "pending_upload_persist",
+        {"target_path": "old.pdf", "needs_write": True},
+        session_id=SID,
+    )
 
     SessionManager.reset_for_new_file(session_id=SID)
 
@@ -228,3 +235,4 @@ def test_reset_for_new_file_clears_stale_viewer_and_stream_keys():
     assert SessionManager.get("active_stream_msg_id", session_id=SID) == ""
     assert SessionManager.get("perf_turn_start", session_id=SID) is None
     assert SessionManager.get("new_file_uploaded", False, session_id=SID) is False
+    assert SessionManager.get("pending_upload_persist", session_id=SID) is None

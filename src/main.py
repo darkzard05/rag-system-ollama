@@ -44,6 +44,7 @@ import os
 import tempfile
 import threading
 import time
+from enum import Enum, auto
 from pathlib import Path
 from typing import Any, Literal, cast
 
@@ -606,45 +607,79 @@ def _find_cached_upload(
 
 
 _PENDING_UPLOAD_KEY = "pending_upload_persist"
-# 콜백과 `_handle_pending_tasks` 는 같은 스크립트 런에서 실행되므로 바이트는
-# 모듈 전역에 보관한다. 세션 저장소(및 그 UI 미러)에는 메타데이터만 싣는다.
-_PENDING_UPLOAD_BYTES: dict[str, bytes] = {}
 
 
-def _recover_upload_bytes(pending: dict) -> bytes | None:
-    """재실행으로 모듈 전역이 사라졌을 때 위젯에서 업로드 바이트를 복구한다."""
-    try:
-        uploaded_file = st.session_state.get("pdf_uploader")
-        if uploaded_file is None or not hasattr(uploaded_file, "read"):
-            return None
-        if getattr(uploaded_file, "name", None) != pending.get("file_name"):
-            return None
-        uploaded_file.seek(0)
-        data = uploaded_file.read()
-        uploaded_file.seek(0)
-        return data or None
-    except Exception:  # noqa: BLE001 - 복구 실패는 저장 실패로 처리한다
-        return None
+class FlushOutcome(Enum):
+    """Result of a deferred upload flush attempt."""
+
+    NO_PENDING = auto()
+    PERSISTED = auto()
+    STALE = auto()
+    MISSING_BYTES = auto()
+    IO_ERROR = auto()
+    INVALID_PENDING = auto()
+
+
+def _pending_upload_hash(pending: dict[str, Any]) -> str | None:
+    value = pending.get("file_hash")
+    return str(value) if value else None
 
 
 def get_pending_upload_bytes(session_id: str) -> bytes | None:
-    """지연 저장 대기 중인 업로드 바이트를 반환한다 (읽기 전용).
+    """Return deferred upload bytes from the session SSoT (read-only).
 
-    ``_flush_pending_upload`` 가 디스크 쓰기를 성공할 때까지 값을 유지하므로,
-    뷰어는 파일이 아직 없을 때 메모리 바이트로 페이지를 추출할 수 있다.
-    """
-    return _PENDING_UPLOAD_BYTES.get(session_id)
-
-
-def _rollback_pending_upload(session_id: str) -> None:
-    """지연 저장 실패 시 세션을 '문서 없음' 상태로 되돌린다.
-
-    콜백 시점에는 아직 문서가 게시되지 않았으므로, 실패 후에도 PREPARING
-    패널이 반쯤 쓰인 파일을 가리키는 상태가 남지 않아야 한다.
+    The bytes live inside ``pending_upload_persist`` so they survive reruns and
+    are visible to both the viewer and the background worker without relying on
+    module globals or ``st.session_state``.
     """
     from core.session import SessionManager
 
+    pending = SessionManager.get(_PENDING_UPLOAD_KEY, None, session_id)
+    if not isinstance(pending, dict):
+        return None
+    data = pending.get("file_bytes")
+    return data if isinstance(data, bytes) and data else None
+
+
+def _discard_pending_upload(session_id: str, expected_file_hash: str | None) -> None:
+    """Delete the pending record only while it still belongs to this upload."""
+    from core.session import SessionManager
+
+    current = SessionManager.get(_PENDING_UPLOAD_KEY, None, session_id)
+    if not isinstance(current, dict):
+        return
+    if (
+        expected_file_hash is not None
+        and _pending_upload_hash(current) != expected_file_hash
+    ):
+        return
     SessionManager.delete(_PENDING_UPLOAD_KEY, session_id)
+
+
+def _rollback_pending_upload(
+    session_id: str, *, expected_file_hash: str | None = None
+) -> None:
+    """지연 저장 실패 시 세션을 '문서 없음' 상태로 되돌린다.
+
+    콜백 시점에는 아직 문서가 게시되지 않았으므로, 실패 후에도 PREPARING
+    패널이 반쯤 쓰인 파일을 가리키는 상태가 남지 않아야 한다. ``file_hash`` 가
+    이미 다른 업로드로 바뀌었다면 최신 업로드 상태를 건드리지 않는다.
+    """
+    from core.session import SessionManager
+
+    if expected_file_hash is not None:
+        current_hash = str(SessionManager.get("file_hash", None, session_id) or "")
+        if current_hash != expected_file_hash:
+            logger.info(
+                "[UPLOAD] rollback skipped; newer upload owns session "
+                "(session=%s expected=%s current=%s)",
+                session_id,
+                expected_file_hash,
+                current_hash or None,
+            )
+            return
+
+    _discard_pending_upload(session_id, expected_file_hash)
     SessionManager.set("pdf_file_path", None, session_id=session_id)
     SessionManager.delete("first_page_preview", session_id)
     SessionManager.delete("total_pages", session_id)
@@ -681,10 +716,17 @@ def _cleanup_previous_upload(old_path: str, target: str) -> None:
         SystemNotifier.warning(f"이전 파일 정리에 실패했습니다: {old_path}")
 
 
-def _flush_pending_upload(session_id: str, *, defer_old_cleanup: bool = False) -> bool:
+def _flush_pending_upload(
+    session_id: str,
+    *,
+    expected_file_hash: str | None = None,
+    defer_old_cleanup: bool = False,
+) -> FlushOutcome:
     """첫 프레임 렌더 이후, 빌드 디스패치 이전에 지연된 업로드 쓰기를 수행한다.
 
-    Returns True when a pending upload existed (handled or rolled back).
+    ``expected_file_hash`` 가 주어지면 현재 pending 레코드가 해당 업로드의
+    것일 때만 처리한다. 다른 업로드가 pending 을 교체했다면 ``STALE`` 을
+    반환하고 상태를 전혀 건드리지 않는다.
 
     ``defer_old_cleanup=True`` 는 동기 메인 스레드(예: needs_rag_rebuild 분기)
     에서 호출될 때 이전 파일 삭제의 Windows 잠금 백오프가 UI를 막지 않도록
@@ -695,35 +737,42 @@ def _flush_pending_upload(session_id: str, *, defer_old_cleanup: bool = False) -
 
     pending = SessionManager.get(_PENDING_UPLOAD_KEY, None, session_id)
     if not isinstance(pending, dict):
-        _PENDING_UPLOAD_BYTES.pop(session_id, None)
-        return False
+        return FlushOutcome.NO_PENDING
 
-    SessionManager.delete(_PENDING_UPLOAD_KEY, session_id)
+    pending_hash = _pending_upload_hash(pending)
+    if expected_file_hash is not None and pending_hash != expected_file_hash:
+        logger.info(
+            "[UPLOAD] stale pending upload ignored (session=%s expected=%s current=%s)",
+            session_id,
+            expected_file_hash,
+            pending_hash,
+        )
+        return FlushOutcome.STALE
+
     target = str(pending.get("target_path") or "")
     if not target:
-        _PENDING_UPLOAD_BYTES.pop(session_id, None)
-        _rollback_pending_upload(session_id)
-        return True
+        _discard_pending_upload(session_id, pending_hash)
+        _rollback_pending_upload(session_id, expected_file_hash=pending_hash)
+        return FlushOutcome.INVALID_PENDING
 
     if pending.get("needs_write"):
-        file_bytes = _PENDING_UPLOAD_BYTES.get(session_id)
-        if file_bytes is None:
-            file_bytes = _recover_upload_bytes(pending)
-        if file_bytes is None:
+        file_bytes = pending.get("file_bytes")
+        if not isinstance(file_bytes, bytes) or not file_bytes:
             logger.error("[UPLOAD] 지연 저장 실패: 업로드 바이트 유실")
-            _PENDING_UPLOAD_BYTES.pop(session_id, None)
-            _rollback_pending_upload(session_id)
-            return True
+            _discard_pending_upload(session_id, pending_hash)
+            _rollback_pending_upload(session_id, expected_file_hash=pending_hash)
+            return FlushOutcome.MISSING_BYTES
         try:
             _persist_upload_atomically(target, file_bytes)
         except OSError as e:
             logger.error("[UPLOAD] 파일 저장 실패: %s", e, exc_info=True)
-            _PENDING_UPLOAD_BYTES.pop(session_id, None)
-            _rollback_pending_upload(session_id)
-            return True
+            _discard_pending_upload(session_id, pending_hash)
+            _rollback_pending_upload(session_id, expected_file_hash=pending_hash)
+            return FlushOutcome.IO_ERROR
 
-    # 디스크 기록 성공 후에만 메모리 폴백을 해제한다 (뷰어의 디스크 전환 보장).
-    _PENDING_UPLOAD_BYTES.pop(session_id, None)
+    # 디스크 기록 성공 후에만 pending 을 해제한다. 그 사이 새 업로드가
+    # pending 을 교체했다면 그 레코드는 보존한다.
+    _discard_pending_upload(session_id, pending_hash)
 
     old_path = pending.get("old_path")
     if old_path and old_path != target:
@@ -736,7 +785,28 @@ def _flush_pending_upload(session_id: str, *, defer_old_cleanup: bool = False) -
             ).start()
         else:
             _cleanup_previous_upload(str(old_path), target)
-    return True
+    return FlushOutcome.PERSISTED
+
+
+def _validate_pending_upload(
+    session_id: str, expected_file_hash: str | None
+) -> FlushOutcome:
+    """Validate pending upload identity/bytes without performing disk I/O."""
+    from core.session import SessionManager
+
+    pending = SessionManager.get(_PENDING_UPLOAD_KEY, None, session_id)
+    if not isinstance(pending, dict):
+        return FlushOutcome.NO_PENDING
+    pending_hash = _pending_upload_hash(pending)
+    if expected_file_hash is not None and pending_hash != expected_file_hash:
+        return FlushOutcome.STALE
+    if not str(pending.get("target_path") or ""):
+        return FlushOutcome.INVALID_PENDING
+    if pending.get("needs_write"):
+        data = pending.get("file_bytes")
+        if not isinstance(data, bytes) or not data:
+            return FlushOutcome.MISSING_BYTES
+    return FlushOutcome.PERSISTED
 
 
 def _process_uploaded_file(uploaded_file) -> None:
@@ -841,16 +911,16 @@ def _process_uploaded_file(uploaded_file) -> None:
         # [DEFER-PERSIST] 디스크 쓰기는 첫 프레임(뷰어 위젯 생성) 이후
         # `_flush_pending_upload` 로 미룬다. 1페이지 뷰어는 아래에서 등록한
         # `first_page_preview` 바이트만으로 렌더되므로, 파일이 아직 없어도
-        # 첫 프레임은 유효하다. 경로는 미리 게시하되, pending 레코드를 먼저
-        # 기록해 "게시된 경로 + 기록자 없음" 상태가 생기지 않게 한다.
-        if needs_write:
-            _PENDING_UPLOAD_BYTES[sid] = file_bytes
+        # 첫 프레임은 유효하다. bytes 는 pending 레코드에 함께 넣어 rerun
+        # 경계를 넘어도 viewer 와 worker 가 같은 SSoT 를 읽게 한다.
         publish_updates: dict[str, Any] = {
             _PENDING_UPLOAD_KEY: {
                 "target_path": tmp_path,
                 "needs_write": needs_write,
                 "old_path": old_path,
                 "file_name": uploaded_file.name,
+                "file_hash": uploaded_hash,
+                "file_bytes": file_bytes if needs_write else None,
             },
             "pdf_file_path": tmp_path,
             "new_file_uploaded": True,
@@ -995,8 +1065,6 @@ def _handle_pending_tasks() -> None:
     if SessionManager.get(
         "new_file_uploaded", False, current_sid
     ) and not SessionManager.get("is_generating_answer", False, current_sid):
-        SessionManager.set("new_file_uploaded", False, current_sid)
-
         current_file_path = SessionManager.get("pdf_file_path", None, current_sid)
         current_file_name = SessionManager.get(
             "last_uploaded_file_name", None, current_sid
@@ -1006,6 +1074,30 @@ def _handle_pending_tasks() -> None:
             SessionManager.get("last_selected_embedding_model", None, current_sid)
             or DEFAULT_EMBEDDING_MODEL
         )
+
+        # [UPLOAD-PREFLIGHT] Discard an upload whose bytes vanished before a
+        # worker is dispatched. Disk writes stay in the worker.
+        preflight = _validate_pending_upload(current_sid, current_file_hash or None)
+        if preflight is FlushOutcome.STALE:
+            logger.info(
+                "[UPLOAD] stale pending upload blocked build dispatch "
+                "(session=%s expected=%s)",
+                current_sid,
+                current_file_hash or None,
+            )
+            return
+        if preflight in (
+            FlushOutcome.MISSING_BYTES,
+            FlushOutcome.INVALID_PENDING,
+        ):
+            if preflight is FlushOutcome.MISSING_BYTES:
+                logger.error("[UPLOAD] 지연 저장 실패: 업로드 바이트 유실")
+            _rollback_pending_upload(
+                current_sid, expected_file_hash=current_file_hash or None
+            )
+            return
+
+        SessionManager.set("new_file_uploaded", False, current_sid)
 
         # 이미 업로드 핸들러에서 생성되었는지 확인 후 없을 때만 폴백 생성
         if SessionManager.get_build_state(session_id=current_sid) is None:
@@ -1041,14 +1133,6 @@ def _handle_pending_tasks() -> None:
         and not is_building
         and not SessionManager.get("is_generating_answer", False, current_sid)
     ):
-        SessionManager.set("needs_rag_rebuild", False, current_sid)
-        SessionManager.set("is_building_rag", True, current_sid)
-        SessionManager.set("active_faiss_retriever", None, current_sid)
-        SessionManager.set("active_bm25_retriever", None, current_sid)
-        SessionManager.delete("active_retriever_hash", current_sid)
-        # 이전 파일 정리의 잠금 백오프가 UI 스레드를 막지 않도록 위임한다.
-        _flush_pending_upload(current_sid, defer_old_cleanup=True)
-
         current_file_path = SessionManager.get("pdf_file_path", None, current_sid)
         current_file_name = SessionManager.get(
             "last_uploaded_file_name", None, current_sid
@@ -1057,6 +1141,34 @@ def _handle_pending_tasks() -> None:
         current_embedding_model = SessionManager.get(
             "last_selected_embedding_model", None, current_sid
         )
+        expected_hash = current_file_hash or None
+
+        # 이전 파일 정리의 잠금 백오프가 UI 스레드를 막지 않도록 위임한다.
+        flush_outcome = _flush_pending_upload(
+            current_sid,
+            expected_file_hash=expected_hash,
+            defer_old_cleanup=True,
+        )
+        if flush_outcome not in (
+            FlushOutcome.PERSISTED,
+            FlushOutcome.NO_PENDING,
+        ):
+            SessionManager.set("needs_rag_rebuild", False, current_sid)
+            SessionManager.set("is_building_rag", False, current_sid)
+            if flush_outcome is FlushOutcome.STALE:
+                logger.info(
+                    "[UPLOAD] stale pending upload blocked rag rebuild "
+                    "(session=%s expected=%s)",
+                    current_sid,
+                    expected_hash,
+                )
+            return
+
+        SessionManager.set("needs_rag_rebuild", False, current_sid)
+        SessionManager.set("is_building_rag", True, current_sid)
+        SessionManager.set("active_faiss_retriever", None, current_sid)
+        SessionManager.set("active_bm25_retriever", None, current_sid)
+        SessionManager.delete("active_retriever_hash", current_sid)
 
         # [FIX] 임베딩 변경 재빌드도 동기 init으로 즉시 running 카드를 노출한다.
         if current_file_name:
@@ -1271,11 +1383,6 @@ async def _bg_rebuild_task(
     if defer_seconds > 0:
         await asyncio.sleep(defer_seconds)
 
-    # [DEFER-PERSIST] 지연된 업로드 쓰기를 메인 스크립트 스레드 밖에서 완료한
-    # 뒤에만 build_pipeline 으로 진입한다. 쓰기 실패 시 rollback 이 build_state
-    # 를 지우므로 아래 stale 체크가 이 워커를 안전하게 종료한다.
-    await asyncio.to_thread(_flush_pending_upload, session_id)
-
     from core.build_state import (
         BuildEvent,
         BuildPhase,
@@ -1306,6 +1413,42 @@ async def _bg_rebuild_task(
             session_id,
             expected_file_hash,
             None if _initial_state is None else _initial_state.file_hash,
+        )
+        return
+
+    # [DEFER-PERSIST] 지연된 업로드 쓰기를 메인 스크립트 스레드 밖에서 완료한
+    # 뒤에만 build_pipeline 으로 진입한다. bytes/hash 는 pending SSoT 에 있으므로
+    # worker 에 ScriptRunContext 가 없어도 된다.
+    flush_outcome = await asyncio.to_thread(
+        _flush_pending_upload,
+        session_id,
+        expected_file_hash=expected_file_hash or None,
+    )
+    if flush_outcome in (
+        FlushOutcome.STALE,
+        FlushOutcome.MISSING_BYTES,
+        FlushOutcome.IO_ERROR,
+        FlushOutcome.INVALID_PENDING,
+    ):
+        if flush_outcome is FlushOutcome.STALE:
+            logger.info(
+                "[UPLOAD] stale pending flush ignored (session=%s expected=%s)",
+                session_id,
+                expected_file_hash,
+            )
+        # rollback already cleared the build state for missing bytes/IO errors.
+        return
+
+    _after_flush_state = SessionManager.get_build_state(session_id=session_id)
+    if expected_file_hash is not None and (
+        _after_flush_state is None or _after_flush_state.file_hash != expected_file_hash
+    ):
+        logger.info(
+            "[MAIN] stale build worker ignored after flush "
+            "(session=%s expected=%s current=%s)",
+            session_id,
+            expected_file_hash,
+            None if _after_flush_state is None else _after_flush_state.file_hash,
         )
         return
 

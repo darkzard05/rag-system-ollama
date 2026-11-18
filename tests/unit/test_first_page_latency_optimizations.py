@@ -45,10 +45,8 @@ def setup_session():
     SessionManager.reset()
     SessionManager.reset_all_state(SID)
     SessionManager.set_session_id(SID)
-    main_module._PENDING_UPLOAD_BYTES.clear()
     main_module._BUILD_RERUN_LAST.clear()
     yield
-    main_module._PENDING_UPLOAD_BYTES.clear()
     main_module._BUILD_RERUN_LAST.clear()
     SessionManager.reset()
 
@@ -92,8 +90,19 @@ def test_get_pdf_page_bytes_skips_cached_reader_when_file_missing(tmp_path):
 def test_get_pdf_page_bytes_uses_pending_memory_before_disk(tmp_path):
     """디스크 기록 전에도 메모리 업로드 바이트로 요청 페이지를 추출한다."""
     pdf_bytes = _make_pdf(pages=2, token="MEMORY-FALLBACK-TOKEN")
-    main_module._PENDING_UPLOAD_BYTES[SID] = pdf_bytes
     missing = str(tmp_path / "pending_upload.pdf")
+    SessionManager.set(
+        "pending_upload_persist",
+        {
+            "target_path": missing,
+            "needs_write": True,
+            "old_path": None,
+            "file_name": "pending.pdf",
+            "file_hash": "hash-memory",
+            "file_bytes": pdf_bytes,
+        },
+        session_id=SID,
+    )
 
     page_bytes = viewer_module._get_pdf_page_bytes(missing, "hash-memory", 2)
     assert page_bytes, "메모리 폴백이 2페이지를 추출해야 함"

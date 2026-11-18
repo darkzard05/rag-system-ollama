@@ -136,7 +136,8 @@ class SessionManager:
             # Large 1-page preview bytes are read from the SSoT on demand by
             # viewer.py; mirroring them into st.session_state doubles memory.
             "first_page_preview",
-            # Internal upload hand-off (callback -> _handle_pending_tasks).
+            # Internal upload hand-off (callback -> viewer/worker). Holds the
+            # pending PDF bytes until the background flush writes them.
             "pending_upload_persist",
         }
     )
@@ -552,7 +553,12 @@ class SessionManager:
                 if logger.isEnabledFor(
                     logging.DEBUG
                 ):  # 👈 DEBUG 레벨일 때만 문자열 포맷팅 실행
-                    logger.debug(f"[DEBUG] SessionManager.set: {sid} {k}={v}")
+                    if k in cls._NON_UI_SYNC_KEYS:
+                        logger.debug(
+                            "[DEBUG] SessionManager.set: %s %s=<non-ui>", sid, k
+                        )
+                    else:
+                        logger.debug(f"[DEBUG] SessionManager.set: {sid} {k}={v}")
             cls._mark_dirty_locked(state, set(updates.keys()))
 
     @classmethod
@@ -747,6 +753,7 @@ class SessionManager:
             rebuild_cancelled=False,
             build_state=None,
             first_page_preview=None,
+            pending_upload_persist=None,
             needs_rag_rebuild=False,
             needs_qa_chain_update=False,
             rag_build_complete_flag=False,
