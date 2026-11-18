@@ -397,6 +397,11 @@ class RAGSystem:
                         if langgraph_node == "generate":
                             dropped_generate_msgs += 1
                             continue
+                        if langgraph_node in ("grade_documents", "verify_answer"):
+                            # 내부 제어 노드의 JSON 토큰은 사용자 응답이 아니므로
+                            # 드롭한다. dropped_generate_msgs는 generate 전용
+                            # 계측이므로 증가시키지 않는다.
+                            continue
                         yield ("messages", event["data"])
                     elif kind == "on_chain_stream":
                         data = event["data"]
