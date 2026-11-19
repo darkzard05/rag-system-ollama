@@ -92,10 +92,13 @@ def reset_all_key(sid: str) -> str:
     return f"reset_all_{sid}"
 
 
-def pdf_viewer_key(file_hash: str, page: int) -> str:
+def pdf_viewer_key(file_hash: str, page: int, annotations_sig: str = "") -> str:
     """Widget key for the PDF viewer component (components/viewer.py).
 
-    페이지를 키에 포함해 페이지 변경 시 컴포넌트가 재마운트되도록 한다
-    (streamlit-pdf-viewer 0.0.30 프론트엔드는 pages_to_render 변경을 감시하지 않음).
+    페이지와 현재 페이지의 주석 시그니처를 키에 포함해 페이지 변경 또는
+    동일 페이지 내 주석 갱신 시 컴포넌트가 재마운트되도록 한다
+    (streamlit-pdf-viewer 0.0.30 프론트엔드는 prop 변경을 감시하지 않음).
     """
+    if annotations_sig:
+        return f"pdf_v8_{file_hash}_{page}_{annotations_sig}"
     return f"pdf_v8_{file_hash}_{page}"

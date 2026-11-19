@@ -313,10 +313,11 @@ def _make_prewarm_done_callback(
 ) -> Callable[[Future[list[dict[str, Any]]]], None]:
     """prewarm 완료 시 ``SessionManager.pdf_annotations`` 를 채운다.
 
-    워커 스레드에서 실행되므로 Streamlit 호출(``st.rerun`` 포함) 금지:
-    뷰어 fragment(``render_pdf_area`` → ``render_pdf_viewer``)가 다음
-    fragment 실행(참조 클릭 경로 ``_page_scoped_annotations``)에서 값을
-    읽어 rect를 표시한다. 판정 후 future는 레지스트리에서 제거한다.
+    워커 스레드에서 실행되므로 ``st.rerun()`` 직접 호출은 금지한다.
+    대신 현재 뷰어가 표시 중인 페이지에 해당하는 주석이 생성되었고 답변
+    생성 중이 아닐 때만 스레드 안전한 ``request_session_rerun(sid)``를
+    요청해 뷰어 컬럼이 즉시 하이라이트를 반영하도록 한다. 판정 후
+    future는 레지스트리에서 제거한다.
     """
 
     def _on_done(fut: Future[list[dict[str, Any]]]) -> None:
@@ -348,6 +349,23 @@ def _make_prewarm_done_callback(
                 {"file_hash": file_hash, "annotations": annotations},
                 sid,
             )
+            if (
+                isinstance(annotations, list)
+                and annotations
+                and not SessionManager.get("is_generating_answer", False, sid)
+            ):
+                try:
+                    current_page = max(
+                        1, int(SessionManager.get("current_page", 1, sid) or 1)
+                    )
+                except (TypeError, ValueError):
+                    current_page = 1
+                from ui.components.viewer import _page_scoped_annotations
+
+                if _page_scoped_annotations(annotations, current_page):
+                    from common.async_worker import request_session_rerun
+
+                    request_session_rerun(sid)
         except (OSError, ValueError, TypeError, RuntimeError) as exc:
             logger.warning("[PREFETCH] prewarm 하이드레이션 실패: %s", exc)
 

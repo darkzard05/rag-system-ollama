@@ -3,6 +3,7 @@ PDF 뷰어 및 문서 관련 UI 컴포넌트.
 @st.fragment를 사용하여 PDF 렌더링과 네비게이션이 전체 페이지 리런 없이 독립적으로 업데이트됩니다.
 """
 
+import json
 import logging
 import os
 
@@ -11,7 +12,7 @@ import streamlit as st
 from common.config import MSG_PDF_VIEWER_NO_FILE
 from common.exceptions import PDFProcessingError
 from common.pdf_utils import get_pdf_page_count, open_pdf_document
-from common.utils import safe_cache_data
+from common.utils import fast_hash, safe_cache_data
 from core.session import SessionManager
 from ui.components.common import (
     get_doc_metadata,
@@ -426,7 +427,9 @@ def render_pdf_area():
     """PDF 뷰어 + 네비게이션 컨트롤을 렌더링하는 단일 fragment.
 
     run_every 폴링 없이 동작한다(원래 2s 폴링의 소비 대상 재분석 결과):
-    - pdf_annotations: 프로덕션 세터가 없음(테스트 경로 `consume_stream_into_message`에만 존재).
+    - pdf_annotations: 답변 완료 시 `_finalize_pdf_side_effects` 또는 비동기
+      prewarm 콜백(`_make_prewarm_done_callback`)이 현재 페이지 주석 변경을
+      감지해 필요 시에만 리런을 트리거한다.
     - pdf_target_page(수동 참조 점프): on_click 콜백(_handle_page_jump/_handle_doc_jump)이
       설정하고, 버튼 클릭이 유발하는 다음 전체 rerun에서 _resolve_pdf_state가 소비한다.
       Callback-phase st.rerun()은 no-op 경고를 유발하므로 사용하지 않는다.
@@ -470,7 +473,18 @@ def render_pdf_viewer(pdf_path, current_page, file_hash):
             )
         else:
             annotations = raw_annotations  # legacy list 형식 호환
-        viewer_key = pdf_viewer_key(file_hash, current_page)
+        if not isinstance(annotations, list):
+            annotations = []
+        scoped_annotations = _page_scoped_annotations(annotations, current_page)
+        annotations_sig = (
+            fast_hash(
+                json.dumps(scoped_annotations, sort_keys=True, default=str),
+                length=8,
+            )
+            if scoped_annotations
+            else ""
+        )
+        viewer_key = pdf_viewer_key(file_hash, current_page, annotations_sig)
 
         # [FAST-PATH] 1페이지는 업로드 검증 단계에서 선행 추출된 메모리
         # 바이트가 있으면 디스크 재오픈/재파싱 없이 즉시 렌더링한다.

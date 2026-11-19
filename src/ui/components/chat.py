@@ -837,29 +837,54 @@ def _seeded_metrics_text(aux: dict[str, Any], sid: str) -> str:
     return _metrics_caption(metrics, turn_start=t0)
 
 
+def _current_page_annotations(sid: str) -> list[dict[str, Any]]:
+    """현재 PDF 뷰어에 표시 중인 페이지의 주석 목록 스냅샷을 반환한다."""
+    from ui.components.viewer import _page_scoped_annotations
+
+    file_hash = SessionManager.get("file_hash", None, session_id=sid)
+    raw_annotations = SessionManager.get("pdf_annotations", [], session_id=sid)
+    if isinstance(raw_annotations, dict):
+        annotations = (
+            raw_annotations.get("annotations", [])
+            if raw_annotations.get("file_hash") == file_hash
+            else []
+        )
+    else:
+        annotations = raw_annotations
+    if not isinstance(annotations, list):
+        return []
+    try:
+        current_page = max(
+            1, int(SessionManager.get("current_page", 1, session_id=sid) or 1)
+        )
+    except (TypeError, ValueError):
+        current_page = 1
+    return _page_scoped_annotations(annotations, current_page)
+
+
 def _should_skip_final_rerun(
     *,
     cancelled: bool,
     error_text: str | None,
     rendered_while_generating: bool = False,
+    current_page_annotations_changed: bool = False,
 ) -> bool:
-    """Clean finalize needs no st.rerun (Task3 terminalize, in-run commit).
+    """Clean finalize needs no st.rerun unless current-page highlights changed.
 
     The status line plus the reference list are already painted in-run by
     the ``finally`` tail, so the only pending change is the ``msg_type``
     streaming->general conversion for the current ``msg_id``. Cancelled
-    (■ stop), error turns, and turns whose sidebar/input chrome rendered while
-    ``is_generating_answer`` was True (e.g. retry or sample-question runs)
-    still rerun so locked controls unlock and placeholders refresh.
-
-    ``_finalize_pdf_side_effects`` always mutates ``pdf_annotations``
-    whenever citations exist, so gating on that delta made every normal
-    turn rerun too. Auto-jump is disabled (INT-1): the PDF viewer only
-    moves when the user clicks a citation badge (``_handle_page_jump``),
-    which refreshes the viewer on its own, so the post-stream full rerun
-    bought nothing and cost a 1.5-3.5s stall.
+    (■ stop), error turns, turns whose sidebar/input chrome rendered while
+    ``is_generating_answer`` was True (e.g. retry or sample-question runs),
+    and turns that add/update/clear annotations on the currently displayed
+    PDF page still rerun so the viewer reflects the updated highlights.
     """
-    return not cancelled and not error_text and not rendered_while_generating
+    return (
+        not cancelled
+        and not error_text
+        and not rendered_while_generating
+        and not current_page_annotations_changed
+    )
 
 
 def _resolve_final_text(
@@ -1056,10 +1081,10 @@ def _render_streaming_with_write_stream(
     SessionManager.set("generation_cancel", False, session_id=current_sid)
     _clear_aux_state(current_sid)
     _t_fin = time.perf_counter()
-    # 백그라운드 주석 하이드레이션 및 세션 기록만 수행한다. PDF 뷰어는 사용자가
-    # 인용 배지를 클릭할 때 _handle_page_jump가 해당 페이지를 리프레시하므로,
-    # 여기서 pdf_annotations 변경 여부로 rerun을 강제하지 않는다.
+    prev_page_annotations = _current_page_annotations(current_sid)
     _finalize_pdf_side_effects(current_sid, msg_id)
+    next_page_annotations = _current_page_annotations(current_sid)
+    current_page_annotations_changed = next_page_annotations != prev_page_annotations
     logger.info("[PERF] finalize took %.3fs", time.perf_counter() - _t_fin)
 
     rendered_while_generating = bool(
@@ -1069,13 +1094,14 @@ def _render_streaming_with_write_stream(
 
     # Terminalize (Task3): clean finalize already painted the single status line
     # + reference list in-run, so skip st.rerun() when the only pending change is
-    # msg_type streaming->general for this msg_id. The finalized flag lets the
-    # next run know no rerun wall is pending.
+    # msg_type streaming->general for this msg_id. When the visible PDF page's
+    # annotations changed, rerun so the viewer column paints/clears highlights.
     if (
         _should_skip_final_rerun(
             cancelled=cancelled,
             error_text=final_error,
             rendered_while_generating=rendered_while_generating,
+            current_page_annotations_changed=current_page_annotations_changed,
         )
         and not content_replaced
     ):
