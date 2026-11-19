@@ -244,19 +244,22 @@ def _confirm_reset_all() -> None:
     st.warning(t("sidebar_reset_body"))
     col_cancel, col_confirm = st.columns(2)
     with col_cancel:
-        # 버튼 위젯 interaction 자체의 리런으로 다이얼로그가 닫히므로 명시 rerun 금지.
+        # @st.dialog 내부 버튼 클릭은 다이얼로그 프래그먼트만 재실행하므로
+        # 모달을 닫기 위해 앱 스코프 st.rerun()을 명시 호출한다.
         if st.button(
             t("sidebar_cancel"),
             width="stretch",
             key="reset_confirm_cancel_btn",
         ):
-            pass
+            st.rerun()
     with col_confirm:
+        # SessionManager 초기화 후 모달 종료 및 UI 전체 상태(UIBridge) 동기화를 위해
+        # 반드시 앱 스코프 st.rerun()을 호출한다.
         if st.button(
             t("sidebar_confirm_reset"),
             width="stretch",
             type="primary",
             key="reset_confirm_btn",
-            # 버튼 위젯 interaction 자체의 리런으로 전체 UI가 갱신되므로 명시 rerun 금지.
         ):
             SessionManager.reset_all_state()
+            st.rerun()
