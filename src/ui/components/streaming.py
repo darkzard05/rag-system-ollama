@@ -359,6 +359,7 @@ def consume_stream_into_message(
                 # 전용; 여기선 누적 목적으로만 사용).
                 if getattr(chunk, "is_replace", False):
                     # 재생성 확정 본문은 누적분을 대체한다 (중복 방지).
+                    raw_json_extractor = _FinalAnswerExtractor()
                     accumulated = chunk.content
                 elif getattr(chunk, "raw_json", False):
                     delta = raw_json_extractor.feed(chunk.content)

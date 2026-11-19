@@ -857,9 +857,7 @@ def _resolve_final_text(
     """
     if error_text:
         return (streamed_text or persisted_text), False
-    replaced = bool(
-        persisted_text and streamed_text and persisted_text != streamed_text
-    )
+    replaced = bool(persisted_text and persisted_text != streamed_text)
     return (persisted_text or streamed_text), replaced
 
 

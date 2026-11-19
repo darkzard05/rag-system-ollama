@@ -784,6 +784,7 @@ def _content_generator(
                     # write_stream으로 그려진 1차 본문은 지울 수 없으므로
                     # 다시 yield하지 않고, aux content로 영속화한 뒤 chat.py가
                     # 필요 시 rerun으로 화면을 확정한다.
+                    raw_json_extractor = _FinalAnswerExtractor()
                     accumulated_parts = [chunk.content]
                     _real_yielded = True
                     _placeholder_live = False

@@ -1645,7 +1645,7 @@ async def generate(
     # 패스 본문이 이미 UI에 그려졌으므로, 확정 본문을 replace 이벤트로 보내
     # 소비자가 라이브 텍스트를 최종 답변으로 교체하게 한다. (aquery는 writer가
     # 없어 상태의 response를 그대로 사용한다.)
-    if len(passes) > 1 and writer is not None and result["response"]:
+    if (len(passes) > 1 or parse_failed) and writer is not None and result["response"]:
         await _dispatch_event(
             "answer_replace",
             {
