@@ -964,6 +964,8 @@ def on_embedding_change() -> None:
         return
 
     SessionManager.set("last_selected_embedding_model", selected)
+    SessionManager.set("embedder", None)
+    SessionManager.delete("embedder_model_name")
     if SessionManager.get("pdf_file_path"):
         SessionManager.set("needs_rag_rebuild", True)
 
@@ -1554,6 +1556,12 @@ async def _bg_rebuild_task(
         # lock 직렬화로 워밍업 스레드가 이중 실행되어, 캐시 히트 부팅에서도
         # 수십 초 대기 로그가 남는다.
         embedder = await ModelManager.get_embedder(embedder_name)
+        SessionManager.set("embedder", embedder, session_id=session_id)
+        SessionManager.set(
+            "embedder_model_name",
+            embedder_name or DEFAULT_EMBEDDING_MODEL,
+            session_id=session_id,
+        )
 
         # Check cancellation before starting build
         if SessionManager.get("rebuild_cancelled", False, session_id=session_id):
@@ -1683,6 +1691,7 @@ async def _bg_update_qa_chain(session_id: str) -> None:
             model_name = str(selected_model or DEFAULT_OLLAMA_MODEL)
             llm = load_llm(model_name)
             SessionManager.set("llm", llm, session_id=session_id)
+            SessionManager.set("llm_model_name", model_name, session_id=session_id)
             SessionManager.add_status_log(
                 "Inference model switched", session_id=session_id
             )

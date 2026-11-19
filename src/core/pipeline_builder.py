@@ -609,22 +609,53 @@ async def prepare_query_config_or_build(
     """LLM·임베더·리트리버 설정을 포함한 LangGraph 실행 Config를 준비합니다."""
     from core.model_loader import ModelManager
 
-    target_model = model_name or DEFAULT_OLLAMA_MODEL
+    session_model = SessionManager.get("last_selected_model", session_id=session_id)
+    target_model = model_name or session_model or DEFAULT_OLLAMA_MODEL
     selected_embedding = (
         SessionManager.get("last_selected_embedding_model", session_id=session_id)
         or DEFAULT_EMBEDDING_MODEL
     )
 
     llm = SessionManager.get("llm", session_id=session_id)
+    cached_llm_model = SessionManager.get("llm_model_name", session_id=session_id)
     embedder = SessionManager.get("embedder", session_id=session_id)
+    cached_emb_model = SessionManager.get("embedder_model_name", session_id=session_id)
 
-    if not llm or not embedder:
+    need_llm = llm is None or (
+        cached_llm_model is not None and cached_llm_model != target_model
+    )
+    if not need_llm and model_name is not None and cached_llm_model is None:
+        actual_llm_model = getattr(llm, "model", None) or getattr(
+            llm, "model_name", None
+        )
+        if not isinstance(actual_llm_model, str) or actual_llm_model != target_model:
+            need_llm = True
+
+    need_embedder = embedder is None or (
+        cached_emb_model is not None and cached_emb_model != selected_embedding
+    )
+
+    if need_llm and need_embedder:
         llm, embedder = await asyncio.gather(
             ModelManager.get_llm(target_model),
             ModelManager.get_embedder(selected_embedding),
         )
         SessionManager.set("llm", llm, session_id=session_id)
+        SessionManager.set("llm_model_name", target_model, session_id=session_id)
         SessionManager.set("embedder", embedder, session_id=session_id)
+        SessionManager.set(
+            "embedder_model_name", selected_embedding, session_id=session_id
+        )
+    elif need_llm:
+        llm = await ModelManager.get_llm(target_model)
+        SessionManager.set("llm", llm, session_id=session_id)
+        SessionManager.set("llm_model_name", target_model, session_id=session_id)
+    elif need_embedder:
+        embedder = await ModelManager.get_embedder(selected_embedding)
+        SessionManager.set("embedder", embedder, session_id=session_id)
+        SessionManager.set(
+            "embedder_model_name", selected_embedding, session_id=session_id
+        )
 
     file_hash = SessionManager.get("file_hash", session_id=session_id)
     if not file_hash:
