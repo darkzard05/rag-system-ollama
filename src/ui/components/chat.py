@@ -172,6 +172,15 @@ def render_message(
             st.caption(t("caption_stopped_partial"))
 
 
+def _render_build_error_message(msg: dict[str, Any]) -> None:
+    """타임라인 내 build_error 메시지를 오류 말풍선으로 렌더링합니다."""
+    role = msg.get("role", "system")
+    chat_role = "assistant" if role == "assistant" else "system"
+    error_text = msg.get("error") or msg.get("content") or "Unknown error"
+    with st.chat_message(chat_role, avatar=AVATARS["error"]):
+        ui_error(str(error_text))
+
+
 def _render_unified_timeline(current_sid: str) -> None:
     _t_tl = time.perf_counter()
     messages = SessionManager.get_messages() or []
@@ -198,6 +207,10 @@ def _render_unified_timeline(current_sid: str) -> None:
         # 온보딩은 _render_guidance_panel 단일 소스에 위임한다 (파일 게이트는
         # 패널 내부에 일원화 — 여기서 중복 검사하지 않는다).
         _render_guidance_panel()
+        # 대화 시작 전에 발생한 업로드·모델교체·빌드 오류(build_error)는 누락하지 않고 표시한다.
+        for msg in messages:
+            if msg.get("msg_type") == "build_error":
+                _render_build_error_message(msg)
         # 문서 분석 완료 시 상단 status 블록("준비 완료")과 하단 입력창 placeholder가
         # 상태 안내 및 질문 유도를 전담하므로, 증발하는 중복 더미 말풍선은 렌더링하지 않고 종료
         return
@@ -226,8 +239,7 @@ def _render_unified_timeline(current_sid: str) -> None:
                 continue
 
             elif mtype == "build_error":
-                with st.chat_message("system", avatar=AVATARS["error"]):
-                    ui_error(msg.get("error", "Unknown error"))
+                _render_build_error_message(msg)
                 continue
 
             elif mtype == "log":
@@ -241,6 +253,11 @@ def _render_unified_timeline(current_sid: str) -> None:
 
         # READY_FOR_QUERY 같은 내부 메시지는 스킵
         if content == "READY_FOR_QUERY":
+            continue
+
+        # 어시스턴트 역할로 기록된 업로드/모델교체/빌드 오류도 오류 말풍선으로 통일 렌더링
+        if mtype == "build_error":
+            _render_build_error_message(msg)
             continue
 
         # 스트리밍 중인 메시지: 단일 pass로 직접 렌더.
