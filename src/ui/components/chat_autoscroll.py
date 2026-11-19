@@ -106,13 +106,8 @@ def build_autoscroll_js(force: bool) -> str:
                 marker = doc.createElement("div");
                 marker.id = SENTINEL_ID;
                 const scroller = getScroller();
-                const inputWrap = scroller ? scroller.querySelector(
-                    ':scope > [data-testid="stElementContainer"]:has([data-testid="stChatInput"]),'
-                    + ' :scope > [data-testid="stLayoutWrapper"]:has([data-testid="stChatInput"])'
-                ) : null;
                 if (scroller) {
-                    if (inputWrap) scroller.insertBefore(marker, inputWrap);
-                    else scroller.appendChild(marker);
+                    scroller.appendChild(marker);
                 }
             }
 

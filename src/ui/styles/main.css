@@ -636,6 +636,9 @@ border-top: 1px solid color-mix(in srgb, var(--border-color) 30%, transparent) !
    frame height, so collapsing it is safe and removes the blank. Do NOT revert to
    visible height or the top gap returns. */
 [data-testid="stMainBlockContainer"] > [data-testid="stVerticalBlock"]
+> .stElementContainer:has(> [data-testid="stIFrame"]),
+[data-testid="stMainBlockContainer"] [data-testid="stColumn"]:last-child
+> [data-testid="stVerticalBlock"]
 > .stElementContainer:has(> [data-testid="stIFrame"]) {
     height: 0 !important;
     min-height: 0 !important;
@@ -645,9 +648,13 @@ border-top: 1px solid color-mix(in srgb, var(--border-color) 30%, transparent) !
 }
 [data-testid="stMainBlockContainer"] > [data-testid="stVerticalBlock"]
 > .stElementContainer:has(> [data-testid="stIFrame"]) [data-testid="stIFrame"],
+[data-testid="stMainBlockContainer"] [data-testid="stColumn"]:last-child
+> [data-testid="stVerticalBlock"]
+> .stElementContainer:has(> [data-testid="stIFrame"]) [data-testid="stIFrame"],
 #chat-autoscroll-sentinel,
 iframe[title="ui.ui.inject_header_height_script"],
-iframe[title="ui.ui.inject_custom_css"] {
+iframe[title="ui.ui.inject_custom_css"],
+iframe[title="ui.components.chat_autoscroll.render_autoscroll_sentinel"] {
     height: 0 !important;
     min-height: 0 !important;
     border: none !important;
