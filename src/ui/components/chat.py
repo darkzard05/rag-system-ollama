@@ -699,6 +699,14 @@ def render_chat_input_area() -> None:
         # 준비 미완료면 큐에 남겨 유실을 막고 입력창 렌더로 진행한다.
 
     # 생성 중에도 위젯을 disabled로 계속 렌더(입력창 소실 방지).
+    # 재시도(_retry_stopped_answer)나 샘플 질문 경로처럼 입력창·사이드바가
+    # is_generating_answer=True 상태에서 먼저 그려진 경우에는 스트리밍 종료 후
+    # st.rerun()을 생략하면 사이드바 잠금 및 입력창 안내 문구가 고착되므로 기록한다.
+    SessionManager.set(
+        "_ui_rendered_while_generating",
+        bool(SessionManager.get("is_generating_answer", False, current_sid)),
+        session_id=current_sid,
+    )
     input_placeholder, input_disabled = _resolve_chat_input_state(current_sid)
 
     # [UX-3] 실사용 취소 = 네이티브 ■ 중지(submit_mode="stop") — ScriptRunner가
@@ -812,13 +820,20 @@ def _seeded_metrics_text(aux: dict[str, Any], sid: str) -> str:
     return _metrics_caption(metrics, turn_start=t0)
 
 
-def _should_skip_final_rerun(*, cancelled: bool, error_text: str | None) -> bool:
+def _should_skip_final_rerun(
+    *,
+    cancelled: bool,
+    error_text: str | None,
+    rendered_while_generating: bool = False,
+) -> bool:
     """Clean finalize needs no st.rerun (Task3 terminalize, in-run commit).
 
     The status line plus the reference list are already painted in-run by
     the ``finally`` tail, so the only pending change is the ``msg_type``
     streaming->general conversion for the current ``msg_id``. Cancelled
-    (■ stop) and error turns still rerun for a confirmed render.
+    (■ stop), error turns, and turns whose sidebar/input chrome rendered while
+    ``is_generating_answer`` was True (e.g. retry or sample-question runs)
+    still rerun so locked controls unlock and placeholders refresh.
 
     ``_finalize_pdf_side_effects`` always mutates ``pdf_annotations``
     whenever citations exist, so gating on that delta made every normal
@@ -827,7 +842,7 @@ def _should_skip_final_rerun(*, cancelled: bool, error_text: str | None) -> bool
     which refreshes the viewer on its own, so the post-stream full rerun
     bought nothing and cost a 1.5-3.5s stall.
     """
-    return not cancelled and not error_text
+    return not cancelled and not error_text and not rendered_while_generating
 
 
 def _resolve_final_text(
@@ -1032,12 +1047,21 @@ def _render_streaming_with_write_stream(
     _finalize_pdf_side_effects(current_sid, msg_id)
     logger.info("[PERF] finalize took %.3fs", time.perf_counter() - _t_fin)
 
+    rendered_while_generating = bool(
+        SessionManager.get("_ui_rendered_while_generating", False, current_sid)
+    )
+    SessionManager.set("_ui_rendered_while_generating", False, session_id=current_sid)
+
     # Terminalize (Task3): clean finalize already painted the single status line
     # + reference list in-run, so skip st.rerun() when the only pending change is
     # msg_type streaming->general for this msg_id. The finalized flag lets the
     # next run know no rerun wall is pending.
     if (
-        _should_skip_final_rerun(cancelled=cancelled, error_text=final_error)
+        _should_skip_final_rerun(
+            cancelled=cancelled,
+            error_text=final_error,
+            rendered_while_generating=rendered_while_generating,
+        )
         and not content_replaced
     ):
         SessionManager.set("stream_finalized_no_rerun", msg_id, session_id=current_sid)
