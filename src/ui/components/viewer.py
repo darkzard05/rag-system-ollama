@@ -56,13 +56,27 @@ def _render_coord_cache_warnings() -> None:
         st.warning(t("pdf_highlight_load_failed"))
 
 
-def _get_pending_upload_bytes(session_id: str) -> bytes | None:
-    """``src/main.get_pending_upload_bytes`` 를 재임포트 없이 조회한다.
+def _get_pending_upload_bytes(
+    session_id: str, expected_file_hash: str | None = None
+) -> bytes | None:
+    """디스크 플러시 전 세션 SSoT(``pending_upload_persist``)에서 업로드 바이트를 조회한다.
 
-    Streamlit 은 ``src/main.py`` 를 ``__main__`` 으로 실행하므로, 뷰어가
-    ``import main`` 을 수행하면 모듈이 중복 실행될 수 있다. 이미 로드된
-    모듈 네임스페이스에서만 접근자(accessor)를 찾는다.
+    Streamlit 런타임은 ``src/main.py`` 를 ``sys.modules["__main__"]`` / ``"main"`` 에
+    등록하지 않으므로 모듈 탐색 대신 ``SessionManager`` 를 직접 읽는다.
+    세션 저장소에 없을 때만 기존 테스트 목 호환을 위해 ``sys.modules`` 폴백을 수행한다.
     """
+    pending = SessionManager.get("pending_upload_persist", None, session_id)
+    if isinstance(pending, dict):
+        pending_hash = pending.get("file_hash")
+        if (
+            expected_file_hash
+            and pending_hash
+            and str(pending_hash) != expected_file_hash
+        ):
+            return None
+        data = pending.get("file_bytes")
+        return data if isinstance(data, bytes) and data else None
+
     import sys
 
     for mod_name in ("__main__", "src.main", "main"):
@@ -170,10 +184,10 @@ def _get_pdf_total_pages(pdf_path: str) -> int | None:
         return None
 
 
-def _get_pending_page_bytes(page: int) -> bytes:
+def _get_pending_page_bytes(page: int, file_hash: str | None = None) -> bytes:
     """디스크 기록 전 메모리 업로드 바이트에서 단일 페이지를 추출한다."""
     session_id = SessionManager.get_session_id()
-    pending = _get_pending_upload_bytes(session_id)
+    pending = _get_pending_upload_bytes(session_id, expected_file_hash=file_hash)
     if not pending:
         return b""
     try:
@@ -197,9 +211,9 @@ def _get_pdf_page_bytes(pdf_path: str, file_hash: str, page: int) -> bytes:
     try:
         stat = os.stat(pdf_path)
     except OSError:
-        return _get_pending_page_bytes(page)
+        return _get_pending_page_bytes(page, file_hash=file_hash)
     if stat.st_size <= 0:
-        return _get_pending_page_bytes(page)
+        return _get_pending_page_bytes(page, file_hash=file_hash)
     try:
         return _read_pdf_page_bytes_cached(pdf_path, file_hash, page, stat.st_mtime_ns)
     except Exception as e:
@@ -583,7 +597,7 @@ def render_pdf_controls(current_page, total_pages):
             dyn_key = f"{PDF_NAV_INPUT_KEY}_{current_page}"
             # 이전 페이지 번호 입력 위젯 키 정리 (메모리 누수 및 세션 상태 잔재 방지)
             for k in list(st.session_state.keys()):
-                if k.startswith(f"{PDF_NAV_INPUT_KEY}_") and k != dyn_key:
+                if str(k).startswith(f"{PDF_NAV_INPUT_KEY}_") and k != dyn_key:
                     st.session_state.pop(k, None)
 
             st.number_input(
