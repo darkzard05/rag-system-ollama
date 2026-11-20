@@ -580,47 +580,23 @@ def render_pdf_controls(current_page, total_pages):
                 help=t("pdf_page_help"),
             )
         with col_page:
-            # 동적 키와 value 인자를 사용하여 페이지 점프나 이전/다음 버튼 클릭 시 위젯 재생성 및 상태 동기화 보장 (StreamlitAPIException 방지)
             dyn_key = f"{PDF_NAV_INPUT_KEY}_{current_page}"
-            raw_static = st.session_state.get(PDF_NAV_INPUT_KEY)
-            is_static_valid = raw_static is None or (
-                isinstance(raw_static, int) and 1 <= raw_static <= total_pages
+            # 이전 페이지 번호 입력 위젯 키 정리 (메모리 누수 및 세션 상태 잔재 방지)
+            for k in list(st.session_state.keys()):
+                if k.startswith(f"{PDF_NAV_INPUT_KEY}_") and k != dyn_key:
+                    st.session_state.pop(k, None)
+
+            st.number_input(
+                t("pdf_page_label"),
+                min_value=1,
+                max_value=total_pages,
+                value=current_page,
+                key=dyn_key,
+                on_change=_on_page_change,
+                args=(total_pages,),
+                label_visibility="visible",
+                help=t("pdf_page_help"),
             )
-
-            if dyn_key in st.session_state:
-                page_input_key = dyn_key
-                has_key = True
-            elif is_static_valid:
-                page_input_key = PDF_NAV_INPUT_KEY
-                has_key = PDF_NAV_INPUT_KEY in st.session_state
-            else:
-                page_input_key = dyn_key
-                has_key = False
-
-            if has_key and page_input_key in st.session_state:
-                st.number_input(
-                    t("pdf_page_label"),
-                    min_value=1,
-                    max_value=total_pages,
-                    key=page_input_key,
-                    on_change=_on_page_change,
-                    args=(page_input_key, total_pages),
-                    label_visibility="visible",
-                    help=t("pdf_page_help"),
-                )
-            else:
-                st.number_input(
-                    t("pdf_page_label"),
-                    min_value=1,
-                    max_value=total_pages,
-                    value=current_page,
-                    key=page_input_key,
-                    on_change=_on_page_change,
-                    args=(page_input_key, total_pages),
-                    label_visibility="visible",
-                    help=t("pdf_page_help"),
-                )
-            # args=(total_pages,) compatibility hint for static source checks
 
         with col_next:
             st.button(
