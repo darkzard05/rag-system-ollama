@@ -70,6 +70,31 @@ def get_pdf_page_count(file_path: str) -> int | None:
     """
     if not file_path:
         return None
+    import os
+
+    if not os.path.exists(file_path):
+        try:
+            from core.session import SessionManager
+
+            sid = SessionManager.get_session_id()
+            if sid and SessionManager.get("pdf_file_path", session_id=sid) == file_path:
+                tp = SessionManager.get("total_pages", session_id=sid)
+                if isinstance(tp, int) and tp > 0:
+                    return tp
+                pending = SessionManager.get(
+                    "pending_upload_persist", None, session_id=sid
+                )
+                if (
+                    isinstance(pending, dict)
+                    and pending.get("target_path") == file_path
+                ):
+                    file_bytes = pending.get("file_bytes")
+                    if isinstance(file_bytes, bytes) and file_bytes:
+                        return get_pdf_page_count_from_bytes(file_bytes)
+        except Exception:
+            pass
+        return None
+
     fitz = _fitz()
     return _count_pages(lambda: fitz.open(file_path), file_path, exc_info=True)
 

@@ -101,7 +101,7 @@ def _extract_page_bytes(doc, page: int) -> bytes:
     try:
         new_doc.insert_pdf(doc, from_page=page - 1, to_page=page - 1)
         # deflate=False로 불필요한 zlib 압축 CPU 소모 제거 (단일 페이지 고속 직렬화)
-        return new_doc.tobytes(garbage=1, deflate=False)
+        return new_doc.tobytes(garbage=0, deflate=False)
     finally:
         new_doc.close()
 
@@ -545,7 +545,7 @@ def render_pdf_viewer(pdf_path, current_page, file_hash):
                 input=page_bytes,
                 render_text=True,
                 pages_to_render=[1],
-                annotations=_page_scoped_annotations(annotations, current_page),
+                annotations=scoped_annotations,
                 annotation_outline_size=2,
                 scroll_behavior="instant",
                 key=viewer_key,
