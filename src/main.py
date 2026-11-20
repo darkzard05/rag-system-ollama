@@ -814,6 +814,7 @@ def _process_uploaded_file(uploaded_file) -> None:
     from ui.components.common import navigate_to_page
 
     sid = SessionManager.get_session_id()
+    SessionManager.set("pdf_upload_start_time", time.perf_counter(), session_id=sid)
     last_file_name = SessionManager.get("last_uploaded_file_name", session_id=sid)
     last_file_hash = SessionManager.get("file_hash", session_id=sid)
     # reset_for_new_file clears pdf_file_path; capture the old path first so

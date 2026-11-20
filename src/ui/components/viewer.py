@@ -6,6 +6,7 @@ PDF 뷰어 및 문서 관련 UI 컴포넌트.
 import json
 import logging
 import os
+import time
 
 import streamlit as st
 
@@ -550,6 +551,16 @@ def render_pdf_viewer(pdf_path, current_page, file_hash):
                 scroll_behavior="instant",
                 key=viewer_key,
             )
+            if current_page == 1:
+                start_time = SessionManager.get(
+                    "pdf_upload_start_time", None, session_id=sid
+                )
+                if isinstance(start_time, (int, float)) and start_time > 0:
+                    elapsed = time.perf_counter() - float(start_time)
+                    logger.info(
+                        "[PERF] PDF upload to first page render took %.3fs", elapsed
+                    )
+                    SessionManager.delete("pdf_upload_start_time", session_id=sid)
             return
 
         pdf_bytes = _get_pdf_bytes(pdf_path)
@@ -566,6 +577,16 @@ def render_pdf_viewer(pdf_path, current_page, file_hash):
             scroll_behavior="instant",
             key=viewer_key,
         )
+        if current_page == 1:
+            start_time = SessionManager.get(
+                "pdf_upload_start_time", None, session_id=sid
+            )
+            if isinstance(start_time, (int, float)) and start_time > 0:
+                elapsed = time.perf_counter() - float(start_time)
+                logger.info(
+                    "[PERF] PDF upload to first page render took %.3fs", elapsed
+                )
+                SessionManager.delete("pdf_upload_start_time", session_id=sid)
     except PDFProcessingError as e:
         logger.error(f"PDF 처리 오류: {e}")
         ui_error(t("pdf_error_viewer"))
