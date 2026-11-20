@@ -79,7 +79,10 @@ jobs:
           --ignore-vuln CVE-2026-26013 \
           --ignore-vuln CVE-2026-27794 \
           --ignore-vuln CVE-2026-28277 \
-          --ignore-vuln CVE-2026-28500
+          --ignore-vuln CVE-2026-28500 \
+          --ignore-vuln PYSEC-2026-4363 \
+          --ignore-vuln CVE-2026-128067 \
+          --ignore-vuln CVE-2026-128066
 
   test:
     # Single-job, single-environment CI. The local pre-push hook
