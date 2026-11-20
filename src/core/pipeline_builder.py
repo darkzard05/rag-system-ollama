@@ -88,9 +88,8 @@ async def _preload_model() -> None:
         coordinator = get_resource_manager()
 
         def _user_busy() -> bool:
-            return bool(
-                SessionManager.get("is_generating_answer")
-                or SessionManager.get("is_building_rag")
+            return SessionManager.any_session_flag(
+                "is_generating_answer", "is_building_rag"
             )
 
         def _yield_to_user(stage: str) -> bool:

@@ -347,9 +347,7 @@ def _warm_heavy_imports() -> None:
     if remaining > 0:
         time.sleep(remaining)
     for mod_name in ("faiss", "torch"):
-        if SessionManager.get("new_file_uploaded") or SessionManager.get(
-            "is_building_rag"
-        ):
+        if SessionManager.any_session_flag("new_file_uploaded", "is_building_rag"):
             logger.debug(
                 "[WARMUP] active upload/build detected — %s import yielded",
                 mod_name,
@@ -453,11 +451,11 @@ async def _warmup_models() -> None:
     # 프리로드/모델 로드가 첫 질의를 막지 않도록 업로드·빌드·생성 시작 시 중단.
     for _ in range(25):
         await asyncio.sleep(0.1)
-        if (
-            SessionManager.get("new_file_uploaded")
-            or SessionManager.get("is_building_rag")
-            or SessionManager.get("pdf_file_path")
-            or SessionManager.get("is_generating_answer")
+        if SessionManager.any_session_flag(
+            "new_file_uploaded",
+            "is_building_rag",
+            "pdf_file_path",
+            "is_generating_answer",
         ):
             logger.info("[WARMUP] 사용자 상호작용 감지 — 프리워밍 즉시 중단")
             return
@@ -1222,9 +1220,7 @@ def _start_tokenizer_warmup() -> bool:
         from core.session import SessionManager
 
         time.sleep(_TOKENIZER_WARMUP_DELAY_S)
-        if SessionManager.get("new_file_uploaded") or SessionManager.get(
-            "is_building_rag"
-        ):
+        if SessionManager.any_session_flag("new_file_uploaded", "is_building_rag"):
             logger.debug("[MAIN] startup tokenizer warmup yielded to active build")
             return
         try:

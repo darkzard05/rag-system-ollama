@@ -516,6 +516,33 @@ class SessionManager:
         return default
 
     @classmethod
+    def any_session_flag(cls, *keys: str) -> bool:
+        """활성 세션 중 지정된 플래그 키가 하나라도 참(truthy)인지 확인합니다.
+
+        백그라운드 워밍업/프리로드 스레드처럼 ScriptRunContext가 없는 컨텍스트에서
+        SessionManager.get()을 호출하면 항상 "default" 세션만 조회해 실제 사용자
+        세션(UUID)의 상태를 놓치는 문제를 방지합니다.
+        """
+        if not keys:
+            return False
+        with cls._map_lock:
+            candidates = [
+                (sid, cls._session_locks.get(sid)) for sid in cls._fallback_sessions
+            ]
+        for sid, lock in candidates:
+            if lock is not None:
+                with lock:
+                    state = cls._fallback_sessions.get(sid)
+                    if state is not None and any(bool(state.get(k)) for k in keys):
+                        return True
+            else:
+                with cls._map_lock:
+                    state = cls._fallback_sessions.get(sid)
+                    if state is not None and any(bool(state.get(k)) for k in keys):
+                        return True
+        return any(bool(cls.get(k)) for k in keys)
+
+    @classmethod
     def _mark_dirty_locked(cls, state: dict[str, Any], keys: Set[str]) -> None:
         """세션 락 보유 중에 더티 집합과 버전 카운터를 함께 갱신한다."""
         state.setdefault("_dirty_keys", set()).update(keys)

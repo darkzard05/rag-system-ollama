@@ -462,9 +462,7 @@ async def _warmup_models() -> None:
 
     coordinator = get_resource_manager()
 
-    if SessionManager.get("is_generating_answer") or SessionManager.get(
-        "is_building_rag"
-    ):
+    if SessionManager.any_session_flag("is_generating_answer", "is_building_rag"):
         logger.info("[WARMUP] 사용자 작업 우선 — 임베더 워밍업 양보")
         return
 
@@ -479,9 +477,7 @@ async def _warmup_models() -> None:
     except Exception as e:
         logger.debug(f"[WARMUP] 임베더 프리웜 실패 (무시): {e}")
 
-    if SessionManager.get("is_generating_answer") or SessionManager.get(
-        "is_building_rag"
-    ):
+    if SessionManager.any_session_flag("is_generating_answer", "is_building_rag"):
         logger.info("[WARMUP] 사용자 작업 우선 — LLM 워밍업 양보")
         return
 
