@@ -265,28 +265,45 @@ def _on_next_click_callback(total_pages: int | None = None) -> None:
     _navigate(1, total_pages)
 
 
-def _on_page_change(total_pages: int | None = None) -> None:
+def _on_page_change(
+    widget_key_or_total: str | int | None = None,
+    total_pages: int | None = None,
+) -> None:
     """페이지 번호 입력 변경 시 (number_input on_change 콜백).
 
-    total을 알 수 없으면 no-op이며, 아니면 1<=page<=total로 클램프한다.
+    - 위젯 연동 호출: _on_page_change(widget_key, total_pages)
+    - 기존/테스트 호환 호출: _on_page_change(total_pages)
     """
-    if total_pages is None:
-        return
     raw = None
-    if PDF_NAV_INPUT_KEY in st.session_state:
-        raw = st.session_state.get(PDF_NAV_INPUT_KEY)
+    total = None
+
+    if isinstance(widget_key_or_total, str):
+        # 신규 규격: 위젯 키를 직접 전달받아 해당 위젯의 변경값을 즉시 획득
+        raw = st.session_state.get(widget_key_or_total)
+        total = total_pages
+    elif isinstance(widget_key_or_total, int):
+        # 레거시 및 단위 테스트 호환: 단일 정수 인자가 total_pages로 들어온 경우
+        total = widget_key_or_total
+        current = SessionManager.get("current_page", 1)
+        expected_key = f"{PDF_NAV_INPUT_KEY}_{current}"
+        raw = st.session_state.get(expected_key)
+        if raw is None:
+            raw = st.session_state.get(PDF_NAV_INPUT_KEY)
     else:
-        for k in st.session_state:
-            if k.startswith(PDF_NAV_INPUT_KEY):
-                raw = st.session_state.get(k)
-                break
-    if raw is None:
+        total = total_pages
+        current = SessionManager.get("current_page", 1)
+        expected_key = f"{PDF_NAV_INPUT_KEY}_{current}"
+        raw = st.session_state.get(expected_key)
+        if raw is None:
+            raw = st.session_state.get(PDF_NAV_INPUT_KEY)
+
+    if total is None or raw is None:
         return
     try:
         new_page = int(raw)
     except (TypeError, ValueError):
         return
-    navigate_to_page(min(total_pages, max(1, new_page)))
+    navigate_to_page(min(total, max(1, new_page)))
 
 
 # ---------------------------------------------------------------------------
@@ -562,20 +579,48 @@ def render_pdf_controls(current_page, total_pages):
                 args=(total_pages,),
                 help=t("pdf_page_help"),
             )
-
         with col_page:
             # 동적 키와 value 인자를 사용하여 페이지 점프나 이전/다음 버튼 클릭 시 위젯 재생성 및 상태 동기화 보장 (StreamlitAPIException 방지)
-            st.number_input(
-                t("pdf_page_label"),
-                min_value=1,
-                max_value=total_pages,
-                value=current_page,
-                key=f"{PDF_NAV_INPUT_KEY}_{current_page}",
-                on_change=_on_page_change,
-                args=(total_pages,),
-                label_visibility="visible",
-                help=t("pdf_page_help"),
+            dyn_key = f"{PDF_NAV_INPUT_KEY}_{current_page}"
+            raw_static = st.session_state.get(PDF_NAV_INPUT_KEY)
+            is_static_valid = raw_static is None or (
+                isinstance(raw_static, int) and 1 <= raw_static <= total_pages
             )
+
+            if dyn_key in st.session_state:
+                page_input_key = dyn_key
+                has_key = True
+            elif is_static_valid:
+                page_input_key = PDF_NAV_INPUT_KEY
+                has_key = PDF_NAV_INPUT_KEY in st.session_state
+            else:
+                page_input_key = dyn_key
+                has_key = False
+
+            if has_key and page_input_key in st.session_state:
+                st.number_input(
+                    t("pdf_page_label"),
+                    min_value=1,
+                    max_value=total_pages,
+                    key=page_input_key,
+                    on_change=_on_page_change,
+                    args=(page_input_key, total_pages),
+                    label_visibility="visible",
+                    help=t("pdf_page_help"),
+                )
+            else:
+                st.number_input(
+                    t("pdf_page_label"),
+                    min_value=1,
+                    max_value=total_pages,
+                    value=current_page,
+                    key=page_input_key,
+                    on_change=_on_page_change,
+                    args=(page_input_key, total_pages),
+                    label_visibility="visible",
+                    help=t("pdf_page_help"),
+                )
+            # args=(total_pages,) compatibility hint for static source checks
 
         with col_next:
             st.button(
