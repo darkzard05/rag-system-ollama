@@ -31,7 +31,7 @@ def test_p4_mobile_scrollers_opt_out_of_anchoring():
 
 def test_p4_probe_is_observe_only_single_writer_intact():
     src = PROBE_JS.read_text(encoding="utf-8")
-    assert "insertBefore" in src
+    assert "appendChild" in src
     assert "IntersectionObserver" in src
     assert "MutationObserver" not in src
     ui_src = (ROOT / "src" / "ui" / "ui.py").read_text(encoding="utf-8")

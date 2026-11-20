@@ -74,15 +74,15 @@ def test_keep_alive_seconds_honours_env_minutes(monkeypatch) -> None:
     assert loaders._keep_alive_seconds() == 1800
 
 
-def test_config_yml_keep_alive_is_ten_minutes() -> None:
-    """배포 config.yml의 keep_alive가 10m인지 확인."""
+def test_config_yml_keep_alive_is_thirty_minutes() -> None:
+    """배포 config.yml의 keep_alive가 30m인지 확인."""
     from pathlib import Path
 
     import yaml
 
     root = Path(__file__).resolve().parents[2]
     data = yaml.safe_load((root / "config.yml").read_text(encoding="utf-8"))
-    assert data["models"]["keep_alive"] == "10m"
+    assert data["models"]["keep_alive"] == "30m"
 
 
 @pytest.mark.asyncio

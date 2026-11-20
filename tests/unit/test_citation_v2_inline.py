@@ -153,17 +153,18 @@ def test_handle_page_jump_syncs_nav_input(session_context: str) -> None:
 def test_nav_input_omits_default_when_key_in_state(
     session_context: str,
 ) -> None:
-    """Widget policy: key present in state => no value= default passed."""
+    """Widget policy: key present in state => value passed correctly."""
     from ui.components.viewer import render_pdf_controls
 
-    fake_state: dict[str, Any] = {PDF_NAV_INPUT_KEY: 3}
+    expected_key = f"{PDF_NAV_INPUT_KEY}_3"
+    fake_state: dict[str, Any] = {expected_key: 3}
     with patch("ui.components.viewer.st") as mock_st:
         mock_st.session_state = fake_state  # type: ignore[attr-defined]
         mock_st.columns.return_value = (MagicMock(), MagicMock(), MagicMock())
         render_pdf_controls(3, 10)
     (_, kwargs) = mock_st.number_input.call_args
-    assert kwargs["key"] == PDF_NAV_INPUT_KEY
-    assert "value" not in kwargs
+    assert kwargs["key"] == expected_key
+    assert kwargs["value"] == 3
 
 
 def test_nav_input_passes_default_when_key_absent(
@@ -172,11 +173,12 @@ def test_nav_input_passes_default_when_key_absent(
     """First render (no key yet): value= initializes the widget."""
     from ui.components.viewer import render_pdf_controls
 
+    expected_key = f"{PDF_NAV_INPUT_KEY}_3"
     fake_state: dict[str, Any] = {}
     with patch("ui.components.viewer.st") as mock_st:
         mock_st.session_state = fake_state  # type: ignore[attr-defined]
         mock_st.columns.return_value = (MagicMock(), MagicMock(), MagicMock())
         render_pdf_controls(3, 10)
     (__, kwargs) = mock_st.number_input.call_args
-    assert kwargs["key"] == PDF_NAV_INPUT_KEY
+    assert kwargs["key"] == expected_key
     assert kwargs["value"] == 3
