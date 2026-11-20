@@ -272,7 +272,14 @@ def _on_page_change(total_pages: int | None = None) -> None:
     """
     if total_pages is None:
         return
-    raw = st.session_state.get(PDF_NAV_INPUT_KEY)
+    raw = None
+    if PDF_NAV_INPUT_KEY in st.session_state:
+        raw = st.session_state.get(PDF_NAV_INPUT_KEY)
+    else:
+        for k in st.session_state:
+            if k.startswith(PDF_NAV_INPUT_KEY):
+                raw = st.session_state.get(k)
+                break
     if raw is None:
         return
     try:
@@ -541,18 +548,6 @@ def render_pdf_controls(current_page, total_pages):
         # 1. current_page의 유효 범위를 1 ~ total_pages로 엄격히 제한
         current_page = min(max(1, int(current_page)), total_pages)
 
-        # 2. st.number_input 위젯 생성 직전에 st.session_state[PDF_NAV_INPUT_KEY]를 동기화.
-        # 위젯이 렌더링되기 전(pre-instantiation) 수정은 Streamlit API 규약상 합법적이며,
-        # 새 문서 업로드로 total_pages가 축소되었을 때 잔류 값이 max_value를 초과하여
-        # StreamlitAPIException(컨트롤바 증발)이 발생하는 현상을 원천 방지함.
-        if (
-            PDF_NAV_INPUT_KEY not in st.session_state
-            or st.session_state[PDF_NAV_INPUT_KEY] != current_page
-            or st.session_state[PDF_NAV_INPUT_KEY] > total_pages
-            or st.session_state[PDF_NAV_INPUT_KEY] < 1
-        ):
-            st.session_state[PDF_NAV_INPUT_KEY] = current_page
-
         col_prev, col_page, col_next = st.columns(
             [1, 2, 1], gap="small", vertical_alignment="center"
         )
@@ -569,11 +564,13 @@ def render_pdf_controls(current_page, total_pages):
             )
 
         with col_page:
+            # 동적 키와 value 인자를 사용하여 페이지 점프나 이전/다음 버튼 클릭 시 위젯 재생성 및 상태 동기화 보장 (StreamlitAPIException 방지)
             st.number_input(
                 t("pdf_page_label"),
                 min_value=1,
                 max_value=total_pages,
-                key=PDF_NAV_INPUT_KEY,
+                value=current_page,
+                key=f"{PDF_NAV_INPUT_KEY}_{current_page}",
                 on_change=_on_page_change,
                 args=(total_pages,),
                 label_visibility="visible",
