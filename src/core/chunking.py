@@ -56,7 +56,7 @@ def _load_hf_embedding_tokenizer() -> Any | None:
     # 캐시된 토크나이저를 우선 사용해 HF Hub 메타데이터 조회(수 초)를 피한다.
     for local_only in (True, False):
         try:
-            return AutoTokenizer.from_pretrained(
+            return AutoTokenizer.from_pretrained(  # nosec B615
                 _HF_TOKENIZER_REPO,
                 trust_remote_code=True,
                 local_files_only=local_only,
