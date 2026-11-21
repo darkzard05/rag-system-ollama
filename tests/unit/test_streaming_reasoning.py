@@ -91,12 +91,16 @@ async def test_generate_streams_thought_and_content(mock_dispatch):
     thought_calls = [
         call
         for call in mock_dispatch.call_args_list
-        if len(call.args) > 1 and call.args[1].get("thought")
+        if len(call.args) > 1
+        and call.args[0] == "response_chunk"
+        and call.args[1].get("thought")
     ]
     content_calls = [
         call
         for call in mock_dispatch.call_args_list
-        if len(call.args) > 1 and call.args[1].get("content")
+        if len(call.args) > 1
+        and call.args[0] == "response_chunk"
+        and call.args[1].get("content")
     ]
 
     assert len(thought_calls) >= 1

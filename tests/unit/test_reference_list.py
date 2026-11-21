@@ -257,10 +257,13 @@ if isinstance(_cp, int):
     st.session_state["__current_page"] = int(_cp)
 """
     SessionManager.reset()
-    with open("temp_test_reflist_callback.py", "w", encoding="utf-8") as f:
+    # Streamlit 1.66 resolves relative AppTest paths against this test file,
+    # not the process CWD, so pass an absolute path.
+    temp_script = pathlib.Path("temp_test_reflist_callback.py").resolve()
+    with open(temp_script, "w", encoding="utf-8") as f:
         f.write(script_content)
     try:
-        at = AppTest.from_file("temp_test_reflist_callback.py").run(timeout=60)
+        at = AppTest.from_file(str(temp_script)).run(timeout=60)
         assert not at.exception, at.exception
         assert "__jumped_page" not in at.session_state, (
             "렌더 단계에서 점프 토큰이 세팅됨 (인라인 호출 회귀 의심)"
@@ -273,5 +276,5 @@ if isinstance(_cp, int):
         assert at_after.session_state["__jumped_page"] == 3
         assert at_after.session_state["__current_page"] == 3
     finally:
-        if os.path.exists("temp_test_reflist_callback.py"):
-            os.remove("temp_test_reflist_callback.py")
+        if temp_script.exists():
+            temp_script.unlink()

@@ -77,10 +77,17 @@ def test_no_callback_rerun_in_main() -> None:
 
 
 def test_no_callback_rerun_in_sidebar_dialog() -> None:
-    """sidebar 리셋 다이얼로그(_confirm_reset_all)는 rerun 금지."""
+    """sidebar 리셋 다이얼로그(_confirm_reset_all)는 rerun 금지.
+
+    예외: ``@st.dialog`` 내부 버튼 핸들러는 다이얼로그 프래그먼트만 재실행하므로
+    모달을 닫으려면 앱 스코프 ``st.rerun()``이 필요하다 (sidebar.py 주석 참조).
+    따라서 취소/확인 두 버튼의 rerun 2건만 허용한다.
+    """
     tree = _parse(sidebar_module)
     calls = _rerun_calls_in("_confirm_reset_all", tree)
-    assert not calls, f"_confirm_reset_all 내 st.rerun() {len(calls)}건 잔존"
+    assert len(calls) == 2, (
+        f"_confirm_reset_all 내 st.rerun() {len(calls)}건 (기대: 2건)"
+    )
 
 
 # --- (b) 단일 st.status 인플레이스 렌더 ---------------------------------------

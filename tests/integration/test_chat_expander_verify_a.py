@@ -53,6 +53,7 @@ Known pipeline defects surfaced by this full-flow run (both now FIXED):
 import os
 import sys
 import time
+from pathlib import Path
 
 import pytest
 from streamlit.testing.v1 import AppTest
@@ -66,6 +67,10 @@ from core.session import SessionManager  # noqa: E402
 PDF_PATH = os.path.join("tests", "data", "2201.07520v1.pdf")
 ANALYSIS_WALL_TIMEOUT = 240  # seconds
 ANSWER_WALL_TIMEOUT = 300  # seconds
+
+# Streamlit >=1.66 resolves relative AppTest paths against this test file,
+# not the process CWD, so pin the app entrypoint to an absolute path.
+_APP_MAIN = Path(__file__).resolve().parents[2] / "src" / "main.py"
 
 RESULTS: list[tuple[str, bool, str]] = []
 
@@ -145,7 +150,7 @@ def test_chat_expander_and_interactive_chat_render() -> None:
     # Fresh process-global store so other tests' state cannot leak in.
     SessionManager.reset()
 
-    at = AppTest.from_file("src/main.py", default_timeout=300)
+    at = AppTest.from_file(_APP_MAIN, default_timeout=300)
     at.run()
     sid = _app_session_id()
     record("app_initial_run", True, f"initial at.run() ok (sid={sid})")

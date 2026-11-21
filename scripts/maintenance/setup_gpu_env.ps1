@@ -2,7 +2,7 @@
 # This script creates a Conda environment and installs PyTorch with GPU support.
 
 $EnvName = "rag-ollama"
-$PythonVersion = "3.10"
+$PythonVersion = "3.11"
 $CudaVersion = "12.1"
 
 # Set absolute path for requirements.txt (Project Root is one level up from this script)

@@ -3,7 +3,7 @@
 > **A High-Performance, Local Retrieval-Augmented Generation (RAG) Solution with Modern UI.**  
 > Optimized for extreme speed and precision using `LangGraph` orchestration, local `Ollama` models, and a sleek Streamlit interface.
 
-[![Python 3.10+](https://img.shields.io/badge/Python-3.10+-blue.svg)](https://www.python.org)
+[![Python 3.11+](https://img.shields.io/badge/Python-3.11+-blue.svg)](https://www.python.org)
 [![Model: qwen3:4b-instruct-2507-q4_K_M](https://img.shields.io/badge/Model-qwen3:4b--instruct--2507--q4_K_M-blueviolet.svg)](https://ollama.com/library/qwen3)
 [![Backend: LangGraph](https://img.shields.io/badge/Orchestrator-LangGraph-informational.svg)]()
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)

@@ -30,7 +30,7 @@ jobs:
     - name: Set up Python
       uses: actions/setup-python@v5
       with:
-        python-version: "3.10"
+        python-version: "3.11"
         cache: 'pip'
         
     - name: Install Linting Tools
@@ -58,7 +58,7 @@ jobs:
     - name: Set up Python
       uses: actions/setup-python@v5
       with:
-        python-version: "3.10"
+        python-version: "3.11"
         cache: 'pip'
         
     - name: Install Security Tools
@@ -71,27 +71,19 @@ jobs:
       
     - name: Run pip-audit (Dependency Scan)
       run: |
-        # Ignore unresolved/stable-less CVEs or major version bumps that require refactoring
-        pip-audit -r requirements.txt --skip-editable \
-          --ignore-vuln CVE-2025-2953 \
-          --ignore-vuln CVE-2025-3730 \
-          --ignore-vuln CVE-2025-67221 \
-          --ignore-vuln CVE-2026-26013 \
-          --ignore-vuln CVE-2026-27794 \
-          --ignore-vuln CVE-2026-28277 \
-          --ignore-vuln CVE-2026-28500 \
-          --ignore-vuln PYSEC-2026-4363 \
-          --ignore-vuln CVE-2026-128067 \
-          --ignore-vuln CVE-2026-128066
+        # No --ignore-vuln exceptions: vulnerable packages are pinned to their
+        # fixed versions in requirements/. If a new advisory has no released fix
+        # yet, fail loudly and track it rather than silently suppressing it.
+        pip-audit -r requirements.txt --skip-editable
 
   test:
     # Single-job, single-environment CI. The local pre-push hook
     # (.pre-commit-config.yaml) runs the exact same gates (ruff, mypy, bandit,
-    # pip-audit, run_ci_checks.py) on the developer's Windows + Python 3.10
+    # pip-audit, run_ci_checks.py) on the developer's Windows + Python 3.11
     # environment, so a green hook guarantees a green CI here. Keeping CI to one
     # env that matches the local dev box means "hook passed" => "CI passed"
     # holds without a multi-OS/version matrix.
-    name: Test (Windows Py 3.10)
+    name: Test (Windows Py 3.11)
     needs: [lint-and-static-analysis, security-scan]
     runs-on: windows-latest
     env:
@@ -108,7 +100,7 @@ jobs:
     - name: Set up Python 3.11
       uses: actions/setup-python@v5
       with:
-        python-version: "3.10"
+        python-version: "3.11"
         cache: 'pip'
         
     - name: Install dependencies

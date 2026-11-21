@@ -35,9 +35,9 @@ repos:
 
 -   repo: local
     hooks:
-    # Dependency CVE scan — mirrors ci.yml `pip-audit` EXACTLY (same 8 ignored
-    # CVEs) so the local pre-push catches dependency vulns before they reach CI.
-    # Runs as a script so we can pass the long --ignore-vuln list verbatim.
+    # Dependency CVE scan — mirrors ci.yml `pip-audit` EXACTLY (same invocation,
+    # no --ignore-vuln suppressions) so the local pre-push catches dependency
+    # vulns before they reach CI. Fixed versions are pinned in requirements/.
     -   id: pip-audit
         name: pip-audit
         entry: python scripts/maintenance/pip_audit_hook.py

@@ -1,6 +1,14 @@
+# Requires Python >=3.11 (pillow 13 / filelock 4.2 security floors).
+
 # Streamlit & UI
-streamlit==1.60.0
+# 1.66.1 is the first release that permits pillow<14 (>=13), unblocking the
+# pillow security upgrade below. Requires Python >=3.11.
+streamlit==1.66.1
 streamlit-pdf-viewer==0.0.30
+# pyarrow 23.0.1 is the minimum release that fixes PYSEC-2026-113 while still
+# supporting NumPy 1.26 (26.x hard-requires NumPy >=2, but this project pins
+# numpy==1.26.4 for torch/faiss ABI compatibility).
+pyarrow==23.0.1
 pymupdf>=1.25.0
 pymupdf4llm>=0.3.4
 
@@ -48,8 +56,13 @@ python-multipart==0.0.31
 requests>=2.32.0
 
 # Security & Image Processing
-pillow>=12.1.1
+# pillow>=13.0.0 fixes PYSEC-2026-4326..4343 / CVE-2026-112xxx / CVE-2026-12806x
+# (requires Python >=3.11 — see CI python-version).
+pillow>=13.0.0
 
 # Utilities
 psutil==6.1.1
 xxhash==3.8.1
+# Transitive (torch/huggingface_hub) security floor: >=4.2.1 fixes
+# CVE-2026-112906..112941 (requires Python >=3.11).
+filelock>=4.2.1

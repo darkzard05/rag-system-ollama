@@ -17,7 +17,7 @@ Verifies three behaviors of the chat view in `src/ui/components/chat.py`
       expander — see tests/unit/test_chat_render_expander.py).
 
 AppTest idioms that work (streamlit 1.54.0):
-- `AppTest.from_file("src/main.py").run(timeout=N)` boots the full app.
+- `AppTest.from_file(_APP_MAIN).run(timeout=N)` boots the full app.
 - The app's script thread resolves its session via `get_script_run_ctx()`, and
   `streamlit.testing.v1.LocalScriptRunner` hardcodes `session_id="test session
   id"` (local_script_runner.py:61). The matching SessionManager store is
@@ -41,6 +41,7 @@ AppTest idioms that work (streamlit 1.54.0):
 import asyncio
 import os
 import time
+from pathlib import Path
 
 from streamlit.testing.v1 import AppTest
 
@@ -53,6 +54,10 @@ os.environ.setdefault("IS_CI_TEST", "true")
 # How long each script run may take before AppTest raises. Boot is ~1.5s,
 # the mocked stream completes in <1s; 60s is generous headroom.
 _RUN_TIMEOUT = 60
+
+# Streamlit >=1.66 resolves relative AppTest paths against this test file,
+# not the process CWD, so pin the app entrypoint to an absolute path.
+_APP_MAIN = Path(__file__).resolve().parents[2] / "src" / "main.py"
 
 
 def _app_session_id() -> str:
@@ -94,10 +99,15 @@ def test_build_status_banner_lifecycle():
       진행 캡션 "{n}% 완료 · {s}초 경과".
     """
     SessionManager.reset()
-    at = AppTest.from_file("src/main.py").run(timeout=_RUN_TIMEOUT)
+    at = AppTest.from_file(_APP_MAIN).run(timeout=_RUN_TIMEOUT)
     sid = _app_session_id()
     assert not at.exception
     SessionManager.set("ui_lang", "ko", sid)
+    # render_chat_messages_area only evaluates the build panel when an upload
+    # is present (chat.py has_uploaded_file guard); init_build_state alone does
+    # not set these flat upload markers.
+    SessionManager.set("last_uploaded_file_name", "doc.pdf", sid)
+    SessionManager.set("file_hash", "h-test", sid)
 
     # Phase 1 — analysis running. Seed the BuildState exactly like
     # main.py's _bg_rebuild_task via init/update_build_state; the native
@@ -181,7 +191,7 @@ def test_chat_input_state_machine_during_generation():
     유지되어 네이티브 ■ 중지 버튼(submit_mode="stop")이 전송 버튼 자리에 렌더된다.
     """
     SessionManager.reset()
-    at = AppTest.from_file("src/main.py").run(timeout=_RUN_TIMEOUT)
+    at = AppTest.from_file(_APP_MAIN).run(timeout=_RUN_TIMEOUT)
     sid = _app_session_id()
     assert not at.exception
     _set_ready_state(sid)
@@ -242,7 +252,7 @@ def test_streamed_answer_renders_thought_expander_and_reenables_input(
 
     monkeypatch.setattr(RAGSystem, "astream", _fake_astream)
 
-    at = AppTest.from_file("src/main.py").run(timeout=_RUN_TIMEOUT)
+    at = AppTest.from_file(_APP_MAIN).run(timeout=_RUN_TIMEOUT)
     sid = _app_session_id()
     assert not at.exception
     _set_ready_state(sid)

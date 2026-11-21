@@ -1,9 +1,16 @@
 # Windows Optimized Requirements (Stable)
 # Use: pip install -r requirements-win.txt
+# Requires Python >=3.11 (pillow 13 / filelock 4.2 security floors).
 
 # Core UI & Utils
-streamlit==1.60.0
+# 1.66.1 is the first release that permits pillow<14 (>=13), unblocking the
+# pillow security upgrade below. Requires Python >=3.11.
+streamlit==1.66.1
 streamlit-pdf-viewer==0.0.30
+# pyarrow 23.0.1 is the minimum release that fixes PYSEC-2026-113 while still
+# supporting NumPy 1.26 (26.x hard-requires NumPy >=2, but this project pins
+# numpy==1.26.4 for torch/faiss ABI compatibility).
+pyarrow==23.0.1
 pymupdf>=1.25.0
 pymupdf4llm>=0.3.4
 python-dotenv==1.2.2
@@ -33,7 +40,7 @@ faiss-cpu==1.9.0.post1
 numpy==1.26.4
 rank-bm25==0.2.2
 flashrank==0.2.0
-optimum[onnxruntime]==2.1.0
+optimum==2.3.0
 onnxruntime>=1.20.1
 
 # API Server
@@ -47,11 +54,18 @@ requests>=2.32.0
 ollama==0.6.1
 
 # Security & Image Processing
-pillow>=12.1.1
+# pillow>=13.0.0 fixes PYSEC-2026-4326..4343 / CVE-2026-112xxx / CVE-2026-12806x
+# (requires Python >=3.11 — see CI python-version).
+pillow>=13.0.0
+# Transitive (torch/huggingface_hub) security floor: >=4.2.1 fixes
+# CVE-2026-112906..112941 (requires Python >=3.11).
+filelock>=4.2.1
 
 # Testing
-pytest==8.3.2
-pytest-mock==3.14.0
-pytest-cov==5.0.0
-pytest-asyncio==0.24.0
+# pytest>=9.0.3 fixes PYSEC-2026-1845; pytest-asyncio 1.x is the first line
+# compatible with pytest 9.
+pytest==9.2.0
+pytest-mock==3.17.0
+pytest-cov==7.1.0
+pytest-asyncio==1.5.0
 httpx>=0.28.1

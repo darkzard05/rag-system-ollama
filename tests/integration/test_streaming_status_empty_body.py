@@ -21,6 +21,7 @@ return ``GenericFakeChatModel`` (model_loader.py).
 
 import os
 import sys
+from pathlib import Path
 
 import pytest
 from langchain_core.documents import Document
@@ -36,6 +37,10 @@ from core.session import SessionManager  # noqa: E402
 
 # How long each script run may take before AppTest raises. Boot is ~1.5s.
 _RUN_TIMEOUT = 60
+
+# Streamlit >=1.66 resolves relative AppTest paths against this test file,
+# not the process CWD, so pin the app entrypoint to an absolute path.
+_APP_MAIN = Path(__file__).resolve().parents[2] / "src" / "main.py"
 
 # render_generation_expander titles (strings.py, both locales) — used to locate
 # the streaming evidence expander among unrelated ones (e.g. sidebar "Settings").
@@ -129,7 +134,7 @@ def test_streaming_expander_reflects_thought_and_references():
     - both → "Sources & Reasoning".
     """
     SessionManager.reset()
-    at = AppTest.from_file("src/main.py").run(timeout=_RUN_TIMEOUT)
+    at = AppTest.from_file(_APP_MAIN).run(timeout=_RUN_TIMEOUT)
     sid = _app_session_id()
     assert not at.exception
     _set_ready_state(sid)

@@ -40,7 +40,8 @@ def test_get_pdf_page_bytes_calls_tobytes_without_deflate(tmp_path: Path):
     assert len(tobytes_kwargs_list) == 1
     # deflate가 False로 전달되어 CPU 압축 오버헤드가 제거되었음을 단언
     assert tobytes_kwargs_list[0].get("deflate") is False
-    assert tobytes_kwargs_list[0].get("garbage") == 1
+    # garbage=0: 객체 테이블 전수 스캔을 건너뛰어 추출 지연을 줄인다 (viewer.py).
+    assert tobytes_kwargs_list[0].get("garbage") == 0
 
     # 추출된 바이트가 여전히 유효한 단일 페이지 PDF인지 검증
     with pymupdf.open(stream=page_bytes, filetype="pdf") as doc:

@@ -57,7 +57,13 @@ def _isolate_async_globals() -> Iterator[None]:
 
 def _swap_to_fresh_loop_pair() -> tuple[asyncio.AbstractEventLoop, Any]:
     """Create (loop_a, previous_loop) with loop_a installed as current."""
-    previous = asyncio.get_event_loop()
+    try:
+        previous: Any = asyncio.get_event_loop()
+    except RuntimeError:
+        # Python 3.11+ / pytest-asyncio 1.x can leave no current loop between
+        # tests (``_set_called`` is True, ``_loop`` is None). Restoring
+        # ``None`` mirrors that pre-test state instead of creating a loop.
+        previous = None
     loop_a = asyncio.new_event_loop()
     asyncio.set_event_loop(loop_a)
     return loop_a, previous

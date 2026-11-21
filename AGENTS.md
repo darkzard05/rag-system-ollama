@@ -60,7 +60,7 @@ rag-system-ollama/
 | `ModelManager` | Class | `src/core/model_loader.py` | LLM/embedding/flashrank facade |
 
 ## CONVENTIONS
-- **Python 3.10+**: Use `X | Y` for unions.
+- **Python 3.11+**: Use `X | Y` for unions. (3.11 is required by the pillow 13 / filelock 4.2 security floors.)
 - **Formatting**: Strictly `ruff` (Double quotes, 88 chars).
 - **Typing**: Mandatory type annotations for all signatures (`mypy`).
 - **Imports**: Sorted via `ruff`. Lazy imports for heavy modules (`torch`, `fitz`).
