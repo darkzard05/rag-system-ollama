@@ -12,7 +12,11 @@ from typing import Any, Union
 import yaml
 from dotenv import load_dotenv
 
-load_dotenv()
+# CI has no .env file; a developer's local .env must not change results of a
+# parity run. DOTENV_DISABLE=1 (set by scripts/maintenance/ci_parity.py) keeps
+# local and CI environments identical.
+if os.getenv("DOTENV_DISABLE") != "1":
+    load_dotenv()
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------

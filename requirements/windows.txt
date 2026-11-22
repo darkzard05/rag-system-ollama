@@ -68,4 +68,7 @@ pytest==9.2.0
 pytest-mock==3.17.0
 pytest-cov==7.1.0
 pytest-asyncio==1.5.0
+# Hard per-test timeout: a hung test fails the step instead of wedging the
+# pre-push hook or the CI job (see [tool.pytest.ini_options] in pyproject.toml).
+pytest-timeout==2.4.0
 httpx>=0.28.1

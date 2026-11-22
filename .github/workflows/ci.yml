@@ -8,6 +8,9 @@ on:
       - 'requirements/**'
       - 'tests/**'
       - 'scripts/**'
+      - 'pyproject.toml'
+      - 'config.yml'
+      - '.pre-commit-config.yaml'
       - '.github/workflows/ci.yml'
   pull_request:
     branches: [ "main", "master" ]
@@ -16,76 +19,69 @@ on:
       - 'requirements/**'
       - 'tests/**'
       - 'scripts/**'
+      - 'pyproject.toml'
+      - 'config.yml'
+      - '.pre-commit-config.yaml'
 
 permissions:
   contents: read
 
+# Every job delegates to scripts/maintenance/ci_parity.py. The local pre-push
+# hook runs the exact same script (--stage pre-push), so a green hook guarantees
+# a green CI by construction. Do not inline tool commands here; add them to the
+# script instead (tests/unit/test_ci_parity_contract.py enforces this).
 jobs:
   lint-and-static-analysis:
     name: Linting & Type Checking
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
     - uses: actions/checkout@v4
-    
+
     - name: Set up Python
       uses: actions/setup-python@v5
       with:
         python-version: "3.11"
         cache: 'pip'
-        
+
     - name: Install Linting Tools
       run: |
         python -m pip install --upgrade pip
         pip install ruff==0.15.1 mypy==1.15.0 types-PyYAML types-psutil types-requests
-        
-    - name: Run Ruff Check (Lint)
-      run: ruff check .
-      
-    - name: Run Ruff Format Check
-      run: ruff format --check .
-      
-    - name: Run Mypy (Type Check)
-      run: |
-        export PYTHONPATH="${PYTHONPATH}:$(pwd)/src"
-        mypy src
+
+    - name: Run Static Gates (ruff + mypy)
+      run: python scripts/maintenance/ci_parity.py --only static
 
   security-scan:
     name: Security Scan
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
     - uses: actions/checkout@v4
-    
+
     - name: Set up Python
       uses: actions/setup-python@v5
       with:
         python-version: "3.11"
         cache: 'pip'
-        
+
     - name: Install Security Tools
       run: |
         python -m pip install --upgrade pip
         pip install bandit pip-audit
-        
-    - name: Run Bandit (SAST)
-      run: bandit -r src/ -ll # -ll: Report medium and high severity issues
-      
-    - name: Run pip-audit (Dependency Scan)
-      run: |
-        # No --ignore-vuln exceptions: vulnerable packages are pinned to their
-        # fixed versions in requirements/. If a new advisory has no released fix
-        # yet, fail loudly and track it rather than silently suppressing it.
-        pip-audit -r requirements.txt --skip-editable
+
+    - name: Run Security Gates (bandit + pip-audit)
+      run: python scripts/maintenance/ci_parity.py --only security
 
   test:
     # Single-job, single-environment CI. The local pre-push hook
-    # (.pre-commit-config.yaml) runs the exact same gates (ruff, mypy, bandit,
-    # pip-audit, run_ci_checks.py) on the developer's Windows + Python 3.11
-    # environment, so a green hook guarantees a green CI here. Keeping CI to one
-    # env that matches the local dev box means "hook passed" => "CI passed"
-    # holds without a multi-OS/version matrix.
+    # (.pre-commit-config.yaml) runs the exact same gates via ci_parity.py, on
+    # the developer's Windows + Python 3.11 environment, so a green hook
+    # guarantees a green CI here.
     name: Test (Windows Py 3.11)
     needs: [lint-and-static-analysis, security-scan]
     runs-on: windows-latest
+    timeout-minutes: 30
     env:
       PYTHONPATH: ${{ github.workspace }}/src
       IS_CI_TEST: "true"
@@ -102,20 +98,17 @@ jobs:
       with:
         python-version: "3.11"
         cache: 'pip'
-        
+
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install pytest-cov pytest-asyncio
+        pip install pytest-cov pytest-asyncio pytest-timeout
         if (Test-Path requirements-win.txt) { pip install -r requirements-win.txt }
         if (Test-Path requirements.txt) { pip install -r requirements.txt }
 
-    # CI parity: runs the EXACT same test commands as the local pre-push hook
-    # via the single source of truth (scripts/maintenance/run_ci_checks.py).
+    # CI parity: the exact same test commands as the local pre-push hook.
     - name: Run Tests (CI parity with pre-push hook)
-      run: |
-        python scripts/maintenance/run_ci_checks.py
-      shell: bash
+      run: python scripts/maintenance/ci_parity.py --only tests
 
     - name: Upload Test Logs
       if: always()
@@ -125,4 +118,3 @@ jobs:
         path: |
           logs/*.log
           coverage.xml
-

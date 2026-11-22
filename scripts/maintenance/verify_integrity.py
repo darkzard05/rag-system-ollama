@@ -211,15 +211,15 @@ def main():
     )
 
     # 2. 단위 및 통합 테스트 (Pytest)
-    # NOTE: CI parity — delegate to the SINGLE SOURCE OF TRUTH for the test
-    # stage (scripts/maintenance/run_ci_checks.py), identical to what the GitHub
-    # Actions `test` job and the local pre-push hook run. This guarantees the
-    # three entry points never drift apart.
+    # NOTE: CI parity — delegate to the SINGLE SOURCE OF TRUTH
+    # (scripts/maintenance/ci_parity.py), identical to what the GitHub Actions
+    # jobs and the local pre-push hook run. This guarantees the entry points
+    # never drift apart.
     print_header("Step 2: Core & Integration Tests (CI parity)")
     results["Test: CI Parity"] = run_command(
-        ["python", "scripts/maintenance/run_ci_checks.py"],
+        ["python", "scripts/maintenance/ci_parity.py", "--only", "tests"],
         "CI-Parity Test Suite",
-        timeout=600,
+        timeout=900,
     )
 
     # 3. 실전 파이프라인 테스트 (E2E)

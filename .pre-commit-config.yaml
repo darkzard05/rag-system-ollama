@@ -1,62 +1,38 @@
+# Hook layout is deliberately small:
+#   pre-commit : ruff only (fast, file-scoped feedback while editing)
+#   pre-push   : ONE ci-parity hook that runs every gating command
+#
+# ci-parity (scripts/maintenance/ci_parity.py) is the single source of truth and
+# is invoked by the GitHub Actions jobs too (--only static/security/tests), so
+# "pre-push green" => "CI green" holds by construction rather than by keeping
+# two lists in sync by hand. The runner also enforces per-step timeouts and kills
+# the whole process tree, so the hook cannot hang forever.
 repos:
-# 1. Ruff (린팅 + 포맷) - 커밋 시점에 고속 실행
+# 1. Ruff (lint + format) at commit time
 -   repo: https://github.com/astral-sh/ruff-pre-commit
     rev: v0.15.1
     hooks:
     -   id: ruff-check
         args: [ --fix ]
+        stages: [pre-commit]
     -   id: ruff-format
+        stages: [pre-commit]
 
-# 2. 통합 검증 및 보안 자동화 - 푸시 시점에 심층 실행
--   repo: https://github.com/PyCQA/bandit
-    rev: 1.8.3
-    hooks:
-    -   id: bandit
-        args: ["-r", "src/", "-ll"]
-        pass_filenames: false
-        stages: [pre-push]
-
--   repo: https://github.com/pre-commit/mirrors-mypy
-    rev: v1.15.0
-    hooks:
-    -   id: mypy
-        args: ["src/"]
-        pass_filenames: false
-        stages: [pre-push]
-        additional_dependencies:
-          # CI parity: mirrors ci.yml `pip install ... types-PyYAML types-psutil
-          # types-requests` so the pre-push mypy deep-checks the SAME modules CI
-          # does, instead of silently degrading them to `Any` via
-          # ignore_missing_imports. Keep in sync with ci.yml line ~39.
-          - "tokenize-rt==5.2.0"
-          - "types-PyYAML"
-          - "types-psutil"
-          - "types-requests"
-
+# 2. Gating checks at push time (ruff, mypy, bandit, pip-audit, tests)
 -   repo: local
     hooks:
-    # Dependency CVE scan — mirrors ci.yml `pip-audit` EXACTLY (same invocation,
-    # no --ignore-vuln suppressions) so the local pre-push catches dependency
-    # vulns before they reach CI. Fixed versions are pinned in requirements/.
-    -   id: pip-audit
-        name: pip-audit
-        entry: python scripts/maintenance/pip_audit_hook.py
+    # Runs the same commands as all three CI jobs. mypy/bandit/pip-audit use the
+    # active environment (`language: system`) so they match CI, which installs
+    # them into the same interpreter that runs the tests.
+    -   id: ci-parity
+        name: ci-parity (ruff, mypy, bandit, pip-audit, tests)
+        entry: python scripts/maintenance/ci_parity.py --stage pre-push
         language: system
         pass_filenames: false
         always_run: true
         stages: [pre-push]
 
-    # CI parity: runs the EXACT same commands as the GitHub Actions `test` job
-    # (scripts/maintenance/run_ci_checks.py is the single source of truth). A
-    # green pre-push therefore guarantees the CI test stage is green.
-    -   id: ci-test-parity
-        name: ci-test-parity
-        entry: python scripts/maintenance/run_ci_checks.py
-        language: system
-        pass_filenames: false
-        always_run: true
-        stages: [pre-push]
-
+    # Fast requirements consistency check (only when requirements changed).
     -   id: verify-requirements
         name: verify-requirements
         entry: python scripts/maintenance/verify_requirements.py

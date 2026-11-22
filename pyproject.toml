@@ -52,6 +52,11 @@ asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
 pythonpath = ["src", "."]
 testpaths = ["tests"]
+# Hard per-test timeout (requires pytest-timeout). A hung test now fails with a
+# traceback instead of stalling the pre-push hook / CI job until the outer
+# step timeout fires. `thread` method works on Windows.
+timeout = 120
+timeout_method = "thread"
 markers = [
     "e2e: end-to-end browser tests requiring a running Streamlit app",
     "perf: performance/benchmark tests",
@@ -98,6 +103,10 @@ check_untyped_defs = true
 ignore_missing_imports = true
 explicit_package_bases = true
 exclude = ["tests"]
+# SQLite-backed cache is far cheaper to update than the default per-module JSON
+# files (21k files / ~400MB for this dependency set). Same semantics, much less
+# I/O per pre-push run.
+sqlite_cache = true
 
 [[tool.mypy.overrides]]
 module = ["requests", "yaml"]
@@ -110,25 +119,39 @@ ignore_missing_imports = true
 module = [
     "IPython",
     "PIL.*",
+    "accelerate.*",
     "aiohttp.*",
     "bokeh.*",
+    "chonkie.*",
     "cryptography.*",
     "fitz",
+    "flashrank",
+    "google.*",
     "huggingface_hub.*",
     "jinja2.*",
     "langchain.*",
     "langchain_community.*",
     "langchain_core.*",
     "langgraph.*",
+    "langsmith.*",
     "matplotlib.*",
-    "openai.*",
     "onnx.*",
+    "onnxruntime.*",
+    "openai.*",
+    "optimum.*",
+    "pandas.*",
+    "peft.*",
     "playwright.*",
     "prompt_toolkit.*",
     "pymupdf",
     "rich.*",
+    "safetensors.*",
+    "scipy.*",
+    "sentence_transformers.*",
+    "sklearn.*",
     "sqlalchemy.*",
     "streamlit.*",
+    "tiktoken.*",
     "torch.*",
     "tornado.*",
     "transformers.*",
