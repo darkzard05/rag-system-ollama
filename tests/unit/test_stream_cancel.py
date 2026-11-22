@@ -201,7 +201,7 @@ def _finite_astream_factory(probe: _SlotProbe) -> Callable[..., Any]:
                 yield ("custom", {"status": f"{idx}-1"})
                 # Hold the slot briefly (staggered so completions don't overlap),
                 # then finish naturally - no cancellation anywhere in this test.
-                await asyncio.sleep(0.03 + 0.01 * idx)
+                await asyncio.sleep(0.5 + 0.1 * idx)
                 yield ("custom", {"status": f"{idx}-2"})
             finally:
                 probe.record_closed(idx)
