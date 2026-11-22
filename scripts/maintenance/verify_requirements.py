@@ -61,8 +61,8 @@ def main():
     security_checks = {
         "starlette": ">=0.49.1",
         "fastapi": "==0.133.1",
-        "pillow": ">=12.1.1",
-        "streamlit": "==1.60.0",
+        "pillow": ">=13.0.0",
+        "streamlit": "==1.66.1",
     }
 
     for pkg, min_version in security_checks.items():
