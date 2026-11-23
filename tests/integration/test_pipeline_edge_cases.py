@@ -123,6 +123,37 @@ class TestPipelineEdgeCases:
                 pass
 
     @pytest.mark.asyncio
+    async def test_image_only_pdf(self, rag_system: RAGSystem, mock_embedder: Any):
+        """
+        엣지 케이스 3b: 이미지(스캔) 전용 PDF 처리 검증.
+        페이지는 존재하지만 추출 텍스트가 전부 비어 있으면 EmptyPDFError가
+        발생해야 한다 (개수만 세는 검사는 이런 PDF를 'Ready'로 오인한다).
+        """
+        fitz = pytest.importorskip("fitz")
+        with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
+            tmp_path = tmp.name
+
+        try:
+            doc = fitz.open()
+            page = doc.new_page()
+            page.draw_rect(
+                fitz.Rect(60, 60, 240, 240),
+                color=(1, 0, 0),
+                fill=(1, 0, 0),
+            )
+            doc.save(tmp_path)
+            doc.close()
+
+            with pytest.raises(EmptyPDFError):
+                await rag_system.build_pipeline(tmp_path, "scanned.pdf", mock_embedder)
+        finally:
+            try:
+                if os.path.exists(tmp_path):
+                    os.remove(tmp_path)
+            except Exception:
+                pass
+
+    @pytest.mark.asyncio
     async def test_non_existent_file(self, rag_system: RAGSystem, mock_embedder: Any):
         """
         엣지 케이스 3: 존재하지 않는 파일 경로 처리 검증.
@@ -194,8 +225,8 @@ class TestPipelineEdgeCases:
 
         mock_engine = MagicMock()
         # AsyncMock 대신 MagicMock을 사용하여 제너레이터 반환을 명확히 함
-        mock_engine.astream_events.side_effect = (
-            lambda *args, **kwargs: mock_astream_events_gen(*args, **kwargs)
+        mock_engine.astream_events.side_effect = lambda *args, **kwargs: (
+            mock_astream_events_gen(*args, **kwargs)
         )
 
         with (

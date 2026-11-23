@@ -1,6 +1,7 @@
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from langchain_core.documents import Document
 
 from core.pipeline_builder import PipelineBuilder
 
@@ -14,7 +15,8 @@ async def test_build_reuses_provided_file_hash():
             "core.pipeline_builder.compute_file_hash", return_value="hash123"
         ) as mock_hash,
         patch(
-            "core.pipeline_builder.load_pdf_docs", new=AsyncMock(return_value=["doc"])
+            "core.pipeline_builder.load_pdf_docs",
+            new=AsyncMock(return_value=[Document(page_content="doc")]),
         ) as mock_load,
         patch(
             "core.pipeline_builder.split_documents",

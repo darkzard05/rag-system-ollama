@@ -161,6 +161,10 @@ UI_STRINGS: dict[str, dict[str, str]] = {
         "build_phase_indexing": "Building knowledge index...",
         "build_phase_registering": "Finalizing pipeline...",
         "build_phase_error": "Analysis failed",
+        "build_error_no_text": (
+            "This PDF has no extractable text. It looks like a scanned document "
+            "— OCR is not supported yet. Please upload a text-based PDF."
+        ),
         "build_step_extract": "Extract",
         "build_step_chunk": "Chunk",
         "build_step_index": "Index",
@@ -282,6 +286,10 @@ UI_STRINGS: dict[str, dict[str, str]] = {
         "build_phase_indexing": "지식 인덱스 구축 중...",
         "build_phase_registering": "파이프라인 마무리 중...",
         "build_phase_error": "분석 실패",
+        "build_error_no_text": (
+            "이 PDF에는 추출 가능한 텍스트가 없습니다. 스캔(이미지) PDF는 아직 "
+            "지원하지 않습니다. 텍스트 기반 PDF를 업로드해 주세요."
+        ),
         "build_step_extract": "추출",
         "build_step_chunk": "청킹",
         "build_step_index": "인덱싱",

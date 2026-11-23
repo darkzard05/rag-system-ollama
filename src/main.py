@@ -57,6 +57,7 @@ from common.config import (
     MSG_ERROR_OLLAMA_NOT_RUNNING,
 )
 from common.constants import FilePathConstants, StringConstants
+from common.exceptions import EmptyPDFError
 from common.logging_config import setup_logging
 from common.utils import compute_file_hash, safe_cache_resource
 from ui.strings import t
@@ -1298,6 +1299,18 @@ _INITIAL_PAINT_WINDOW_S = 2.5
 _MIN_BUILD_RERUN_INTERVAL_S = 2.0
 _BUILD_RERUN_LAST: dict[str, tuple[float, str]] = {}
 
+_BUILD_ERROR_GENERIC = (
+    "문서 분석 중 오류가 발생했습니다. 파일 상태를 확인하신 후 다시 업로드해 주세요."
+)
+
+
+def _build_failure_message(exc: BaseException) -> str:
+    """User-facing build failure message; specific when the cause is known."""
+    if isinstance(exc, EmptyPDFError):
+        return t("build_error_no_text")
+    return _BUILD_ERROR_GENERIC
+
+
 # [PAINT-GRACE] 신규 업로드 직후 빌드 워커의 CPU 작업(임베더 로드/파싱)이
 # 서버 스레드의 첫 렌더 및 델타 전송과 겹치지 않도록 유예한다.
 # E2E 실측: 파일 선택 → 첫 캔버스 페인트가 ~1.45s(그중 서버 콜백~0.12s,
@@ -1636,7 +1649,7 @@ async def _bg_rebuild_task(
         if not _is_current_build():
             logger.info("[MAIN] stale build error ignored (session=%s)", session_id)
             return
-        error_msg = "문서 분석 중 오류가 발생했습니다. 파일 상태를 확인하신 후 다시 업로드해 주세요."
+        error_msg = _build_failure_message(e)
         failed = SessionManager.get_build_state(session_id=session_id)
         if failed is not None:
             SessionManager.finalize_build_state(

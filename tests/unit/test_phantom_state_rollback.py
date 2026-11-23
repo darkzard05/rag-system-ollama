@@ -11,6 +11,7 @@ import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from langchain_core.documents import Document
 
 from cache.engine_cache import EngineCacheManager
 from common.exceptions import EmptyPDFError
@@ -65,7 +66,7 @@ async def test_build_failure_restores_file_hash_on_vector_build_error():
         patch("core.pipeline_builder.compute_file_hash", return_value="next_hash"),
         patch(
             "core.pipeline_builder.load_pdf_docs",
-            new=AsyncMock(return_value=["doc"]),
+            new=AsyncMock(return_value=[Document(page_content="doc")]),
         ),
         patch(
             "core.pipeline_builder.split_documents",
@@ -135,7 +136,7 @@ async def test_build_success_keeps_hash_and_syncs_engine_metadata():
         patch("core.pipeline_builder.compute_file_hash", return_value="new_hash"),
         patch(
             "core.pipeline_builder.load_pdf_docs",
-            new=AsyncMock(return_value=["doc"]),
+            new=AsyncMock(return_value=[Document(page_content="doc")]),
         ),
         patch(
             "core.pipeline_builder.split_documents",

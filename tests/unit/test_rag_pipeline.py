@@ -73,7 +73,7 @@ async def test_build_pipeline_degenerate_no_token_corpus_vector_fallback(rag_sys
     with (
         patch(
             "core.pipeline_builder.load_pdf_docs",
-            return_value=[Document(page_content="")],
+            return_value=[Document(page_content="본문")],
         ),
         patch(
             "core.pipeline_builder.split_documents",

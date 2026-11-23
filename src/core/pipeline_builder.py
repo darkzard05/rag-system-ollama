@@ -409,8 +409,11 @@ class PipelineBuilder:
             file_hash=file_hash,
         )
         _t_extract_ms = (time.perf_counter() - _t0) * 1000.0
-        if not documents:
-            raise EmptyPDFError()
+        # Page count alone lets an image-only (scanned) PDF pass as "Ready" with
+        # nothing to retrieve. Fail on "no extractable text" instead, which is
+        # the documented contract of EmptyPDFError.
+        if not any((doc.page_content or "").strip() for doc in documents):
+            raise EmptyPDFError(file_name)
 
         _report(BuildPhase.EXTRACTING, 40, "Text extraction complete")
 
