@@ -1,0 +1,17 @@
+{
+  "tool": "bench_stream_citations",
+  "n_docs": 12,
+  "n_citations": 6,
+  "explicit_doc_id": {
+    "median_ms_per_answer": 0.17435300003853627,
+    "min_ms_per_answer": 0.172826999987592,
+    "max_ms_per_answer": 42.641282999975374,
+    "trials": 7
+  },
+  "hashed_doc_id": {
+    "median_ms_per_answer": 0.37925800002994947,
+    "min_ms_per_answer": 0.36655700001574587,
+    "max_ms_per_answer": 0.4192429999966407,
+    "trials": 7
+  }
+}

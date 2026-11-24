@@ -1,0 +1,100 @@
+{
+  "tool": "bench_stream_scroll",
+  "stream_chunks": 60,
+  "trials": [
+    {
+      "count": 342,
+      "total_ms": 1.9999999850988388,
+      "bySel": {
+        "aria-label setAttribute": {
+          "count": 70,
+          "total_ms": 0.6999999955296516
+        },
+        "[data-testid=\"stChatInput\"]": {
+          "count": 68,
+          "total_ms": 0.6000000014901161
+        },
+        ":scope > [data-testid=\"stVerticalBlock\"]": {
+          "count": 68,
+          "total_ms": 0.09999999403953552
+        },
+        "[data-testid=\"stChatInput\"] textarea": {
+          "count": 68,
+          "total_ms": 0.29999999701976776
+        },
+        "aria-label getAttribute": {
+          "count": 68,
+          "total_ms": 0.29999999701976776
+        }
+      }
+    },
+    {
+      "count": 391,
+      "total_ms": 1.6000000014901161,
+      "bySel": {
+        "aria-label setAttribute": {
+          "count": 103,
+          "total_ms": 0.5
+        },
+        "[data-testid=\"stChatInput\"]": {
+          "count": 72,
+          "total_ms": 0.5999999940395355
+        },
+        ":scope > [data-testid=\"stVerticalBlock\"]": {
+          "count": 72,
+          "total_ms": 0.10000000149011612
+        },
+        "[data-testid=\"stChatInput\"] textarea": {
+          "count": 72,
+          "total_ms": 0.30000000447034836
+        },
+        "aria-label getAttribute": {
+          "count": 72,
+          "total_ms": 0.10000000149011612
+        }
+      }
+    },
+    {
+      "count": 391,
+      "total_ms": 3.199999988079071,
+      "bySel": {
+        "aria-label setAttribute": {
+          "count": 99,
+          "total_ms": 0.7999999821186066
+        },
+        "[data-testid=\"stChatInput\"]": {
+          "count": 73,
+          "total_ms": 1.2999999970197678
+        },
+        ":scope > [data-testid=\"stVerticalBlock\"]": {
+          "count": 73,
+          "total_ms": 0.10000000149011612
+        },
+        "[data-testid=\"stChatInput\"] textarea": {
+          "count": 73,
+          "total_ms": 0.9000000059604645
+        },
+        "aria-label getAttribute": {
+          "count": 73,
+          "total_ms": 0.10000000149011612
+        }
+      }
+    }
+  ],
+  "median_calls": 391,
+  "median_total_ms": 1.9999999850988388,
+  "per_trial": [
+    {
+      "count": 342,
+      "total_ms": 2.0
+    },
+    {
+      "count": 391,
+      "total_ms": 1.6
+    },
+    {
+      "count": 391,
+      "total_ms": 3.2
+    }
+  ]
+}
