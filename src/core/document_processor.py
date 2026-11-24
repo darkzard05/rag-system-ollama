@@ -568,6 +568,7 @@ async def load_pdf_docs(
                 # 수집 후 gather 1회로 오버랩한다 (키가 페이지별 독립이라
                 # 순서 무관, 실패는 save_coords 내부에서 흡수됨).
                 pending_coords: list[tuple[int, list[Any]]] = []
+                heavy_pages: list[int] = []
 
                 for i, chunk in enumerate(page_chunks or []):
                     if isinstance(chunk, dict):
@@ -613,6 +614,14 @@ async def load_pdf_docs(
                             ]
 
                     tables = chunk.get("tables", []) if isinstance(chunk, dict) else []
+                    table_count = len(tables)
+                    is_heavy = (
+                        table_count >= 2
+                        or len(text.strip()) < 50
+                        or ("$$" in text or "\\[" in text or "\\(" in text)
+                    )
+                    if is_heavy:
+                        heavy_pages.append(page_num)
 
                     docs.append(
                         Document(
@@ -627,9 +636,10 @@ async def load_pdf_docs(
                                 "current_section": current_section,
                                 "has_coordinates": has_coords,
                                 "bbox": bbox,
-                                "has_tables": len(tables) > 0,
-                                "table_count": len(tables),
+                                "has_tables": table_count > 0,
+                                "table_count": table_count,
                                 "chunk_index": len(docs),
+                                "needs_heavy_parse": bool(is_heavy),
                                 # [R2-04] 페이지 단위 추출 결과는 사전 분할 단위 —
                                 # split_documents가 과대 페이지만 하위 분할하고
                                 # 나머지를 재사용하도록 플래그를 세팅한다.
@@ -650,22 +660,7 @@ async def load_pdf_docs(
                 )
 
             # Phase 2 (router signal, 동작 변경 없음): 무거운 파서(Docling/Marker)가
-            # 유리한 페이지를 식별해 로그만 남긴다. 기준 — 표 다수(table_count>=2),
-            # 스캔 의심(50자 미만), 수식 밀집($/\(/\[ 포함). 임계 도달 시에만
-            # status_log에 1회 가시화하고, doc 메타에 needs_heavy_parse를 기록해
-            # 향후 페이지별 라우팅(pdfmux 패턴)의 입력으로 쓴다.
-            heavy_pages: list[int] = []
-            for d in docs:
-                md = d.metadata
-                text = d.page_content or ""
-                is_heavy = (
-                    int(md.get("table_count", 0) or 0) >= 2
-                    or len(text.strip()) < 50
-                    or ("$$" in text or "\\[" in text or "\\(" in text)
-                )
-                md["needs_heavy_parse"] = bool(is_heavy)
-                if is_heavy:
-                    heavy_pages.append(int(md.get("page", 0) or 0))
+            # 유리한 페이지를 식별해 로그만 남긴다.
             if heavy_pages:
                 logger.info(
                     "[RAG] [PDF] heavy-parse 후보 %d/%d페이지 %s "
