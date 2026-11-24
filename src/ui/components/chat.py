@@ -748,6 +748,15 @@ def render_chat_input_area() -> None:
         if input_disabled:
             ui_error(input_placeholder)
             return
+        # submit_mode="stop" keeps the textarea enabled during generation so the
+        # native stop button remains available, but a typed submission while a
+        # stream is active would overwrite the active stream state and lose the
+        # in-progress answer. Ignore it and let the current stream finish/stop.
+        if SessionManager.get("is_generating_answer", False, current_sid):
+            logger.info(
+                "[CHAT] Ignored chat submission while generating (sid=%s)", current_sid
+            )
+            return
         query_text = user_query.strip()
         if query_text:
             _t_submit = time.perf_counter()

@@ -161,3 +161,26 @@ def test_render_chat_input_area_idle_has_no_status_caption() -> None:
         render_chat_input_area()
 
     mock_st.caption.assert_not_called()
+
+
+def test_render_chat_input_area_ignores_submission_while_generating() -> None:
+    """생성 중 submit_mode='stop' 입력 제출이 들어와도 활성 스트림을 덮어쓰지 않는다."""
+    sid = "input_area_generating_submit_guard"
+    _reset_session(sid)
+    SessionManager.set_session_id(sid)
+    _make_ready(sid)
+    SessionManager.set("is_generating_answer", True, sid)
+    SessionManager.set("active_stream_msg_id", "active-msg", sid)
+
+    with (
+        patch("ui.components.chat.st") as mock_st,
+        patch("ui.components.chat.SessionManager.add_message") as mock_add_message,
+        patch("ui.components.chat.ui_error") as mock_ui_error,
+    ):
+        mock_st.chat_input.return_value = "interrupting question"
+        render_chat_input_area()
+
+    mock_add_message.assert_not_called()
+    mock_ui_error.assert_not_called()
+    assert SessionManager.get("is_generating_answer", False, sid) is True
+    assert SessionManager.get("active_stream_msg_id", "", sid) == "active-msg"
