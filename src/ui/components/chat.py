@@ -330,6 +330,9 @@ def _render_unified_timeline(current_sid: str) -> None:
 _STATIC_PHASE_KEYWORDS: tuple[tuple[str, ...], ...] = tuple(
     tuple(k.lower() for k in keywords) for _, keywords in PHASE_KEYWORDS
 )
+_EVIDENCE_PHASE_IDX: int = next(
+    i for i, (key, _) in enumerate(PHASE_KEYWORDS) if key == "phase_evidence_collection"
+)
 
 
 def _infer_proc_phase(status_text: str) -> int:
@@ -396,6 +399,10 @@ def _final_status_line(
         idx = _infer_proc_phase(s)
         if idx >= 0:
             done.add(idx)
+    # The stream emits no status event for evidence collection. Citations are
+    # the UI signal that the evidence phase finished.
+    if n_cit > 0:
+        done.add(_EVIDENCE_PHASE_IDX)
     parts: list[str] = []
     for idx, (label, _keywords) in enumerate(get_phase_labels()):
         parts.append(f"✓ {label}" if idx in done else label)
