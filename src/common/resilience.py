@@ -88,9 +88,7 @@ def retry_with_backoff(
         return _retry_async(
             fn, max_retries, effective_delay, backoff, retry_on, use_async_sleep
         )
-    return _retry_sync(
-        fn, max_retries, effective_delay, backoff, retry_on, use_async_sleep
-    )
+    return _retry_sync(fn, max_retries, effective_delay, backoff, retry_on)
 
 
 def _retry_sync(
@@ -99,7 +97,6 @@ def _retry_sync(
     base_delay: float,
     backoff: float,
     retry_on: tuple[type[Exception], ...],
-    use_async_sleep: bool,  # noqa: ARG001 - sync 경로는 항상 time.sleep
 ) -> Any:
     for attempt in range(max_retries):
         try:

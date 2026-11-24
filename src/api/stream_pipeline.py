@@ -6,8 +6,7 @@ SSE 직렬화 전담으로 유지된다 (5→2).
 
 - SSE 이벤트명 / error-fallback / cancel·dedup 동작은 byte-identical 유지.
 - 라우트(path/method/status)·auth 변경 없음.
-- 구경로(``stream_buffers`` / ``stream_events`` / ``stream_state_machine`` /
-  ``streaming_handler``)는 순수 re-export shim 으로 유지된다.
+- 구경로 ``streaming_handler`` 는 순수 re-export shim 으로 유지된다.
 - 취소/슬롯 게이팅은 ``common.stream_worker`` 파사드(Task1)를 통해서만
   수행한다 (본 모듈이 API 측 진입점).
 """

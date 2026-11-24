@@ -30,19 +30,6 @@ TERMINAL_PHASES: frozenset[BuildPhase] = frozenset(
     {BuildPhase.DONE, BuildPhase.ERROR, BuildPhase.CANCELLED}
 )
 
-# 단계별 대표 진행률 (파이프라인 emit 단일 테이블 — pct 매직넘버 분산 금지).
-PHASE_PCT: dict[BuildPhase, int] = {
-    BuildPhase.IDLE: 0,
-    BuildPhase.PREPARING: 0,
-    BuildPhase.EXTRACTING: 25,
-    BuildPhase.CHUNKING: 55,
-    BuildPhase.INDEXING: 75,
-    BuildPhase.REGISTERING: 90,
-    BuildPhase.DONE: 100,
-    BuildPhase.ERROR: 0,
-    BuildPhase.CANCELLED: 0,
-}
-
 # 위상별 i18n detail 키 (strings.py가 소유, 여기는 참조만).
 PHASE_DETAIL_KEY: dict[BuildPhase, str] = {
     BuildPhase.IDLE: "build_in_progress",
@@ -85,14 +72,6 @@ class BuildState:
     cache_used: bool | None = None
     error: str | None = None
     attempt: int = 0
-
-
-@dataclass(frozen=True)
-class BuildResult:
-    """빌드 완료 결과 (페이지/청크 수는 의도적으로 제외 — 결정 1)."""
-
-    cache_used: bool
-    duration_s: float
 
 
 def initial_build_state(

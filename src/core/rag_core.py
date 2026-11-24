@@ -272,7 +272,6 @@ class RAGSystem:
             # (하이드레이션이 추가하는 좌표 메타데이터는 렌더 필드에 무영향.)
             cached_context = resolve_cached_context(result, docs)
 
-            # perf_report = monitor.get_report() # 이전 코드
             perf_report = _lazy_perf_report()
             combined_perf = {**result.get("performance", {}), "metrics": perf_report}
             record_qa_turn(

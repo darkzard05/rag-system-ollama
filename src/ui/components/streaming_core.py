@@ -1,12 +1,9 @@
 """Streaming core — merged logic from extractors, runtime, and state.
 
-Phase 2B consolidation: ``streaming_extractors.py`` + ``streaming_runtime.py``
-+ ``streaming_state.py`` → single cohesive module.
+Phase 2B consolidation: extractors, runtime, and state moved into this module.
 
-Backward compatibility: the old module names become thin re-export stubs that
-import everything from this file, so all existing ``from ui.components
-.streaming_extractors import …`` / ``streaming_runtime`` / ``streaming_state``
-paths continue to work unchanged.
+Backward compatibility: ``streaming_runtime.py`` and ``streaming_state.py``
+remain thin re-export stubs, so their existing import paths still work.
 
 Layering (bottom-up):
   1. Extractors  — pure functions/classes, no Streamlit, no I/O
