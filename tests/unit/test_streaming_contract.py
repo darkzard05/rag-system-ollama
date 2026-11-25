@@ -18,7 +18,6 @@ import uuid
 from typing import Any
 from unittest.mock import MagicMock, patch
 
-import pytest
 
 import ui.components.streaming as streaming_mod
 import ui.components.streaming_core as streaming_core_mod

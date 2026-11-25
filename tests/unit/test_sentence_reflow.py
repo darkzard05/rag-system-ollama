@@ -11,7 +11,6 @@
 취급하지 않아야 한다.
 """
 
-import pytest
 
 from core.semantic_chunker import EmbeddingBasedSemanticChunker
 

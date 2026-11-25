@@ -1,5 +1,4 @@
 import pytest
-import pytest_asyncio
 from langchain_core.messages import AIMessageChunk
 from api.stream_pipeline import StreamingResponseHandler
 

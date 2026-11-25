@@ -1,4 +1,3 @@
-import asyncio
 import pytest
 from core.model_loader import MemoizingEmbedding
 from langchain_core.embeddings import FakeEmbeddings

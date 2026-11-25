@@ -1,4 +1,3 @@
-import pytest
 from core._loaders import _is_ollama_server_up
 import core._loaders as loaders
 

@@ -5,7 +5,6 @@
 """
 
 import numpy as np
-import pytest
 
 from core.semantic_chunker import EmbeddingBasedSemanticChunker
 

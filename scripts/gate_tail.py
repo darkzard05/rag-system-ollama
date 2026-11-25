@@ -14,7 +14,6 @@ from datetime import datetime
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-SRC_ROOT = REPO_ROOT / "src"
 REPORTS_DIR = REPO_ROOT / "reports"
 
 GATE_TIMESTAMP = datetime.now().strftime("%Y%m%d_%H%M%S")

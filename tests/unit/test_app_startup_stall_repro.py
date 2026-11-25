@@ -61,7 +61,6 @@ def test_ocr_modules_are_not_eagerly_imported():
     for mod in ocr_modules:
         sys.modules.pop(mod, None)
 
-    import core.document_processor  # noqa: F401
 
     for mod in ocr_modules:
         assert mod not in sys.modules, f"Heavy OCR module eagerly imported: {mod}"

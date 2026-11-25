@@ -10,7 +10,6 @@ import pytest
 
 import ui.strings as strings_mod
 from ui.strings import (
-    dropped_key_count,
     gate_en_keys_read,
     gate_tables_symmetric,
     t,
@@ -50,11 +49,6 @@ def _collect_direct_keys() -> set[str]:
             continue
         found.update(_DIRECT_CALL_RE.findall(text))
     return found
-
-
-def _indirect_keys() -> set[str]:
-    """Keys consumed via ``PHASE_KEYWORDS`` (resolved dynamically in ``t``)."""
-    return {key for key, _keywords in strings_mod.PHASE_KEYWORDS}
 
 
 def test_every_en_key_is_read() -> None:

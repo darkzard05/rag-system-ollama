@@ -57,7 +57,6 @@ class AggregationMetrics:
     total_output_results: int = 0
     duplicates_found: int = 0
     duplicates_merged: int = 0
-    removed_results: int = 0
     aggregation_time: float = 0.0
     strategy_used: str = ""
     dedup_strategy: str = ""

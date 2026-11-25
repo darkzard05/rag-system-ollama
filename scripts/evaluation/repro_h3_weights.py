@@ -45,13 +45,6 @@ REPORTS_DIR = ROOT / "reports"
 text = CONFIG_PATH.read_text(encoding="utf-8")
 
 
-def _extract_block(pattern: str) -> str:
-    m = re.search(pattern, text)
-    if not m:
-        raise SystemExit(f"config.yml: pattern not found: {pattern}")
-    return m.group(0)
-
-
 # ensemble_weights: [0.4, 0.6]
 m = re.search(r"ensemble_weights:\s*\[([^\]]+)\]", text)
 assert m, "ensemble_weights not found in config.yml"

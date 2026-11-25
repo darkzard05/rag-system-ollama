@@ -8,7 +8,7 @@ save는 루프 A, get은 루프 B에서 실행해도 owner-루프 라우팅으�
 
 import asyncio
 
-from cache.coord_cache import _WRITE_BEHIND_QUEUE_MAX, CoordCacheManager
+from cache.coord_cache import CoordCacheManager
 
 FILE_HASH = "cross_loop_test_hash"
 PAGE_NUM = 3

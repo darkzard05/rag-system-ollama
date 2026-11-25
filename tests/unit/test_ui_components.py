@@ -5,7 +5,6 @@ import tempfile
 
 from streamlit.testing.v1 import AppTest
 
-from src.core.session import SessionManager  # type: ignore[import]
 
 # 프로젝트 루트를 경로에 추가
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))

@@ -43,9 +43,6 @@ _CONTENT_1 = StreamChunk(content="안녕")
 _CONTENT_2 = StreamChunk(content="하세요")
 
 _ANSWER_TEXT = "안녕하세요"
-# Initial caption is i18n-driven (chat.t("status_initial_search")); the test
-# pins the Korean locale to assert the exact string.
-_INITIAL_CAPTION_KEY = "status_initial_search"
 # First-content status marker now reuses the src placeholder contract
 # (streaming_core._STATUS_PLACEHOLDER, currently "").
 _FIRST_CONTENT_STATUS = streaming_core_mod._STATUS_PLACEHOLDER

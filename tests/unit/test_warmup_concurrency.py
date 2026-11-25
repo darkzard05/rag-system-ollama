@@ -23,7 +23,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-import core.model_loader as model_loader
 import core.resource_manager as resource_manager_mod
 from core.model_loader import ModelManager, _warmup_models
 from core.resource_manager import get_resource_manager

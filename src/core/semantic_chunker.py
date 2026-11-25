@@ -14,9 +14,7 @@ import asyncio
 import bisect
 import logging
 import re
-import tempfile
 from collections.abc import Callable
-from pathlib import Path
 from typing import Any, Literal, cast
 
 import numpy as np
@@ -24,7 +22,6 @@ import xxhash
 from langchain_core.documents import Document
 from langchain_core.embeddings import Embeddings
 
-from common.config import MODEL_CACHE_DIR, is_test_env
 from common.constants import ChunkingConstants
 from common.similarity import cosine_similarity
 from core.model_loader import is_ollama_embedder
@@ -116,21 +113,6 @@ class EmbeddingBasedSemanticChunker:
         # 호출하여 문장마다 개별 파일을 쓰지 않는다 (청크 벡터는 VectorStoreCache가
         # index.faiss/doc_splits.json으로 일괄 영속화). 희귀한 차원 불일치 복구
         # 경로(``_reembed_single``)만 보정 벡터를 디스크에 남긴다.
-        # 디스크 경로는 전역 MODEL_CACHE_DIR 하위의 embedding_cache 로 격리해
-        # 기타 응답 캐시와 혼재되지 않게 한다.
-        #
-        # [안전장치] 테스트 환경(IS_UNIT_TEST/IS_CI_TEST)에서는 가짜 임베더
-        # (FakeEmbeddings 등)가 생성한 벡터가 프로덕션 캐시 공간을 오염하지
-        # 않도록 디스크 캐시 경로를 OS 임시 디렉토리로 분리한다. 가짜 임베더는
-        # 실제 모델과 출력 차원이 다를 수 있어(1536 vs 768), 프로덕션 경로에
-        # 기록되면 이후 chunker가 그 벡터를 히트해 FAISS 인덱스-쿼리 차원
-        # 불일치(assert d == self.d)를 유발했다.
-        _is_test_env = is_test_env()
-        _embedding_cache_dir = (
-            str(Path(tempfile.gettempdir()) / "embedding_cache_test")
-            if _is_test_env
-            else str(Path(MODEL_CACHE_DIR) / "embedding_cache")
-        )
         self.cache_manager = cache_manager or CacheManager(
             enable_memory_cache=True,
             enable_semantic_cache=False,

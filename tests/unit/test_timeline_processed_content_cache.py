@@ -1,6 +1,5 @@
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
-import pytest
 
 from core.session import SessionManager
 import ui.components.chat as chat_mod

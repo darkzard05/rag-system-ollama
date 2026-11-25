@@ -1,6 +1,5 @@
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
-from langchain_core.documents import Document
 
 
 @pytest.mark.asyncio

@@ -16,7 +16,6 @@ NOTE: ``src.core.session.manager`` and ``core.session.manager`` can resolve to
 two distinct module objects at runtime, so we reset both aliases.
 """
 
-import sys
 
 import pytest
 

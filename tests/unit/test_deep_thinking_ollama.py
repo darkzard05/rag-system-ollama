@@ -1,5 +1,4 @@
 
-import pytest
 from langchain_core.messages import AIMessageChunk
 from src.core.custom_ollama import DeepThinkingChatOllama
 

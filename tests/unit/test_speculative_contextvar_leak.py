@@ -3,11 +3,9 @@ Test for P0-Bug: ContextVar snapshot inversion in _start_speculative_generate
 causing unauthorized streaming token leak (Event Buffering Bypass).
 """
 
-import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
-from common.config import MAX_CONCURRENT_INFERENCE
 from core.graph._graph_core import _dispatch_event, _start_speculative_generate
 from core.graph.graph_builder import _spec_registry
 

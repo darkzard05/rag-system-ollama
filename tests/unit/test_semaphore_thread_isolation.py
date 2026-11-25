@@ -23,7 +23,6 @@ async def test_semaphore_isolation_across_tasks():
     successfully protects across different async tasks.
     """
     # Ensure semaphore is correctly initialized for this test
-    from src.common.config import MAX_CONCURRENT_INFERENCE  # type: ignore[import]
 
     # ModelManager._inference_semaphore is already asyncio.Semaphore
     # 강제로 1로 설정하여 순차 실행을 보장함

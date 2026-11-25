@@ -1,9 +1,8 @@
-import os
 import time
 import logging
 import argparse
 from pathlib import Path
-from datetime import datetime, timedelta
+from datetime import datetime
 
 # 프로젝트 루트 설정
 ROOT_DIR = Path(__file__).parent.parent.parent.absolute()

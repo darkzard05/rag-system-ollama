@@ -12,12 +12,9 @@ from datetime import datetime
 ROOT_DIR = Path(__file__).parent.parent.parent.absolute()
 sys.path.append(str(ROOT_DIR / "src"))
 
-from core.rag_core import RAGSystem
-from core.model_loader import load_embedding_model, ModelManager
-from common.config import OLLAMA_BASE_URL, DEFAULT_OLLAMA_MODEL
-from core.session import SessionManager
+from core.model_loader import ModelManager
+from common.config import OLLAMA_BASE_URL
 from langchain_text_splitters import RecursiveCharacterTextSplitter
-from langchain_core.documents import Document
 
 
 # 테스트 데이터 준비 (메모리 로드)
@@ -127,8 +124,6 @@ async def run_benchmark():
 
         # 3. 검색 시간 측정 (FAISS)
         import faiss
-        from langchain_community.vectorstores import FAISS
-        from langchain_community.docstore.in_memory import InMemoryDocstore
 
         v_np = np.array(vectors).astype("float32")
         d = v_np.shape[1]

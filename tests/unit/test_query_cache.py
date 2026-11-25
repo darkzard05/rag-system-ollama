@@ -19,7 +19,6 @@ import pytest
 from core.graph.graph_builder import generate, preprocess
 from core.pipeline_builder import GRADE_MEMO_KEY, PipelineBuilder
 from core.session import SessionManager
-from services.optimization.caching_optimizer import get_cache_manager
 
 
 # ----------------------------------------------------------------------------
@@ -66,16 +65,6 @@ def _make_cache_manager(get_return: object) -> MagicMock:
     cm.get = AsyncMock(return_value=get_return)
     cm.semantic_cache = _FakeSemanticCache()
     return cm
-
-
-@pytest.fixture
-def patch_cache_manager():
-    """get_cache_manager() 가 지정한 페이크를 반환하도록 전역 패치."""
-    with patch(
-        "core.graph.graph_builder.get_cache_manager",
-        side_effect=lambda *a, **k: get_cache_manager(),
-    ) as p:
-        yield p
 
 
 # ----------------------------------------------------------------------------

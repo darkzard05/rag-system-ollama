@@ -16,7 +16,6 @@ from __future__ import annotations
 
 from typing import Any
 
-import pytest
 from langchain_core.documents import Document
 
 from common.exceptions import CoordCacheReadError
@@ -57,12 +56,6 @@ def _make_doc(
             "has_coordinates": has_coordinates,
         },
     )
-
-
-@pytest.fixture
-def patch_coord_cache(monkeypatch: Any) -> None:
-    """Redirect ``document_hydrator.coord_cache`` to a controlled fake."""
-    return monkeypatch
 
 
 def test_t3_failed_file_marked_and_other_files_processed(

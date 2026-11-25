@@ -44,7 +44,6 @@ PDF_META_RE = re.compile(
 TAIL_RE = re.compile(r"tail_content_ms=([0-9.\-]+)")
 PARSE_RE = re.compile(r"parse_ms=([0-9.\-]+)")
 CIT_COUNT_RE = re.compile(r"citations-dispatch count=(\d+)")
-HYDRATION_RE = re.compile(r"hydration drain.*?([0-9.]+)s", re.IGNORECASE)
 
 VERDICT_THRESHOLDS = {
     "pdf_finalize_s": 0.5,

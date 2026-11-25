@@ -9,7 +9,6 @@ from ui.components.chat_autoscroll import (
 from core.search_aggregator import (
     SearchResultAggregator,
     AggregationStrategy,
-    AggregatedResult,
 )
 
 

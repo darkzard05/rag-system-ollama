@@ -21,7 +21,6 @@ import os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "src"))
 
 import re
-import numpy as np
 
 # From config.yml
 DYNAMIC_WEIGHTING_CONFIG = {

@@ -1,4 +1,3 @@
-import pytest
 from unittest.mock import patch
 from main import _load_available_models, _is_ollama_reachable
 from common.config import DEFAULT_OLLAMA_MODEL, MSG_ERROR_OLLAMA_NOT_RUNNING

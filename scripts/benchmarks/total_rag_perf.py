@@ -1,10 +1,8 @@
 import asyncio
 import time
-import os
 import sys
 from pathlib import Path
 import numpy as np
-from langchain_core.documents import Document
 from langchain_core.embeddings import Embeddings
 
 # 프로젝트 루트 경로 추가

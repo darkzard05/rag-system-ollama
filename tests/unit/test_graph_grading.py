@@ -21,31 +21,6 @@ def json_response(**fields):
     return SimpleNamespace(content=json.dumps(fields))
 
 
-@pytest.fixture
-def mock_state():
-    return {
-        "input": "DeepSeek-R1의 성능은 어떠한가요?",
-        "relevant_docs": [
-            Document(
-                page_content="DeepSeek-R1은 매우 높은 성능을 가진 모델입니다.",
-                metadata={"rerank_score": 0.5},
-            ),
-        ],
-        "retry_count": 0,
-        "is_cached": False,
-        "intent": "rag",
-    }
-
-
-@pytest.fixture
-def mock_config():
-    """bind+JSON 모드로 모킹된 LLM을 포함한 config를 생성합니다."""
-    llm = MagicMock()
-    json_llm = AsyncMock()
-    llm.bind.return_value = json_llm
-    return {"configurable": {"llm": llm}}
-
-
 @pytest.mark.asyncio
 async def test_grade_documents_short_circuit():
     """리랭킹 점수가 매우 높을 때 Short-circuit이 작동하여 즉시 generate를 반환하는지 검증"""

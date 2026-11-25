@@ -1,7 +1,6 @@
 import os
 import fitz  # PyMuPDF
 import logging
-from langchain_core.documents import Document
 from core.document_processor import load_pdf_docs
 from common.utils import extract_annotations_from_docs
 

@@ -1,7 +1,4 @@
-import asyncio
-import tempfile
 import uuid
-from pathlib import Path
 
 import numpy as np
 import pytest
@@ -282,19 +279,13 @@ async def test_default_cache_manager_isolates_test_env_cache():
 
 
 @pytest.mark.asyncio
-async def test_chunking_does_not_write_response_cache_to_disk(tmp_path, monkeypatch):
+async def test_chunking_does_not_write_response_cache_to_disk(tmp_path):
     """청킹 실행 후 전역 ./model_cache/response_cache (응답 캐시)에는 임베딩 항목이
     기록되지 않아야 한다. [최적화-04] 청킹 hot path는 문장 임베딩을 디스크에
-    영속화하지 않으므로(L1 메모리 캐시로 dedup), 프로덕션 ``embedding_cache`` 뿐
-    아니라 OS 임시 격리 경로(``embedding_cache_test``)에도 새 파일을 쓰지 않는다.
-    최종 청크 벡터는 VectorStoreCache(index.faiss/doc_splits.json)로 일괄 영속화된다."""
-    # 전역 디스크 캐시 디렉터리를 tmp_path 로 리다이렉트하여 격리
-    # (MODEL_CACHE_DIR 은 common.config 에서 import 시점에 상수로 바인딩되므로
-    #  환경변수가 아닌 해당 모듈 속성을 직접 monkeypatch 해야 반영됨)
+    영속화하지 않으므로(L1 메모리 캐시로 dedup) 프로덕션 ``embedding_cache`` 에도
+    새 파일을 쓰지 않는다. 최종 청크 벡터는
+    VectorStoreCache(index.faiss/doc_splits.json)로 일괄 영속화된다."""
     model_cache = tmp_path / ".model_cache"
-    monkeypatch.setattr("common.config.MODEL_CACHE_DIR", str(model_cache))
-    # semantic_chunker 는 MODEL_CACHE_DIR 을 import 시점에 바인딩하므로 해당 모듈 속성도 패치
-    monkeypatch.setattr("core.semantic_chunker.MODEL_CACHE_DIR", str(model_cache))
     response_cache = model_cache / "response_cache"
     response_cache.mkdir(parents=True, exist_ok=True)
 
@@ -308,8 +299,6 @@ async def test_chunking_does_not_write_response_cache_to_disk(tmp_path, monkeypa
     text = (
         f"A uniquely generated sentence {uuid.uuid4()} for embedding cache test. " * 8
     )
-    test_cache = Path(tempfile.gettempdir()) / "embedding_cache_test"
-    test_cache_before = len(list(test_cache.glob("*.cache")))
     await chunker.split_text(text)
 
     # 청커는 전역 응답 캐시(response_cache)에 쓰지 않는다
@@ -320,12 +309,6 @@ async def test_chunking_does_not_write_response_cache_to_disk(tmp_path, monkeypa
     embedding_cache = model_cache / "embedding_cache"
     assert list(embedding_cache.glob("*.cache")) == [], (
         "Chunker must not write fake vectors into PROD embedding_cache from test env"
-    )
-    # [최적화-04] 청킹 hot path는 문장 임베딩을 디스크에 쓰지 않는다 (L1 전용)
-    test_cache_after = len(list(test_cache.glob("*.cache")))
-    assert test_cache_after == test_cache_before, (
-        "Chunker must not persist per-sentence embeddings to disk "
-        f"(before={test_cache_before}, after={test_cache_after})"
     )
 
 

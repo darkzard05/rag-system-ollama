@@ -7,8 +7,6 @@
 - common.utils.apply_tooltips_to_response / friendly_error_message
 """
 
-import os
-import tempfile
 import uuid
 from types import SimpleNamespace
 from unittest.mock import patch

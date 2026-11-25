@@ -1,5 +1,4 @@
 import time
-import pytest
 from core.session import SessionManager
 from core._loaders import _fetch_available_models_cached
 import core._loaders as loaders_mod

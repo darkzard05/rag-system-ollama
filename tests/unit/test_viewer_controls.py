@@ -1,4 +1,3 @@
-import pytest
 from unittest.mock import MagicMock, patch
 import streamlit as st
 from ui.components.viewer import render_pdf_controls

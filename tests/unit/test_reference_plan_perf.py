@@ -1,11 +1,8 @@
 from unittest.mock import patch
-import pytest
 
 from core.session import SessionManager
-from ui.components import reference_plan as rp_mod
 from ui.components.reference_plan import (
     _DOCS_SIG_CACHE,
-    _build_reference_plan,
     _docs_signature,
     note_stream_references,
 )

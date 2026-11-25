@@ -7,7 +7,6 @@ import asyncio
 import logging
 import os
 import pandas as pd
-from typing import List
 
 from langchain_community.document_loaders import PyMuPDFLoader
 from langchain_core.output_parsers import JsonOutputParser

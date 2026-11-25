@@ -1,7 +1,5 @@
-import asyncio
 import pytest
-from unittest.mock import MagicMock
-from core.resource_manager import ResourceManager, get_resource_manager
+from core.resource_manager import get_resource_manager
 
 
 class MockFaissIndex:

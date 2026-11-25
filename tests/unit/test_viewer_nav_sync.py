@@ -1,4 +1,3 @@
-import pytest
 from unittest.mock import MagicMock, patch
 from core.session import SessionManager
 from ui.components.viewer import render_pdf_controls, _on_page_change

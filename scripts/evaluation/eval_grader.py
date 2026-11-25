@@ -9,7 +9,6 @@ sys.path.append(os.path.join(os.getcwd(), "src"))
 from langchain_core.documents import Document
 from core.graph.graph_builder import grade_documents
 from core.model_loader import ModelManager
-from langchain_core.runnables import RunnableConfig
 
 # 로깅 설정 (결과만 보기 위해 ERROR로 설정)
 logging.basicConfig(level=logging.ERROR)

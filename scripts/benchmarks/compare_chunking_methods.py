@@ -18,9 +18,7 @@ sys.path.insert(0, str(ROOT_DIR / "src"))
 async def main() -> int:
     from core.document_processor import load_pdf_docs
     from core.model_loader import ModelManager
-    from core.semantic_chunker import EmbeddingBasedSemanticChunker
     from langchain_text_splitters import RecursiveCharacterTextSplitter
-    from common.config import SEMANTIC_CHUNKER_CONFIG
 
     pdf_path = str(ROOT_DIR / "tests" / "data" / "2201.07520v1.pdf")
     print("=" * 70)

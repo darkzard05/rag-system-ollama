@@ -1,5 +1,4 @@
 # ModelManager의 모델 필터링 로직을 테스트하는 유�� 테스트
-import pytest
 from core.model_loader import ModelManager
 from common.config import DEFAULT_EMBEDDING_MODEL, DEFAULT_OLLAMA_MODEL
 

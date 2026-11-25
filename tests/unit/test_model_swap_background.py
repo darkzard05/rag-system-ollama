@@ -6,7 +6,7 @@ import inspect
 import os
 import sys
 import unittest
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 # 프로젝트 루트를 path에 추가
 sys.path.append(os.path.abspath("src"))

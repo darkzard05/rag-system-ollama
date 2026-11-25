@@ -318,7 +318,6 @@ VECTOR_STORE_CACHE_DIR: str = str(
 
 # --- 5. 프롬프트 설정 (Prompts) ---
 # prompts 섹션은 config.yml의 rag.prompts 아래에 있음
-_rag_config = _config.get("rag", {})
 _prompts_config = _rag_config.get("prompts") or {}
 TOKEN_ESTIMATION_PROXY: str = _prompts_config.get("token_estimation_proxy", "")
 ANALYSIS_PROTOCOL: str = _prompts_config.get("analysis_protocol", "")

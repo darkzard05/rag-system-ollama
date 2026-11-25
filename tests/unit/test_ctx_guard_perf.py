@@ -5,7 +5,6 @@
 - (c) 예산 내 문서 20개 → 트리밍 없음, _render_doc_block 호출 = 20회, len == 20
 """
 
-from unittest.mock import MagicMock
 
 import pytest
 from langchain_core.documents import Document

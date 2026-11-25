@@ -1,4 +1,3 @@
-import pytest
 from unittest.mock import patch
 from ui.components.chat import _render_unified_timeline
 

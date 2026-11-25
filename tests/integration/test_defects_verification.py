@@ -25,7 +25,6 @@ async def test_p0_2_session_sync_concurrency(session_context):
 @pytest.mark.asyncio
 async def test_use_llm_pins_actual_model():
     """결함-05: 비기본 LLM 모델 사용 시 추론 중 실제 모델명이 pin되는지 검증"""
-    from common.config import DEFAULT_OLLAMA_MODEL
     from core.graph._graph_core import _safe_invoke
     from core.resource_manager import get_resource_manager
 

@@ -4,7 +4,7 @@ from typing import Any
 
 import streamlit as st
 
-from ui.components.common import AVATARS, ui_error  # noqa: F401
+from ui.components.common import AVATARS
 from ui.components.doc_analysis.actions import on_cancel as _cancel_rebuild
 from ui.components.doc_analysis.panel import render_document_panel
 from ui.strings import t

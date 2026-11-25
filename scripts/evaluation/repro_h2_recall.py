@@ -44,7 +44,6 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 GOLDEN = ROOT / "tests" / "data" / "golden_set.json"
-CONFIG = ROOT / "config.yml"
 REPORTS = ROOT / "reports"
 
 # ---- Config values read from config.yml (verified 2026-09-27) ----

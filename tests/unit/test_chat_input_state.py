@@ -12,12 +12,10 @@ from ui.strings import set_lang, t
 # Placeholders are i18n-driven (src/ui/components/chat.py::_resolve_chat_input_state
 # via t() keys). Tests pin the Korean locale to assert exact strings.
 _PLACEHOLDER_GENERATING = "chat_placeholder_generating"
-_PLACEHOLDER_SWAPPING = "chat_placeholder_swapping"
 _PLACEHOLDER_BUILDING = "chat_placeholder_building"
 _PLACEHOLDER_NO_PDF = "chat_placeholder_no_pdf"
 _PLACEHOLDER_NOT_READY = "chat_placeholder_not_ready"
 _PLACEHOLDER_READY = "chat_placeholder_ready"
-_PLACEHOLDER_FOLLOWUP = "chat_placeholder_next"
 
 
 def _reset_session(sid: str) -> None:

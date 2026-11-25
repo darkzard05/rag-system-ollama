@@ -7,7 +7,6 @@
 """
 
 from unittest.mock import patch
-import pytest
 from langchain_core.documents import Document
 
 import core.graph._generate as ggen

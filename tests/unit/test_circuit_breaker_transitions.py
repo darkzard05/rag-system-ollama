@@ -34,10 +34,6 @@ async def _ok_async() -> int:
     return 7
 
 
-async def _fail_async() -> int:
-    raise RuntimeError("async boom")
-
-
 async def _gen() -> AsyncGenerator[int, None]:
     for i in range(3):
         yield i

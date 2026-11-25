@@ -5,31 +5,9 @@
 from typing import Annotated, Any, Literal, TypedDict
 
 from langchain_core.documents import Document
-from pydantic import BaseModel, Field, computed_field, model_validator
+from pydantic import BaseModel, Field, model_validator
 
 from common.utils import coerce_citation_mapping
-
-
-class PerformanceStats(BaseModel):
-    """통합 성능 메트릭 스키마 (Pydantic v2 최적화)"""
-
-    ttft: float = 0.0
-    thinking_time: float = 0.0
-    generation_time: float = 0.0
-    total_time: float = 0.0
-    token_count: int = 0
-    thought_token_count: int = 0
-    input_token_count: int = 0
-    model_name: str = "unknown"
-    doc_count: int = 0
-
-    @computed_field  # type: ignore[prop-decorator]
-    @property
-    def tps(self) -> float:
-        """Tokens Per Second (계산된 필드)"""
-        return (
-            self.token_count / self.generation_time if self.generation_time > 0 else 0.0
-        )
 
 
 def reset_or_append(existing: list[str], new: list[str]) -> list[str]:

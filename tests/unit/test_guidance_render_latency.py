@@ -1,7 +1,5 @@
 # tests/unit/test_guidance_render_latency.py
-import time
-from unittest.mock import MagicMock, patch
-import pytest
+from unittest.mock import patch
 from core.session import SessionManager
 
 

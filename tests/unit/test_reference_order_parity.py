@@ -14,8 +14,6 @@ from unittest.mock import MagicMock, patch
 import ui.strings as strings_mod
 from ui.strings import set_lang, t
 
-LONG_SPAN = "인용 원문 전체 문장입니다. " * 30
-
 
 def _doc(page: int, text: str, doc_id: str) -> MagicMock:
     doc = MagicMock()

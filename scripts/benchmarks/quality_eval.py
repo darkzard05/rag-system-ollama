@@ -1,8 +1,5 @@
-import asyncio
 import time
-import os
 import sys
-import json
 from pathlib import Path
 import pandas as pd
 from typing import List, Dict, Any
@@ -12,7 +9,6 @@ ROOT_DIR = Path(__file__).parent.parent.parent.absolute()
 sys.path.append(str(ROOT_DIR / "src"))
 
 import pymupdf4llm
-from core.document_processor import load_pdf_docs
 
 def analyze_table_quality(chunks: List[Dict[str, Any]]):
     """청크 리스트에서 표 데이터를 추출하여 정밀 통계를 산출합니다."""
