@@ -150,7 +150,9 @@
 }
 
 [data-testid="stColumn"] {
-    flex: 1 1 0px !important;
+    /* Keep Streamlit's per-column flex-basis (42% / 58% from st.columns).
+       A zero basis flattened every column to equal width. */
+    flex: 1 1 auto !important;
     min-width: 0 !important;
     display: flex !important;
     flex-direction: column !important;
@@ -488,58 +490,79 @@ header[data-testid="stHeader"] {
     max-width: 360px;
 }
 
-/* VIS-RESP: 769-1024px window/narrow laptop still hit the base
-   `flex-wrap: nowrap !important; overflow: hidden !important` rule and clip
-   the 2-column content. Stack + allow scroll here so content stays reachable. */
+/* VIS-RESP: narrow windows stack the two panes but keep the viewport-height
+   flex chain. The old height:auto override left the chat scroller at 264px
+   with 444px of unused space below it on a 768px-tall window. The mobile
+   block below still wins for <=768px (later rules at equal specificity). */
 @media (max-width: 1024px) {
     .stApp, [data-testid="stAppViewContainer"] {
-        height: auto !important;
-        overflow: visible !important;
+        height: 100dvh !important;
+        overflow: hidden !important;
     }
     [data-testid="stMainBlockContainer"] {
-        height: auto !important;
+        height: 100dvh !important;
         display: flex !important;
         flex-direction: column !important;
-        padding-top: 0 !important;
+        padding-top: var(--header-h, var(--header-h-fallback)) !important;
     }
     [data-testid="stHorizontalBlock"] {
         flex-wrap: wrap !important;
         height: auto !important;
-        overflow: visible !important;
+        overflow: hidden !important;
+        /* Without this, stretch distribution leaves an empty band between the
+           PDF line and the chat line on tablet widths. */
+        align-content: flex-start;
     }
-    [data-testid="stMainBlockContainer"] [data-testid="stColumn"] {
-        flex: 1 1 100% !important;
-        min-width: 0 !important;
-        height: auto !important;
-        overflow-y: auto !important;
-        /* MOBILE-ANCHOR: 1024 이하에서도 Chromium 앵커링이 scrollTop을 독자
-           조정하지 못하게 데스크톱 규칙과 동일한 옵트아웃을 유지한다.
-           Plain 선언만 사용 (hygiene 예산 준수). */
+    [data-testid="stMainBlockContainer"] [data-testid="stColumn"]:first-child {
+        flex: 0 0 100% !important;
+        height: 35vh !important;
         overflow-anchor: none;
+    }
+    [data-testid="stMainBlockContainer"] [data-testid="stColumn"]:last-child {
+        flex: 1 1 100% !important;
+        height: calc(100% - 35vh - 0.25rem) !important;
+        /* The column's direct stVerticalBlock is the one scroller (rule ~314).
+           Making the column itself scrollable creates a competing scrollport. */
+        overflow-y: visible !important;
+        overflow-anchor: none;
+    }
+    /* Tablet keeps the same single scroller as desktop: only the column's
+       direct stVerticalBlock scrolls, never the column itself. */
+    [data-testid="stMainBlockContainer"] [data-testid="stColumn"]:last-child
+    > [data-testid="stVerticalBlock"] {
+        overflow-y: auto;
     }
 }
 
 @media (max-width: 768px) {
+    /* Keep the viewport-height chain here too: height:auto stopped the chat
+       scrollport above the fixed input and left ~142px of dead space. */
     .stApp, [data-testid="stAppViewContainer"] {
-        height: auto !important;
-        overflow: visible !important;
+        height: 100dvh !important;
+        overflow: hidden !important;
     }
     [data-testid="stMainBlockContainer"] {
-        height: auto !important;
+        height: 100dvh !important;
         display: flex !important;
         flex-direction: column !important;
-        padding-top: 0 !important;
+        padding-top: var(--header-h, var(--header-h-fallback)) !important;
     }
     [data-testid="stHorizontalBlock"] {
         flex-wrap: wrap !important;
         height: auto !important;
         overflow: visible !important;
+        /* The tablet rule packs lines to the top; mobile needs stretch back so
+           the chat line fills to the fixed input instead of stopping short. */
+        align-content: normal;
     }
     /* VIS-4: mobile stack — compact PDF preview (35vh) + chat column dominates.
        Scoped to the app's own columns so PDF-controls inner columns stay auto. */
     [data-testid="stMainBlockContainer"] [data-testid="stColumn"]:first-child {
         display: flex !important;
         flex-direction: column !important;
+        /* Full row basis: the shared column rule uses flex-basis:auto so desktop
+           keeps 42/58; without this the two panes share one mobile line. */
+        flex: 0 0 100% !important;
         height: 35vh !important;
         overflow-y: auto !important;
         /* MOBILE-ANCHOR: PDF 프리뷰 스크롤러도 앵커링 옵트아웃. */
@@ -553,8 +576,9 @@ header[data-testid="stHeader"] {
         /* MOBILE-INPUT-RESERVE: fixed chat input overlays the column end.
            Reserve its height + safe-area so the last message stays visible.
            Plain declarations only (hygiene priority-declaration budget is at cap). */
-        padding-bottom: calc(96px + env(safe-area-inset-bottom, 0px));
-        scroll-padding-bottom: calc(96px + env(safe-area-inset-bottom, 0px));
+        /* 64px = 59px fixed input + 5px breathing room; 96px reserved too much. */
+        padding-bottom: calc(64px + env(safe-area-inset-bottom, 0px));
+        scroll-padding-bottom: calc(64px + env(safe-area-inset-bottom, 0px));
     }
     [data-testid="stColumn"] > [data-testid="stVerticalBlock"]
     > [data-testid="stLayoutWrapper"] > [data-testid="stVerticalBlock"] {

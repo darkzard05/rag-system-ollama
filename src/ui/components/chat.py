@@ -125,9 +125,6 @@ def render_message(
         # 동일 msg_id 키의 익스팬더가 2개면 StreamlitDuplicateElementKey).
         error = kwargs.get("error")
         if error:
-            # 익스팬더 삭제: 오류 턴도 참조 목록만 남기고 확정 렌더한다.
-            if role == "assistant" and (documents or citations):
-                render_reference_list(msg_id, documents, citations)
             has_content = bool(processed_content or content)
             if has_content:
                 if processed_content:
@@ -142,6 +139,9 @@ def render_message(
             # 버튼을 렌더한다 (중단 턴의 retry_stopped 패턴과 동일 콜백 재사용).
             if role == "assistant":
                 _render_error_retry(msg_id, error)
+            # 오류 안내 다음에 참조를 배치한다 (정상 턴과 동일한 위계).
+            if role == "assistant" and (documents or citations):
+                render_reference_list(msg_id, documents, citations)
             return
 
         # 인용 익스팬더 삭제: 완료 메시지는 상태 1줄 + 본문 + 점프 스트립만 렌더한다.
@@ -163,13 +163,13 @@ def render_message(
             )
             st.markdown(display_text, unsafe_allow_html=(role == "assistant"))
 
+        # 중단 사실은 본문 바로 뒤에 알린다 (점프 버튼 목록 아래로 밀지 않는다).
+        if role == "assistant" and cancelled and msg_type == "general":
+            st.caption(t("caption_stopped_partial"))
+
         # 문서별 한 줄 요약 참조 목록 (기존 [1][2] 배지 + 지표 캡션 대체).
         if role == "assistant" and (documents or citations):
             render_reference_list(msg_id, documents, citations)
-
-        # 중단 턴은 중립 캡션만 남긴다 (성능 지표 캡션 삭제).
-        if role == "assistant" and cancelled and msg_type == "general":
-            st.caption(t("caption_stopped_partial"))
 
 
 def _render_build_error_message(msg: dict[str, Any]) -> None:

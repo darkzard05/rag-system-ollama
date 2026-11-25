@@ -632,6 +632,8 @@ def render_pdf_controls(current_page, total_pages):
                 label_visibility="visible",
                 help=t("pdf_page_help"),
             )
+            # 분모가 없으면 현재 번호만 보이지 않아 이동 범위를 가늠할 수 없다.
+            st.caption(t("pdf_page_count").format(total=total_pages))
 
         with col_next:
             st.button(
