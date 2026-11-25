@@ -9,6 +9,7 @@ import re
 import threading
 import time
 from functools import lru_cache
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -40,6 +41,21 @@ _HF_TOKENIZER_REPO = "nomic-ai/nomic-embed-text-v2-moe"
 _TOKENIZER_LOAD_LOCK = threading.Lock()
 
 
+class _CachedTokenizerAdapter:
+    """``tokenizers.Tokenizer`` 를 HF 배치 호출 형태로 감싼다."""
+
+    def __init__(self, tokenizer: Any) -> None:
+        self._tokenizer = tokenizer
+
+    def __call__(
+        self, texts: list[str], add_special_tokens: bool = False
+    ) -> dict[str, list[list[int]]]:
+        encoded = self._tokenizer.encode_batch(
+            texts, add_special_tokens=add_special_tokens
+        )
+        return {"input_ids": [item.ids for item in encoded]}
+
+
 @lru_cache(maxsize=1)
 def _load_hf_embedding_tokenizer() -> Any | None:
     """v2-moe 실제 토크나이저를 지연 로드한다 (오프라인/미설치 시 None).
@@ -48,6 +64,32 @@ def _load_hf_embedding_tokenizer() -> Any | None:
     과소평가한다. 최종 토큰 상한 강제는 이 토크나이저로 실제 값을 재고,
     사용할 수 없을 때만 보수적 배수 폴백을 쓴다.
     """
+    hf_cache = os.environ.get("HF_HUB_CACHE")
+    if hf_cache:
+        cache_root = Path(hf_cache)
+    else:
+        hf_home = os.environ.get("HF_HOME")
+        cache_root = (
+            Path(hf_home) / "hub" if hf_home else Path.home() / ".cache/huggingface/hub"
+        )
+    repo_dir = f"models--{_HF_TOKENIZER_REPO.replace('/', '--')}"
+    snapshot_glob = f"{repo_dir}/snapshots/*/tokenizer.json"
+    cache_file = next(
+        (path for path in sorted(cache_root.glob(snapshot_glob)) if path.is_file()),
+        None,
+    )
+    if cache_file is not None:
+        try:
+            from tokenizers import Tokenizer
+
+            return _CachedTokenizerAdapter(Tokenizer.from_file(str(cache_file)))
+        except Exception as e:
+            logger.debug(
+                "[RAG] [CHUNKING] tokenizer.json 직접 로드 실패 — AutoTokenizer 폴백: %s",
+                e,
+            )
+
+    # 캐시 파일이 없거나 직접 로드에 실패하면 기존 AutoTokenizer 경로를 쓴다.
     from transformers import AutoTokenizer
 
     # 캐시된 토크나이저를 우선 사용해 HF Hub 메타데이터 조회(수 초)를 피한다.

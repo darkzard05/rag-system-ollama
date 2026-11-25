@@ -1,0 +1,19 @@
+{
+  "generated_at": "2026-11-25T23:23:26",
+  "label": "after_p1",
+  "pdf": "C:\\Users\\darkzard05\\hy\\rag-system-ollama\\tests\\data\\2201.07520v1.pdf",
+  "embedder": "nomic-embed-text-v2-moe",
+  "vector_cache_enabled": false,
+  "wall_s": 17.959,
+  "tokenizer_warmup_ms": 906.6,
+  "stages": {
+    "extract_ms": 7004.5,
+    "chunk_ms": 10831.6,
+    "faiss_ms": 58.4,
+    "bm25_ms": 35.2,
+    "register_ms": 49.8,
+    "total_s": 17.9
+  },
+  "chunks": 68,
+  "errors": 0
+}

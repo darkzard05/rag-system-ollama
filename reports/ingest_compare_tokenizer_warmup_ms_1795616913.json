@@ -1,0 +1,37 @@
+{
+  "generated_at": "2026-11-25T23:28:33",
+  "metric": "tokenizer_warmup_ms",
+  "pairs": 5,
+  "before": {
+    "median": 13637.3,
+    "min": 13324.0,
+    "max": 14843.4
+  },
+  "after": {
+    "median": 776.3,
+    "min": 740.6,
+    "max": 906.6
+  },
+  "paired_improvement": {
+    "median_saved": 12896.7,
+    "min_saved": 12477.2,
+    "max_saved": 14081.8,
+    "pct_of_before_median": 94.6
+  },
+  "artifacts": {
+    "before": [
+      "reports\\bench_ingest_before_p1_1795616579.json",
+      "reports\\bench_ingest_before_p2_1795616639.json",
+      "reports\\bench_ingest_before_p3_1795616706.json",
+      "reports\\bench_ingest_before_p4_1795616770.json",
+      "reports\\bench_ingest_before_p5_1795616827.json"
+    ],
+    "after": [
+      "reports\\bench_ingest_after_p1_1795616606.json",
+      "reports\\bench_ingest_after_p2_1795616666.json",
+      "reports\\bench_ingest_after_p3_1795616740.json",
+      "reports\\bench_ingest_after_p4_1795616796.json",
+      "reports\\bench_ingest_after_p5_1795616861.json"
+    ]
+  }
+}
