@@ -103,10 +103,11 @@ def test_proc_phase_caption_uses_single_space_middot() -> None:
     assert line.endswith("7s ▍")
 
 
-def test_proc_phase_caption_skips_empty_status_text() -> None:
-    """빈 status_text가 이중 구분자로 남지 않고, 빈 조각은 건너뛴다."""
+def test_proc_phase_caption_never_shows_time_only() -> None:
+    """빈 status_text에서도 진행 라벨이 남아 시간만 노출되지 않는다."""
     line = chat_mod._proc_phase_caption("", 3.0)
     assert "  ·  " not in line
     assert "· ·" not in line
+    assert "▸" in line
     assert line.endswith("3s ▍")
     assert common_mod.status_line("a", "", "b") == "a · b"

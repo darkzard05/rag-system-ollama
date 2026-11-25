@@ -244,6 +244,12 @@ def test_status_caption_created_and_cleared_around_write_stream() -> None:
     status_ph = fake_st.empty.return_value
     captions = [call.args[0] for call in status_ph.caption.call_args_list if call.args]
     assert len(captions) > 0
+    # Every live repaint carries a phase label, including the empty placeholder
+    # emitted on the first content chunk and the pre-final silence. The final
+    # completion line uses ✓ marks and is not a live repaint.
+    live_captions = [text for text in captions if text.endswith("▍")]
+    assert live_captions
+    assert all("▸" in text for text in live_captions)
     # Phase labels resolve per call for the active locale: rendered under ko,
     # so the Korean label is expected (locale-reactive, not import-bound).
     assert any("▸ 답변 생성" in text for text in captions)
