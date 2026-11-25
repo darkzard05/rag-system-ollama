@@ -51,6 +51,9 @@ UI_STRINGS: dict[str, dict[str, str]] = {
         "phase_document_search": "Document Search",
         "phase_evidence_collection": "Evidence Collection",
         "phase_answer_generation": "Answer Generation",
+        "phase_document_search_short": "Search",
+        "phase_evidence_collection_short": "Evidence",
+        "phase_answer_generation_short": "Generate",
         # Streaming status
         "status_stopped": "Generation stopped · No answer to display",
         # Captions
@@ -144,6 +147,7 @@ UI_STRINGS: dict[str, dict[str, str]] = {
         "ref_section_title": "Reference",
         # Streaming status fallbacks (chat._draw_streaming_message, streaming_core)
         "status_initial_search": "Analyzing the question and searching related knowledge... ▍",
+        "status_short_active": "Working...",
         "status_fallback_generating": "Generating...",
         "status_fallback_stopping": "Stopping...",
         "status_citation_cleanup": "Tidying citations...",
@@ -195,6 +199,9 @@ UI_STRINGS: dict[str, dict[str, str]] = {
         "phase_document_search": "문서 검색",
         "phase_evidence_collection": "증거 수집",
         "phase_answer_generation": "답변 생성",
+        "phase_document_search_short": "검색",
+        "phase_evidence_collection_short": "증거",
+        "phase_answer_generation_short": "생성",
         "status_stopped": "답변 생성이 사용자에 의해 중단되었습니다.",
         "caption_stopped_partial": "정지됨 · 부분적인 답변 보존됨",
         "pdf_error_data": "⚠️ PDF 데이터를 불러올 수 없습니다.",
@@ -270,6 +277,7 @@ UI_STRINGS: dict[str, dict[str, str]] = {
         "ref_section_title": "Reference",
         # Streaming status fallbacks (chat._draw_streaming_message, streaming_core)
         "status_initial_search": "질문을 분석하고 관련 지식을 검색하는 중입니다... ▍",
+        "status_short_active": "진행 중...",
         "status_fallback_generating": "생성 중...",
         "status_fallback_stopping": "중지 중...",
         "status_citation_cleanup": "인용 정리 중...",
@@ -432,3 +440,13 @@ PHASE_KEYWORDS: tuple[tuple[str, tuple[str, ...]], ...] = (
 def get_phase_labels() -> tuple[tuple[str, tuple[str, ...]], ...]:
     """Return phase labels resolved for the active language."""
     return tuple((t(key), keywords) for key, keywords in PHASE_KEYWORDS)
+
+
+def get_short_phase_labels() -> tuple[str, ...]:
+    """Return compact phase labels in PHASE_KEYWORDS order."""
+    labels = {
+        "phase_document_search": t("phase_document_search_short"),
+        "phase_evidence_collection": t("phase_evidence_collection_short"),
+        "phase_answer_generation": t("phase_answer_generation_short"),
+    }
+    return tuple(labels[key] for key, _keywords in PHASE_KEYWORDS)

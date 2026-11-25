@@ -39,7 +39,7 @@ from ui.components.streaming import (
     _content_generator,
     _finalize_pdf_side_effects,
 )
-from ui.strings import PHASE_KEYWORDS, get_phase_labels, t
+from ui.strings import PHASE_KEYWORDS, get_phase_labels, get_short_phase_labels, t
 from ui.widget_keys import MAIN_CHAT_INPUT_KEY, SAMPLE_QUESTION_STATE_KEY
 
 logger = logging.getLogger(__name__)
@@ -352,22 +352,13 @@ def _proc_phase_caption(
 ) -> str:
     """답변 위 자막용 프로세스 위상 캡션 텍스트를 만든다."""
     active_idx = _infer_proc_phase(status_text)
-    parts: list[str] = []
-    for idx, (label, _keywords) in enumerate(get_phase_labels()):
-        if active_idx >= 0 and idx == active_idx:
-            parts.append(f"▸ {label}")
-        elif active_idx > idx:
-            parts.append(f"✓ {label}")
-        else:
-            parts.append(label)
-    # 마지막 하드코딩 구분자를 status_line으로 일원화한다: 앱 전역 상태줄
-    # 규격인 한 칸 미들닷(" · ")을 사용하고 빈 조각은 건너뛴다.
-    line = status_line(*parts)
-    if active_idx == -1 and status_text:
-        line = status_line(line, status_text)
-    if extra:
-        line = status_line(line, extra)
-    return status_line(line, f"{elapsed_sec:.0f}s ▍")
+    if active_idx >= 0:
+        phrase = f"▸ {get_phase_labels()[active_idx][0]}"
+    elif status_text:
+        phrase = f"▸ {t('status_short_active')}"
+    else:
+        phrase = ""
+    return status_line(phrase, extra or "", f"{elapsed_sec:.0f}s ▍")
 
 
 def _live_status_line(status_text: str, elapsed_sec: float, n_citations: int) -> str:
@@ -404,7 +395,7 @@ def _final_status_line(
     if n_cit > 0:
         done.add(_EVIDENCE_PHASE_IDX)
     parts: list[str] = []
-    for idx, (label, _keywords) in enumerate(get_phase_labels()):
+    for idx, label in enumerate(get_short_phase_labels()):
         parts.append(f"✓ {label}" if idx in done else label)
     line = status_line(*parts)
     if n_cit > 0:
