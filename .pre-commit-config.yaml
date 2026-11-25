@@ -1,12 +1,11 @@
 # Hook layout is deliberately small:
 #   pre-commit : ruff only (fast, file-scoped feedback while editing)
-#   pre-push   : ONE ci-parity hook that runs every gating command
+#   pre-push   : ONE ci-parity hook that runs every gating group
 #
-# ci-parity (scripts/maintenance/ci_parity.py) is the single source of truth and
-# is invoked by the GitHub Actions jobs too (--only static/security/tests), so
-# "pre-push green" => "CI green" holds by construction rather than by keeping
-# two lists in sync by hand. The runner also enforces per-step timeouts and kills
-# the whole process tree, so the hook cannot hang forever.
+# The same gate commands run locally and in ci.yml through ci_parity.py. CI also
+# runs setup, install, and artifact upload steps. Branch protection is what
+# makes CI block merges; a green hook does not guarantee a green CI run.
+# The runner enforces per-step timeouts and kills the whole process tree.
 repos:
 # 1. Ruff (lint + format) at commit time
 -   repo: https://github.com/astral-sh/ruff-pre-commit
@@ -21,9 +20,9 @@ repos:
 # 2. Gating checks at push time (ruff, mypy, bandit, pip-audit, tests)
 -   repo: local
     hooks:
-    # Runs the same commands as all three CI jobs. mypy/bandit/pip-audit use the
-    # active environment (`language: system`) so they match CI, which installs
-    # them into the same interpreter that runs the tests.
+    # Runs the same gate commands as ci.yml. Tools come from the active
+    # environment (`language: system`); install the pins from
+    # requirements/ci-tools.txt so local and CI versions match.
     -   id: ci-parity
         name: ci-parity (ruff, mypy, bandit, pip-audit, tests)
         entry: python scripts/maintenance/ci_parity.py --stage pre-push

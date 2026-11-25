@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import importlib.util
 import re
+import subprocess
 import sys
 from pathlib import Path
 from types import ModuleType
@@ -144,6 +145,59 @@ def test_changed_file_scoping_matches_ci_trigger_paths() -> None:
         "ci_parity would skip a push that CI runs: missing trigger prefixes "
         f"{sorted(missing)}"
     )
+
+
+def test_pre_push_blocks_dirty_gate_files(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    src = repo / "src"
+    src.mkdir(parents=True)
+    tracked = src / "tracked.py"
+    tracked.write_text("VALUE = 1\n", encoding="utf-8")
+
+    def git(*args: str) -> None:
+        subprocess.run(["git", *args], cwd=repo, check=True, capture_output=True)
+
+    git("init", "-q")
+    git("config", "user.email", "test@example.com")
+    git("config", "user.name", "Test")
+    git("add", "src/tracked.py")
+    git("commit", "-q", "-m", "initial")
+    tracked.write_text("VALUE = 2\n", encoding="utf-8")
+
+    copied_script = repo / "scripts" / "maintenance" / "ci_parity.py"
+    copied_script.parent.mkdir(parents=True)
+    copied_script.write_text(CI_PY.read_text(encoding="utf-8"), encoding="utf-8")
+
+    result = subprocess.run(
+        [sys.executable, str(copied_script), "--stage", "pre-push"],
+        cwd=repo,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    output = result.stdout + result.stderr
+
+    assert result.returncode == 1
+    assert "src/tracked.py" in output
+
+
+def test_ci_path_filters_include_gating_files() -> None:
+    workflow = _load_yaml(ROOT / ".github" / "workflows" / "ci.yml")
+    # PyYAML resolves the bare `on:` key to boolean True.
+    triggers = workflow.get("on") or workflow.get(True)
+    assert isinstance(triggers, dict), "ci.yml has no on: trigger block"
+    required = (
+        "requirements.txt",
+        "requirements-win.txt",
+        ".github/workflows/ci.yml",
+    )
+    for event in ("push", "pull_request"):
+        event_config = triggers.get(event)
+        assert isinstance(event_config, dict), f"ci.yml has no {event} block"
+        paths = event_config.get("paths")
+        assert isinstance(paths, list), f"ci.yml {event} has no paths list"
+        missing = [path for path in required if path not in paths]
+        assert not missing, f"{event} paths missing: {missing}"
 
 
 @pytest.mark.parametrize(

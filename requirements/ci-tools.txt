@@ -1,0 +1,23 @@
+# Pinned tools shared by the local pre-push gate and CI gating jobs.
+# ci_parity.py reads this file and checks the installed ruff, mypy, bandit and
+# pip-audit versions before a gating run. Install with:
+#   python -m pip install -r requirements/ci-tools.txt
+
+# Test runner and plugins
+pytest==9.2.0
+pytest-mock==3.17.0
+pytest-cov==7.1.0
+pytest-asyncio==1.5.0
+pytest-timeout==2.4.0
+
+# Hook and gate tools
+pre-commit==3.5.0
+ruff==0.15.1
+mypy==1.15.0
+bandit==1.8.3
+pip-audit==2.10.1
+
+# Type stubs used by mypy in CI
+types-PyYAML
+types-psutil
+types-requests

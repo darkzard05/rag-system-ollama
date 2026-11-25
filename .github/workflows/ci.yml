@@ -11,6 +11,8 @@ on:
       - 'pyproject.toml'
       - 'config.yml'
       - '.pre-commit-config.yaml'
+      - 'requirements.txt'
+      - 'requirements-win.txt'
       - '.github/workflows/ci.yml'
   pull_request:
     branches: [ "main", "master" ]
@@ -22,14 +24,19 @@ on:
       - 'pyproject.toml'
       - 'config.yml'
       - '.pre-commit-config.yaml'
+      - 'requirements.txt'
+      - 'requirements-win.txt'
+      - '.github/workflows/ci.yml'
 
 permissions:
   contents: read
 
-# Every job delegates to scripts/maintenance/ci_parity.py. The local pre-push
-# hook runs the exact same script (--stage pre-push), so a green hook guarantees
-# a green CI by construction. Do not inline tool commands here; add them to the
-# script instead (tests/unit/test_ci_parity_contract.py enforces this).
+# Every gating job delegates to scripts/maintenance/ci_parity.py. The local
+# pre-push hook runs the same gate commands through the same script. CI also
+# runs setup, install, and artifact upload steps. Branch protection is what
+# makes CI block merges; a green hook does not guarantee a green CI run.
+# Do not inline tool commands here; add them to the script instead
+# (tests/unit/test_ci_parity_contract.py enforces this).
 jobs:
   lint-and-static-analysis:
     name: Linting & Type Checking
@@ -44,10 +51,10 @@ jobs:
         python-version: "3.11"
         cache: 'pip'
 
-    - name: Install Linting Tools
+    - name: Install Gate Tools
       run: |
         python -m pip install --upgrade pip
-        pip install ruff==0.15.1 mypy==1.15.0 types-PyYAML types-psutil types-requests
+        pip install -r requirements/ci-tools.txt
 
     - name: Run Static Gates (ruff + mypy)
       run: python scripts/maintenance/ci_parity.py --only static
@@ -65,19 +72,18 @@ jobs:
         python-version: "3.11"
         cache: 'pip'
 
-    - name: Install Security Tools
+    - name: Install Gate Tools
       run: |
         python -m pip install --upgrade pip
-        pip install bandit pip-audit
+        pip install -r requirements/ci-tools.txt
 
     - name: Run Security Gates (bandit + pip-audit)
       run: python scripts/maintenance/ci_parity.py --only security
 
   test:
-    # Single-job, single-environment CI. The local pre-push hook
-    # (.pre-commit-config.yaml) runs the exact same gates via ci_parity.py, on
-    # the developer's Windows + Python 3.11 environment, so a green hook
-    # guarantees a green CI here.
+    # Single-job, single-environment CI. The local pre-push hook runs the same
+    # gate commands via ci_parity.py. CI also performs setup, install, and log
+    # upload. Branch protection is what makes a failed CI job block a merge.
     name: Test (Windows Py 3.11)
     needs: [lint-and-static-analysis, security-scan]
     runs-on: windows-latest
@@ -102,7 +108,7 @@ jobs:
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install pytest-cov pytest-asyncio pytest-timeout
+        pip install -r requirements/ci-tools.txt
         if (Test-Path requirements-win.txt) { pip install -r requirements-win.txt }
         if (Test-Path requirements.txt) { pip install -r requirements.txt }
 

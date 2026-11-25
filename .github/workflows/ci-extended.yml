@@ -1,9 +1,11 @@
 name: RAG System Extended (non-gating)
 
 # Tier 2 coverage that is too slow, needs a browser, or needs real Ollama models.
-# This workflow is intentionally NOT a required check: it runs nightly and on
-# demand only, and every job is continue-on-error. The gating contract lives in
-# ci.yml (Tier 1) and is mirrored by the local pre-push hook.
+# This workflow runs nightly and on demand only, and every job is
+# continue-on-error. The gating commands run locally and in ci.yml through
+# ci_parity.py; this workflow uses the same runner for non-gating tiers. CI also
+# runs setup, install, and upload steps. Branch protection is what makes CI
+# checks block merges, and this workflow is not a required check.
 on:
   schedule:
     - cron: "0 3 * * *"

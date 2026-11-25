@@ -4,23 +4,8 @@
 # Include all base dependencies
 -r base.txt
 
-# Testing
-# pytest>=9.0.3 fixes PYSEC-2026-1845; pytest-asyncio 1.x is the first line
-# compatible with pytest 9.
-pytest==9.2.0
-pytest-mock==3.17.0
-pytest-cov==7.1.0
-pytest-asyncio==1.5.0
-pytest-timeout==2.4.0
-httpx>=0.28.1
+# Gate tools are pinned once for local hooks and CI.
+-r ci-tools.txt
 
-# Code Quality
-pre-commit==3.5.0
-pip-audit>=2.8.0
-mypy==1.15.0
-bandit==1.8.3
-# CI parity: ci.yml installs these so mypy deep-checks the same modules instead
-# of degrading them to Any via ignore_missing_imports.
-types-PyYAML
-types-psutil
-types-requests
+# Extra development dependency
+httpx>=0.28.1

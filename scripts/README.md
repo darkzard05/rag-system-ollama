@@ -71,12 +71,11 @@ CI·코드 품질·환경 관리를 위한 유틸리티입니다.
 
 | 도구명 | 용도 |
 | :--- | :--- |
-| **`run_ci_checks.py`** | CI test stage 단일 소스오브트루스 (ruff/mypy/coverage/integration) |
+| **`run_ci_checks.py`** | Deprecated alias for the `--only tests` group in `ci_parity.py`; gate commands live in `ci_parity.py` |
 | **`check_imports.py`** | scripts/tests first-party import 스윕 백스톱 |
 | **`verify_integrity.py`** | 시스템 구성 요소 및 모델 파일 무결성 점검 |
 | **`verify_requirements.py`** | requirements.txt 버전/상태 검증 |
 | **`verify_ci_logic.py`** | CI 로직 사양 검증 |
-| **`pip_audit_hook.py`** | pre-commit pip-audit 훅 |
 | **`clean_artifacts.py`** | 로그/임시/캐시 정리 |
 | **`export_openapi.py`** | API OpenAPI 스키마 내보내기 |
 | **`update_readme.py`** | README 자동 갱신 도구 |

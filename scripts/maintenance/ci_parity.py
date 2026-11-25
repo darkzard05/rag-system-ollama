@@ -1,16 +1,18 @@
-"""Single source of truth for CI gating and the local pre-push hook.
+"""Shared gate runner for the local pre-push hook and GitHub Actions.
 
-Both the GitHub Actions jobs (.github/workflows/ci.yml) and the local pre-push
-hook (.pre-commit-config.yaml) invoke THIS script. CI calls it with
-``--only <group>`` (one group per job); the pre-push hook calls it with
-``--stage pre-push`` (all gating groups). Because the commands, arguments,
-environment and scope come from one place, "pre-push green" => "CI green" holds
-by construction instead of by convention.
+The same gate commands run locally and in CI. CI also runs setup, install, and
+artifact upload steps that the local hook does not run. Branch protection is
+what makes CI block merges. A green hook does not guarantee a green CI run.
 
-The runner also enforces hard timeouts per step and for the whole run, so a
-hanging test or tool can never wedge a push or a CI job. Timeouts kill the
-whole process tree (important on Windows, where child pytest workers survive a
-naive ``kill``).
+The pre-push hook (.pre-commit-config.yaml) calls this script with
+``--stage pre-push`` (all gating groups). CI jobs (.github/workflows/ci.yml)
+call it with ``--only <group>`` (one group per job). Commands, arguments,
+environment and scope come from this file so the two entry points do not drift.
+
+The runner enforces hard timeouts per step and for the whole run, so a hanging
+test or tool cannot wedge a push or a CI job. Timeouts kill the whole process
+tree, which matters on Windows where child pytest workers survive a naive
+``kill``.
 
 Groups
 ------
@@ -32,6 +34,7 @@ from __future__ import annotations
 import argparse
 import concurrent.futures
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -63,6 +66,46 @@ CI_ENV: dict[str, str] = {
     # it for parity runs so a developer's local .env cannot change test results.
     "DOTENV_DISABLE": "1",
 }
+
+CI_TOOLS_FILE = ROOT_DIR / "requirements" / "ci-tools.txt"
+
+# Name -> (console script, module fallback). The version check uses _tool() so
+# it inspects the same binary the gate will run.
+VERSION_TOOLS: dict[str, tuple[str, str]] = {
+    "ruff": ("ruff", "ruff"),
+    "mypy": ("mypy", "mypy"),
+    "bandit": ("bandit", "bandit"),
+    "pip-audit": ("pip-audit", "pip_audit"),
+}
+
+OS_ENV_ALLOWLIST = (
+    "PATH",  # executable lookup on both platforms
+    "PATHEXT",  # executable extensions on Windows
+    "COMSPEC",  # shell used by subprocess on Windows
+    "SYSTEMROOT",  # Windows DLL and CRT lookup
+    "WINDIR",  # Windows system directory lookup
+    "SYSTEMDRIVE",  # Windows system drive lookup
+    "TEMP",  # temporary files on Windows
+    "TMP",  # temporary files on Windows
+    "TMPDIR",  # temporary files on POSIX
+    "HOME",  # user config location on POSIX
+    "USERPROFILE",  # user profile location on Windows
+    "HOMEDRIVE",  # home drive on Windows
+    "HOMEPATH",  # home path on Windows
+    "APPDATA",  # RoamingAppData on Windows
+    "LOCALAPPDATA",  # LocalAppData on Windows
+    "PROGRAMDATA",  # shared program data on Windows
+    "NUMBER_OF_PROCESSORS",  # default worker count on Windows
+    "LANG",  # locale and encoding on POSIX
+    "LC_ALL",  # locale override on POSIX
+)
+
+
+def _gate_env() -> dict[str, str]:
+    env = {key: os.environ[key] for key in OS_ENV_ALLOWLIST if key in os.environ}
+    env.update(CI_ENV)
+    return env
+
 
 # Paths that make CI (and therefore the pre-push hook) relevant. This is a
 # SUPERSET of ci.yml's `on.*.paths`: pre-push may run when CI would not, but it
@@ -165,6 +208,66 @@ def _tool(binary: str, module: str) -> list[str]:
     if found:
         return [found]
     return [sys.executable, "-m", module]
+
+
+_PIN_RE = re.compile(
+    r"^\s*(?P<name>[A-Za-z0-9][A-Za-z0-9_.-]*)==(?P<version>[^\s;#]+)",
+    re.IGNORECASE,
+)
+_VERSION_RE = re.compile(r"\b(\d+\.\d+(?:\.\d+)*)\b")
+
+
+def _pinned_tool_versions() -> dict[str, str]:
+    pins: dict[str, str] = {}
+    for line in CI_TOOLS_FILE.read_text(encoding="utf-8").splitlines():
+        match = _PIN_RE.match(line)
+        if match:
+            pins[match.group("name").lower()] = match.group("version")
+    return pins
+
+
+def _installed_tool_version(argv: list[str]) -> str:
+    result = subprocess.run(
+        [*argv, "--version"],
+        cwd=str(ROOT_DIR),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        return "<unavailable>"
+    for stream in (result.stdout, result.stderr):
+        match = _VERSION_RE.search(stream)
+        if match:
+            return match.group(1)
+    return "<unknown>"
+
+
+def _preflight_tool_versions() -> bool:
+    try:
+        pins = _pinned_tool_versions()
+    except OSError as exc:
+        print(f"[ci-parity] FAILED: cannot read {CI_TOOLS_FILE}: {exc}", flush=True)
+        return False
+
+    problems: list[str] = []
+    for name, (binary, module) in VERSION_TOOLS.items():
+        expected = pins.get(name)
+        if expected is None:
+            problems.append(f"{name}: no pin in {CI_TOOLS_FILE.name}")
+            continue
+        actual = _installed_tool_version(_tool(binary, module))
+        if actual != expected:
+            problems.append(f"{name}: installed {actual}, expected {expected}")
+
+    if not problems:
+        return True
+    print("[ci-parity] FAILED: gate tool versions do not match CI pins.", flush=True)
+    for problem in problems:
+        print(f"[ci-parity]   {problem}", flush=True)
+    install_cmd = f"python -m pip install -r {CI_TOOLS_FILE.relative_to(ROOT_DIR)}"
+    print(f"[ci-parity]   Install with: {install_cmd}", flush=True)
+    return False
 
 
 def _build_steps() -> list[Step]:
@@ -300,6 +403,41 @@ def _touches_ci_scope(files: list[str]) -> bool:
     return False
 
 
+def _local_changes() -> list[str]:
+    git_queries = (
+        ("diff", "--name-only"),
+        ("diff", "--cached", "--name-only"),
+        ("ls-files", "--others", "--exclude-standard"),
+    )
+    files: set[str] = set()
+    for args in git_queries:
+        output = _git(*args)
+        if output:
+            files.update(line for line in output.splitlines() if line.strip())
+    return sorted(files)
+
+
+def _blocking_local_changes() -> list[str]:
+    return sorted(path for path in _local_changes() if _touches_ci_scope([path]))
+
+
+def _abort_on_local_changes() -> bool:
+    blocking = _blocking_local_changes()
+    if not blocking:
+        return False
+    print(
+        "[ci-parity] FAILED: pre-push runs against committed files. "
+        "Commit or stash these gate-scope paths:",
+        flush=True,
+    )
+    for path in blocking:
+        print(f"[ci-parity]   {path}", flush=True)
+    print(
+        "[ci-parity]   Use --force-all to run gates against this worktree.", flush=True
+    )
+    return True
+
+
 def _kill_tree(proc: subprocess.Popen[bytes]) -> None:
     if os.name == "nt":
         subprocess.run(
@@ -312,8 +450,7 @@ def _kill_tree(proc: subprocess.Popen[bytes]) -> None:
 
 
 def _run_step(step: Step) -> StepResult:
-    env = os.environ.copy()
-    env.update(CI_ENV)
+    env = _gate_env()
     for key in step.unset_env:
         env.pop(key, None)
     started = time.perf_counter()
@@ -442,6 +579,14 @@ def main(argv: list[str] | None = None) -> int:
         for step in steps:
             print(f"{step.group:<9} {step.name:<16} timeout={step.timeout}s")
         return 0
+
+    if args.stage == "pre-push" and not args.force_all:
+        if _abort_on_local_changes():
+            return 1
+
+    gating = args.stage == "pre-push" or args.only in {"static", "security", "tests"}
+    if gating and not _preflight_tool_versions():
+        return 1
 
     if args.only:
         selected = _select_steps(steps, [args.only])

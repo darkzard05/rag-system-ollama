@@ -162,5 +162,5 @@ done
 ## NOTES
 - The system is optimized for local execution via Ollama.
 - Pull the configured models before running: `qwen3:4b-instruct-2507-q4_K_M` (LLM) and `nomic-embed-text-v2-moe` (default embedding) — both set in `config.yml`.
-- Test coverage gate is ≥55%; `scripts/maintenance/verify_integrity.py` runs a full style/typing/RAG-logic check.
+- Test coverage gate is ≥70%; `scripts/maintenance/verify_integrity.py` runs a full style/typing/RAG-logic check.
 
