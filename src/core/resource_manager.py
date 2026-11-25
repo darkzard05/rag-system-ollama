@@ -708,23 +708,6 @@ class ResourceCoordinator:
                 f"[RESOURCE] '{key}' 빌드 실패 ({count}/{_BUILD_FAILURE_LIMIT}) — 재시도 허용"
             )
 
-    # 하위 호환 별칭 프로퍼티
-    @property
-    def _inference_sem(self) -> Any:
-        return self._inference_semaphore
-
-    @_inference_sem.setter
-    def _inference_sem(self, val: Any) -> None:
-        self._inference_semaphore = val
-
-    @property
-    def _inference_sem_limit(self) -> int | None:
-        return self._inference_semaphore_bound
-
-    @_inference_sem_limit.setter
-    def _inference_sem_limit(self, val: int | None) -> None:
-        self._inference_semaphore_bound = val
-
     def _get_inference_semaphore(self) -> Any:
         bound = get_effective_inference_bound()
         with self._inference_sem_lock:

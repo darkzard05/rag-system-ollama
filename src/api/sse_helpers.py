@@ -16,17 +16,7 @@ if TYPE_CHECKING:
 __all__ = [
     "ServerSentEventsHandler",
     "StreamingResponseBuilder",
-    "gzip_compress",
 ]
-
-
-def gzip_compress(data: str) -> bytes:
-    """SSE 데이터 gzip 압축 (압축 임계값은: 1KB)"""
-    import gzip
-
-    if len(data) < 1024:
-        return data.encode("utf-8")
-    return gzip.compress(data.encode("utf-8"))
 
 
 class ServerSentEventsHandler:
@@ -66,10 +56,6 @@ class ServerSentEventsHandler:
             ServerSentEventsHandler.format_sse_event(event_type, data, event_id)
             for event_type, data, event_id in events
         )
-
-    @staticmethod
-    def gzip_compress(data: str) -> bytes:
-        return gzip_compress(data)
 
 
 class StreamingResponseBuilder:

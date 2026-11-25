@@ -389,8 +389,8 @@ async def _safe_invoke(
 def _doc_stable_id(doc: Document) -> str:
     """문서의 안정(stable) 식별자를 반환합니다.
 
-    `format_context`, `_estimate_ctx_tokens`, verify 노드 모두 동일한 식별자를
-    사용해야 하므로 단일 진원(single source of truth)으로 추출합니다.
+    `format_context`와 verify 노드가 동일한 식별자를 사용해야 하므로 단일
+    진원(single source of truth)으로 추출합니다.
     `doc_id` 메타데이터가 있으면 그것을, 없으면 page_content 해시를 사용합니다.
     공용 구현은 `common.utils.doc_stable_id` 를 참조합니다 (R: 중복 통합).
     """

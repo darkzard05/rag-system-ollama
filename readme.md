@@ -156,7 +156,6 @@ Each run writes `reports/eval_quality_<tag>_<ts>.json` and `.md` with per-questi
 | `rag.retriever.rerank_top_k` | 10 | Final rerank selection pool |
 | `rag.prompts.grading.grade_top_n` | 5 | Docs passed to grading (widened 3→5: citations observed at rank 4–5) |
 | `rag.parsing.hydration_mode` | precision_clip | PDF coordinate extraction mode for highlighting |
-| `rag.parsing.hydration_drain_timeout_seconds` | 30.0 | Bounded hydration drain upper bound (fail-loud timeout + metric) |
 | `rag.reranker.engine` | auto | Reranker engine: `auto` / `flashrank` / `semantic` |
 | `rag.reranker.max_length` | 384 | FlashRank max sequence length (512 default; 384 cuts CPU rerank latency at equal golden-set context recall) |
 | `rag.prompts.grading.min_score_to_skip` | 0.70 (FlashRank) / 0.45 (semantic) | Skip the LLM grade when the max rerank score reaches this (per-engine thresholds) |

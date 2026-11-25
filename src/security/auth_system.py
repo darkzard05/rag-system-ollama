@@ -122,8 +122,6 @@ class PasswordHasher:
     HASH_ALGORITHM = "sha256"
     PROD_ITERATIONS = 100000
     TEST_ITERATIONS = 10
-    # 하위 호환: 기존 코드가 참조하는 프로덕션 iteration 상수.
-    ITERATIONS = PROD_ITERATIONS
 
     @classmethod
     def get_iterations(cls) -> int:
@@ -604,20 +602,6 @@ class AuthenticationManager:
         with self._lock:
             return self._sessions.get(session_id)
 
-    def validate_session(self, session_id: str) -> bool:
-        """세션 검증"""
-        with self._lock:
-            session = self._sessions.get(session_id)
-
-            if not session:
-                return False
-
-            if not session.is_valid():
-                return False
-
-            session.last_activity = time.time()
-            return True
-
     def logout(self, session_id: str) -> bool:
         """로그아웃 (세션 비활성화 + 연결된 접근 토큰 무효화)"""
         with self._lock:
@@ -632,30 +616,6 @@ class AuthenticationManager:
                 linked.is_valid = False
                 if linked.token_string:
                     self._deny_list.add(linked.token_string)
-
-            self._save_state()
-            return True
-
-    def change_password(
-        self, user_id: str, old_password: str, new_password: str
-    ) -> bool:
-        """비밀번호 변경"""
-        with self._lock:
-            if user_id not in self._users:
-                return False
-
-            user_data = self._users[user_id]
-
-            # 기존 비밀번호 검증
-            if not PasswordHasher.verify_password(
-                old_password, user_data["password_hash"], user_data["salt"]
-            ):
-                return False
-
-            # 새 비밀번호 설정
-            new_hash, new_salt = PasswordHasher.hash_password(new_password)
-            user_data["password_hash"] = new_hash
-            user_data["salt"] = new_salt
 
             self._save_state()
             return True

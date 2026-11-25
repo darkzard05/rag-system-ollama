@@ -7,7 +7,7 @@ Single source of truth for:
 - Named session-state keys that were previously scattered as bare string
   literals (C7), so every key has one definition to grep and change.
 
-Transient widget keys (cancel/jump) are intentionally NOT part of
+Transient widget keys (cancel/retry/reset) are intentionally NOT part of
 ``INTERACTIVE_KEYS``: they are bound to buttons whose widget state is
 re-created identically on every rerun, and the session store never writes to
 them (``SessionManager.set``/``add_message`` never touch these keys), so
@@ -70,21 +70,6 @@ def retry_build_key(sid: str, attempt: int | None = None) -> str:
     if attempt is None:
         return f"retry_build_{sid}"
     return f"retry_build_{sid}_{int(attempt)}"
-
-
-def onboarding_upload_key(sid: str) -> str:
-    """Widget key for the onboarding 'Upload PDF' CTA button."""
-    return f"onb_upload_{sid}"
-
-
-def sample_question_key(sid: str, idx: int) -> str:
-    """Widget key for an onboarding sample-question chip."""
-    return f"onb_sample_{sid}_{idx}"
-
-
-def jump_key(msg_id: str, page: int, idx: int) -> str:
-    """Widget key for a reference page-jump button (components/chat.py)."""
-    return f"jump_{msg_id}_{page}_{idx}"
 
 
 def reset_all_key(sid: str) -> str:

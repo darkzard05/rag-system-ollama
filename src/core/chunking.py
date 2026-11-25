@@ -33,9 +33,6 @@ from services.monitoring.performance_monitor import (
 
 logger = logging.getLogger(__name__)
 
-# 임베딩 모델 컨텍스트(v2-moe 512)에서 안전 마진을 뺀 토큰 상한.
-# 페이지 오버플로우 판정과 최종 청크 분할이 동일한 값을 사용한다.
-_DEFAULT_EMBEDDING_TOKEN_LIMIT = 448
 _TOKEN_OVERLAP = 64
 _HF_TOKENIZER_REPO = "nomic-ai/nomic-embed-text-v2-moe"
 

@@ -21,8 +21,8 @@ two locks with a strict ownership split:
   `_acquire_lock` and stored in `_session_locks`). EVERY read-modify-write on a
   session's state takes this per-session lock for the ENTIRE operation:
   `set`, `get` (when `create=True`, and the non-creating read path),
-  `add_message`, `add_status_log`, `replace_last_status_log`,
-  `reset_conversation`, `delete`, and the dirty-key snapshot in
+  `add_message`, `add_status_log`, `reset_conversation`, `delete`, and the
+  dirty-key snapshot in
   `sync_to_streamlit`. The per-session lock is always acquired BEFORE
   `_map_lock` (via `_get_state`), so the lock ordering is consistent and
   deadlock-free.
@@ -705,17 +705,6 @@ class SessionManager:
 
         if add_to_chat:
             cls.add_message("system", msg, msg_type="log", session_id=session_id)
-
-    @classmethod
-    def replace_last_status_log(cls, msg: str, session_id: str | None = None):
-        sid = session_id or cls.get_session_id()
-        with cls._acquire_lock(sid):
-            state = cls._get_state(sid)
-            logs = state["status_logs"]
-            if logs:
-                logs[-1] = msg
-
-            cls._mark_dirty_locked(state, {"status_logs"})
 
     @classmethod
     def reset_all_state(cls, session_id: str | None = None):

@@ -24,8 +24,6 @@ _ESCAPE_DECODE: dict[str, str] = {
     "/": "/",
 }
 
-_DELIMITERS = (":", ",", "}", "]")
-
 # ``final_answer`` 는 JSON 문자열 **값**이므로 ``:`` 는 닫는 구분자가 될 수 없다.
 _VALUE_DELIMITERS = (",", "}", "]")
 _JSON_WHITESPACE = " \t\n\r"

@@ -166,8 +166,6 @@ rag:
     # full: 페이지 전체 좌표 추출 (비효율적)
     # none: 좌표 추출 안 함 (하이라이트 불가)
     hydration_mode: "precision_clip"
-    # T2 bounded drain 상한(초) — 초과 시 fail-loud 타임아웃 + X.XXXs metric emit.
-    hydration_drain_timeout_seconds: 30.0
     # 정상 스트림 종료 후 done 방출 전 tail 대기 상한(초). 이 시간을 넘긴
     # 좌표 하이드레이션은 취소하지 않고 백그라운드에서 계속 완료된다.
     hydration_tail_drain_timeout_seconds: 0.15

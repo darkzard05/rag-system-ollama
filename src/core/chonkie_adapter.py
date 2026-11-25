@@ -25,9 +25,6 @@ from common.text_utils import split_by_headers
 
 logger = logging.getLogger(__name__)
 
-# chonkie>=1.0.0 하한 (requirements/optional-chonkie.txt). 상한핀은 해당 파일 참조.
-_CHONKIE_MIN_VERSION = (1, 0, 0)
-
 
 def is_chonkie_available() -> bool:
     """Return True when ``chonkie`` is importable."""

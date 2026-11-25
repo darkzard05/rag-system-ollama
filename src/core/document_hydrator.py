@@ -67,16 +67,6 @@ def _extract_pages_words_sync(
     return results
 
 
-def _extract_page_words_sync(
-    path: str, page_num: int, chunk_bbox: Any | None
-) -> list[Any] | None:
-    """PDF 파일에서 특정 페이지의 단어 좌표를 동기로 추출합니다 (스레드 푸시용).
-
-    단일 페이지용 호환 래퍼 — 내부는 단일 오픈 배치 경로를 재사용한다.
-    """
-    return _extract_pages_words_sync(path, [(page_num, chunk_bbox)])[0]
-
-
 def _get_doc_pages(doc: Document) -> list[int]:
     """문서 메타데이터에서 페이지 번호 목록 추출 헬퍼."""
     pages = doc.metadata.get("pages")

@@ -831,28 +831,6 @@ def _paint_midstream_badges(aux: dict[str, Any]) -> bool:
         return False
 
 
-def _seeded_metrics_text(aux: dict[str, Any], sid: str) -> str:
-    """Pre-final 캡션 텍스트: 최종 total_time 전에는 turn clock 시드로 표시.
-
-    최종 메트릭(``total_time``)이 있으면 ``_metrics_caption``이 최종값으로
-    업그레이드하고, 없으면 Task0 ``perf_turn_start`` 단조 clock으로 시드한다.
-    빈 문자열이면 호출자가 캡션을 그리지 않는다 (팬텀 캡션 금지).
-    """
-    metrics = aux.get("metrics") or {}
-    if not isinstance(metrics, dict):
-        return ""
-    if metrics.get("total_time"):
-        return _metrics_caption(metrics)
-    turn_start = SessionManager.get("perf_turn_start", None, sid)
-    if turn_start is None:
-        return ""
-    try:
-        t0 = float(turn_start)
-    except (TypeError, ValueError):
-        return ""
-    return _metrics_caption(metrics, turn_start=t0)
-
-
 def _current_page_annotations(sid: str) -> list[dict[str, Any]]:
     """현재 PDF 뷰어에 표시 중인 페이지의 주석 목록 스냅샷을 반환한다."""
     from ui.components.viewer import _page_scoped_annotations

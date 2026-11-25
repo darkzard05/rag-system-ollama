@@ -85,7 +85,6 @@ class ModelManager:
     """
 
     # 비동기 락 (지연 로딩)
-    _locks: dict[str, asyncio.Lock] = {}
     _inference_semaphore: asyncio.Semaphore | None = None
     _inference_semaphore_bound: int | None = None
 

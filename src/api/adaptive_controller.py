@@ -87,22 +87,6 @@ class AdaptiveStreamingController:
                 self.current_buffer_size = new_size
                 self.buffer_adjustments += 1
 
-    def set_client_profile(self, profile: str) -> None:
-        """클라이언트 프로파일 동적 전환"""
-        if profile in self.PROFILES and profile != self.client_profile:
-            old_profile = self.client_profile
-            self.client_profile = profile
-            self.profile_config = self.PROFILES[profile]
-            self.alpha = cast(float, self.profile_config["alpha"])
-            self.target_latency_ms = cast(
-                float, self.profile_config["target_latency_ms"]
-            )
-            self.ewma_latency = None  # 리셋
-            self.profile_switches += 1
-            logger.info(
-                f"[AdaptiveStreaming] 프로파일 변경: {old_profile} -> {profile}"
-            )
-
     def get_buffer_size(self) -> int:
         return self.current_buffer_size
 

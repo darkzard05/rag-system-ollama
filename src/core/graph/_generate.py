@@ -470,23 +470,6 @@ def resolve_cached_context(
     return cached
 
 
-def _estimate_ctx_tokens(
-    docs: list, query: str, system_prompt: str | None = None
-) -> int:
-    """Estimate prompt tokens for the analysis-context template (standalone).
-
-    Single assembly + single count, byte-compatible with the historical
-    inline layout. ``_apply_ctx_guard`` does not call this helper: it reuses
-    its pre-rendered per-doc blocks so the trim loop never re-renders or
-    re-hashes documents (O(R×D) -> O(D) renders).
-    """
-    if not docs:
-        return count_tokens_rough(_ctx_prompt("", query, system_prompt))
-    return count_tokens_rough(
-        _ctx_prompt("".join(_render_doc_block(d) for d in docs), query, system_prompt)
-    )
-
-
 def _resolve_ctx_budgets(system_tokens: int = 0) -> tuple[int, int]:
     """num_ctx/num_predict에서 입력 토큰 예산과 하드 한도를 계산한다.
 

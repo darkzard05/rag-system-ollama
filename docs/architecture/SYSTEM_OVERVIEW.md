@@ -37,7 +37,7 @@ To solve the "State Fragmentation" problem inherent in Streamlit, the system dec
 The pipeline is engineered for "Extreme Speed" without sacrificing precision:
 - **Grading Short-circuit**: If the reranker max score reaches its per-engine threshold (FlashRank `0.70` / semantic bi-encoder `0.45`, plus `min_top_gap_to_skip: 0.05`), the system skips the costly LLM grading step (`rag.prompts.grading.min_score_to_skip`), reducing latency by 2-3 seconds.
 - **Retrieval Window**: Stage-1 pool `retriever.search_kwargs.k: 18` matches `dynamic_top_k.max_candidates: 18` (`min: 12`); rerank selection `rerank_top_k: 10`; grading window `grade_top_n: 5` (widened 3→5, F3 fix: citations observed at rank 4–5). Queries shorter than `min_rerank_chars: 6` skip FlashRank and use RRF scores.
-- **Lean Index + Coord Memo**: FAISS stores lean metadata (coordinates stripped); `CoordCacheManager` hydrates on demand with an `annotation_memo` TTL table. Hydration drains are bounded (`hydration_drain_timeout_seconds: 30.0`) with parallel extraction and batched hydration.
+- **Lean Index + Coord Memo**: FAISS stores lean metadata (coordinates stripped); `CoordCacheManager` hydrates on demand with an `annotation_memo` TTL table, parallel extraction and batched hydration.
 - **Reference Prewarm**: The reference list prefetches/hydrates non-blocking with order preservation (`src/ui/components/reference_plan.py`), so sources render before citations finalize.
 - **1-Pass Pruning**: Redundancy checks are integrated directly into the `EmbeddingBasedSemanticChunker` to avoid duplicate embeddings during indexing.
 
