@@ -172,6 +172,9 @@ rag:
     
     margins: [0, 72, 0, 72]  # [추가] 상하 1인치(72pt) 마진 무시 (헤더/푸터 제거)
     write_images: false
+    # ONNX 레이아웃 GNN 대신 레거시 파서 사용 (기본 false).
+    # 20쪽 PDF 실측 중앙값: layout 8509.5 ms vs legacy 5900.3 ms.
+    use_layout: false
 
   # 의미론적 분할 설정
   semantic_chunker:

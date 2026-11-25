@@ -30,6 +30,8 @@ logger = logging.getLogger(__name__)
 
 _OCR_SILENCED = False
 _OCR_SILENCE_LOCK = threading.Lock()
+_LAYOUT_CONFIGURED = False
+_LAYOUT_CONFIG_LOCK = threading.Lock()
 
 
 def _silence_pymupdf_messages() -> None:
@@ -82,6 +84,29 @@ def _ensure_ocr_silenced() -> None:
         except Exception:
             pass
         _OCR_SILENCED = True
+
+
+def _configure_pymupdf_layout(parsing_config: dict[str, Any]) -> None:
+    """PyMuPDF4LLM의 ONNX 레이아웃 파서 사용 여부를 1회 설정한다.
+
+    pymupdf4llm 2.x는 import 시 레이아웃 GNN을 기본 활성화한다. 실측에서
+    20쪽 PDF 추출 10.8s 중 8.3s가 페이지별 ``get_layout()``이었고, 레거시
+    경로는 동일 문서를 5.9s에 추출했다. ``parsing.use_layout`` 기본값은
+    false이며, true로 명시하면 이전 경로를 유지한다.
+    """
+    global _LAYOUT_CONFIGURED
+
+    if _LAYOUT_CONFIGURED:
+        return
+    with _LAYOUT_CONFIG_LOCK:
+        if _LAYOUT_CONFIGURED:
+            return
+        import pymupdf4llm
+
+        use_layout = getattr(pymupdf4llm, "use_layout", None)
+        if callable(use_layout):
+            use_layout(bool(parsing_config.get("use_layout", False)))
+        _LAYOUT_CONFIGURED = True
 
 
 def compute_file_hash(file_path: str, data: bytes | None = None) -> str:
@@ -425,6 +450,7 @@ async def load_pdf_docs(
     from cache.coord_cache import coord_cache
     from common.config import HYDRATION_MODE, PARSING_CONFIG
 
+    _configure_pymupdf_layout(PARSING_CONFIG)
     logger.info(f"[RAG] [LOAD] PDF 분석 시작: {file_name} (Mode: {HYDRATION_MODE})")
     with get_performance_monitor().track_operation(
         OperationType.PDF_LOADING, {"file": file_name}
