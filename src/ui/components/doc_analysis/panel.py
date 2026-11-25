@@ -7,6 +7,8 @@ plus error surfacing on worker failure (D4, ``async_worker._on_complete``).
 
 from __future__ import annotations
 
+from typing import Any
+
 import streamlit as st
 
 from core.build_state import BuildState
@@ -45,11 +47,11 @@ def render_document_panel(sid: str) -> None:
     except (TypeError, ValueError):
         attempt = 0
 
-    with st.status(
-        vm.label,
-        expanded=vm.expanded,
-        state=vm.status_state,  # type: ignore[arg-type]
-    ) as status_container:
+    status_kwargs: dict[str, Any] = {
+        "expanded": vm.expanded,
+        "state": vm.status_state,
+    }
+    with st.status(vm.label, **status_kwargs) as status_container:
         if vm.progress is not None:
             st.progress(vm.progress)
         if vm.stepper:
@@ -90,11 +92,7 @@ def render_document_panel(sid: str) -> None:
     # state="complete" + expanded=False on block exit, which strobes the
     # panel and swallows the cancel click. Re-assert the viewmodel state
     # only after __exit__ has run so running/error panels stay expanded.
-    status_container.update(
-        label=vm.label,
-        expanded=vm.expanded,
-        state=vm.status_state,  # type: ignore[arg-type]
-    )
+    status_container.update(label=vm.label, **status_kwargs)
 
 
 def should_mount_fragment(sid: str) -> bool:

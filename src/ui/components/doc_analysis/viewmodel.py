@@ -151,8 +151,14 @@ def to_viewmodel(
         )
 
     if build.phase == BuildPhase.DONE:
+        # The collapsed status hides its caption, so keep elapsed in the label.
+        elapsed_tag = (
+            f" · {t('build_complete_elapsed').format(elapsed=elapsed)}"
+            if elapsed > 0
+            else ""
+        )
         return BuildVM(
-            label=f"{file_name} · {t('build_complete_status')}{tag}",
+            label=f"{file_name} · {t('build_complete_status')}{tag}{elapsed_tag}",
             status_state="complete",
             expanded=False,
             progress=None,

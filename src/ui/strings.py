@@ -171,6 +171,7 @@ UI_STRINGS: dict[str, dict[str, str]] = {
         "build_step_finalize": "Finalize",
         "build_progress_caption": "{progress}% complete · {elapsed}s elapsed",
         "build_complete_caption": "Analysis took {elapsed}s",
+        "build_complete_elapsed": "{elapsed}s",
         "build_complete_default": "Analysis complete",
         "build_complete_status": "Ready",
         # Chat input placeholders (chat._resolve_chat_input_state)
@@ -296,6 +297,7 @@ UI_STRINGS: dict[str, dict[str, str]] = {
         "build_step_finalize": "마무리",
         "build_progress_caption": "{progress}% 완료 · {elapsed}초 경과",
         "build_complete_caption": "분석 소요 시간: {elapsed}초",
+        "build_complete_elapsed": "{elapsed}초",
         "build_complete_default": "분석 완료",
         "build_complete_status": "준비 완료",
         # Chat input placeholders (chat._resolve_chat_input_state)
