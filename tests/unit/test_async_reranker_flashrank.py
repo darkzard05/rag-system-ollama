@@ -171,3 +171,41 @@ async def test_retrieve_and_rerank_uses_cross_encoder_in_auto_mode():
 
     assert result["relevant_docs"]
     assert mock_ranker.rerank.called
+
+
+@pytest.mark.asyncio
+async def test_cross_encoder_score_cache_reuses_exact_request_until_cleared():
+    """동일 쿼리/후보는 ONNX 호출 없이 같은 순서·점수를 재사용한다."""
+    docs = _make_docs(3)
+    # FlashRank는 동점에서 후보 원본 순서를 유지한다.
+    fake_results = [
+        {"id": 0, "text": docs[0].page_content, "score": 0.7},
+        {"id": 1, "text": docs[1].page_content, "score": 0.5},
+        {"id": 2, "text": docs[2].page_content, "score": 0.5},
+    ]
+    mock_ranker = MagicMock()
+    mock_ranker.rerank.return_value = fake_results
+    reranker = AsyncCrossEncoderReranker()
+
+    with patch(
+        "core.model_loader.ModelManager.get_flashranker",
+        new_callable=AsyncMock,
+        return_value=mock_ranker,
+    ):
+        cold_docs = [Document(page_content=d.page_content, metadata={}) for d in docs]
+        cold = await reranker.rerank(cold_docs, query="  테스트   질문 ", top_k=3)
+
+        warm_docs = [Document(page_content=d.page_content, metadata={}) for d in docs]
+        warm = await reranker.rerank(warm_docs, query="테스트 질문", top_k=3)
+
+        assert mock_ranker.rerank.call_count == 1
+        assert [d.page_content for d in warm[0]] == [d.page_content for d in cold[0]]
+        assert warm[1] == cold[1]
+        assert [d.metadata["rerank_score"] for d in warm[0]] == cold[1]
+
+        reranker.clear_score_cache()
+        again_docs = [Document(page_content=d.page_content, metadata={}) for d in docs]
+        again = await reranker.rerank(again_docs, query="테스트 질문", top_k=3)
+
+        assert mock_ranker.rerank.call_count == 2
+        assert again[1] == cold[1]

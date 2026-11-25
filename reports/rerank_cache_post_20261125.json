@@ -1,0 +1,32 @@
+{
+  "generated_at": "2026-11-25T15:43:32",
+  "pool_type": "real",
+  "candidates": 18,
+  "repeat": 5,
+  "cold_ms": [
+    10066.45,
+    4492.14,
+    4461.15,
+    4361.12,
+    4394.09
+  ],
+  "warm_ms": [
+    0.49,
+    0.4,
+    0.54,
+    0.84,
+    0.38
+  ],
+  "cold_median_ms": 4461.15,
+  "warm_median_ms": 0.49,
+  "cold_range_ms": [
+    4361.12,
+    10066.45
+  ],
+  "warm_range_ms": [
+    0.38,
+    0.84
+  ],
+  "mismatch_pairs": [],
+  "errors": []
+}

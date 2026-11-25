@@ -7,12 +7,13 @@ import asyncio
 import hashlib
 import logging
 from collections import OrderedDict
+from typing import Any
 
 import numpy as np
 from langchain_core.documents import Document
 from langchain_core.embeddings import Embeddings
 
-from common.config import RERANKER_ENGINE
+from common.config import RERANKER_ENGINE, RERANKER_MAX_LENGTH, RERANKER_MODEL_NAME
 from common.similarity import cosine_similarity_batch
 
 logger = logging.getLogger(__name__)
@@ -24,6 +25,11 @@ _DOC_EMB_CACHE_MAX = 1024
 
 # 쿼리 임베딩 캐시 상한 (고유 쿼리 수만큼 무한 누적 방지 — R3b-07)
 _QUERY_EMB_CACHE_MAX = 512
+
+# FlashRank 점수 캐시 상한: (정규화 쿼리, 모델, 후보 해시 순서, max_length) →
+# 원본 후보 순서의 점수 목록. 동일 쿼리/후보 재요청 시 ONNX 추론을 건너뛴다.
+RerankScoreKey = tuple[str, str, tuple[str, ...], int]
+_SCORE_CACHE_MAX = 128
 
 # get_async_reranker가 마지막으로 활성화한 리랭커 엔진. rerank_score의 스케일
 # (FlashRank sigmoid vs bi-encoder 코사인)을 결정하므로 grade short-circuit 임계값 분기에 사용된다 (R3b-02).
@@ -216,6 +222,59 @@ class AsyncCrossEncoderReranker:
     FlashRank 로드/추론 중 예외 발생 시 AsyncSemanticReranker로 폴백합니다.
     """
 
+    def __init__(self) -> None:
+        self._score_cache: OrderedDict[RerankScoreKey, list[float]] = OrderedDict()
+
+    @staticmethod
+    def _score_cache_key(documents: list[Document], query: str) -> RerankScoreKey:
+        """정확히 동일한 요청만 히트하도록 키를 구성합니다."""
+        return (
+            " ".join(query.split()),
+            RERANKER_MODEL_NAME,
+            tuple(_text_hash(doc.page_content) for doc in documents),
+            RERANKER_MAX_LENGTH,
+        )
+
+    def clear_score_cache(self) -> None:
+        """점수 캐시를 비웁니다 (콜드/웜 벤치마크용 공개 API)."""
+        self._score_cache.clear()
+
+    def _cache_scores(
+        self,
+        key: RerankScoreKey,
+        num_docs: int,
+        results: list[dict[str, Any]],
+    ) -> None:
+        """FlashRank 결과를 원본 후보 순서의 점수로 저장합니다 (결과 이상 시 스킵)."""
+        if len(results) != num_docs:
+            return
+        by_id: dict[int, float] = {}
+        for passage in results:
+            try:
+                idx = int(passage["id"])
+                score = float(passage["score"])
+            except (KeyError, TypeError, ValueError):
+                return
+            by_id[idx] = score
+        if sorted(by_id) != list(range(num_docs)):
+            return
+        self._score_cache[key] = [by_id[i] for i in range(num_docs)]
+        self._score_cache.move_to_end(key)
+        if len(self._score_cache) > _SCORE_CACHE_MAX:
+            self._score_cache.popitem(last=False)
+
+    @staticmethod
+    def _rank_and_tag(
+        pairs: list[tuple[Document, float]], top_k: int
+    ) -> tuple[list[Document], list[float]]:
+        """미스 경로와 동일한 안정 정렬 + rerank_score 메타데이터 부여."""
+        ranked = sorted(pairs, key=lambda item: item[1], reverse=True)[:top_k]
+        ranked_docs = [doc for doc, _ in ranked]
+        ranked_scores = [score for _, score in ranked]
+        for doc, score in zip(ranked_docs, ranked_scores, strict=False):
+            doc.metadata["rerank_score"] = score
+        return ranked_docs, ranked_scores
+
     async def rerank(
         self,
         documents: list[Document],
@@ -234,6 +293,13 @@ class AsyncCrossEncoderReranker:
             return [], []
 
         _set_active_engine("flashrank")
+
+        key = self._score_cache_key(documents, query)
+        cached_scores = self._score_cache.get(key)
+        if cached_scores is not None:
+            self._score_cache.move_to_end(key)
+            pairs = list(zip(documents, cached_scores, strict=True))
+            return self._rank_and_tag(pairs, top_k)
 
         # (1) 의존성 부재 → 영구 폴백
         try:
@@ -272,18 +338,12 @@ class AsyncCrossEncoderReranker:
                 documents, query, top_k
             )
 
+        self._cache_scores(key, len(documents), results)
+
         # (3) 우리 모듈의 점수 매핑/정렬 — 프로그래밍 오류는 은닉하지 않고 재발생.
         try:
-            ranked = sorted(
-                ((documents[p["id"]], float(p["score"])) for p in results),
-                key=lambda item: item[1],
-                reverse=True,
-            )[:top_k]
-            ranked_docs = [doc for doc, _ in ranked]
-            ranked_scores = [score for _, score in ranked]
-            for doc, score in zip(ranked_docs, ranked_scores, strict=False):
-                doc.metadata["rerank_score"] = score
-            return ranked_docs, ranked_scores
+            pairs = [(documents[p["id"]], float(p["score"])) for p in results]
+            return self._rank_and_tag(pairs, top_k)
         except Exception:
             logger.error(
                 "[RERANK] FlashRank 결과 점수 매핑 중 오류 — 폴백하지 않고 재발생",
