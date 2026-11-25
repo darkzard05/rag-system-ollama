@@ -21,12 +21,10 @@ parse the per-stage breakdown (preprocess/retrieve/grade/generate) for
 
 NOTE on S3 / cache wiring
 -------------------------
-The query cache is a LATER task and is NOT yet wired. Until then S3 behaves
-identically to S2 (every issuance hits the full LLM path), so:
-  * `s3_repeat_llm_calls` is recorded as the *measured* value (may be > 0
-    pre-wiring). The script does NOT fail when it is non-zero.
-  * The strict "cache HIT => 0 LLM calls" assertion is enforced by the
-    regression guard in a later task, not here.
+`--cache-on` flips the flag on the bare `core.*` modules the real graph uses;
+patching `src.core.*` aliases alone has no effect (distinct module objects).
+A HIT must make no LLM call. Low-confidence answers are deliberately not
+stored, so `s3_repeat_llm_calls` can still be > 0 for those queries.
 """
 
 from __future__ import annotations
@@ -56,7 +54,6 @@ from src.common.config import (  # noqa: E402
     MSG_ERROR_OLLAMA_NOT_RUNNING,
 )
 from src.common.logging_config import setup_logging  # noqa: E402
-from src.core.graph import graph_builder as _graph_builder  # noqa: E402
 from src.core.document_processor import compute_file_hash  # noqa: E402
 from src.core.model_loader import ModelManager  # noqa: E402
 from src.core.rag_core import RAGSystem  # noqa: E402
@@ -441,8 +438,21 @@ async def main_async(args: argparse.Namespace) -> dict[str, object]:
     if args.cache_on:
         import src.common.config as _config
 
+        import core.graph._generate as _core_generate
+        import core.graph._graph_core as _core_graph_core
+        import core.graph._retrieval as _core_retrieval
+        import core.graph.graph_builder as _core_graph_builder
+
         _config.QUERY_CACHE_ENABLED = True
-        _graph_builder.QUERY_CACHE_ENABLED = True
+
+        # The live graph runs on bare `core.*` imports, while this benchmark
+        # imports `src.core.*`. Those are distinct module objects, so patching
+        # only the `src.*` alias never reaches the cache gate. Patch every
+        # module that captured the flag via a value import.
+        _core_retrieval.QUERY_CACHE_ENABLED = True
+        _core_generate.QUERY_CACHE_ENABLED = True
+        _core_graph_core.QUERY_CACHE_ENABLED = True
+        _core_graph_builder.QUERY_CACHE_ENABLED = True
 
         # The query cache get/set is gated on SessionManager "file_hash" (see
         # graph_builder.py:437/1427). Real entrypoints (main.py:539, api_server.py:435)
