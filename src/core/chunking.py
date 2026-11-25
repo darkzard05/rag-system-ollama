@@ -22,7 +22,6 @@ from common.config import (
     SEMANTIC_CHUNKER_CONFIG,
     TEXT_SPLITTER_CONFIG,
 )
-from common.logging_config import silence_transformers_auto_docstring
 from common.text_utils import count_tokens_rough, split_by_headers
 from core.model_loader import is_ollama_embedder
 from core.semantic_chunker import EmbeddingBasedSemanticChunker
@@ -160,12 +159,12 @@ def _recursive_splitter_cls() -> Any:
 
     ``langchain_text_splitters`` 패키지 ``__init__`` 은 ``sentence_transformers``
     서브모듈을 끌어오고, 그 경로에서 transformers ``auto_docstring`` 데코레이터가
-    import 시점에 stdout print를 뿌릴 수 있다. 패키지 ``__init__`` 실행은 회피할
-    수 없으므로, print 차단을 먼저 적용한 뒤 임포트한다. 또한 이 임포트는
-    모듈 로드 비용이 커서 실제 분할 시점까지 미룬다.
+    import 시점에 stdout print를 뿌릴 수 있다. 클래스 정의 모듈을 직접 임포트하면
+    무거운 패키지 ``__init__`` 과 그 stdout 노이즈를 피할 수 있으므로 여기서는
+    ``silence_transformers_auto_docstring()`` 이 필요 없다. 모듈 로드 비용이 커서
+    임포트는 실제 분할 시점까지 미룬다.
     """
-    silence_transformers_auto_docstring()
-    from langchain_text_splitters import RecursiveCharacterTextSplitter
+    from langchain_text_splitters.character import RecursiveCharacterTextSplitter
 
     return RecursiveCharacterTextSplitter
 
