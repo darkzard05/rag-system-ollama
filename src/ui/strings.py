@@ -424,15 +424,15 @@ def gate_tables_symmetric() -> bool:
 PHASE_KEYWORDS: tuple[tuple[str, tuple[str, ...]], ...] = (
     (
         "phase_document_search",
-        ("검색", "fetch", "retriev", "문서"),
+        ("검색", "fetch", "retriev", "search", "찾았"),
     ),
     (
         "phase_evidence_collection",
-        ("증거", "연결", "context", "evidence", "리랭크", "rerank"),
+        ("증거", "연결", "context", "evidence", "리랭크", "rerank", "검증"),
     ),
     (
         "phase_answer_generation",
-        ("답변", "생성", "generate", "response", "작성"),
+        ("답변", "생성", "generate", "response", "작성", "인용", "citation"),
     ),
 )
 

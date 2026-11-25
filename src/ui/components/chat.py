@@ -357,7 +357,8 @@ def _proc_phase_caption(
     elif status_text:
         phrase = f"▸ {t('status_short_active')}"
     else:
-        phrase = ""
+        # 빈 상태는 첫 본문/마무리 구간에서만 발생하므로 생성 위상으로 유지한다.
+        phrase = f"▸ {t('phase_answer_generation')}"
     return status_line(phrase, extra or "", f"{elapsed_sec:.0f}s ▍")
 
 
