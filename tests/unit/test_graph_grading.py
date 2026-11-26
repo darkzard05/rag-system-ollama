@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from langchain_core.documents import Document
 
-from common.config import GRADING_CONFIG
+from common.config import GRADING_CONFIG, OLLAMA_NUM_CTX
 from core.graph.graph_builder import grade_documents
 
 
@@ -204,7 +204,12 @@ async def test_grade_documents_calls_llm_below_threshold(
     mock_llm.bind.assert_called_once_with(
         format="json",
         reasoning=False,
-        options={"think": False, "num_predict": 256, "temperature": 0.0},
+        options={
+            "num_ctx": OLLAMA_NUM_CTX,
+            "think": False,
+            "num_predict": 256,
+            "temperature": 0.0,
+        },
     )
     json_llm.ainvoke.assert_awaited_once()
 

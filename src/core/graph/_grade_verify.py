@@ -29,6 +29,7 @@ from common.config import (
     GRADE_PROMPT_CONFIG,
     GRADING_CONFIG,
     GRADING_ENABLED,
+    OLLAMA_NUM_CTX,
     VERIFICATION_ENABLED,
     VERIFICATION_SAMPLE_RATE,
     VERIFY_PROMPT_CONFIG,
@@ -432,7 +433,15 @@ async def grade_documents(
                 llm.bind(
                     format="json",
                     reasoning=False,
-                    options={"think": False, "num_predict": 256, "temperature": 0.0},
+                    options={
+                        # ChatOllama drops instance fields when options are
+                        # supplied. Keep the generate context window so the
+                        # next LLM call does not reload the model.
+                        "num_ctx": OLLAMA_NUM_CTX,
+                        "think": False,
+                        "num_predict": 256,
+                        "temperature": 0.0,
+                    },
                 )
                 if hasattr(llm, "bind")
                 else llm
