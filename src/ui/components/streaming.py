@@ -328,6 +328,9 @@ def consume_stream_into_message(
     _ghost_logged = False
     incr_citations: list[dict[str, Any]] = []
     incr_attempt: int | None = None
+    # Documents are replaced only on `sources` events. Reuse their stable-id
+    # set across citation events instead of rehashing every page_content.
+    valid_ids: set[str] | None = None
 
     def _emit(cancelled: bool) -> None:
         if on_chunk is not None:
@@ -376,6 +379,9 @@ def consume_stream_into_message(
                 elif ev.type == "sources":
                     if ev.payload["documents"]:
                         documents = ev.payload["documents"]
+                        valid_ids = (
+                            {doc_stable_id(d) for d in documents} if documents else None
+                        )
                         if not citations and not _ghost_logged:
                             _ghost_logged = True
                             logger.info(
@@ -416,9 +422,7 @@ def consume_stream_into_message(
                         arr_len=int(arr_len_raw)
                         if isinstance(arr_len_raw, int)
                         else len(incr_citations),
-                        valid_ids={doc_stable_id(d) for d in documents}
-                        if documents
-                        else None,
+                        valid_ids=valid_ids,
                     )
                     citations = incr_citations
                     note_stream_references(

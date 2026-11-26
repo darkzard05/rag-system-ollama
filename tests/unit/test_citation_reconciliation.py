@@ -7,6 +7,7 @@ final-replace(authoritative) 동작을 검증한다.
 
 from __future__ import annotations
 
+from typing import Any
 from unittest.mock import patch
 
 from api.stream_pipeline import StreamChunk
@@ -64,6 +65,44 @@ def test_dedupe_secondary_key_keeps_first() -> None:
     )
     # text_span 해시는 원문 기준이므로 공백이 다르면 별개로 본다.
     assert len(merged) == 2
+
+
+def test_valid_ids_are_hashed_once_per_document_set() -> None:
+    """Incremental citations must not rehash every page_content per event."""
+    SessionManager.reset_all_state(_SID)
+    documents = [
+        {"page_content": "doc-one", "metadata": {}},
+        {"page_content": "doc-two", "metadata": {}},
+    ]
+    chunks = [StreamChunk(metadata={"documents": documents})]
+    chunks.extend(
+        StreamChunk(
+            citations_add={
+                "items": [_cit(str(i))],
+                "base_index": i,
+                "arr_len": i + 1,
+                "attempt": 0,
+            }
+        )
+        for i in range(3)
+    )
+
+    calls: list[Any] = []
+
+    def _counting_stable_id(doc: Any) -> str:
+        calls.append(doc)
+        return "ok"
+
+    with (
+        patch(
+            "ui.components.streaming_core.doc_stable_id",
+            side_effect=_counting_stable_id,
+        ),
+        patch("ui.components.streaming_core.stream_chunks", return_value=iter(chunks)),
+    ):
+        list(_content_generator("q", "m", _SID, _MSG))
+
+    assert len(calls) == len(documents)
 
 
 def test_final_replace_is_authoritative() -> None:

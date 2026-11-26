@@ -728,6 +728,10 @@ def _content_generator(
     _prewarm_elapsed_done = False
     _t_first_citation_paint: float | None = None
     _has_error = False
+    # Documents are replaced only on `sources` events. Cache their stable-id
+    # set there instead of rehashing every chunk's page_content on each
+    # incremental citation event (O(citations x docs x content) -> O(docs)).
+    valid_ids: set[str] | None = None
 
     def _ghost_flags() -> dict[str, Any]:
         has_ghost = bool(documents) and not citations
@@ -822,6 +826,7 @@ def _content_generator(
             meta = chunk.metadata or {}
             if meta.get("documents"):
                 documents = meta["documents"]
+                valid_ids = {doc_stable_id(d) for d in documents} if documents else None
                 if not citations and not _ghost_logged:
                     _ghost_logged = True
                     logger.info(
@@ -846,9 +851,7 @@ def _content_generator(
                     arr_len=int(arr_len_raw)
                     if isinstance(arr_len_raw, int)
                     else len(incr_citations),
-                    valid_ids={doc_stable_id(d) for d in documents}
-                    if documents
-                    else None,
+                    valid_ids=valid_ids,
                 )
                 citations = incr_citations
                 if _t_first_citation_paint is None:
