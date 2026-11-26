@@ -4,6 +4,7 @@ Task 12의 streaming_handler.py에서 분리 (PHASE 3-P1)
 """
 
 import logging
+from collections import deque
 from typing import cast
 
 from common.config import UI_CONTENT_BUFFER_SIZE
@@ -47,16 +48,15 @@ class AdaptiveStreamingController:
         self.alpha = cast(float, self.profile_config["alpha"])
         self.target_latency_ms = cast(float, self.profile_config["target_latency_ms"])
 
-        # 메트릭
-        self.latency_samples: list[float] = []
+        # 메트릭 — bounded deque drops the oldest sample in O(1). A list with
+        # pop(0) was O(n) per streamed chunk once the window was full.
         self.max_samples = 50
+        self.latency_samples: deque[float] = deque(maxlen=self.max_samples)
         self.buffer_adjustments = 0
         self.profile_switches = 0
 
     def record_latency(self, latency_ms: float) -> None:
         self.latency_samples.append(latency_ms)
-        if len(self.latency_samples) > self.max_samples:
-            self.latency_samples.pop(0)
 
         # EWMA 업데이트
         if self.ewma_latency is None:
