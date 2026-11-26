@@ -176,6 +176,43 @@ async def test_parse_failure_dispatches_authoritative_reset() -> None:
     assert "BROKEN" not in result["parsed_answer"].final_answer
 
 
+class _CountingConverterLLM:
+    """LLM whose converter property counts lookups across the token loop."""
+
+    def __init__(self, chunks: list[str]) -> None:
+        self._chunks = [_FakeChunk(part) for part in chunks]
+        self.lookups = 0
+
+    @property
+    def _convert_chunk_to_thought_and_content(self) -> Any:
+        self.lookups += 1
+        return lambda chunk: (chunk.content, "")
+
+    def bind(self, **kwargs: Any) -> _CountingConverterLLM:
+        return self
+
+    async def astream(self, _messages: Any, config: Any = None) -> Any:
+        for chunk in self._chunks:
+            yield chunk
+
+
+@pytest.mark.asyncio
+async def test_converter_is_resolved_once_per_pass() -> None:
+    payload = '{"final_answer":"ok","citations":[]}'
+    llm = _CountingConverterLLM(_split(payload, 4))
+    assert len(llm._chunks) > 1
+    await _patched_pass(
+        llm=llm,
+        sys_msg=MagicMock(),
+        human_msg=MagicMock(),
+        prompt_version="v1",
+        config={},
+        writer=None,
+        attempt=0,
+    )
+    assert llm.lookups == 1
+
+
 def test_merge_valid_ids_drops_ghost() -> None:
     merged = merge_citations_add(
         [],

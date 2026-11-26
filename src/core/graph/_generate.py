@@ -872,6 +872,12 @@ async def _generate_pass(
                 "top_p": OLLAMA_TOP_P,
             }
         json_llm = llm.bind(**bind_kwargs)
+        # Resolve the optional thought/content converter once per pass instead
+        # of a `hasattr` lookup on every streamed token.
+        _NO_CONVERTER = object()
+        _convert_chunk = getattr(
+            llm, "_convert_chunk_to_thought_and_content", _NO_CONVERTER
+        )
         coordinator = get_resource_manager()
         active_model = (
             getattr(json_llm, "model", None)
@@ -890,10 +896,8 @@ async def _generate_pass(
             pending_chunks = 0
             first_content_flushed = False
             async for chunk in json_llm.astream([sys_msg, human_msg], config=config):
-                if hasattr(llm, "_convert_chunk_to_thought_and_content"):
-                    content_chunk, thought_chunk = (
-                        llm._convert_chunk_to_thought_and_content(chunk)
-                    )
+                if _convert_chunk is not _NO_CONVERTER:
+                    content_chunk, thought_chunk = _convert_chunk(chunk)
                 else:
                     # Fallback for LLMs without thought/content separation.
                     # R4-08: content가 리스트(복합 콘텐츠)면 텍스트 블록을 병합해
@@ -912,8 +916,9 @@ async def _generate_pass(
                 if content_chunk:
                     full_response += content_chunk
                     _t_last_content = time.perf_counter()
-                if hasattr(chunk, "response_metadata") and chunk.response_metadata:
-                    last_metadata = chunk.response_metadata
+                chunk_metadata = getattr(chunk, "response_metadata", None)
+                if chunk_metadata:
+                    last_metadata = chunk_metadata
 
                 # Phase 0: 완성된 citation 객체를 생성 도중 즉시 디스패치한다.
                 # writer=None / 비구조화 경로는 건드리지 않는다.
