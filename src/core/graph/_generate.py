@@ -875,7 +875,7 @@ async def _generate_pass(
         # Resolve the optional thought/content converter once per pass instead
         # of a `hasattr` lookup on every streamed token.
         _NO_CONVERTER = object()
-        _convert_chunk = getattr(
+        _convert_chunk: Any = getattr(
             llm, "_convert_chunk_to_thought_and_content", _NO_CONVERTER
         )
         coordinator = get_resource_manager()
