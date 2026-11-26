@@ -189,8 +189,14 @@ def _normalize_markdown_bold_dropcaps(markdown: str) -> str:
 
 
 def _parallel_extract_enabled() -> bool:
-    """페이지 병렬 추출 허용 여부 (env RAG_PARALLEL_EXTRACT=0이면 강제 순차)."""
-    return os.environ.get("RAG_PARALLEL_EXTRACT", "1") != "0"
+    """페이지 병렬 추출 허용 여부 (env RAG_PARALLEL_EXTRACT=1이면 강제 병렬).
+
+    20쪽 기준 5쌍 교차 A/B에서 순차 추출 중앙값 5387.8 ms, 병렬(4 ranges)
+    6026.8 ms로 순차가 앞섰다. pymupdf4llm의 ``find_tables``가 스레드 간
+    자원을 공유해 워커 추가가 오히려 대기 시간을 늘리므로 기본은 순차로 둔다.
+    대형 PDF에서는 ``RAG_PARALLEL_EXTRACT=1``로 병렬 경로를 선택할 수 있다.
+    """
+    return os.environ.get("RAG_PARALLEL_EXTRACT", "0") == "1"
 
 
 def _extract_markdown_range(
