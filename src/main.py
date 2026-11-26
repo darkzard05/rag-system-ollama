@@ -1050,7 +1050,7 @@ def _handle_pending_tasks() -> None:
 
                 failed = SessionManager.get_build_state(session_id=current_sid)
                 if failed is not None and not is_terminal(failed.phase):
-                    message = f"Background task dispatch failed: {exc}"
+                    message = t("build_error_dispatch")
                     SessionManager.finalize_build_state(
                         fail_build(failed, message), session_id=current_sid
                     )
@@ -1062,7 +1062,7 @@ def _handle_pending_tasks() -> None:
             SessionManager.set("is_building_rag", False, current_sid)
             SessionManager.set(
                 "pdf_processing_error",
-                f"Background task dispatch failed: {exc}",
+                t("build_error_dispatch"),
                 current_sid,
             )
             _BUILD_RERUN_LAST.pop(current_sid, None)

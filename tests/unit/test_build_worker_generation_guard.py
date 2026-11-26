@@ -207,11 +207,13 @@ def test_dispatch_failure_marks_build_error_and_clears_building():
     build = SessionManager.get_build_state(session_id=SID)
     assert build is not None
     assert build.phase == BuildPhase.ERROR
-    assert "dispatch failed" in (build.error or "")
+    from ui.strings import t
+
+    friendly = t("build_error_dispatch")
+    assert build.error == friendly
+    assert "submit failed" not in (build.error or "")
     assert SessionManager.get("is_building_rag", False, session_id=SID) is False
-    assert "dispatch failed" in (
-        SessionManager.get("pdf_processing_error", "", session_id=SID) or ""
-    )
+    assert SessionManager.get("pdf_processing_error", "", session_id=SID) == friendly
 
 
 def test_reset_for_new_file_clears_stale_viewer_and_stream_keys():
