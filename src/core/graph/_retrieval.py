@@ -29,6 +29,7 @@ from core.graph._graph_core import (
     _enter_stage,
     _get_session_id,
     _is_valid_query_cache_value,
+    _query_cache_key,
     _reset_stage_timings,
     get_state_attr,
 )
@@ -50,7 +51,7 @@ async def _precompute_query_embedding(
     """FAISS 리트리버 임베더로 쿼리 벡터를 1회 선계산한다 (L2 정규화).
 
     [최적화-01] 이전에는 세맨틱 캐시 조회가 네임스페이스 키
-    ``f"{file_hash}:{query}"`` 를, retrieve 노드가 순수 쿼리를 각각 임베딩해
+    ``f"{file_hash}:{model}:{query}"`` 를, retrieve 노드가 순수 쿼리를 각각 임베딩해
     쿼리당 Ollama HTTP 라운드트립이 2회 직렬 발생했다. 여기서 순수 쿼리 벡터를
     한 번만 만들어 캐시 조회와 retrieve가 공유한다.
 
@@ -155,8 +156,13 @@ async def preprocess(
     if QUERY_CACHE_ENABLED and has_doc:
         await _ensure_query_cache_embedder()
         try:
-            # D17 — cache key namespaced by file_hash so cross-document queries can't collide.
-            cache_key = f"{file_hash}:{query}"
+            # D17 — cache key namespaced by file_hash so cross-document queries
+            # can't collide; the model segment prevents cross-model answer reuse.
+            cache_key = _query_cache_key(
+                file_hash,
+                query,
+                SessionManager.get("last_selected_model", session_id=sid),
+            )
             # [최적화-01] 선계산 벡터를 주입해 내부 재임베딩(네임스페이스 키
             # 대상 HTTP)을 원천 차단한다. None이면 기존 계약대로 내부 임베딩.
             cached = await get_cache_manager().get(

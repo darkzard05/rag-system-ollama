@@ -46,6 +46,7 @@ from core.graph._graph_core import (
     _enter_stage,
     _extract_partial_answer,
     _get_session_id,
+    _query_cache_key,
     _recover_citations,
     _repair_json,
     _sanitize_channel_value,
@@ -139,6 +140,7 @@ def _schedule_query_cache_set(
     file_hash: str,
     msg_id: str = "",
     query_embedding: list[float] | None = None,
+    model: str | None = None,
 ) -> bool:
     """쿼리 캐시 쓰기를 크리티컬 패스 밖으로 예약한다. 예약되면 True.
 
@@ -157,7 +159,7 @@ def _schedule_query_cache_set(
         return False
     if conf < float(QUERY_CACHE_MIN_CONF):
         return False
-    key = f"{file_hash}:{query}"
+    key = _query_cache_key(file_hash, query, model)
     value = {
         "response": response,
         "confidence": conf,
@@ -1657,6 +1659,7 @@ async def generate(
             response=result["response"],
             confidence=result.get("confidence", 0.0),
             file_hash=file_hash or "",
+            model=SessionManager.get("last_selected_model", session_id=sid),
             # [최적화-01] preprocess가 선계산한 순수 쿼리 벡터를 저장에도 재사용해
             # 세맨틱 저장 시 재임베딩(Ollama HTTP)을 제거하고, 조회 경로와 동일한
             # 임베딩 텍스트를 보장한다.

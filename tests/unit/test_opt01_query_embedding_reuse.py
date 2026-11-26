@@ -93,7 +93,7 @@ async def test_preprocess_injects_precomputed_embedding_into_cache(monkeypatch):
     assert embed_calls == [(faiss, "reusable query")]
     # 캐시 조회는 네임스페이스 키이되, 임베딩은 주입되어 내부 재임베딩이 없다.
     fake_cm.get.assert_called_once_with(
-        "abc123:reusable query",
+        "abc123::reusable query",
         use_semantic=True,
         query_embedding=_PRECOMPUTED,
     )

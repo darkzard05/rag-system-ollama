@@ -65,7 +65,7 @@ def _make_cache_manager(get_return: object) -> MagicMock:
 # ----------------------------------------------------------------------------
 @pytest.mark.asyncio
 async def test_get_uses_namespaced_key(monkeypatch):
-    """file_hash="abc123" 세션에서 preprocess 의 get() 은 "abc123:<query>" 로 호출."""
+    """file_hash="abc123" 세션에서 preprocess 의 get() 은 "abc123:<model>:<query>" 로 호출."""
     monkeypatch.setattr("core.graph._preprocess.QUERY_CACHE_ENABLED", True)
     monkeypatch.setattr("core.graph._preprocess.QUERY_CACHE_MIN_CONF", 0.85)
 
@@ -87,7 +87,7 @@ async def test_get_uses_namespaced_key(monkeypatch):
             result = await preprocess(state, _base_config(sid), writer=None)
 
         fake_cm.get.assert_called_once_with(
-            "abc123:reusable query", use_semantic=True, query_embedding=None
+            "abc123::reusable query", use_semantic=True, query_embedding=None
         )
         assert result["is_cached"] is True
     finally:
@@ -99,7 +99,7 @@ async def test_get_uses_namespaced_key(monkeypatch):
 # ----------------------------------------------------------------------------
 @pytest.mark.asyncio
 async def test_set_uses_namespaced_key(monkeypatch):
-    """file_hash="abc123" 세션에서 generate 의 set() 은 "abc123:<query>" 로 호출."""
+    """file_hash="abc123" 세션에서 generate 의 set() 은 "abc123:<model>:<query>" 로 호출."""
     monkeypatch.setattr("core.graph._generate.QUERY_CACHE_ENABLED", True)
     # 저장 게이트(신뢰도)만 낮춰 폴백 confidence(0.5)가 통과하도록 한다.
     monkeypatch.setattr("core.graph._generate.QUERY_CACHE_MIN_CONF", 0.0)
@@ -153,7 +153,7 @@ async def test_set_uses_namespaced_key(monkeypatch):
                 await asyncio.sleep(0.01)
         fake_cm.set.assert_called_once()
         (key,) = fake_cm.set.call_args.args[:1]
-        assert key == "abc123:reusable query"
+        assert key == "abc123::reusable query"
         assert result["response"]
     finally:
         SessionManager.delete("file_hash", session_id=sid)
@@ -191,5 +191,41 @@ async def test_different_file_hashes_do_not_collide(monkeypatch):
         finally:
             SessionManager.delete("file_hash", session_id=sid)
 
-    assert keys == ["abc123:reusable query", "def456:reusable query"]
+    assert keys == ["abc123::reusable query", "def456::reusable query"]
     assert keys[0] != keys[1]
+
+
+# ----------------------------------------------------------------------------
+# (d) 같은 문서·질의라도 LLM 모델이 바뀌면 캐시를 공유하지 않는다
+# ----------------------------------------------------------------------------
+@pytest.mark.asyncio
+async def test_different_models_do_not_share_cached_answer(monkeypatch):
+    monkeypatch.setattr("core.graph._preprocess.QUERY_CACHE_ENABLED", True)
+    monkeypatch.setattr("core.graph._preprocess.QUERY_CACHE_MIN_CONF", 0.85)
+
+    sid = "ns-session-model-switch"
+    SessionManager.set("file_hash", "abc123", session_id=sid)
+    keys: list[str] = []
+    try:
+        for model in ("model-a", "model-b"):
+            SessionManager.set("last_selected_model", model, session_id=sid)
+            fake_cm = _make_cache_manager(
+                {"response": "cached answer", "confidence": 0.99, "version": "1.0"}
+            )
+            with (
+                patch("core.graph._preprocess.get_cache_manager", return_value=fake_cm),
+                patch(
+                    "core.graph._preprocess._ensure_query_cache_embedder",
+                    new=AsyncMock(),
+                ),
+            ):
+                await preprocess(
+                    _base_state("reusable query"), _base_config(sid), writer=None
+                )
+            keys.append(fake_cm.get.call_args.args[0])
+    finally:
+        SessionManager.delete("file_hash", session_id=sid)
+        SessionManager.delete("last_selected_model", session_id=sid)
+
+    assert keys[0] != keys[1]
+    assert "model-a" in keys[0] and "model-b" in keys[1]
