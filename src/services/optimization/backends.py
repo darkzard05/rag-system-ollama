@@ -466,9 +466,9 @@ class DiskCache(CacheBackend[T]):
                     ttl_seconds=ttl_seconds if ttl_seconds > 0 else 86400.0,
                 )
 
-                # [최적화] 전체 디렉터리 스캔(glob) 대신 증분 카운터 유지 (쓰기당 O(N) 제거)
-                if not cache_file.exists():
-                    self.stats.cache_size += 1
+                # [최적화] 전체 디렉터리 스캔(glob) 대신 증분 카운터 유지 (쓰기당 O(N) 제거).
+                # 카운터는 파일·메타데이터 기록이 끝난 뒤에만 올린다.
+                is_new = not cache_file.exists()
 
                 # 1. 파일 저장 — unsafe 역직렬화 대신 안전한 JSON 직렬화 (RCE 취약점 제거)
                 with open(cache_file, "w", encoding="utf-8") as f:
@@ -490,9 +490,15 @@ class DiskCache(CacheBackend[T]):
                 self.security_manager.save_cache_metadata(
                     str(cache_file) + ".meta", metadata
                 )
+                if is_new:
+                    self.stats.cache_size += 1
 
             except Exception as e:
                 logger.error(f"[DiskCache] 저장 오류: {e}")
+                # 쓰기 실패로 남은 부분 파일은 카운터가 없으므로 정리한다.
+                with contextlib.suppress(OSError):
+                    cache_file.unlink(missing_ok=True)
+                    Path(str(cache_file) + ".meta").unlink(missing_ok=True)
 
     async def delete(self, key: str) -> None:
         """값 삭제"""
