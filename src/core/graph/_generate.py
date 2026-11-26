@@ -253,8 +253,17 @@ def _normalize_citations(citations: list[Any], docs: list[Document]) -> list[Any
         if (isinstance(raw, int) and not isinstance(raw, bool))
         or (isinstance(raw, str) and raw.isdigit() and raw not in valid_ids)
     ]
+    # A lone positive id is ambiguous (legacy 0-based callers emit [1] for
+    # the second doc), so keep the old full-range rule and only extend it to
+    # multi-id partial 1..N runs, which small models emit when they cite a
+    # subset of the retrieved documents.
     one_based = (
-        bool(numeric_ids) and min(numeric_ids) >= 1 and max(numeric_ids) <= doc_count
+        bool(numeric_ids)
+        and min(numeric_ids) >= 1
+        and (
+            max(numeric_ids) == doc_count
+            or (len(numeric_ids) >= 2 and max(numeric_ids) < doc_count)
+        )
     )
     normalized: list[Any] = []
     dropped_ids: list[Any] = []

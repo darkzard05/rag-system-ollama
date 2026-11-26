@@ -42,3 +42,13 @@ def test_partial_one_based_ids_map_to_matching_documents() -> None:
         [{"doc_id": 1, "anchor": "a"}, {"doc_id": 2, "anchor": "b"}], docs
     )
     assert [c["doc_id"] for c in out] == ["doc0", "doc1"]
+
+
+def test_single_positive_id_with_two_docs_keeps_zero_based_mapping() -> None:
+    """A lone integer id is ambiguous; keep the legacy 0-based reading."""
+    docs = [
+        Document(page_content=f"body {i}", metadata={"doc_id": f"doc{i}"})
+        for i in range(2)
+    ]
+    out = _normalize_citations([{"doc_id": 1, "anchor": "a"}], docs)
+    assert [c["doc_id"] for c in out] == ["doc1"]
