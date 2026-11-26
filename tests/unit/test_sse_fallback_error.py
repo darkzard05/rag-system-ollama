@@ -14,6 +14,7 @@ from httpx import ASGITransport, AsyncClient
 from src.api import api_server
 from src.api.api_server import TEST_USER, app
 
+from common.exceptions import VectorStoreError
 from core.session import SessionManager
 
 
@@ -94,3 +95,24 @@ async def test_query_rag_error_returns_500_without_sse_events(
     assert "event:" not in resp.text
     assert "data:" not in resp.text
     assert "detail" in resp.json()
+
+
+@pytest.mark.asyncio
+async def test_query_rag_domain_error_returns_structured_500(
+    async_client, auth_headers, session_state
+):
+    """도메인 예외도 /query 에서 구조화된 500 으로 변환되어야 한다."""
+
+    async def _raise(self, query, model_name=None):
+        raise VectorStoreError("index unavailable")
+
+    with patch.object(api_server.RAGSystem, "aquery", _raise):
+        resp = await async_client.post(
+            "/api/v1/query",
+            json={"query": "hello", "session_id": session_state},
+            headers=auth_headers,
+        )
+
+    assert resp.status_code == 500
+    assert "detail" in resp.json()
+    assert "Traceback" not in resp.text
