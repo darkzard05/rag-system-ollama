@@ -72,6 +72,27 @@ class TestModelSwapBackgroundDispatch(unittest.TestCase):
             SessionManager.get("is_swapping_model", session_id="test_session") is True
         )
 
+    def test_dispatch_failure_releases_swap_guard(self):
+        """디스패치가 실패하면 스왑 가드가 풀려 다음 rerun에서 재시도된다."""
+        SessionManager.set("needs_qa_chain_update", True, session_id="test_session")
+
+        with (
+            patch(
+                "common.utils.run_in_background_worker",
+                side_effect=RuntimeError("worker dead"),
+            ),
+            patch("src.main.st.rerun"),
+        ):
+            _handle_pending_tasks()
+
+        assert (
+            SessionManager.get("needs_qa_chain_update", session_id="test_session")
+            is True
+        )
+        assert (
+            SessionManager.get("is_swapping_model", session_id="test_session") is False
+        )
+
     def test_bg_update_qa_chain_offloads_core_via_to_thread(self):
         """_bg_update_qa_chain은 모델 스왑 작업을 asyncio.to_thread로
         오프로드하고 완료 시 is_swapping_model을 클리어한다."""
