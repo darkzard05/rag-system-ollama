@@ -8,6 +8,9 @@ save_coords가 동시에 실행되어도 데이터 손상 없이 유효한 좌�
 """
 
 import asyncio
+import contextlib
+
+import pytest
 
 from cache.coord_cache import CoordCacheManager
 
@@ -93,3 +96,48 @@ def test_coord_cache_round_trip_integrity():
     finally:
         asyncio.run(manager.clear_cache(ROUND_TRIP_HASH))
         asyncio.run(manager.close())
+
+
+@pytest.mark.asyncio
+async def test_cancelled_coord_write_is_not_committed_by_later_write():
+    """A cancelled save must roll back before another write shares the connection."""
+    manager = CoordCacheManager()
+    file_hash = "cancel_rollback_hash"
+
+    async def scenario() -> None:
+        await manager.clear_cache(file_hash)
+        db = await manager._get_connection()
+        original_commit = db.commit
+        entered = asyncio.Event()
+        release = asyncio.Event()
+        calls = {"n": 0}
+
+        async def gated_commit() -> None:
+            calls["n"] += 1
+            if calls["n"] == 1:
+                entered.set()
+                await release.wait()
+            await original_commit()
+
+        db.commit = gated_commit  # type: ignore[method-assign]
+        try:
+            task = asyncio.create_task(
+                manager._insert_coords_impl(file_hash, 1, [{"x": "cancelled"}])
+            )
+            await asyncio.wait_for(entered.wait(), 5)
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+
+            await manager._insert_coords_impl(file_hash, 2, [{"x": "kept"}])
+            assert await manager._get_coords_impl(file_hash, 1) is None
+            assert await manager._get_coords_impl(file_hash, 2) == [{"x": "kept"}]
+        finally:
+            release.set()
+            db.commit = original_commit  # type: ignore[method-assign]
+
+    try:
+        await manager._submit(scenario())
+    finally:
+        await manager.clear_cache(file_hash)
+        await manager.close()

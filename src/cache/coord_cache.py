@@ -16,7 +16,7 @@ import logging
 import sqlite3
 import threading
 import time
-from collections.abc import Coroutine
+from collections.abc import AsyncIterator, Coroutine
 from typing import Any
 
 import aiosqlite
@@ -93,6 +93,7 @@ class CoordCacheManager:
 
     _conn: aiosqlite.Connection | None
     _conn_lock: asyncio.Lock
+    _db_lock: asyncio.Lock
     _conn_created_at: float
     _last_health_check: float
     _conn_healthy: bool
@@ -109,6 +110,7 @@ class CoordCacheManager:
             cls._instance = super().__new__(cls)
             cls._instance._conn = None
             cls._instance._conn_lock = asyncio.Lock()
+            cls._instance._db_lock = asyncio.Lock()
             cls._instance._conn_created_at = 0
             cls._instance._last_health_check = 0
             cls._instance._conn_healthy = False
@@ -245,12 +247,12 @@ class CoordCacheManager:
         self, file_hash: str, page_num: int, coords: list[dict[str, Any]]
     ) -> None:
         """SQLite에 좌표를 기록합니다 (워커와 QueueFull 폴백 공용)."""
-        db = await self._get_connection()
-        await db.execute(
-            "INSERT OR REPLACE INTO coords (file_hash, page_num, coords, created_at) VALUES (?, ?, ?, ?)",
-            (file_hash, page_num, orjson.dumps(coords), time.time()),
-        )
-        await db.commit()
+        async with self._db_operation() as db:
+            await db.execute(
+                "INSERT OR REPLACE INTO coords (file_hash, page_num, coords, created_at) VALUES (?, ?, ?, ?)",
+                (file_hash, page_num, orjson.dumps(coords), time.time()),
+            )
+            await db.commit()
 
     async def _write_behind_worker(self) -> None:
         """백그라운드에서 큐의 좌표 데이터를 SQLite에 저장합니다."""
@@ -337,6 +339,22 @@ class CoordCacheManager:
         self._conn_healthy = True
         return conn
 
+    @contextlib.asynccontextmanager
+    async def _db_operation(self) -> AsyncIterator[aiosqlite.Connection]:
+        """Serialize SQLite work on the single shared connection.
+
+        A cancelled owner-loop coroutine must not leave an open transaction
+        behind: the next writer on that connection would commit both payloads.
+        """
+        db = await self._get_connection()
+        async with self._db_lock:
+            try:
+                yield db
+            except BaseException:
+                with contextlib.suppress(Exception):
+                    await asyncio.shield(db.rollback())
+                raise
+
     async def start_eviction_loop(self) -> None:
         """백그라운드에서 주기적으로 캐시를 정리합니다."""
         while True:
@@ -350,65 +368,65 @@ class CoordCacheManager:
 
     async def _evict_old_entries(self) -> None:
         """TTL 및 크기 제한에 따라 오래된 캐시 파일을 정리합니다."""
-        db = await self._get_connection()
-        # 1. TTL 만료 삭제
-        ttl_seconds = CACHE_TTL_DAYS * 86400
-        now = time.time()
-        _ = await db.execute(
-            "DELETE FROM coords WHERE ? - created_at > ?", (now, ttl_seconds)
-        )
-        # [Wave2] 메모 행도 동일 TTL로 만료 (coords 크기 계산은 기존식 유지).
-        await db.execute(_ANNOTATION_MEMO_DDL)
-        _ = await db.execute(
-            "DELETE FROM annotation_memo WHERE ? - created_at > ?",
-            (now, ttl_seconds),
-        )
-
-        # 2. 크기 제한 — [R1b-07] SUM(length(coords)) 기반 초과 감지 후 배치 삭제.
-        #    상한을 초과하면 오래된 행부터 반복 삭제해 한 사이클에서 상한 이하로
-        #    되돌립니다. (기존 LIMIT 10은 10행/30분 = 하루 480행에 불과해
-        #    500MB 상한이 사실상 비작동이었습니다)
-        #
-        #    [오버 삭제 방지] 삭제 후보를 "created_at 오름차순 누적 바이트가
-        #    현재 초과분 이하"인 행으로 한정해, 한 번의 배치가 보존해야 할
-        #    최신 행까지 휩쓸지 않도록 합니다. 행 수는 _EVICTION_BATCH_SIZE로
-        #    상한을 둡니다(사이클당 작업량 바운드).
-        size_limit = MAX_CACHE_SIZE_MB * 1024 * 1024
-        while True:
-            async with db.execute(
-                "SELECT COALESCE(SUM(length(coords)), 0) FROM coords"
-            ) as cursor:
-                row = await cursor.fetchone()
-            total_size = row[0] if row else 0
-            if total_size <= size_limit:
-                break
-            excess = total_size - size_limit
-            cur = await db.execute(
-                "DELETE FROM coords WHERE rowid IN ("
-                "SELECT rowid FROM ("
-                "  SELECT rowid,"
-                "    SUM(length(coords)) OVER ("
-                "      ORDER BY created_at ASC, rowid ASC"
-                "    ) AS cum_size"
-                "  FROM coords"
-                ") WHERE cum_size <= ?"
-                " ORDER BY rowid LIMIT ?)",
-                (excess, _EVICTION_BATCH_SIZE),
+        async with self._db_operation() as db:
+            # 1. TTL 만료 삭제
+            ttl_seconds = CACHE_TTL_DAYS * 86400
+            now = time.time()
+            _ = await db.execute(
+                "DELETE FROM coords WHERE ? - created_at > ?", (now, ttl_seconds)
             )
-            if not cur.rowcount:
-                # 누적 바이트가 초과분을 넘는 단일 행만 남은 경우(너무 큰 1행),
-                # 가장 오래된 1행을 삭제해 진행을 보장합니다. 최신 행은 모든
-                # 오래된 행이 사라지고도 상한을 넘을 때만 삭제 대상이 됩니다.
+            # [Wave2] 메모 행도 동일 TTL로 만료 (coords 크기 계산은 기존식 유지).
+            await db.execute(_ANNOTATION_MEMO_DDL)
+            _ = await db.execute(
+                "DELETE FROM annotation_memo WHERE ? - created_at > ?",
+                (now, ttl_seconds),
+            )
+
+            # 2. 크기 제한 — [R1b-07] SUM(length(coords)) 기반 초과 감지 후 배치 삭제.
+            #    상한을 초과하면 오래된 행부터 반복 삭제해 한 사이클에서 상한 이하로
+            #    되돌립니다. (기존 LIMIT 10은 10행/30분 = 하루 480행에 불과해
+            #    500MB 상한이 사실상 비작동이었습니다)
+            #
+            #    [오버 삭제 방지] 삭제 후보를 "created_at 오름차순 누적 바이트가
+            #    현재 초과분 이하"인 행으로 한정해, 한 번의 배치가 보존해야 할
+            #    최신 행까지 휩쓸지 않도록 합니다. 행 수는 _EVICTION_BATCH_SIZE로
+            #    상한을 둡니다(사이클당 작업량 바운드).
+            size_limit = MAX_CACHE_SIZE_MB * 1024 * 1024
+            while True:
+                async with db.execute(
+                    "SELECT COALESCE(SUM(length(coords)), 0) FROM coords"
+                ) as cursor:
+                    row = await cursor.fetchone()
+                total_size = row[0] if row else 0
+                if total_size <= size_limit:
+                    break
+                excess = total_size - size_limit
                 cur = await db.execute(
-                    "DELETE FROM coords WHERE rowid = ("
-                    "SELECT rowid FROM coords"
-                    " ORDER BY created_at ASC, rowid ASC LIMIT 1"
-                    ")"
+                    "DELETE FROM coords WHERE rowid IN ("
+                    "SELECT rowid FROM ("
+                    "  SELECT rowid,"
+                    "    SUM(length(coords)) OVER ("
+                    "      ORDER BY created_at ASC, rowid ASC"
+                    "    ) AS cum_size"
+                    "  FROM coords"
+                    ") WHERE cum_size <= ?"
+                    " ORDER BY rowid LIMIT ?)",
+                    (excess, _EVICTION_BATCH_SIZE),
                 )
                 if not cur.rowcount:
-                    # 안전망: 삭제할 행이 없는데도 상한 미달이 아닌 경우 루프 종료
-                    break
-        await db.commit()
+                    # 누적 바이트가 초과분을 넘는 단일 행만 남은 경우(너무 큰 1행),
+                    # 가장 오래된 1행을 삭제해 진행을 보장합니다. 최신 행은 모든
+                    # 오래된 행이 사라지고도 상한을 넘을 때만 삭제 대상이 됩니다.
+                    cur = await db.execute(
+                        "DELETE FROM coords WHERE rowid = ("
+                        "SELECT rowid FROM coords"
+                        " ORDER BY created_at ASC, rowid ASC LIMIT 1"
+                        ")"
+                    )
+                    if not cur.rowcount:
+                        # 안전망: 삭제할 행이 없는데도 상한 미달이 아닌 경우 루프 종료
+                        break
+            await db.commit()
 
     # -- 공개 API (루프 독립) ----------------------------------------------
 
@@ -477,8 +495,10 @@ class CoordCacheManager:
             query = f"SELECT page_num, coords FROM coords WHERE file_hash = ? AND page_num IN ({placeholders})"  # nosec B608
 
             results = {}
-            db = await self._get_connection()
-            async with db.execute(query, (file_hash, *page_nums)) as cursor:
+            async with (
+                self._db_operation() as db,
+                db.execute(query, (file_hash, *page_nums)) as cursor,
+            ):
                 async for row in cursor:
                     results[row[0]] = orjson.loads(row[1])
             return results
@@ -511,11 +531,13 @@ class CoordCacheManager:
         self, file_hash: str, page_num: int
     ) -> list[dict[str, Any]] | None:
         try:
-            db = await self._get_connection()
-            async with db.execute(
-                "SELECT coords FROM coords WHERE file_hash = ? AND page_num = ?",
-                (file_hash, page_num),
-            ) as cursor:
+            async with (
+                self._db_operation() as db,
+                db.execute(
+                    "SELECT coords FROM coords WHERE file_hash = ? AND page_num = ?",
+                    (file_hash, page_num),
+                ) as cursor,
+            ):
                 row = await cursor.fetchone()
                 if row:
                     return orjson.loads(row[0])  # type: ignore
@@ -700,24 +722,24 @@ class CoordCacheManager:
         self, file_hash: str, page_num: int, normtext_hash: str
     ) -> list[dict[str, Any]] | None:
         try:
-            db = await self._get_connection()
-            await db.execute(_ANNOTATION_MEMO_DDL)
-            async with db.execute(
-                "SELECT annotations, created_at FROM annotation_memo "
-                "WHERE file_hash = ? AND page_num = ? AND normtext_hash = ?",
-                (file_hash, page_num, normtext_hash),
-            ) as cursor:
-                row = await cursor.fetchone()
-                if row:
-                    try:
-                        _created = float(row[1])
-                    except (IndexError, TypeError, ValueError):
-                        return None
-                    if time.time() - _created > CACHE_TTL_DAYS * 86400:
-                        return None
-                    payload = orjson.loads(row[0])
-                    if isinstance(payload, list):
-                        return payload
+            async with self._db_operation() as db:
+                await db.execute(_ANNOTATION_MEMO_DDL)
+                async with db.execute(
+                    "SELECT annotations, created_at FROM annotation_memo "
+                    "WHERE file_hash = ? AND page_num = ? AND normtext_hash = ?",
+                    (file_hash, page_num, normtext_hash),
+                ) as cursor:
+                    row = await cursor.fetchone()
+                    if row:
+                        try:
+                            _created = float(row[1])
+                        except (IndexError, TypeError, ValueError):
+                            return None
+                        if time.time() - _created > CACHE_TTL_DAYS * 86400:
+                            return None
+                        payload = orjson.loads(row[0])
+                        if isinstance(payload, list):
+                            return payload
             return None
         except (aiosqlite.Error, OSError, ValueError, TypeError) as e:
             logger.debug(f"메모 조회 실패 ({file_hash}, p{page_num}): {e}")
@@ -758,15 +780,15 @@ class CoordCacheManager:
             logger.debug(f"메모 직렬화 실패 ({file_hash}, p{page_num}): {e}")
             return
         try:
-            db = await self._get_connection()
-            await db.execute(_ANNOTATION_MEMO_DDL)
-            await db.execute(
-                "INSERT OR REPLACE INTO annotation_memo "
-                "(file_hash, page_num, normtext_hash, annotations, created_at) "
-                "VALUES (?, ?, ?, ?, ?)",
-                (file_hash, page_num, normtext_hash, blob, time.time()),
-            )
-            await db.commit()
+            async with self._db_operation() as db:
+                await db.execute(_ANNOTATION_MEMO_DDL)
+                await db.execute(
+                    "INSERT OR REPLACE INTO annotation_memo "
+                    "(file_hash, page_num, normtext_hash, annotations, created_at) "
+                    "VALUES (?, ?, ?, ?, ?)",
+                    (file_hash, page_num, normtext_hash, blob, time.time()),
+                )
+                await db.commit()
         except (aiosqlite.Error, OSError) as e:
             logger.debug(f"메모 저장 실패 ({file_hash}, p{page_num}): {e}")
             self._conn_healthy = False
@@ -777,17 +799,19 @@ class CoordCacheManager:
 
     async def _clear_cache_impl(self, file_hash: str | None = None):
         try:
-            db = await self._get_connection()
-            await db.execute(_ANNOTATION_MEMO_DDL)
-            if file_hash:
-                await db.execute("DELETE FROM coords WHERE file_hash = ?", (file_hash,))
-                await db.execute(
-                    "DELETE FROM annotation_memo WHERE file_hash = ?", (file_hash,)
-                )
-            else:
-                await db.execute("DELETE FROM coords")
-                await db.execute("DELETE FROM annotation_memo")
-            await db.commit()
+            async with self._db_operation() as db:
+                await db.execute(_ANNOTATION_MEMO_DDL)
+                if file_hash:
+                    await db.execute(
+                        "DELETE FROM coords WHERE file_hash = ?", (file_hash,)
+                    )
+                    await db.execute(
+                        "DELETE FROM annotation_memo WHERE file_hash = ?", (file_hash,)
+                    )
+                else:
+                    await db.execute("DELETE FROM coords")
+                    await db.execute("DELETE FROM annotation_memo")
+                await db.commit()
         except aiosqlite.Error as e:
             logger.error(f"좌표 캐시 삭제 중 오류: {e}")
 
@@ -803,6 +827,7 @@ class CoordCacheManager:
         await self._submit(self._close_impl())
         self._stop_owner_loop()
         self._conn_lock = asyncio.Lock()
+        self._db_lock = asyncio.Lock()
         self._queue = asyncio.Queue(maxsize=_WRITE_BEHIND_QUEUE_MAX)
         # [R1b-05] close→재사용 시 가드를 리셋하지 않으면 _ensure_schema가 조기
         # 반환해 eviction 루프가 영구 비활성됩니다 (worker는 _ensure_worker_started가
