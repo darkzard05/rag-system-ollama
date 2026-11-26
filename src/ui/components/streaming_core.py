@@ -784,9 +784,12 @@ def _content_generator(
                     # 재생성 확정 본문: 1차 패스 누적분을 교체한다. 이미
                     # write_stream으로 그려진 1차 본문은 지울 수 없으므로
                     # 다시 yield하지 않고, aux content로 영속화한 뒤 chat.py가
-                    # 필요 시 rerun으로 화면을 확정한다.
+                    # 필요 시 rerun으로 화면을 확정한다. 인용도 확정분 기준으로
+                    # 재설정해 빈 배열이 오면 이전 패스 참조가 남지 않게 한다.
                     raw_json_extractor = _FinalAnswerExtractor()
                     accumulated_parts = [chunk.content]
+                    citations = list(chunk.citations or [])
+                    incr_citations = list(citations)
                     _real_yielded = True
                     _placeholder_live = False
                     _yielded_this_chunk = True

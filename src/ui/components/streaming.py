@@ -362,8 +362,12 @@ def consume_stream_into_message(
                 # 전용; 여기선 누적 목적으로만 사용).
                 if getattr(chunk, "is_replace", False):
                     # 재생성 확정 본문은 누적분을 대체한다 (중복 방지).
+                    # 인용도 확정분 기준으로 재설정한다 — JSON 복구 실패로
+                    # 빈 배열이 오면 1차 패스의 인용이 남지 않아야 한다.
                     raw_json_extractor = _FinalAnswerExtractor()
                     accumulated = chunk.content
+                    citations = list(chunk.citations or [])
+                    incr_citations = list(citations)
                 elif getattr(chunk, "raw_json", False):
                     delta = raw_json_extractor.feed(chunk.content)
                     accumulated += delta

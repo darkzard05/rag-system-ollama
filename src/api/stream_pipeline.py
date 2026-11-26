@@ -842,9 +842,10 @@ def chunk_to_stream_events(chunk: StreamChunk) -> list[StreamEvent]:
             )
         )
 
-    # 6. citations — 구조화된 인용
-    if citations:
-        events.append(StreamEvent("citations", {"citations": citations}))
+    # 6. citations — 구조화된 인용. 재생성 확정분은 빈 배열도 내려보내어
+    #    소비자가 이전 패스의 인용을 지운다 (빈 배열 필터는 오래된 참조 잔류).
+    if citations or is_replace:
+        events.append(StreamEvent("citations", {"citations": citations or []}))
 
     # 7. metrics — 성능 통계
     if performance:
