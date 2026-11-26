@@ -65,9 +65,12 @@ def render_document_panel(sid: str) -> None:
             if error:
                 ui_error(str(error))
         if "cancel" in vm.actions:
-            # Once cancellation is requested, hide the CTA and let the
-            # post-block update below settle the final visual state.
-            if not bool(SessionManager.get("rebuild_cancelled", False, sid)):
+            # Once cancellation is requested, hide the CTA and say why the
+            # worker is still winding down; otherwise the panel spins with no
+            # button and no explanation until the phase boundary is reached.
+            if bool(SessionManager.get("rebuild_cancelled", False, sid)):
+                st.caption(t("build_cancelled"))
+            else:
                 st.button(
                     t("action_cancel_build"),
                     key=cancel_rebuild_key(sid, attempt),

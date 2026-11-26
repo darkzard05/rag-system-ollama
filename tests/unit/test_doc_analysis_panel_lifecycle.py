@@ -73,6 +73,30 @@ def test_running_panel_explicitly_updates_expanded_true():
     assert container.update.call_args.kwargs["state"] == "running"
 
 
+def test_cancel_requested_panel_shows_pending_state_without_dead_end():
+    """After Cancel, the running panel must say so instead of hiding every action."""
+    from ui.strings import t
+
+    sid = "test-panel-cancel-requested"
+    SessionManager.reset_all_state(sid)
+    build = initial_build_state("doc.pdf", "hash1")
+    build.phase = BuildPhase.CHUNKING
+    build.pct = 50
+    SessionManager.set("build_state", build, session_id=sid)
+    SessionManager.set("rebuild_cancelled", True, session_id=sid)
+
+    with _mock_st_status_container() as (mock_st, _container):
+        render_document_panel(sid)
+
+    captions = [
+        str(call.args[0]) for call in mock_st.caption.call_args_list if call.args
+    ]
+    assert any(t("build_cancelled") in caption for caption in captions), (
+        f"no cancellation feedback while the worker winds down: {captions!r}"
+    )
+    assert mock_st.button.call_count == 0
+
+
 def test_done_panel_explicitly_updates_expanded_false():
     """DONE 상태는 expanded=False/state='complete'로 고정되어야 한다."""
     sid = "test-panel-done"
