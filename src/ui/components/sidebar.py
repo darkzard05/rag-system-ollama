@@ -262,4 +262,7 @@ def _confirm_reset_all() -> None:
             key="reset_confirm_btn",
         ):
             SessionManager.reset_all_state()
+            # 위젯 키는 스토어 초기화의 영향을 받지 않는다. 남겨두면 언어·PDF·모델
+            # 셀렉터가 이전 값을 계속 표시하므로 세션 상태까지 비운 뒤 재마운트한다.
+            st.session_state.clear()
             st.rerun()

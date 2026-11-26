@@ -36,8 +36,8 @@ def test_confirm_reset_all_cancel() -> None:
     ):
         mock_col1, mock_col2 = MagicMock(), MagicMock()
         mock_st.columns.return_value = [mock_col1, mock_col2]
-        mock_st.button.side_effect = (
-            lambda label, **kwargs: kwargs.get("key") == "reset_confirm_cancel_btn"
+        mock_st.button.side_effect = lambda label, **kwargs: (
+            kwargs.get("key") == "reset_confirm_cancel_btn"
         )
         func()
         mock_reset.assert_not_called()
@@ -55,9 +55,12 @@ def test_confirm_reset_all_confirm() -> None:
     ):
         mock_col1, mock_col2 = MagicMock(), MagicMock()
         mock_st.columns.return_value = [mock_col1, mock_col2]
-        mock_st.button.side_effect = (
-            lambda label, **kwargs: kwargs.get("key") == "reset_confirm_btn"
+        mock_st.button.side_effect = lambda label, **kwargs: (
+            kwargs.get("key") == "reset_confirm_btn"
         )
         func()
         mock_reset.assert_called_once()
+        # Widget-bound session state survives a store-only reset, so the UI
+        # would keep showing the old language/PDF/model after the rerun.
+        mock_st.session_state.clear.assert_called_once()
         mock_st.rerun.assert_called_once()
