@@ -3,7 +3,8 @@
 Covers src/ui/components/streaming_core.py _FinalAnswerExtractor.feed
 (``self._blob += content`` — O(n) copy per token, O(n^2) per answer).
 
-T1 (structural, RED before fix): inputs accumulate in a chunk list.
+T1 (structural): no append-only chunk list is retained; the scanner keeps a
+   tail-compacted window instead.
 T2 (scaling, RED before fix): 3x input growth costs <5x time (quadratic ~=9x).
 T3/T4 (guards, GREEN before and after): delta correctness incl. escapes
 split across chunk boundaries, closed-tail behavior, and _content_generator
@@ -23,23 +24,22 @@ import ui.components.streaming_core as streaming_core_mod  # noqa: E402
 from api.streaming_handler import StreamChunk  # noqa: E402
 
 
-def test_extractor_accumulates_chunks_without_full_copy() -> None:
-    """T1: fed inputs must be retained as an append-only chunk list."""
+def test_extractor_accumulates_without_full_copy() -> None:
+    """T1: the sliding-window rewrite supersedes the append-only chunk list."""
     extractor = streaming_core_mod._FinalAnswerExtractor()
     parts = ['{"final_answer":"', "hello ", "world"]
     for part in parts:
         extractor.feed(part)
-    chunks = extractor._chunks  # type: ignore[attr-defined]
-    assert isinstance(chunks, list)
-    assert "".join(chunks) == "".join(parts)
+    assert not hasattr(extractor, "_chunks")
+    assert len(extractor._blob) < 100
 
 
 def test_extractor_holds_no_unbounded_private_buffer() -> None:
     """T2: no private full-copy string may grow with the answer length.
 
     Deterministic proxy for the O(n^2) copy: after 7500 post-key chunks the
-    legacy ``_blob`` holds ~360KB. Any retained contiguous buffer must stay
-    bounded (8KB) — the chunk list from T1 is the only growth allowed.
+    legacy ``_blob`` holds ~360KB. The retained contiguous buffer must stay
+    bounded (8KB); T1 guards that no chunk list is kept instead.
     """
     extractor = streaming_core_mod._FinalAnswerExtractor()
     extractor.feed('{"final_answer":"')
