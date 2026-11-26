@@ -256,6 +256,11 @@ class SimpleJWT:
                 return None
 
             header_encoded, payload_encoded, signature_encoded = parts
+            # 발급된 토큰은 패딩을 제거한 정규형이다. '='를 임의로 덧붙인
+            # 문자열도 같은 바이트로 디코딩되지만 deny-list는 문자열을
+            # 조회하므로 철회를 우회할 수 있다.
+            if any("=" in part for part in parts):
+                return None
 
             # 서명 검증
             message = f"{header_encoded}.{payload_encoded}"

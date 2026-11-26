@@ -10,6 +10,8 @@ def test_jwt_rejects_non_base64_signature_suffix(tmp_path):
     assert jwt.verify_token(token) is not None
     assert jwt.verify_token(token + "!!") is None
     assert jwt.verify_token(token + "!!!") is None
+    assert jwt.verify_token(token + "=") is None
+    assert jwt.verify_token(token + "==") is None
 
 
 def test_revoked_token_cannot_be_resurrected(tmp_path):
@@ -24,3 +26,4 @@ def test_revoked_token_cannot_be_resurrected(tmp_path):
     assert auth.revoke_token(token) is True
     assert auth.verify_token(token) is None
     assert auth.verify_token(token + "!!") is None
+    assert auth.verify_token(token + "=") is None
