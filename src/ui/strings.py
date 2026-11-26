@@ -70,10 +70,9 @@ UI_STRINGS: dict[str, dict[str, str]] = {
         ),
         # Navigation (VIS-5: geometric ◀/▶ pair in both locales)
         "nav_prev": "◀ Previous",
-        # PDF page input (viewer.py render_pdf_controls, visible label + help)
+        # PDF page input (viewer.py render_pdf_controls, collapsed label + inline total)
         "pdf_page_label": "Page",
-        "pdf_page_help": "Page number to jump to (1–N).",
-        "pdf_page_count": "of {total} pages",
+        "pdf_page_count": "/ {total}",
         # Onboarding guide (chat_build._render_guidance_panel, single source)
         "onboarding_guide": (
             "Answers with cited evidence from your uploaded PDF.\n\n"
@@ -216,8 +215,7 @@ UI_STRINGS: dict[str, dict[str, str]] = {
         ),
         "nav_prev": "◀ 이전",
         "pdf_page_label": "페이지",
-        "pdf_page_help": "이동할 페이지 번호 (1–N).",
-        "pdf_page_count": "전체 {total} 페이지",
+        "pdf_page_count": "/ {total}",
         "onboarding_guide": (
             "업로드하신 PDF 문서의 내용을 바탕으로 정확한 근거와 함께 답변해 드립니다.\n\n"
             "**시작하는 방법:**\n"

@@ -612,7 +612,6 @@ def render_pdf_controls(current_page, total_pages):
                 disabled=current_page <= 1,
                 on_click=_on_prev_click,
                 args=(total_pages,),
-                help=t("pdf_page_help"),
             )
         with col_page:
             dyn_key = f"{PDF_NAV_INPUT_KEY}_{current_page}"
@@ -621,19 +620,21 @@ def render_pdf_controls(current_page, total_pages):
                 if str(k).startswith(f"{PDF_NAV_INPUT_KEY}_") and k != dyn_key:
                     st.session_state.pop(k, None)
 
-            st.number_input(
-                t("pdf_page_label"),
-                min_value=1,
-                max_value=total_pages,
-                value=current_page,
-                key=dyn_key,
-                on_change=_on_page_change,
-                args=(total_pages,),
-                label_visibility="visible",
-                help=t("pdf_page_help"),
-            )
-            # 분모가 없으면 현재 번호만 보이지 않아 이동 범위를 가늠할 수 없다.
-            st.caption(t("pdf_page_count").format(total=total_pages))
+            # 한 줄 표시: 라벨은 접어도 Streamlit이 aria-label로 이름을 유지한다.
+            # 전체 페이지 수를 같은 행의 caption으로 붙여 3줄을 1줄로 압축한다.
+            with st.container(horizontal=True, vertical_alignment="center"):
+                st.number_input(
+                    t("pdf_page_label"),
+                    min_value=1,
+                    max_value=total_pages,
+                    value=current_page,
+                    key=dyn_key,
+                    on_change=_on_page_change,
+                    args=(total_pages,),
+                    label_visibility="collapsed",
+                    width=70,
+                )
+                st.caption(t("pdf_page_count").format(total=total_pages))
 
         with col_next:
             st.button(
@@ -641,7 +642,6 @@ def render_pdf_controls(current_page, total_pages):
                 width="stretch",
                 key="btn_nav_next_v6",
                 disabled=current_page >= total_pages,
-                help=t("pdf_page_help"),
                 on_click=_on_next_click_callback,
                 args=(total_pages,),
             )

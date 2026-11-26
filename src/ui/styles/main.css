@@ -187,9 +187,15 @@
    - The MESSAGES fragment (the other wrapper) is promoted to flex:1 1 auto by the rule
      below so it absorbs the free space; this keeps the input fixed at the column bottom
      instead of re-jittering under margin-top:auto on every 2s fragment rerun. */
+/* PDF controls bar reuses this wrapper depth. Its final selector below keeps the
+   nav widgets at natural height so the page input is not clipped. */
 [data-testid="stMainBlockContainer"] [data-testid="stColumn"]:last-child
 > [data-testid="stVerticalBlock"] > [data-testid="stLayoutWrapper"]:has([data-testid="stChatInput"]),
 [data-testid="stMainBlockContainer"] [data-testid="stColumn"]:last-child
+> [data-testid="stVerticalBlock"] > [data-testid="stElementContainer"],
+[data-testid="stMainBlockContainer"] [data-testid="stColumn"]:first-child
+[data-testid="stLayoutWrapper"]:has(> [data-testid="stHorizontalBlock"])
+[data-testid="stHorizontalBlock"] [data-testid="stColumn"]
 > [data-testid="stVerticalBlock"] > [data-testid="stElementContainer"] {
     flex: 0 0 auto !important;
     min-height: 0 !important;
@@ -268,11 +274,12 @@
    selectors at column-block depth can never match that shape, so anchor on the controls'
    OWN wrapper via :has(> stHorizontalBlock) and pin it sticky, mirroring the chat-input
    recipe (see stChatInput rule below). stLayoutWrapper/stElementContainer variants both
-   kept for DOM-shape robustness. */
+   kept for DOM-shape robustness. The :has chain requires three direct columns so the
+   page input's own horizontal container does not become a second sticky bar. */
 [data-testid="stMainBlockContainer"] [data-testid="stColumn"]:first-child
-[data-testid="stLayoutWrapper"]:has(> [data-testid="stHorizontalBlock"]),
+[data-testid="stLayoutWrapper"]:has(> [data-testid="stHorizontalBlock"] > [data-testid="stColumn"]:nth-child(3)),
 [data-testid="stMainBlockContainer"] [data-testid="stColumn"]:first-child
-[data-testid="stElementContainer"]:has(> [data-testid="stHorizontalBlock"]) {
+[data-testid="stElementContainer"]:has(> [data-testid="stHorizontalBlock"] > [data-testid="stColumn"]:nth-child(3)) {
     position: sticky !important;
     bottom: 0 !important;
     z-index: 100 !important;
@@ -301,6 +308,8 @@
     flex: 1 1 0 !important;
     min-width: 0 !important;
 }
+/* Nav widget wrappers share the chat rule above. The generic flex:1 + overflow:hidden
+   rule otherwise clips the page input and offsets the two buttons. */
 
 /* Chat column (last child) — single-scroller layout.
    Streamlit renders each st.chat_message as its own stLayoutWrapper /

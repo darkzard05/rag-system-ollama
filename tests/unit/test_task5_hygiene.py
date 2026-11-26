@@ -59,14 +59,14 @@ def test_input_visual_order_and_focus_ring() -> None:
 # --- (b) viewer 페이지 입력 라벨 --------------------------------------------
 
 
-def test_viewer_page_input_has_visible_label_and_help() -> None:
-    """number_input에 visible label + help (하드코딩 'Page' 금지)."""
+def test_viewer_page_input_has_compact_inline_total() -> None:
+    """number_input의 라벨은 접고 전체 페이지 수를 같은 행에 표시한다."""
     source = inspect.getsource(viewer_module.render_pdf_controls)
-    assert 'label_visibility="visible"' in source, "Page 입력에 visible label 필요"
-    assert "help=" in source, "Page 입력에 help 필요"
+    assert 'label_visibility="collapsed"' in source, "한 줄 표시를 위한 접힌 라벨 필요"
     assert '"Page"' not in source, "하드코딩 라벨은 t() 키로 대체"
     assert "pdf_page_label" in source
-    assert "pdf_page_help" in source
+    assert "pdf_page_count" in source
+    assert "st.container(horizontal=True" in source, "번호와 총 페이지는 한 행에 배치"
 
 
 # --- (c) CSS overflow / 모바일 단일 fixed ------------------------------------
@@ -100,7 +100,6 @@ def test_input_visual_order_preserved() -> None:
     "key",
     [
         "pdf_page_label",
-        "pdf_page_help",
         "onboarding_guide",
         "nav_prev",
         "nav_next",
