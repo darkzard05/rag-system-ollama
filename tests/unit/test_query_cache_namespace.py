@@ -1,7 +1,7 @@
 """
 단위 테스트: 쿼리 캐시 키 네임스페이싱 (D17).
 
-D17 은 쿼리 응답 캐시 키를 ``f"{file_hash}:{query}"`` 로 네임스페이싱하여
+D17 은 쿼리 응답 캐시 키를 ``f"{file_hash}~{model}:{query}"`` 로 네임스페이싱하여
 같은 질의 문자열이 다른 문서에서 조회/저장될 때 서로 충돌하지 않게 한다.
 (교차 문서 의미 충돌 → 이전 문서의 캐시 답변 참조 버그 방지)
 
@@ -65,7 +65,7 @@ def _make_cache_manager(get_return: object) -> MagicMock:
 # ----------------------------------------------------------------------------
 @pytest.mark.asyncio
 async def test_get_uses_namespaced_key(monkeypatch):
-    """file_hash="abc123" 세션에서 preprocess 의 get() 은 "abc123:<model>:<query>" 로 호출."""
+    """file_hash="abc123" 세션에서 preprocess 의 get() 은 "abc123~<model>:<query>" 로 호출."""
     monkeypatch.setattr("core.graph._preprocess.QUERY_CACHE_ENABLED", True)
     monkeypatch.setattr("core.graph._preprocess.QUERY_CACHE_MIN_CONF", 0.85)
 
@@ -87,7 +87,7 @@ async def test_get_uses_namespaced_key(monkeypatch):
             result = await preprocess(state, _base_config(sid), writer=None)
 
         fake_cm.get.assert_called_once_with(
-            "abc123::reusable query", use_semantic=True, query_embedding=None
+            "abc123~:reusable query", use_semantic=True, query_embedding=None
         )
         assert result["is_cached"] is True
     finally:
@@ -99,7 +99,7 @@ async def test_get_uses_namespaced_key(monkeypatch):
 # ----------------------------------------------------------------------------
 @pytest.mark.asyncio
 async def test_set_uses_namespaced_key(monkeypatch):
-    """file_hash="abc123" 세션에서 generate 의 set() 은 "abc123:<model>:<query>" 로 호출."""
+    """file_hash="abc123" 세션에서 generate 의 set() 은 "abc123~<model>:<query>" 로 호출."""
     monkeypatch.setattr("core.graph._generate.QUERY_CACHE_ENABLED", True)
     # 저장 게이트(신뢰도)만 낮춰 폴백 confidence(0.5)가 통과하도록 한다.
     monkeypatch.setattr("core.graph._generate.QUERY_CACHE_MIN_CONF", 0.0)
@@ -153,7 +153,7 @@ async def test_set_uses_namespaced_key(monkeypatch):
                 await asyncio.sleep(0.01)
         fake_cm.set.assert_called_once()
         (key,) = fake_cm.set.call_args.args[:1]
-        assert key == "abc123::reusable query"
+        assert key == "abc123~:reusable query"
         assert result["response"]
     finally:
         SessionManager.delete("file_hash", session_id=sid)
@@ -191,7 +191,7 @@ async def test_different_file_hashes_do_not_collide(monkeypatch):
         finally:
             SessionManager.delete("file_hash", session_id=sid)
 
-    assert keys == ["abc123::reusable query", "def456::reusable query"]
+    assert keys == ["abc123~:reusable query", "def456~:reusable query"]
     assert keys[0] != keys[1]
 
 
