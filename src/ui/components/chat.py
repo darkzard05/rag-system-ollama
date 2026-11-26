@@ -432,11 +432,25 @@ def _last_user_query() -> str:
     return ""
 
 
+def _query_for_error_turn(msg_id: str) -> str:
+    """Return the question stored on the error turn itself, if any."""
+    try:
+        messages = SessionManager.get_messages() or []
+    except (AttributeError, RuntimeError, KeyError):
+        return ""
+    for msg in reversed(messages):
+        if not isinstance(msg, dict):
+            continue
+        if str(msg.get("msg_id", "")) == msg_id:
+            return str(msg.get("query") or "").strip()
+    return ""
+
+
 def _render_error_retry(msg_id: str, error: object) -> None:
     """UX-4: 오류 턴에 직전 질문 재전송 버튼을 렌더한다 (재시도 불가면 생략)."""
     if isinstance(error, dict) and error.get("retryable") is False:
         return
-    query = _last_user_query()
+    query = _query_for_error_turn(msg_id) or _last_user_query()
     if not query:
         return
     sid = SessionManager.get_session_id()

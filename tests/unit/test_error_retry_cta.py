@@ -56,6 +56,40 @@ def test_error_with_prior_query_renders_retry() -> None:
     assert "retry_error_err-1" in _button_keys(mock_st)
 
 
+def test_error_retry_uses_its_own_query_not_latest() -> None:
+    """An old error turn retries its own question, not the newest user turn."""
+    messages = [
+        {"role": "user", "content": "question A"},
+        {
+            "role": "assistant",
+            "content": "",
+            "msg_id": "err-old",
+            "query": "question A",
+        },
+        {"role": "user", "content": "question B"},
+        {"role": "assistant", "content": "ok", "msg_id": "done-new"},
+    ]
+    mock_st = MagicMock()
+    mock_st.chat_message.return_value.__enter__.return_value = MagicMock()
+    mock_st.chat_message.return_value.__exit__.return_value = False
+    with (
+        patch.object(chat_mod, "st", mock_st),
+        patch.object(chat_mod, "SessionManager", _StubSession(messages)),
+        patch("ui.components.common.st", mock_st),
+    ):
+        chat_mod.render_message(
+            role="assistant", content="partial", msg_id="err-old", error="boom"
+        )
+
+    retry_calls = [
+        call
+        for call in mock_st.button.call_args_list
+        if str(call.kwargs.get("key", "")).startswith("retry_error_")
+    ]
+    assert len(retry_calls) == 1
+    assert retry_calls[0].kwargs.get("args") == ("sid-retry", "question A")
+
+
 def test_error_non_retryable_skips_retry() -> None:
     """retryable=False 오류(FriendlyError) → 버튼 없음."""
     from ui.components.streaming import FriendlyError
