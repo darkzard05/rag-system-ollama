@@ -971,24 +971,35 @@ async def _generate_pass(
                         if pending_content:
                             new_cites = citation_scanner.feed(full_response)
                             if new_cites:
-                                items = _enrich_citations(
-                                    _filter_stream_cite_items(
-                                        [obj for _, obj in new_cites], docs
-                                    ),
-                                    docs,
-                                )
-                                if items:
-                                    await _dispatch_event(
-                                        "citations_add",
-                                        {
-                                            "items": items,
-                                            "base_index": new_cites[0][0],
-                                            "arr_len": citation_scanner.emitted,
-                                            "attempt": attempt,
-                                        },
-                                        writer=writer,
-                                        config=config,
+                                # 필터로 빠진 항목이 있어도 남은 항목은 원래 인용
+                                # 번호를 유지해야 한다. base_index는 이벤트당
+                                # 하나이므로 연속 번호끼리 묶어 여러 이벤트로 보낸다.
+                                runs: list[list[tuple[int, Any]]] = []
+                                for index, obj in new_cites:
+                                    kept = _filter_stream_cite_items([obj], docs)
+                                    if not kept:
+                                        continue
+                                    normalized = kept[0]
+                                    if runs and index == runs[-1][-1][0] + 1:
+                                        runs[-1].append((index, normalized))
+                                    else:
+                                        runs.append([(index, normalized)])
+                                for run in runs:
+                                    items = _enrich_citations(
+                                        [obj for _, obj in run], docs
                                     )
+                                    if items:
+                                        await _dispatch_event(
+                                            "citations_add",
+                                            {
+                                                "items": items,
+                                                "base_index": run[0][0],
+                                                "arr_len": citation_scanner.emitted,
+                                                "attempt": attempt,
+                                            },
+                                            writer=writer,
+                                            config=config,
+                                        )
                         await _dispatch_event(
                             "response_chunk",
                             {
