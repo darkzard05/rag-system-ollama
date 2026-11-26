@@ -1290,9 +1290,13 @@ async def generate(
         if adoption is not None:
             spec_task, spec_buffer = adoption
             logger.info("[RAG] [SPEC] warm generate 채택 — speculative 결과 반환")
+            # 남은 이벤트를 먼저 버퍼에 모은 뒤 순서대로 재생한다. 태스크가
+            # 도는 동안 재생을 시작하면 버퍼 우회/추가 dispatch가 섞여
+            # 나중 토큰이 앞 토큰보다 먼저 스트리밍된다.
+            spec_result = await spec_task
             for ev in spec_buffer:
                 await adispatch_custom_event(ev.name, ev.data, config=ev.config)
-            return await spec_task
+            return spec_result
 
     # [TIMING] 쿼리당 버퍼를 로컬에 캡처 (재시도로 retrieve/grade가 재실행되어도 누적 유지)
     _query_timings = dict(_stage_timing_var.get({}))

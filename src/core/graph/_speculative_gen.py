@@ -153,8 +153,11 @@ def _adopt_speculative_generate(
         logger.warning("[RAG] [SPEC] dead spec task — falling back to fresh generate")
         _reap_spec_entry(thread_id)
         return None
+    # is_adopted는 채택 재생이 끝날 때까지 False로 둔다. True로 바꾸면 아직
+    # 도는 투기 태스크가 버퍼를 우회해 직접 dispatch하고, 재생 중인 이전
+    # 이벤트보다 나중 이벤트가 먼저 도착한다. 재생이 끝나면 객체는 더 이상
+    # 사용되지 않으므로 별도 플래그 복원은 필요 없다.
     spec.adopter = thread_id
-    spec.is_adopted = True
     _spec_registry.pop(thread_id, None)
     return spec.task, spec.buffer
 

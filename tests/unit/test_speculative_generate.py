@@ -536,9 +536,10 @@ async def test_double_start_same_thread_id():
 # ---------------------------------------------------------------------------
 @pytest.mark.asyncio
 async def test_speculative_generate_stream_event_blackout():
-    """MAX_CONCURRENT_INFERENCE > 1 환경에서 _start_speculative_generate 실행 후
-    _adopt_speculative_generate 호출 이후 _dispatch_event가 버퍼에 갇히지 않고
-    실제 adispatch_custom_event를 라이브로 트리거하는지 검증.
+    """Adopted speculative events all reach the stream, in emission order.
+
+    A task still running after adoption must keep buffering its events. Letting
+    them go live during replay reorders the stream.
     """
     from core.graph._graph_core import _dispatch_event, _start_speculative_generate
     from core.graph._speculative_gen import _adopt_speculative_generate
@@ -553,20 +554,10 @@ async def test_speculative_generate_stream_event_blackout():
     config = {"configurable": {"thread_id": thread_id, "llm": _json_llm("generate")}}
 
     async def _dummy_gen(st, cfg, *, writer):
-        # 1. Before adoption, dispatch event should go to buffer
         await _dispatch_event(
             "response_chunk", {"content": "early"}, writer=writer, config=cfg
         )
-        # Wait until adopted
-        for _ in range(100):
-            # Check if current spec is adopted via ContextVar or registry
-            from core.graph._speculative_gen import _current_spec
-
-            curr = _current_spec.get(None)
-            if curr and curr.is_adopted:
-                break
-            await asyncio.sleep(0.01)
-        # 2. After adoption, dispatch event should go live via adispatch_custom_event
+        await asyncio.sleep(0)
         await _dispatch_event(
             "response_chunk", {"content": "live"}, writer=writer, config=cfg
         )
@@ -588,16 +579,13 @@ async def test_speculative_generate_stream_event_blackout():
         assert adoption is not None
         spec_task, spec_buffer = adoption
 
-        # Replay buffer (early event)
+        # Drain the warm task first, then replay every buffered event in order.
+        res = await spec_task
+        assert res["response"] == "earlylive"
         for ev in spec_buffer:
             await fake_dispatch(ev.name, ev.data, config=ev.config)
 
-        # Await task completion
-        res = await spec_task
-        assert res["response"] == "earlylive"
-
-    # Verify:
-    # 1. Early event was in buffer (replayed)
-    assert ("response_chunk", {"content": "early"}) in dispatched
-    # 2. Live event after adoption was dispatched immediately without being trapped in buffer
-    assert ("response_chunk", {"content": "live"}) in dispatched
+    assert dispatched == [
+        ("response_chunk", {"content": "early"}),
+        ("response_chunk", {"content": "live"}),
+    ]
