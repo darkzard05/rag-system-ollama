@@ -1056,6 +1056,9 @@ def _handle_pending_tasks() -> None:
                     )
             elif kind == "qa_update":
                 SessionManager.set("needs_qa_chain_update", True, current_sid)
+                # 정상 경로의 finally(1724행)가 실행되지 않았으므로 가드도 해제한다.
+                # 남기면 다음 rerun이 분기를 건너뛰어 입력창이 영구 잠긴다.
+                SessionManager.set("is_swapping_model", False, current_sid)
             SessionManager.set("is_building_rag", False, current_sid)
             SessionManager.set(
                 "pdf_processing_error",
