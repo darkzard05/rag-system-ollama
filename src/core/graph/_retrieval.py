@@ -229,6 +229,11 @@ _RE_ONLY_NUMBERING = re.compile(r"^\s*(?:\d+(?:\.\d+)*\.?|[-*+])\s*$")
 _RE_LOW_INFO = re.compile(r"^[\W_]+$", re.UNICODE)
 _RE_MEANINGFUL_WORD = re.compile(r"[A-Za-z]{2,}|[\uac00-\ud7a3]{2,}|[\u4e00-\u9fff]")
 
+# 참고문헌/부록 청크는 본문 질의를 밀어낸다 (CM3 논문 p14-20이 실측 사례).
+# section_path의 REFERENCE/BIBLIOGRAPHY와 chunking이 붙인 is_reference를 함께 본다.
+_RE_REFERENCE_SECTION = re.compile(r"\b(references?|bibliography)\b", re.IGNORECASE)
+_MIN_BODY_CANDIDATES = int(GRADING_CONFIG.get("grade_top_n", 5))
+
 
 def _is_informative_short(content: str) -> bool:
     """50자 미만 청크가 보존할 가치가 있는지 내용 기반으로 판정한다.
@@ -280,6 +285,33 @@ def _filter_min_section_len(docs: list[Document]) -> list[Document]:
         len(best.page_content) if best else 0,
     )
     return [best]
+
+
+def _is_reference_chunk(doc: Document) -> bool:
+    """참고문헌 목록/부록으로 표시된 청크인지 판정한다."""
+    metadata = doc.metadata
+    section = str(metadata.get("section_path") or metadata.get("current_section") or "")
+    return bool(metadata.get("is_reference")) or bool(
+        _RE_REFERENCE_SECTION.search(section)
+    )
+
+
+def _drop_reference_results(
+    results: dict[str, list[Document]],
+) -> tuple[dict[str, list[Document]], int]:
+    """본문 후보가 충분할 때만 참고문헌/부록 결과를 검색 풀에서 제거한다.
+
+    부록 전용 질의(예: 하이퍼파라미터 표)를 위해 본문 후보가 부족하면 원본을
+    유지한다. 반환값은 ``(결과, 제거된 문서 수)``.
+    """
+    kept = {
+        source: [doc for doc in docs if not _is_reference_chunk(doc)]
+        for source, docs in results.items()
+    }
+    if sum(len(docs) for docs in kept.values()) < _MIN_BODY_CANDIDATES:
+        return results, 0
+    dropped = sum(len(results[source]) - len(docs) for source, docs in kept.items())
+    return kept, dropped
 
 
 def _embed_and_search_faiss_sync(
@@ -501,6 +533,10 @@ async def retrieve_and_rerank(
         results = dict(zip(task_names, task_results, strict=False))
 
     search_ms = (time.perf_counter() - t0) * 1000
+
+    results, dropped_refs = _drop_reference_results(results)
+    if dropped_refs:
+        logger.info("[RAG] [RETRIEVE] 참고문헌/부록 청크 %d건 제외", dropped_refs)
 
     logger.debug(
         f"[RAG] [RETRIEVE] 검색 결과 확보 (BM25: {len(results.get('bm25', []))}, Vector: {len(results.get('faiss', []))})"
