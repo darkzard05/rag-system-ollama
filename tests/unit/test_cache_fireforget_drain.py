@@ -2,7 +2,7 @@
 
 Failing-first coverage for:
   (a) cache-set off the critical path when QUERY_CACHE_ENABLED, with zero
-      thread/zero embed overhead when disabled (default False);
+      thread/zero embed overhead when disabled;
   (b) hydration drain concurrent + order-preserving with fail-loud metrics;
   (c) lazy perf report (monitoring never breaks the answer) and no retriever
       object persistence from rag_core (pipeline_builder 504-511 anti-pattern).
@@ -37,9 +37,11 @@ def _payload(**over: object) -> dict:
 # --- (a) fire-and-forget cache-set -------------------------------------------
 
 
-def test_cache_set_disabled_has_zero_thread_zero_embed_overhead() -> None:
+def test_cache_set_disabled_has_zero_thread_zero_embed_overhead(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """QUERY_CACHE_ENABLED=False면 스레드/임베더/캐시 접근이 전혀 없다."""
-    assert gen_mod.QUERY_CACHE_ENABLED is False
+    monkeypatch.setattr(gen_mod, "QUERY_CACHE_ENABLED", False)
     with (
         patch("threading.Thread", side_effect=AssertionError("no thread")),
         patch(

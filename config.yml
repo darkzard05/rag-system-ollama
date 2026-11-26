@@ -207,9 +207,9 @@ rag:
       overlap_ratio: 0.1
       chunk_size: 512
 
-  # 쿼리 캐시 설정 (선택적 opt-in)
+  # 쿼리 캐시 설정 (동일 문서·동일 질의 반복 시 LLM 호출 생략)
   query_cache:
-    enabled: false                 # 쿼리 캐시 활성화 여부
+    enabled: true                  # 쿼리 캐시 활성화 여부
     similarity_threshold: 0.92     # 캐시 히트를 위한 유사도 임계값
     ttl_seconds: 3600              # 캐시 항목 수명(초)
     min_confidence: 0.85           # 캐시 저장 최소 신뢰도

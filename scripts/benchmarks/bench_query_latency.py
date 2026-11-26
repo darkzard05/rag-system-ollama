@@ -491,6 +491,12 @@ async def main_async(args: argparse.Namespace) -> dict[str, object]:
     ) = await _scenario_cache(rag, timing_handler, llm_counter)
 
     captured = timing_handler.records
+    # Report the *effective* gate the live graph reads, not just the CLI flag.
+    # With the cache enabled by default in config.yml, `args.cache_on` alone
+    # would mislabel the run as cache-disabled.
+    import core.graph._generate as _live_generate
+
+    effective_cache_enabled = bool(_live_generate.QUERY_CACHE_ENABLED)
     report: dict[str, object] = {
         "generated_at": datetime.now().isoformat(timespec="seconds"),
         "config": {
@@ -499,7 +505,7 @@ async def main_async(args: argparse.Namespace) -> dict[str, object]:
             "pdf": str(PDF_PATH),
             "repeat": args.repeat,
             "n_questions": len(FIXED_QUESTIONS),
-            "query_cache_enabled": bool(args.cache_on),
+            "query_cache_enabled": effective_cache_enabled,
         },
         "s1_cold_ttft_p95": round(s1_p95, 2),
         "s2_warm_ttft_p95": round(s2_p95, 2),
