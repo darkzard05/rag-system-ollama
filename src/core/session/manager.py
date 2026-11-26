@@ -56,7 +56,7 @@ import os
 import threading
 import time
 import uuid
-from collections.abc import Set
+from collections.abc import MutableSet, Set
 from contextvars import ContextVar
 from typing import TYPE_CHECKING, Any
 
@@ -313,16 +313,20 @@ class SessionManager:
         if lock is not None and not lock.acquire(blocking=False):
             # 후보 선정 이후 작성자가 락을 잡았다. 이번 퇴출만 포기한다.
             return None
+        mirror_keys: MutableSet[str] = set()
         try:
-            pdf_path = cls._delete_session_locked(oldest_sid)
+            pdf_path = cls._delete_session_locked(
+                oldest_sid, mirror_keys_out=mirror_keys
+            )
             logger.warning(
                 f"[SESSION] 활성 세션 상한({MAX_ACTIVE_SESSIONS}) 도달, "
                 f"가장 오래된 세션 퇴출: {oldest_sid}"
             )
-            return pdf_path
         finally:
             if lock is not None:
                 lock.release()
+        cls._clear_ui_mirror(mirror_keys)
+        return pdf_path
 
     @classmethod
     def init_session(cls, session_id: str | None = None):
@@ -967,7 +971,10 @@ class SessionManager:
 
     @classmethod
     def _delete_session_locked(
-        cls, session_id: str, pdf_path: str | None = None
+        cls,
+        session_id: str,
+        pdf_path: str | None = None,
+        mirror_keys_out: MutableSet[str] | None = None,
     ) -> str | None:
         """_map_lock 보유 상태에서 세션을 정리합니다.
 
@@ -1001,17 +1008,13 @@ class SessionManager:
             if k in state:
                 state[k] = None
 
-        # SSoT를 해체하기 전에 UI 미러도 정리한다. tombstone은 state와 함께
-        # 사라지므로, 미러를 남기면 재생성된 세션이 get()의 UI 폴백에서 이전
-        # 세션의 대화·문서 값을 다시 읽어 되살린다.
-        delete_fn = getattr(cls._ui_sync, "delete", None) if cls._ui_sync else None
-        if callable(delete_fn):
-            mirrored_keys = set(state) | set(state.get("_deleted_keys", ()))
-            for k in mirrored_keys:
-                if k.startswith("_"):
-                    continue
-                with contextlib.suppress(Exception):
-                    delete_fn(k)
+        # tombstone은 state와 함께 사라진다. 미러 키는 호출자가 락을 해제한
+        # 뒤에 정리한다 (어댑터 호출은 락 구간 밖에서만 허용).
+        if mirror_keys_out is not None:
+            candidates = set(state) | set(state.get("_deleted_keys", ()))
+            for k in candidates:
+                if not k.startswith("_"):
+                    mirror_keys_out.add(k)
 
         del cls._fallback_sessions[session_id]
 
@@ -1063,6 +1066,16 @@ class SessionManager:
         return pdf_path
 
     @classmethod
+    def _clear_ui_mirror(cls, keys: MutableSet[str]) -> None:
+        """Remove mirrored keys after all session locks have been released."""
+        delete_fn = getattr(cls._ui_sync, "delete", None) if cls._ui_sync else None
+        if not callable(delete_fn):
+            return
+        for key in keys:
+            with contextlib.suppress(Exception):
+                delete_fn(key)
+
+    @classmethod
     def delete_session(cls, session_id: str) -> bool:
         """세션을 삭제하고 무거운 객체의 참조를 명시적으로 해제합니다.
 
@@ -1071,6 +1084,7 @@ class SessionManager:
         """
         # 세션별 락을 먼저 잡아 진행 중인 기록이 상태 해체와 경합하지 않게 한다.
         # 락 순서는 항상 세션별 락 -> _map_lock 이다 (모듈 독스트링 계약).
+        mirror_keys: MutableSet[str] = set()
         with cls._acquire_lock(session_id), cls._map_lock:
             if session_id not in cls._fallback_sessions:
                 return False
@@ -1084,7 +1098,10 @@ class SessionManager:
                 )
 
             # 락 보유 상태에서 무거운 참조/그래프 thread 정리 위임.
-            pdf_path = cls._delete_session_locked(session_id, pdf_path)
+            pdf_path = cls._delete_session_locked(
+                session_id, pdf_path, mirror_keys_out=mirror_keys
+            )
+        cls._clear_ui_mirror(mirror_keys)
         # 물리적 PDF 삭제는 _map_lock 밖에서 수행하여, Windows 파일 락
         # 백오프(sleep) 동안 전역 세션 접근이 블로킹되지 않도록 합니다.
         if pdf_path:
