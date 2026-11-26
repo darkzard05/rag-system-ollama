@@ -16,6 +16,17 @@ import json
 from common.final_answer import FinalAnswerExtractor
 
 
+def test_extractor_keeps_only_unscanned_tail() -> None:
+    """No append-only chunk list may survive the sliding-window rewrite."""
+    extractor = FinalAnswerExtractor()
+    blob = json.dumps({"final_answer": "x" * 5000})
+    for i in range(0, len(blob), 7):
+        extractor.feed(blob[i : i + 7])
+
+    assert not hasattr(extractor, "_chunks")
+    assert len(extractor._blob) < len(blob) // 10
+
+
 def test_chunk_boundary_inner_quote_preserved() -> None:
     """A quote at a chunk boundary is preserved, not treated as close."""
     extractor = FinalAnswerExtractor()

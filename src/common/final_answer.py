@@ -242,15 +242,13 @@ def recover_final_answer(blob: str) -> str | None:
 class FinalAnswerExtractor:
     """structured 모드 raw_json 청크 → final_answer 증분 추출 헬퍼 (O(n) total).
 
-    ``_chunks`` 에 입력 전체를 append-only 로 보관하고, 스캐너에 넘기는
-    ``_blob`` 은 스캔이 끝난 앞부분을 매 feed 마다 잘라내는 sliding window 로
-    유지한다. 스캐너가 verified 이후 Phase 1-3 을 생략하므로 앞부분 삭제가
-    안전하고, 매 feed 복사량은 미스캔 꼬리+새 청크로 상수가 된다. 기존의 매
-    토큰 전체 복사(``_blob += content`` O(n²) total)를 제거한다.
+    스캐너에 넘기는 ``_blob`` 은 스캔이 끝난 앞부분을 매 feed 마다 잘라내는
+    sliding window 로 유지한다. 스캐너가 verified 이후 Phase 1-3 을 생략하므로
+    앞부분 삭제가 안전하고, 매 feed 복사량은 미스캔 꼬리+새 청크로 상수가 된다.
+    기존의 매 토큰 전체 복사(``_blob += content`` O(n²) total)를 제거한다.
     """
 
     def __init__(self) -> None:
-        self._chunks: list[str] = []
         self._blob: str = ""
         self._scan_pos = 0
         # [key_idx, raw_pos, pending_escape, pending_u, closed, verified]
@@ -258,7 +256,6 @@ class FinalAnswerExtractor:
 
     def feed(self, content: str) -> str:
         """raw_json 청크의 content를 누적하고 새 final_answer delta를 즉시 반환."""
-        self._chunks.append(content)
         if self._key_pos[5] and self._key_pos[1] > 0:
             # 소비된 앞부분은 디코드 완료 — 스캐너 재개점만 남기고 버린다.
             # (pending_escape/pending_u 플래그가 경계 이스케이프를 carries)
