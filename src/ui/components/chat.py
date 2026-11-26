@@ -530,7 +530,8 @@ def _draw_streaming_message(msg: dict[str, Any], current_sid: str) -> None:
         msg, expanded=False, generating=True, status_text=status_text
     )
 
-    # 스트리밍 내용 표시 (커서 포함).
+    # 비활성 플레이스홀더의 부분 본문 — 라이브 커서는 활성 스트림 전용이므로
+    # 여기서는 붙이지 않는다(영구 깜빡임 방지).
     raw_content = msg.get("content", "")
     msg_id = msg.get("msg_id", "")
     cache_key = f"_stream_html_{msg_id}"
@@ -544,7 +545,7 @@ def _draw_streaming_message(msg: dict[str, Any], current_sid: str) -> None:
             }
         else:
             processed = cached["html"]
-        st.markdown(processed + " ▌", unsafe_allow_html=True)
+        st.markdown(processed, unsafe_allow_html=True)
 
 
 # ---------------------------------------------------------------------------

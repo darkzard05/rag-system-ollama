@@ -226,6 +226,30 @@ def test_draw_streaming_message_empty_placeholder_shows_neutral_caption() -> Non
     mock_st.error.assert_not_called()
 
 
+def test_orphaned_streaming_message_has_no_live_cursor() -> None:
+    """An inactive stream placeholder must not show a perpetual typing caret."""
+    sid = "render_orphan_stream"
+    SessionManager.reset_all_state(sid)
+
+    with (
+        patch("ui.components.chat.st") as mock_st,
+        patch("ui.components.chat.render_generation_expander") as mock_expander,
+    ):
+        _draw_streaming_message(
+            {"role": "assistant", "content": "partial answer", "msg_id": "orphan-1"},
+            sid,
+        )
+
+    bodies = [
+        str(call.args[0]) for call in mock_st.markdown.call_args_list if call.args
+    ]
+    assert bodies, "partial answer must still be rendered"
+    assert all("▌" not in body and "▍" not in body for body in bodies), (
+        f"stale live cursor on an inactive stream: {bodies!r}"
+    )
+    mock_expander.assert_called_once()
+
+
 def test_draw_streaming_message_with_content_keeps_generating_expander() -> None:
     """content 있는 스트리밍 메시지 → expander generating=True 유지 (회귀 가드)."""
     sid = "render_content_stream"
