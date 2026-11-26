@@ -147,6 +147,30 @@ def test_set_after_delete_resurrects_key():
         assert SessionManager.has_pending_ui_sync(sid) is False
 
 
+def test_key_scoped_sync_leaves_other_tombstones_intact():
+    """A sync for key b must not consume or deliver the tombstone for key a."""
+    sid = "scoped_tombstone_sid"
+    SessionManager.init_session(sid)
+
+    st_state: dict = {}
+    p1, p2, p3 = _patch_sync_deps(st_state)
+    with p1, p2, p3:
+        SessionManager.set("a", "v1", session_id=sid)
+        SessionManager.sync_to_streamlit(session_id=sid)
+        SessionManager.set("b", "v2", session_id=sid)
+        SessionManager.sync_to_streamlit(session_id=sid)
+        SessionManager.delete("a", session_id=sid)
+
+        state = SessionManager._fallback_sessions[sid]
+        assert "a" in state["_deleted_keys"]
+
+        SessionManager.sync_to_streamlit(session_id=sid, key="b")
+
+        assert "a" in state["_deleted_keys"]
+        assert "a" in st_state
+        assert SessionManager.has_pending_ui_sync(sid) is True
+
+
 # --- Streamlit Synchronization Tests ---
 
 

@@ -366,19 +366,20 @@ class SessionManager:
                 if k not in cls._NON_UI_SYNC_KEYS:
                     values[k] = state[k]
 
+            # 삭제 tombstone 스냅샷: state에 이미 없으므로 values에 담지 않고
+            # 별도로 전달한다. set() 후 add는 동일 키 부활(set)과의 경합에서
+            # tombstone이 지지 않도록 스냅샷 시점에 고정한다.
+            tombstones = state.setdefault("_deleted_keys", set()).copy()
             if key:
                 if key in state:
                     _stage(key)
-                deleted_keys = {key} & state.setdefault("_deleted_keys", set()).copy()
+                deleted_keys = {key} & tombstones
             else:
                 dirty = state["_dirty_keys"].copy()
                 for k in dirty:
                     if k in state:
                         _stage(k)
-            # 삭제 tombstone 스냅샷: state에 이미 없으므로 values에 담지 않고
-            # 별도로 전달한다. set() 후 add는 동일 키 부활(set)과의 경합에서
-            # tombstone이 지지 않도록 스냅샷 시점에 고정한다.
-            deleted_keys = state.setdefault("_deleted_keys", set()).copy()
+                deleted_keys = tombstones
 
         # 값이 하나도 없더라도 소비 대상(target_keys)이 있으면 진행한다 —
         # 백엔드 전용 키만 dirty인 경우에도 dirty 해소를 위해 필요하다.
