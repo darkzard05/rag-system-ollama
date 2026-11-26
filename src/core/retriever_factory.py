@@ -123,6 +123,14 @@ def create_vector_store(
                 vectors = vectors.astype("float32", copy=False)
         else:
             vectors = np.ascontiguousarray(vectors, dtype="float32")
+        if vectors.ndim != 2 or vectors.shape[0] != len(docs):
+            raise VectorStoreError(
+                details={
+                    "reason": "vector count must match document count",
+                    "vectors": vectors.shape,
+                    "documents": len(docs),
+                }
+            )
         logger.info(f"[FAISS] Using pre-computed vectors: {vectors.shape}")
 
     # GPU 자동 감지 및 설정 — faiss-gpu 심볼 존재 시에만 활성화 (R3a-05)
@@ -153,10 +161,14 @@ def create_vector_store(
 
     # GPU 인덱스 및 정규화 전략 최적화
     # [최적화] 조건부 L2 정규화 — 이미 정규화된 벡터는 건너뜀
+    index_vectors = vectors
     if use_l2:
         norms = np.linalg.norm(vectors, axis=1)
         if np.any(np.abs(norms - 1.0) > 1e-3):
-            faiss.normalize_L2(vectors)
+            # ascontiguousarray는 이미 float32 연속 배열을 그대로 반환하므로,
+            # 호출자가 캐시한 임베딩을 변형하지 않도록 사본을 정규화한다.
+            index_vectors = vectors.copy()
+            faiss.normalize_L2(index_vectors)
             logger.debug("[FAISS] L2 정규화 수행 완료")
         else:
             logger.debug("[FAISS] 벡터가 이미 정규화됨 — 건너뜀")
@@ -232,7 +244,7 @@ def create_vector_store(
             logger.warning(f"[FAISS GPU] 전환 실패, CPU 사용: {e}")
             use_gpu = False
 
-    index.add(vectors)
+    index.add(index_vectors)
 
     # efSearch 설정 — use_gpu와 무관하게 HNSW 인덱스에 적용 (R3a-05)
     _configure_hnsw_efsearch(index, index_type, ef_search)
