@@ -13,7 +13,6 @@ SSE 직렬화 전담으로 유지된다 (5→2).
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import sys
 import time
@@ -541,9 +540,10 @@ class StreamingResponseHandler:
             raise
         finally:
             exc_type, _, _ = sys.exc_info()
-            is_exit = exc_type is not None and issubclass(
-                exc_type, (GeneratorExit, asyncio.CancelledError)
-            )
+            # A propagating exception (including GeneratorExit/CancelledError)
+            # must not be suspended by a yield here: a consumer that stops at
+            # these tail chunks would discard the error and report success.
+            is_exit = exc_type is not None
 
             # Phase 2.2: 두 버퍼 모두 플러시
             _t_tail = time.perf_counter()

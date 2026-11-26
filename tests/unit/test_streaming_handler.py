@@ -40,3 +40,31 @@ async def test_stream_graph_events_aclose_runtime_error():
     assert item is not None
     # 스트림 중간에 aclose() 호출 시 RuntimeError 없이 안전하게 닫혀야 함
     await gen.aclose()
+
+
+@pytest.mark.asyncio
+async def test_stream_error_is_not_hidden_by_tail_chunks():
+    """An error must reach the consumer before any is_final tail chunk."""
+
+    async def failing_events():
+        yield ("custom", {"content": "hello"})
+        raise ValueError("boom")
+
+    handler = StreamingResponseHandler()
+    gen = handler.stream_graph_events(failing_events(), _remaining=None)
+
+    error: Exception | None = None
+    saw_final = False
+    try:
+        while True:
+            chunk = await anext(gen)
+            if chunk.is_final:
+                saw_final = True
+                break
+    except ValueError as exc:
+        error = exc
+    finally:
+        await gen.aclose()
+
+    assert error is not None
+    assert not saw_final
