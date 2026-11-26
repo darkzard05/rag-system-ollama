@@ -161,8 +161,8 @@ def test_render_chat_input_area_idle_has_no_status_caption() -> None:
     mock_st.caption.assert_not_called()
 
 
-def test_render_chat_input_area_ignores_submission_while_generating() -> None:
-    """생성 중 submit_mode='stop' 입력 제출이 들어와도 활성 스트림을 덮어쓰지 않는다."""
+def test_render_chat_input_area_refuses_submission_while_generating() -> None:
+    """A submit during a stream is refused and explains why, without overwriting it."""
     sid = "input_area_generating_submit_guard"
     _reset_session(sid)
     SessionManager.set_session_id(sid)
@@ -179,6 +179,8 @@ def test_render_chat_input_area_ignores_submission_while_generating() -> None:
         render_chat_input_area()
 
     mock_add_message.assert_not_called()
-    mock_ui_error.assert_not_called()
+    mock_ui_error.assert_called_once()
+    reason = str(mock_ui_error.call_args).lower()
+    assert "generating" in reason or "생성" in reason
     assert SessionManager.get("is_generating_answer", False, sid) is True
     assert SessionManager.get("active_stream_msg_id", "", sid) == "active-msg"
