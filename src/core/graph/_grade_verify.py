@@ -296,7 +296,19 @@ async def grade_documents(
             # 메모 재사용 경로가 retry_count 를 반환하지 않으면 reset_or_add
             # 리듀서가 카운터를 증가시키지 않아 hardcap(>= max_retries)에
             # 도달하지 못하고 무한 재귀(GraphRecursionError)가 발생한다.
-            return {"intent": "generate", "route": reused_route, "retry_count": 1}
+            replay: dict[str, Any] = {
+                "intent": "generate",
+                "route": reused_route,
+                "retry_count": 1,
+            }
+            # [FIX] transform 판단은 최적화 쿼리를 함께 기억해야 한다. 그렇지 않으면
+            # rewrite가 빈 search_queries를 받아 원래 쿼리로 재검색하고 같은 메모를
+            # 다시 히트해 재시도 예산을 소진한 뒤 부적합 문서로 답변을 생성한다.
+            if reused_route == "transform" and isinstance(decision, dict):
+                optimized = decision.get("optimized_query")
+                if optimized:
+                    replay["search_queries"] = [optimized]
+            return replay
     except Exception as e:  # noqa: BLE001 - 메모 실패는 치명적이지 않음
         logger.debug(f"[RAG] [GRADE] 메모 조회 실패, LLM 경로로 진행: {e}")
 
@@ -484,7 +496,12 @@ async def grade_documents(
                 "검색 결과가 부적합하여 질문 재구성을 시도합니다.",
                 session_id=_get_session_id(config),
             )
-            _store_grade_memo(state, docs, {"route": "transform"}, sid)
+            _store_grade_memo(
+                state,
+                docs,
+                {"route": "transform", "optimized_query": optimized},
+                sid,
+            )
             grade_ms = (time.perf_counter() - grade_start) * 1000
             logger.info(
                 f"[RAG] [GRADE][TIMING] grade_ms={grade_ms:.1f} short_circuit=False"
