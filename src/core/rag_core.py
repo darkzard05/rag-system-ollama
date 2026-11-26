@@ -515,6 +515,15 @@ class RAGSystem:
                             session_id=self.session_id,
                         )
                 finally:
+                    # 중단된 턴의 투기 생성 결과를 폐기한다. abort 경로에는
+                    # 채택 노드가 없으므로 레지스트리에 이전 답변이 남고, 다음
+                    # 질문이 grade 단축 경로에서 그대로 채택할 수 있다.
+                    try:
+                        from core.graph._speculative_gen import delete_spec_thread
+
+                        delete_spec_thread(self.session_id)
+                    except Exception as e:  # noqa: BLE001 - 정리 실패는 스트림 실패 아님
+                        logger.debug("[RAG] 투기 생성 정리 실패: %s", e)
                     # 어떠한 예외/취소 상황에서도 unpin 확정 실행
                     _safe_unpin()
 
