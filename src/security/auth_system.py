@@ -263,15 +263,19 @@ class SimpleJWT:
                 crypto_utils.hmac_sign(self.secret_key, message, "sha256")
             )
 
-            # 패딩 추가
-            signature = base64.urlsafe_b64decode(_add_b64_padding(signature_encoded))
+            # 엄격 디코딩: urlsafe_b64decode는 base64 알파벳 밖 문자를 버려
+            # 서명 뒤에 '!'를 붙여도 원래 서명이 복원된다. 철회된 토큰이
+            # deny-list 조회를 피해 통과하지 않도록 비알파벳 문자를 거부한다.
+            signature = base64.b64decode(
+                _add_b64_padding(signature_encoded), altchars=b"-_", validate=True
+            )
 
             if not hmac.compare_digest(signature, expected_signature):
                 return None
 
             # 페이로드 디코딩
-            payload_json = base64.urlsafe_b64decode(
-                _add_b64_padding(payload_encoded)
+            payload_json = base64.b64decode(
+                _add_b64_padding(payload_encoded), altchars=b"-_", validate=True
             ).decode("utf-8")
 
             payload = json.loads(payload_json)
