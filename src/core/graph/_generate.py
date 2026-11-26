@@ -239,6 +239,23 @@ def _normalize_citations(citations: list[Any], docs: list[Document]) -> list[Any
     doc_ids = [_doc_stable_id(d) for d in docs]
     valid_ids = set(doc_ids)
     doc_count = len(doc_ids)
+    # Small models sometimes emit 1-based indices instead of the copied hash
+    # token. Shift only when every numeric id is in 1..N — a 0-based set keeps
+    # its existing mapping.
+    numeric_ids = [
+        int(raw)
+        for cit in citations
+        for raw in (
+            getattr(cit, "doc_id", None)
+            if not isinstance(cit, dict)
+            else cit.get("doc_id"),
+        )
+        if (isinstance(raw, int) and not isinstance(raw, bool))
+        or (isinstance(raw, str) and raw.isdigit() and raw not in valid_ids)
+    ]
+    one_based = (
+        bool(numeric_ids) and min(numeric_ids) >= 1 and max(numeric_ids) == doc_count
+    )
     normalized: list[Any] = []
     dropped_ids: list[Any] = []
 
@@ -254,11 +271,14 @@ def _normalize_citations(citations: list[Any], docs: list[Document]) -> list[Any
         mapped: str | None = None
 
         if isinstance(raw_id, int) and not isinstance(raw_id, bool):
-            if 0 <= raw_id < doc_count:
-                mapped = doc_ids[raw_id]
+            index = raw_id - 1 if one_based else raw_id
+            if 0 <= index < doc_count:
+                mapped = doc_ids[index]
         elif isinstance(raw_id, str):
-            if raw_id.isdigit() and 0 <= int(raw_id) < doc_count:
-                mapped = doc_ids[int(raw_id)]
+            if raw_id.isdigit() and raw_id not in valid_ids:
+                index = int(raw_id) - 1 if one_based else int(raw_id)
+                if 0 <= index < doc_count:
+                    mapped = doc_ids[index]
             # 숫자 문자열이면서 hash 집합에도 있으면 hash 우선 (충돌 방지).
             if raw_id in valid_ids:
                 mapped = raw_id
