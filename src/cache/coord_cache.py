@@ -32,6 +32,8 @@ _EVICTION_BATCH_SIZE = 128  # [R1b-07] 크기 상한 초과 시 사이클당 삭
 _CONNECTION_MAX_AGE = 300  # 5분: 연결 최대 생존 시간 (초)
 _CONNECTION_HEALTH_CHECK_INTERVAL = 30  # 30초: 헬스체크 간격
 _WRITE_BEHIND_QUEUE_MAX = 5000  # 백그라운드 큐 최대 대기 항목 (메모리 바운드)
+_WRITE_MAX_ATTEMPTS = 3  # 일시적 DB 락에 대한 재시도 횟수
+_WRITE_RETRY_BASE_DELAY = 0.05  # 첫 재시도 대기(초), 이후 선형 증가
 
 logger = logging.getLogger(__name__)
 
@@ -254,18 +256,30 @@ class CoordCacheManager:
             )
             await db.commit()
 
+    async def _insert_coords_with_retry(
+        self, file_hash: str, page_num: int, coords: list[dict[str, Any]]
+    ) -> None:
+        """일시적 DB 락/쓰기 오류를 재시도한다 (워커·QueueFull 폴백 공용)."""
+        for attempt in range(_WRITE_MAX_ATTEMPTS):
+            try:
+                await self._insert_coords_impl(file_hash, page_num, coords)
+                return
+            except (aiosqlite.Error, OSError, RuntimeError) as e:
+                self._conn_healthy = False
+                if attempt == _WRITE_MAX_ATTEMPTS - 1:
+                    logger.error(
+                        "좌표 저장 최종 실패 (%s, p%s): %s", file_hash, page_num, e
+                    )
+                    return
+                await asyncio.sleep(_WRITE_RETRY_BASE_DELAY * (attempt + 1))
+
     async def _write_behind_worker(self) -> None:
         """백그라운드에서 큐의 좌표 데이터를 SQLite에 저장합니다."""
         while True:
             try:
                 file_hash, page_num, coords = await self._queue.get()
                 try:
-                    await self._insert_coords_impl(file_hash, page_num, coords)
-                except (aiosqlite.Error, OSError, RuntimeError) as e:
-                    logger.error(
-                        f"백그라운드 저장 실패 ({file_hash}, p{page_num}): {e}"
-                    )
-                    self._conn_healthy = False
+                    await self._insert_coords_with_retry(file_hash, page_num, coords)
                 finally:
                     self._queue.task_done()
             except asyncio.CancelledError:
@@ -466,7 +480,9 @@ class CoordCacheManager:
             logger.info(
                 f"좌표 캐시 큐 가득 참 — 즉시 기록 폴백 ({file_hash}, p{page_num})"
             )
-            await self._submit(self._insert_coords_impl(file_hash, page_num, coords))
+            await self._submit(
+                self._insert_coords_with_retry(file_hash, page_num, coords)
+            )
 
     async def get_coords_batch(
         self, file_hash: str, page_nums: list[int]
