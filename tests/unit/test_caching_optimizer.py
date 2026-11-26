@@ -263,9 +263,22 @@ async def test_semantic_cache_matrix_incremental_remove():
     await cache.set("k1", "val1", query_embedding=vec1)
     await cache.set("k2", "val2", query_embedding=vec2)
 
-    await cache.delete(fast_hash("k1"))
+    await cache.delete("k1")
     assert cache._cached_matrix.shape == (1, 384)
     assert fast_hash("k1") not in cache._cached_keys
 
     assert await cache.get("k2", query_embedding=vec2) == "val2"
     assert await cache.get("k1", query_embedding=vec1) is None
+
+
+@pytest.mark.asyncio
+async def test_semantic_cache_delete_removes_raw_public_key():
+    """Callers pass the same raw key to set() and delete(); delete must match."""
+    cache = SemanticCache(similarity_threshold=0.90)
+    vec1 = [1.0] + [0.0] * 383
+
+    await cache.set("k1", "val1", query_embedding=vec1)
+    await cache.delete("k1")
+
+    assert await cache.get("k1", query_embedding=vec1) is None
+    assert cache.stats.cache_size == 0

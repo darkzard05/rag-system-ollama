@@ -954,12 +954,13 @@ class SemanticCache(CacheBackend[T]):
 
     async def delete(self, key: str) -> None:
         """값 삭제"""
+        cache_key = fast_hash(key)
         with self.lock:
-            if key in self.cache:
-                del self.cache[key]
-            if key in self.embeddings:
-                del self.embeddings[key]
-                self._update_matrix(key, action="remove")  # 증분 삭제
+            if cache_key in self.cache:
+                del self.cache[cache_key]
+            if cache_key in self.embeddings:
+                del self.embeddings[cache_key]
+                self._update_matrix(cache_key, action="remove")  # 증분 삭제
             self.stats.cache_size = len(self.cache)
 
     async def clear(self) -> None:
