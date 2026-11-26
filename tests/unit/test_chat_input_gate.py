@@ -127,6 +127,27 @@ def test_submit_refused_guides_via_error_not_body_no_rerun() -> None:
     mock_st.rerun.assert_not_called()
 
 
+def test_submit_while_generating_is_not_silently_dropped() -> None:
+    """A typed follow-up during a stream must be refused with a visible reason."""
+    sid = "dg_gate_generating_submit"
+    _reset_session(sid)
+    SessionManager.set("is_generating_answer", True, sid)
+
+    with (
+        patch("ui.components.chat.st") as mock_st,
+        patch("ui.components.common.st") as mock_common_st,
+        patch.object(SessionManager, "add_message") as mock_add,
+    ):
+        mock_st.chat_input.return_value = "follow-up typed during stream"
+        render_chat_input_area()
+
+    assert _user_calls(mock_add) == [], "in-flight answer must not be overwritten"
+    err = str(mock_common_st.error.call_args)
+    assert "generating" in err.lower() or "생성" in err, (
+        f"silent drop: no visible reason for the ignored submit, got {err!r}"
+    )
+
+
 def test_vector_store_error_persists_error_field_without_raw_body() -> None:
     """(d) RED: VectorStoreError persists error=, body hides raw str(exc)."""
     sid = "dg_gate_raw_body"

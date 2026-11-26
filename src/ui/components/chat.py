@@ -748,6 +748,7 @@ def render_chat_input_area() -> None:
             logger.info(
                 "[CHAT] Ignored chat submission while generating (sid=%s)", current_sid
             )
+            ui_error(t("chat_placeholder_generating"))
             return
         query_text = user_query.strip()
         if query_text:
