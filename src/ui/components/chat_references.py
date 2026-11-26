@@ -160,9 +160,10 @@ def render_reference_list(
 ) -> bool:
     """문서별 한 줄 요약 링크 목록: Reference見出 + 발췌/페이지 단일 행.
 
-    인용이 있으면 인용된 문서만 관련도 순으로 렌더하고, 없으면 문서 입력
-    순서(관련도 순)를 사용한다. 문서별 최대 1행을 tertiary 버튼으로
-    렌더한다. 라벨은 ``"{i}. :blue[{요약}] :gray[p.{N}]"`` 이며, CSS가 라벨
+    인용이 있으면 ``ordered_reference_entries`` 순서를 사용해 행 번호를
+    인라인 ``[n]`` 배지와 일치시키고, 없으면 문서 입력 순서(관련도 순)를
+    사용한다. 문서별 최대 1행을 tertiary 버튼으로 렌더한다.
+    라벨은 ``"{i}. :blue[{요약}] :gray[p.{N}]"`` 이며, CSS가 라벨
     ``<p>``를 flex로 만들어 발췌는 좌측(말줄임), 페이지는 우측 끝에 붙인다.
     내용은 파랑, 페이지는 회색으로 구분된다.
 
@@ -180,20 +181,12 @@ def render_reference_list(
             content = doc.get("page_content")
         return content if isinstance(content, str) else ""
 
-    # citations[]가 인용 출처의 단일 진실원천이므로, 순위 밖 밀린 인용 문서도
-    # 클릭 가능한 행으로 남긴다. 인용된 문서가 없으면 기존 관련도 순을 유지한다.
-    cited_ids: set[str] = {
-        str(cit["doc_id"])
+    # 인용 upsert는 길이가 같아도 내용이 바뀌므로 지문을 캐시 키에 포함한다.
+    cit_sigs = tuple(
+        (str(cit.get("doc_id")), str(cit.get("text_span") or ""), cit.get("page"))
         for cit in citations or []
-        if isinstance(cit, dict) and cit.get("doc_id") is not None
-    }
-    ordered_docs = documents or []
-    if cited_ids:
-        cited_docs = [d for d in ordered_docs if doc_stable_id(d) in cited_ids]
-        if cited_docs:
-            ordered_docs = cited_docs
-
-    # 문서 및 인용구 목록의 지문 기반 캐시 키 구성 (동일 렌더링 재계산 스킵)
+        if isinstance(cit, dict)
+    )
     doc_sigs = tuple(
         (
             getattr(d, "metadata", {}).get("doc_id")
@@ -201,13 +194,13 @@ def render_reference_list(
             else (d.get("metadata", {}).get("doc_id") if isinstance(d, dict) else None)
         )
         or id(d)
-        for d in ordered_docs[:max_rows]
+        for d in (documents or [])[:max_rows]
     )
     cache_key = (
         msg_id,
         len(documents or []),
         doc_sigs,
-        tuple(sorted(cited_ids)),
+        cit_sigs,
         max_rows,
         excerpt_chars,
     )
@@ -216,40 +209,30 @@ def render_reference_list(
         _REFERENCE_ROWS_CACHE.move_to_end(cache_key)
         rows = _REFERENCE_ROWS_CACHE[cache_key]
     else:
-        span_by_doc: dict[str, str] = {}
-        page_by_doc: dict[str, int] = {}
-        for cit in citations or []:
-            if not isinstance(cit, dict):
-                continue
-            doc_id = cit.get("doc_id")
-            if doc_id is None:
-                continue
-            key = str(doc_id)
-            span = cit.get("text_span")
-            if key not in span_by_doc and isinstance(span, str) and span.strip():
-                span_by_doc[key] = span
-            page = _coerce_page(cit.get("page"))
-            if key not in page_by_doc and page is not None:
-                page_by_doc[key] = page
-
         rows = []
-        seen: set[str] = set()
-        for doc in ordered_docs:
-            sid = doc_stable_id(doc)
-            if sid in seen:
-                continue
-            seen.add(sid)
-            excerpt = normalize_excerpt(
-                span_by_doc.get(sid) or _doc_text(doc), excerpt_chars
-            )
-            if not excerpt:
-                continue
-            page = page_by_doc.get(sid)
-            if page is None:
+        if cit_sigs:
+            # 배지와 동일한 페이지 정렬·병합 결과를 행 순서로 재사용한다.
+            for entry in ordered_reference_entries(documents or [], citations or []):
+                excerpt = normalize_excerpt(entry["excerpt"], excerpt_chars)
+                if not excerpt:
+                    continue
+                rows.append((excerpt, entry["page"]))
+                if len(rows) >= max(1, max_rows):
+                    break
+        else:
+            seen: set[str] = set()
+            for doc in documents or []:
+                sid = doc_stable_id(doc)
+                if sid in seen:
+                    continue
+                seen.add(sid)
+                excerpt = normalize_excerpt(_doc_text(doc), excerpt_chars)
+                if not excerpt:
+                    continue
                 page = _coerce_page(get_doc_metadata(doc).get("page")) or 1
-            rows.append((excerpt, page))
-            if len(rows) >= max(1, max_rows):
-                break
+                rows.append((excerpt, page))
+                if len(rows) >= max(1, max_rows):
+                    break
 
         _REFERENCE_ROWS_CACHE[cache_key] = rows
         if len(_REFERENCE_ROWS_CACHE) > _MAX_REF_ROWS_CACHE_SIZE:
