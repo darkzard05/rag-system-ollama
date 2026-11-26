@@ -75,6 +75,8 @@ class ReferencePlan:
 
 _ACTIVE_PLANS: dict[tuple[str, str], ReferencePlan] = {}
 _PREWARM_FUTURES: dict[str, Future[list[dict[str, Any]]]] = {}
+#: prewarm 제출 시점의 문서 해시. 완료 콜백이 새 문서의 해시를 읽지 않도록 보관.
+_PREWARM_FILE_HASH: dict[str, str | None] = {}
 _registry_lock = threading.Lock()
 
 #: done 콜백 중복 등록 방지 (호출자는 ``_registry_lock`` 보유).
@@ -239,7 +241,9 @@ def _evict_if_needed_locked() -> None:
     while len(_ACTIVE_PLANS) > _MAX_ACTIVE_PLANS:
         _ACTIVE_PLANS.pop(next(iter(_ACTIVE_PLANS)))
     while len(_PREWARM_FUTURES) > _MAX_PREWARM_FUTURES:
-        _PREWARM_FUTURES.pop(next(iter(_PREWARM_FUTURES)))
+        evicted_signature = next(iter(_PREWARM_FUTURES))
+        del _PREWARM_FUTURES[evicted_signature]
+        _PREWARM_FILE_HASH.pop(evicted_signature, None)
 
 
 def note_stream_references(
@@ -295,6 +299,9 @@ def note_stream_references(
             logger.warning("[PREFETCH] prewarm 제출 실패: %s", exc)
             return plan
         _PREWARM_FUTURES[plan.docs_signature] = future
+        _PREWARM_FILE_HASH[plan.docs_signature] = SessionManager.get(
+            "file_hash", None, sid
+        )
         _evict_if_needed_locked()
     return plan
 
@@ -305,11 +312,12 @@ def _drop_prewarm_future_locked(
     """레지스트리에서 prewarm future 제거 (호출자는 ``_registry_lock`` 보유)."""
     if _PREWARM_FUTURES.get(docs_signature) is fut:
         _PREWARM_FUTURES.pop(docs_signature, None)
+        _PREWARM_FILE_HASH.pop(docs_signature, None)
     _PREWARM_CALLBACK_ATTACHED.discard(docs_signature)
 
 
 def _make_prewarm_done_callback(
-    sid: str, docs_signature: str
+    sid: str, docs_signature: str, file_hash: str | None = None
 ) -> Callable[[Future[list[dict[str, Any]]]], None]:
     """prewarm 완료 시 ``SessionManager.pdf_annotations`` 를 채운다.
 
@@ -343,16 +351,26 @@ def _make_prewarm_done_callback(
         with _registry_lock:
             _drop_prewarm_future_locked(fut, docs_signature)
         try:
-            file_hash = SessionManager.get("file_hash", None, sid)
+            # 제출 시점의 해시를 사용한다. 완료 시점의 세션 해시는 그 사이
+            # 새 문서가 업로드됐을 수 있어 이전 좌표를 잘못 스탬프한다.
+            resolved_hash = file_hash
+            if resolved_hash is None:
+                resolved_hash = SessionManager.get("file_hash", None, sid)
+            had_annotations = bool(
+                (SessionManager.get("pdf_annotations", None, sid) or {}).get(
+                    "annotations"
+                )
+            )
             SessionManager.set(
                 "pdf_annotations",
-                {"file_hash": file_hash, "annotations": annotations},
+                {"file_hash": resolved_hash, "annotations": annotations},
                 sid,
             )
+            is_list = isinstance(annotations, list)
             if (
-                isinstance(annotations, list)
-                and annotations
+                is_list
                 and not SessionManager.get("is_generating_answer", False, sid)
+                and (had_annotations or bool(annotations))
             ):
                 try:
                     current_page = max(
@@ -362,7 +380,10 @@ def _make_prewarm_done_callback(
                     current_page = 1
                 from ui.components.viewer import _page_scoped_annotations
 
-                if _page_scoped_annotations(annotations, current_page):
+                if _page_scoped_annotations(annotations, current_page) or (
+                    had_annotations and not annotations
+                ):
+                    # 빈 결과도 이전 페이지 하이라이트를 지우므로 갱신이 필요하다.
                     from common.async_worker import request_session_rerun
 
                     request_session_rerun(sid)
@@ -416,7 +437,11 @@ def adopt_prewarmed_annotations(
             if docs_signature not in _PREWARM_CALLBACK_ATTACHED:
                 _PREWARM_CALLBACK_ATTACHED.add(docs_signature)
                 future.add_done_callback(
-                    _make_prewarm_done_callback(sid, docs_signature)
+                    _make_prewarm_done_callback(
+                        sid,
+                        docs_signature,
+                        _PREWARM_FILE_HASH.get(docs_signature),
+                    )
                 )
         logger.info(
             "[PERF] join-block msg_id=%s took %.3fs prewarmed=pending",
