@@ -135,3 +135,47 @@ def test_async_prewarm_callback_triggers_rerun_when_matching():
     with patch("common.async_worker.request_session_rerun") as mock_request_rerun:
         callback_gen(future_gen)
         mock_request_rerun.assert_not_called()
+
+
+def test_prewarm_callback_stamps_hash_captured_at_submit_time():
+    """새 문서 업로드 후 늦게 끝난 콜백이 이전 문서 좌표를 새 해시로 붙이지 않는다."""
+    sid = SessionManager.get_session_id()
+    SessionManager.set("file_hash", "hash-new", session_id=sid)
+    SessionManager.set("is_generating_answer", False, session_id=sid)
+
+    future = MagicMock()
+    future.result.return_value = [
+        {"page": 1, "x": 5, "y": 5, "width": 10, "height": 10}
+    ]
+    callback = _make_prewarm_done_callback(sid, "sig_captured_hash", "hash-old")
+    callback(future)
+
+    stored = SessionManager.get("pdf_annotations", None, sid)
+    assert stored["file_hash"] == "hash-old"
+
+
+def test_empty_prewarm_result_clears_stale_highlights():
+    """빈 주석 결과도 화면을 갱신해 이전 턴 하이라이트를 지워야 한다."""
+    sid = SessionManager.get_session_id()
+    SessionManager.set("file_hash", "hash-old", session_id=sid)
+    SessionManager.set("current_page", 2, session_id=sid)
+    SessionManager.set("is_generating_answer", False, session_id=sid)
+    SessionManager.set(
+        "pdf_annotations",
+        {
+            "file_hash": "hash-old",
+            "annotations": [{"page": 2, "x": 5, "y": 5, "width": 10, "height": 10}],
+        },
+        session_id=sid,
+    )
+
+    future = MagicMock()
+    future.result.return_value = []
+    callback = _make_prewarm_done_callback(sid, "sig_empty_result", "hash-old")
+
+    with patch("common.async_worker.request_session_rerun") as mock_request_rerun:
+        callback(future)
+        mock_request_rerun.assert_called_once_with(sid)
+
+    stored = SessionManager.get("pdf_annotations", None, sid)
+    assert stored["annotations"] == []
