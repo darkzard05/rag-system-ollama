@@ -49,6 +49,7 @@ released, so the UI layer never participates in the locked critical section.
 
 from __future__ import annotations
 
+import contextlib
 import copy
 import logging
 import os
@@ -999,6 +1000,18 @@ class SessionManager:
         for k in heavy_keys:
             if k in state:
                 state[k] = None
+
+        # SSoT를 해체하기 전에 UI 미러도 정리한다. tombstone은 state와 함께
+        # 사라지므로, 미러를 남기면 재생성된 세션이 get()의 UI 폴백에서 이전
+        # 세션의 대화·문서 값을 다시 읽어 되살린다.
+        delete_fn = getattr(cls._ui_sync, "delete", None) if cls._ui_sync else None
+        if callable(delete_fn):
+            mirrored_keys = set(state) | set(state.get("_deleted_keys", ()))
+            for k in mirrored_keys:
+                if k.startswith("_"):
+                    continue
+                with contextlib.suppress(Exception):
+                    delete_fn(k)
 
         del cls._fallback_sessions[session_id]
 
