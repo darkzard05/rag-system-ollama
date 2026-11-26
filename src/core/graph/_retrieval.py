@@ -203,6 +203,9 @@ async def preprocess(
         # reset_or_add 리듀서에 0을 내려보내 이전 턴의 검증 재생성 예산을
         # 리셋한다. 생략하면 체크포인트의 1이 남아 다음 턴 자가 교정이 멈춘다.
         "regeneration_count": 0,
+        # 리듀서가 없는 채널이므로 키를 생략하면 이전 턴의 실패 사유가
+        # 체크포인트에 남아 다음 질문의 generate 프롬프트에 주입된다.
+        "verification_issues": None,
         # Tier1 P0-1: 이전 턴 출력 채널 잔재 제거. 캐시 히트·단축 라우팅 경로에서
         # generate가 실행되지 않으면 구 response/thought/context가 그대로 남아
         # 새 답변에 이전 턴 인용 컨텍스트가 혼입된다. 선언된 채널만 리셋한다.
