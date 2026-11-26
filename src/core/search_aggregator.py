@@ -260,8 +260,17 @@ class SearchResultAggregator:
                 results, key=lambda x: getattr(x, "score", 0.0), reverse=True
             )
 
-            for rank_idx, r in enumerate(sorted_res):
+            seen_doc_ids: set[str] = set()
+            rank_idx = 0
+            for r in sorted_res:
+                # One retriever contributes at most one rank per document.
+                # Duplicate stable ids (repeated headers/footers on different
+                # pages) otherwise score twice and outrank distinct content.
+                if r.doc_id in seen_doc_ids:
+                    continue
+                seen_doc_ids.add(r.doc_id)
                 score_delta = weight / (kf + float(rank_idx + 1))
+                rank_idx += 1
                 existing = doc_map.get(r.doc_id)
                 if existing:
                     if node_id not in existing.source_nodes:
