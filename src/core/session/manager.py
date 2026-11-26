@@ -21,7 +21,8 @@ two locks with a strict ownership split:
   `_acquire_lock` and stored in `_session_locks`). EVERY read-modify-write on a
   session's state takes this per-session lock for the ENTIRE operation:
   `set`, `get` (when `create=True`, and the non-creating read path),
-  `add_message`, `add_status_log`, `reset_conversation`, `delete`, and the
+  `add_message`, `add_status_log`, `reset_conversation`, `delete`,
+  `delete_session`, and the
   dirty-key snapshot in
   `sync_to_streamlit`. The per-session lock is always acquired BEFORE
   `_map_lock` (via `_get_state`), so the lock ordering is consistent and
@@ -1038,7 +1039,9 @@ class SessionManager:
         물리적 파일 삭제는 _map_lock 밖에서 수행하여, Windows 파일 락
         백오프(sleep) 동안 전역 세션 접근이 블로킹되지 않도록 합니다.
         """
-        with cls._map_lock:
+        # 세션별 락을 먼저 잡아 진행 중인 기록이 상태 해체와 경합하지 않게 한다.
+        # 락 순서는 항상 세션별 락 -> _map_lock 이다 (모듈 독스트링 계약).
+        with cls._acquire_lock(session_id), cls._map_lock:
             if session_id not in cls._fallback_sessions:
                 return False
             state = cls._fallback_sessions[session_id]

@@ -5,6 +5,8 @@ delete_session 락 범위 검증 (문제 2D).
 전역 세션 접근이 블로킹되지 않습니다.
 """
 
+import threading
+
 from core.session import SessionManager
 
 
@@ -33,3 +35,48 @@ def test_file_removal_happens_outside_map_lock(monkeypatch):
 def test_delete_nonexistent_session_returns_false():
     SessionManager.reset()
     assert SessionManager.delete_session("ghost_session_zzz") is False
+
+
+def test_delete_session_waits_for_inflight_writer(monkeypatch):
+    """delete_session must take the per-session lock before tearing state down."""
+    SessionManager.reset()
+    sid = "delete_lock_contract"
+    SessionManager.init_session(sid)
+
+    original_get_state = SessionManager._get_state
+    writer_in_lock = threading.Event()
+    allow_writer = threading.Event()
+
+    def gated_get_state(session_id):
+        state = original_get_state(session_id)
+        if session_id == sid and not writer_in_lock.is_set():
+            writer_in_lock.set()
+            assert allow_writer.wait(5)
+        return state
+
+    monkeypatch.setattr(SessionManager, "_get_state", gated_get_state)
+
+    deleted = threading.Event()
+    result: dict[str, bool] = {}
+
+    def writer() -> None:
+        SessionManager.set("msg", "written", session_id=sid)
+
+    def deleter() -> None:
+        result["deleted"] = SessionManager.delete_session(sid)
+        deleted.set()
+
+    w = threading.Thread(target=writer)
+    w.start()
+    assert writer_in_lock.wait(5)
+
+    d = threading.Thread(target=deleter)
+    d.start()
+    blocked = not deleted.wait(0.2)
+    allow_writer.set()
+
+    assert w.join(5) is None
+    assert d.join(5) is None
+    assert blocked
+    assert result["deleted"] is True
+    assert SessionManager.get("msg", session_id=sid) is None
