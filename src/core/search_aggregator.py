@@ -140,7 +140,7 @@ class SearchResultAggregator:
         self, result: Any, score: float | None = None
     ) -> AggregatedResult:
         """AggregatedResult 객체 생성 팩토리"""
-        return AggregatedResult(
+        aggregated = AggregatedResult(
             doc_id=result.doc_id,
             content=result.content,
             aggregated_score=score if score is not None else result.score,
@@ -148,6 +148,10 @@ class SearchResultAggregator:
             original_scores=[result.score],
             metadata=result.metadata or {},
         )
+        if self.dedup_strategy == DuplicateStrategy.KEEP_LATEST:
+            # 비교 기준은 생성 시각이 아니라 첫 결과의 타임스탬프여야 한다.
+            aggregated.aggregation_timestamp = getattr(result, "timestamp", 0.0)
+        return aggregated
 
     def _merge_all(
         self, search_results: dict[str, list[Any]], metrics: AggregationMetrics
