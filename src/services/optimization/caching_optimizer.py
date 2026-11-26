@@ -3,8 +3,8 @@
 응답 캐싱, 세맨틱 캐싱, TTL 관리, 캐시 일관성
 """
 
+import asyncio
 import logging
-from threading import RLock
 from typing import Any
 
 from services.monitoring.performance_monitor import (
@@ -83,7 +83,10 @@ class CacheManager:
         if enable_disk_cache:
             self.disk_cache = DiskCache(cache_dir=disk_cache_dir)
 
-        self.lock = RLock()
+        # 비동기 메서드 전체를 감싸므로 코루틴 단위로 상호배제하는 asyncio.Lock이
+        # 필요하다. threading.RLock은 OS 스레드 단위여서 await 지점에서 다른
+        # 코루틴이 같은 임계구역에 들어온다.
+        self.lock = asyncio.Lock()
 
     async def get(
         self,
@@ -152,7 +155,7 @@ class CacheManager:
         생략한다. 조회 경로가 같은 벡터를 주입하므로 저장·조회 임베딩 텍스트가
         일치해 세맨틱 히트 일관성이 유지된다.
         """
-        with self.lock:
+        async with self.lock:
             # L1에 저장
             if self.memory_cache:
                 await self.memory_cache.set(key, value, ttl_seconds)
@@ -171,7 +174,7 @@ class CacheManager:
 
     async def delete(self, key: str) -> None:
         """전체 레이어에서 삭제"""
-        with self.lock:
+        async with self.lock:
             if self.memory_cache:
                 await self.memory_cache.delete(key)
             if self.semantic_cache:
@@ -181,7 +184,7 @@ class CacheManager:
 
     async def clear(self) -> None:
         """모든 캐시 비우기"""
-        with self.lock:
+        async with self.lock:
             if self.memory_cache:
                 await self.memory_cache.clear()
             if self.semantic_cache:
