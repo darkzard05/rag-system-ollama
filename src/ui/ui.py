@@ -117,12 +117,16 @@ def inject_custom_css() -> None:
     # 헤더 높이 감지 스크립트 - 매 렌더 동일 슬롯 점유(결정론적 최상위 구조).
     inject_header_height_script()
 
+    from core.session import SessionManager
     from ui.components.autoscroll_stick import BOTTOM_STICK_PX
-    from ui.strings import t
+    from ui.strings import set_lang, t
 
     css_json = json.dumps(css_content)
     # [A11Y-FOCUS-ORDER] localized order notice for the textarea aria-label
     # suffix (WCAG 2.4.3 mitigation). ensure_ascii keeps the JS string safe.
+    # main() calls this before the sidebar applies the session language, so
+    # read the store directly instead of trusting the module-level LANG.
+    set_lang(str(SessionManager.get("ui_lang", "en") or "en"))
     notice_json = json.dumps(t("focus_order_notice"))
     js = f"""
         <script>

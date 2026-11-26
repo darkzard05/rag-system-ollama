@@ -14,11 +14,14 @@ visual space:
 from __future__ import annotations
 
 import inspect
+import json
+from unittest.mock import patch
 
 import ui.components.chat as chat_module
 import ui.components.chat_build as chat_build_module
 import ui.ui as ui_module
-from ui.strings import UI_STRINGS
+from core.session import SessionManager
+from ui.strings import UI_STRINGS, set_lang
 
 
 def test_focus_order_has_zero_space_mitigation() -> None:
@@ -54,3 +57,25 @@ def test_focus_order_has_zero_space_mitigation() -> None:
     assert "focus_order_notice" in UI_STRINGS["ko"], "ko table needs the key"
     assert UI_STRINGS["en"]["focus_order_notice"].strip()
     assert UI_STRINGS["ko"]["focus_order_notice"].strip()
+
+
+def test_injected_notice_follows_session_language() -> None:
+    """CSS injection runs before the sidebar sets LANG, so it must read the store."""
+    sid = "focus_notice_lang"
+    SessionManager.reset_all_state(sid)
+    SessionManager.set_session_id(sid)
+    SessionManager.set("ui_lang", "ko", sid)
+    set_lang("en")  # stale global at inject time, exactly as in main()
+    try:
+        with (
+            patch("ui.ui.st") as mock_st,
+            patch("ui.ui.inject_header_height_script"),
+        ):
+            ui_module.inject_custom_css()
+        payload = str(mock_st.iframe.call_args.args[0])
+        ko = json.dumps(UI_STRINGS["ko"]["focus_order_notice"])
+        en = json.dumps(UI_STRINGS["en"]["focus_order_notice"])
+        assert ko in payload, "injected notice stayed in the previous language"
+        assert en not in payload
+    finally:
+        set_lang("en")
