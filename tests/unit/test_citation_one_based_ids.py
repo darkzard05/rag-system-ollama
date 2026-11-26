@@ -30,3 +30,15 @@ def test_zero_based_integer_ids_keep_existing_mapping() -> None:
         [{"doc_id": 0, "anchor": "kw"}, {"doc_id": 2, "anchor": "kw"}], _DOCS
     )
     assert [c["doc_id"] for c in out] == ["aaa111", "ccc333"]
+
+
+def test_partial_one_based_ids_map_to_matching_documents() -> None:
+    """A model citing only the first two of five docs still uses 1..N indexing."""
+    docs = [
+        Document(page_content=f"body {i}", metadata={"doc_id": f"doc{i}"})
+        for i in range(5)
+    ]
+    out = _normalize_citations(
+        [{"doc_id": 1, "anchor": "a"}, {"doc_id": 2, "anchor": "b"}], docs
+    )
+    assert [c["doc_id"] for c in out] == ["doc0", "doc1"]
