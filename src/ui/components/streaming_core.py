@@ -892,16 +892,18 @@ def _content_generator(
                 logger.info("[PREWARM] submit reason=final msg_id=%s", msg_id)
                 _note_reference_prewarm(sid, msg_id, documents, citations)
             if on_aux is not None:
-                # [최적화] 스냅샷을 길이/버킷 비교로 저렴하게 구성하고, thought
-                # 갱신 버킷을 50자로 완화하여 고속 스트리밍 중 세션 락 획득 및
-                # dict/tuple 할당을 줄인다. _aux_state는 실제 갱신이 있을 때만
-                # 늦게 생성(Lazy)한다.
-                thought_bucket = len(thought) // 50 if thought else 0
+                # [최적화] 스냅샷을 길이 비교로 저렴하게 구성하고, _aux_state는
+                # 실제 갱신이 있을 때만 늦게 생성(Lazy)한다. thought는 50자
+                # 버킷 대신 정확한 길이로 비교한다. 버킷은 늦게 도착한 짧은
+                # thought를 이전 스냅샷과 같다고 걸러 화면에 한 번도 보여주지
+                # 않았다. content 토큰은 thought 길이를 바꾸지 않으므로
+                # 호출 횟수는 그대로다.
+                thought_len = len(thought) if thought else 0
                 snapshot = (
                     len(process_steps),
                     len(documents),
                     len(citations),
-                    thought_bucket,
+                    thought_len,
                 )
                 if snapshot != _last_on_aux_snapshot:
                     _last_on_aux_snapshot = snapshot

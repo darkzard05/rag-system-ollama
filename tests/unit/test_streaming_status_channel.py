@@ -314,6 +314,28 @@ def test_content_generator_calls_on_aux_only_on_changes() -> None:
     assert called[2]["complete"] is False
 
 
+def test_short_thought_arriving_after_status_reaches_on_aux() -> None:
+    """A sub-50-character thought still reaches the live panel when it arrives late."""
+    _FakeSessionManager.reset()
+    called: list[dict[str, Any]] = []
+    chunks = [
+        StreamChunk(content="", status="관련 지식 검색 중..."),
+        StreamChunk(content="", thought="짧은 생각"),
+        StreamChunk(content="본문"),
+    ]
+    with (
+        patch.object(streaming_core_mod, "stream_chunks", return_value=iter(chunks)),
+        patch.object(streaming_core_mod, "SessionManager", _FakeSessionManager),
+    ):
+        list(
+            streaming_mod._content_generator("q", "m", "s", "mid", on_aux=called.append)
+        )
+
+    assert any(item.get("thought") == "짧은 생각" for item in called), (
+        "late short thought never reached the live thinking panel"
+    )
+
+
 def test_stop_exception_persists_partial_answer() -> None:
     """■ 중지(StopException) 시 부분 응답이 cancelled=True로 영속되고 rerun된다.
 
