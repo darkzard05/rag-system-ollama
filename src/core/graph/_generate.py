@@ -1436,12 +1436,11 @@ async def generate(
         state_docs = docs
 
     # 컨텍스트와 질문을 템플릿에 주입
-    # JSON 스키마의 중호({})가 format() 플레이스홀더로 해석되지 않게 보호
-    # {context}와 {query}만 남기고 나머지는 이스케이프
-    safe_prompt = structured_prompt.replace("{context}", "{{context}}").replace(
-        "{query}", "{{query}}"
-    )
-    safe_prompt = safe_prompt.replace("{", "{{").replace("}", "}}")
+    # JSON 스키마의 중호({})가 format() 플레이스홀더로 해석되지 않게 보호한다.
+    # 모든 중괄호를 먼저 이스케이프한 뒤 두 플레이스홀더만 되돌려야 한다.
+    # 플레이스홀더를 미리 한 번 더 이스케이프하면 {context}/{query}가
+    # 세 겹으로 남아 주입된 값이 리터럴 중괄호로 감싸진다.
+    safe_prompt = structured_prompt.replace("{", "{{").replace("}", "}}")
     safe_prompt = safe_prompt.replace("{{context}}", "{context}").replace(
         "{{query}}", "{query}"
     )
