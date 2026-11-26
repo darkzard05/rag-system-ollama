@@ -209,7 +209,13 @@ class SimpleJWT:
             secret = secrets.token_urlsafe(32)
             _secure_atomic_write_text(path, secret)
             return secret
-        except OSError:
+        except OSError as e:
+            logger.error(
+                "JWT 시크릿 파일을 읽거나 쓸 수 없어 임시 키를 사용합니다 (%s): %s. "
+                "재시작 시 기존 토큰이 무효화되므로 JWT_SECRET_KEY 환경 변수를 설정하세요.",
+                path,
+                e,
+            )
             return secrets.token_urlsafe(32)
 
     def create_token(self, user_id: str, expires_in: int = 3600) -> str:
