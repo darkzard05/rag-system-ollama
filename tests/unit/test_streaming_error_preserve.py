@@ -6,6 +6,7 @@ import pytest
 
 from core.session import SessionManager
 from ui.components import streaming_core as sc
+from ui.components.streaming import _GENERIC_STREAMING_MSG, friendly_error_message
 
 
 def test_content_generator_error_not_overwritten_by_finally():
@@ -27,3 +28,23 @@ def test_content_generator_error_not_overwritten_by_finally():
         f"Error was swallowed: {aux.get('error')}"
     )
     assert aux.get("complete") is False, "Failure state was marked as complete: True"
+
+
+@pytest.mark.parametrize(
+    ("message", "expected"),
+    [
+        (
+            "스트리밍 응답을 기다리는 동안 시간이 초과되었습니다.",
+            "timed out",
+        ),
+        (
+            "동시 스트림 실행 한도를 초과했습니다. 잠시 후 다시 시도해 주세요.",
+            "try again",
+        ),
+    ],
+)
+def test_korean_stream_errors_keep_specific_cause(message: str, expected: str) -> None:
+    """Korean timeout/limit errors must not collapse to the generic fallback."""
+    result = friendly_error_message(RuntimeError(message))
+    assert result != _GENERIC_STREAMING_MSG
+    assert expected in str(result).lower()

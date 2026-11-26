@@ -91,6 +91,16 @@ _ERROR_SIGNATURES: tuple[tuple[str, str, bool], ...] = (
         "Request timed out. The model may be overloaded — please try again.",
         True,
     ),
+    (
+        "시간이 초과",
+        "Request timed out. The model may be overloaded — please try again.",
+        True,
+    ),
+    (
+        "동시 스트림 실행 한도",
+        "Too many answers are being generated. Please try again in a moment.",
+        True,
+    ),
     ("cancelled", "Generation was stopped by the user.", False),
     (
         "invalid pdf",
