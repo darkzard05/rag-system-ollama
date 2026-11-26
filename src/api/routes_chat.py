@@ -40,6 +40,7 @@ from api.stream_pipeline import (
     get_adaptive_controller,
     get_streaming_handler,
 )
+from common.exceptions import PDFProcessingError
 
 logger = logging.getLogger(__name__)
 
@@ -126,7 +127,7 @@ async def query_rag(
             answer=result["response"], sources=sources, execution_time_ms=execution_time
         )
 
-    except (RuntimeError, ValueError, KeyError) as e:
+    except (RuntimeError, ValueError, KeyError, PDFProcessingError) as e:
         logger.error(f"질의 오류 (Session: {sid}): {e}", exc_info=True)
         raise HTTPException(
             status_code=500, detail="질의 처리 중 오류가 발생했습니다."
