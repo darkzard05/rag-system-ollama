@@ -251,21 +251,10 @@ async def _enforce_embedding_token_limit(
     """
     started_at = time.perf_counter()
     limit = _embedding_token_limit()
-    rough_counts = [count_tokens_rough(d.page_content) for d in docs]
-    # rough가 최악 관측 배수(1.6)를 곱해도 상한 이하이면 HF 토크나이저를
-    # 로드하지 않고 즉시 반환한다 (소형 청크/테스트 경로의 지연 방지).
-    if not rough_counts or max(rough_counts) * 1.6 <= limit:
-        logger.info(
-            "[RAG] [CHUNKING] 토큰 통계 | chunks=%d | p50=%d | p95=%d | max=%d | limit=%d | total_ms=%.1f",
-            len(docs),
-            _token_percentile(rough_counts, 0.5),
-            _token_percentile(rough_counts, 0.95),
-            max(rough_counts) if rough_counts else 0,
-            limit,
-            (time.perf_counter() - started_at) * 1000,
-        )
-        return docs, vectors
-
+    # count_tokens_rough는 구두점 밀집 텍스트를 과소추정한다(ASCII 3자당
+    # 1토큰 가정). rough*1.6 조기 반환은 실제 상한 초과 청크를 통과시키므로
+    # 항상 임베딩 토크나이저로 판정한다. 토크나이저가 없으면 _embedding_token_counts
+    # 가 보수적 rough*1.6 폴백을 사용한다.
     count_started = time.perf_counter()
     token_counts = await asyncio.to_thread(
         _embedding_token_counts, [d.page_content for d in docs]
