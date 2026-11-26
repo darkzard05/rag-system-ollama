@@ -227,11 +227,14 @@ class MemoryCache(CacheBackend[T]):
         with self.lock:
             ttl = ttl_seconds if ttl_seconds > 0 else self.default_ttl
 
-            # [최적화] 기존 항목이 있으면 사이즈 차감
+            # [최적화] 기존 항목이 있으면 사이즈 차감 후 제거한다. 항목을 남겨두면
+            # _cleanup_if_needed 의 LRU 제거가 같은 항목을 다시 차감해
+            # total_memory_bytes 가 실제 점유량보다 작아지고 메모리 상한이 무력화된다.
             if key in self.cache:
                 self.stats.total_memory_bytes -= self.cache[key].metadata.get(
                     "size_bytes", 0
                 )
+                del self.cache[key]
 
             # 메모리 확인 및 정리
             self._cleanup_if_needed(value)
