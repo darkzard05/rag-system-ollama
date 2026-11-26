@@ -134,6 +134,36 @@ async def test_generate_pass_filters_stream_and_final_with_docs() -> None:
 
 
 @pytest.mark.asyncio
+async def test_stream_citation_indices_survive_filtering() -> None:
+    docs = [_doc("d1"), _doc("d2")]
+    payload = (
+        '{"final_answer":"ok",'
+        '"citations":['
+        '{"doc_id":"d1","text_span":"s","section":"s","page":1,"score":0.9},'
+        '{"doc_id":999,"text_span":"x","section":"s","page":1,"score":0.9},'
+        '{"doc_id":"d2","text_span":"y","section":"s","page":2,"score":0.8}'
+        "]}"
+    )
+    llm = _make_llm([payload])
+    _, events = await _patched_pass(
+        llm=llm,
+        sys_msg=MagicMock(),
+        human_msg=MagicMock(),
+        prompt_version="v1",
+        config={},
+        writer=object(),
+        attempt=1,
+        docs=docs,
+    )
+    placements = []
+    for name, data in events:
+        if name == "citations_add":
+            for offset, item in enumerate(data["items"]):
+                placements.append((data["base_index"] + offset, item["doc_id"]))
+    assert placements == [(0, "d1"), (2, "d2")]
+
+
+@pytest.mark.asyncio
 async def test_generate_pass_passthrough_without_docs_pins_legacy() -> None:
     payload = (
         '{"final_answer":"ok",'
