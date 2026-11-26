@@ -316,9 +316,13 @@ class CoordCacheManager:
                 self._conn_healthy = False
                 return await self._connect()
 
-            # 3. 수명 내이지만 헬스체크 주기 도래 → 지연 검증 (SELECT 1)
+            # 3. 수명 내이지만 health 플래그가 False이거나 헬스체크 주기 도래 →
+            #    지연 검증 (SELECT 1). 플래그가 False인데 4번으로 흐르면 쓰기
+            #    실패 이후 깨진 연결을 주기 동안 그대로 반환하게 된다.
             if self._conn is not None:
-                if (now - self._last_health_check) >= _CONNECTION_HEALTH_CHECK_INTERVAL:
+                if (not self._conn_healthy) or (
+                    (now - self._last_health_check) >= _CONNECTION_HEALTH_CHECK_INTERVAL
+                ):
                     try:
                         await self._conn.execute("SELECT 1")
                         self._conn_healthy = True
