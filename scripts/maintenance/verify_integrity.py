@@ -234,7 +234,9 @@ def main():
         print(
             f"{Colors.WARNING}[SKIPPED]{Colors.ENDC} Full pipeline E2E skipped due to Ollama status"
         )
-        results["E2E: Full Pipeline"] = False
+        # SKIP은 실패가 아니다. False로 저장하면 실행 가능한 검사가 모두 통과해도
+        # 요약이 FAIL로 바뀌고 존재하지 않는 회귀를 추적하게 된다.
+        results["E2E: Full Pipeline"] = None
 
     # 3b. 쿼리 레이턴시 회귀 가드 (선택적 / 비치명적)
     print_header("Step 3b: Query Latency Regression Guard (optional)")
@@ -250,14 +252,14 @@ def main():
     print_header("Verification Summary")
     all_passed = True
     for task, passed in results.items():
-        status = (
-            f"{Colors.GREEN}PASS{Colors.ENDC}"
-            if passed
-            else f"{Colors.FAIL}FAIL{Colors.ENDC}"
-        )
-        print(f"{task.ljust(30)}: {status}")
-        if not passed:
+        if passed is None:
+            status = f"{Colors.WARNING}SKIP{Colors.ENDC}"
+        elif passed:
+            status = f"{Colors.GREEN}PASS{Colors.ENDC}"
+        else:
+            status = f"{Colors.FAIL}FAIL{Colors.ENDC}"
             all_passed = False
+        print(f"{task.ljust(30)}: {status}")
 
     total_elapsed = time.time() - start_all
     print("-" * 50)
