@@ -205,6 +205,9 @@ def inject_custom_css() -> None:
                         }}
                         scrollState.yankTarget = container.scrollHeight;
                         container.scrollTop = scrollState.yankTarget;
+                        // Sync the dedupe baseline to the post-yank position,
+                        // or a user drag back to top is dropped as a no-op.
+                        container.__lastScrollTop = container.scrollTop;
                         scrollState.isTicking = false;
                     }});
                 }}

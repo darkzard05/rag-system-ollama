@@ -76,6 +76,7 @@ class Faults:
 
     no_raf_recheck: bool = False
     no_own_yank_guard: bool = False
+    no_yank_scroll_sync: bool = False
     force_on_every_rerun: bool = False
 
 
@@ -100,8 +101,9 @@ class State:
 # State right after the first setupChatObserver() run at page load:
 # initialYanked was false, so the code set it and called scrollToBottom(true).
 # scrollTop = scrollHeight is clamped to h - clientHeight, the browser queues
-# one scroll event for that write, and __lastScrollTop still holds the value
-# captured before the yank (normally 0 on a fresh load).
+# one scroll event for that write, and the rAF callback syncs __lastScrollTop
+# to the post-yank position so the delayed event dedupes while a later user
+# drag back to the top does not.
 INITIAL = State(
     up=False,
     h=START_H,
@@ -116,7 +118,7 @@ INITIAL = State(
     pending_scrolls=1,
     pending_observer=0,
     pending_forces=0,
-    last_scroll_top=0,
+    last_scroll_top=START_H - CLIENT_H,
 )
 
 Event = tuple[str, ...]
@@ -174,6 +176,12 @@ def source_tether() -> list[str]:
         "yank_pair",
         r"scrollState\.yankTarget = container\.scrollHeight;\s*"
         r"container\.scrollTop = scrollState\.yankTarget;",
+        js,
+    )
+    require(
+        "yank_syncs_last_scroll_top",
+        r"container\.scrollTop = scrollState\.yankTarget;[\s\S]{0,400}?"
+        r"container\.__lastScrollTop = container\.scrollTop;",
         js,
     )
     require(
@@ -311,6 +319,9 @@ def apply_event(state: State, event: Event, faults: Faults) -> tuple[State, list
                 ticking=False,
                 forced_yanks=min(MAX_COUNT, state.forced_yanks + int(state.raf_force)),
                 pending_scrolls=min(MAX_QUEUED, state.pending_scrolls + 1),
+                last_scroll_top=state.last_scroll_top
+                if faults.no_yank_scroll_sync
+                else next_t,
             ),
             violations,
         )
@@ -461,8 +472,11 @@ def trace(
 def check(
     depth: int, faults: Faults, max_states: int = 200_000
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
-    parents: dict[State, tuple[State | None, Event | None]] = {INITIAL: (None, None)}
-    frontier: dict[State, int] = {INITIAL: 0}
+    initial = (
+        replace(INITIAL, last_scroll_top=0) if faults.no_yank_scroll_sync else INITIAL
+    )
+    parents: dict[State, tuple[State | None, Event | None]] = {initial: (None, None)}
+    frontier: dict[State, int] = {initial: 0}
     findings: list[dict[str, Any]] = []
     seen_kinds: set[str] = set()
     truncated = False
@@ -480,8 +494,8 @@ def check(
             }
         )
 
-    for violation in state_violations(INITIAL):
-        record(violation, INITIAL)
+    for violation in state_violations(initial):
+        record(violation, initial)
 
     while frontier:
         if len(parents) >= max_states:
@@ -512,6 +526,7 @@ def check(
         "faults": {
             "no_raf_recheck": faults.no_raf_recheck,
             "no_own_yank_guard": faults.no_own_yank_guard,
+            "no_yank_scroll_sync": faults.no_yank_scroll_sync,
             "force_on_every_rerun": faults.force_on_every_rerun,
         },
     }
@@ -525,6 +540,11 @@ def self_test(depth: int, max_states: int) -> int:
             "no_own_yank_guard",
             Faults(no_own_yank_guard=True),
             "OWN_YANK_DOES_NOT_LATCH",
+        ),
+        (
+            "no_yank_scroll_sync",
+            Faults(no_yank_scroll_sync=True),
+            "BOTTOM_STICK",
         ),
         ("force_on_every_rerun", Faults(force_on_every_rerun=True), "FORCE_BUDGET"),
     )
