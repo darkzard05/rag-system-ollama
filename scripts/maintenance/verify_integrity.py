@@ -193,8 +193,9 @@ def main():
     print(f"Python: {sys.version.split()[0]}")
     print(f"Root: {ROOT_DIR}")
 
-    # 0. 환경 점검
-    results["Environment: Ollama"] = check_ollama()
+    # 0. 환경 점검. Ollama 미기동은 코드 결함이 아니라 선택적 E2E의 선제조건이다.
+    ollama_ready = check_ollama()
+    results["Environment: Ollama"] = True if ollama_ready else None
 
     # 1. 정적 분석 (Static Analysis)
     print_header("Step 1: Static Analysis")
@@ -224,7 +225,7 @@ def main():
 
     # 3. 실전 파이프라인 테스트 (E2E)
     print_header("Step 3: End-to-End Verification")
-    if results.get("Environment: Ollama"):
+    if ollama_ready:
         results["E2E: Full Pipeline"] = run_command(
             ["python", "scripts/verification/verify_full_pipeline.py"],
             "Full Pipeline E2E",
