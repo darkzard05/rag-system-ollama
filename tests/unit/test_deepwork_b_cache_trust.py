@@ -190,13 +190,19 @@ def test_b3_fresh_memo_still_served() -> None:
 
 
 def test_b2_version_constant_shared() -> None:
-    assert gen_module._QUERY_CACHE_VALUE_VERSION == "1.0"
+    assert (
+        gen_module._QUERY_CACHE_VALUE_VERSION
+        == graph_core_module._QUERY_CACHE_VALUE_VERSION
+    )
     assert retrieval_module._is_valid_query_cache_value is not None
-    assert graph_core_module._QUERY_CACHE_VALUE_VERSION == "1.0"
 
 
 def test_b2_hit_predicate() -> None:
-    good = {"response": "ans", "confidence": 0.9, "version": "1.0"}
+    good = {
+        "response": "ans",
+        "confidence": 0.9,
+        "version": graph_core_module._QUERY_CACHE_VALUE_VERSION,
+    }
     assert _is_valid_query_cache_value(good, 0.85) is True
     assert (
         _is_valid_query_cache_value({**good, "version": "0.9"}, 0.85) is False

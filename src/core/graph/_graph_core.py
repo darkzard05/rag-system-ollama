@@ -61,7 +61,7 @@ logger = logging.getLogger(__name__)
 
 # 쿼리 응답 캐시 저장값 버전. 읽기 경로(grade 전 preprocess)와 쓰기 경로가
 # 공유하는 유일 진원 — 버전 불일치 값은 미스로 처리한다.
-_QUERY_CACHE_VALUE_VERSION = "1.0"
+_QUERY_CACHE_VALUE_VERSION = "1.1"
 
 
 def _query_cache_key(file_hash: str | None, query: str, model: str | None) -> str:

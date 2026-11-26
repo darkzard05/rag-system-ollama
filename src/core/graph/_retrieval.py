@@ -140,6 +140,7 @@ async def preprocess(
     # 후보군으로 삼는다 — 문서 없는 세션의 캐시 히트는 부정확하므로 무시한다.
     is_cached = False
     cached_response: str | None = None
+    cached_citations: list[dict[str, Any]] | None = None
     # [최적화-04] 캐시 조회·retrieve가 공유할 선계산 쿼리 벡터. 쿼리 캐시
     # 활성화 여부와 무관하게 문서 기반 질의(intent != "general")라면 전처리
     # 단계에서 1회 선계산하여 후속 검색 노드가 재임베딩 없이 즉시 FAISS/BM25를
@@ -180,6 +181,9 @@ async def preprocess(
             response = cached["response"]
             is_cached = True
             cached_response = response
+            citations = cached.get("citations")
+            if isinstance(citations, list):
+                cached_citations = [c for c in citations if isinstance(c, dict)]
             intent = "general"  # 라우터가 generate로 단축 라우팅
             logger.info("[RAG] [PREPROCESS] 쿼리 캐시 히트 — generate 단축 경로")
 
@@ -187,6 +191,7 @@ async def preprocess(
         "intent": intent,
         "is_cached": is_cached,
         "cached_response": cached_response,
+        "cached_citations": cached_citations,
         "search_weights": weights,
         # [최적화-01] retrieve 노드가 재임베딩 없이 재사용할 선계산 쿼리 벡터.
         "query_embedding": query_embedding,

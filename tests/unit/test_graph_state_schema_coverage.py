@@ -183,6 +183,7 @@ def test_graph_state_declaration_captured():
         "query_embedding",
         "is_cached",
         "cached_response",
+        "cached_citations",
         "short_query",
         "retry_count",
         "verification_route",

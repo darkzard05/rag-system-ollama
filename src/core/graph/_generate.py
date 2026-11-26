@@ -141,6 +141,7 @@ def _schedule_query_cache_set(
     msg_id: str = "",
     query_embedding: list[float] | None = None,
     model: str | None = None,
+    citations: list[dict[str, Any]] | None = None,
 ) -> bool:
     """쿼리 캐시 쓰기를 크리티컬 패스 밖으로 예약한다. 예약되면 True.
 
@@ -164,6 +165,8 @@ def _schedule_query_cache_set(
         "response": response,
         "confidence": conf,
         "version": _QUERY_CACHE_VALUE_VERSION,
+        # 캐시 히트에서 인용을 재생할 수 있도록 원본 인용을 함께 보관한다.
+        "citations": list(citations or []),
     }
     ttl_seconds = int(QUERY_CACHE_TTL)
     tag = msg_id or "-"
@@ -1351,6 +1354,14 @@ async def generate(
         if cached_response:
             logger.info("[RAG] [GENERATE] 캐시 응답 스트리밍 (LLM 미호출)")
             if writer is not None:
+                cached_citations = get_state_attr(state, "cached_citations", None)
+                if isinstance(cached_citations, list) and cached_citations:
+                    await _dispatch_event(
+                        "citations",
+                        {"citations": cached_citations},
+                        writer=writer,
+                        config=config,
+                    )
                 await _dispatch_event(
                     "response_chunk",
                     {"content": cached_response},
@@ -1713,6 +1724,7 @@ async def generate(
             confidence=result.get("confidence", 0.0),
             file_hash=file_hash or "",
             model=SessionManager.get("last_selected_model", session_id=sid),
+            citations=result["citations"],
             # [최적화-01] preprocess가 선계산한 순수 쿼리 벡터를 저장에도 재사용해
             # 세맨틱 저장 시 재임베딩(Ollama HTTP)을 제거하고, 조회 경로와 동일한
             # 임베딩 텍스트를 보장한다.

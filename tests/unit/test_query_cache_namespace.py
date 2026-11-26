@@ -20,6 +20,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from core.graph._graph_core import _QUERY_CACHE_VALUE_VERSION
 from core.graph.graph_builder import generate, preprocess
 from core.session import SessionManager
 
@@ -73,7 +74,11 @@ async def test_get_uses_namespaced_key(monkeypatch):
     SessionManager.set("file_hash", "abc123", session_id=sid)
 
     fake_cm = _make_cache_manager(
-        {"response": "cached answer", "confidence": 0.99, "version": "1.0"}
+        {
+            "response": "cached answer",
+            "confidence": 0.99,
+            "version": _QUERY_CACHE_VALUE_VERSION,
+        }
     )
     state = _base_state("reusable query")
     try:
@@ -172,7 +177,11 @@ async def test_different_file_hashes_do_not_collide(monkeypatch):
     for sid, file_hash in (("ns-session-a", "abc123"), ("ns-session-b", "def456")):
         SessionManager.set("file_hash", file_hash, session_id=sid)
         fake_cm = _make_cache_manager(
-            {"response": "cached answer", "confidence": 0.99, "version": "1.0"}
+            {
+                "response": "cached answer",
+                "confidence": 0.99,
+                "version": _QUERY_CACHE_VALUE_VERSION,
+            }
         )
         state = _base_state("reusable query")
         try:
@@ -210,7 +219,11 @@ async def test_different_models_do_not_share_cached_answer(monkeypatch):
         for model in ("model-a", "model-b"):
             SessionManager.set("last_selected_model", model, session_id=sid)
             fake_cm = _make_cache_manager(
-                {"response": "cached answer", "confidence": 0.99, "version": "1.0"}
+                {
+                    "response": "cached answer",
+                    "confidence": 0.99,
+                    "version": _QUERY_CACHE_VALUE_VERSION,
+                }
             )
             with (
                 patch("core.graph._preprocess.get_cache_manager", return_value=fake_cm),
@@ -228,4 +241,5 @@ async def test_different_models_do_not_share_cached_answer(monkeypatch):
         SessionManager.delete("last_selected_model", session_id=sid)
 
     assert keys[0] != keys[1]
-    assert "model-a" in keys[0] and "model-b" in keys[1]
+    assert "model-a" in keys[0]
+    assert "model-b" in keys[1]

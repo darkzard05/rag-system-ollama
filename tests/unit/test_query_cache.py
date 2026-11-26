@@ -16,6 +16,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from core.graph._graph_core import _QUERY_CACHE_VALUE_VERSION
 from core.graph.graph_builder import generate, preprocess
 from core.pipeline_builder import GRADE_MEMO_KEY, PipelineBuilder
 from core.session import SessionManager
@@ -79,7 +80,11 @@ async def test_preprocess_cache_disabled_is_miss(monkeypatch):
 
     # get() 이 절대 호출되지 않아야 하므로 실패하는 페이크로 교체해도 안전.
     fake_cm = _make_cache_manager(
-        {"response": "cached answer", "confidence": 0.99, "version": "1.0"}
+        {
+            "response": "cached answer",
+            "confidence": 0.99,
+            "version": _QUERY_CACHE_VALUE_VERSION,
+        }
     )
 
     state = _base_state("reusable query")
@@ -102,7 +107,11 @@ async def test_generate_cache_hit_zero_llm_calls(
     monkeypatch.setattr("core.graph._generate.QUERY_CACHE_ENABLED", True)
     monkeypatch.setattr("core.graph._generate.QUERY_CACHE_MIN_CONF", 0.85)
 
-    cached_value = {"response": "cached answer", "confidence": 0.99, "version": "1.0"}
+    cached_value = {
+        "response": "cached answer",
+        "confidence": 0.99,
+        "version": _QUERY_CACHE_VALUE_VERSION,
+    }
     fake_cm = _make_cache_manager(cached_value)
 
     captured_events: list[dict] = []
@@ -164,7 +173,11 @@ async def test_preprocess_cache_hit_marks_cached(monkeypatch):
     monkeypatch.setattr("core.graph._preprocess.QUERY_CACHE_ENABLED", True)
     monkeypatch.setattr("core.graph._preprocess.QUERY_CACHE_MIN_CONF", 0.85)
 
-    cached_value = {"response": "cached answer", "confidence": 0.99, "version": "1.0"}
+    cached_value = {
+        "response": "cached answer",
+        "confidence": 0.99,
+        "version": _QUERY_CACHE_VALUE_VERSION,
+    }
     fake_cm = _make_cache_manager(cached_value)
 
     state = _base_state("reusable query")
