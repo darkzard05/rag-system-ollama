@@ -35,6 +35,12 @@ def test_focus_order_has_zero_space_mitigation() -> None:
     assert "next !== current" in js_src, (
         "MutationObserver runs per token; identical aria-label must not be rewritten"
     )
+    assert "scrollState.container && scrollState.container.isConnected" in js_src, (
+        "the scroller lookup must be cached across token deltas"
+    )
+    assert "scrollState.textarea && scrollState.textarea.isConnected" in js_src, (
+        "the textarea lookup must be cached across token deltas"
+    )
     assert 't("focus_order_notice")' in js_src, (
         "probe must inject the localized notice (same pattern as css_json)"
     )

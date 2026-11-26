@@ -165,15 +165,25 @@ def inject_custom_css() -> None:
             // permanent no-op. stChatInput is always present in the chat
             // column and lives inside the scroller itself.
             const getChatContainer = () => {{
+                // The scroller block survives token deltas within a run. Cache
+                // it and re-resolve only after Streamlit replaces the node.
+                if (scrollState.container && scrollState.container.isConnected) {{
+                    return scrollState.container;
+                }}
                 const input = doc.querySelector('[data-testid="stChatInput"]');
                 if (input) {{
                     const col = input.closest('[data-testid="stColumn"]');
                     const vb = col && col.querySelector(':scope > [data-testid="stVerticalBlock"]');
-                    if (vb) return vb;
+                    if (vb) {{
+                        scrollState.container = vb;
+                        return vb;
+                    }}
                 }}
-                return doc.querySelector(
+                const fallback = doc.querySelector(
                     '[data-testid="stMainBlockContainer"] [data-testid="stColumn"]:last-child > [data-testid="stVerticalBlock"]'
                 );
+                scrollState.container = fallback;
+                return fallback;
             }};
 
             const scrollToBottom = (force = false) => {{
@@ -208,8 +218,13 @@ def inject_custom_css() -> None:
             // Re-applied on every probe run and DOM mutation: Streamlit
             // re-renders reset element attributes, and reruns rebuild nodes.
             const applyA11yLabel = () => {{
-                const box = doc.querySelector('[data-testid="stChatInput"] textarea');
+                // Token deltas trigger this on every DOM mutation. Reuse the
+                // textarea while it is connected to the live document.
+                const box = scrollState.textarea && scrollState.textarea.isConnected
+                    ? scrollState.textarea
+                    : doc.querySelector('[data-testid="stChatInput"] textarea');
                 if (!box) return;
+                scrollState.textarea = box;
                 const current = box.getAttribute('aria-label') || '';
                 let label = current;
                 if (box.__a11yNotice && label.includes(box.__a11yNotice)) {{
