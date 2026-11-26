@@ -160,7 +160,8 @@ def render_reference_list(
 ) -> bool:
     """문서별 한 줄 요약 링크 목록: Reference見出 + 발췌/페이지 단일 행.
 
-    문서 입력 순서(관련도 순)대로 문서별 최대 1행을 tertiary 버튼으로
+    인용이 있으면 인용된 문서만 관련도 순으로 렌더하고, 없으면 문서 입력
+    순서(관련도 순)를 사용한다. 문서별 최대 1행을 tertiary 버튼으로
     렌더한다. 라벨은 ``"{i}. :blue[{요약}] :gray[p.{N}]"`` 이며, CSS가 라벨
     ``<p>``를 flex로 만들어 발췌는 좌측(말줄임), 페이지는 우측 끝에 붙인다.
     내용은 파랑, 페이지는 회색으로 구분된다.
@@ -179,6 +180,19 @@ def render_reference_list(
             content = doc.get("page_content")
         return content if isinstance(content, str) else ""
 
+    # citations[]가 인용 출처의 단일 진실원천이므로, 순위 밖 밀린 인용 문서도
+    # 클릭 가능한 행으로 남긴다. 인용된 문서가 없으면 기존 관련도 순을 유지한다.
+    cited_ids: set[str] = {
+        str(cit["doc_id"])
+        for cit in citations or []
+        if isinstance(cit, dict) and cit.get("doc_id") is not None
+    }
+    ordered_docs = documents or []
+    if cited_ids:
+        cited_docs = [d for d in ordered_docs if doc_stable_id(d) in cited_ids]
+        if cited_docs:
+            ordered_docs = cited_docs
+
     # 문서 및 인용구 목록의 지문 기반 캐시 키 구성 (동일 렌더링 재계산 스킵)
     doc_sigs = tuple(
         (
@@ -187,14 +201,13 @@ def render_reference_list(
             else (d.get("metadata", {}).get("doc_id") if isinstance(d, dict) else None)
         )
         or id(d)
-        for d in (documents or [])[:max_rows]
+        for d in ordered_docs[:max_rows]
     )
-    cit_count = len(citations or [])
     cache_key = (
         msg_id,
         len(documents or []),
         doc_sigs,
-        cit_count,
+        tuple(sorted(cited_ids)),
         max_rows,
         excerpt_chars,
     )
@@ -221,7 +234,7 @@ def render_reference_list(
 
         rows = []
         seen: set[str] = set()
-        for doc in documents or []:
+        for doc in ordered_docs:
             sid = doc_stable_id(doc)
             if sid in seen:
                 continue
