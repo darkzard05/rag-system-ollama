@@ -207,7 +207,7 @@ def _render_settings_internal(
             key="embedding_model_selector",
             on_change=embedding_selector_callback,
             help=t("sidebar_embedding_help"),
-            disabled=is_generating or (available_models is None),
+            disabled=is_generating or is_swapping_model or not ollama_reachable,
         )
 
         # 새 대화 (문서 유지, 대화만 초기화)
