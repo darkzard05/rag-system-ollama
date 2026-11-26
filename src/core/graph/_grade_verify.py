@@ -400,7 +400,8 @@ async def grade_documents(
         else (
             f"{grade_system}\n\n"
             f"[질문]\n{query}\n\n"
-            f"[검색된 문서 (상위 3개)]\n{context_text}\n\n"
+            f"[검색된 문서 (상위 {GRADING_CONFIG.get('grade_top_n', 5)}개)]\n"
+            f"{context_text}\n\n"
             "[작업]\n"
             "1. 위 문서들이 질문에 답하기에 충분한지 평가하세요 (is_relevant: true/false)\n"
             "2. 충분하지 않다면, 더 나은 검색 결과를 위한 최적화된 쿼리를 작성하세요 "
