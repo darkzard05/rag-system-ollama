@@ -206,9 +206,10 @@ class SearchResultAggregator:
                 weighted_score = r.score * weight
                 if r.doc_id in aggregated_map:
                     agg = aggregated_map[r.doc_id]
-                    agg.aggregated_score = (agg.aggregated_score + weighted_score) / (
-                        len(agg.source_nodes) + 1
-                    )
+                    count = agg.occurrence_count
+                    agg.aggregated_score = (
+                        agg.aggregated_score * count + weighted_score
+                    ) / (count + 1)
                     agg.source_nodes.append(node_id)
                     agg.original_scores.append(r.score)
                     agg.occurrence_count += 1
