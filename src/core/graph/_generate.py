@@ -254,7 +254,7 @@ def _normalize_citations(citations: list[Any], docs: list[Document]) -> list[Any
         or (isinstance(raw, str) and raw.isdigit() and raw not in valid_ids)
     ]
     one_based = (
-        bool(numeric_ids) and min(numeric_ids) >= 1 and max(numeric_ids) == doc_count
+        bool(numeric_ids) and min(numeric_ids) >= 1 and max(numeric_ids) <= doc_count
     )
     normalized: list[Any] = []
     dropped_ids: list[Any] = []
