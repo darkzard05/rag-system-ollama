@@ -181,16 +181,17 @@ def _sweep_stale_owners() -> None:
     """만료되었거나 디스크에서 삭제된 소유권 항목을 제거합니다.
 
     - 세션: TTL(_OWNER_TTL_SECONDS)을 초과한 바인딩 제거
-    - 파일: TTL 초과 또는 스토리지에 PDF 파일이 존재하지 않는 항목 제거
+    - 파일: PDF 보존 기간(_PDF_RETENTION_DAYS) 초과 또는 스토리지에 파일이 없는 항목 제거
     """
     now = time.time()
+    file_ttl = _PDF_RETENTION_DAYS * 24 * 3600
     with _owners_lock:
         for session_id, entry in list(_session_owners.items()):
             if now - entry[1] > _OWNER_TTL_SECONDS:
                 del _session_owners[session_id]
         storage = Path(_app_server_module().PDF_STORAGE_DIR)
         for file_hash, entry in list(_file_owners.items()):
-            stale = now - entry[1] > _OWNER_TTL_SECONDS
+            stale = now - entry[1] > file_ttl
             if stale or not (storage / f"{file_hash}.pdf").exists():
                 del _file_owners[file_hash]
 

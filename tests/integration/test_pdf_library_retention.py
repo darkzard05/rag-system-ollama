@@ -135,6 +135,23 @@ def test_library_sweep_keeps_recent_files(tmp_path: Path):
     assert fresh_hash in api._file_owners
 
 
+def test_retained_pdf_owner_outlives_session_ttl(tmp_path: Path):
+    """A PDF kept for 30 days must stay serveable after the 7-day session TTL."""
+    file_hash = "c" * 64
+    pdf_file = tmp_path / f"{file_hash}.pdf"
+    pdf_file.write_bytes(b"%PDF-1.4 retained")
+    with api._owners_lock:
+        api._file_owners[file_hash] = ("test-user", time.time() - 8 * 24 * 3600)
+    try:
+        with patch("src.api.api_server.PDF_STORAGE_DIR", str(tmp_path)):
+            api._sweep_stale_owners()
+            resp = client.get(f"/api/v1/pdf/{file_hash}")
+        assert resp.status_code == 200
+    finally:
+        with api._owners_lock:
+            api._file_owners.pop(file_hash, None)
+
+
 def test_ui_temp_file_still_deleted_on_session_delete(tmp_path: Path):
     """UI 전용 임시 파일(pdf_file_path만 설정)은 세션 삭제 시 여전히 제거되어야 합니다."""
     sid = "ui-temp-sess"
