@@ -469,7 +469,7 @@ cors:
 global_cache:
   # 벡터 저장소(인덱싱 결과) 캐시 사용 여부
   # 동일 파일 재업로드 시 재인덱싱을 건너뛰고 캐시를 재사용한다.
-  enable_vector_cache: false
+  enable_vector_cache: true
 
 # --- 채팅 UI 설정 ---
 ui:
