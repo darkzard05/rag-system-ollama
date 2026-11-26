@@ -516,8 +516,9 @@ class SessionManager:
                 state = cls._get_state(sid)
             if state is not None and key in state:
                 return cls._copy_value(state[key])
+            deleted = bool(state is not None and key in state.get("_deleted_keys", ()))
 
-        if cls._is_streamlit_running():
+        if not deleted and cls._is_streamlit_running():
             try:
                 from streamlit.runtime.scriptrunner import get_script_run_ctx
 
