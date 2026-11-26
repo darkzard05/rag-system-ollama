@@ -58,11 +58,14 @@ def _extract_pages_words_sync(
                         raw_words = page_obj.get_text("words")
                         coords = [(w[0], w[1], w[2], w[3], w[4]) for w in raw_words]
                     results[i] = coords or None
-                except (OSError, fitz.FileDataError) as e:
+                except Exception as e:
+                    # 손상된 페이지 하나가 같은 파일의 나머지 페이지 좌표까지
+                    # 버리지 않도록 페이지 단위로 격리한다.
                     logger.error(
-                        f"[HYDRATE] 파일 처리 중 오류 ({os.path.basename(path)}): {e}"
+                        f"[HYDRATE] 페이지 처리 중 오류 (P{page_num}, "
+                        f"{os.path.basename(path)}): {e}"
                     )
-    except (OSError, Exception) as e:
+    except Exception as e:
         logger.error(f"[HYDRATE] 파일 열기 실패 ({os.path.basename(path)}): {e}")
     return results
 
