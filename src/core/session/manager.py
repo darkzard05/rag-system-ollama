@@ -278,6 +278,9 @@ class SessionManager:
           제외합니다. 순수 LRU로 퇴출하면 스트리밍 세션이 도중에 사라집니다.
         - 잡혀 있는 세션 락을 pop하면 상호배제가 깨지므로, 해제된 락만
           정리합니다.
+        - 락 순서는 세션별 락 → _map_lock 이다. _map_lock을 잡은 상태에서
+          희생 세션 락을 블로킹 획득하면 순서 역전 데드락이므로, 논블로킹으로
+          선점하고 실패하면 이번 퇴출을 건너뛴다.
         """
         oldest_sid: str | None = None
         oldest_ts = float("inf")
@@ -294,18 +297,31 @@ class SessionManager:
                 <= cls.MAX_GENERATION_SECONDS
             ):
                 continue
+            lock = cls._session_locks.get(candidate)
+            if lock is not None and lock.locked():
+                # 진행 중인 기록자가 있다. 상태 해체·파일 삭제를 미룬다.
+                continue
             ts = state.get("last_accessed", 0)
             if ts < oldest_ts:
                 oldest_ts = ts
                 oldest_sid = candidate
-        if oldest_sid is not None:
+        if oldest_sid is None:
+            return None
+
+        lock = cls._session_locks.get(oldest_sid)
+        if lock is not None and not lock.acquire(blocking=False):
+            # 후보 선정 이후 작성자가 락을 잡았다. 이번 퇴출만 포기한다.
+            return None
+        try:
             pdf_path = cls._delete_session_locked(oldest_sid)
             logger.warning(
                 f"[SESSION] 활성 세션 상한({MAX_ACTIVE_SESSIONS}) 도달, "
                 f"가장 오래된 세션 퇴출: {oldest_sid}"
             )
             return pdf_path
-        return None
+        finally:
+            if lock is not None:
+                lock.release()
 
     @classmethod
     def init_session(cls, session_id: str | None = None):

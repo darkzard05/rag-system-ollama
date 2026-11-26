@@ -18,8 +18,9 @@ def test_eviction_skips_session_with_active_writer() -> None:
             SessionManager.init_session("evict-new")
 
             assert victim in SessionManager._fallback_sessions
-            assert SessionManager.get("last_accessed", session_id=victim) == 1000.0
         finally:
             lock.release()
+
+        assert SessionManager.get("last_accessed", session_id=victim) == 1000.0
     finally:
         SessionManager.reset()
