@@ -522,13 +522,16 @@ def _recover_citations(blob: str) -> list[dict[str, Any]]:
         if obj_end == -1:
             break
         obj = blob[obj_start : obj_end + 1]
-        # doc_id 는 실제로 fast_hash() 해시 문자열일 수 있으므로 따옴표 없는
-        # 해시/숫자-문자 혼합 토큰도 포착한다 (스키마 int 와 실제 데이터 불일치 보정).
-        doc_id_m = re.search(r'"doc_id"\s*:\s*("?)([0-9a-fA-F]+|\d+)("?)', obj)
+        # stable_id 는 fast_hash 결과뿐 아니라 메타데이터의 임의 문자열
+        # (UUID의 하이픈, "chunk_12" 등)일 수 있다. 16진수/숫자만 허용하면
+        # 절단된 JSON 에서 인용 id가 잘려 멤버십 검증에서 드롭된다.
+        doc_id_m = re.search(r'"doc_id"\s*:\s*(?:"([^"\\]*)"|([^\s,}\]]+))', obj)
         if not doc_id_m:
             obj_start = blob.find('"doc_id"', obj_end)
             continue
-        doc_id = doc_id_m.group(2)
+        doc_id = (
+            doc_id_m.group(1) if doc_id_m.group(1) is not None else doc_id_m.group(2)
+        )
         anchor_m = re.search(r'"anchor"\s*:', obj)
         anchor: str = ""
         if anchor_m:
