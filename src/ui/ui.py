@@ -210,12 +210,20 @@ def inject_custom_css() -> None:
             const applyA11yLabel = () => {{
                 const box = doc.querySelector('[data-testid="stChatInput"] textarea');
                 if (!box) return;
-                let label = box.getAttribute('aria-label') || '';
+                const current = box.getAttribute('aria-label') || '';
+                let label = current;
                 if (box.__a11yNotice && label.includes(box.__a11yNotice)) {{
                     label = label.replace(box.__a11yNotice, '').trim();
                 }}
-                box.setAttribute('aria-label', (label + ' ' + a11yNotice).trim());
-                box.__a11yNotice = a11yNotice;
+                const next = (label + ' ' + a11yNotice).trim();
+                // MutationObserver fires on every streamed token. Writing an
+                // identical aria-label forces needless attribute/layout work;
+                // only write when Streamlit rebuilt the node or the locale
+                // notice actually changed.
+                if (next !== current || box.__a11yNotice !== a11yNotice) {{
+                    box.setAttribute('aria-label', next);
+                    box.__a11yNotice = a11yNotice;
+                }}
             }};
 
             const setupChatObserver = () => {{

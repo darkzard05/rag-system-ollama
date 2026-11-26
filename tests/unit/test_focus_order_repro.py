@@ -32,6 +32,9 @@ def test_focus_order_has_zero_space_mitigation() -> None:
     js_src = inspect.getsource(ui_module.inject_custom_css)
     assert "applyA11yLabel" in js_src, "probe must define the aria-label applier"
     assert "aria-label" in js_src, "probe must write the textarea accessible name"
+    assert "next !== current" in js_src, (
+        "MutationObserver runs per token; identical aria-label must not be rewritten"
+    )
     assert 't("focus_order_notice")' in js_src, (
         "probe must inject the localized notice (same pattern as css_json)"
     )
