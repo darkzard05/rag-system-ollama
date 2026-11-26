@@ -475,6 +475,36 @@ def _extract_json_string(
     return None, start
 
 
+def _find_json_object_end(blob: str, start: int) -> int:
+    """Match the closing brace of one JSON object, ignoring braces in strings.
+
+    ``start`` points inside an object (at a field name), so the opening brace
+    is already behind the cursor and the object starts at depth 1.
+    """
+    depth = 1
+    in_string = False
+    escaped = False
+    for i in range(start, len(blob)):
+        ch = blob[i]
+        if in_string:
+            if escaped:
+                escaped = False
+            elif ch == "\\":
+                escaped = True
+            elif ch == '"':
+                in_string = False
+            continue
+        if ch == '"':
+            in_string = True
+        elif ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                return i
+    return -1
+
+
 def _recover_citations(blob: str) -> list[dict[str, Any]]:
     """깨진 JSON 에서 citations[] 를 객체 단위로 추출한다.
 
@@ -486,7 +516,7 @@ def _recover_citations(blob: str) -> list[dict[str, Any]]:
     citations: list[dict[str, Any]] = []
     obj_start = blob.find('"doc_id"')
     while obj_start != -1:
-        obj_end = blob.find("}", obj_start)
+        obj_end = _find_json_object_end(blob, obj_start)
         if obj_end == -1:
             break
         obj = blob[obj_start : obj_end + 1]
@@ -503,7 +533,7 @@ def _recover_citations(blob: str) -> list[dict[str, Any]]:
             _anchor, _ = _extract_json_string(obj, anchor_m.end())
             anchor = _anchor or ""
         citations.append({"doc_id": doc_id, "anchor": anchor})
-        obj_start = blob.find('"doc_id"', obj_end)
+        obj_start = blob.find('"doc_id"', obj_end + 1)
 
     if citations:
         return citations

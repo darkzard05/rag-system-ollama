@@ -153,6 +153,14 @@ def test_recover_citations_mapping_form() -> None:
     ]
 
 
+def test_recover_citations_preserves_brace_inside_anchor() -> None:
+    blob = (
+        '{"final_answer": "ans", "citations": ['
+        '{"doc_id": "abc123", "anchor": "구조 } 비교"}]}'
+    )
+    assert _recover_citations(blob) == [{"doc_id": "abc123", "anchor": "구조 } 비교"}]
+
+
 def test_schema_fallback_preserves_final_answer() -> None:
     fallback = _schema_fallback_answer(
         {
