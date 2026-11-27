@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from langchain_core.documents import Document
@@ -71,3 +71,30 @@ async def test_grade_memo_hit_replays_optimized_query() -> None:
     bound.ainvoke.assert_awaited_once(), "memo hit must not call the grade LLM again"
 
     SessionManager.delete_session(session_id)
+
+
+@pytest.mark.asyncio
+async def test_grade_error_path_memoizes_optimized_query() -> None:
+    """A grading failure must not burn the retry budget on the same query."""
+    session_id = "grade-memo-error-replay"
+    SessionManager.delete_session(session_id)
+    config = {
+        "configurable": {
+            "llm": MagicMock(),
+            "session_id": session_id,
+            "thread_id": session_id,
+        }
+    }
+    failing_invoke = AsyncMock(side_effect=RuntimeError("LLM is not initialized"))
+    try:
+        with patch("core.graph._grade_verify._safe_invoke", new=failing_invoke):
+            first = await grade_documents(_state(), config, writer=None)
+            second = await grade_documents(_state(), config, writer=None)
+
+        assert first["route"] == "transform"
+        assert first.get("search_queries") == [_state()["input"]]
+        assert second["route"] == "transform"
+        assert second.get("search_queries") == [_state()["input"]]
+        failing_invoke.assert_awaited_once(), "memo hit must not retry the failing LLM"
+    finally:
+        SessionManager.delete_session(session_id)

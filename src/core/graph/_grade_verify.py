@@ -523,7 +523,16 @@ async def grade_documents(
 
     except (RuntimeError, ValueError, json.JSONDecodeError) as e:
         logger.warning(f"[RAG] [GRADE] 평가 실패, 기본값(NO) 적용하여 재구성 시도: {e}")
-        _store_grade_memo(state, docs, {"route": "transform"}, sid)
+        # 정상 transform 경로와 동일하게 재작성 쿼리를 기억하고 반환해야 한다.
+        # 그렇지 않으면 메모 히트가 빈 search_queries로 재검색해 같은 문서를
+        # 다시 평가하고 재시도 예산만 소진한 뒤 부적합 컨텍스트로 답변한다.
+        optimized = query or ""
+        _store_grade_memo(
+            state,
+            docs,
+            {"route": "transform", "optimized_query": optimized},
+            sid,
+        )
         grade_ms = (time.perf_counter() - grade_start) * 1000
         logger.info(
             f"[RAG] [GRADE][TIMING] grade_ms={grade_ms:.1f} short_circuit=False"
@@ -537,6 +546,7 @@ async def grade_documents(
         return {
             "intent": "transform",
             "route": "transform",
+            "search_queries": [optimized] if optimized else [],
             "retry_count": 1,
         }
 
