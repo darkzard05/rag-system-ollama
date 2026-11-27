@@ -363,9 +363,11 @@ class CoordCacheManager:
 
         A cancelled owner-loop coroutine must not leave an open transaction
         behind: the next writer on that connection would commit both payloads.
+        Connection lookup stays inside the lock so a contender cannot close
+        the connection an active operation is still using.
         """
-        db = await self._get_connection()
         async with self._db_lock:
+            db = await self._get_connection()
             try:
                 yield db
             except BaseException:
