@@ -522,12 +522,18 @@ header[data-testid="stHeader"] {
            PDF line and the chat line on tablet widths. */
         align-content: flex-start;
     }
-    [data-testid="stMainBlockContainer"] [data-testid="stColumn"]:first-child {
+    /* Direct children of the content row only. A descendant selector also hits
+       the three nav columns, stacking them into three rows on narrow screens. */
+    [data-testid="stMainBlockContainer"] > [data-testid="stVerticalBlock"]
+    > [data-testid="stLayoutWrapper"] > [data-testid="stHorizontalBlock"]
+    > [data-testid="stColumn"]:first-child {
         flex: 0 0 100% !important;
         height: 35vh !important;
         overflow-anchor: none;
     }
-    [data-testid="stMainBlockContainer"] [data-testid="stColumn"]:last-child {
+    [data-testid="stMainBlockContainer"] > [data-testid="stVerticalBlock"]
+    > [data-testid="stLayoutWrapper"] > [data-testid="stHorizontalBlock"]
+    > [data-testid="stColumn"]:last-child {
         flex: 1 1 100% !important;
         height: calc(100% - 35vh - 0.25rem) !important;
         /* The column's direct stVerticalBlock is the one scroller (rule ~314).
@@ -566,7 +572,9 @@ header[data-testid="stHeader"] {
     }
     /* VIS-4: mobile stack — compact PDF preview (35vh) + chat column dominates.
        Scoped to the app's own columns so PDF-controls inner columns stay auto. */
-    [data-testid="stMainBlockContainer"] [data-testid="stColumn"]:first-child {
+    [data-testid="stMainBlockContainer"] > [data-testid="stVerticalBlock"]
+    > [data-testid="stLayoutWrapper"] > [data-testid="stHorizontalBlock"]
+    > [data-testid="stColumn"]:first-child {
         display: flex !important;
         flex-direction: column !important;
         /* Full row basis: the shared column rule uses flex-basis:auto so desktop
@@ -577,7 +585,9 @@ header[data-testid="stHeader"] {
         /* MOBILE-ANCHOR: PDF 프리뷰 스크롤러도 앵커링 옵트아웃. */
         overflow-anchor: none;
     }
-    [data-testid="stMainBlockContainer"] [data-testid="stColumn"]:last-child {
+    [data-testid="stMainBlockContainer"] > [data-testid="stVerticalBlock"]
+    > [data-testid="stLayoutWrapper"] > [data-testid="stHorizontalBlock"]
+    > [data-testid="stColumn"]:last-child {
         display: flex !important;
         flex-direction: column !important;
         flex: 1 !important;

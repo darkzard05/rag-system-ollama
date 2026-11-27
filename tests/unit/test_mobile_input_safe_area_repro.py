@@ -40,7 +40,11 @@ def test_mobile_fixed_input_respects_safe_area() -> None:
 def test_chat_column_reserves_input_space() -> None:
     """Mobile chat column must reserve space for the fixed input."""
     mobile = _mobile_block()
-    anchor = '[data-testid="stMainBlockContainer"] [data-testid="stColumn"]:last-child'
+    anchor = (
+        '[data-testid="stMainBlockContainer"] > [data-testid="stVerticalBlock"]\n'
+        '    > [data-testid="stLayoutWrapper"] > [data-testid="stHorizontalBlock"]\n'
+        '    > [data-testid="stColumn"]:last-child'
+    )
     assert anchor in mobile, "mobile chat-column selector must exist"
     # Scope to the chat-column rule block (up to its closing brace) so the
     # generic/PDF-column padding-bottom rules cannot satisfy this vacuously.
