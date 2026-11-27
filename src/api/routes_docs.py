@@ -233,4 +233,5 @@ async def serve_pdf(
         str(pdf_path),
         media_type="application/pdf",
         filename=pdf_path.name,
+        content_disposition_type="inline",
     )
