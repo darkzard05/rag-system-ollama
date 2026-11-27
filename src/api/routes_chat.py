@@ -15,6 +15,7 @@ import logging
 import time
 from collections.abc import AsyncGenerator
 from contextlib import suppress
+from dataclasses import replace
 from typing import Any, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -41,6 +42,7 @@ from api.stream_pipeline import (
     get_streaming_handler,
 )
 from common.exceptions import PDFProcessingError
+from common.final_answer import FinalAnswerExtractor
 
 logger = logging.getLogger(__name__)
 
@@ -176,6 +178,9 @@ async def stream_query_rag(
     async def event_generator():
         logger.debug(f"[API] Streaming started for session: {sid}")
 
+        # 구조화 출력(raw JSON)은 UI와 동일한 추출기로 final_answer만 노출한다.
+        raw_json_extractor = FinalAnswerExtractor()
+        last_raw_json_is_replace = False
         handler = get_streaming_handler()
         controller = get_adaptive_controller(client_profile="api")
         sse_handler = ServerSentEventsHandler()
@@ -243,6 +248,10 @@ async def stream_query_rag(
                     logger.info(f"[API] Client disconnected, stopping stream: {sid}")
                     break
                 chunk_index += 1
+                if getattr(chunk, "raw_json", False) and chunk.content:
+                    delta = raw_json_extractor.feed(chunk.content)
+                    last_raw_json_is_replace = bool(getattr(chunk, "is_replace", False))
+                    chunk = replace(chunk, content=delta, raw_json=False)
                 entries, event_counter = chunk_to_sse_entries(chunk, event_counter)
                 batch_buffer.extend(entries)
                 if chunk.status:
@@ -269,6 +278,15 @@ async def stream_query_rag(
                         first_token_emitted = True
                     yield sse_handler.format_sse_batch(batch_buffer)
                     batch_buffer.clear()
+            tail_delta = raw_json_extractor.finalize()
+            if tail_delta:
+                tail_chunk = StreamChunk(
+                    content=tail_delta,
+                    chunk_index=chunk_index,
+                    is_replace=last_raw_json_is_replace,
+                )
+                entries, event_counter = chunk_to_sse_entries(tail_chunk, event_counter)
+                batch_buffer.extend(entries)
             if batch_buffer:
                 yield sse_handler.format_sse_batch(batch_buffer)
                 batch_buffer.clear()
