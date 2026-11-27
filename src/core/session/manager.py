@@ -887,7 +887,10 @@ class SessionManager:
                 return None
             apply_event(build, event)
             _ = status_text
-            st["rebuild_cancelled"] = build.phase == BuildPhase.CANCELLED
+            # The cancel flag is a user request. Recomputing it from a progress
+            # event makes the worker miss the request at its next check.
+            if build.phase == BuildPhase.CANCELLED:
+                st["rebuild_cancelled"] = True
             st["is_building_rag"] = build.phase in (
                 BuildPhase.PREPARING,
                 BuildPhase.EXTRACTING,
