@@ -305,6 +305,14 @@ class RAGSystem:
                 "performance": combined_perf,
             }
         finally:
+            # 실패/취소된 턴의 투기 생성 결과를 폐기한다. 채택 노드에 도달하지
+            # 못하면 이전 답변이 레지스트리에 남고 다음 질문이 그대로 채택한다.
+            try:
+                from core.graph._speculative_gen import delete_spec_thread
+
+                delete_spec_thread(self.session_id)
+            except Exception as e:  # noqa: BLE001 - 정리 실패는 쿼리 실패 아님
+                logger.debug("[RAG] 투기 생성 정리 실패: %s", e)
             # D1: 쿼리 스코프 pin 균형 — prepare 단계의 get_retrievers pin(+1)은
             # 쿼리마다 반드시 해제한다. 단일 문서 보호는
             # RetrieverPool.check_memory_pressure(len<=1 no-evict)가 담당하므로
