@@ -12,6 +12,8 @@ from typing import Any, Union
 import yaml
 from dotenv import load_dotenv
 
+from common.runtime_settings import RuntimeSetting
+
 # CI has no .env file; a developer's local .env must not change results of a
 # parity run. DOTENV_DISABLE=1 (set by scripts/maintenance/ci_parity.py) keeps
 # local and CI environments identical.
@@ -247,12 +249,13 @@ DYNAMIC_TOP_K_CONFIG: dict = RETRIEVER_CONFIG.get(
 
 _reranker_config = _rag_config.get("reranker", {})
 RERANKER_MODEL_NAME: str = _reranker_config.get("model_name", "ms-marco-MultiBERT-L-12")
-# RERANKER_ENGINE lets benchmarks sweep auto/flashrank/semantic without editing
-# config.yml. Unknown values keep the config.yml path so a typo cannot silently
-# disable reranking.
-RERANKER_ENGINE: str = _get_env(
-    "RERANKER_ENGINE", _reranker_config.get("engine", "auto"), str
-).lower()
+# RERANKER_ENGINE lets benchmarks and the settings UI pick auto/flashrank/semantic.
+# Unknown values fall back to the default so a typo cannot silently disable reranking.
+RERANKER_ENGINE: RuntimeSetting = RuntimeSetting(
+    "reranker_engine",
+    _get_env("RERANKER_ENGINE", _reranker_config.get("engine", "auto"), str).lower(),
+    choices=("auto", "flashrank", "semantic"),
+)
 # Final document order. "score" keeps the reranker's ordering; "rrf" keeps the
 # hybrid RRF ordering and uses reranker scores only for grade gating.
 RERANKER_ORDER: str = _get_env(
@@ -279,7 +282,10 @@ SEMANTIC_CHUNKER_CONFIG: dict = _rag_config.get("semantic_chunker", {"enabled": 
 
 # 쿼리 캐시 설정 (선택적 opt-in)
 _query_cache_config = _rag_config.get("query_cache", {})
-QUERY_CACHE_ENABLED: bool = bool(_query_cache_config.get("enabled", False))
+# The settings modal owns this flag at runtime; config.yml no longer carries it.
+QUERY_CACHE_ENABLED: RuntimeSetting = RuntimeSetting(
+    "query_cache_enabled", bool(_query_cache_config.get("enabled", True))
+)
 QUERY_CACHE_TTL: int = int(_query_cache_config.get("ttl_seconds", 3600))
 QUERY_CACHE_MIN_CONF: float = float(_query_cache_config.get("min_confidence", 0.85))
 # 시맨틱 캐시 유사도 임계값 — 기본 0.95는 기존 SemanticCache 기본값과 동일해
@@ -290,7 +296,9 @@ QUERY_CACHE_SIMILARITY: float = float(
 
 # 채점(grading) 단계 설정
 _grading_config = _rag_config.get("grading", {})
-GRADING_ENABLED: bool = bool(_grading_config.get("enabled", True))
+GRADING_ENABLED: RuntimeSetting = RuntimeSetting(
+    "grading_enabled", bool(_grading_config.get("enabled", True))
+)
 
 # --- 4. 파싱 및 하이드레이션 (Parsing) ---
 PARSING_CONFIG: dict = _rag_config.get("parsing", {})
@@ -356,10 +364,9 @@ CACHE_EXPECTED_DIR_MODE: int = (
     else _expected_dir_mode
 )
 
-ENABLE_VECTOR_CACHE: bool = _get_env(
-    "ENABLE_VECTOR_CACHE",
-    _config.get("global_cache", {}).get("enable_vector_cache", True),
-    lambda x: str(x).lower() == "true",
+ENABLE_VECTOR_CACHE: RuntimeSetting = RuntimeSetting(
+    "enable_vector_cache",
+    _get_env("ENABLE_VECTOR_CACHE", True, lambda x: str(x).lower() == "true"),
 )
 
 # --- 6.5 평가 설정 (Evaluation) ---

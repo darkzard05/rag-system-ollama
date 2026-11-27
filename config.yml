@@ -129,9 +129,6 @@ rag:
     # 줄어들지만 긴 청크는 잘린다. 512(라이브러리 기본) 대비 384는 golden 3건
     # context_recall 동일(0.6389), 리랭크 중앙값 3.99s→3.45s로 측정되어 384 채택.
     max_length: 384
-    # 리랭커 엔진 선택: auto(FlashRank 크로스-인코더 시도 → 실패 시 bi-encoder 폴백) /
-    # flashrank(FlashRank 강제) / semantic(bi-encoder 강제, 기존 동작)
-    engine: "auto"
     # 최종 문서 순서: score(리랭커 점수 정렬, 기존 동작) / rrf(하이브리드 RRF 순서 유지).
     # rrf는 리랭커 점수를 grade 임계값 판정에만 쓰고 컨텍스트 순서는 보존한다.
     order: "score"
@@ -208,15 +205,13 @@ rag:
       chunk_size: 512
 
   # 쿼리 캐시 설정 (동일 문서·동일 질의 반복 시 LLM 호출 생략)
+  # 활성화 여부는 설정 창에서 런타임으로 제어한다.
   query_cache:
-    enabled: true                  # 쿼리 캐시 활성화 여부
     similarity_threshold: 0.92     # 캐시 히트를 위한 유사도 임계값
     ttl_seconds: 3600              # 캐시 항목 수명(초)
     min_confidence: 0.85           # 캐시 저장 최소 신뢰도
 
-  # 채점(grading) 단계 설정
-  grading:
-    enabled: true                  # 문서 채점 단계 활성화 여부
+  # 채점(grading) 단계 활성화 여부는 설정 창에서 런타임으로 제어한다.
 
   # 프롬프트 설정
   prompts:
@@ -468,11 +463,7 @@ cors:
   # 기본값 [] = 모든 브라우저 교차-오리진 차단 (API는 키 인증 + 로컬 사용):
   allow_origins: []
 
-# --- 전역 캐시 활성화 설정 ---
-global_cache:
-  # 벡터 저장소(인덱싱 결과) 캐시 사용 여부
-  # 동일 파일 재업로드 시 재인덱싱을 건너뛰고 캐시를 재사용한다.
-  enable_vector_cache: true
+# 벡터 저장소 캐시 사용 여부는 설정 창에서 런타임으로 제어한다.
 
 # --- 채팅 UI 설정 ---
 ui:
