@@ -923,6 +923,7 @@ def _render_streaming_with_write_stream(
     stop_hit = False
     response = None
     stream_error: str | None = None
+    body_ph: Any = None
     try:
         with st.chat_message("assistant", avatar=AVATARS["assistant"]):
             # 답변 위 상태 슬롯 (단일 1줄): 위상 + 인용 개수를 한 줄로 합쳐
@@ -972,19 +973,23 @@ def _render_streaming_with_write_stream(
                     )
 
             # st.write_stream — 스트리밍 텍스트 표시
+            # 같은 자리를 placeholder로 잡아 두면 완료 시 정리된 본문으로
+            # 교체할 수 있다 (전체 rerun 없이 원문 메타토큰 제거).
+            body_ph = st.empty()
             response = None
             _t_join = time.perf_counter()
             try:
-                response = st.write_stream(
-                    _content_generator(
-                        query,
-                        model_name,
-                        current_sid,
-                        msg_id,
-                        on_status=_on_status,
-                        on_aux=_on_aux,
-                    ),
-                )
+                with body_ph.container():
+                    response = st.write_stream(
+                        _content_generator(
+                            query,
+                            model_name,
+                            current_sid,
+                            msg_id,
+                            on_status=_on_status,
+                            on_aux=_on_aux,
+                        ),
+                    )
             except Exception as exc:
                 # 삼킴 금지: 사용자에게는 제네릭 메시지만 보이지만, 로그에는
                 # 원본 traceback을 남긴다 (무로그 실패 방지).
@@ -1056,6 +1061,8 @@ def _render_streaming_with_write_stream(
     cached_processed = None
     if final_text and not final_error:
         cached_processed = format_chat_display_text(final_text, is_assistant=True)
+        if body_ph is not None:
+            body_ph.markdown(cached_processed, unsafe_allow_html=True)
 
     _t_persist = time.perf_counter()
     SessionManager.add_message(
