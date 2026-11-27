@@ -62,6 +62,7 @@ class Session:
     session_id: str = field(default_factory=lambda: str(uuid.uuid4()))
     user_id: str = ""
     token_id: str = ""
+    token_string: str = ""
     created_at: float = field(default_factory=time.time)
     last_activity: float = field(default_factory=time.time)
     expires_at: float = field(default_factory=lambda: time.time() + 3600)
@@ -464,6 +465,7 @@ class AuthenticationManager:
             session = Session(
                 user_id=user_id,
                 token_id=access_token.token_id,
+                token_string=access_token_str,
                 ip_address=ip_address,
                 user_agent=user_agent,
             )
@@ -639,8 +641,13 @@ class AuthenticationManager:
             linked = self._tokens.get(session.token_id)
             if linked is not None:
                 linked.is_valid = False
-                if linked.token_string:
-                    self._deny_list.add(linked.token_string)
+            # The in-memory token map is empty after a restart, so the session
+            # must carry its token string for logout to revoke it.
+            token_string = (
+                linked.token_string if linked is not None else ""
+            ) or session.token_string
+            if token_string:
+                self._deny_list.add(token_string)
 
             self._save_state()
             return True
