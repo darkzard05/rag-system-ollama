@@ -14,14 +14,6 @@ def on_cancel(sid: str) -> None:
 
 def on_retry(sid: str) -> None:
     """Reset pipeline state and flag a rebuild (3-line minimal reset)."""
-    # The failed attempt's error bubble has a random msg_id, so the next build
-    # cannot replace it. Drop it while keeping the real conversation intact.
-    messages = SessionManager.get_messages(session_id=sid)
-    SessionManager.set(
-        "messages",
-        [m for m in messages if m.get("msg_type") != "build_error"],
-        session_id=sid,
-    )
     SessionManager.reset_build_state(session_id=sid)
     SessionManager.set("pdf_processing_error", "", session_id=sid)
     SessionManager.set("rebuild_error", None, session_id=sid)

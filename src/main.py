@@ -1674,10 +1674,13 @@ async def _bg_rebuild_task(
             error=error_msg,
             session_id=session_id,
         )
+        # Reuse the build message id so the next attempt replaces this bubble
+        # instead of leaving a second, stale error in the timeline.
         SessionManager.add_message(
             "assistant",
             error_msg,
             msg_type="build_error",
+            msg_id=build_msg_id,
             session_id=session_id,
         )
     finally:
