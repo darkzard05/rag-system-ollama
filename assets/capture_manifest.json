@@ -1,0 +1,12 @@
+{
+  "captured_at_utc": "2026-11-27T15:28:26.550993+00:00",
+  "git_sha": "d4be6e3",
+  "question": "이 문서의 핵심 내용을 요약해 주세요",
+  "viewport": {
+    "width": 1920,
+    "height": 1080
+  },
+  "pdf_path": "C:\\Users\\darkzard05\\hy\\rag-system-ollama\\tests\\data\\2201.07520v1.pdf",
+  "port": 8517,
+  "ollama_assumed_required": true
+}
