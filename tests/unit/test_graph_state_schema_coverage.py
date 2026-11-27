@@ -184,6 +184,7 @@ def test_graph_state_declaration_captured():
         "is_cached",
         "cached_response",
         "cached_citations",
+        "citations",
         "short_query",
         "retry_count",
         "verification_route",

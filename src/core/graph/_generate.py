@@ -1351,12 +1351,17 @@ async def generate(
         cached_response = get_state_attr(state, "cached_response")
         if cached_response:
             logger.info("[RAG] [GENERATE] 캐시 응답 스트리밍 (LLM 미호출)")
+            stored_citations = get_state_attr(state, "cached_citations", None)
+            citations = (
+                [c for c in stored_citations if isinstance(c, dict)]
+                if isinstance(stored_citations, list)
+                else []
+            )
             if writer is not None:
-                cached_citations = get_state_attr(state, "cached_citations", None)
-                if isinstance(cached_citations, list) and cached_citations:
+                if citations:
                     await _dispatch_event(
                         "citations",
-                        {"citations": cached_citations},
+                        {"citations": citations},
                         writer=writer,
                         config=config,
                     )
@@ -1367,7 +1372,7 @@ async def generate(
                     config=config,
                 )
             _emit_query_timing(_query_timings)
-            return {"response": cached_response}
+            return {"response": cached_response, "citations": citations}
         # cached_response가 비어 있으면(오염된 캐시 항목 등) 정상 생성 경로로
         # 폴백하지 않고 빈 컨텍스트로 LLM을 호출하지 않도록 무정보 안내를 반환한다.
         # (Tier 2 방어: 기존 오염 캐시가 있어도 환각 생성 차단)

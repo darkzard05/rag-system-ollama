@@ -64,6 +64,9 @@ class GraphState(TypedDict):
     )  # preprocess:333 반환 키 (FIX-1: LangGraph 채널 드롭 방지)
     # 캐시 히트 시 원래 답변의 인용을 그대로 재생해 UI 참조를 유지한다.
     cached_citations: list[dict[str, Any]] | None
+    # Citations returned by generate. Without this channel LangGraph drops them
+    # from the final result, so aquery and the QA trace see no references.
+    citations: list[dict[str, Any]] | None
     short_query: bool  # preprocess:337 반환 키 (FIX-1: fast path 채널 드롭 방지)
     retry_count: Annotated[int, reset_or_add]
     verification_route: str | None
