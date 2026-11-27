@@ -43,6 +43,7 @@ async def test_sse_emits_parsed_final_answer() -> None:
     chunks = [
         StreamChunk(content='{"final_answer": "Hello ', raw_json=True, chunk_index=0),
         StreamChunk(content='world"}', raw_json=True, chunk_index=1, is_final=True),
+        StreamChunk(content="Hello world", chunk_index=2, is_replace=True),
     ]
     fake_request = SimpleNamespace(is_disconnected=AsyncMock(return_value=False))
     with (

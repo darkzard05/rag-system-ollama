@@ -181,6 +181,7 @@ async def stream_query_rag(
         # 구조화 출력(raw JSON)은 UI와 동일한 추출기로 final_answer만 노출한다.
         raw_json_extractor = FinalAnswerExtractor()
         last_raw_json_is_replace = False
+        parsed_answer_parts: list[str] = []
         handler = get_streaming_handler()
         controller = get_adaptive_controller(client_profile="api")
         sse_handler = ServerSentEventsHandler()
@@ -248,8 +249,16 @@ async def stream_query_rag(
                     logger.info(f"[API] Client disconnected, stopping stream: {sid}")
                     break
                 chunk_index += 1
+                # 파싱으로 이미 최종 답변을 내보낸 뒤 오는 answer_replace는 같은
+                # 본문을 다시 보내 고객이 두 번 누적한다. 확정분이 같으면 본문만
+                # 비우고 인용 초기화 이벤트는 유지한다.
+                if getattr(chunk, "is_replace", False) and chunk.content == "".join(
+                    parsed_answer_parts
+                ):
+                    chunk = replace(chunk, content="")
                 if getattr(chunk, "raw_json", False) and chunk.content:
                     delta = raw_json_extractor.feed(chunk.content)
+                    parsed_answer_parts.append(delta)
                     last_raw_json_is_replace = bool(getattr(chunk, "is_replace", False))
                     chunk = replace(chunk, content=delta, raw_json=False)
                 entries, event_counter = chunk_to_sse_entries(chunk, event_counter)
@@ -279,6 +288,7 @@ async def stream_query_rag(
                     yield sse_handler.format_sse_batch(batch_buffer)
                     batch_buffer.clear()
             tail_delta = raw_json_extractor.finalize()
+            parsed_answer_parts.append(tail_delta)
             if tail_delta:
                 tail_chunk = StreamChunk(
                     content=tail_delta,
