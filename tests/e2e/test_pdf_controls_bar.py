@@ -1,13 +1,8 @@
-"""
-E2E tests for the PDF controls bar (RED baseline for work plan `pdf-control-bar-fix`).
+"""E2E tests for the PDF controls bar.
 
-These tests capture the CURRENT (buggy) geometry of the PDF navigation bar so that
-fixing it later turns them GREEN:
-
-- The bar wrapper is sticky but currently rests ~64px above the column bottom.
-- The "prev" button currently sits ~32px above the Page / "next" controls.
-
-Both tests are expected to FAIL against the current app (RED). Do not weaken them.
+The bar must be sticky, flush with the PDF column bottom, laid out on one line,
+and free of horizontal overflow. Nav labels are matched in both locales because
+the app defaults to English; the sidebar language toggle is not a precondition.
 """
 
 import os
@@ -29,7 +24,7 @@ FIND_BAR_WRAPPER_JS = """
         );
         if (wrapper) return wrapper;
         const btn = Array.from(document.querySelectorAll('button')).find(
-            (b) => b.textContent.includes('이전')
+            (b) => b.textContent.includes('이전') || b.textContent.includes('Previous')
         );
         if (!btn) return null;
         const block = btn.closest('[data-testid="stHorizontalBlock"]');
@@ -42,7 +37,7 @@ FIND_BAR_WRAPPER_JS = """
 BAR_VISIBLE_JS = """
     () => {
         return Array.from(document.querySelectorAll('button')).some((b) => {
-            if (!b.textContent.includes('이전')) return false;
+            if (!b.textContent.includes('이전') && !b.textContent.includes('Previous')) return false;
             const r = b.getBoundingClientRect();
             return r.width > 0 && r.height > 0;
         });
@@ -66,12 +61,14 @@ BAR_METRICS_JS = f"""
                 : el.getBoundingClientRect().top;
         }};
         const prevBtn = Array.from(wrapper.querySelectorAll('button')).find(
-            (b) => b.textContent.includes('이전')
+            (b) => b.textContent.includes('이전') || b.textContent.includes('Previous')
         );
         const nextBtn = Array.from(wrapper.querySelectorAll('button')).find(
-            (b) => b.textContent.includes('다음')
+            (b) => b.textContent.includes('다음') || b.textContent.includes('Next')
         );
-        const pageInput = wrapper.querySelector('input[aria-label="Page"]');
+        const pageInput = Array.from(wrapper.querySelectorAll('input')).find(
+            (i) => ['Page', '페이지'].includes(i.getAttribute('aria-label'))
+        );
         const tops = [topOf(prevBtn), topOf(pageInput), topOf(nextBtn)].filter(
             (t) => t !== null
         );
