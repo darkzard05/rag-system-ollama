@@ -218,11 +218,9 @@ def _render_settings_internal(
         st.info(t("sidebar_switching"))
 
     st.caption(t("settings_intro"))
-    st.space("xsmall")
     left, right = st.columns([1, 1], gap="large")
     with left:
         st.caption(t("settings_group_model"))
-        st.space("xsmall")
         # UI 언어 토글 (단일 콜백 on_language_change 경유)
         current_lang = str(SessionManager.get("ui_lang", "en") or "en")
         lang_labels = list(_LANG_OPTIONS.keys())
@@ -237,7 +235,6 @@ def _render_settings_internal(
             key=_draft_key(LANGUAGE_SELECTOR_KEY),
             help=t("sidebar_language_help"),
         )
-        st.space("xsmall")
 
         # 모델 설정 그룹
         from core.model_catalog import get_filtered_models
@@ -264,7 +261,6 @@ def _render_settings_internal(
             help=t("sidebar_llm_help"),
             disabled=is_generating or is_swapping_model or not ollama_reachable,
         )
-        st.space("xsmall")
 
         if not ollama_reachable:
             st.caption(t("sidebar_ollama_hint"))
@@ -282,7 +278,6 @@ def _render_settings_internal(
             and refresh_models_callback
         ):
             refresh_models_callback()
-        st.space("xsmall")
 
         # 임베딩 선택
         current_emb = (
@@ -304,25 +299,21 @@ def _render_settings_internal(
             help=t("sidebar_embedding_help"),
             disabled=is_generating or is_swapping_model or not ollama_reachable,
         )
-        st.space("xsmall")
 
     with right:
         st.caption(t("settings_group_behavior"))
-        st.space("xsmall")
         st.toggle(
             t("setting_vector_cache"),
             value=bool(ENABLE_VECTOR_CACHE.get()),
             key=_draft_key(VECTOR_CACHE_TOGGLE_KEY),
             help=t("setting_vector_cache_help"),
         )
-        st.space("xsmall")
         st.toggle(
             t("setting_query_cache"),
             value=bool(QUERY_CACHE_ENABLED.get()),
             key=_draft_key(QUERY_CACHE_TOGGLE_KEY),
             help=t("setting_query_cache_help"),
         )
-        st.space("xsmall")
         engine_options = ["auto", "flashrank", "semantic"]
         engine = str(RERANKER_ENGINE.get())
         st.selectbox(
@@ -332,7 +323,6 @@ def _render_settings_internal(
             key=_draft_key(RERANKER_ENGINE_SELECT_KEY),
             help=t("setting_reranker_engine_help"),
         )
-        st.space("xsmall")
         st.toggle(
             t("setting_grading"),
             value=bool(GRADING_ENABLED.get()),
@@ -341,9 +331,7 @@ def _render_settings_internal(
         )
 
     # 실행 동작(왼쪽)과 설정 커밋 동작(오른쪽)을 구분선으로 분리한다.
-    st.space("small")
     st.divider()
-    st.space("xsmall")
     sid = SessionManager.get_session_id()
     actions_left, rule, actions_right = st.columns([1, 0.02, 1], gap="small")
     with actions_left, st.container(horizontal=True, horizontal_alignment="left"):

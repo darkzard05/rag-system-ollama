@@ -729,6 +729,31 @@ iframe[title="ui.components.chat_autoscroll.render_autoscroll_sentinel"] {
     opacity: 1;
 }
 
+/* Native st.dialog has no size cap: its content kept a fixed 794px height and
+   overflowed short viewports. Cap both axes to the viewport and let only the
+   content area scroll, so the title and action bar stay reachable. */
+div:has(> section[role="dialog"]) {
+    max-width: min(720px, calc(100vw - 2rem));
+}
+
+section[role="dialog"] {
+    width: 100%;
+    max-height: calc(100vh - 4rem);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+
+section[role="dialog"] > button,
+section[role="dialog"] > h2 {
+    flex: 0 0 auto;
+}
+
+section[role="dialog"] > div {
+    min-height: 0;
+    overflow-y: auto;
+}
+
 /* Settings footer: thin vertical rule between session actions and Save/Cancel.
    Plain class selector — no new testID or priority override (hygiene gate). */
 .rag-settings-divider {
