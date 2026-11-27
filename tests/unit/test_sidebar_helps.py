@@ -19,7 +19,8 @@ def test_help_keys_complete_en_ko() -> None:
 
 
 def test_sidebar_widgets_wire_help() -> None:
-    source = inspect.getsource(sidebar_mod._render_settings_internal)
-    assert 'help=t("sidebar_upload_help")' in source
-    assert 'help=t("sidebar_llm_help")' in source
-    assert 'help=t("sidebar_embedding_help")' in source
+    upload_source = inspect.getsource(sidebar_mod._render_upload_section)
+    settings_source = inspect.getsource(sidebar_mod._render_settings_internal)
+    assert 'help=t("sidebar_upload_help")' in upload_source
+    assert 'help=t("sidebar_llm_help")' in settings_source
+    assert 'help=t("sidebar_embedding_help")' in settings_source

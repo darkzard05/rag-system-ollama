@@ -4,6 +4,7 @@ Sidebar settings and management component.
 """
 
 import re
+from collections.abc import Callable
 
 import streamlit as st
 
@@ -13,7 +14,12 @@ from common.config import (
 )
 from core.session import SessionManager
 from ui.strings import set_lang, t
-from ui.widget_keys import LANGUAGE_SELECTOR_KEY, reset_all_key
+from ui.widget_keys import (
+    CONFIRM_RESET_PENDING_KEY,
+    LANGUAGE_SELECTOR_KEY,
+    SETTINGS_DIALOG_OPEN_KEY,
+    reset_all_key,
+)
 
 _LANG_OPTIONS: dict[str, str] = {"한국어": "ko", "English": "en"}
 
@@ -60,6 +66,18 @@ def on_language_change() -> None:
     set_lang(code)
 
 
+def _on_settings_dismiss() -> None:
+    """Clear the queued-modal flag when the user closes the settings dialog."""
+    st.session_state[SETTINGS_DIALOG_OPEN_KEY] = False
+
+
+def _request_reset_confirm() -> None:
+    """Defer the reset confirmation to app scope (one dialog per script run)."""
+    st.session_state[CONFIRM_RESET_PENDING_KEY] = True
+    st.session_state[SETTINGS_DIALOG_OPEN_KEY] = False
+    st.rerun()
+
+
 def _render_sidebar_logo():
     """Render the brand logo at the top of the sidebar (C8: theme-driven CSS)."""
     st.markdown(
@@ -71,6 +89,20 @@ def _render_sidebar_logo():
 """,
         unsafe_allow_html=True,
     )
+
+
+def _render_upload_section(file_uploader_callback, is_generating: bool) -> None:
+    """PDF uploader stays in the sidebar; the rest of the settings move to the modal."""
+    is_building = bool(SessionManager.get("is_building_rag", False))
+    with st.container(border=True):
+        st.file_uploader(
+            t("sidebar_upload_label"),
+            type="pdf",
+            key="pdf_uploader",
+            on_change=file_uploader_callback,
+            help=t("sidebar_upload_help"),
+            disabled=is_generating or is_building,
+        )
 
 
 def render_settings_content(
@@ -86,28 +118,28 @@ def render_settings_content(
     available_models=None,
     ollama_reachable=True,
 ):
-    """Render the settings content (callable outside the sidebar)."""
+    """Render the sidebar entry point: brand, uploader, and the settings button."""
+    set_lang(str(SessionManager.get("ui_lang", "en") or "en"))
     _render_sidebar_logo()
     # INT-4: locked controls need a reason — chat input stays live as ■ stop,
-    # sidebar settings wait for the turn to end.
+    # settings wait for the turn to end.
     if is_generating:
         st.caption(t("sidebar_locked_generating"))
-    _render_settings_internal(
-        file_uploader_callback,
-        model_selector_callback,
-        embedding_selector_callback,
-        new_chat_callback,
-        refresh_models_callback,
-        is_generating,
-        is_swapping_model,
-        current_file_name,
-        available_models,
-        ollama_reachable,
-    )
+    if is_swapping_model:
+        st.info(t("sidebar_switching"))
+    _render_upload_section(file_uploader_callback, is_generating)
+    if st.button(
+        t("sidebar_settings"),
+        width="stretch",
+        type="secondary",
+        icon=":material/settings:",
+        help=t("sidebar_settings_help"),
+        key="settings_dialog_button",
+    ):
+        st.session_state[SETTINGS_DIALOG_OPEN_KEY] = True
 
 
 def _render_settings_internal(
-    file_uploader_callback,
     model_selector_callback,
     embedding_selector_callback,
     new_chat_callback,
@@ -117,6 +149,7 @@ def _render_settings_internal(
     current_file_name,
     available_models,
     ollama_reachable=True,
+    reset_callback: Callable[[], None] | None = None,
 ):
     # LANG 단일 배선: 스토어 값이 매 렌더 strings 활성 언어를 결정한다.
     set_lang(str(SessionManager.get("ui_lang", "en") or "en"))
@@ -128,126 +161,189 @@ def _render_settings_internal(
     if is_swapping_model:
         st.info(t("sidebar_switching"))
 
-    # 1. 문서 업로드 섹션
-    with st.container(border=True):
-        st.file_uploader(
-            t("sidebar_upload_label"),
-            type="pdf",
-            key="pdf_uploader",
-            on_change=file_uploader_callback,
-            help=t("sidebar_upload_help"),
-            disabled=is_generating or is_building,
-        )
+    # UI 언어 토글 (단일 콜백 on_language_change 경유)
+    current_lang = str(SessionManager.get("ui_lang", "en") or "en")
+    lang_labels = list(_LANG_OPTIONS.keys())
+    try:
+        lang_idx = list(_LANG_OPTIONS.values()).index(current_lang)
+    except ValueError:
+        lang_idx = 1
+    st.selectbox(
+        t("sidebar_language"),
+        lang_labels,
+        index=lang_idx,
+        key=LANGUAGE_SELECTOR_KEY,
+        on_change=on_language_change,
+        help=t("sidebar_language_help"),
+    )
 
-    # 2. 고급 설정 (익스팬더)
-    with st.expander(t("sidebar_settings"), expanded=False):
-        # UI 언어 토글 (단일 콜백 on_language_change 경유)
-        current_lang = str(SessionManager.get("ui_lang", "en") or "en")
-        lang_labels = list(_LANG_OPTIONS.keys())
-        try:
-            lang_idx = list(_LANG_OPTIONS.values()).index(current_lang)
-        except ValueError:
-            lang_idx = 1
-        st.selectbox(
-            t("sidebar_language"),
-            lang_labels,
-            index=lang_idx,
-            key=LANGUAGE_SELECTOR_KEY,
-            on_change=on_language_change,
-            help=t("sidebar_language_help"),
-        )
-        # 모델 설정 그룹
-        from core.model_catalog import get_filtered_models
+    # 모델 설정 그룹
+    from core.model_catalog import get_filtered_models
 
-        filtered = get_filtered_models(safe_models)
-        actual_llms = filtered["llm"]
-        actual_embeddings = filtered["embedding"]
+    filtered = get_filtered_models(safe_models)
+    actual_llms = filtered["llm"]
+    actual_embeddings = filtered["embedding"]
 
-        # LLM 선택
-        last_model = SessionManager.get("last_selected_model") or DEFAULT_OLLAMA_MODEL
-        if last_model not in actual_llms:
-            last_model = actual_llms[0]
-        try:
-            def_idx = actual_llms.index(last_model)
-        except ValueError:
-            def_idx = 0
+    # LLM 선택
+    last_model = SessionManager.get("last_selected_model") or DEFAULT_OLLAMA_MODEL
+    if last_model not in actual_llms:
+        last_model = actual_llms[0]
+    try:
+        def_idx = actual_llms.index(last_model)
+    except ValueError:
+        def_idx = 0
 
-        st.selectbox(
-            t("sidebar_llm_label"),
-            actual_llms,
-            index=def_idx,
-            key="model_selector",
-            on_change=model_selector_callback,
-            format_func=format_llm_option,
-            help=t("sidebar_llm_help"),
-            disabled=is_generating or is_swapping_model or not ollama_reachable,
-        )
+    st.selectbox(
+        t("sidebar_llm_label"),
+        actual_llms,
+        index=def_idx,
+        key="model_selector",
+        on_change=model_selector_callback,
+        format_func=format_llm_option,
+        help=t("sidebar_llm_help"),
+        disabled=is_generating or is_swapping_model or not ollama_reachable,
+    )
 
-        if not ollama_reachable:
-            st.caption(t("sidebar_ollama_hint"))
+    if not ollama_reachable:
+        st.caption(t("sidebar_ollama_hint"))
 
-        # 모델 새로고침 (Ollama에서 모델 목록 재조회 — 보조 동작이므로 하향)
-        if (
-            st.button(
-                t("sidebar_refresh"),
-                width="stretch",
-                type="secondary",
-                help=t("sidebar_refresh_help"),
-                key="refresh_models_btn",
-                disabled=is_generating,
-            )
-            and refresh_models_callback
-        ):
-            refresh_models_callback()
-
-        # 임베딩 선택
-        current_emb = (
-            SessionManager.get("last_selected_embedding_model")
-            or DEFAULT_EMBEDDING_MODEL
-        )
-        if current_emb not in actual_embeddings:
-            current_emb = actual_embeddings[0]
-        try:
-            emb_idx = actual_embeddings.index(current_emb)
-        except ValueError:
-            emb_idx = 0
-
-        st.selectbox(
-            t("sidebar_embedding_label"),
-            actual_embeddings,
-            index=emb_idx,
-            key="embedding_model_selector",
-            on_change=embedding_selector_callback,
-            help=t("sidebar_embedding_help"),
-            disabled=is_generating or is_swapping_model or not ollama_reachable,
-        )
-
-        # 새 대화 (문서 유지, 대화만 초기화)
-        if (
-            st.button(
-                t("sidebar_new_chat"),
-                width="stretch",
-                type="primary",
-                help=t("sidebar_new_chat_help"),
-                key="new_chat_btn",
-                disabled=is_generating or is_building,
-            )
-            and new_chat_callback
-        ):
-            new_chat_callback()
-
-        # 초기화 (파괴적 동작 — 확인 다이얼로그 + 생성/빌드 중 비활성 + 시각 위계 하향)
-        sid = SessionManager.get_session_id()
-        st.divider()
-        if st.button(
-            t("sidebar_reset"),
-            width="stretch",
+    # 모델 새로고침 (Ollama에서 모델 목록 재조회 — 보조 동작이므로 하향)
+    if (
+        st.button(
+            t("sidebar_refresh"),
+            width="content",
             type="secondary",
-            help=t("sidebar_reset_help"),
-            key=reset_all_key(sid),
+            help=t("sidebar_refresh_help"),
+            key="refresh_models_btn",
+            disabled=is_generating,
+        )
+        and refresh_models_callback
+    ):
+        refresh_models_callback()
+
+    # 임베딩 선택
+    current_emb = (
+        SessionManager.get("last_selected_embedding_model") or DEFAULT_EMBEDDING_MODEL
+    )
+    if current_emb not in actual_embeddings:
+        current_emb = actual_embeddings[0]
+    try:
+        emb_idx = actual_embeddings.index(current_emb)
+    except ValueError:
+        emb_idx = 0
+
+    st.selectbox(
+        t("sidebar_embedding_label"),
+        actual_embeddings,
+        index=emb_idx,
+        key="embedding_model_selector",
+        on_change=embedding_selector_callback,
+        help=t("sidebar_embedding_help"),
+        disabled=is_generating or is_swapping_model or not ollama_reachable,
+    )
+
+    # 새 대화 (문서 유지, 대화만 초기화)
+    if (
+        st.button(
+            t("sidebar_new_chat"),
+            width="content",
+            type="primary",
+            help=t("sidebar_new_chat_help"),
+            key="new_chat_btn",
             disabled=is_generating or is_building,
-        ):
+        )
+        and new_chat_callback
+    ):
+        new_chat_callback()
+
+    # 초기화 (파괴적 동작 — 확인 다이얼로그 + 생성/빌드 중 비활성 + 시각 위계 하향)
+    sid = SessionManager.get_session_id()
+    st.divider()
+    if st.button(
+        t("sidebar_reset"),
+        width="content",
+        type="secondary",
+        help=t("sidebar_reset_help"),
+        key=reset_all_key(sid),
+        disabled=is_generating or is_building,
+    ):
+        if reset_callback:
+            reset_callback()
+        else:
             _confirm_reset_all()
+
+
+def _render_settings_modal(
+    model_selector_callback,
+    embedding_selector_callback,
+    new_chat_callback,
+    refresh_models_callback,
+    is_generating: bool,
+    is_swapping_model: bool,
+    current_file_name,
+    available_models,
+    ollama_reachable: bool,
+) -> None:
+    """Body of the large centered settings dialog."""
+    if is_generating:
+        st.caption(t("sidebar_locked_generating"))
+    # Refresh Models writes this key; read it here so a dialog-fragment rerun
+    # sees the new list without waiting for the full app to rerun.
+    models = st.session_state.get("available_models_list") or available_models
+    _render_settings_internal(
+        model_selector_callback,
+        embedding_selector_callback,
+        new_chat_callback,
+        refresh_models_callback,
+        is_generating,
+        is_swapping_model,
+        current_file_name,
+        models,
+        ollama_reachable,
+        reset_callback=_request_reset_confirm,
+    )
+
+
+def render_pending_dialogs(
+    model_selector_callback,
+    embedding_selector_callback,
+    new_chat_callback,
+    refresh_models_callback,
+    is_generating: bool = False,
+    is_swapping_model: bool = False,
+    current_file_name=None,
+    available_models=None,
+    ollama_reachable: bool = True,
+) -> None:
+    """Render at most one queued modal from the app scope.
+
+    Streamlit allows only one dialog per script run. The reset confirmation
+    wins over the settings modal; the settings dialog is created here, outside
+    ``st.sidebar``, so it renders centered over the main app.
+    """
+    if st.session_state.pop(CONFIRM_RESET_PENDING_KEY, False):
+        st.session_state[SETTINGS_DIALOG_OPEN_KEY] = False
+        _confirm_reset_all()
+        return
+    if not st.session_state.get(SETTINGS_DIALOG_OPEN_KEY, False):
+        return
+    dialog = st.dialog(
+        t("sidebar_settings"),
+        width="large",
+        position="center",
+        on_dismiss=_on_settings_dismiss,
+    )
+    dialog(_render_settings_modal)(
+        model_selector_callback,
+        embedding_selector_callback,
+        new_chat_callback,
+        refresh_models_callback,
+        is_generating,
+        is_swapping_model,
+        current_file_name,
+        available_models,
+        ollama_reachable,
+    )
 
 
 @st.dialog(t("sidebar_reset_title"))

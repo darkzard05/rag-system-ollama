@@ -92,6 +92,9 @@ UI_STRINGS: dict[str, dict[str, str]] = {
             "The PDF is split into chunks and indexed as answer sources."
         ),
         "sidebar_settings": "Settings",
+        "sidebar_settings_help": (
+            "Open the language, model, and session settings in a large dialog."
+        ),
         "sidebar_llm_label": "LLM Model Selection",
         "sidebar_llm_help": (
             "The model that writes answers. Smaller models respond faster."
@@ -231,6 +234,7 @@ UI_STRINGS: dict[str, dict[str, str]] = {
             "PDF를 청크로 나누어 인덱싱하고 답변 근거로 사용합니다."
         ),
         "sidebar_settings": "설정",
+        "sidebar_settings_help": ("언어·모델·세션 설정을 큰 창에서 엽니다."),
         "sidebar_llm_label": "LLM 모델 선택",
         "sidebar_llm_help": ("답변을 작성하는 모델입니다. 가벼울수록 빠릅니다."),
         # UX-7: LLM 셀렉터 역할 배지 (모델 ID에서 크기 파싱)

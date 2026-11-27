@@ -991,7 +991,11 @@ def _render_app_layout(
     available_models: list[str] | None = None, ollama_reachable: bool = True
 ) -> None:
     from core.session import SessionManager
-    from ui.components.sidebar import render_settings_content
+    from ui.components.sidebar import render_pending_dialogs, render_settings_content
+
+    is_generating = bool(SessionManager.get("is_generating_answer", False))
+    is_swapping_model = bool(SessionManager.get("is_swapping_model", False))
+    current_file_name = SessionManager.get("last_uploaded_file_name")
 
     with st.sidebar:
         render_settings_content(
@@ -1000,12 +1004,26 @@ def _render_app_layout(
             embedding_selector_callback=on_embedding_change,
             new_chat_callback=on_new_chat,
             refresh_models_callback=on_refresh_models,
-            is_generating=bool(SessionManager.get("is_generating_answer", False)),
-            is_swapping_model=bool(SessionManager.get("is_swapping_model", False)),
-            current_file_name=SessionManager.get("last_uploaded_file_name"),
+            is_generating=is_generating,
+            is_swapping_model=is_swapping_model,
+            current_file_name=current_file_name,
             available_models=available_models,
             ollama_reachable=ollama_reachable,
         )
+
+    # The settings modal must be created outside st.sidebar so it stays centered
+    # over the main app. Only one dialog may be open per script run.
+    render_pending_dialogs(
+        model_selector_callback=on_model_change,
+        embedding_selector_callback=on_embedding_change,
+        new_chat_callback=on_new_chat,
+        refresh_models_callback=on_refresh_models,
+        is_generating=is_generating,
+        is_swapping_model=is_swapping_model,
+        current_file_name=current_file_name,
+        available_models=available_models,
+        ollama_reachable=ollama_reachable,
+    )
 
     from ui.ui import render_main_content
 

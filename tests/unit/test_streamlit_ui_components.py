@@ -45,8 +45,25 @@ class TestStreamlitUIComponents(unittest.TestCase):
             "업로드하신 PDF" in str(m.value) for m in at.chat_message[0].markdown
         ), "Onboarding guide panel not rendered"
 
-        # Model + embedding selectboxes (sidebar.py: render_settings_content)
-        assert len(at.sidebar.selectbox) >= 1, "No model selectbox rendered"
+        # Advanced settings moved from the sidebar into a centered modal.
+        assert len(at.sidebar.selectbox) == 0, "Settings still rendered in the sidebar"
+        buttons = [b for b in at.sidebar.button if b.key == "settings_dialog_button"]
+        assert len(buttons) == 1, "Settings button not rendered in the sidebar"
+        buttons[0].click().run()
+        assert len(at.selectbox) >= 1, "Settings modal did not open"
+
+    def test_settings_reset_defers_confirm_dialog(self):
+        """Reset inside the settings modal must not nest two dialogs."""
+        at = AppTest.from_file(_SMOKE_SCRIPT, default_timeout=60).run()
+        settings = [b for b in at.sidebar.button if b.key == "settings_dialog_button"]
+        settings[0].click().run()
+        reset = [b for b in at.button if b.key and b.key.startswith("reset_all_")]
+        assert len(reset) == 1, "Reset All not rendered in the settings modal"
+        reset[0].click().run()
+        assert not at.exception, at.exception
+        assert any(b.key == "reset_confirm_cancel_btn" for b in at.button), (
+            "Reset confirmation did not open after the settings modal closed"
+        )
 
     def test_chat_input_renders(self):
         """Chat input area renders without a full app boot."""

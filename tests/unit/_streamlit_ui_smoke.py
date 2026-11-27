@@ -22,7 +22,10 @@ from ui.components.chat import (  # noqa: E402
     render_chat_input_area,
     render_chat_messages_area,
 )
-from ui.components.sidebar import render_settings_content  # noqa: E402
+from ui.components.sidebar import (  # noqa: E402
+    render_pending_dialogs,
+    render_settings_content,
+)
 
 # ko-KR primary premise: 스토어에 ko를 심는다 (sidebar 단일 배선이 매 렌더
 # 스토어에서 strings.LANG을 결정하므로 set_lang 직접 호출은 소용없다).
@@ -46,6 +49,14 @@ with st.sidebar:
         current_file_name=None,
         available_models=[DEFAULT_OLLAMA_MODEL],
     )
+
+render_pending_dialogs(
+    model_selector_callback=lambda: None,
+    embedding_selector_callback=lambda: None,
+    new_chat_callback=lambda: None,
+    refresh_models_callback=lambda: None,
+    available_models=[DEFAULT_OLLAMA_MODEL],
+)
 
 col_pdf, col_chat = st.columns([1, 2], gap="small")
 with col_pdf:

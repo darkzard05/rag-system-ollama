@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
-from ui.components.sidebar import render_settings_content
+import ui.components.sidebar as sidebar_mod
 
 
 def _select_kwargs(mock_st, key: str) -> dict:
@@ -27,11 +27,15 @@ def test_embedding_selector_disabled_when_ollama_is_down() -> None:
         ),
     ):
         mock_st.button.return_value = False
-        render_settings_content(
-            lambda *_args, **_kwargs: None,
-            lambda *_args, **_kwargs: None,
-            lambda *_args, **_kwargs: None,
-            available_models=["llm-a", "emb-a"],
+        sidebar_mod._render_settings_internal(
+            lambda: None,
+            lambda: None,
+            lambda: None,
+            lambda: None,
+            False,
+            False,
+            None,
+            ["llm-a", "emb-a"],
             ollama_reachable=False,
         )
 

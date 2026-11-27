@@ -57,6 +57,13 @@ SAMPLE_QUESTION_STATE_KEY: str = "onboarding_sample_question"
 # (never writes) this key, so it needs no flicker protection.
 LANGUAGE_SELECTOR_KEY: str = "language_selector"
 
+# Settings modal lifecycle (src/ui/components/sidebar.py). These are plain
+# session-state flags, not widget keys. A dialog is a fragment, so settings
+# callbacks only rerun the modal; dismissing it reruns the full app and lets
+# main._handle_pending_tasks consume the store changes.
+SETTINGS_DIALOG_OPEN_KEY: str = "settings_dialog_open"
+CONFIRM_RESET_PENDING_KEY: str = "confirm_reset_pending"
+
 
 def cancel_rebuild_key(sid: str, attempt: int | None = None) -> str:
     """Widget key for the RAG rebuild cancel button (components/chat.py)."""
