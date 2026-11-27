@@ -117,6 +117,35 @@ def test_logout_revokes_token():
     assert after.status_code == 401
 
 
+def test_other_user_cannot_logout_owned_session():
+    """A user must not be able to end another user's session through logout."""
+    from src.api.api_server import auth_manager
+
+    users = (
+        ("logout_owner_a", "logout_user_a", "logout-pass-a"),
+        ("logout_owner_b", "logout_user_b", "logout-pass-b"),
+    )
+    tokens: dict[str, str] = {}
+    sessions: dict[str, str] = {}
+    for user_id, username, password in users:
+        if user_id not in auth_manager._users:  # type: ignore[attr-defined]
+            assert auth_manager.register_user(user_id, username, password)
+        resp = _login(username, password)
+        assert resp.status_code == 200, resp.text
+        tokens[user_id] = resp.json()["access_token"]
+        sessions[user_id] = resp.json()["session_id"]
+
+    other_headers = {"Authorization": f"Bearer {tokens['logout_owner_a']}"}
+    resp = client.post(
+        "/api/v1/logout",
+        json={"session_id": sessions["logout_owner_b"]},
+        headers=other_headers,
+    )
+    assert resp.status_code == 403
+    assert auth_manager.get_session(sessions["logout_owner_b"]).is_active
+    assert auth_manager.verify_token(tokens["logout_owner_b"])
+
+
 # --- D. 세션 소유권 검사 ---
 
 
