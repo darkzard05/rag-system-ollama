@@ -714,8 +714,19 @@ _stage_timing_var: contextvars.ContextVar[dict[str, float]] = contextvars.Contex
 
 
 def _reset_stage_timings() -> None:
-    """Clear per-query stage timing buffer (called at preprocess start)."""
-    _stage_timing_var.set(
+    """Clear the per-query stage timing buffer in place.
+
+    LangGraph runs every node in ``copy_context()``. Replacing the dict with
+    ``ContextVar.set`` inside preprocess confines it to that node, so generate
+    reads an empty buffer. All nodes must share one dict object; the caller
+    seeds it before graph invocation, and each reset only mutates it.
+    """
+    stages = _stage_timing_var.get(None)
+    if stages is None:
+        stages = {}
+        _stage_timing_var.set(stages)
+    stages.clear()
+    stages.update(
         {
             "preprocess_ms": 0.0,
             "retrieve_ms": 0.0,

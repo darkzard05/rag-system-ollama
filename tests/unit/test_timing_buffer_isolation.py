@@ -11,6 +11,7 @@
 """
 
 import asyncio
+import contextvars
 import re
 from unittest.mock import patch
 
@@ -90,6 +91,32 @@ async def test_speculative_task_shares_buffer_and_accumulates():
     assert snap.get("retrieve_ms") == 100.0, (
         f"retrieve 누적이 유지되어야 하는데 {snap.get('retrieve_ms')}"
     )
+
+
+def test_stage_timings_survive_langgraph_node_contexts() -> None:
+    """LangGraph의 copy_context 노드 경계를 넘어 스테이지 값이 전달되어야 한다."""
+    # prepare_query_config_or_build가 부모 컨텍스트에 시드하는 것을 흉내낸다.
+    gcore._reset_stage_timings()
+
+    def preprocess_node() -> None:
+        ctx = contextvars.copy_context()
+        ctx.run(gcore._reset_stage_timings)
+        ctx.run(lambda: gcore._add_stage_ms("preprocess_ms", 12.0))
+
+    def retrieve_node() -> None:
+        ctx = contextvars.copy_context()
+        ctx.run(lambda: gcore._add_stage_ms("retrieve_ms", 30.0))
+
+    def generate_node() -> dict[str, float]:
+        ctx = contextvars.copy_context()
+        return ctx.run(lambda: dict(gcore._stage_timing_var.get({})))
+
+    preprocess_node()
+    retrieve_node()
+    snap = generate_node()
+
+    assert snap.get("preprocess_ms") == 12.0, snap
+    assert snap.get("retrieve_ms") == 30.0, snap
 
 
 def test_query_timing_format_preserved():

@@ -29,6 +29,7 @@ from common.exceptions import EmptyPDFError, InsufficientChunksError, VectorStor
 from core.build_state import PHASE_DETAIL_KEY, BuildEvent, BuildPhase
 from core.chunking import split_documents, warm_embedding_tokenizer_async
 from core.document_processor import compute_file_hash, emit_progress, load_pdf_docs
+from core.graph._graph_core import _reset_stage_timings
 from core.graph.graph_builder import build_graph, invalidate_graph_cache
 from core.resource_manager import get_resource_manager
 from core.retriever_factory import create_bm25_retriever, create_vector_store
@@ -609,6 +610,9 @@ async def prepare_query_config_or_build(
     build_fn: Callable[..., Any] | None = None,
 ) -> dict[str, Any]:
     """LLM·임베더·리트리버 설정을 포함한 LangGraph 실행 Config를 준비합니다."""
+    # 그래프 호출 전 부모 컨텍스트에 공유 버퍼를 시드한다. 각 노드는
+    # copy_context()에서 실행되므로 노드 내부의 set은 형제 노드에 보이지 않는다.
+    _reset_stage_timings()
     from core.model_loader import ModelManager
 
     session_model = SessionManager.get("last_selected_model", session_id=session_id)
