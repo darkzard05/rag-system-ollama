@@ -123,10 +123,37 @@ async def upload_document(
     if not file.filename or not file.filename.endswith(".pdf"):
         raise HTTPException(status_code=400, detail="PDF 파일만 업로드 가능합니다.")
 
+    # Validate the body before claiming the session. A rejected upload must not
+    # bind an unbound session or create one that evicts another user's session
+    # when the active-session limit is reached.
+    content = b""
+    total = 0
+    while chunk := await file.read(1024 * 1024):  # 1MB 청크
+        total += len(chunk)
+        if total > srv.MAX_PDF_SIZE_BYTES:
+            raise HTTPException(
+                status_code=413, detail="파일 크기가 50MB를 초과합니다."
+            )
+        content += chunk
+    # [입력 검증] 저장·소유권 바인딩 전에 실제 PDF인지 검증한다.
+    # 검증 실패 시 스토리지/레지스트리를 오염시키지 않고 400으로 거부한다.
+    _ensure_valid_pdf(content, file.filename)
+    # Tier1.5: 페이지 수 상한 검사. 파싱 불가(None)는 빌드 단계에서
+    # 확정 판정하므로 여기서 거부하지 않고 통과시킨다.
+    from common.pdf_utils import get_pdf_page_count_from_bytes
+
+    page_count = get_pdf_page_count_from_bytes(content)
+    if page_count is not None and page_count > MAX_PDF_PAGES:
+        raise HTTPException(
+            status_code=413,
+            detail=f"PDF 페이지 수가 상한({MAX_PDF_PAGES})을 초과합니다.",
+        )
+
     # 다른 사용자가 소유한 세션으로의 업로드를 차단 (교차 사용자 내용 주입 방지)
     _require_session_owner(session_id, user_id)
-    # [TOCTOU 방지] 소유권 바인딩을 핸들러 최상단으로 이동: 첫 업로드가 진행되는 동안
-    # 다른 사용자의 동일 세션 업로드가 교차 주입되는 경합을 차단한다.
+    # [TOCTOU 방지] 소유권 바인딩은 저장·세션 생성 전에 수행한다.
+    # 첫 업로드가 진행되는 동안 다른 사용자의 동일 세션 업로드가 교차 주입되는
+    # 경합은 first-wins 바인딩으로 차단한다.
     _bind_session_owner(session_id, user_id)
 
     # 명시적으로 세션 초기화 (최적화: 직접 호출)
@@ -134,29 +161,6 @@ async def upload_document(
 
     try:
         # PDF를 file_hash 기반 스토리지에 영구 보존 (PDF 서빙 + 좌표 하이드레이션용)
-        # [입력 경계] 파일 크기 제한: 메모리 고갈 방지를 위해 청크 단위로 읽으며 상한을 초과하면 거부
-        content = b""
-        total = 0
-        while chunk := await file.read(1024 * 1024):  # 1MB 청크
-            total += len(chunk)
-            if total > srv.MAX_PDF_SIZE_BYTES:
-                raise HTTPException(
-                    status_code=413, detail="파일 크기가 50MB를 초과합니다."
-                )
-            content += chunk
-        # [입력 검증] 저장·소유권 바인딩 전에 실제 PDF인지 검증한다.
-        # 검증 실패 시 스토리지/레지스트리를 오염시키지 않고 400으로 거부한다.
-        _ensure_valid_pdf(content, file.filename)
-        # Tier1.5: 페이지 수 상한 검사. 파싱 불가(None)는 빌드 단계에서
-        # 확정 판정하므로 여기서 거부하지 않고 통과시킨다.
-        from common.pdf_utils import get_pdf_page_count_from_bytes
-
-        page_count = get_pdf_page_count_from_bytes(content)
-        if page_count is not None and page_count > MAX_PDF_PAGES:
-            raise HTTPException(
-                status_code=413,
-                detail=f"PDF 페이지 수가 상한({MAX_PDF_PAGES})을 초과합니다.",
-            )
         file_hash = compute_file_hash("", data=content)
         # [TOCTOU 방지] 파일 소유권 바인딩을 파일 저장 직전으로 이동.
         _bind_file_owner(file_hash, user_id)
