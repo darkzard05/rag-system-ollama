@@ -260,18 +260,35 @@ class PipelineBuilder:
                 cancel,
             )
         except BaseException:
-            SessionManager.set("file_hash", prev_file_hash, session_id=self.session_id)
-            SessionManager.set(
-                "pdf_file_path", prev_pdf_file_path, session_id=self.session_id
+            # A newer upload can replace the session state while this worker is
+            # still building. Roll back only while this build still owns the
+            # state it committed at entry.
+            current_hash = SessionManager.get("file_hash", session_id=self.session_id)
+            current_path = SessionManager.get(
+                "pdf_file_path", session_id=self.session_id
             )
-            SessionManager.set(
-                "last_uploaded_file_name", prev_file_name, session_id=self.session_id
-            )
-            SessionManager.set("is_building_rag", False, session_id=self.session_id)
-            logger.warning(
-                "[RAG] [INDEX] 파이프라인 구축 실패 — file_hash 롤백: "
-                f"{file_hash!r} -> {prev_file_hash!r}"
-            )
+            if current_hash == resolved_hash and current_path == file_path:
+                SessionManager.set(
+                    "file_hash", prev_file_hash, session_id=self.session_id
+                )
+                SessionManager.set(
+                    "pdf_file_path", prev_pdf_file_path, session_id=self.session_id
+                )
+                SessionManager.set(
+                    "last_uploaded_file_name",
+                    prev_file_name,
+                    session_id=self.session_id,
+                )
+                SessionManager.set("is_building_rag", False, session_id=self.session_id)
+                logger.warning(
+                    "[RAG] [INDEX] 파이프라인 구축 실패 — file_hash 롤백: "
+                    f"{resolved_hash!r} -> {prev_file_hash!r}"
+                )
+            else:
+                logger.warning(
+                    "[RAG] [INDEX] 파이프라인 구축 실패 — 새 업로드가 세션을 소유해 "
+                    f"롤백 건너뜀: {resolved_hash!r}"
+                )
             raise
 
         if (
