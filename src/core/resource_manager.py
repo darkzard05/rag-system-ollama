@@ -300,17 +300,17 @@ class BaseResourcePool(Generic[T]):
 
         # pinned 리소스는 퇴출 대상이 아니므로, 퇴출로 확보 가능한 용량만 따진다.
         with self._lock:
-            if key in self._pool:
+            replacing = key in self._pool
+            if replacing:
                 old_res = self._pool[key]
                 self._current_bytes -= self._get_resource_size(old_res)
                 self._pool.move_to_end(key)
 
-            # 용량 초과 시 가장 오래된 unpinned 리소스를 하나씩 퇴출.
-            # 락을 유지한 채 동기 퇴출하므로 동시 put과의 경쟁이 없습니다.
-            while (
-                len(self._pool) >= self.item_limit
-                or (self._current_bytes + resource_size) > self.byte_limit
-            ):
+            # 교체는 기존 슬롯을 재사용하므로 항목 수 제한을 적용하지 않습니다.
+            # 바이트 제한은 교체 후 크기가 커진 경우에도 여전히 적용합니다.
+            while (not replacing and len(self._pool) >= self.item_limit) or (
+                self._current_bytes + resource_size
+            ) > self.byte_limit:
                 if not self._evict_one_locked():
                     # 더 이상 퇴출할 수 있는(unpinned) 리소스가 없으면 중단
                     break
