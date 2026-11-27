@@ -35,6 +35,9 @@ _PARTICLES = (
     "한테",
 )
 _P_LENS = (2, 1)
+_PARTICLES_BY_LEN = {
+    length: tuple(p for p in _PARTICLES if len(p) == length) for length in _P_LENS
+}
 
 
 def bm25_tokenizer(text: str) -> list[str]:
@@ -58,10 +61,10 @@ def bm25_tokenizer(text: str) -> list[str]:
         # 한글인 경우 추가 처리
         if "가" <= token[0] <= "힣":
             # 2. 간단한 어미/조사 제거 (끝글자 체크)
-            # 2음절 이상의 조사 처리 지원
+            # Match only particles of the current length. A 2-char slice must
+            # not be cut because a 1-char particle happens to be a suffix.
             for p_len in _P_LENS:
-                if len(token) > p_len + 1 and token.endswith(_PARTICLES):
-                    # _PARTICLES 튜플에 2음절 조사가 포함되어 있으므로 endswith가 올바르게 작동함
+                if len(token) > p_len + 1 and token.endswith(_PARTICLES_BY_LEN[p_len]):
                     stem = token[:-p_len]
                     if len(stem) >= 2:
                         final_tokens.append(stem)
