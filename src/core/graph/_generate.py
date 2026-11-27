@@ -53,6 +53,7 @@ from core.graph._graph_core import (
     _stage_timing_var,
     _strip_json_fence,
     get_state_attr,
+    query_cache_model,
 )
 from core.graph._partial_citations import PartialCitationScanner
 from core.graph._speculative_gen import _adopt_speculative_generate
@@ -1723,7 +1724,7 @@ async def generate(
             response=result["response"],
             confidence=result.get("confidence", 0.0),
             file_hash=file_hash or "",
-            model=SessionManager.get("last_selected_model", session_id=sid),
+            model=query_cache_model(sid),
             citations=result["citations"],
             # [최적화-01] preprocess가 선계산한 순수 쿼리 벡터를 저장에도 재사용해
             # 세맨틱 저장 시 재임베딩(Ollama HTTP)을 제거하고, 조회 경로와 동일한

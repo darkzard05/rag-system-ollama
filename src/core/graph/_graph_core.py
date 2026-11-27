@@ -76,6 +76,18 @@ def _query_cache_key(file_hash: str | None, query: str, model: str | None) -> st
     return f"{file_hash or ''}~{model or ''}:{query}"
 
 
+def query_cache_model(session_id: str) -> str | None:
+    """모델 네임스페이스에 실제로 로드된 모델 이름을 사용한다.
+
+    API 요청이 ``model_name``을 오버라이드하면 ``last_selected_model``은 이전
+    기본값을 유지한다. 그 값으로 캐시 키를 만들면 다른 모델이 생성한 답변을
+    기본 모델 질의가 재사용한다.
+    """
+    return SessionManager.get(
+        "llm_model_name", session_id=session_id
+    ) or SessionManager.get("last_selected_model", session_id=session_id)
+
+
 def _is_valid_query_cache_value(cached: Any, min_conf: float) -> bool:
     """쿼리 캐시 히트 판정 (테스트 가능한 순수 조건).
 

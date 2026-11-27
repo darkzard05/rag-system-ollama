@@ -32,6 +32,7 @@ from core.graph._graph_core import (
     _query_cache_key,
     _reset_stage_timings,
     get_state_attr,
+    query_cache_model,
 )
 from core.session import SessionManager
 from services.monitoring.performance_monitor import OperationType
@@ -159,11 +160,7 @@ async def preprocess(
         try:
             # D17 — cache key namespaced by file_hash so cross-document queries
             # can't collide; the model segment prevents cross-model answer reuse.
-            cache_key = _query_cache_key(
-                file_hash,
-                query,
-                SessionManager.get("last_selected_model", session_id=sid),
-            )
+            cache_key = _query_cache_key(file_hash, query, query_cache_model(sid))
             # [최적화-01] 선계산 벡터를 주입해 내부 재임베딩(네임스페이스 키
             # 대상 HTTP)을 원천 차단한다. None이면 기존 계약대로 내부 임베딩.
             cached = await get_cache_manager().get(
