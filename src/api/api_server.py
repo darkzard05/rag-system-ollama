@@ -181,7 +181,7 @@ app.add_middleware(
     allow_origins=list(CORS_ALLOW_ORIGINS),
     allow_credentials=True,
     allow_methods=["GET", "POST", "DELETE"],
-    allow_headers=["Authorization", "Content-Type"],
+    allow_headers=["Authorization", "Content-Type", "X-Session-ID"],
 )
 
 # --- 보안 및 인증 설정 ---
