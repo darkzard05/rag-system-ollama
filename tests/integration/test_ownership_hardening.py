@@ -154,3 +154,35 @@ async def test_concurrent_upload_second_rejected(client, pdf_override, auth_over
         release.set()
         resp_a = await task_a
         assert resp_a.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_rejected_query_does_not_evict_other_sessions(client):
+    """A 400 for an unbound session must not create it and evict a victim."""
+    import src.api.api_server as api
+    from core.session import SessionManager
+
+    api._session_owners.clear()
+    SessionManager.reset()
+    try:
+        victim = "eviction-victim-session"
+        SessionManager.init_session(session_id=victim)
+        SessionManager.set(
+            "last_uploaded_file_name", "victim-secret.pdf", session_id=victim
+        )
+        SessionManager.add_message("user", "confidential", session_id=victim)
+
+        for i in range(64):
+            resp = await client.post(
+                "/api/v1/query",
+                json={"query": "hello", "session_id": f"churn-{i}"},
+            )
+            assert resp.status_code == 400
+
+        assert (
+            SessionManager.get("last_uploaded_file_name", session_id=victim)
+            == "victim-secret.pdf"
+        )
+        assert len(SessionManager.get_messages(session_id=victim)) == 1
+    finally:
+        SessionManager.reset()

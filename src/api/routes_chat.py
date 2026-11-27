@@ -105,11 +105,12 @@ async def query_rag(
         raise HTTPException(
             status_code=400, detail=f"질문은 {MAX_QUERY_LENGTH}자 이하여야 합니다."
         )
-    srv.SessionManager.init_session(session_id=sid)
+    # 세션 생성 전에 업로드 여부를 확인한다. 문서가 없는 임의 sid의 질의가
+    # 세션을 만들면 상한 도달 시 가장 오래된 다른 사용자의 세션이 퇴출된다.
     _require_session_owner(sid, user_id)
-
     if srv.SessionManager.get("last_uploaded_file_name", session_id=sid) is None:
         raise HTTPException(status_code=400, detail="먼저 문서를 업로드해주세요.")
+    srv.SessionManager.init_session(session_id=sid)
 
     start_time = time.time()
     try:
@@ -164,14 +165,13 @@ async def stream_query_rag(
         raise HTTPException(
             status_code=400, detail=f"질문은 {MAX_QUERY_LENGTH}자 이하여야 합니다."
         )
-    srv.SessionManager.init_session(session_id=sid)
+    # query 핸들러와 동일하게, 거부되는 질의가 세션을 생성해 타인을 퇴출시키지 않도록 한다.
     _require_session_owner(sid, user_id)
-
     file_name = srv.SessionManager.get("last_uploaded_file_name", session_id=sid)
-    logger.debug(f"[TEST] Session ID: {sid}, last_uploaded_file_name: {file_name}")
-
     if file_name is None:
         raise HTTPException(status_code=400, detail="먼저 문서를 업로드해주세요.")
+    srv.SessionManager.init_session(session_id=sid)
+    logger.debug(f"[TEST] Session ID: {sid}, last_uploaded_file_name: {file_name}")
 
     async def event_generator():
         logger.debug(f"[API] Streaming started for session: {sid}")
