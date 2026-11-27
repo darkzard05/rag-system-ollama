@@ -4,7 +4,6 @@
 > Optimized for extreme speed and precision using `LangGraph` orchestration, local `Ollama` models, and a sleek Streamlit interface.
 
 [![Python 3.11+](https://img.shields.io/badge/Python-3.11+-blue.svg)](https://www.python.org)
-[![Model: qwen3:4b-instruct-2507-q4_K_M](https://img.shields.io/badge/Model-qwen3:4b--instruct--2507--q4_K_M-blueviolet.svg)](https://ollama.com/library/qwen3)
 [![Backend: LangGraph](https://img.shields.io/badge/Orchestrator-LangGraph-informational.svg)]()
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
@@ -15,12 +14,6 @@
 ![Application Interface](assets/image1.png)
 
 *GraphRAG-Ollama features a refined sidebar, real-time status logging, and a professional PDF viewer with a grouped-control navigation toolbar. The unified chat timeline surfaces every pipeline stage — document indexing, retrieval, streaming generation, and the final cited answer with page-level references.*
-
-### Pipeline in action
-
-![Real-time document indexing with progress and cancellation](assets/image3.png)
-
-![Streaming generation with live retrieval pipeline status](assets/image2.png)
 
 ---
 
@@ -37,13 +30,15 @@
 - **Relevant Entity Extraction:** The LLM is strictly instructed to extract key technical entities during the grading phase, ensuring transparency in its reasoning process.
 
 ### 🛡️ **Reliability & Integrity**
-- **232 unit test files** (plus 32 integration tests) covering Graph Flow, RAG Orchestration, Document Processing, Advanced Citations, concurrency, and streaming.
-- **CI-enforced integrity:** `ruff check`, `ruff format --check`, `mypy src`, `bandit`, `pip-audit`, unit coverage ≥55%, and 32 integration tests (auth/ownership/PDF/SSE).
+<!-- TEST_COUNTS_START -->
+- **422 unit test files** (plus 32 integration test files) covering Graph Flow, RAG Orchestration, Document Processing, Advanced Citations, concurrency, and streaming.
+- **CI-enforced integrity:** `ruff check`, `ruff format --check`, `mypy src`, `bandit`, `pip-audit`, unit coverage ≥70%, and 32 integration test files (auth/ownership/PDF/SSE).
+<!-- TEST_COUNTS_END -->
 - **Ghosting-Free UI:** Advanced `st.fragment` and `st.empty` placeholder management prevents visual glitches during real-time streaming.
 - **Robust PDF handling:** Corrupt PDFs are rejected upfront on upload; the viewer stays crash-proof and layout-preserved.
 
 ### 🆕 Recent Improvements (2026-06 → 10)
-- **Reasoning extraction:** `models.thinking` (default `true`) enables Ollama native reasoning streams, surfaced in the UI as a native "reasoning expander" with a condensed pipeline summary per answer.
+- **Reasoning extraction:** `models.thinking` enables Ollama native reasoning streams, surfaced in the UI as a native "reasoning expander" with a condensed pipeline summary per answer.
 - **Faster first query:** embedding model, FlashRank ONNX, and the default LLM are preloaded at build time (silently skipped on failure); `num_ctx` raised to 10240.
 - **GPU batch embedding:** the Ollama embedder now picks batch size from available VRAM (`embedding_batch_size: auto`), cutting embedding HTTP round-trips.
 - **Non-blocking cache I/O:** DiskCache operations run on a worker thread (`asyncio.to_thread`) with an incremental size counter and an optional `persist_to_disk=False` fast path.
@@ -58,10 +53,10 @@
 
 ## 🛠️ Tech Stack
 <!-- TECH_STACK_START -->
-- **Streamlit**: 1.60.0
-- **LangChain**: 1.3.0
-- **LangGraph**: 1.2.0
-- **PyMuPDF4LLM**: latest
+- **Streamlit**: 1.66.1
+- **LangChain**: >=1.3.0
+- **LangGraph**: >=1.2.0
+- **PyMuPDF4LLM**: >=0.3.4
 - **Ollama**: 0.6.1
 - **FastAPI**: 0.133.1
 <!-- TECH_STACK_END -->
@@ -75,13 +70,16 @@
 ## 🚀 Getting Started
 
 ### 1️⃣ Model Setup
+<!-- BADGES_START -->
+[![Model: qwen3:4b-instruct-2507-q4_K_M](https://img.shields.io/badge/Model-qwen3:4b--instruct--2507--q4_K_M-blueviolet.svg)](https://ollama.com/library/qwen3)
 ```powershell
 # Pull the recommended models
 ollama pull qwen3:4b-instruct-2507-q4_K_M
-ollama pull nomic-embed-text-v2-moe  # default embedding model (config.yml: models.default_embedding)
+ollama pull nomic-embed-text-v2-moe  # default embedding model (src/common/config.py: DEFAULT_EMBEDDING_MODEL)
 # Optional (legacy embedding model):
 ollama pull nomic-embed-text
 ```
+<!-- BADGES_END -->
 
 ### 2️⃣ Configuration
 Customize your RAG behavior in `config.yml` (e.g., grading instructions, chunk sizes, model names).
@@ -122,7 +120,7 @@ python scripts/verify_section_metadata.py
 python scripts/maintenance/verify_integrity.py
 ```
 
-CI enforces unit coverage ≥55% (`--cov-fail-under=55`) and additionally runs `bandit`, `pip-audit`, and the integration tests: `test_rag_integration`, `test_streamlit_ui_lifecycle`, `test_streaming_response`, `test_caching_system`, `test_api_auth_login`, `test_api_pdf_serving`, `test_global_exception_handler`, `test_ownership_hardening`, `test_pdf_library_retention`, `test_stream_error_isolation`, `test_api_endpoints`, `test_incremental_citation_dispatch` (32 integration tests total).
+CI enforces unit coverage ≥70% (`--cov-fail-under=70`) and additionally runs `bandit`, `pip-audit`, and the integration tests: `test_rag_integration`, `test_streamlit_ui_lifecycle`, `test_streaming_response`, `test_caching_system`, `test_api_auth_login`, `test_api_pdf_serving`, `test_global_exception_handler`, `test_ownership_hardening`, `test_pdf_library_retention`, `test_stream_error_isolation`, `test_api_endpoints`, `test_incremental_citation_dispatch` (32 integration tests total).
 
 ---
 
@@ -144,27 +142,31 @@ Each run writes `reports/eval_quality_<tag>_<ts>.json` and `.md` with per-questi
 
 **Key settings:**
 
+<!-- SETTINGS_START -->
 | Key | Default | Purpose |
 |-----|---------|---------|
 | `models.ollama_num_predict` | 2048 | Max generated tokens per answer |
 | `models.num_ctx` | 10240 | Model context window (tokens) |
-| `models.thinking` | true | Enable Ollama native reasoning extraction |
+| `models.thinking` | false | Enable Ollama native reasoning extraction |
 | `models.embedding_batch_size` | auto | Embedding batch size (auto = GPU VRAM-based) |
 | `models.allow_concurrent_inference` | false | T2 load-test gate: effective inference bound stays 1 until load gate passes |
 | `rag.retriever.search_kwargs.k` | 18 | Stage-1 candidate pool (matches `dynamic_top_k.max_candidates`) |
-| `rag.retriever.dynamic_top_k.min_rerank_chars` | 6 | Queries shorter than this skip FlashRank and use RRF scores |
+| `rag.retriever.min_rerank_chars` | 6 | Queries shorter than this skip FlashRank and use RRF scores |
 | `rag.retriever.rerank_top_k` | 10 | Final rerank selection pool |
 | `rag.prompts.grading.grade_top_n` | 5 | Docs passed to grading (widened 3→5: citations observed at rank 4–5) |
 | `rag.parsing.hydration_mode` | precision_clip | PDF coordinate extraction mode for highlighting |
-| `rag.reranker.engine` | auto | Reranker engine: `auto` / `flashrank` / `semantic` |
+| `rag.reranker.engine` | auto | Reranker engine: `auto` / `flashrank` / `semantic` (code default) |
 | `rag.reranker.max_length` | 384 | FlashRank max sequence length (512 default; 384 cuts CPU rerank latency at equal golden-set context recall) |
 | `rag.prompts.grading.min_score_to_skip` | 0.70 (FlashRank) / 0.45 (semantic) | Skip the LLM grade when the max rerank score reaches this (per-engine thresholds) |
-| `rag.prompt_templates.citations.text_span` | ≤200 chars (advisory) | Keep `text_span` under 200 chars; `maxLength: 200` is advisory only in `json_object` mode (not enforced by a validator) |
-| `rag.prompts.generate.generation_validation` | observe-only | S1 telemetry flags (`over_budget_chars: 600`, `regen_floor_chars: 450`, regen OFF) |
-| `global_cache.enable_vector_cache` | true | Enable vector store (indexing results) caching |
+| `rag.prompt_templates.citations.text_span` | <=200 chars (advisory) | Keep `text_span` under 200 chars; `maxLength: 200` is advisory only in `json_object` mode (not enforced by a validator) |
+| `rag.prompts.generate.generation_validation` | regen_on_short=true | S1 telemetry flags (over_budget_chars: 1400, regen_floor_chars: 700) |
+| `global_cache.enable_vector_cache` | true | Enable vector store (indexing results) caching (code default) |
+<!-- SETTINGS_END -->
 
 ---
 
 ## 📄 License
 MIT License - Developed by **darkzard05**.
-**Last Updated:** 2026-10-11
+<!-- LAST_UPDATED_START -->
+**Last Updated:** 2026-11-27
+<!-- LAST_UPDATED_END -->

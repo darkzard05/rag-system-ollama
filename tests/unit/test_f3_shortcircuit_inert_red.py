@@ -27,7 +27,7 @@ from common.config import GRADING_CONFIG
 REPO_ROOT = Path(__file__).resolve().parents[2]
 PINNED_CORPUS = REPO_ROOT / "reports" / "eval_quality_baseline_20260806_174429.json"
 GRADE_VERIFY = REPO_ROOT / "src" / "core" / "graph" / "_grade_verify.py"
-README_MD = REPO_ROOT / "README.md"
+README_MD = REPO_ROOT / "readme.md"
 
 INJECTED_SCORE_FLASHRANK = 0.9
 INJECTED_SCORE_SEMANTIC = 0.5

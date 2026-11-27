@@ -246,7 +246,8 @@ def main():
     # 4. 문서 자동 업데이트 (Documentation)
     print_header("Step 4: Documentation Update")
     results["Docs: README Update"] = run_command(
-        ["python", "scripts/maintenance/update_readme.py"], "README Auto-update"
+        ["python", "scripts/maintenance/update_readme.py", "--check"],
+        "README Auto-update",
     )
 
     # 5. 결과 요약 리포트

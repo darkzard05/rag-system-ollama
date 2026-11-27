@@ -297,6 +297,12 @@ def _build_steps() -> list[Step]:
             timeout=300,
         ),
         Step(
+            name="docs-drift",
+            group="static",
+            argv=(py, "scripts/maintenance/update_readme.py", "--check"),
+            timeout=60,
+        ),
+        Step(
             name="bandit",
             group="security",
             argv=(*bandit, "-r", "src/", "-ll"),
