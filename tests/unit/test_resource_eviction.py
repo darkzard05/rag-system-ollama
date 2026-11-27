@@ -42,6 +42,21 @@ async def test_lru_item_limit_eviction():
 
 
 @pytest.mark.asyncio
+async def test_replacing_existing_key_keeps_other_items():
+    """Rebuilding one document must not evict a different cached document."""
+    pool: BaseResourcePool = BaseResourcePool("Test", item_limit=2, byte_limit=10**9)
+    second = MockResource(name="second")
+    await pool.put("docA", MockResource(name="first"))
+    await pool.put("docB", second)
+
+    rebuilt = MockResource(name="first-rebuilt")
+    await pool.put("docA", rebuilt)
+
+    assert pool.get("docA") is rebuilt
+    assert pool.get("docB") is second
+
+
+@pytest.mark.asyncio
 async def test_byte_limit_eviction():
     """Verify that items are evicted when byte_limit is exceeded."""
     # Set a small byte limit: 1000 bytes
