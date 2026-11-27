@@ -74,9 +74,9 @@ class PartialCitationScanner:
                 elif ch in " \t\r\n:":
                     self._cursor += 1
                 else:
-                    # Marker found but no array follows (e.g. null) — give up.
-                    self._state = _DONE
-                    break
+                    # The word may sit inside answer text when the model omits
+                    # JSON escaping. Keep looking for the real array key.
+                    self._state = _SEEK_KEY
             elif self._state == _IN_ARRAY:
                 if ch in " \t\r\n,":
                     self._cursor += 1
