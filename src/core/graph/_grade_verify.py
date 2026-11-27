@@ -500,12 +500,15 @@ async def grade_documents(
                 "검색 결과가 부적합하여 질문 재구성을 시도합니다.",
                 session_id=_get_session_id(config),
             )
-            _store_grade_memo(
-                state,
-                docs,
-                {"route": "transform", "optimized_query": optimized},
-                sid,
-            )
+            # 원본과 같은 질의를 기억하면 다음 턴이 같은 메모 키로 히트해
+            # 재작성 없이 재시도 예산만 소진한다. 실제 최적화가 있을 때만 저장.
+            if optimized and optimized != query:
+                _store_grade_memo(
+                    state,
+                    docs,
+                    {"route": "transform", "optimized_query": optimized},
+                    sid,
+                )
             grade_ms = (time.perf_counter() - grade_start) * 1000
             logger.info(
                 f"[RAG] [GRADE][TIMING] grade_ms={grade_ms:.1f} short_circuit=False"
@@ -527,16 +530,8 @@ async def grade_documents(
 
     except (RuntimeError, ValueError, json.JSONDecodeError) as e:
         logger.warning(f"[RAG] [GRADE] 평가 실패, 기본값(NO) 적용하여 재구성 시도: {e}")
-        # 정상 transform 경로와 동일하게 재작성 쿼리를 기억하고 반환해야 한다.
-        # 그렇지 않으면 메모 히트가 빈 search_queries로 재검색해 같은 문서를
-        # 다시 평가하고 재시도 예산만 소진한 뒤 부적합 컨텍스트로 답변한다.
-        optimized = query or ""
-        _store_grade_memo(
-            state,
-            docs,
-            {"route": "transform", "optimized_query": optimized},
-            sid,
-        )
+        # 평가 실패에는 최적화 쿼리가 없다. 원본 질의를 메모에 저장하면 다음 턴이
+        # 같은 키로 히트해 실패한 판단을 재생하고 LLM 재시도 기회를 잃는다.
         grade_ms = (time.perf_counter() - grade_start) * 1000
         logger.info(
             f"[RAG] [GRADE][TIMING] grade_ms={grade_ms:.1f} short_circuit=False"
@@ -550,7 +545,7 @@ async def grade_documents(
         return {
             "intent": "transform",
             "route": "transform",
-            "search_queries": [optimized] if optimized else [],
+            "search_queries": [],
             "retry_count": 1,
         }
 
