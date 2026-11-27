@@ -264,12 +264,16 @@ async def login(request: LoginRequest, client_request: Request) -> TokenResponse
 async def logout(
     request: LogoutRequest | None = None,
     credentials: HTTPAuthorizationCredentials = Depends(auth_scheme),
+    user_id: str = Depends(verify_token),
 ):
     """현재 접근 토큰을 무효화하고, 제공된 세션을 비활성화합니다."""
+    session_id = request.session_id if request else None
+    if session_id:
+        _require_session_owner(session_id, user_id)
     if not auth_manager.revoke_token(credentials.credentials):
         raise HTTPException(status_code=401, detail="유효하지 않은 토큰입니다.")
-    if request and request.session_id:
-        auth_manager.logout(request.session_id)
+    if session_id:
+        auth_manager.logout(session_id)
     return {"message": "로그아웃되었습니다."}
 
 
