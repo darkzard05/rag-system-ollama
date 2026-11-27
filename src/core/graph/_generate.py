@@ -10,6 +10,7 @@ import logging
 import re
 import threading
 import time
+from concurrent.futures import Future
 from typing import Any
 
 from langchain_core.callbacks.manager import adispatch_custom_event
@@ -20,6 +21,7 @@ from langgraph.types import StreamWriter
 from pydantic import ValidationError
 
 from api.schemas import AnswerStructure, Citation, GraphState
+from common.async_worker import AsyncWorker
 from common.config import (
     ANALYSIS_PROTOCOL,
     DEFAULT_OLLAMA_MODEL,
@@ -77,7 +79,7 @@ _RESPONSE_COALESCE_CHUNKS = 4
 _RESPONSE_COALESCE_CHARS = 32
 
 
-def _log_cache_set_done(task: asyncio.Task[None], *, msg_id: str) -> None:
+def _log_cache_set_done(task: Future[Any] | asyncio.Task[None], *, msg_id: str) -> None:
     """Fire-and-forget 완료 콜백: 예외를 소비·기록하고 재발생시키지 않는다."""
     if task.cancelled():
         logger.warning("[RAG] [CACHE] 백그라운드 저장 취소됨 msg_id=%s", msg_id)
@@ -171,34 +173,29 @@ def _schedule_query_cache_set(
     }
     ttl_seconds = int(QUERY_CACHE_TTL)
     tag = msg_id or "-"
+    worker_kwargs: dict[str, Any] = {
+        "key": key,
+        "value": value,
+        "ttl_seconds": ttl_seconds,
+        "query_embedding": query_embedding,
+    }
+    # st.write_stream이 만든 임시 이벤트 루프는 스트림 종료 시 닫힌다. 그 루프에
+    # create_task로 예약한 쓰기는 완료 전에 파기되어 캐시가 영구히 비어 있다.
+    # 프로세스 수명의 전용 워커 루프에 제출해 루프 종료와 무관하게 완료시킨다.
     try:
-        loop = asyncio.get_running_loop()
+        future = AsyncWorker().submit(_cache_set_worker(**worker_kwargs))
     except RuntimeError:
         thread = threading.Thread(
             target=_run_cache_worker_sync,
-            kwargs={
-                "key": key,
-                "value": value,
-                "ttl_seconds": ttl_seconds,
-                "msg_id": tag,
-                "query_embedding": query_embedding,
-            },
+            kwargs={**worker_kwargs, "msg_id": tag},
             daemon=True,
             name=f"query-cache-set-{tag}",
         )
         thread.start()
         logger.info("[PERF] cache-set scheduled (thread) msg_id=%s", tag)
         return True
-    task: asyncio.Task[None] = loop.create_task(
-        _cache_set_worker(
-            key=key,
-            value=value,
-            ttl_seconds=ttl_seconds,
-            query_embedding=query_embedding,
-        )
-    )
-    task.add_done_callback(lambda t: _log_cache_set_done(t, msg_id=tag))
-    logger.info("[PERF] cache-set scheduled msg_id=%s (off critical path)", tag)
+    future.add_done_callback(lambda f: _log_cache_set_done(f, msg_id=tag))
+    logger.info("[PERF] cache-set scheduled msg_id=%s (dedicated worker)", tag)
     return True
 
 

@@ -10,6 +10,7 @@ Failing-first coverage for:
 
 import asyncio
 import logging
+import threading
 import time
 from unittest.mock import AsyncMock, patch
 
@@ -96,6 +97,35 @@ async def test_cache_set_enabled_is_fire_and_forget_off_critical_path(
         ), "msg_id가 [PERF] 예약 로그에 남아야 한다"
         release.set()
         await asyncio.wait_for(done.wait(), timeout=5.0)
+
+
+def test_cache_set_survives_short_lived_stream_loop() -> None:
+    """Streamlit write_stream 임시 루프가 닫혀도 캐시 쓰기는 완료되어야 한다."""
+    written: list[str] = []
+    done = threading.Event()
+
+    async def _set(*args: object, **kwargs: object) -> None:
+        await asyncio.sleep(0.01)
+        written.append("set")
+        done.set()
+
+    async def _schedule_once() -> None:
+        assert _schedule_query_cache_set(**_payload()) is True  # type: ignore[arg-type]
+
+    with (
+        patch.object(gen_mod, "QUERY_CACHE_ENABLED", True),
+        patch.object(gen_mod, "_ensure_query_cache_embedder", new=AsyncMock()),
+        patch.object(gen_mod, "get_cache_manager") as manager_factory,
+    ):
+        manager_factory.return_value.set = _set
+        loop = asyncio.new_event_loop()
+        try:
+            loop.run_until_complete(_schedule_once())
+        finally:
+            loop.close()
+        assert done.wait(timeout=5.0), "임시 루프 종료 후 쓰기가 유실되면 안 된다"
+
+    assert written == ["set"]
 
 
 @pytest.mark.asyncio
