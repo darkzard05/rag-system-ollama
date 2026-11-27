@@ -62,13 +62,13 @@ async def test_cache_set_enabled_is_fire_and_forget_off_critical_path(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     """enabled면 set을 백그라운드로 예약하고 호출자는 기다리지 않고 복귀한다."""
-    release = asyncio.Event()
-    done = asyncio.Event()
+    release = threading.Event()
+    done = threading.Event()
     calls: list[str] = []
 
     async def _slow_set(*args: object, **kwargs: object) -> None:
         calls.append("set")
-        await release.wait()
+        await asyncio.to_thread(release.wait)
         done.set()
 
     with (
@@ -96,7 +96,7 @@ async def test_cache_set_enabled_is_fire_and_forget_off_critical_path(
             _MSG in rec.message and "cache-set" in rec.message for rec in caplog.records
         ), "msg_id가 [PERF] 예약 로그에 남아야 한다"
         release.set()
-        await asyncio.wait_for(done.wait(), timeout=5.0)
+        assert done.wait(timeout=5.0), "백그라운드 set이 완료되어야 한다"
 
 
 def test_cache_set_survives_short_lived_stream_loop() -> None:
