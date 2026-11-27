@@ -275,6 +275,16 @@ class SimpleJWT:
                 _add_b64_padding(signature_encoded), altchars=b"-_", validate=True
             )
 
+            # b64decode accepts both alphabets and ignores unused trailing bits,
+            # so multiple strings carry the same signature bytes. The deny-list
+            # stores the exact issued string; require its canonical encoding so
+            # a revoked token cannot be revived by rewriting its signature.
+            canonical_signature = (
+                base64.urlsafe_b64encode(signature).decode().rstrip("=")
+            )
+            if not hmac.compare_digest(canonical_signature, signature_encoded):
+                return None
+
             if not hmac.compare_digest(signature, expected_signature):
                 return None
 
