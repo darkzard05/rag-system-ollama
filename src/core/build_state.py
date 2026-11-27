@@ -115,6 +115,8 @@ def apply_event(state: BuildState, event: BuildEvent) -> BuildState:
 
 def fail_build(state: BuildState, error: str) -> BuildState:
     """에러 터미널 전이."""
+    if is_terminal(state.phase):
+        return state
     state.phase = BuildPhase.ERROR
     state.error = error
     if state.finished_at is None:
@@ -136,6 +138,8 @@ def complete_build(
     state: BuildState, *, cache_used: bool, pct: int = 100
 ) -> BuildState:
     """완료 터미널 전이."""
+    if is_terminal(state.phase):
+        return state
     state.phase = BuildPhase.DONE
     state.pct = max(0, min(100, pct))
     state.cache_used = cache_used
