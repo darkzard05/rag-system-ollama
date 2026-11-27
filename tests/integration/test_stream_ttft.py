@@ -107,48 +107,86 @@ class _FakeChunk:
         self.additional_kwargs: dict[str, object] = {}
 
 
-async def _scripted_tokens(n: int, initial_delay_s: float = 0.05):
-    """첫 토큰 전 지연(모델 콜드 스타트 시뮬레이션) + n 개 콘텐츠 토큰."""
+async def _scripted_tokens(
+    n: int, initial_delay_s: float = 0.05, pulled: list[int] | None = None
+):
+    """첫 토큰 전 지연(모델 콜드 스타트 시뮬레이션) + n 개 콘텐츠 토큰.
+
+    ``pulled`` 가 주어지면 소비자가 첫 청크를 받은 시점에 소스에서 몇 개의
+    토큰이 방출됐는지 세기 위해 인덱스를 기록한다 (벽시계 시간과 무관한 증거).
+    """
     await asyncio.sleep(initial_delay_s)
     for i in range(n):
+        if pulled is not None:
+            pulled.append(i)
         yield ("messages", (_FakeChunk(content=f"tok{i} "), {}))
 
 
-async def _measure_first_chunk(handler) -> tuple[str, float]:
-    """스트림을 끝까지 소비하며 첫 콘텐츠 청크 내용과 first_token_latency 측정."""
+async def _measure_first_chunk(handler) -> tuple[str, float, int]:
+    """첫 콘텐츠 청크 내용, TTFT, 첫 청크 방출 시까지 소비된 소스 토큰 수."""
+    pulled: list[int] = []
     first_content: str | None = None
-    async for chunk in handler.stream_graph_events(_scripted_tokens(8)):
+    pulled_at_first_chunk = 0
+    async for chunk in handler.stream_graph_events(_scripted_tokens(8, pulled=pulled)):
         if chunk.content and first_content is None:
             first_content = chunk.content
+            pulled_at_first_chunk = len(pulled)
     assert first_content is not None, "첫 콘텐츠 청크를 찾지 못했습니다."
-    return first_content, handler.metrics.first_token_latency or 0.0
+    return (
+        first_content,
+        handler.metrics.first_token_latency or 0.0,
+        pulled_at_first_chunk,
+    )
 
 
 @pytest.mark.asyncio
 async def test_ttft_unaffected_by_buffer_size():
-    """기본 설정(버퍼 크기 4)의 TTFT가 size=1 기준과 동일함을 입증한다.
+    """기본 설정(버퍼 크기 4)의 첫 토큰 방출이 size=1 기준과 동일함을 입증한다.
 
     ``TokenStreamBuffer.add_token`` 의 첫 토큰 바이패스는 버퍼 크기와 무관하게
     첫 콘텐츠 토큰을 즉시 flush 하므로, 크기 4(기본 config)와 크기 1(기존
-    의미) 모두 첫 콘텐츠 청크가 정확히 첫 토큰에서 방출되어야 한다. 구조적
-    증거(첫 청크 내용 == 첫 토큰)와 실측 first_token_latency 의 일치를 단언한다.
+    의미) 모두 **소스 토큰 1개만 소비한 시점**에 첫 콘텐츠 청크가 방출되어야 한다.
+
+    두 TTFT 값의 직접 비교는 CI 러너의 콜드 스타트 지터(첫 측정에만 0.1s 이상의
+    초기화 오버헤드가 실림) 때문에 플레이키하다. 그래서 핵심 증거는 벽시계 시간이
+    아닌 소스 토큰 소비 수로 두고, TTFT 는 스크립트 지연(0.05s)보다 훨씬 큰
+    절대 상한만으로 실시성을 sanity-check 한다.
     """
     # 기본 설정 — get_streaming_handler() 는 call-time 으로 UI_CONTENT_BUFFER_SIZE
     # (config.yml ui.streaming.content_buffer_size, 기본 4) 를 읽는다.
     default_handler = get_streaming_handler()
     assert default_handler.buffer.buffer_size == 4
 
-    default_first, default_ttft = await _measure_first_chunk(default_handler)
+    (
+        default_first,
+        default_ttft,
+        default_pulled,
+    ) = await _measure_first_chunk(default_handler)
 
     # 기존 size=1 의미 기준선
     baseline_handler = StreamingResponseHandler(content_buffer_size=1)
-    baseline_first, baseline_ttft = await _measure_first_chunk(baseline_handler)
+    baseline_first, baseline_ttft, baseline_pulled = await _measure_first_chunk(
+        baseline_handler
+    )
 
     # 첫 토큰 바이패스 보존: 두 경우 모두 첫 콘텐츠 청크가 정확히 첫 토큰.
     assert default_first == "tok0 "
     assert baseline_first == "tok0 "
-    # 첫 토큰 지연(TTFT) 동일 — 0.05s 콜드 스타트 지연이 지배하므로 측정이 안정적.
-    assert abs(default_ttft - baseline_ttft) < 0.05, (
-        f"TTFT changed with buffer size: default={default_ttft:.4f}s vs "
-        f"baseline={baseline_ttft:.4f}s"
+
+    # 결정적 증거: 버퍼 크기와 무관하게 소스 토큰 1개만 읽고 즉시 방출했다.
+    # 첫 토큰 바이패스가 없으면 size=4 는 4개를 모은 뒤에야 첫 청크를 내보낸다.
+    assert default_pulled == 1, (
+        f"default buffer held the first token: pulled={default_pulled}"
+    )
+    assert baseline_pulled == 1, (
+        f"baseline buffer held the first token: pulled={baseline_pulled}"
+    )
+
+    # 실시성 sanity: 0.05s 스크립트 지연 + CI 러너 지터를 포함해도 상한 초과 금지.
+    ttft_limit = 0.5
+    assert default_ttft < ttft_limit, (
+        f"default TTFT too slow: {default_ttft:.4f}s (limit={ttft_limit}s)"
+    )
+    assert baseline_ttft < ttft_limit, (
+        f"baseline TTFT too slow: {baseline_ttft:.4f}s (limit={ttft_limit}s)"
     )
