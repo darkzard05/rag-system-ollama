@@ -40,8 +40,8 @@ import streamlit as st  # noqa: E402
 with st.sidebar:
     render_settings_content(
         file_uploader_callback=lambda: None,
-        model_selector_callback=lambda: None,
-        embedding_selector_callback=lambda: None,
+        model_selector_callback=lambda *_: None,
+        embedding_selector_callback=lambda *_: None,
         new_chat_callback=lambda: None,
         refresh_models_callback=lambda: None,
         is_generating=False,
@@ -51,8 +51,8 @@ with st.sidebar:
     )
 
 render_pending_dialogs(
-    model_selector_callback=lambda: None,
-    embedding_selector_callback=lambda: None,
+    model_selector_callback=lambda *_: None,
+    embedding_selector_callback=lambda *_: None,
     new_chat_callback=lambda: None,
     refresh_models_callback=lambda: None,
     available_models=[DEFAULT_OLLAMA_MODEL],

@@ -729,6 +729,15 @@ iframe[title="ui.components.chat_autoscroll.render_autoscroll_sentinel"] {
     opacity: 1;
 }
 
+/* Settings footer: thin vertical rule between session actions and Save/Cancel.
+   Plain class selector — no new testID or priority override (hygiene gate). */
+.rag-settings-divider {
+    width: 1px;
+    height: 40px;
+    margin: 0 auto;
+    background-color: var(--border-color);
+}
+
 /* Chat auto-scroll rollout: sentinel marker only (append-only).
    No broad :has(button) rule here, so no chat-column button
    (retry/cancel) can be restyled by this block. */

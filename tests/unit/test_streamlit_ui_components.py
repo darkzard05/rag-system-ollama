@@ -53,20 +53,70 @@ class TestStreamlitUIComponents(unittest.TestCase):
         assert len(at.selectbox) == 4, "Two-column settings did not open"
         assert len(at.toggle) == 3, "Runtime setting toggles are missing"
 
-    def test_settings_toggle_updates_runtime_value(self):
-        """Toggling vector cache in the modal changes what core observes."""
+    @staticmethod
+    def _open_settings(at):
+        buttons = [b for b in at.sidebar.button if b.key == "settings_dialog_button"]
+        assert len(buttons) == 1, "Settings button not rendered in the sidebar"
+        buttons[0].click().run()
+
+    @staticmethod
+    def _toggle(at, base_key):
+        return [t for t in at.toggle if t.key and t.key.startswith(base_key)]
+
+    def test_settings_save_commits_runtime_value(self):
+        """A staged toggle reaches core only when Save is pressed."""
         from common.config import ENABLE_VECTOR_CACHE
 
         at = AppTest.from_file(_SMOKE_SCRIPT, default_timeout=60).run()
-        buttons = [b for b in at.sidebar.button if b.key == "settings_dialog_button"]
-        buttons[0].click().run()
-        toggles = [t for t in at.toggle if t.key == "setting_vector_cache"]
+        self._open_settings(at)
+        toggles = self._toggle(at, "setting_vector_cache")
         assert len(toggles) == 1, "Vector cache toggle not rendered"
         try:
             toggles[0].set_value(False).run()
+            assert bool(ENABLE_VECTOR_CACHE) is True, "change applied before Save"
+            save = [b for b in at.button if b.key == "settings_save_btn"]
+            assert len(save) == 1, "Save button not rendered"
+            save[0].click().run()
             assert bool(ENABLE_VECTOR_CACHE) is False
+            assert not [b for b in at.button if b.key == "settings_save_btn"]
         finally:
             ENABLE_VECTOR_CACHE.reset()
+
+    def test_settings_cancel_discards_runtime_value(self):
+        """Cancel closes the dialog without applying staged changes."""
+        from common.config import ENABLE_VECTOR_CACHE
+
+        at = AppTest.from_file(_SMOKE_SCRIPT, default_timeout=60).run()
+        self._open_settings(at)
+        try:
+            self._toggle(at, "setting_vector_cache")[0].set_value(False).run()
+            cancel = [b for b in at.button if b.key == "settings_cancel_btn"]
+            assert len(cancel) == 1, "Cancel button not rendered"
+            cancel[0].click().run()
+            assert bool(ENABLE_VECTOR_CACHE) is True
+            assert not [b for b in at.button if b.key == "settings_cancel_btn"]
+            # Reopening remounts the widgets with the live value, not the draft.
+            self._open_settings(at)
+            assert bool(self._toggle(at, "setting_vector_cache")[0].value) is True
+        finally:
+            ENABLE_VECTOR_CACHE.reset()
+
+    def test_settings_cancel_keeps_live_language(self):
+        """Language is staged too: Cancel must not switch the active locale."""
+        from ui.strings import LANG
+
+        at = AppTest.from_file(_SMOKE_SCRIPT, default_timeout=60).run()
+        self._open_settings(at)
+        original = LANG
+        selector = [
+            s for s in at.selectbox if s.key and s.key.startswith("language_selector")
+        ]
+        assert len(selector) == 1
+        other = "English" if original == "ko" else "한국어"
+        selector[0].set_value(other).run()
+        cancel = [b for b in at.button if b.key == "settings_cancel_btn"][0]
+        cancel.click().run()
+        assert LANG == original
 
     def test_settings_reset_defers_confirm_dialog(self):
         """Reset inside the settings modal must not nest two dialogs."""

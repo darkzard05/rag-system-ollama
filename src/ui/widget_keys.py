@@ -63,6 +63,9 @@ LANGUAGE_SELECTOR_KEY: str = "language_selector"
 # main._handle_pending_tasks consume the store changes.
 SETTINGS_DIALOG_OPEN_KEY: str = "settings_dialog_open"
 CONFIRM_RESET_PENDING_KEY: str = "confirm_reset_pending"
+# Bumped on every open/close so draft widget keys change and a cancelled or
+# dismissed dialog cannot leak uncommitted values into the next opening.
+SETTINGS_DRAFT_GENERATION_KEY: str = "settings_draft_generation"
 
 # Runtime setting widgets inside the settings modal. Their values are written
 # to common.runtime_settings by module-level callbacks in the sidebar.

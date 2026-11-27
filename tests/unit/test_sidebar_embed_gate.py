@@ -27,7 +27,8 @@ def test_embedding_selector_disabled_when_ollama_is_down() -> None:
         ),
     ):
         mock_st.button.return_value = False
-        mock_st.columns.return_value = (mock_st, mock_st)
+        mock_st.session_state.get.return_value = 0
+        mock_st.columns.side_effect = lambda spec, *a, **k: (mock_st,) * len(spec)
         sidebar_mod._render_settings_internal(
             lambda: None,
             lambda: None,
@@ -40,5 +41,5 @@ def test_embedding_selector_disabled_when_ollama_is_down() -> None:
             ollama_reachable=False,
         )
 
-    assert _select_kwargs(mock_st, "model_selector")["disabled"] is True
-    assert _select_kwargs(mock_st, "embedding_model_selector")["disabled"] is True
+    assert _select_kwargs(mock_st, "model_selector_d0")["disabled"] is True
+    assert _select_kwargs(mock_st, "embedding_model_selector_d0")["disabled"] is True

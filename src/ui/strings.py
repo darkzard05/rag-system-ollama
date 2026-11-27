@@ -96,6 +96,10 @@ UI_STRINGS: dict[str, dict[str, str]] = {
             "Open the language, model, and session settings in a compact dialog."
         ),
         "settings_intro": "Manage models and retrieval behavior in one place.",
+        "settings_save": "Save",
+        "settings_save_help": "Apply the changed settings and close the dialog.",
+        "settings_cancel": "Cancel",
+        "settings_cancel_help": "Close the dialog without saving changes.",
         "settings_group_model": "Model & language",
         "settings_group_behavior": "Retrieval & answers",
         "setting_vector_cache": "Reuse vector store cache",
@@ -257,6 +261,10 @@ UI_STRINGS: dict[str, dict[str, str]] = {
             "언어·모델·세션 설정을 화면 중앙의 작은 창에서 엽니다."
         ),
         "settings_intro": "모델과 검색 동작을 이곳에서 관리합니다.",
+        "settings_save": "저장",
+        "settings_save_help": "변경한 설정을 적용하고 창을 닫습니다.",
+        "settings_cancel": "취소",
+        "settings_cancel_help": "변경 사항을 저장하지 않고 창을 닫습니다.",
         "settings_group_model": "모델 및 언어",
         "settings_group_behavior": "검색 및 답변",
         "setting_vector_cache": "벡터스토어 캐시 재사용",

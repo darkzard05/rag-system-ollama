@@ -25,6 +25,7 @@ from ui.widget_keys import (
     QUERY_CACHE_TOGGLE_KEY,
     RERANKER_ENGINE_SELECT_KEY,
     SETTINGS_DIALOG_OPEN_KEY,
+    SETTINGS_DRAFT_GENERATION_KEY,
     VECTOR_CACHE_TOGGLE_KEY,
     reset_all_key,
 )
@@ -66,40 +67,60 @@ def resolve_model_option(value: object) -> str:
     return str(value or "").strip().split(" · ", 1)[0]
 
 
-def on_language_change() -> None:
+def on_language_change(label: str | None = None) -> None:
     """LANG 단일 토글 콜백: 셀렉터 읽기 → 스토어 + strings.LANG에 반영."""
-    label = st.session_state.get(LANGUAGE_SELECTOR_KEY, "English")
-    code = _LANG_OPTIONS.get(str(label), "en")
+    raw = label if label is not None else st.session_state.get(LANGUAGE_SELECTOR_KEY)
+    code = _LANG_OPTIONS.get(str(raw), "en")
     SessionManager.set("ui_lang", code)
     set_lang(code)
 
 
-def _on_settings_dismiss() -> None:
-    """Clear the queued-modal flag when the user closes the settings dialog."""
+def _draft_key(base: str) -> str:
+    """Bind a widget to the current dialog opening, not to a previous draft."""
+    generation = int(st.session_state.get(SETTINGS_DRAFT_GENERATION_KEY, 0))
+    return f"{base}_d{generation}"
+
+
+def _bump_draft_generation() -> None:
+    """Discard the current draft by retiring its widget keys."""
+    generation = int(st.session_state.get(SETTINGS_DRAFT_GENERATION_KEY, 0))
+    st.session_state[SETTINGS_DRAFT_GENERATION_KEY] = generation + 1
+
+
+def _close_settings() -> None:
+    """Close the modal and retire any uncommitted widget values."""
     st.session_state[SETTINGS_DIALOG_OPEN_KEY] = False
+    _bump_draft_generation()
+
+
+def _on_settings_dismiss() -> None:
+    """X/ESC closes the dialog and discards the draft like Cancel."""
+    _close_settings()
 
 
 def _request_reset_confirm() -> None:
     """Defer the reset confirmation to app scope (one dialog per script run)."""
     st.session_state[CONFIRM_RESET_PENDING_KEY] = True
-    st.session_state[SETTINGS_DIALOG_OPEN_KEY] = False
+    _close_settings()
     st.rerun()
 
 
-def _on_vector_cache_change() -> None:
-    ENABLE_VECTOR_CACHE.set(st.session_state[VECTOR_CACHE_TOGGLE_KEY])
-
-
-def _on_query_cache_change() -> None:
-    QUERY_CACHE_ENABLED.set(st.session_state[QUERY_CACHE_TOGGLE_KEY])
-
-
-def _on_grading_change() -> None:
-    GRADING_ENABLED.set(st.session_state[GRADING_TOGGLE_KEY])
-
-
-def _on_reranker_engine_change() -> None:
-    RERANKER_ENGINE.set(st.session_state[RERANKER_ENGINE_SELECT_KEY])
+def _apply_settings_draft(
+    model_selector_callback,
+    embedding_selector_callback,
+) -> None:
+    """Commit every staged widget value to live settings."""
+    on_language_change(st.session_state.get(_draft_key(LANGUAGE_SELECTOR_KEY)))
+    if callable(model_selector_callback):
+        model_selector_callback(st.session_state.get(_draft_key("model_selector")))
+    if callable(embedding_selector_callback):
+        embedding_selector_callback(
+            st.session_state.get(_draft_key("embedding_model_selector"))
+        )
+    ENABLE_VECTOR_CACHE.set(st.session_state.get(_draft_key(VECTOR_CACHE_TOGGLE_KEY)))
+    QUERY_CACHE_ENABLED.set(st.session_state.get(_draft_key(QUERY_CACHE_TOGGLE_KEY)))
+    RERANKER_ENGINE.set(st.session_state.get(_draft_key(RERANKER_ENGINE_SELECT_KEY)))
+    GRADING_ENABLED.set(st.session_state.get(_draft_key(GRADING_TOGGLE_KEY)))
 
 
 def _reset_runtime_settings() -> None:
@@ -170,6 +191,7 @@ def render_settings_content(
         help=t("sidebar_settings_help"),
         key="settings_dialog_button",
     ):
+        _bump_draft_generation()
         st.session_state[SETTINGS_DIALOG_OPEN_KEY] = True
 
 
@@ -212,8 +234,7 @@ def _render_settings_internal(
             t("sidebar_language"),
             lang_labels,
             index=lang_idx,
-            key=LANGUAGE_SELECTOR_KEY,
-            on_change=on_language_change,
+            key=_draft_key(LANGUAGE_SELECTOR_KEY),
             help=t("sidebar_language_help"),
         )
         st.space("xsmall")
@@ -238,8 +259,7 @@ def _render_settings_internal(
             t("sidebar_llm_label"),
             actual_llms,
             index=def_idx,
-            key="model_selector",
-            on_change=model_selector_callback,
+            key=_draft_key("model_selector"),
             format_func=format_llm_option,
             help=t("sidebar_llm_help"),
             disabled=is_generating or is_swapping_model or not ollama_reachable,
@@ -280,8 +300,7 @@ def _render_settings_internal(
             t("sidebar_embedding_label"),
             actual_embeddings,
             index=emb_idx,
-            key="embedding_model_selector",
-            on_change=embedding_selector_callback,
+            key=_draft_key("embedding_model_selector"),
             help=t("sidebar_embedding_help"),
             disabled=is_generating or is_swapping_model or not ollama_reachable,
         )
@@ -293,16 +312,14 @@ def _render_settings_internal(
         st.toggle(
             t("setting_vector_cache"),
             value=bool(ENABLE_VECTOR_CACHE.get()),
-            key=VECTOR_CACHE_TOGGLE_KEY,
-            on_change=_on_vector_cache_change,
+            key=_draft_key(VECTOR_CACHE_TOGGLE_KEY),
             help=t("setting_vector_cache_help"),
         )
         st.space("xsmall")
         st.toggle(
             t("setting_query_cache"),
             value=bool(QUERY_CACHE_ENABLED.get()),
-            key=QUERY_CACHE_TOGGLE_KEY,
-            on_change=_on_query_cache_change,
+            key=_draft_key(QUERY_CACHE_TOGGLE_KEY),
             help=t("setting_query_cache_help"),
         )
         st.space("xsmall")
@@ -312,30 +329,29 @@ def _render_settings_internal(
             t("setting_reranker_engine"),
             engine_options,
             index=engine_options.index(engine) if engine in engine_options else 0,
-            key=RERANKER_ENGINE_SELECT_KEY,
-            on_change=_on_reranker_engine_change,
+            key=_draft_key(RERANKER_ENGINE_SELECT_KEY),
             help=t("setting_reranker_engine_help"),
         )
         st.space("xsmall")
         st.toggle(
             t("setting_grading"),
             value=bool(GRADING_ENABLED.get()),
-            key=GRADING_TOGGLE_KEY,
-            on_change=_on_grading_change,
+            key=_draft_key(GRADING_TOGGLE_KEY),
             help=t("setting_grading_help"),
         )
 
-    # 실행 동작은 본문 아래 별도 바에 모아 설정과 위계를 분리한다.
+    # 실행 동작(왼쪽)과 설정 커밋 동작(오른쪽)을 구분선으로 분리한다.
     st.space("small")
     st.divider()
     st.space("xsmall")
     sid = SessionManager.get_session_id()
-    with st.container(horizontal=True, horizontal_alignment="right"):
+    actions_left, rule, actions_right = st.columns([1, 0.02, 1], gap="small")
+    with actions_left, st.container(horizontal=True, horizontal_alignment="left"):
         if (
             st.button(
                 t("sidebar_new_chat"),
                 width="content",
-                type="primary",
+                type="secondary",
                 help=t("sidebar_new_chat_help"),
                 key="new_chat_btn",
                 disabled=is_generating or is_building,
@@ -355,6 +371,28 @@ def _render_settings_internal(
                 reset_callback()
             else:
                 _confirm_reset_all()
+    with rule:
+        st.markdown('<div class="rag-settings-divider"></div>', unsafe_allow_html=True)
+    with actions_right, st.container(horizontal=True, horizontal_alignment="right"):
+        if st.button(
+            t("settings_save"),
+            width="content",
+            type="primary",
+            help=t("settings_save_help"),
+            key="settings_save_btn",
+        ):
+            _apply_settings_draft(model_selector_callback, embedding_selector_callback)
+            _close_settings()
+            st.rerun()
+        if st.button(
+            t("settings_cancel"),
+            width="content",
+            type="secondary",
+            help=t("settings_cancel_help"),
+            key="settings_cancel_btn",
+        ):
+            _close_settings()
+            st.rerun()
 
 
 def _render_settings_modal(

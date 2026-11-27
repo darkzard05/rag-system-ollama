@@ -940,14 +940,17 @@ def on_new_chat() -> None:
     # 버튼 위젯 interaction 자체가 리런을 유발하므로 명시 rerun 금지 (중복 리런 방지).
 
 
-def on_model_change() -> None:
+def on_model_change(selected: str | None = None) -> None:
     from core.session import SessionManager
     from ui.components.sidebar import resolve_model_option
 
     # The widget key may hold a format_func label during a callback (Streamlit
     # serializes selectbox state as the formatted string). Normalize both sides
-    # so a locale change never stores a display label as the model id.
-    selected = resolve_model_option(st.session_state.get("model_selector"))
+    # so a locale change never stores a display label as the model id. The
+    # optional value lets the settings Save button commit a staged draft.
+    selected = resolve_model_option(
+        selected if selected is not None else st.session_state.get("model_selector")
+    )
     last = resolve_model_option(SessionManager.get("last_selected_model"))
 
     if not selected or "---" in selected or selected == last:
@@ -958,10 +961,11 @@ def on_model_change() -> None:
         SessionManager.set("needs_qa_chain_update", True)
 
 
-def on_embedding_change() -> None:
+def on_embedding_change(selected: str | None = None) -> None:
     from core.session import SessionManager
 
-    selected = st.session_state.get("embedding_model_selector")
+    if selected is None:
+        selected = st.session_state.get("embedding_model_selector")
     last = SessionManager.get("last_selected_embedding_model")
 
     if not selected or selected == last:
