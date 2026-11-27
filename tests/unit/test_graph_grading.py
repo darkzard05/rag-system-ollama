@@ -207,11 +207,27 @@ async def test_grade_documents_calls_llm_below_threshold(
         options={
             "num_ctx": OLLAMA_NUM_CTX,
             "think": False,
-            "num_predict": 256,
+            "num_predict": int(GRADING_CONFIG.get("num_predict", 0)),
             "temperature": 0.0,
         },
     )
     json_llm.ainvoke.assert_awaited_once()
+
+
+def test_grade_num_predict_has_headroom_for_full_json() -> None:
+    """채점 JSON이 reason 도중에 잘리지 않도록 상한이 충분해야 한다."""
+    assert int(GRADING_CONFIG.get("num_predict", 0)) >= 1024
+
+
+def test_truncated_grade_optimized_query_is_discarded() -> None:
+    """잘린 optimized_query를 재작성 검색어로 쓰면 안 된다."""
+    from core.graph._grade_verify import _parse_grade_response
+
+    blob = (
+        '{"action": "rewrite", "is_relevant": false, "reason": "문서가 부적합", '
+        '"optimized_query": "핵심 기여점을 찾을 수 있는 문서'
+    )
+    assert _parse_grade_response(blob).get("optimized_query") is None
 
 
 def test_structured_output_prompt_drops_inline_citation_mandate():

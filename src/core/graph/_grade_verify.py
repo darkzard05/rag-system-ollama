@@ -144,7 +144,11 @@ def _recover_truncated_grade(blob: str) -> dict[str, Any] | None:
         action = "generate" if is_relevant else "rewrite"
 
     reason_m = re.search(r'"reason"\s*:\s*"([^"]*)', blob)
-    optimized_m = re.search(r'"optimized_query"\s*:\s*"([^"]*)', blob)
+    # 닫는 따옴표가 없는 절단 값은 검색어로 쓰지 않는다. 부분 문자열을 받으면
+    # rewrite가 원본 질의와 거의 같은 쿼리를 재검색해 재시도 예산만 소진한다.
+    optimized_m = re.search(
+        r'"optimized_query"\s*:\s*"((?:[^"\\]|\\.)*)"\s*(?:,|})', blob
+    )
     logger.warning("[RAG] [GRADE] 잘린 JSON 응답에서 핵심 필드 복구: action=%s", action)
     return {
         "action": action,
@@ -452,7 +456,7 @@ async def grade_documents(
                         # next LLM call does not reload the model.
                         "num_ctx": OLLAMA_NUM_CTX,
                         "think": False,
-                        "num_predict": 256,
+                        "num_predict": int(GRADING_CONFIG.get("num_predict", 1024)),
                         "temperature": 0.0,
                     },
                 )

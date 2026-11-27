@@ -358,6 +358,9 @@ rag:
       # (Q3: r4,r5; Q6: r4; Q8: r4). grade_top_n=3 was lossy — citations outside
       # the grading window cannot be verified. 5 covers observed max rank 5.
       grade_top_n: 5
+      # 채점 JSON(reason + relevant_entities + optimized_query)이 절단되지 않도록
+      # 256에서 상향. 절단 시 rewrite가 원본 질의를 재사용해 재시도 예산만 소진했다.
+      num_predict: 1024
       max_retries: 2            # rewrite 최대 재시도 횟수 (graph_builder.py grade_documents 리다이렉트 상한 — GRADING_CONFIG로 배선됨)
 
     # 3. 구조화된 답변 출력용 프롬프트 템플릿 (Phase 1.3)
