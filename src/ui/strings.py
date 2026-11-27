@@ -95,6 +95,24 @@ UI_STRINGS: dict[str, dict[str, str]] = {
         "sidebar_settings_help": (
             "Open the language, model, and session settings in a large dialog."
         ),
+        "settings_group_model": "Model & language",
+        "settings_group_behavior": "Retrieval & answers",
+        "setting_vector_cache": "Reuse vector store cache",
+        "setting_vector_cache_help": (
+            "Load a cached FAISS index for an unchanged PDF instead of rebuilding it."
+        ),
+        "setting_query_cache": "Answer cache",
+        "setting_query_cache_help": (
+            "Reuse a previous answer when the same question is asked again."
+        ),
+        "setting_reranker_engine": "Reranker engine",
+        "setting_reranker_engine_help": (
+            "auto tries FlashRank first and falls back to semantic ranking."
+        ),
+        "setting_grading": "Document grading",
+        "setting_grading_help": (
+            "Check retrieved documents with the LLM before generating an answer."
+        ),
         "sidebar_llm_label": "LLM Model Selection",
         "sidebar_llm_help": (
             "The model that writes answers. Smaller models respond faster."
@@ -235,6 +253,24 @@ UI_STRINGS: dict[str, dict[str, str]] = {
         ),
         "sidebar_settings": "설정",
         "sidebar_settings_help": ("언어·모델·세션 설정을 큰 창에서 엽니다."),
+        "settings_group_model": "모델 및 언어",
+        "settings_group_behavior": "검색 및 답변",
+        "setting_vector_cache": "벡터스토어 캐시 재사용",
+        "setting_vector_cache_help": (
+            "동일 PDF의 인덱스를 캐시에서 불러와 재인덱싱을 건너뜁니다."
+        ),
+        "setting_query_cache": "답변 캐시",
+        "setting_query_cache_help": (
+            "같은 문서에 같은 질문을 다시 하면 이전 답변을 재사용합니다."
+        ),
+        "setting_reranker_engine": "리랭커 엔진",
+        "setting_reranker_engine_help": (
+            "auto는 FlashRank를 우선하고 실패 시 시맨틱 랭킹으로 폴백합니다."
+        ),
+        "setting_grading": "문서 채점",
+        "setting_grading_help": (
+            "답변 생성 전에 LLM으로 검색 문서의 관련성을 확인합니다."
+        ),
         "sidebar_llm_label": "LLM 모델 선택",
         "sidebar_llm_help": ("답변을 작성하는 모델입니다. 가벼울수록 빠릅니다."),
         # UX-7: LLM 셀렉터 역할 배지 (모델 ID에서 크기 파싱)

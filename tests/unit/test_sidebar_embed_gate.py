@@ -27,6 +27,7 @@ def test_embedding_selector_disabled_when_ollama_is_down() -> None:
         ),
     ):
         mock_st.button.return_value = False
+        mock_st.columns.return_value = (mock_st, mock_st)
         sidebar_mod._render_settings_internal(
             lambda: None,
             lambda: None,

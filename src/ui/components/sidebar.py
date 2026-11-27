@@ -11,13 +11,21 @@ import streamlit as st
 from common.config import (
     DEFAULT_EMBEDDING_MODEL,
     DEFAULT_OLLAMA_MODEL,
+    ENABLE_VECTOR_CACHE,
+    GRADING_ENABLED,
+    QUERY_CACHE_ENABLED,
+    RERANKER_ENGINE,
 )
 from core.session import SessionManager
 from ui.strings import set_lang, t
 from ui.widget_keys import (
     CONFIRM_RESET_PENDING_KEY,
+    GRADING_TOGGLE_KEY,
     LANGUAGE_SELECTOR_KEY,
+    QUERY_CACHE_TOGGLE_KEY,
+    RERANKER_ENGINE_SELECT_KEY,
     SETTINGS_DIALOG_OPEN_KEY,
+    VECTOR_CACHE_TOGGLE_KEY,
     reset_all_key,
 )
 
@@ -76,6 +84,32 @@ def _request_reset_confirm() -> None:
     st.session_state[CONFIRM_RESET_PENDING_KEY] = True
     st.session_state[SETTINGS_DIALOG_OPEN_KEY] = False
     st.rerun()
+
+
+def _on_vector_cache_change() -> None:
+    ENABLE_VECTOR_CACHE.set(st.session_state[VECTOR_CACHE_TOGGLE_KEY])
+
+
+def _on_query_cache_change() -> None:
+    QUERY_CACHE_ENABLED.set(st.session_state[QUERY_CACHE_TOGGLE_KEY])
+
+
+def _on_grading_change() -> None:
+    GRADING_ENABLED.set(st.session_state[GRADING_TOGGLE_KEY])
+
+
+def _on_reranker_engine_change() -> None:
+    RERANKER_ENGINE.set(st.session_state[RERANKER_ENGINE_SELECT_KEY])
+
+
+def _reset_runtime_settings() -> None:
+    for setting in (
+        ENABLE_VECTOR_CACHE,
+        QUERY_CACHE_ENABLED,
+        GRADING_ENABLED,
+        RERANKER_ENGINE,
+    ):
+        setting.reset()
 
 
 def _render_sidebar_logo():
@@ -161,116 +195,154 @@ def _render_settings_internal(
     if is_swapping_model:
         st.info(t("sidebar_switching"))
 
-    # UI 언어 토글 (단일 콜백 on_language_change 경유)
-    current_lang = str(SessionManager.get("ui_lang", "en") or "en")
-    lang_labels = list(_LANG_OPTIONS.keys())
-    try:
-        lang_idx = list(_LANG_OPTIONS.values()).index(current_lang)
-    except ValueError:
-        lang_idx = 1
-    st.selectbox(
-        t("sidebar_language"),
-        lang_labels,
-        index=lang_idx,
-        key=LANGUAGE_SELECTOR_KEY,
-        on_change=on_language_change,
-        help=t("sidebar_language_help"),
-    )
+    left, right = st.columns([1, 1], gap="medium")
+    with left:
+        st.caption(t("settings_group_model"))
+        # UI 언어 토글 (단일 콜백 on_language_change 경유)
+        current_lang = str(SessionManager.get("ui_lang", "en") or "en")
+        lang_labels = list(_LANG_OPTIONS.keys())
+        try:
+            lang_idx = list(_LANG_OPTIONS.values()).index(current_lang)
+        except ValueError:
+            lang_idx = 1
+        st.selectbox(
+            t("sidebar_language"),
+            lang_labels,
+            index=lang_idx,
+            key=LANGUAGE_SELECTOR_KEY,
+            on_change=on_language_change,
+            help=t("sidebar_language_help"),
+        )
 
-    # 모델 설정 그룹
-    from core.model_catalog import get_filtered_models
+        # 모델 설정 그룹
+        from core.model_catalog import get_filtered_models
 
-    filtered = get_filtered_models(safe_models)
-    actual_llms = filtered["llm"]
-    actual_embeddings = filtered["embedding"]
+        filtered = get_filtered_models(safe_models)
+        actual_llms = filtered["llm"]
+        actual_embeddings = filtered["embedding"]
 
-    # LLM 선택
-    last_model = SessionManager.get("last_selected_model") or DEFAULT_OLLAMA_MODEL
-    if last_model not in actual_llms:
-        last_model = actual_llms[0]
-    try:
-        def_idx = actual_llms.index(last_model)
-    except ValueError:
-        def_idx = 0
+        # LLM 선택
+        last_model = SessionManager.get("last_selected_model") or DEFAULT_OLLAMA_MODEL
+        if last_model not in actual_llms:
+            last_model = actual_llms[0]
+        try:
+            def_idx = actual_llms.index(last_model)
+        except ValueError:
+            def_idx = 0
 
-    st.selectbox(
-        t("sidebar_llm_label"),
-        actual_llms,
-        index=def_idx,
-        key="model_selector",
-        on_change=model_selector_callback,
-        format_func=format_llm_option,
-        help=t("sidebar_llm_help"),
-        disabled=is_generating or is_swapping_model or not ollama_reachable,
-    )
+        st.selectbox(
+            t("sidebar_llm_label"),
+            actual_llms,
+            index=def_idx,
+            key="model_selector",
+            on_change=model_selector_callback,
+            format_func=format_llm_option,
+            help=t("sidebar_llm_help"),
+            disabled=is_generating or is_swapping_model or not ollama_reachable,
+        )
 
-    if not ollama_reachable:
-        st.caption(t("sidebar_ollama_hint"))
+        if not ollama_reachable:
+            st.caption(t("sidebar_ollama_hint"))
 
-    # 모델 새로고침 (Ollama에서 모델 목록 재조회 — 보조 동작이므로 하향)
-    if (
-        st.button(
-            t("sidebar_refresh"),
+        # 모델 새로고침 (Ollama에서 모델 목록 재조회 — 보조 동작이므로 하향)
+        if (
+            st.button(
+                t("sidebar_refresh"),
+                width="content",
+                type="secondary",
+                help=t("sidebar_refresh_help"),
+                key="refresh_models_btn",
+                disabled=is_generating,
+            )
+            and refresh_models_callback
+        ):
+            refresh_models_callback()
+
+        # 임베딩 선택
+        current_emb = (
+            SessionManager.get("last_selected_embedding_model")
+            or DEFAULT_EMBEDDING_MODEL
+        )
+        if current_emb not in actual_embeddings:
+            current_emb = actual_embeddings[0]
+        try:
+            emb_idx = actual_embeddings.index(current_emb)
+        except ValueError:
+            emb_idx = 0
+
+        st.selectbox(
+            t("sidebar_embedding_label"),
+            actual_embeddings,
+            index=emb_idx,
+            key="embedding_model_selector",
+            on_change=embedding_selector_callback,
+            help=t("sidebar_embedding_help"),
+            disabled=is_generating or is_swapping_model or not ollama_reachable,
+        )
+
+    with right:
+        st.caption(t("settings_group_behavior"))
+        st.toggle(
+            t("setting_vector_cache"),
+            value=bool(ENABLE_VECTOR_CACHE.get()),
+            key=VECTOR_CACHE_TOGGLE_KEY,
+            on_change=_on_vector_cache_change,
+            help=t("setting_vector_cache_help"),
+        )
+        st.toggle(
+            t("setting_query_cache"),
+            value=bool(QUERY_CACHE_ENABLED.get()),
+            key=QUERY_CACHE_TOGGLE_KEY,
+            on_change=_on_query_cache_change,
+            help=t("setting_query_cache_help"),
+        )
+        engine_options = ["auto", "flashrank", "semantic"]
+        engine = str(RERANKER_ENGINE.get())
+        st.selectbox(
+            t("setting_reranker_engine"),
+            engine_options,
+            index=engine_options.index(engine) if engine in engine_options else 0,
+            key=RERANKER_ENGINE_SELECT_KEY,
+            on_change=_on_reranker_engine_change,
+            help=t("setting_reranker_engine_help"),
+        )
+        st.toggle(
+            t("setting_grading"),
+            value=bool(GRADING_ENABLED.get()),
+            key=GRADING_TOGGLE_KEY,
+            on_change=_on_grading_change,
+            help=t("setting_grading_help"),
+        )
+
+        # 새 대화 (문서 유지, 대화만 초기화)
+        if (
+            st.button(
+                t("sidebar_new_chat"),
+                width="content",
+                type="primary",
+                help=t("sidebar_new_chat_help"),
+                key="new_chat_btn",
+                disabled=is_generating or is_building,
+            )
+            and new_chat_callback
+        ):
+            new_chat_callback()
+
+        # 초기화 (파괴적 동작 — 확인 다이얼로그 + 생성/빌드 중 비활성 + 시각 위계 하향)
+        sid = SessionManager.get_session_id()
+        st.divider()
+        if st.button(
+            t("sidebar_reset"),
             width="content",
             type="secondary",
-            help=t("sidebar_refresh_help"),
-            key="refresh_models_btn",
-            disabled=is_generating,
-        )
-        and refresh_models_callback
-    ):
-        refresh_models_callback()
-
-    # 임베딩 선택
-    current_emb = (
-        SessionManager.get("last_selected_embedding_model") or DEFAULT_EMBEDDING_MODEL
-    )
-    if current_emb not in actual_embeddings:
-        current_emb = actual_embeddings[0]
-    try:
-        emb_idx = actual_embeddings.index(current_emb)
-    except ValueError:
-        emb_idx = 0
-
-    st.selectbox(
-        t("sidebar_embedding_label"),
-        actual_embeddings,
-        index=emb_idx,
-        key="embedding_model_selector",
-        on_change=embedding_selector_callback,
-        help=t("sidebar_embedding_help"),
-        disabled=is_generating or is_swapping_model or not ollama_reachable,
-    )
-
-    # 새 대화 (문서 유지, 대화만 초기화)
-    if (
-        st.button(
-            t("sidebar_new_chat"),
-            width="content",
-            type="primary",
-            help=t("sidebar_new_chat_help"),
-            key="new_chat_btn",
+            help=t("sidebar_reset_help"),
+            key=reset_all_key(sid),
             disabled=is_generating or is_building,
-        )
-        and new_chat_callback
-    ):
-        new_chat_callback()
-
-    # 초기화 (파괴적 동작 — 확인 다이얼로그 + 생성/빌드 중 비활성 + 시각 위계 하향)
-    sid = SessionManager.get_session_id()
-    st.divider()
-    if st.button(
-        t("sidebar_reset"),
-        width="content",
-        type="secondary",
-        help=t("sidebar_reset_help"),
-        key=reset_all_key(sid),
-        disabled=is_generating or is_building,
-    ):
-        if reset_callback:
-            reset_callback()
-        else:
-            _confirm_reset_all()
+        ):
+            if reset_callback:
+                reset_callback()
+            else:
+                _confirm_reset_all()
 
 
 def _render_settings_modal(
@@ -370,6 +442,7 @@ def _confirm_reset_all() -> None:
             key="reset_confirm_btn",
         ):
             SessionManager.reset_all_state()
+            _reset_runtime_settings()
             # 위젯 키는 스토어 초기화의 영향을 받지 않는다. 남겨두면 언어·PDF·모델
             # 셀렉터가 이전 값을 계속 표시하므로 세션 상태까지 비운 뒤 재마운트한다.
             st.session_state.clear()

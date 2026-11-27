@@ -64,6 +64,13 @@ LANGUAGE_SELECTOR_KEY: str = "language_selector"
 SETTINGS_DIALOG_OPEN_KEY: str = "settings_dialog_open"
 CONFIRM_RESET_PENDING_KEY: str = "confirm_reset_pending"
 
+# Runtime setting widgets inside the settings modal. Their values are written
+# to common.runtime_settings by module-level callbacks in the sidebar.
+VECTOR_CACHE_TOGGLE_KEY: str = "setting_vector_cache"
+QUERY_CACHE_TOGGLE_KEY: str = "setting_query_cache"
+GRADING_TOGGLE_KEY: str = "setting_grading"
+RERANKER_ENGINE_SELECT_KEY: str = "setting_reranker_engine"
+
 
 def cancel_rebuild_key(sid: str, attempt: int | None = None) -> str:
     """Widget key for the RAG rebuild cancel button (components/chat.py)."""

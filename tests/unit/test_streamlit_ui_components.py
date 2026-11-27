@@ -50,7 +50,23 @@ class TestStreamlitUIComponents(unittest.TestCase):
         buttons = [b for b in at.sidebar.button if b.key == "settings_dialog_button"]
         assert len(buttons) == 1, "Settings button not rendered in the sidebar"
         buttons[0].click().run()
-        assert len(at.selectbox) >= 1, "Settings modal did not open"
+        assert len(at.selectbox) == 4, "Two-column settings did not open"
+        assert len(at.toggle) == 3, "Runtime setting toggles are missing"
+
+    def test_settings_toggle_updates_runtime_value(self):
+        """Toggling vector cache in the modal changes what core observes."""
+        from common.config import ENABLE_VECTOR_CACHE
+
+        at = AppTest.from_file(_SMOKE_SCRIPT, default_timeout=60).run()
+        buttons = [b for b in at.sidebar.button if b.key == "settings_dialog_button"]
+        buttons[0].click().run()
+        toggles = [t for t in at.toggle if t.key == "setting_vector_cache"]
+        assert len(toggles) == 1, "Vector cache toggle not rendered"
+        try:
+            toggles[0].set_value(False).run()
+            assert bool(ENABLE_VECTOR_CACHE) is False
+        finally:
+            ENABLE_VECTOR_CACHE.reset()
 
     def test_settings_reset_defers_confirm_dialog(self):
         """Reset inside the settings modal must not nest two dialogs."""

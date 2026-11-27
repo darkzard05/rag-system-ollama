@@ -160,7 +160,7 @@
     position: relative !important;
 }
 
-[data-testid="stColumn"] > [data-testid="stVerticalBlock"] {
+[data-testid="stMainBlockContainer"] [data-testid="stColumn"] > [data-testid="stVerticalBlock"] {
     flex: 1 !important;
     min-height: 0 !important;
     min-width: 0 !important;
@@ -170,8 +170,8 @@
     row-gap: 0 !important;
 }
 
-[data-testid="stColumn"] > [data-testid="stVerticalBlock"] > [data-testid="stLayoutWrapper"],
-[data-testid="stColumn"] > [data-testid="stVerticalBlock"] > [data-testid="stElementContainer"] {
+[data-testid="stMainBlockContainer"] [data-testid="stColumn"] > [data-testid="stVerticalBlock"] > [data-testid="stLayoutWrapper"],
+[data-testid="stMainBlockContainer"] [data-testid="stColumn"] > [data-testid="stVerticalBlock"] > [data-testid="stElementContainer"] {
     flex: 1 !important;
     min-height: 0 !important;
     min-width: 0 !important;
@@ -237,8 +237,8 @@
     row-gap: 0 !important;
 }
 
-[data-testid="stColumn"] > [data-testid="stVerticalBlock"] > [data-testid="stLayoutWrapper"] > [data-testid="stVerticalBlock"],
-[data-testid="stColumn"] > [data-testid="stVerticalBlock"] > [data-testid="stElementContainer"] > [data-testid="stVerticalBlock"] {
+[data-testid="stMainBlockContainer"] [data-testid="stColumn"] > [data-testid="stVerticalBlock"] > [data-testid="stLayoutWrapper"] > [data-testid="stVerticalBlock"],
+[data-testid="stMainBlockContainer"] [data-testid="stColumn"] > [data-testid="stVerticalBlock"] > [data-testid="stElementContainer"] > [data-testid="stVerticalBlock"] {
     flex: 1 !important;
     min-height: 0 !important;
     overflow: hidden !important;
