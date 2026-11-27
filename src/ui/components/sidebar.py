@@ -40,6 +40,18 @@ def format_llm_option(model_id: str) -> str:
     return f"{raw} · {match.group(1)}B · {badge}"
 
 
+def resolve_model_option(value: object) -> str:
+    """Recover the raw Ollama model id from a selectbox value.
+
+    Streamlit serializes selectbox state through ``format_func``. In an
+    ``on_change`` callback the widget key can still hold the formatted label
+    (for example ``"qwen3:4b… · 4B · fast"``). Feeding that label to Ollama
+    fails with ``invalid model name``. ``format_llm_option`` appends badges
+    after ``" · "``, so the id is everything before the first separator.
+    """
+    return str(value or "").strip().split(" · ", 1)[0]
+
+
 def on_language_change() -> None:
     """LANG 단일 토글 콜백: 셀렉터 읽기 → 스토어 + strings.LANG에 반영."""
     label = st.session_state.get(LANGUAGE_SELECTOR_KEY, "English")

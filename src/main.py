@@ -942,9 +942,13 @@ def on_new_chat() -> None:
 
 def on_model_change() -> None:
     from core.session import SessionManager
+    from ui.components.sidebar import resolve_model_option
 
-    selected = st.session_state.get("model_selector")
-    last = SessionManager.get("last_selected_model")
+    # The widget key may hold a format_func label during a callback (Streamlit
+    # serializes selectbox state as the formatted string). Normalize both sides
+    # so a locale change never stores a display label as the model id.
+    selected = resolve_model_option(st.session_state.get("model_selector"))
+    last = resolve_model_option(SessionManager.get("last_selected_model"))
 
     if not selected or "---" in selected or selected == last:
         return
