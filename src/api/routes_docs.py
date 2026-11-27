@@ -31,7 +31,6 @@ from api._deps import (
     _validate_session_id,
     verify_token,
 )
-from common.config import DEFAULT_EMBEDDING_MODEL
 from core.document_processor import compute_file_hash
 from core.resource_manager import get_resource_manager
 
@@ -174,11 +173,9 @@ async def upload_document(
 
         # [중요] RAGSystem 클래스를 통해 세션 격리 보장
         rag_sys = srv.RAGSystem(session_id=session_id)
-        # [수정] 빌드 전체 동안 embedder 를 pin 하여 모델 축출 use-after-free 방지.
-        # 명시적 model_name 으로 획득+pin (key_for_object 역산 의존 제거).
-        async with get_resource_manager().use_embedder(
-            model_name=embedding_model or DEFAULT_EMBEDDING_MODEL
-        ):
+        # Pin the exact embedder passed to the build. A model-name pin can
+        # target the default while the session uses a different embedder.
+        async with get_resource_manager().use_embedder(embedder=embedder):
             msg, cache_used = await rag_sys.build_pipeline(
                 file_path=str(persisted_path),
                 file_name=file.filename,
