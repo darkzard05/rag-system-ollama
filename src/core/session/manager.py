@@ -1079,6 +1079,12 @@ class SessionManager:
                 delete_fn(key)
 
     @classmethod
+    def session_exists(cls, session_id: str) -> bool:
+        """Return whether the session already exists, without creating it."""
+        with cls._acquire_lock(session_id):
+            return session_id in cls._fallback_sessions
+
+    @classmethod
     def delete_session(cls, session_id: str) -> bool:
         """세션을 삭제하고 무거운 객체의 참조를 명시적으로 해제합니다.
 

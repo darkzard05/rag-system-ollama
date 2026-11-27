@@ -337,6 +337,10 @@ async def delete_session(session_id: str, user_id: str = Depends(verify_token)):
     """특정 세션의 데이터를 삭제하고 메모리를 해제합니다. (소유자만 가능)"""
     srv = _app_server_module()
     _validate_session_id(session_id)
+    # Resolve the session before claiming it. A delete of a missing id must
+    # return 404 without reserving that id for the caller.
+    if not srv.SessionManager.session_exists(session_id):
+        raise HTTPException(status_code=404, detail="세션을 찾을 수 없습니다.")
     _require_session_owner(session_id, user_id)
     success = srv.SessionManager.delete_session(session_id)
     if not success:
