@@ -58,6 +58,17 @@ def test_citations_before_final_answer_order() -> None:
     assert out[0][1]["doc_id"] == 1
 
 
+def test_word_citations_in_answer_does_not_hide_the_array() -> None:
+    blob = (
+        '{"final_answer": "Mentions "citations" in the appendix.", '
+        + f'"citations": [{_CITE}]}}'
+    )
+    scanner = PartialCitationScanner()
+    out = scanner.feed(blob)
+    assert len(out) == 1
+    assert out[0][1]["doc_id"] == 1
+
+
 def test_attempt_reset_fresh_scanner() -> None:
     first = PartialCitationScanner()
     first.feed('{"citations": [' + _CITE + "]}")
