@@ -104,6 +104,55 @@ def test_clean_finalize_skips_rerun(
     assert SessionManager.get("stream_finalized_no_rerun", None, sid) == mid
 
 
+def test_live_body_repaints_without_context_tokens(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A completed turn must not leave raw [doc:...] tokens in the live bubble."""
+    from ui.components.streaming import _AUX_STATE_KEY
+
+    sid = f"task3_{uuid.uuid4().hex[:8]}"
+    mid = f"msg_{uuid.uuid4().hex[:8]}"
+    raw = "answer [doc:d1] here"
+
+    st_mock = _make_st_mock()
+    placeholders = [MagicMock(name=f"ph{i}") for i in range(3)]
+    st_mock.empty.side_effect = placeholders
+    monkeypatch.setattr(chat_module, "st", st_mock)
+
+    def token_generator(
+        query: str,
+        model_name: str,
+        session_id: str,
+        message_id: str,
+        on_status: Any = None,
+        on_aux: Any = None,
+    ) -> Iterator[str]:
+        aux: dict[str, Any] = {
+            "content": raw,
+            "citations": [],
+            "documents": [],
+            "metrics": {},
+            "process_steps": [],
+        }
+        SessionManager.set(_AUX_STATE_KEY, aux, session_id)
+        if on_aux is not None:
+            on_aux(aux)
+        yield raw
+
+    monkeypatch.setattr(chat_module, "_content_generator", token_generator)
+    monkeypatch.setattr(chat_module, "render_reference_list", MagicMock())
+    monkeypatch.setattr(chat_module, "_finalize_pdf_side_effects", MagicMock())
+
+    chat_module._render_streaming_with_write_stream({"msg_id": mid}, sid, "q")
+
+    body_ph = placeholders[2]
+    body_ph.markdown.assert_called_once()
+    rendered = body_ph.markdown.call_args.args[0]
+    assert "[doc:" not in rendered
+    assert "answer" in rendered
+    st_mock.rerun.assert_not_called()
+
+
 def test_clean_finalize_paints_refs_in_run(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
