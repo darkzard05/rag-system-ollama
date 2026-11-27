@@ -61,6 +61,32 @@ def test_cors_default_empty_blocks_cross_origin():
     assert "access-control-allow-origin" not in resp.headers
 
 
+def test_cors_preflight_allows_session_header():
+    """A registered origin must be able to send X-Session-ID across origins."""
+    mw = _cors_middleware(srv.app)
+    original_origins = mw.kwargs["allow_origins"]
+    mw.kwargs["allow_origins"] = ["http://example.com"]
+    srv.app.middleware_stack = None
+    try:
+        client = TestClient(srv.app)
+        resp = client.options(
+            "/api/v1/query",
+            headers={
+                "Origin": "http://example.com",
+                "Access-Control-Request-Method": "POST",
+                "Access-Control-Request-Headers": (
+                    "authorization,content-type,x-session-id"
+                ),
+            },
+        )
+        assert resp.status_code == 200
+        allowed = resp.headers["access-control-allow-headers"].lower()
+        assert "x-session-id" in allowed
+    finally:
+        mw.kwargs["allow_origins"] = original_origins
+        srv.app.middleware_stack = None
+
+
 def test_cors_allowed_origins_from_config(monkeypatch):
     """구성된 오리진이 파싱·배선된다 (실제 앱 미들웨어는 import 시점 값 사용)."""
     configured = ["http://localhost:8501"]
