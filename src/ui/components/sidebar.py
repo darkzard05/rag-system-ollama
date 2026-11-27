@@ -196,11 +196,11 @@ def _render_settings_internal(
         st.info(t("sidebar_switching"))
 
     st.caption(t("settings_intro"))
-    st.space("small")
+    st.space("xsmall")
     left, right = st.columns([1, 1], gap="large")
     with left:
         st.caption(t("settings_group_model"))
-        st.space("small")
+        st.space("xsmall")
         # UI 언어 토글 (단일 콜백 on_language_change 경유)
         current_lang = str(SessionManager.get("ui_lang", "en") or "en")
         lang_labels = list(_LANG_OPTIONS.keys())
@@ -216,7 +216,7 @@ def _render_settings_internal(
             on_change=on_language_change,
             help=t("sidebar_language_help"),
         )
-        st.space("small")
+        st.space("xsmall")
 
         # 모델 설정 그룹
         from core.model_catalog import get_filtered_models
@@ -244,7 +244,7 @@ def _render_settings_internal(
             help=t("sidebar_llm_help"),
             disabled=is_generating or is_swapping_model or not ollama_reachable,
         )
-        st.space("small")
+        st.space("xsmall")
 
         if not ollama_reachable:
             st.caption(t("sidebar_ollama_hint"))
@@ -262,7 +262,7 @@ def _render_settings_internal(
             and refresh_models_callback
         ):
             refresh_models_callback()
-        st.space("small")
+        st.space("xsmall")
 
         # 임베딩 선택
         current_emb = (
@@ -285,11 +285,11 @@ def _render_settings_internal(
             help=t("sidebar_embedding_help"),
             disabled=is_generating or is_swapping_model or not ollama_reachable,
         )
-        st.space("small")
+        st.space("xsmall")
 
     with right:
         st.caption(t("settings_group_behavior"))
-        st.space("small")
+        st.space("xsmall")
         st.toggle(
             t("setting_vector_cache"),
             value=bool(ENABLE_VECTOR_CACHE.get()),
@@ -297,7 +297,7 @@ def _render_settings_internal(
             on_change=_on_vector_cache_change,
             help=t("setting_vector_cache_help"),
         )
-        st.space("small")
+        st.space("xsmall")
         st.toggle(
             t("setting_query_cache"),
             value=bool(QUERY_CACHE_ENABLED.get()),
@@ -305,7 +305,7 @@ def _render_settings_internal(
             on_change=_on_query_cache_change,
             help=t("setting_query_cache_help"),
         )
-        st.space("small")
+        st.space("xsmall")
         engine_options = ["auto", "flashrank", "semantic"]
         engine = str(RERANKER_ENGINE.get())
         st.selectbox(
@@ -316,7 +316,7 @@ def _render_settings_internal(
             on_change=_on_reranker_engine_change,
             help=t("setting_reranker_engine_help"),
         )
-        st.space("small")
+        st.space("xsmall")
         st.toggle(
             t("setting_grading"),
             value=bool(GRADING_ENABLED.get()),
@@ -326,9 +326,9 @@ def _render_settings_internal(
         )
 
     # 실행 동작은 본문 아래 별도 바에 모아 설정과 위계를 분리한다.
-    st.space("medium")
-    st.divider()
     st.space("small")
+    st.divider()
+    st.space("xsmall")
     sid = SessionManager.get_session_id()
     with st.container(horizontal=True, horizontal_alignment="right"):
         if (
@@ -368,7 +368,7 @@ def _render_settings_modal(
     available_models,
     ollama_reachable: bool,
 ) -> None:
-    """Body of the large centered settings dialog."""
+    """Body of the compact centered settings dialog."""
     if is_generating:
         st.caption(t("sidebar_locked_generating"))
     # Refresh Models writes this key; read it here so a dialog-fragment rerun
@@ -413,7 +413,7 @@ def render_pending_dialogs(
         return
     dialog = st.dialog(
         t("sidebar_settings"),
-        width="large",
+        width="medium",
         position="center",
         on_dismiss=_on_settings_dismiss,
     )

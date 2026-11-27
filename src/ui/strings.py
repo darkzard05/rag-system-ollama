@@ -93,7 +93,7 @@ UI_STRINGS: dict[str, dict[str, str]] = {
         ),
         "sidebar_settings": "Settings",
         "sidebar_settings_help": (
-            "Open the language, model, and session settings in a large dialog."
+            "Open the language, model, and session settings in a compact dialog."
         ),
         "settings_intro": "Manage models and retrieval behavior in one place.",
         "settings_group_model": "Model & language",
@@ -253,7 +253,9 @@ UI_STRINGS: dict[str, dict[str, str]] = {
             "PDF를 청크로 나누어 인덱싱하고 답변 근거로 사용합니다."
         ),
         "sidebar_settings": "설정",
-        "sidebar_settings_help": ("언어·모델·세션 설정을 큰 창에서 엽니다."),
+        "sidebar_settings_help": (
+            "언어·모델·세션 설정을 화면 중앙의 작은 창에서 엽니다."
+        ),
         "settings_intro": "모델과 검색 동작을 이곳에서 관리합니다.",
         "settings_group_model": "모델 및 언어",
         "settings_group_behavior": "검색 및 답변",
